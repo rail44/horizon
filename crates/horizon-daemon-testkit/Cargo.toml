@@ -3,18 +3,23 @@ name = "horizon-daemon-testkit"
 version = "0.1.0"
 edition = "2021"
 
-# Test support only: this crate is a `[dev-dependencies]` entry of the two
-# daemon crates and is never linked into a shipped binary. It deliberately
-# depends on nothing domain-specific -- no agent crate, no terminal crate --
-# so both daemons' suites can use it without either one dragging the other's
-# graph in behind it.
+# Test support only: this crate is a `[dev-dependencies]` entry of the
+# daemon crates and is never linked into a shipped binary. It depends on no
+# runtime crate -- no agent crate, no terminal crate -- so every daemon's
+# suite can use it without dragging another daemon's graph in behind it.
 [dependencies]
+# `horizon-agentd`'s wire: the ACP crate and Horizon's extension
+# vocabulary on it.
+agent-client-protocol = { workspace = true }
+horizon-acp = { path = "../horizon-acp" }
 # The domain-free wire foundation: `WireCodec` (the workspace's one codec
-# pin) is all this crate needs to establish a remoc connection for either
-# hub.
+# pin) is all this crate needs to establish a remoc connection for the
+# remoc hubs.
 horizon-wire = { path = "../horizon-wire" }
 remoc = { workspace = true }
-tokio = { version = "1.52", features = ["net", "rt", "time"] }
+serde_json = "1.0"
+tokio = { version = "1.52", features = ["net", "rt", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["compat"] }
 uuid = { version = "1.18", features = ["v4"] }
 
 [lints.clippy]

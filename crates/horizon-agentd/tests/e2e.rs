@@ -7,55 +7,35 @@
 //! through too -- see `docs/agent-runtime-split-design.md`'s step 2
 //! deliverables.
 //!
-//! Since the v10 remoc cutover (`docs/remoc-adoption-design.md`) these talk
-//! to the daemon over the actual `SessionHub` rtc trait on the actual unix
-//! socket, through the [`HubTestClient`] harness below: `hello` range
-//! negotiation, the agent attach calls returning channel-bearing
-//! attachments, and `drain`. Cross-generation recovery (a v10 UI meeting a
-//! JSONL daemon) is covered on the *client* side, in `src/runtime/tests.rs`,
-//! where the runtime that owns the probe-drain-respawn sequence lives.
+//! These talk to the daemon as an ACP v2 client on the actual unix socket
+//! (`docs/acp-agentd-design.md`), through the testkit's [`AcpClient`]:
+//! `initialize` with the extension version, `session/new`/`session/resume`
+//! and the updates they stream, `session/request_permission` and
+//! `_horizon/host_tool` round trips, and `_horizon/drain`.
 //!
-//! **Terminals are not here any more.** The v17 split
+//! **Terminals are not here.** The v17 split
 //! (`docs/terminald-split-design.md`) moved terminal hosting to
-//! `horizon-terminald`, so its e2e coverage — real PTYs, the frame watch, the
-//! attach/reseed dance — moved to `crates/horizon-terminald/tests/e2e.rs`
-//! with it. That file also owns the split's acceptance test, which spawns
-//! *both* daemons to prove a agentd drain/respawn leaves a live terminald
-//! session attachable.
-//!
-//! The tests use a multi-thread runtime because the remoc chmux mux task
-//! must be polled concurrently with the test's own awaits (adoption
-//! condition 3) while some helpers block briefly (process spawn/kill,
-//! stderr reads); a current-thread runtime would starve the mux.
+//! `horizon-terminald`, so its e2e coverage lives in
+//! `crates/horizon-terminald/tests/e2e.rs`, which also owns the split's
+//! acceptance test spawning *both* daemons.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use agent_client_protocol::schema::{v2, MaybeUndefined};
+use agent_client_protocol::Error;
+use horizon_acp as acp;
 use horizon_agent::contract::{
-    Command as AgentCommand, Event, Exit, MessageRole, ProviderEvent, ProviderId, SessionId,
-    SessionState, TurnEndReason,
+    Event, Exit, MessageRole, ProviderEvent, ProviderId, SessionId, SessionState, TurnEndReason,
 };
-use horizon_agent::frame::agent_frame_from_events;
 use horizon_agent::persistence::event_log::{Appender, WriterHandle, WriterInit};
-use horizon_agent::roles::RoleId;
-use horizon_agent::wire::{
-    agent_version_range, AgentWireEvent, HostToolRequest, HostToolResponse, SessionHub as _,
-    SessionHubClient, SessionNew, SessionSummary, AGENT_PROTOCOL_VERSION,
-    MIN_SUPPORTED_AGENT_PROTOCOL_VERSION,
-};
 use horizon_daemon_testkit::{
-    agentd_hermetic_command, cargo_bin_exe_var, connect_hub_client, connect_with_retry,
-    drain_with_timeout, resolve_daemon_binary, spawn_with_link_retry, wait_for_exit, AgentdPaths,
-    AgentdProcess, AgentdSpawn,
+    agentd_hermetic_command, cargo_bin_exe_var, connect_acp, connect_initialized,
+    connect_with_retry, initialize_request, resolve_daemon_binary, spawn_with_link_retry,
+    wait_for_exit, AcpClient, AgentdPaths, AgentdProcess, AgentdSpawn, Inbound,
 };
-use horizon_wire::{
-    CappedReceiver, ClientHello, HubError, VersionRange, WireCodec, CONTROL_MAX_ITEM_BYTES,
-    TOOL_IO_MAX_ITEM_BYTES,
-};
-use remoc::rch;
-use tokio::net::UnixStream;
 
 /// The env var `horizon-agentd`'s `main` reads to artificially delay its
 /// event-log-read-plus-resume phase -- see that binary's own doc comment on
@@ -64,9 +44,9 @@ const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
 
 /// The env var `horizon-agentd`'s `main` reads to artificially delay its
 /// background DuckDB rebuild task -- the DuckDB analogue of
-/// [`TEST_RESUME_DELAY_MS_VAR`], letting a test prove `hello`/`session_list`
-/// stay reachable while a slow rebuild is still running. Test-only; never
-/// set outside this file.
+/// [`TEST_RESUME_DELAY_MS_VAR`], letting a test prove `initialize`/
+/// `session/list` stay reachable while a slow rebuild is still running.
+/// Test-only; never set outside this file.
 const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS";
 
 /// Resolves the `horizon-agentd` binary to spawn. Only the `env!()` bake
@@ -199,172 +179,278 @@ fn spawn_agentd_with_duckdb_options(
     agentd_spawn(paths).capture_stderr().spawn()
 }
 
-// --- the remoc hub test harness --------------------------------------------
+// --- the ACP test harness --------------------------------------------------
 
-/// A connected `SessionHub` client over the real socket: the v10 successor
-/// of the JSONL `connect_and_handshake` split halves. Owns the chmux mux
-/// task (aborted on drop, which closes the socket so the daemon's
-/// one-at-a-time accept loop can serve the next connection) and holds the
-/// connection-global `HubHello` channels.
-struct HubTestClient {
-    hub: SessionHubClient<WireCodec>,
-    negotiated: u32,
-    binary_id: String,
-    host_tools: CappedReceiver<HostToolRequest, TOOL_IO_MAX_ITEM_BYTES>,
-    host_tool_responses: rch::mpsc::Sender<HostToolResponse, WireCodec>,
-    skipped_lines: CappedReceiver<String, CONTROL_MAX_ITEM_BYTES>,
-    conn_task: tokio::task::JoinHandle<()>,
+/// Connects to the real socket and completes `initialize` at this build's
+/// extension version -- every session-hosting test's entry point.
+async fn connect(socket_path: &Path) -> AcpClient {
+    connect_initialized(connect_with_retry(socket_path).await, "test-client").await
 }
 
-impl Drop for HubTestClient {
-    fn drop(&mut self) {
-        self.conn_task.abort();
-    }
+fn test_cwd() -> PathBuf {
+    std::env::current_dir().expect("test cwd should be readable")
 }
 
-/// Establishes the remoc connection over an already-connected stream, hands
-/// the daemon its client, and runs `hello` with the given advertised range.
-async fn establish_hub(
-    stream: UnixStream,
-    supported: VersionRange,
-) -> Result<HubTestClient, HubError> {
-    let (hub, conn_task) = connect_hub_client::<SessionHubClient<WireCodec>>(stream).await;
-
-    let client_hello = ClientHello {
-        supported,
-        binary_id: "test-client".to_string(),
-    };
-    match hub.hello(client_hello).await {
-        Ok(hello) => Ok(HubTestClient {
-            hub,
-            negotiated: hello.negotiated,
-            binary_id: hello.binary_id,
-            host_tools: hello.host_tools,
-            host_tool_responses: hello.host_tool_responses,
-            skipped_lines: hello.skipped_lines,
-            conn_task,
-        }),
-        Err(error) => {
-            // The connection stays alive (the mux task keeps running) so a
-            // rejected client can still call `drain` -- return a live hub
-            // for that, threaded through the error's own path in the one
-            // test that needs it.
-            conn_task.abort();
-            Err(error)
-        }
-    }
-}
-
-/// Connects to the real socket and completes `hello` at this build's own
-/// advertised range -- every session-hosting test's entry point.
-async fn connect_hub(socket_path: &Path) -> HubTestClient {
-    let stream = connect_with_retry(socket_path).await;
-    establish_hub(stream, agent_version_range())
-        .await
-        .expect("hello should succeed at a matching version range")
-}
-
-impl HubTestClient {
-    /// Gracefully drains the daemon -- see `drain_with_timeout` for why the
-    /// call's own outcome is discarded.
-    async fn drain(&self) {
-        drain_with_timeout(self.hub.drain()).await;
-    }
-}
-
-/// Reads events from an agent attachment's channel until `predicate`
-/// matches one, returning every event observed (including the matching
-/// one), in arrival order. Skips the non-`Event` announcements
-/// (`ToolCallProgress`, `SessionModel`, `WorkspaceRootResolved`) that share
-/// the channel. Panics after a generous number of reads.
-async fn collect_events_until(
-    events: &mut CappedReceiver<AgentWireEvent, TOOL_IO_MAX_ITEM_BYTES>,
-    mut predicate: impl FnMut(&Event) -> bool,
-) -> Vec<Event> {
-    let mut collected = Vec::new();
-    for _ in 0..400 {
-        let wire_event = tokio::time::timeout(Duration::from_secs(120), events.recv())
-            .await
-            .expect("timed out waiting for an agent event")
-            .expect("agent event channel error")
-            .expect("the daemon should keep streaming events, not close the attachment");
-        if let AgentWireEvent::Event(event) = wire_event {
-            let done = predicate(&event);
-            collected.push(event);
-            if done {
-                return collected;
-            }
-        }
-    }
-    panic!("gave up waiting for the expected event after 400 reads; got: {collected:?}");
-}
-
-/// Collect exactly the private snapshot, using its protocol boundary rather
-/// than guessing completion from a quiet interval in the live stream.
-async fn collect_replayed_events(
-    events: &mut CappedReceiver<AgentWireEvent, TOOL_IO_MAX_ITEM_BYTES>,
-) -> Vec<Event> {
-    tokio::time::timeout(Duration::from_secs(120), async {
-        assert_eq!(
-            events.recv().await.unwrap(),
-            Some(AgentWireEvent::ReplayStarted)
-        );
-        let mut collected = Vec::new();
-        loop {
-            match events.recv().await.unwrap().expect("replay stream ended") {
-                AgentWireEvent::Event(event) => collected.push(event),
-                AgentWireEvent::ReplayComplete => return collected,
-                AgentWireEvent::AttachmentClosed(reason) => panic!("replay closed: {reason:?}"),
-                _ => {}
-            }
-        }
-    })
-    .await
-    .expect("replay timed out")
-}
-
-/// Reads the connection-global host-tool request channel
-/// (`HubHello::host_tools`) until a request arrives.
-async fn read_host_tool_request(client: &mut HubTestClient) -> HostToolRequest {
-    tokio::time::timeout(Duration::from_secs(120), client.host_tools.recv())
-        .await
-        .expect("timed out waiting for a host-tool request")
-        .expect("host-tool channel error")
-        .expect("the daemon should keep the host-tool channel open")
-}
-
-async fn respond_host_tool(client: &HubTestClient, response: HostToolResponse) {
-    client
-        .host_tool_responses
-        .send(response)
-        .await
-        .expect("send a host-tool response");
+fn acp_id(session_id: SessionId) -> v2::SessionId {
+    v2::SessionId::new(session_id.as_uuid().to_string())
 }
 
 fn mock_provider_id() -> ProviderId {
     ProviderId("builtin.agent.mock".to_string())
 }
 
-fn session_new(session_id: SessionId) -> SessionNew {
-    SessionNew {
-        session_id,
-        provider_id: mock_provider_id(),
-        role_id: None,
-        workspace_root: None,
-        spawn_source_session_id: None,
-        isolate: false,
+/// A `session/new` for `session_id` on `provider_id`, confined to `cwd`.
+fn new_session_request(
+    session_id: SessionId,
+    provider_id: &str,
+    role_id: Option<&str>,
+    cwd: PathBuf,
+    isolate: bool,
+) -> v2::NewSessionRequest {
+    let mut meta = None;
+    acp::write_horizon_meta(
+        &mut meta,
+        &acp::SessionNewMeta {
+            session_id,
+            provider_id: provider_id.to_string(),
+            role_id: role_id.map(str::to_string),
+            isolate,
+            spawn_source_session_id: None,
+        },
+    )
+    .unwrap();
+    v2::NewSessionRequest::new(cwd).meta(meta)
+}
+
+/// A mock-provider session in the test's cwd.
+fn session_new(session_id: SessionId) -> v2::NewSessionRequest {
+    new_session_request(session_id, &mock_provider_id().0, None, test_cwd(), false)
+}
+
+async fn open_session(
+    client: &AcpClient,
+    request: v2::NewSessionRequest,
+) -> v2::NewSessionResponse {
+    client
+        .request(request)
+        .await
+        .expect("session/new should succeed")
+}
+
+async fn prompt(client: &AcpClient, session_id: SessionId, text: &str) {
+    client
+        .request(v2::PromptRequest::new(
+            acp_id(session_id),
+            vec![text.to_string().into()],
+        ))
+        .await
+        .expect("session/prompt should be accepted");
+}
+
+async fn list_sessions(client: &AcpClient) -> Vec<v2::SessionInfo> {
+    client
+        .request(v2::ListSessionsRequest::new())
+        .await
+        .expect("session/list should succeed")
+        .sessions
+}
+
+fn info_meta(info: &v2::SessionInfo) -> acp::SessionInfoMeta {
+    acp::read_horizon_meta(info.meta.as_ref())
+        .expect("session info carries _meta.horizon")
+        .unwrap()
+}
+
+/// The one listed session, checked against its expected id and facts.
+fn assert_listed(
+    sessions: &[v2::SessionInfo],
+    session_id: SessionId,
+    role_id: Option<&str>,
+    workspace_root: Option<PathBuf>,
+) {
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert_eq!(sessions[0].session_id, acp_id(session_id));
+    assert_eq!(
+        info_meta(&sessions[0]),
+        acp::SessionInfoMeta {
+            workspace_root,
+            parent_session_id: None,
+            role_id: role_id.map(str::to_string),
+            provider_id: mock_provider_id().0,
+        }
+    );
+}
+
+/// Reads the inbox until `predicate` matches, returning every message
+/// observed (including the matching one) in arrival order.
+async fn collect_until(
+    client: &mut AcpClient,
+    mut predicate: impl FnMut(&Inbound) -> bool,
+) -> Vec<Inbound> {
+    let mut collected = Vec::new();
+    for _ in 0..4000 {
+        let inbound = client.next(Duration::from_secs(120)).await;
+        let done = predicate(&inbound);
+        collected.push(inbound);
+        if done {
+            return collected;
+        }
+    }
+    panic!("gave up waiting for the expected message; got: {collected:?}");
+}
+
+/// Resumes `session_id` from the start and returns its bootstrap: the
+/// messages from the attachment's leading `config_option_update` /
+/// `session_info_update` up to the answer (anything a replaced attachment
+/// on this connection sent before it is left out).
+async fn resume(client: &mut AcpClient, session_id: SessionId) -> Result<Vec<Inbound>, Error> {
+    client.send_ordered(
+        v2::ResumeSessionRequest::new(acp_id(session_id), test_cwd())
+            .replay_from(v2::ReplayFrom::Start(v2::ReplayFromStart::new())),
+    );
+    let mut collected =
+        collect_until(client, |inbound| matches!(inbound, Inbound::Replied(_))).await;
+    let Some(Inbound::Replied(result)) = collected.pop() else {
+        unreachable!()
+    };
+    result?;
+    let start = collected
+        .iter()
+        .rposition(|inbound| {
+            matches!(inbound, Inbound::Update(notification)
+                if notification.session_id == acp_id(session_id)
+                    && matches!(notification.update, v2::SessionUpdate::SessionInfoUpdate(_)))
+        })
+        .expect("a bootstrap carries session_info_update");
+    // The model's config option, when known, precedes it.
+    let start = match start.checked_sub(1).map(|index| update(&collected[index])) {
+        Some(Some(v2::SessionUpdate::ConfigOptionUpdate(_))) => start - 1,
+        _ => start,
+    };
+    Ok(collected.split_off(start))
+}
+
+fn update(inbound: &Inbound) -> Option<&v2::SessionUpdate> {
+    match inbound {
+        Inbound::Update(notification) => Some(&notification.update),
+        _ => None,
     }
 }
 
-fn session_new_with_role(session_id: SessionId, role_id: RoleId) -> SessionNew {
-    SessionNew {
-        session_id,
-        provider_id: mock_provider_id(),
-        role_id: Some(role_id),
-        workspace_root: None,
-        spawn_source_session_id: None,
-        isolate: false,
+fn content_text(content: &MaybeUndefined<Vec<v2::ContentBlock>>) -> String {
+    match content {
+        MaybeUndefined::Value(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block {
+                v2::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect(),
+        _ => String::new(),
     }
+}
+
+fn agent_message(inbound: &Inbound) -> Option<String> {
+    match update(inbound)? {
+        v2::SessionUpdate::AgentMessage(message) => Some(content_text(&message.content)),
+        _ => None,
+    }
+}
+
+fn user_message(inbound: &Inbound) -> Option<String> {
+    match update(inbound)? {
+        v2::SessionUpdate::UserMessage(message) => Some(content_text(&message.content)),
+        _ => None,
+    }
+}
+
+fn tool_update(inbound: &Inbound) -> Option<&v2::ToolCallUpdate> {
+    match update(inbound)? {
+        v2::SessionUpdate::ToolCallUpdate(call) => Some(call),
+        _ => None,
+    }
+}
+
+fn tool_meta(call: &v2::ToolCallUpdate) -> Option<acp::ToolCallMeta> {
+    acp::read_horizon_meta(call.meta.as_opt_ref().flatten())?.ok()
+}
+
+fn has_status(call: &v2::ToolCallUpdate, status: v2::ToolCallStatus) -> bool {
+    call.status == MaybeUndefined::Value(status)
+}
+
+/// A tool call's final update: the one that carries its outcome.
+fn finished_tool(inbound: &Inbound) -> Option<(&v2::ToolCallUpdate, acp::ToolCallMeta)> {
+    let call = tool_update(inbound)?;
+    let meta = tool_meta(call)?;
+    meta.outcome.is_some().then_some((call, meta))
+}
+
+fn idle_stop_reason(inbound: &Inbound) -> Option<Option<v2::StopReason>> {
+    match update(inbound)? {
+        v2::SessionUpdate::StateUpdate(v2::StateUpdate::Idle(idle)) => {
+            Some(idle.stop_reason.clone())
+        }
+        _ => None,
+    }
+}
+
+fn is_state(inbound: &Inbound) -> bool {
+    matches!(update(inbound), Some(v2::SessionUpdate::StateUpdate(_)))
+}
+
+fn session_error(inbound: &Inbound) -> Option<&str> {
+    match inbound {
+        Inbound::SessionEvent(acp::SessionEventNotification::Error { message, .. }) => {
+            Some(message)
+        }
+        _ => None,
+    }
+}
+
+/// The permission request's approval payload.
+fn approval_meta(request: &v2::RequestPermissionRequest) -> acp::ApprovalMeta {
+    acp::read_horizon_meta(request.meta.as_ref())
+        .expect("permission requests carry _meta.horizon")
+        .unwrap()
+}
+
+fn take_permission(
+    collected: &mut Vec<Inbound>,
+) -> (
+    v2::RequestPermissionRequest,
+    agent_client_protocol::Responder<v2::RequestPermissionResponse>,
+) {
+    let index = collected
+        .iter()
+        .position(|inbound| matches!(inbound, Inbound::Permission(..)))
+        .expect("a permission request should have arrived");
+    let Inbound::Permission(request, responder) = collected.remove(index) else {
+        unreachable!()
+    };
+    (request, responder)
+}
+
+fn approve() -> v2::RequestPermissionResponse {
+    v2::RequestPermissionResponse::new(v2::RequestPermissionOutcome::Selected(
+        v2::SelectedPermissionOutcome::new(acp::PERMISSION_OPTION_APPROVE),
+    ))
+}
+
+/// Everything comparable a message carries, requests' responders aside.
+fn wire(inbound: &Inbound) -> serde_json::Value {
+    match inbound {
+        Inbound::Update(notification) => serde_json::to_value(notification),
+        Inbound::SessionEvent(notification) => serde_json::to_value(notification),
+        Inbound::TaskProgress(notification) => serde_json::to_value(notification),
+        Inbound::ToolCallProgress(notification) => serde_json::to_value(notification),
+        Inbound::Memory(notification) => serde_json::to_value(notification),
+        Inbound::ProviderRequest(notification) => serde_json::to_value(notification),
+        Inbound::Permission(request, _) => serde_json::to_value(request),
+        Inbound::HostTool(request, _) => serde_json::to_value(request),
+        Inbound::Replied(_) => Ok(serde_json::Value::Null),
+    }
+    .unwrap()
 }
 
 fn run_fixture_git(dir: &Path, args: &[&str]) {
@@ -467,30 +553,37 @@ async fn wait_for_persisted_event(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reload_then_switch_updates_an_existing_session_and_reattach() {
-    async fn applied(
-        events: &mut CappedReceiver<AgentWireEvent, TOOL_IO_MAX_ITEM_BYTES>,
-        expected_model: &str,
-    ) {
-        tokio::time::timeout(Duration::from_secs(30), async {
-            let mut model = None;
-            loop {
-                match events.recv().await.unwrap().unwrap() {
-                    AgentWireEvent::SessionModel(value) => model = Some(value),
-                    AgentWireEvent::SessionSelection(selection)
-                        if selection.provider == "added" && selection.model == expected_model =>
-                    {
-                        assert_eq!(model.as_deref(), Some(expected_model));
-                        break;
+    fn applied_value(inbound: &Inbound) -> Option<String> {
+        match update(inbound)? {
+            v2::SessionUpdate::ConfigOptionUpdate(update) => {
+                update.config_options.iter().find_map(|option| {
+                    match (&*option.config_id.0 == acp::MODEL_CONFIG_ID, &option.kind) {
+                        (true, v2::SessionConfigKind::Select(select)) => {
+                            Some(select.current_value.0.to_string())
+                        }
+                        _ => None,
                     }
-                    AgentWireEvent::Event(Event::Error(error)) => {
-                        panic!("model application failed: {}", error.message);
-                    }
-                    _ => {}
-                }
+                })
             }
+            _ => None,
+        }
+    }
+    async fn applied(client: &mut AcpClient, expected: &str) {
+        let collected = collect_until(client, |inbound| {
+            if let Some(message) = session_error(inbound) {
+                panic!("model application failed: {message}");
+            }
+            applied_value(inbound).as_deref() == Some(expected)
         })
-        .await
-        .expect("applied selection must reach the client");
+        .await;
+        assert!(!collected.is_empty());
+    }
+    fn set_model(session_id: SessionId, value: &str) -> v2::SetSessionConfigOptionRequest {
+        v2::SetSessionConfigOptionRequest::new(
+            acp_id(session_id),
+            acp::MODEL_CONFIG_ID,
+            v2::SessionConfigOptionValue::id(value.to_string()),
+        )
     }
 
     let directory = tempfile::tempdir().unwrap();
@@ -506,21 +599,22 @@ default_model = "before-model"
         .env("HORIZON_CONFIG", &config_path)
         .env_remove("HORIZON_SWITCH_TEST_KEY")
         .spawn();
-    let client = connect_hub(&agentd.socket_path).await;
+    let mut client = connect(&agentd.socket_path).await;
     let session_id = SessionId::new();
-    let mut attachment = client
-        .hub
-        .new_agent(SessionNew {
-            provider_id: horizon_agent::registry::named_rig_provider_id("initial"),
-            ..session_new(session_id)
-        })
-        .await
-        .unwrap();
-    // Ensure the provider thread has captured its initial config before reload.
-    collect_events_until(&mut attachment.events, |event| {
-        matches!(event, Event::StateChanged(SessionState::WaitingForUser))
-    })
+    let created = open_session(
+        &client,
+        new_session_request(
+            session_id,
+            &horizon_agent::registry::named_rig_provider_id("initial").0,
+            None,
+            test_cwd(),
+            false,
+        ),
+    )
     .await;
+    assert_eq!(created.session_id, acp_id(session_id));
+    // Ensure the provider thread has captured its initial config before reload.
+    collect_until(&mut client, |inbound| idle_stop_reason(inbound).is_some()).await;
 
     std::fs::write(
         &config_path,
@@ -530,49 +624,56 @@ default_model = "before-model"
         ),
     )
     .unwrap();
-    client.hub.reload_provider_config().await.unwrap();
     client
-        .hub
-        .set_session_model(session_id, "added".into(), "after-model".into())
+        .request(acp::ReloadProviderConfigRequest {})
         .await
         .unwrap();
-    applied(&mut attachment.events, "after-model").await;
+    client
+        .request(set_model(session_id, "added/after-model"))
+        .await
+        .unwrap();
+    applied(&mut client, "added/after-model").await;
 
-    // The command channel and the RPC use the same daemon resolution boundary.
-    attachment
-        .commands
-        .send(AgentCommand::SetSessionModel {
-            provider: "added".into(),
-            model: "wire-model".into(),
-        })
+    client
+        .request(set_model(session_id, "added/wire-model"))
         .await
         .unwrap();
-    applied(&mut attachment.events, "wire-model").await;
+    applied(&mut client, "added/wire-model").await;
 
     assert!(client
-        .hub
-        .set_session_model(session_id, "missing".into(), "bad-model".into())
+        .request(set_model(session_id, "missing/bad-model"))
         .await
         .is_err());
-    let mut reattached = client.hub.attach_agent(session_id).await.unwrap();
-    applied(&mut reattached.events, "wire-model").await;
+    let replay = resume(&mut client, session_id).await.unwrap();
+    assert!(
+        replay
+            .iter()
+            .any(|inbound| applied_value(inbound).as_deref() == Some("added/wire-model")),
+        "a reattachment announces the applied model: {replay:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hello_negotiates_lists_agents_and_drains_over_the_real_socket() {
+async fn initialize_lists_sessions_and_drains_over_the_real_socket() {
     let mut agentd = spawn_agentd();
-    let client = connect_hub(&agentd.socket_path).await;
+    let client = connect_acp(connect_with_retry(&agentd.socket_path).await).await;
 
-    // hello's range negotiation settles on this build's version, and the
-    // reply carries the daemon's binary id.
-    assert_eq!(client.negotiated, AGENT_PROTOCOL_VERSION);
+    let response = client.initialize("test-client").await.unwrap();
     assert_eq!(
-        client.binary_id,
+        response.protocol_version,
+        agent_client_protocol::schema::ProtocolVersion::V2
+    );
+    let meta: acp::InitializeMeta = acp::read_horizon_meta(response.meta.as_ref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.ext_version, acp::HORIZON_ACP_EXT_VERSION);
+    assert_eq!(
+        meta.binary_id,
         concat!("horizon-agentd/", env!("CARGO_PKG_VERSION"))
     );
 
     // No sessions yet.
-    assert_eq!(client.hub.list_agents().await.unwrap(), Vec::new());
+    assert!(list_sessions(&client).await.is_empty());
 
     client.drain().await;
     let status = wait_for_exit(&mut agentd.child).await;
@@ -582,390 +683,295 @@ async fn hello_negotiates_lists_agents_and_drains_over_the_real_socket() {
     );
 }
 
-/// The v10 successor of the JSONL cross-version rejection tests: a remoc
-/// client whose advertised range does not overlap the daemon's
-/// (`[MIN_SUPPORTED, current]`) is rejected by `hello` with an explicit
-/// `IncompatibleVersion` error naming both ranges -- and the connection
-/// stays alive enough for the one thing a rejected client may still do:
-/// `drain`, so the auto-recovery path can restart the daemon at a
-/// compatible version.
+/// A client at another extension version still initializes and learns the
+/// daemon's version from the reply; every later method is refused with an
+/// error naming both versions -- except `_horizon/drain`, so the
+/// auto-recovery path can restart the daemon at a compatible version on
+/// the same connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
     let mut agentd = spawn_agentd();
 
-    // A client that only speaks a future version the daemon doesn't.
-    let future = AGENT_PROTOCOL_VERSION + 5;
-    let stream = connect_with_retry(&agentd.socket_path).await;
-    let (read_half, write_half) = stream.into_split();
-    let (conn, _base_tx, mut base_rx) =
-        remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
-            remoc::Cfg::default(),
-            read_half,
-            write_half,
-        )
+    let future = acp::HORIZON_ACP_EXT_VERSION + 5;
+    let client = connect_acp(connect_with_retry(&agentd.socket_path).await).await;
+    let response = client
+        .request(initialize_request("future-horizon", future))
         .await
+        .expect("a v2 client initializes whatever its extension version");
+    let meta: acp::InitializeMeta = acp::read_horizon_meta(response.meta.as_ref())
+        .unwrap()
         .unwrap();
-    let conn_task = tokio::spawn(async move {
-        let _ = conn.await;
-    });
-    let hub = base_rx.recv().await.unwrap().unwrap();
+    assert_eq!(meta.ext_version, acp::HORIZON_ACP_EXT_VERSION);
 
-    let result = hub
-        .hello(ClientHello {
-            supported: VersionRange {
-                min_supported: future,
-                current: future,
-            },
-            binary_id: "future-horizon".to_string(),
-        })
-        .await;
-    match result {
-        Err(HubError::IncompatibleVersion { client, daemon }) => {
-            assert_eq!(client.current, future);
-            assert_eq!(daemon.min_supported, MIN_SUPPORTED_AGENT_PROTOCOL_VERSION);
-            assert_eq!(daemon.current, AGENT_PROTOCOL_VERSION);
-        }
-        Err(other) => panic!("expected IncompatibleVersion, got {other:?}"),
-        Ok(_) => panic!("a disjoint version range must be rejected"),
-    }
+    let error = client
+        .request(session_new(SessionId::new()))
+        .await
+        .expect_err("a mismatched connection must not start sessions");
+    assert!(
+        error.message.starts_with("horizon ext version mismatch"),
+        "{error:?}"
+    );
+    assert!(error.message.contains(&future.to_string()), "{error:?}");
+    assert!(
+        error
+            .message
+            .contains(&acp::HORIZON_ACP_EXT_VERSION.to_string()),
+        "{error:?}"
+    );
 
-    // The version-stable `drain` still works on the same connection.
-    let _ = tokio::time::timeout(Duration::from_secs(5), hub.drain()).await;
+    client.drain().await;
     let status = wait_for_exit(&mut agentd.child).await;
     assert!(
         status.success(),
         "horizon-agentd should exit 0 after a post-rejection drain, got {status:?}"
     );
-    conn_task.abort();
 }
 
-/// `new_agent` -> `UserMessage` -> the resulting events arrive over the
-/// attachment's event channel in the same order the mock provider produced
-/// them, forming a coherent transcript.
+/// `session/new` -> `session/prompt` -> the resulting updates arrive in
+/// the order the mock provider produced them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_agent_then_user_message_streams_events_in_order() {
     let agentd = spawn_agentd();
-    let client = connect_hub(&agentd.socket_path).await;
+    let mut client = connect(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
-    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "hello".to_string(),
-        })
-        .await
-        .unwrap();
+    open_session(&client, session_new(session_id)).await;
+    prompt(&client, session_id, "hello").await;
 
-    let events = collect_events_until(&mut attachment.events, |event| {
-        matches!(
-            event,
-            Event::MessageCommitted(message)
-                if message.role == MessageRole::Assistant && message.text == "Mock response: hello"
-        )
+    let collected = collect_until(&mut client, |inbound| {
+        agent_message(inbound).as_deref() == Some("Mock response: hello")
     })
     .await;
-
-    let user_message_index = events
+    let user_index = collected
         .iter()
-        .position(|event| {
-            matches!(
-                event,
-                Event::MessageCommitted(message)
-                    if message.role == MessageRole::User && message.text == "hello"
-            )
-        })
+        .position(|inbound| user_message(inbound).as_deref() == Some("hello"))
         .expect("the user message should have been committed");
-    let assistant_reply_index = events
-        .iter()
-        .position(|event| {
-            matches!(
-                event,
-                Event::MessageCommitted(message)
-                    if message.role == MessageRole::Assistant && message.text == "Mock response: hello"
-            )
-        })
-        .expect("the assistant's reply should have been committed");
     assert!(
-        assistant_reply_index > user_message_index,
-        "the assistant's reply must land after the user's message, got: {events:?}"
+        user_index < collected.len() - 1,
+        "the assistant's reply must land after the user's message, got: {collected:?}"
     );
 }
 
-/// `list_agents` reflects a session created via `new_agent` on the same
+/// `session/list` reflects a session created via `session/new` on the same
 /// connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_agents_reflects_live_sessions_after_new_agent() {
     let agentd = spawn_agentd();
-    let client = connect_hub(&agentd.socket_path).await;
+    let client = connect(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
-    let _attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+    let created = open_session(&client, session_new(session_id)).await;
+    let meta: acp::SessionInfoMeta = acp::read_horizon_meta(created.meta.as_ref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.provider_id, mock_provider_id().0);
 
-    assert_eq!(
-        client.hub.list_agents().await.unwrap(),
-        vec![SessionSummary {
-            session_id,
-            provider_id: mock_provider_id(),
-            role_id: None,
-            parent_session_id: None,
-            workspace_root: None,
-        }]
-    );
+    let sessions = list_sessions(&client).await;
+    assert_listed(&sessions, session_id, None, Some(test_cwd()));
+    assert_eq!(sessions[0].cwd, v2::AbsolutePath::new(test_cwd()));
 }
 
 /// An auto-allow *host* tool (`workspace.snapshot`) executes agentd-side
-/// but can't answer itself -- it round-trips a host-tool request over the
-/// connection-global channel (guardrail 4) and folds the client's response
-/// into the same `ToolCallFinished` an ordinary auto tool would produce.
+/// but can't answer itself -- it round-trips a `_horizon/host_tool`
+/// request (guardrail 4) and folds the client's answer into the same
+/// finished tool call an ordinary auto tool would produce.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_tool_executes_agentd_side_via_host_tool_round_trip() {
     let agentd = spawn_agentd();
-    let mut client = connect_hub(&agentd.socket_path).await;
+    let mut client = connect(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
-    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "please take a snapshot".to_string(),
+    open_session(&client, session_new(session_id)).await;
+    prompt(&client, session_id, "please take a snapshot").await;
+
+    let mut collected = collect_until(&mut client, |inbound| {
+        matches!(inbound, Inbound::HostTool(..))
+    })
+    .await;
+    let Some(Inbound::HostTool(request, responder)) = collected.pop() else {
+        unreachable!()
+    };
+    assert_eq!(request.tool_id, "workspace.snapshot");
+    responder
+        .respond(acp::HostToolResponse {
+            output: serde_json::json!({ "tab_count": 1 }),
         })
-        .await
         .unwrap();
 
-    let request = read_host_tool_request(&mut client).await;
-    assert_eq!(request.tool_id, "workspace.snapshot");
-    respond_host_tool(
-        &client,
-        HostToolResponse {
-            request_id: request.request_id,
-            output: serde_json::json!({ "tab_count": 1 }).into(),
-        },
-    )
-    .await;
-
-    let events = collect_events_until(
-        &mut attachment.events,
-        |event| matches!(event, Event::ToolCallFinished(result) if result.output["tab_count"] == 1),
-    )
-    .await;
+    collected.extend(
+        collect_until(&mut client, |inbound| {
+            finished_tool(inbound).is_some_and(|(call, _)| {
+                call.raw_output
+                    .as_opt_ref()
+                    .flatten()
+                    .is_some_and(|output| output["tab_count"] == 1)
+            })
+        })
+        .await,
+    );
     assert!(
-        events.iter().any(|event| matches!(
-            event,
-            Event::ToolCallRequested(request) if request.tool_id == "workspace.snapshot"
-        )),
-        "expected the tool call to have been requested too, got: {events:?}"
+        collected.iter().filter_map(tool_update).any(|call| {
+            call.title == MaybeUndefined::Value("workspace.snapshot".to_string())
+                && has_status(call, v2::ToolCallStatus::Pending)
+        }),
+        "expected the tool call to have been requested too, got: {collected:?}"
     );
 }
 
-/// Approval round trip: an `ApprovalRequested` event flows out, an
-/// `ApproveToolCall` command flows back in, and agentd resolves it and
-/// reports the result as an ordinary event.
+/// Approval round trip: the approval goes out as
+/// `session/request_permission`, the approving answer comes back, and
+/// agentd runs the call and reports it as ordinary tool-call updates.
+async fn approve_and_finish(
+    client: &mut AcpClient,
+    text: &str,
+) -> (SessionId, acp::ApprovalMeta, Vec<Inbound>) {
+    let session_id = SessionId::new();
+    open_session(client, session_new(session_id)).await;
+    prompt(client, session_id, text).await;
+
+    let mut collected =
+        collect_until(client, |inbound| matches!(inbound, Inbound::Permission(..))).await;
+    let (request, responder) = take_permission(&mut collected);
+    let approval = approval_meta(&request);
+    assert_eq!(request.session_id, acp_id(session_id));
+    let requested = collected
+        .iter()
+        .filter_map(tool_update)
+        .find(|call| has_status(call, v2::ToolCallStatus::Pending))
+        .expect("tool request before approval");
+    assert_eq!(&*requested.tool_call_id.0, approval.occurrence_id);
+    assert_eq!(tool_meta(requested).unwrap().call_id, approval.call_id);
+    let Some(v2::RequestPermissionSubject::ToolCall(subject)) = &request.subject else {
+        panic!("the permission names its tool call: {request:?}");
+    };
+    assert_eq!(&*subject.tool_call.tool_call_id.0, approval.occurrence_id);
+
+    responder.respond(approve()).unwrap();
+    let occurrence = approval.occurrence_id.clone();
+    let collected = collect_until(client, |inbound| {
+        finished_tool(inbound).is_some_and(|(call, _)| *call.tool_call_id.0 == *occurrence)
+    })
+    .await;
+    assert!(
+        collected.iter().filter_map(tool_update).any(|call| {
+            *call.tool_call_id.0 == *occurrence && has_status(call, v2::ToolCallStatus::InProgress)
+        }),
+        "approving should have started the tool call before finishing it, got: {collected:?}"
+    );
+    (session_id, approval, collected)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approval_round_trip_request_out_approve_in_result_event_out() {
     let agentd = spawn_agentd();
-    let client = connect_hub(&agentd.socket_path).await;
+    let mut client = connect(&agentd.socket_path).await;
+    let (session_id, approval, collected) =
+        approve_and_finish(&mut client, "please run a tool").await;
+    let (_, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
+    assert_eq!(meta.call_id, approval.call_id);
+    assert_eq!(meta.human_decision, Some(acp::HumanDecision::Approved));
 
-    let session_id = SessionId::new();
-    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "please run a tool".to_string(),
-        })
-        .await
-        .unwrap();
-
-    let events = collect_events_until(&mut attachment.events, |event| {
-        matches!(event, Event::ApprovalRequested(_))
-    })
-    .await;
-    let call_id = events
+    // The human decision survives a reattachment.
+    let replay = resume(&mut client, session_id).await.unwrap();
+    let (_, replayed) = replay
         .iter()
-        .find_map(|event| match event {
-            Event::ApprovalRequested(request) => Some(request.call_id.clone()),
-            _ => None,
-        })
-        .expect("an approval request should have been observed");
-
-    let requested = events
-        .iter()
-        .find_map(|event| match event {
-            Event::ToolCallRequested(request) if request.call_id == call_id => {
-                Some(request.identity())
-            }
-            _ => None,
-        })
-        .expect("tool request before approval");
-    assert!(events.iter().any(|event| matches!(event,
-        Event::ApprovalRequested(approval) if approval.occurrence_id == requested.occurrence_id)));
-
-    attachment
-        .commands
-        .send(AgentCommand::ApproveToolCall {
-            identity: requested.clone(),
-        })
-        .await
-        .unwrap();
-
-    let events = collect_events_until(
-        &mut attachment.events,
-        |event| matches!(event, Event::ToolCallFinished(result) if result.call_id == call_id),
-    )
-    .await;
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, Event::ToolCallStarted(id) if id.call_id == call_id)),
-        "approving should have started the tool call before finishing it, got: {events:?}"
-    );
-    assert!(events.iter().any(|event| matches!(event,
-        Event::ToolCallStarted(identity) if identity == &requested)));
-    assert!(events.iter().any(|event| matches!(event,
-        Event::ToolCallFinished(result) if result.call_id == requested.call_id
-            && result.occurrence_id == requested.occurrence_id)));
+        .rev()
+        .find_map(finished_tool)
+        .expect("the finished call is replayed");
+    assert_eq!(replayed.human_decision, Some(acp::HumanDecision::Approved));
 }
 
 /// `bash` runs agentd-side: approving a real `bash` tool call spawns an
-/// actual subprocess in agentd, and the eventual result arrives back over
-/// the attachment's event channel.
+/// actual subprocess in agentd, and the result arrives back as the call's
+/// final update.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     let agentd = spawn_agentd();
-    let client = connect_hub(&agentd.socket_path).await;
-
-    let session_id = SessionId::new();
-    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "please run bash".to_string(),
-        })
-        .await
-        .unwrap();
-
-    let events = collect_events_until(&mut attachment.events, |event| {
-        matches!(event, Event::ApprovalRequested(_))
-    })
-    .await;
-    let call_id = events
-        .iter()
-        .find_map(|event| match event {
-            Event::ApprovalRequested(request) => Some(request.call_id.clone()),
-            _ => None,
-        })
-        .expect("bash should request approval before running");
-
-    let requested = events
-        .iter()
-        .find_map(|event| match event {
-            Event::ToolCallRequested(request) if request.call_id == call_id => {
-                Some(request.identity())
-            }
-            _ => None,
-        })
-        .expect("tool request before approval");
-    assert!(events.iter().any(|event| matches!(event,
-        Event::ApprovalRequested(approval) if approval.occurrence_id == requested.occurrence_id)));
-
-    attachment
-        .commands
-        .send(AgentCommand::ApproveToolCall {
-            identity: requested.clone(),
-        })
-        .await
-        .unwrap();
-
-    let events = collect_events_until(
-        &mut attachment.events,
-        |event| matches!(event, Event::ToolCallFinished(result) if result.call_id == call_id),
-    )
-    .await;
-    let Some(Event::ToolCallFinished(result)) = events.iter().rev().find(
-        |event| matches!(event, Event::ToolCallFinished(result) if result.call_id == call_id),
-    ) else {
-        panic!("expected a ToolCallFinished event for {call_id:?}, got: {events:?}");
-    };
-    assert_eq!(result.output["exit_code"], 0);
-    assert_eq!(result.output["output"], "agentd-bash-ok\n");
-    assert!(events.iter().any(|event| matches!(event,
-        Event::ToolCallStarted(identity) if identity == &requested)));
-    assert!(events.iter().any(|event| matches!(event,
-        Event::ToolCallFinished(result) if result.call_id == requested.call_id
-            && result.occurrence_id == requested.occurrence_id)));
+    let mut client = connect(&agentd.socket_path).await;
+    let (_, approval, collected) = approve_and_finish(&mut client, "please run bash").await;
+    let (call, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
+    assert_eq!(meta.call_id, approval.call_id);
+    assert_eq!(meta.tool_id, "bash");
+    let output = call.raw_output.as_opt_ref().flatten().unwrap();
+    assert_eq!(output["exit_code"], 0);
+    assert_eq!(output["output"], "agentd-bash-ok\n");
 }
 
-/// Regression test for the 2026-07 repeated-approval OOM incident: 10
-/// rapid duplicate `ApproveToolCall`s for the same still-running `bash`
-/// call must start it exactly once -- both in observed events and the
-/// persisted log -- because a session's commands are processed one at a
-/// time on its own dedicated thread.
+/// Regression test for the 2026-07 repeated-approval OOM incident: a call
+/// approved again and again -- each reattachment re-asks a still-pending
+/// approval, and every ask is answered -- must start exactly once, both in
+/// the updates and the persisted log, because a session's commands are
+/// processed one at a time on its own dedicated thread.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     let agentd = spawn_agentd();
-    let client = connect_hub(&agentd.socket_path).await;
+    let mut client = connect(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
-    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "please run bash".to_string(),
-        })
-        .await
-        .unwrap();
-
-    let events = collect_events_until(&mut attachment.events, |event| {
-        matches!(event, Event::ApprovalRequested(_))
+    open_session(&client, session_new(session_id)).await;
+    prompt(&client, session_id, "please run bash").await;
+    let mut collected = collect_until(&mut client, |inbound| {
+        matches!(inbound, Inbound::Permission(..))
     })
     .await;
-    let call_id = events
-        .iter()
-        .find_map(|event| match event {
-            Event::ApprovalRequested(request) => Some(request.call_id.clone()),
-            _ => None,
-        })
-        .expect("bash should request approval before running");
+    let (request, responder) = take_permission(&mut collected);
+    let approval = approval_meta(&request);
+    responder.respond(approve()).unwrap();
 
     for _ in 0..10 {
-        attachment
-            .commands
-            .send(AgentCommand::ApproveToolCall {
-                identity: events
-                    .iter()
-                    .find_map(|event| match event {
-                        Event::ApprovalRequested(request) => Some(request.identity()),
-                        _ => None,
-                    })
-                    .unwrap(),
-            })
-            .await
-            .unwrap();
+        client.send_ordered(
+            v2::ResumeSessionRequest::new(acp_id(session_id), test_cwd())
+                .replay_from(v2::ReplayFrom::Start(v2::ReplayFromStart::new())),
+        );
+        let collected = collect_until(&mut client, |inbound| {
+            matches!(inbound, Inbound::Replied(_))
+        })
+        .await;
+        for inbound in collected {
+            if let Inbound::Permission(_, responder) = inbound {
+                let _ = responder.respond(approve());
+            }
+        }
+        // Answer re-asks that arrive after the replay too.
+        while let Ok(inbound) = client.inbox.try_recv() {
+            if let Inbound::Permission(_, responder) = inbound {
+                let _ = responder.respond(approve());
+            }
+        }
     }
 
-    let events = collect_events_until(
-        &mut attachment.events,
-        |event| matches!(event, Event::ToolCallFinished(result) if result.call_id == call_id),
-    )
-    .await;
-
-    let started_count = events
+    let occurrence = approval.occurrence_id.clone();
+    let mut replay = Vec::new();
+    for _ in 0..200 {
+        replay = resume(&mut client, session_id).await.unwrap();
+        if replay
+            .iter()
+            .filter_map(finished_tool)
+            .any(|(call, _)| *call.tool_call_id.0 == *occurrence)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let started = replay
         .iter()
-        .filter(|event| matches!(event, Event::ToolCallStarted(id) if id.call_id == call_id))
+        .filter_map(tool_update)
+        .filter(|call| {
+            *call.tool_call_id.0 == *occurrence && has_status(call, v2::ToolCallStatus::InProgress)
+        })
         .count();
     assert_eq!(
-        started_count, 1,
-        "10 rapid duplicate approvals must start the tool call exactly once, got: {events:?}"
+        started, 1,
+        "repeated approvals must start the tool call exactly once, got: {replay:?}"
     );
-    let finished_count = events
+    let finished = replay
         .iter()
-        .filter(
-            |event| matches!(event, Event::ToolCallFinished(result) if result.call_id == call_id),
-        )
+        .filter_map(finished_tool)
+        .filter(|(call, _)| *call.tool_call_id.0 == *occurrence)
         .count();
     assert_eq!(
-        finished_count, 1,
-        "a duplicate approval must never produce a second result, got: {events:?}"
+        finished, 1,
+        "a duplicate approval must never produce a second result, got: {replay:?}"
     );
 
     let mut report = None;
@@ -973,7 +979,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
         let candidate = horizon_agent::persistence::event_log::read(&agentd.event_log_path)
             .expect("the on-disk event log should parse cleanly");
         if candidate.records.iter().any(|record| {
-            matches!(&record.event, Event::ToolCallFinished(result) if result.call_id == call_id)
+            matches!(&record.event, Event::ToolCallFinished(result) if result.occurrence_id.0 == occurrence)
         }) {
             report = Some(candidate);
             break;
@@ -984,9 +990,9 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     let logged_started_count = report
         .records
         .iter()
-        .filter(
-            |record| matches!(&record.event, Event::ToolCallStarted(id) if id.call_id == call_id),
-        )
+        .filter(|record| {
+            matches!(&record.event, Event::ToolCallStarted(id) if id.occurrence_id.0 == occurrence)
+        })
         .count();
     assert_eq!(
         logged_started_count, 1,
@@ -996,55 +1002,43 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
 }
 
 /// The mock provider's `"streaming tool"` trigger emits ephemeral
-/// tool-call-progress ticks before the real `ToolCallRequested` -- these
-/// must still reach a connected client (now as
-/// `AgentWireEvent::ToolCallProgress` on the attachment's event channel)
-/// and must never appear in the durable on-disk event log.
+/// tool-call-progress ticks before the real tool call -- these must reach
+/// a connected client (as `_horizon/tool_call_progress`) and must never
+/// appear in the durable on-disk event log.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log() {
     let agentd = spawn_agentd();
-    let client = connect_hub(&agentd.socket_path).await;
+    let mut client = connect(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
-    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "please use the streaming tool".to_string(),
-        })
-        .await
-        .unwrap();
+    open_session(&client, session_new(session_id)).await;
+    prompt(&client, session_id, "please use the streaming tool").await;
 
-    let mut progress_ticks = Vec::new();
-    let mut saw_tool_call_requested = false;
-    for _ in 0..400 {
-        let wire_event = tokio::time::timeout(Duration::from_secs(120), attachment.events.recv())
-            .await
-            .expect("timed out")
-            .expect("channel error")
-            .expect("the daemon should keep streaming events");
-        match wire_event {
-            AgentWireEvent::ToolCallProgress(progress) => progress_ticks.push(progress),
-            AgentWireEvent::Event(Event::ToolCallRequested(request)) => {
-                assert_eq!(request.tool_id, "mock.approval_required");
-                saw_tool_call_requested = true;
-                break;
-            }
-            _ => {}
-        }
-    }
-    assert!(
-        saw_tool_call_requested,
-        "the real tool call request should follow the streamed preview"
+    let collected = collect_until(&mut client, |inbound| {
+        tool_update(inbound).is_some_and(|call| has_status(call, v2::ToolCallStatus::Pending))
+    })
+    .await;
+    let requested = collected.iter().rev().find_map(tool_update).unwrap();
+    assert_eq!(
+        requested.title,
+        MaybeUndefined::Value("mock.approval_required".to_string())
     );
+    let progress_ticks: Vec<usize> = collected
+        .iter()
+        .filter_map(|inbound| match inbound {
+            Inbound::ToolCallProgress(acp::ToolCallProgressNotification {
+                event: acp::ToolCallProgressEvent::Progress { bytes, .. },
+                ..
+            }) => Some(*bytes),
+            _ => None,
+        })
+        .collect();
     assert!(
         progress_ticks.len() >= 3,
-        "expected every mock streaming tick to reach the client as its own event, got: {progress_ticks:?}"
+        "expected every mock streaming tick to reach the client, got: {progress_ticks:?}"
     );
     assert!(
-        progress_ticks
-            .windows(2)
-            .all(|pair| pair[1].bytes >= pair[0].bytes),
+        progress_ticks.windows(2).all(|pair| pair[1] >= pair[0]),
         "byte counts should grow monotonically as the mock provider streams, got: {progress_ticks:?}"
     );
 
@@ -1081,8 +1075,8 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
 }
 
 /// A corrupt line found during startup must be reported to a connecting
-/// client once, on the `HubHello::skipped_lines` channel -- not just
-/// printed to stderr -- so Horizon's status bar can surface it.
+/// client once, as a `_horizon/session_event` -- not just printed to stderr
+/// -- so Horizon's status bar can surface it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection() {
     let socket_path = std::env::temp_dir().join(format!(
@@ -1098,29 +1092,30 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
         .expect("write corrupt line and a tail split inside UTF-8");
 
     let agentd = spawn_agentd_at(socket_path, event_log_path);
-    let mut client = connect_hub(&agentd.socket_path).await;
+    let mut client = connect(&agentd.socket_path).await;
 
-    let summary = tokio::time::timeout(Duration::from_secs(30), client.skipped_lines.recv())
-        .await
-        .expect("timed out waiting for the skipped-lines summary")
-        .expect("skipped-lines channel error")
-        .expect("the daemon should report its startup diagnostics on the skipped-lines channel");
+    let collected = collect_until(&mut client, |inbound| {
+        matches!(
+            inbound,
+            Inbound::SessionEvent(acp::SessionEventNotification::SkippedLines { .. })
+        )
+    })
+    .await;
+    let Some(Inbound::SessionEvent(acp::SessionEventNotification::SkippedLines { summary })) =
+        collected.last()
+    else {
+        unreachable!()
+    };
     assert_eq!(summary, "skipped 1 corrupt line and a torn trailing line");
 
     // The ignored tail must not consume the first new record after startup.
     let session_id = SessionId::new();
-    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "after torn tail".into(),
-        })
-        .await
-        .unwrap();
-    collect_events_until(&mut attachment.events, |event| {
-        matches!(event, Event::MessageCommitted(message)
-            if message.role == MessageRole::Assistant && message.text == "Mock response: after torn tail")
-    }).await;
+    open_session(&client, session_new(session_id)).await;
+    prompt(&client, session_id, "after torn tail").await;
+    collect_until(&mut client, |inbound| {
+        agent_message(inbound).as_deref() == Some("Mock response: after torn tail")
+    })
+    .await;
     wait_for_persisted_event(&agentd.event_log_path, session_id, |event| {
         matches!(event, Event::MessageCommitted(message)
             if message.role == MessageRole::Assistant && message.text == "Mock response: after torn tail")
@@ -1138,7 +1133,7 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
 }
 
 /// Step 4's headline scenario: `kill -9` a live daemon mid-session (a turn
-/// genuinely still open in `WaitingForApproval`), respawn against the same
+/// genuinely still open, waiting for approval), respawn against the same
 /// log, and confirm replay: transcript survives, the interrupted turn is
 /// committed as cancelled, the session is immediately usable again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1146,20 +1141,13 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
     let agentd = spawn_agentd();
     let socket_path = agentd.socket_path.clone();
     let event_log_path = agentd.event_log_path.clone();
-    let client = connect_hub(&socket_path).await;
+    let mut client = connect(&socket_path).await;
 
     let session_id = SessionId::new();
-    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "please run a tool".to_string(),
-        })
-        .await
-        .unwrap();
-
-    collect_events_until(&mut attachment.events, |event| {
-        matches!(event, Event::ApprovalRequested(_))
+    open_session(&client, session_new(session_id)).await;
+    prompt(&client, session_id, "please run a tool").await;
+    collect_until(&mut client, |inbound| {
+        matches!(inbound, Inbound::Permission(..))
     })
     .await;
     wait_for_persisted_event(&event_log_path, session_id, |event| {
@@ -1178,89 +1166,77 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
         .turn_id
         .expect("approval belongs to the original turn");
 
-    drop(attachment);
     drop(client);
     agentd.kill_and_wait();
 
     let mut respawned = spawn_agentd_at(socket_path, event_log_path);
-    let client = connect_hub(&respawned.socket_path).await;
+    let mut client = connect(&respawned.socket_path).await;
 
-    assert_eq!(
-        client.hub.list_agents().await.unwrap(),
-        vec![SessionSummary {
-            session_id,
-            provider_id: mock_provider_id(),
-            role_id: None,
-            parent_session_id: None,
-            workspace_root: Some(std::env::current_dir().expect("test cwd should be readable")),
-        }],
-        "the resumed session must be listed as live again"
+    assert_listed(
+        &list_sessions(&client).await,
+        session_id,
+        None,
+        Some(test_cwd()),
     );
 
-    let mut attachment = client.hub.attach_agent(session_id).await.unwrap();
-    let replayed = collect_replayed_events(&mut attachment.events).await;
-
+    let replayed = resume(&mut client, session_id).await.unwrap();
     assert!(
-        replayed.iter().any(|event| matches!(
-            event,
-            Event::MessageCommitted(message)
-                if message.role == MessageRole::User && message.text == "please run a tool"
-        )),
+        replayed
+            .iter()
+            .any(|inbound| user_message(inbound).as_deref() == Some("please run a tool")),
         "the pre-crash user message must survive replay, got: {replayed:?}"
     );
     assert!(
         replayed
             .iter()
-            .any(|event| matches!(event, Event::ApprovalRequested(_))),
-        "the pre-crash approval request must survive replay, got: {replayed:?}"
-    );
-    assert!(
-        replayed
-            .iter()
-            .any(|event| matches!(event, Event::TurnEnded(TurnEndReason::Cancelled))),
+            .any(|inbound| { idle_stop_reason(inbound) == Some(Some(v2::StopReason::Cancelled)) }),
         "the interrupted turn must be committed as cancelled on resume, got: {replayed:?}"
     );
-    for request in replayed.iter().filter_map(|event| match event {
-        Event::ToolCallRequested(request) => Some(request),
-        _ => None,
-    }) {
+    for requested in replayed
+        .iter()
+        .filter_map(tool_update)
+        .filter(|call| has_status(call, v2::ToolCallStatus::Pending))
+    {
         assert!(
-            replayed.iter().any(|event| matches!(event,
-            Event::ToolCallFinished(result) if result.call_id == request.call_id
-                && result.occurrence_id == request.occurrence_id)),
+            replayed
+                .iter()
+                .filter_map(finished_tool)
+                .any(|(call, _)| call.tool_call_id == requested.tool_call_id),
             "resume must close the exact original execution"
         );
     }
-    let frame = agent_frame_from_events(&replayed);
     assert!(
-        !frame.is_turn_in_flight(),
-        "replay must leave the session ready for a new turn, got frame: {frame:?}"
+        idle_stop_reason(
+            replayed
+                .iter()
+                .rev()
+                .find(|inbound| is_state(inbound))
+                .unwrap()
+        )
+        .is_some(),
+        "replay must leave the session ready for a new turn, got: {replayed:?}"
     );
     assert!(
-        frame.pending_approval_call_id().is_none(),
-        "the cancelled approval must not still read as pending, got frame: {frame:?}"
+        !replayed
+            .iter()
+            .any(|inbound| matches!(inbound, Inbound::Permission(..))),
+        "the cancelled approval must not be asked again"
     );
 
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "hello again".to_string(),
-        })
-        .await
-        .unwrap();
-    let events = collect_events_until(&mut attachment.events, |event| {
-        matches!(
-            event,
-            Event::MessageCommitted(message)
-                if message.role == MessageRole::Assistant && message.text == "Mock response: hello again"
-        )
+    prompt(&client, session_id, "hello again").await;
+    let collected = collect_until(&mut client, |inbound| {
+        agent_message(inbound).as_deref() == Some("Mock response: hello again")
     })
     .await;
-    assert!(events.iter().any(|event| matches!(
-        event,
-        Event::MessageCommitted(message)
-            if message.role == MessageRole::User && message.text == "hello again"
-    )));
+    assert!(
+        !collected
+            .iter()
+            .any(|inbound| matches!(inbound, Inbound::Permission(..))),
+        "the cancelled approval must not be asked again"
+    );
+    assert!(collected
+        .iter()
+        .any(|inbound| user_message(inbound).as_deref() == Some("hello again")));
 
     wait_for_persisted_event(&respawned.event_log_path, session_id, |event| {
         matches!(event, Event::MessageCommitted(message)
@@ -1314,20 +1290,23 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     let agentd = spawn_agentd();
     let socket_path = agentd.socket_path.clone();
     let event_log_path = agentd.event_log_path.clone();
-    let client = connect_hub(&socket_path).await;
+    let mut client = connect(&socket_path).await;
 
     let session_id = SessionId::new();
-    let mut attachment = client
-        .hub
-        .new_agent(session_new_with_role(
+    open_session(
+        &client,
+        new_session_request(
             session_id,
-            RoleId("config".to_string()),
-        ))
-        .await
-        .unwrap();
+            &mock_provider_id().0,
+            Some("config"),
+            test_cwd(),
+            false,
+        ),
+    )
+    .await;
     // Drain the startup burst until its init message reaches the wire...
-    collect_events_until(&mut attachment.events, |event| {
-        matches!(event, Event::MessageCommitted(_))
+    collect_until(&mut client, |inbound| {
+        agent_message(inbound).is_some() || user_message(inbound).is_some()
     })
     .await;
     // ...and disk, before the hard kill.
@@ -1336,22 +1315,16 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     })
     .await;
 
-    drop(attachment);
     drop(client);
     agentd.kill_and_wait();
 
     let respawned = spawn_agentd_at(socket_path, event_log_path);
-    let client = connect_hub(&respawned.socket_path).await;
-    assert_eq!(
-        client.hub.list_agents().await.unwrap(),
-        vec![SessionSummary {
-            session_id,
-            provider_id: mock_provider_id(),
-            role_id: Some(RoleId("config".to_string())),
-            parent_session_id: None,
-            workspace_root: Some(std::env::current_dir().expect("test cwd should be readable")),
-        }],
-        "resume must restore the session's role, not just its provider"
+    let client = connect(&respawned.socket_path).await;
+    assert_listed(
+        &list_sessions(&client).await,
+        session_id,
+        Some("config"),
+        Some(test_cwd()),
     );
 }
 
@@ -1365,20 +1338,27 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     let agentd = spawn_agentd();
     let socket_path = agentd.socket_path.clone();
     let event_log_path = agentd.event_log_path.clone();
-    let client = connect_hub(&socket_path).await;
+    let client = connect(&socket_path).await;
     let session_id = SessionId::new();
-    let mut new = session_new(session_id);
-    new.workspace_root = Some(repo.path().to_path_buf());
-    new.isolate = true;
-    let attachment = client.hub.new_agent(new).await.unwrap();
+    open_session(
+        &client,
+        new_session_request(
+            session_id,
+            &mock_provider_id().0,
+            None,
+            repo.path().to_path_buf(),
+            true,
+        ),
+    )
+    .await;
 
     let mut isolated_root = None;
     for _ in 0..200 {
-        let summaries = client.hub.list_agents().await.unwrap();
-        if let Some(root) = summaries
+        if let Some(root) = list_sessions(&client)
+            .await
             .iter()
-            .find(|summary| summary.session_id == session_id)
-            .and_then(|summary| summary.workspace_root.clone())
+            .find(|info| info.session_id == acp_id(session_id))
+            .and_then(|info| info_meta(info).workspace_root)
             .filter(|root| root != repo.path())
         {
             isolated_root = Some(root);
@@ -1406,105 +1386,81 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
             })
     }));
 
-    drop(attachment);
     drop(client);
     agentd.kill_and_wait();
 
     let respawned = spawn_agentd_at(socket_path, event_log_path);
-    let client = connect_hub(&respawned.socket_path).await;
-    let summaries = client.hub.list_agents().await.unwrap();
-    let resumed = summaries
-        .iter()
-        .find(|summary| summary.session_id == session_id)
+    let mut client = connect(&respawned.socket_path).await;
+    let resumed = list_sessions(&client)
+        .await
+        .into_iter()
+        .find(|info| info.session_id == acp_id(session_id))
         .expect("the isolated session should resume live");
-    assert_eq!(resumed.workspace_root.as_ref(), Some(&isolated_root));
+    assert_eq!(
+        info_meta(&resumed).workspace_root.as_ref(),
+        Some(&isolated_root)
+    );
 
-    let mut attachment = client.hub.attach_agent(session_id).await.unwrap();
-    let _ = collect_replayed_events(&mut attachment.events).await;
+    let _ = resume(&mut client, session_id).await.unwrap();
     if !horizon_sandbox::is_available() {
         return;
     }
 
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "please run bash".to_string(),
-        })
-        .await
-        .unwrap();
-    let events = collect_events_until(&mut attachment.events, |event| {
-        matches!(event, Event::ToolCallFinished(result) if result.call_id.0 == "mock-bash-1")
+    prompt(&client, session_id, "please run bash").await;
+    let collected = collect_until(&mut client, |inbound| {
+        finished_tool(inbound).is_some_and(|(_, meta)| meta.call_id == "mock-bash-1")
     })
     .await;
     assert!(
-        !events
+        !collected
             .iter()
-            .any(|event| matches!(event, Event::ApprovalRequested(_))),
-        "a resumed isolated session should retain tier-1 auto execution: {events:?}"
+            .any(|inbound| matches!(inbound, Inbound::Permission(..))),
+        "a resumed isolated session should retain tier-1 auto execution: {collected:?}"
     );
-    let result = events
-        .iter()
-        .find_map(|event| match event {
-            Event::ToolCallFinished(result) if result.call_id.0 == "mock-bash-1" => Some(result),
-            _ => None,
-        })
-        .expect("bash should finish without manual approval");
+    let (call, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
+    let output = call.raw_output.as_opt_ref().flatten().unwrap();
     assert_eq!(
-        result.output["auto_approved"], true,
-        "resumed call should retain the contained classification: {:?}",
-        result.output
+        meta.auto_approved,
+        Some(true),
+        "resumed call should retain the contained classification: {output:?}"
     );
     assert_eq!(
-        result.output["policy_tier"], "contained",
-        "resumed call should retain tier-1 eligibility: {:?}",
-        result.output
+        meta.policy_tier.as_deref(),
+        Some("contained"),
+        "resumed call should retain tier-1 eligibility: {output:?}"
     );
 }
 
-/// `attach_agent` bootstrap (no crash): a client that disconnects and
-/// reconnects to the same running daemon must see the session's frame come
-/// back identical to the one it had live.
+/// `session/resume` bootstrap (no crash): a client that disconnects and
+/// reconnects to the same running daemon must receive exactly the updates
+/// it had seen live, message ids included.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn attach_agent_after_reconnect_rebuilds_an_equivalent_frame() {
     let agentd = spawn_agentd();
-    let client = connect_hub(&agentd.socket_path).await;
+    let mut client = connect(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
-    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "hello".to_string(),
-        })
-        .await
-        .unwrap();
+    open_session(&client, session_new(session_id)).await;
+    prompt(&client, session_id, "hello").await;
 
     let mut seen_reply = false;
-    let live_events = collect_events_until(&mut attachment.events, |event| {
-        if matches!(
-            event,
-            Event::MessageCommitted(message)
-                if message.role == MessageRole::Assistant && message.text == "Mock response: hello"
-        ) {
+    let live = collect_until(&mut client, |inbound| {
+        if agent_message(inbound).as_deref() == Some("Mock response: hello") {
             seen_reply = true;
         }
-        seen_reply && matches!(event, Event::StateChanged(SessionState::WaitingForUser))
+        seen_reply && idle_stop_reason(inbound).is_some()
     })
     .await;
-    let live_frame = agent_frame_from_events(&live_events);
 
     // Disconnect without draining -- the session keeps running.
-    drop(attachment);
     drop(client);
 
-    let client = connect_hub(&agentd.socket_path).await;
-    let mut attachment = client.hub.attach_agent(session_id).await.unwrap();
-    let replayed_events = collect_replayed_events(&mut attachment.events).await;
-    let replayed_frame = agent_frame_from_events(&replayed_events);
-
+    let mut client = connect(&agentd.socket_path).await;
+    let replayed = resume(&mut client, session_id).await.unwrap();
     assert_eq!(
-        replayed_frame, live_frame,
-        "attach_agent's replay must fold to the exact same frame the live connection saw"
+        replayed.iter().map(wire).collect::<Vec<_>>(),
+        live.iter().map(wire).collect::<Vec<_>>(),
+        "session/resume must replay exactly what the live connection saw"
     );
 }
 
@@ -1516,60 +1472,41 @@ async fn drained_agentd_respawns_and_preserves_a_completed_session() {
     let mut agentd = spawn_agentd();
     let socket_path = agentd.socket_path.clone();
     let event_log_path = agentd.event_log_path.clone();
-    let client = connect_hub(&socket_path).await;
+    let mut client = connect(&socket_path).await;
 
     let session_id = SessionId::new();
-    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: "hello".to_string(),
-        })
-        .await
-        .unwrap();
-    collect_events_until(&mut attachment.events, |event| {
-        matches!(
-            event,
-            Event::MessageCommitted(message)
-                if message.role == MessageRole::Assistant && message.text == "Mock response: hello"
-        )
+    open_session(&client, session_new(session_id)).await;
+    prompt(&client, session_id, "hello").await;
+    collect_until(&mut client, |inbound| {
+        agent_message(inbound).as_deref() == Some("Mock response: hello")
     })
     .await;
 
     client.drain().await;
-    drop(attachment);
     drop(client);
     let status = wait_for_exit(&mut agentd.child).await;
     assert!(status.success(), "drain should exit 0, got {status:?}");
 
     let respawned = spawn_agentd_at(socket_path, event_log_path);
-    let client = connect_hub(&respawned.socket_path).await;
-    assert_eq!(
-        client.hub.list_agents().await.unwrap(),
-        vec![SessionSummary {
-            session_id,
-            provider_id: mock_provider_id(),
-            role_id: None,
-            parent_session_id: None,
-            workspace_root: Some(std::env::current_dir().expect("test cwd should be readable")),
-        }],
-        "a gracefully drained session must resume too, not just a crashed one"
+    let mut client = connect(&respawned.socket_path).await;
+    assert_listed(
+        &list_sessions(&client).await,
+        session_id,
+        None,
+        Some(test_cwd()),
     );
 
-    let mut attachment = client.hub.attach_agent(session_id).await.unwrap();
-    let replayed = collect_replayed_events(&mut attachment.events).await;
+    let replayed = resume(&mut client, session_id).await.unwrap();
     assert!(
-        replayed.iter().any(|event| matches!(
-            event,
-            Event::MessageCommitted(message)
-                if message.role == MessageRole::User && message.text == "hello"
-        )),
+        replayed
+            .iter()
+            .any(|inbound| user_message(inbound).as_deref() == Some("hello")),
         "the pre-drain transcript must survive, got: {replayed:?}"
     );
     assert!(
         !replayed
             .iter()
-            .any(|event| matches!(event, Event::TurnEnded(TurnEndReason::Cancelled))),
+            .any(|inbound| { idle_stop_reason(inbound) == Some(Some(v2::StopReason::Cancelled)) }),
         "a turn that had already completed cleanly before the drain must not be \
          re-marked as cancelled on resume, got: {replayed:?}"
     );
@@ -1625,24 +1562,14 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
     );
 
     let agentd = spawn_agentd_at(socket_path, event_log_path);
-    let client = connect_hub(&agentd.socket_path).await;
-    assert_eq!(
-        client.hub.list_agents().await.unwrap(),
-        vec![SessionSummary {
-            session_id: live_session,
-            provider_id: mock_provider_id(),
-            role_id: None,
-            parent_session_id: None,
-            workspace_root: None,
-        }],
-        "only the live session should have been resumed"
-    );
+    let client = connect(&agentd.socket_path).await;
+    assert_listed(&list_sessions(&client).await, live_session, None, None);
 }
 
-/// Fix 1: `hello` must answer well before a slow resume finishes, and
-/// `list_agents` must wait for it -- proven with the resume-delay hook.
+/// Fix 1: `initialize` must answer well before a slow resume finishes, and
+/// `session/list` must wait for it -- proven with the resume-delay hook.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hello_answers_immediately_while_list_agents_waits_for_a_slow_resume() {
+async fn initialize_answers_immediately_while_session_list_waits_for_a_slow_resume() {
     let socket_path = std::env::temp_dir().join(format!(
         "hzn-e2e-{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..8]
@@ -1668,31 +1595,22 @@ async fn hello_answers_immediately_while_list_agents_waits_for_a_slow_resume() {
     const RESUME_DELAY_MS: u64 = 2000;
     let agentd = spawn_agentd_with_resume_delay(socket_path, event_log_path, RESUME_DELAY_MS);
 
-    let hello_started = Instant::now();
-    let client = connect_hub(&agentd.socket_path).await;
-    let hello_elapsed = hello_started.elapsed();
+    let initialize_started = Instant::now();
+    let client = connect(&agentd.socket_path).await;
+    let initialize_elapsed = initialize_started.elapsed();
     assert!(
-        hello_elapsed < Duration::from_millis(RESUME_DELAY_MS / 2),
-        "hello should answer well before the artificial resume delay elapses, took {hello_elapsed:?}"
+        initialize_elapsed < Duration::from_millis(RESUME_DELAY_MS / 2),
+        "initialize should answer well before the artificial resume delay elapses, took {initialize_elapsed:?}"
     );
 
     let list_started = Instant::now();
-    let agents = client.hub.list_agents().await.unwrap();
+    let sessions = list_sessions(&client).await;
     let list_elapsed = list_started.elapsed();
     assert!(
         list_elapsed >= Duration::from_millis(RESUME_DELAY_MS) - Duration::from_millis(300),
-        "list_agents should have waited for the (artificially slow) resume to finish, took {list_elapsed:?}"
+        "session/list should have waited for the (artificially slow) resume to finish, took {list_elapsed:?}"
     );
-    assert_eq!(
-        agents,
-        vec![SessionSummary {
-            session_id: live_session,
-            provider_id: mock_provider_id(),
-            role_id: None,
-            parent_session_id: None,
-            workspace_root: None,
-        }]
-    );
+    assert_listed(&sessions, live_session, None, None);
 }
 
 /// Fix 1's other half: a second daemon against a live socket must bail
@@ -1722,10 +1640,10 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
     );
 
     let first = spawn_agentd_at(socket_path.clone(), event_log_path.clone());
-    // Wait for the first instance to be up and resumed (list_agents' own
+    // Wait for the first instance to be up and resumed (session/list's own
     // readiness gate) before racing a second one against it.
-    let client = connect_hub(&first.socket_path).await;
-    let _ = client.hub.list_agents().await.unwrap();
+    let client = connect(&first.socket_path).await;
+    let _ = list_sessions(&client).await;
     drop(client);
 
     // Spawned as a bare `Child` rather than an `AgentdProcess`: this one is
@@ -1765,10 +1683,11 @@ async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() 
     drop(first);
 }
 
-/// Task 1: `hello`/`list_agents` must both answer promptly even while an
-/// (artificially slowed) DuckDB rebuild is still running in the background.
+/// Task 1: `initialize`/`session/list` must both answer promptly even
+/// while an (artificially slowed) DuckDB rebuild is still running in the
+/// background.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn duckdb_rebuild_delay_does_not_block_hello_or_list_agents() {
+async fn duckdb_rebuild_delay_does_not_block_initialize_or_session_list() {
     let socket_path = std::env::temp_dir().join(format!(
         "hzn-e2e-{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..8]
@@ -1795,31 +1714,22 @@ async fn duckdb_rebuild_delay_does_not_block_hello_or_list_agents() {
     let agentd =
         spawn_agentd_with_duckdb_rebuild_delay(socket_path, event_log_path, REBUILD_DELAY_MS);
 
-    let hello_started = Instant::now();
-    let client = connect_hub(&agentd.socket_path).await;
-    let hello_elapsed = hello_started.elapsed();
+    let initialize_started = Instant::now();
+    let client = connect(&agentd.socket_path).await;
+    let initialize_elapsed = initialize_started.elapsed();
     assert!(
-        hello_elapsed < Duration::from_millis(REBUILD_DELAY_MS / 2),
-        "hello should answer well before the artificial duckdb rebuild delay elapses, took {hello_elapsed:?}"
+        initialize_elapsed < Duration::from_millis(REBUILD_DELAY_MS / 2),
+        "initialize should answer well before the artificial duckdb rebuild delay elapses, took {initialize_elapsed:?}"
     );
 
     let list_started = Instant::now();
-    let agents = client.hub.list_agents().await.unwrap();
+    let sessions = list_sessions(&client).await;
     let list_elapsed = list_started.elapsed();
     assert!(
         list_elapsed < Duration::from_millis(REBUILD_DELAY_MS / 2),
-        "list_agents must not wait on the (slow) duckdb rebuild, took {list_elapsed:?}"
+        "session/list must not wait on the (slow) duckdb rebuild, took {list_elapsed:?}"
     );
-    assert_eq!(
-        agents,
-        vec![SessionSummary {
-            session_id: live_session,
-            provider_id: mock_provider_id(),
-            role_id: None,
-            parent_session_id: None,
-            workspace_root: None,
-        }]
-    );
+    assert_listed(&sessions, live_session, None, None);
 }
 
 /// Task 2's skip path: a second spawn against an *unchanged* event log must
@@ -1859,14 +1769,14 @@ async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
         event_log_path.clone(),
         state_db_path.clone(),
     );
-    drop(connect_hub(&first.socket_path).await);
+    drop(connect(&first.socket_path).await);
     first
         .wait_for_stderr_line("DuckDB projection rebuilt (")
         .await;
     first.kill_and_wait();
 
     let second = spawn_agentd_with_duckdb_options(socket_path, event_log_path, state_db_path);
-    drop(connect_hub(&second.socket_path).await);
+    drop(connect(&second.socket_path).await);
     second
         .wait_for_stderr_line("DuckDB projection already current, skipping rebuild")
         .await;
@@ -1908,7 +1818,7 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
         event_log_path.clone(),
         state_db_path.clone(),
     );
-    drop(connect_hub(&first.socket_path).await);
+    drop(connect(&first.socket_path).await);
     first
         .wait_for_stderr_line("DuckDB projection rebuilt (")
         .await;
@@ -1927,7 +1837,7 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
     );
 
     let second = spawn_agentd_with_duckdb_options(socket_path, event_log_path, state_db_path);
-    drop(connect_hub(&second.socket_path).await);
+    drop(connect(&second.socket_path).await);
     let catch_up_line = second
         .wait_for_stderr_line("DuckDB projection caught up incrementally (")
         .await;
@@ -2008,19 +1918,17 @@ async fn moa_pass_runs_against_a_real_provider() {
         // contract set it.
         .env("HORIZON_CONFIG", &config_path)
         .spawn();
-    let client = connect_hub(&agentd.socket_path).await;
+    let mut client = connect(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
-    let mut attachment = client
-        .hub
-        .new_agent(SessionNew {
+    client
+        .request(new_session_request(
             session_id,
-            provider_id: horizon_agent::registry::moa_provider_id("mix"),
-            role_id: None,
-            workspace_root: Some(fixture.clone()),
-            spawn_source_session_id: None,
-            isolate: false,
-        })
+            &horizon_agent::registry::moa_provider_id("mix").0,
+            None,
+            fixture.clone(),
+            false,
+        ))
         .await
         .expect("the [[moa]] entry must be registered as a provider");
 
@@ -2028,34 +1936,23 @@ async fn moa_pass_runs_against_a_real_provider() {
                     and line defines it? Answer with the number and the path."
         .to_string();
     let started = Instant::now();
-    attachment
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: question.clone(),
-        })
-        .await
-        .unwrap();
+    prompt(&client, session_id, &question).await;
 
     // One pass runs three sessions to completion before the aggregator's
-    // own turn starts, so the wait is long and the read budget is large.
+    // own turn starts, so the wait is long.
     let deadline = Instant::now() + Duration::from_secs(600);
-    let mut turn_ended = false;
-    while !turn_ended {
+    loop {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .expect("the MoA pass did not finish within 10 minutes");
-        let wire_event = tokio::time::timeout(remaining, attachment.events.recv())
-            .await
-            .expect("timed out waiting for the aggregator's turn to end")
-            .expect("agent event channel error")
-            .expect("the daemon should keep streaming events");
-        if let AgentWireEvent::Event(Event::TurnEnded(reason)) = wire_event {
+        let inbound = client.next(remaining).await;
+        if let Some(Some(reason)) = idle_stop_reason(&inbound) {
             assert_eq!(
                 reason,
-                TurnEndReason::Completed,
+                v2::StopReason::EndTurn,
                 "the aggregator's turn must complete"
             );
-            turn_ended = true;
+            break;
         }
     }
     let elapsed = started.elapsed();
@@ -2372,26 +2269,20 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
     let socket = daemon.socket_path.clone();
     let log = daemon.event_log_path.clone();
     for round in 0..2 {
-        let client = connect_hub(&socket).await;
-        let mut attached = client.hub.attach_agent(session).await.unwrap();
-        let _ = collect_replayed_events(&mut attached.events).await;
-        attached
-            .commands
-            .send(AgentCommand::UserMessage {
-                text: format!("hello after restart {round}"),
-            })
-            .await
-            .unwrap();
-        let events = collect_events_until(&mut attached.events, |event| {
-            matches!(event, Event::TurnEnded(TurnEndReason::Completed))
+        let mut client = connect(&socket).await;
+        let _ = resume(&mut client, session).await.unwrap();
+        prompt(&client, session, &format!("hello after restart {round}")).await;
+        let collected = collect_until(&mut client, |inbound| {
+            idle_stop_reason(inbound) == Some(Some(v2::StopReason::EndTurn))
         })
         .await;
         assert!(
-            !events.iter().any(|event| matches!(event, Event::Error(_))),
-            "{events:?}"
+            !collected
+                .iter()
+                .any(|inbound| session_error(inbound).is_some()),
+            "{collected:?}"
         );
         client.drain().await;
-        drop(attached);
         drop(client);
         assert!(wait_for_exit(&mut daemon.child).await.success());
         let records = horizon_agent::persistence::event_log::read(&log)
@@ -2418,137 +2309,141 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
     }
 }
 
-/// Attach while deltas are being committed. The full wire event sequence,
+/// Reattach while deltas are being committed. The full update sequence,
 /// including the replay/live join, must equal a subsequent quiescent replay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repeated_attachments_during_streaming_join_history_and_live_exactly_once() {
-    let agentd = spawn_agentd();
-    let client = connect_hub(&agentd.socket_path).await;
-    let session = SessionId::new();
-    let mut first = client.hub.new_agent(session_new(session)).await.unwrap();
-    first
-        .commands
-        .send(AgentCommand::UserMessage {
-            text: format!("slow {}", "word ".repeat(100)),
-        })
-        .await
-        .unwrap();
-    collect_events_until(&mut first.events, |event| {
-        matches!(event, Event::AssistantTextDelta(_))
-    })
-    .await;
-    for _ in 0..4 {
-        let mut replacement = client.hub.attach_agent(session).await.unwrap();
-        let history = collect_replayed_events(&mut replacement.events).await;
-        assert!(history
-            .iter()
-            .any(|event| matches!(event, Event::AssistantTextDelta(_))));
-        first = replacement;
+    fn is_chunk(inbound: &Inbound) -> bool {
+        matches!(
+            update(inbound),
+            Some(v2::SessionUpdate::AgentMessageChunk(_))
+        )
     }
-    let mut current = client.hub.attach_agent(session).await.unwrap();
-    let mut events = collect_replayed_events(&mut current.events).await;
-    // An old sender can still have space in its transport buffer. Even when
-    // enqueue succeeds, that attachment has lost command authority.
-    let _ = first
-        .commands
-        .send(AgentCommand::Cancel { request_id: None })
-        .await;
-    if agent_frame_from_events(&events).state != Some(SessionState::WaitingForUser) {
-        events.extend(
-            collect_events_until(&mut current.events, |event| {
-                matches!(event, Event::StateChanged(SessionState::WaitingForUser))
-            })
-            .await,
+    let agentd = spawn_agentd();
+    let mut client = connect(&agentd.socket_path).await;
+    let session = SessionId::new();
+    open_session(&client, session_new(session)).await;
+    prompt(&client, session, &format!("slow {}", "word ".repeat(100))).await;
+    collect_until(&mut client, is_chunk).await;
+    for _ in 0..4 {
+        let history = resume(&mut client, session).await.unwrap();
+        assert!(history.iter().any(is_chunk));
+    }
+    let mut messages = resume(&mut client, session).await.unwrap();
+    let settled = |messages: &[Inbound]| {
+        messages
+            .iter()
+            .rev()
+            .find(|inbound| is_state(inbound))
+            .is_some_and(|inbound| idle_stop_reason(inbound).is_some())
+    };
+    if !settled(&messages) {
+        messages.extend(
+            collect_until(&mut client, |inbound| idle_stop_reason(inbound).is_some()).await,
         );
     }
-    assert!(!events
+    assert!(!messages
         .iter()
-        .any(|event| matches!(event, Event::StateChanged(SessionState::Cancelled))));
-    let mut reopened = client.hub.attach_agent(session).await.unwrap();
-    let replay = collect_replayed_events(&mut reopened.events).await;
+        .any(|inbound| { idle_stop_reason(inbound) == Some(Some(v2::StopReason::Cancelled)) }));
+    let replay = resume(&mut client, session).await.unwrap();
     assert_eq!(
-        events, replay,
+        messages.iter().map(wire).collect::<Vec<_>>(),
+        replay.iter().map(wire).collect::<Vec<_>>(),
         "streaming attach must preserve the entire ordered sequence"
-    );
-    assert_eq!(
-        agent_frame_from_events(&events),
-        agent_frame_from_events(&replay)
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn large_history_survives_abandoned_replay_and_daemon_restart() {
+    fn user_texts(messages: &[Inbound]) -> Vec<String> {
+        messages
+            .iter()
+            .filter_map(user_message)
+            .filter(|text| text.starts_with("historical message "))
+            .collect()
+    }
     let temp = tempfile::tempdir().unwrap();
     let session = SessionId::new();
     let socket = temp.path().join("agentd.sock");
     let log = temp.path().join("events.jsonl");
     let history: Vec<_> = (0..3000)
-        .map(|index| {
-            Event::MessageCommitted(horizon_agent::contract::Message {
-                role: MessageRole::User,
-                text: format!("historical message {index}: {}", "x".repeat(512)),
-            })
-        })
+        .map(|index| format!("historical message {index}: {}", "x".repeat(512)))
         .collect();
-    write_session_fixture(&log, vec![(session, history.clone())]);
-    let agentd = spawn_agentd_at(socket.clone(), log.clone());
-    let client = connect_hub(&socket).await;
-    let mut abandoned = client.hub.attach_agent(session).await.unwrap();
-    assert_eq!(
-        abandoned.events.recv().await.unwrap(),
-        Some(AgentWireEvent::ReplayStarted)
+    write_session_fixture(
+        &log,
+        vec![(
+            session,
+            history
+                .iter()
+                .map(|text| {
+                    Event::MessageCommitted(horizon_agent::contract::Message {
+                        role: MessageRole::User,
+                        text: text.clone(),
+                    })
+                })
+                .collect(),
+        )],
     );
+    let agentd = spawn_agentd_at(socket.clone(), log.clone());
+    let mut abandoned = connect(&socket).await;
+    abandoned.send_ordered(
+        v2::ResumeSessionRequest::new(acp_id(session), test_cwd())
+            .replay_from(v2::ReplayFrom::Start(v2::ReplayFromStart::new())),
+    );
+    let _first = abandoned.next(Duration::from_secs(120)).await;
     drop(abandoned);
-    let mut replacement = client.hub.attach_agent(session).await.unwrap();
-    let replay = collect_replayed_events(&mut replacement.events).await;
-    assert!(replay.starts_with(&history));
-    drop(replacement);
+    let mut client = connect(&socket).await;
+    let replay = resume(&mut client, session).await.unwrap();
+    assert_eq!(user_texts(&replay), history);
     drop(client);
     agentd.kill_and_wait();
     let _restarted = spawn_agentd_at(socket.clone(), log);
-    let client = connect_hub(&socket).await;
-    let mut reopened = client.hub.attach_agent(session).await.unwrap();
-    let restored = collect_replayed_events(&mut reopened.events).await;
-    assert!(restored.starts_with(&history));
-    assert_eq!(
-        restored
-            .iter()
-            .filter(|event| matches!(event, Event::MessageCommitted(message) if message.role == MessageRole::User && message.text.starts_with("historical message ")))
-            .cloned().collect::<Vec<_>>(),
-        history
-    );
+    let mut client = connect(&socket).await;
+    let restored = resume(&mut client, session).await.unwrap();
+    assert_eq!(user_texts(&restored), history);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn startup_isolation_warning_is_visible_and_survives_reattachment() {
     let agentd = spawn_agentd();
-    let client = connect_hub(&agentd.socket_path).await;
+    let mut client = connect(&agentd.socket_path).await;
     let session = SessionId::new();
     let plain_directory = tempfile::tempdir().unwrap();
-    let mut new = session_new(session);
-    new.isolate = true;
-    new.workspace_root = Some(plain_directory.path().into());
-    let mut attachment = client.hub.new_agent(new).await.unwrap();
-    let events = collect_events_until(&mut attachment.events, |event| {
-        matches!(event,
-            Event::Error(error) if error.message.contains("continuing without isolation")
-        )
+    open_session(
+        &client,
+        new_session_request(
+            session,
+            &mock_provider_id().0,
+            None,
+            plain_directory.path().into(),
+            true,
+        ),
+    )
+    .await;
+    let collected = collect_until(&mut client, |inbound| {
+        session_error(inbound)
+            .is_some_and(|message| message.contains("continuing without isolation"))
     })
     .await;
-    let warning = events
-        .into_iter()
-        .find(|event| matches!(event, Event::Error(_)))
-        .unwrap();
-    let mut reopened = client.hub.attach_agent(session).await.unwrap();
-    let replay = collect_replayed_events(&mut reopened.events).await;
-    assert_eq!(replay.iter().filter(|event| **event == warning).count(), 1);
+    let warning = session_error(collected.last().unwrap())
+        .unwrap()
+        .to_string();
+    let replay = resume(&mut client, session).await.unwrap();
+    assert_eq!(
+        replay
+            .iter()
+            .filter(|inbound| session_error(inbound) == Some(warning.as_str()))
+            .count(),
+        1
+    );
     let records = horizon_agent::persistence::event_log::read(&agentd.event_log_path)
         .unwrap()
         .records;
     assert_eq!(
         records
             .iter()
-            .filter(|record| record.session_id == session && record.event == warning)
+            .filter(|record| record.session_id == session
+                && matches!(&record.event, Event::Error(error) if error.message == warning))
             .count(),
         1
     );
