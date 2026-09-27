@@ -87,7 +87,9 @@ impl Shared {
     }
 
     fn slots(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, Slot>> {
-        self.slots.lock().unwrap_or_else(|poison| poison.into_inner())
+        self.slots
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     /// Makes a new attachment of `session_id` current on this connection.
@@ -243,9 +245,8 @@ impl Shared {
         tokio::spawn(async move {
             connection.wait_until_resume_ready().await;
             if let Some(summary) = connection.skipped_lines_summary() {
-                let _ = cx.send_notification(acp::SessionEventNotification::SkippedLines {
-                    summary,
-                });
+                let _ =
+                    cx.send_notification(acp::SessionEventNotification::SkippedLines { summary });
             }
         });
         Ok(())
@@ -269,10 +270,12 @@ impl Shared {
                         input: request.input.0,
                     });
                     match tokio::time::timeout(HOST_TOOL_TIMEOUT, sent.block_task()).await {
-                        Ok(Ok(response)) => connection.handle_host_tool_response(HostToolResponse {
-                            request_id: request.request_id,
-                            output: response.output.into(),
-                        }),
+                        Ok(Ok(response)) => {
+                            connection.handle_host_tool_response(HostToolResponse {
+                                request_id: request.request_id,
+                                output: response.output.into(),
+                            })
+                        }
                         Ok(Err(error)) => {
                             eprintln!("horizon-agentd: host-tool request failed: {error}")
                         }
@@ -686,13 +689,29 @@ where
     let builder = on_request!(builder, v2::ListSessionsRequest, list_sessions);
     let builder = on_request!(builder, v2::PromptRequest, prompt);
     let builder = on_request!(builder, v2::CloseSessionRequest, close_session);
-    let builder = on_request!(builder, v2::SetSessionConfigOptionRequest, set_config_option);
+    let builder = on_request!(
+        builder,
+        v2::SetSessionConfigOptionRequest,
+        set_config_option
+    );
     let builder = on_request!(builder, acp::ContinueTurnRequest, continue_turn);
     let builder = on_request!(builder, acp::ListProvidersRequest, list_providers);
-    let builder = on_request!(builder, acp::ListProviderModelsRequest, list_provider_models);
+    let builder = on_request!(
+        builder,
+        acp::ListProviderModelsRequest,
+        list_provider_models
+    );
     let builder = on_request!(builder, acp::WatchBoardRequest, watch_board);
-    let builder = on_request!(builder, acp::EnsureBoardOrganizerRequest, ensure_board_organizer);
-    let builder = on_request!(builder, acp::ReloadProviderConfigRequest, reload_provider_config);
+    let builder = on_request!(
+        builder,
+        acp::EnsureBoardOrganizerRequest,
+        ensure_board_organizer
+    );
+    let builder = on_request!(
+        builder,
+        acp::ReloadProviderConfigRequest,
+        reload_provider_config
+    );
     let builder = on_request!(builder, acp::DrainRequest, drain);
     let cancel = shared.clone();
     let builder = builder.on_receive_notification(

@@ -16,8 +16,7 @@ use std::path::PathBuf;
 use agent_client_protocol::schema::v2;
 use horizon_acp as acp;
 use horizon_agent::contract::{
-    self, ApprovalRequest, Event, MessageRole, SessionId, SessionState,
-    TurnEndReason,
+    self, ApprovalRequest, Event, MessageRole, SessionId, SessionState, TurnEndReason,
 };
 use horizon_agent::wire::{AgentWireEvent, ModelSelection};
 
@@ -168,9 +167,7 @@ impl Mapper {
     pub(super) fn absorb_metadata(&mut self, event: &AgentWireEvent) {
         match event {
             AgentWireEvent::SessionModel(model) => self.model = Some(model.clone()),
-            AgentWireEvent::SessionSelection(selection) => {
-                self.selection = Some(selection.clone())
-            }
+            AgentWireEvent::SessionSelection(selection) => self.selection = Some(selection.clone()),
             AgentWireEvent::WorkspaceRootResolved(resolved) => {
                 self.facts.workspace_root = Some(resolved.workspace_root.clone());
                 self.facts.parent_session_id = resolved.parent_session_id;
@@ -191,20 +188,24 @@ impl Mapper {
         match event {
             AgentWireEvent::Event(event) => self.map_event(event),
             AgentWireEvent::ToolCallProgress(progress) => {
-                vec![Outgoing::ToolCallProgress(acp::ToolCallProgressNotification {
-                    session_id,
-                    event: acp::ToolCallProgressEvent::Progress {
-                        key: progress.key.clone(),
-                        tool_id: progress.tool_id.clone(),
-                        bytes: progress.bytes,
+                vec![Outgoing::ToolCallProgress(
+                    acp::ToolCallProgressNotification {
+                        session_id,
+                        event: acp::ToolCallProgressEvent::Progress {
+                            key: progress.key.clone(),
+                            tool_id: progress.tool_id.clone(),
+                            bytes: progress.bytes,
+                        },
                     },
-                })]
+                )]
             }
             AgentWireEvent::ToolCallProgressClosed(key) => {
-                vec![Outgoing::ToolCallProgress(acp::ToolCallProgressNotification {
-                    session_id,
-                    event: acp::ToolCallProgressEvent::Closed { key: key.clone() },
-                })]
+                vec![Outgoing::ToolCallProgress(
+                    acp::ToolCallProgressNotification {
+                        session_id,
+                        event: acp::ToolCallProgressEvent::Closed { key: key.clone() },
+                    },
+                )]
             }
             AgentWireEvent::TaskProgress(progress) => {
                 vec![Outgoing::TaskProgress(task_progress(session_id, progress))]
@@ -333,9 +334,7 @@ impl Mapper {
                     vec![Outgoing::AskPermission(request.clone())]
                 }
             }
-            Event::ApprovalResolved(resolved) => {
-                self.settle_approval(&resolved.occurrence_id.0)
-            }
+            Event::ApprovalResolved(resolved) => self.settle_approval(&resolved.occurrence_id.0),
             Event::TurnEnded(reason) => {
                 self.stop_reason = Some(stop_reason(*reason));
                 Vec::new()
@@ -458,10 +457,9 @@ impl Mapper {
 }
 
 fn provider_request(session_id: SessionId, event: acp::ProviderRequestEvent) -> Vec<Outgoing> {
-    vec![Outgoing::ProviderRequest(acp::ProviderRequestNotification {
-        session_id,
-        event,
-    })]
+    vec![Outgoing::ProviderRequest(
+        acp::ProviderRequestNotification { session_id, event },
+    )]
 }
 
 pub(super) fn tool_kind(tool_id: &str) -> v2::ToolKind {
@@ -552,9 +550,7 @@ pub(super) fn approval_title(kind: &contract::ApprovalKind) -> &'static str {
     match kind {
         contract::ApprovalKind::Standard => "Run tool",
         contract::ApprovalKind::DomainDenialRetry { .. } => "Allow network access and retry",
-        contract::ApprovalKind::FilesystemDenialRetry { .. } => {
-            "Allow filesystem access and retry"
-        }
+        contract::ApprovalKind::FilesystemDenialRetry { .. } => "Allow filesystem access and retry",
         contract::ApprovalKind::DomainGrant { .. } => "Allow network access",
         contract::ApprovalKind::GitOperation { .. } => "Allow Git metadata writes",
         contract::ApprovalKind::MachServiceGrant { .. } => "Allow system services and retry",

@@ -91,8 +91,10 @@ fn message_ids_follow_commits_and_tool_calls() {
     );
     let ids: Vec<_> = updates.iter().filter_map(message_id).collect();
     assert_eq!(ids, ["msg-0", "msg-1", "msg-1", "msg-1", "msg-3"]);
-    assert!(matches!(&updates[3], v2::SessionUpdate::AgentMessage(message)
-        if message.content == MaybeUndefined::Value(vec!["Mock response".to_string().into()])));
+    assert!(
+        matches!(&updates[3], v2::SessionUpdate::AgentMessage(message)
+        if message.content == MaybeUndefined::Value(vec!["Mock response".to_string().into()]))
+    );
 }
 
 #[test]
@@ -145,15 +147,11 @@ fn a_turn_end_is_one_idle_with_its_stop_reason() {
         updates,
         vec![
             v2::SessionUpdate::StateUpdate(v2::StateUpdate::Idle(v2::IdleStateUpdate::new())),
-            v2::SessionUpdate::StateUpdate(v2::StateUpdate::Running(
-                v2::RunningStateUpdate::new()
-            )),
+            v2::SessionUpdate::StateUpdate(v2::StateUpdate::Running(v2::RunningStateUpdate::new())),
             v2::SessionUpdate::StateUpdate(v2::StateUpdate::RequiresAction(
                 v2::RequiresActionStateUpdate::new()
             )),
-            v2::SessionUpdate::StateUpdate(v2::StateUpdate::Running(
-                v2::RunningStateUpdate::new()
-            )),
+            v2::SessionUpdate::StateUpdate(v2::StateUpdate::Running(v2::RunningStateUpdate::new())),
             v2::SessionUpdate::StateUpdate(v2::StateUpdate::Idle(
                 v2::IdleStateUpdate::new().stop_reason(v2::StopReason::Other(
                     acp::STOP_REASON_DOOM_LOOP.to_string()
@@ -192,10 +190,7 @@ fn a_tool_call_is_one_update_series_keyed_by_its_occurrence() {
         })
         .collect();
     assert!(calls.iter().all(|call| &*call.tool_call_id.0 == "occ-1"));
-    assert_eq!(
-        calls[0].kind,
-        MaybeUndefined::Value(v2::ToolKind::Execute)
-    );
+    assert_eq!(calls[0].kind, MaybeUndefined::Value(v2::ToolKind::Execute));
     assert_eq!(
         calls[0].status,
         MaybeUndefined::Value(v2::ToolCallStatus::Pending)
@@ -269,10 +264,12 @@ fn replayed_approvals_are_asked_after_the_bootstrap_only_while_pending() {
 #[test]
 fn model_announcements_become_one_select_option() {
     let mut mapper = mapper();
-    assert!(mapper
-        .map(&AgentWireEvent::SessionModel("m-aggregate".into()))
-        .len()
-        == 1);
+    assert!(
+        mapper
+            .map(&AgentWireEvent::SessionModel("m-aggregate".into()))
+            .len()
+            == 1
+    );
     let outgoing = mapper.map(&AgentWireEvent::SessionSelection(ModelSelection {
         provider: "moa".into(),
         model: "mix".into(),

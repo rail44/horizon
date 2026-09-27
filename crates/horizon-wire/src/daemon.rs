@@ -1,6 +1,6 @@
 //! The daemon-side lifecycle every runtime process repeats verbatim: bind
-//! the socket, accept one connection at a time, serve each one (a hub over remoc, or any other protocol on the raw stream),
-//! unlink on the way out. [`crate::spawn`] is the client's half of the same
+//! the socket, accept one connection at a time, serve each one (a hub over
+//! remoc, or another protocol on the raw stream), unlink on the way out. [`crate::spawn`] is the client's half of the same
 //! seam; [`crate::socket`] says where the path is.
 //!
 //! Domain-free, like the rest of this crate: the daemon's *name* is a

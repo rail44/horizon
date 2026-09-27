@@ -98,7 +98,10 @@ impl Asks {
     }
 }
 
-fn permission_request(acp_id: v2::SessionId, request: &ApprovalRequest) -> v2::RequestPermissionRequest {
+fn permission_request(
+    acp_id: v2::SessionId,
+    request: &ApprovalRequest,
+) -> v2::RequestPermissionRequest {
     let options = vec![
         v2::PermissionOption::new(
             acp::PERMISSION_OPTION_APPROVE,
@@ -160,12 +163,11 @@ async fn ask_permission(sink: Sink, request: ApprovalRequest, cancelled: oneshot
         v2::RequestPermissionOutcome::Selected(selected)
             if &*selected.option_id.0 == acp::PERMISSION_OPTION_DENY =>
         {
-            let reason = acp::read_horizon_meta::<acp::PermissionResponseMeta>(
-                response.meta.as_ref(),
-            )
-            .or_else(|| acp::read_horizon_meta(selected.meta.as_ref()))
-            .and_then(Result::ok)
-            .and_then(|meta| meta.reason);
+            let reason =
+                acp::read_horizon_meta::<acp::PermissionResponseMeta>(response.meta.as_ref())
+                    .or_else(|| acp::read_horizon_meta(selected.meta.as_ref()))
+                    .and_then(Result::ok)
+                    .and_then(|meta| meta.reason);
             Command::DenyToolCall { identity, reason }
         }
         v2::RequestPermissionOutcome::Selected(selected) => {
@@ -178,7 +180,10 @@ async fn ask_permission(sink: Sink, request: ApprovalRequest, cancelled: oneshot
         _ => return,
     };
     if let Err(error) = sink.shared.command(sink.session_id, command) {
-        eprintln!("horizon-agentd: dropping a permission answer: {}", error.message);
+        eprintln!(
+            "horizon-agentd: dropping a permission answer: {}",
+            error.message
+        );
     }
 }
 
@@ -250,11 +255,7 @@ async fn run(
         .into_iter()
         .chain([mapper.session_info_update()])
         .all(|outgoing| sink.emit(outgoing, &mut asks));
-    for event in history
-        .into_iter()
-        .map(AgentWireEvent::Event)
-        .chain(tail)
-    {
+    for event in history.into_iter().map(AgentWireEvent::Event).chain(tail) {
         if !streamed {
             break;
         }

@@ -180,7 +180,6 @@ fn spawn_agentd_with_duckdb_options(
     agentd_spawn(paths).capture_stderr().spawn()
 }
 
-
 // --- the ACP test harness --------------------------------------------------
 
 /// Connects to the real socket and completes `initialize` at this build's
@@ -229,7 +228,10 @@ fn session_new(session_id: SessionId) -> v2::NewSessionRequest {
     new_session_request(session_id, &mock_provider_id().0, None, test_cwd(), false)
 }
 
-async fn open_session(client: &AcpClient, request: v2::NewSessionRequest) -> v2::NewSessionResponse {
+async fn open_session(
+    client: &AcpClient,
+    request: v2::NewSessionRequest,
+) -> v2::NewSessionResponse {
     client
         .request(request)
         .await
@@ -307,7 +309,8 @@ async fn resume(client: &mut AcpClient, session_id: SessionId) -> Result<Vec<Inb
         v2::ResumeSessionRequest::new(acp_id(session_id), test_cwd())
             .replay_from(v2::ReplayFrom::Start(v2::ReplayFromStart::new())),
     );
-    let mut collected = collect_until(client, |inbound| matches!(inbound, Inbound::Replied(_))).await;
+    let mut collected =
+        collect_until(client, |inbound| matches!(inbound, Inbound::Replied(_))).await;
     let Some(Inbound::Replied(result)) = collected.pop() else {
         unreachable!()
     };
@@ -547,7 +550,6 @@ async fn wait_for_persisted_event(
     );
 }
 
-
 // --- tests -----------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -613,10 +615,7 @@ default_model = "before-model"
     .await;
     assert_eq!(created.session_id, acp_id(session_id));
     // Ensure the provider thread has captured its initial config before reload.
-    collect_until(&mut client, |inbound| {
-        idle_stop_reason(inbound).is_some()
-    })
-    .await;
+    collect_until(&mut client, |inbound| idle_stop_reason(inbound).is_some()).await;
 
     std::fs::write(
         &config_path,
@@ -661,7 +660,10 @@ async fn initialize_lists_sessions_and_drains_over_the_real_socket() {
     let client = connect_acp(connect_with_retry(&agentd.socket_path).await).await;
 
     let response = client.initialize("test-client").await.unwrap();
-    assert_eq!(response.protocol_version, agent_client_protocol::schema::ProtocolVersion::V2);
+    assert_eq!(
+        response.protocol_version,
+        agent_client_protocol::schema::ProtocolVersion::V2
+    );
     let meta: acp::InitializeMeta = acp::read_horizon_meta(response.meta.as_ref())
         .unwrap()
         .unwrap();
@@ -775,8 +777,10 @@ async fn auto_tool_executes_agentd_side_via_host_tool_round_trip() {
     open_session(&client, session_new(session_id)).await;
     prompt(&client, session_id, "please take a snapshot").await;
 
-    let mut collected =
-        collect_until(&mut client, |inbound| matches!(inbound, Inbound::HostTool(..))).await;
+    let mut collected = collect_until(&mut client, |inbound| {
+        matches!(inbound, Inbound::HostTool(..))
+    })
+    .await;
     let Some(Inbound::HostTool(request, responder)) = collected.pop() else {
         unreachable!()
     };
@@ -810,7 +814,10 @@ async fn auto_tool_executes_agentd_side_via_host_tool_round_trip() {
 /// Approval round trip: the approval goes out as
 /// `session/request_permission`, the approving answer comes back, and
 /// agentd runs the call and reports it as ordinary tool-call updates.
-async fn approve_and_finish(client: &mut AcpClient, text: &str) -> (acp::ApprovalMeta, Vec<Inbound>) {
+async fn approve_and_finish(
+    client: &mut AcpClient,
+    text: &str,
+) -> (acp::ApprovalMeta, Vec<Inbound>) {
     let session_id = SessionId::new();
     open_session(client, session_new(session_id)).await;
     prompt(client, session_id, text).await;
@@ -885,8 +892,10 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     let session_id = SessionId::new();
     open_session(&client, session_new(session_id)).await;
     prompt(&client, session_id, "please run bash").await;
-    let mut collected =
-        collect_until(&mut client, |inbound| matches!(inbound, Inbound::Permission(..))).await;
+    let mut collected = collect_until(&mut client, |inbound| {
+        matches!(inbound, Inbound::Permission(..))
+    })
+    .await;
     let (request, responder) = take_permission(&mut collected);
     let approval = approval_meta(&request);
     responder.respond(approve()).unwrap();
@@ -896,8 +905,10 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
             v2::ResumeSessionRequest::new(acp_id(session_id), test_cwd())
                 .replay_from(v2::ReplayFrom::Start(v2::ReplayFromStart::new())),
         );
-        let collected =
-            collect_until(&mut client, |inbound| matches!(inbound, Inbound::Replied(_))).await;
+        let collected = collect_until(&mut client, |inbound| {
+            matches!(inbound, Inbound::Replied(_))
+        })
+        .await;
         for inbound in collected {
             if let Inbound::Permission(_, responder) = inbound {
                 let _ = responder.respond(approve());
@@ -915,7 +926,11 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     let mut replay = Vec::new();
     for _ in 0..200 {
         replay = resume(&mut client, session_id).await.unwrap();
-        if replay.iter().filter_map(finished_tool).any(|(call, _)| *call.tool_call_id.0 == *occurrence) {
+        if replay
+            .iter()
+            .filter_map(finished_tool)
+            .any(|(call, _)| *call.tool_call_id.0 == *occurrence)
+        {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -923,7 +938,9 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     let started = replay
         .iter()
         .filter_map(tool_update)
-        .filter(|call| *call.tool_call_id.0 == *occurrence && has_status(call, v2::ToolCallStatus::InProgress))
+        .filter(|call| {
+            *call.tool_call_id.0 == *occurrence && has_status(call, v2::ToolCallStatus::InProgress)
+        })
         .count();
     assert_eq!(
         started, 1,
@@ -1060,7 +1077,10 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
     let mut client = connect(&agentd.socket_path).await;
 
     let collected = collect_until(&mut client, |inbound| {
-        matches!(inbound, Inbound::SessionEvent(acp::SessionEventNotification::SkippedLines { .. }))
+        matches!(
+            inbound,
+            Inbound::SessionEvent(acp::SessionEventNotification::SkippedLines { .. })
+        )
     })
     .await;
     let Some(Inbound::SessionEvent(acp::SessionEventNotification::SkippedLines { summary })) =
@@ -1149,9 +1169,9 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
         "the pre-crash user message must survive replay, got: {replayed:?}"
     );
     assert!(
-        replayed.iter().any(|inbound| {
-            idle_stop_reason(inbound) == Some(Some(v2::StopReason::Cancelled))
-        }),
+        replayed
+            .iter()
+            .any(|inbound| { idle_stop_reason(inbound) == Some(Some(v2::StopReason::Cancelled)) }),
         "the interrupted turn must be committed as cancelled on resume, got: {replayed:?}"
     );
     for requested in replayed
@@ -1168,8 +1188,14 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
         );
     }
     assert!(
-        idle_stop_reason(replayed.iter().rev().find(|inbound| is_state(inbound)).unwrap())
-            .is_some(),
+        idle_stop_reason(
+            replayed
+                .iter()
+                .rev()
+                .find(|inbound| is_state(inbound))
+                .unwrap()
+        )
+        .is_some(),
         "replay must leave the session ready for a new turn, got: {replayed:?}"
     );
     assert!(
@@ -1251,7 +1277,13 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     let session_id = SessionId::new();
     open_session(
         &client,
-        new_session_request(session_id, &mock_provider_id().0, Some("config"), test_cwd(), false),
+        new_session_request(
+            session_id,
+            &mock_provider_id().0,
+            Some("config"),
+            test_cwd(),
+            false,
+        ),
     )
     .await;
     // Drain the startup burst until its init message reaches the wire...
@@ -1346,7 +1378,10 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
         .into_iter()
         .find(|info| info.session_id == acp_id(session_id))
         .expect("the isolated session should resume live");
-    assert_eq!(info_meta(&resumed).workspace_root.as_ref(), Some(&isolated_root));
+    assert_eq!(
+        info_meta(&resumed).workspace_root.as_ref(),
+        Some(&isolated_root)
+    );
 
     let _ = resume(&mut client, session_id).await.unwrap();
     if !horizon_sandbox::is_available() {
@@ -1451,9 +1486,9 @@ async fn drained_agentd_respawns_and_preserves_a_completed_session() {
         "the pre-drain transcript must survive, got: {replayed:?}"
     );
     assert!(
-        !replayed.iter().any(|inbound| {
-            idle_stop_reason(inbound) == Some(Some(v2::StopReason::Cancelled))
-        }),
+        !replayed
+            .iter()
+            .any(|inbound| { idle_stop_reason(inbound) == Some(Some(v2::StopReason::Cancelled)) }),
         "a turn that had already completed cleanly before the drain must not be \
          re-marked as cancelled on resume, got: {replayed:?}"
     );
@@ -2174,7 +2209,6 @@ fn write_smoke_fixture() -> PathBuf {
     root
 }
 
-
 /// A crash between durable announcement and dispatch still leaves a valid
 /// conversation after restoration, including another full daemon restart.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2225,7 +2259,9 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
         })
         .await;
         assert!(
-            !collected.iter().any(|inbound| session_error(inbound).is_some()),
+            !collected
+                .iter()
+                .any(|inbound| session_error(inbound).is_some()),
             "{collected:?}"
         );
         client.drain().await;
@@ -2260,7 +2296,10 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repeated_attachments_during_streaming_join_history_and_live_exactly_once() {
     fn is_chunk(inbound: &Inbound) -> bool {
-        matches!(update(inbound), Some(v2::SessionUpdate::AgentMessageChunk(_)))
+        matches!(
+            update(inbound),
+            Some(v2::SessionUpdate::AgentMessageChunk(_))
+        )
     }
     let agentd = spawn_agentd();
     let mut client = connect(&agentd.socket_path).await;
@@ -2285,9 +2324,9 @@ async fn repeated_attachments_during_streaming_join_history_and_live_exactly_onc
             collect_until(&mut client, |inbound| idle_stop_reason(inbound).is_some()).await,
         );
     }
-    assert!(!messages.iter().any(|inbound| {
-        idle_stop_reason(inbound) == Some(Some(v2::StopReason::Cancelled))
-    }));
+    assert!(!messages
+        .iter()
+        .any(|inbound| { idle_stop_reason(inbound) == Some(Some(v2::StopReason::Cancelled)) }));
     let replay = resume(&mut client, session).await.unwrap();
     assert_eq!(
         messages.iter().map(wire).collect::<Vec<_>>(),
@@ -2364,10 +2403,13 @@ async fn startup_isolation_warning_is_visible_and_survives_reattachment() {
     )
     .await;
     let collected = collect_until(&mut client, |inbound| {
-        session_error(inbound).is_some_and(|message| message.contains("continuing without isolation"))
+        session_error(inbound)
+            .is_some_and(|message| message.contains("continuing without isolation"))
     })
     .await;
-    let warning = session_error(collected.last().unwrap()).unwrap().to_string();
+    let warning = session_error(collected.last().unwrap())
+        .unwrap()
+        .to_string();
     let replay = resume(&mut client, session).await.unwrap();
     assert_eq!(
         replay

@@ -22,9 +22,9 @@ use std::process::Command;
 use std::time::Duration;
 
 use horizon_daemon_testkit::{
-    connect_hub_client, connect_initialized, connect_with_retry, drain_with_timeout, resolve_daemon_binary,
-    scratch_socket, sibling_daemon_binary, wait_for_exit, AgentdPaths, AgentdProcess, AgentdSpawn,
-    DaemonProcess,
+    connect_hub_client, connect_initialized, connect_with_retry, drain_with_timeout,
+    resolve_daemon_binary, scratch_socket, sibling_daemon_binary, wait_for_exit, AgentdPaths,
+    AgentdProcess, AgentdSpawn, DaemonProcess,
 };
 use horizon_terminal_core::wire::{
     terminal_client_hello, TerminalHub as _, TerminalHubClient,

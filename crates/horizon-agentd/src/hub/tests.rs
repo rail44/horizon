@@ -12,19 +12,14 @@ async fn connect(state: Arc<AgentdState>) -> ConnectionTo<Agent> {
     tokio::spawn(serve(daemon_read, daemon_write, state, "test-agentd"));
     let (client_read, client_write) = tokio::io::split(client_side);
     let (cx_tx, cx_rx) = tokio::sync::oneshot::channel();
-    tokio::spawn(
-        Client
-            .builder()
-            .without_acp_version_guard()
-            .connect_with(
-                ByteStreams::new(client_write.compat_write(), client_read.compat()),
-                async move |cx| {
-                    let _ = cx_tx.send(cx.clone());
-                    cx.incoming_closed().await;
-                    Ok(())
-                },
-            ),
-    );
+    tokio::spawn(Client.builder().without_acp_version_guard().connect_with(
+        ByteStreams::new(client_write.compat_write(), client_read.compat()),
+        async move |cx| {
+            let _ = cx_tx.send(cx.clone());
+            cx.incoming_closed().await;
+            Ok(())
+        },
+    ));
     cx_rx.await.unwrap()
 }
 
@@ -132,8 +127,10 @@ async fn reload_provider_config_rebuilds_the_registry_from_the_config_file() {
 
     let agent_config =
         crate::providers::agent_config(&horizon_config::reload_from_path(Some(&config)).unwrap());
-    let providers =
-        ProviderRegistry::builtin_with_config(agent_config.clone(), SharedDuckdbStore::unavailable());
+    let providers = ProviderRegistry::builtin_with_config(
+        agent_config.clone(),
+        SharedDuckdbStore::unavailable(),
+    );
     let state = Arc::new(AgentdState::new(
         providers,
         agent_config,
