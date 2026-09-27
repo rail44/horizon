@@ -108,14 +108,14 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
 | `initialize` 両方向 | `ext_version`、`binary_id` |
 | `session/new` 要求 | `session_id`（シェル発行）、`provider_id`、`role_id`、`isolate`、`spawn_source_session_id` |
 | `session/new` 応答、`SessionInfo` | `workspace_root`、`parent_session_id`、`role_id`、`provider_id` |
-| `tool_call_update` | `call_id`（toolCallId は occurrence_id）、`tool_id`、`outcome`（Succeeded / Failed / Denied / Cancelled / Superseded{retry_occurrence_id}）、`auto_approved`、`policy_tier` |
+| `tool_call_update` | `call_id`（toolCallId は occurrence_id）、`tool_id`、`outcome`（Succeeded / Failed / Denied / Cancelled / Superseded{retry_occurrence_id}）、`auto_approved`、`policy_tier`、`human_decision`（`ApprovalResolved` を写す。再生でも人の承認の印が残る） |
 | `request_permission` 要求 | `identity`（call_id、occurrence_id）、`ApprovalKind` の構造化 payload |
 | `request_permission` 応答 | deny の `reason` |
 | `user_message` / `agent_message` | 役割 `TaskNotification` / `AutoContinue` |
 | `state_update` idle | `stop_reason` の独自値 `_horizon/failed`、`_horizon/doom_loop` |
 
 線を越えないもの（agentd 内に留まる）: Input routing 系 6 種、Environment 系
-3 種、`MoaPassStarted`、`MemorySeeded`、`ApprovalResolved`、
+3 種、`MoaPassStarted`、`MemorySeeded`、
 `ContinueTurnRequested`、`ConversationRecorded`、`ProviderRequestUsage`
 （ペインは token 数を描いていない。`usage_update` は当面送らない）。
 `WorkspaceRootResolved` は `session_info_update` の `_meta.horizon`
@@ -130,9 +130,13 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
   `serve_connection` の remoc 版の隣に「生の `UnixStream` を閉包に渡す」
   版を足す。
 - ハンドラ:
-  - `initialize`: `_meta.horizon.ext_version` を照合し、不一致は JSON-RPC
-    error で拒否（今の `HandshakeRejected` 相当）。応答に
-    `capabilities.session = {}` と `_meta.horizon`。
+  - `initialize`: v2 が取れれば常に成功させ、応答の `_meta.horizon` に
+    daemon 側の `ext_version` と `binary_id` を載せる。client の
+    `ext_version` が違えば接続を不一致と記録し、以後 `_horizon/drain` 以外の
+    要求を `horizon ext version mismatch` で始まる JSON-RPC error で拒否する。
+    不一致の検知と drain・respawn は client 側の仕事（SDK の v2 guard が
+    `initialize` 成功前の要求を通さないため、`initialize` 自体を拒否すると
+    古い daemon を drain できない）。応答に `capabilities.session = {}`。
   - `session/new`: `_meta.horizon.session_id` を採用し `handle_session_new`。
     応答の `config_options` に category `model` の select（現在の
     provider・model）。
@@ -199,8 +203,10 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
   `live.rs` は agentd 側（再生・永続化）で使われ続ける。シェルの
   `horizon-agent` 依存は `transcript` の描画ヘルパのために当面残す。
 - `AgentSession` が送るものは `Prompt`、`Cancel`、`Approve{identity}`、
-  `Deny{identity, reason}`、`ContinueTurn`、`Close`、`SetModel` の七つ。
-  `control_plane.rs` の語彙はこの七つに写す。
+  `Deny{identity, reason}`、`ContinueTurn`、`Close` の六つ。モデル切替は
+  応答が要り、attach していないセッションにも向くので、session の command
+  ではなく `AgentdHandle::set_session_model` が接続上で
+  `session/set_config_option` を送る。`control_plane.rs` の語彙はこれに写す。
 - `session_lifecycle.rs` / `commands.rs` / `restore.rs` / `modals.rs` の
   `AgentdHandle` 呼び出しは名前を保ち、中身だけ ACP 要求に変える。
 - `src/agent/auxiliary.rs`（タイトル要約の補助 AI）は provider へ直接 HTTP
@@ -250,6 +256,13 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
 `agent.rs` 672、`attachment.rs` 161、`routing.rs` 382、`mod.rs` の agent 部分、
 試験 `tests.rs` 31 件。agentd 側で `hub.rs` 384、`hub/attachment.rs` 68、
 `connection.rs` 774、`events.rs` 123、e2e 28 件。
+
+## 一度きりの移行手順
+
+remoc を話す旧 `horizon-agentd` は新しいシェルから drain できない
+（シェルに remoc client が残らないため）。切り替え時は旧 daemon を手で
+止めてから新しいビルドを起動する。AGENTS.md の protocol bump の項に
+書く（段 D）。
 
 ## 実装中に決めてよいこと
 

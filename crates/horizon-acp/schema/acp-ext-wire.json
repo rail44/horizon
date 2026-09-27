@@ -312,6 +312,42 @@
       ],
       "type": "object"
     },
+    "HumanDecision": {
+      "description": "Mirrors `contract::ApprovalDecisionPayload` (crates/horizon-agent/src/contract.rs),\ncarried on the call's `tool_call_update` after `ApprovalResolved`.",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "approved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reason": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "denied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "InitializeMeta": {
       "description": "`initialize` request and response, both directions.",
       "properties": {
@@ -926,6 +962,18 @@
         },
         "call_id": {
           "type": "string"
+        },
+        "human_decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Present once a human has decided on the call's approval."
         },
         "outcome": {
           "anyOf": [
