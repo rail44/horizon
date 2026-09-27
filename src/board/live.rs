@@ -1,5 +1,21 @@
-use super::*;
-pub(super) trait LineSource {
+//! The logd subscribe pump: one background thread per view that re-reads
+//! whatever the view is showing whenever anything writes to the board.
+//!
+//! The pump is not tied to a view type. Both board views want the same
+//! thing — a poke per external write, on the UI thread, ending when the
+//! view goes away — so the loop takes the reload as a function pointer and
+//! the caller says what a poke means for it.
+
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
+
+use futures::channel::{mpsc, oneshot};
+use futures::StreamExt as _;
+use gpui::{Context, Task};
+use horizon_board::{Store, SubscribeStream};
+
+pub(crate) trait LineSource {
     fn next_line<'a>(
         &'a mut self,
     ) -> Pin<Box<dyn Future<Output = std::io::Result<Option<String>>> + 'a>>;
@@ -13,16 +29,17 @@ impl LineSource for SubscribeStream {
     }
 }
 
-/// Why the pump stopped. The pane treats all reasons the same (the pump just
-/// ends); the variants exist so the teardown paths are individually testable.
-pub(super) enum PumpStop {
-    /// The pane closed (`Drop` fired the shutdown oneshot).
+/// Why the pump stopped. A view treats all reasons the same (the pump just
+/// ends); the variants exist so the teardown paths are individually
+/// testable.
+pub(crate) enum PumpStop {
+    /// The view closed (`Drop` fired the shutdown oneshot).
     Shutdown,
     /// logd closed the connection (drain/shutdown) or end-of-file.
     EndOfStream,
     /// A read error on the subscribe socket.
     Error,
-    /// The foreground poke consumer is gone (the pane dropped its receiver).
+    /// The foreground poke consumer is gone (the view dropped its receiver).
     ReceiverDropped,
 }
 
@@ -30,7 +47,7 @@ pub(super) enum PumpStop {
 /// `poke_tx` until `shutdown` fires, the source ends, or the receiver drops.
 /// `biased` so `shutdown` is checked first -- a close wins even while a read
 /// is blocked, which is the whole point of the oneshot.
-pub(super) async fn pump_lines<L: LineSource>(
+pub(crate) async fn pump_lines<L: LineSource>(
     lines: &mut L,
     poke_tx: &mpsc::UnboundedSender<()>,
     mut shutdown: oneshot::Receiver<()>,
@@ -54,9 +71,9 @@ pub(super) async fn pump_lines<L: LineSource>(
 
 /// The background thread body: owns a `current_thread` tokio runtime, connects
 /// to logd (`Store::subscribe` connect-or-spawns it), and runs the pump. Bails
-/// quietly on any setup error (no root, no logd, a closed socket) -- the pane
+/// quietly on any setup error (no root, no logd, a closed socket) -- the view
 /// simply gets no live updates and keeps working off its open-time read.
-pub(super) fn run_subscribe_loop(
+pub(crate) fn run_subscribe_loop(
     root: PathBuf,
     poke_tx: mpsc::UnboundedSender<()>,
     mut shutdown_rx: oneshot::Receiver<()>,
@@ -91,21 +108,24 @@ pub(super) fn run_subscribe_loop(
     });
 }
 
-/// The pump's owned handles, held by the pane so closing it ends both halves
-/// (see [`BoardPaneView`]'s `Drop` impl). The task is *not* detached.
-pub(super) struct LiveUpdates {
+/// The pump's owned handles, held by the view so closing it ends both
+/// halves. The task is *not* detached: a view that drops this drops the
+/// foreground consumer with it, and firing `shutdown` wakes the background
+/// loop out of its blocked socket read.
+pub(crate) struct LiveUpdates {
     _pump_task: Task<()>,
-    pub(super) shutdown: oneshot::Sender<()>,
+    pub(crate) shutdown: oneshot::Sender<()>,
 }
 
-/// Starts the live-update pump for `root` (the pane's store root): spawns the
-/// background subscribe thread and a foreground `cx.spawn` consumer that
-/// turns each poke into an `on_poke` re-read. Returns the handles the pane
-/// owns for teardown. Called only when a root was resolved; a pane with no
-/// root gets no live updates (matching its no-read empty state).
-pub(super) fn start_live_updates(
+/// Starts the live-update pump for `root` (the view's store root): spawns
+/// the background subscribe thread and a foreground `cx.spawn` consumer
+/// that turns each poke into a call to `on_poke`. Called only when a root
+/// was resolved; a view over a store with no root gets no live updates,
+/// which is the preview's state.
+pub(crate) fn start_live_updates<V: 'static>(
     root: &std::path::Path,
-    cx: &mut Context<BoardPaneView>,
+    on_poke: fn(&mut V, &mut Context<V>),
+    cx: &mut Context<V>,
 ) -> LiveUpdates {
     let (poke_tx, poke_rx) = mpsc::unbounded::<()>();
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -114,7 +134,7 @@ pub(super) fn start_live_updates(
     let _pump_task = cx.spawn(async move |this, cx| {
         let mut poke_rx = poke_rx;
         while let Some(()) = poke_rx.next().await {
-            if this.update(cx, |view, cx| view.on_poke(cx)).is_err() {
+            if this.update(cx, on_poke).is_err() {
                 return;
             }
         }
@@ -125,48 +145,10 @@ pub(super) fn start_live_updates(
     }
 }
 
-/// What a live-update poke should refresh: the whole item list, or just the
-/// currently-open detail item. The pure decision behind
-/// [`BoardPaneView::on_poke`], extracted so the poke->reload mapping is
-/// unit-testable without a GPUI window.
-pub(super) enum PokeReloadTarget {
-    /// Reload the full list (list mode).
-    List,
-    /// Reload just this item (detail mode).
-    Item(u64),
-}
-
-/// The pure decision behind a live-update poke: `None` (list view, no item
-/// open) reloads the whole list; `Some(id)` (a detail view open on `id`)
-/// reloads just that item.
-pub(super) fn poke_reload_target(open_item_id: Option<u64>) -> PokeReloadTarget {
-    match open_item_id {
-        Some(id) => PokeReloadTarget::Item(id),
-        None => PokeReloadTarget::List,
-    }
-}
-
-impl BoardPaneView {
-    /// Reacts to one logd poke by re-reading whichever view is showing: the
-    /// full list (list mode) or just the open item (detail mode -- so a
-    /// comment posted from outside appears in the open thread). A poke for
-    /// the user's *own* just-posted comment re-reads the same item the inline
-    /// `post_comment` reload already refreshed; that one redundant file fold
-    /// is the cost of staying naive (no seq tracking) -- harmless, and pokes
-    /// are lossy by design so correctness can't depend on suppressing it.
-    pub(super) fn on_poke(&mut self, cx: &mut Context<Self>) {
-        match poke_reload_target(self.open_item_id()) {
-            PokeReloadTarget::List => self.spawn_load(cx),
-            PokeReloadTarget::Item(id) => {
-                self.spawn_show(id, cx);
-                self.spawn_load(cx);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use futures::StreamExt as _;
+
     struct MockLines(futures::channel::mpsc::UnboundedReceiver<String>);
 
     impl super::LineSource for MockLines {
@@ -175,14 +157,12 @@ mod tests {
         ) -> std::pin::Pin<
             std::boxed::Box<dyn std::future::Future<Output = std::io::Result<Option<String>>> + 'a>,
         > {
-            use futures::StreamExt as _;
             std::boxed::Box::pin(async move { Ok(self.0.next().await) })
         }
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn pump_forwards_lines_until_end_of_stream() {
-        use futures::StreamExt as _;
         let (poke_tx, mut poke_rx) = futures::channel::mpsc::unbounded::<()>();
         let (line_tx, line_rx) = futures::channel::mpsc::unbounded::<String>();
         line_tx
@@ -212,7 +192,7 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = futures::channel::oneshot::channel::<()>();
         // The source is idle (no lines), so the read blocks -- the only way
         // out is the shutdown oneshot, fired from a concurrent task the way
-        // the pane's `Drop` fires it on the UI thread.
+        // a view's `Drop` fires it on the UI thread.
         tokio::spawn(async move {
             tokio::task::yield_now().await;
             let _ = shutdown_tx.send(());
@@ -231,7 +211,7 @@ mod tests {
         drop(line_tx);
         let mut src = MockLines(line_rx);
         let (_shutdown_tx, shutdown_rx) = futures::channel::oneshot::channel::<()>();
-        // The pane (foreground consumer) is already gone.
+        // The view (foreground consumer) is already gone.
         drop(poke_rx);
         let stop = super::pump_lines(&mut src, &poke_tx, shutdown_rx).await;
         assert!(matches!(stop, super::PumpStop::ReceiverDropped));

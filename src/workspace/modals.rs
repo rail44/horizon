@@ -426,14 +426,15 @@ impl WorkspaceShell {
 
     // -- Board pane ------------------------------------------------------
 
-    /// `OpenBoard` opens the board as a native pane (`ViewKind::Board`) in a
-    /// new tab, reusing the view chooser's `create_session` placement flow.
-    /// The pane owns its own list/detail navigation internally (no modal
-    /// overlay); see `src/board_pane.rs`.
+    /// `OpenBoard` opens the board's task list as a native pane
+    /// (`ViewKind::BoardList`) in a new tab, reusing the view chooser's
+    /// `create_session` placement flow. Opening a task from that list
+    /// splits it with a thread pane (`CommandId::OpenBoardRelatedItem`);
+    /// see `src/board/`.
     pub(super) fn open_board_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use horizon_workspace::ViewKind;
         self.create_session(
-            PaneKind::View(ViewKind::Board),
+            PaneKind::View(ViewKind::BoardList),
             None,
             false,
             Placement::NewTab,

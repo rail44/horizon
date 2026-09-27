@@ -17,6 +17,17 @@
 //!   the scene is serialized, so glyphs from different strings interleave.
 //!   Every assertion here is on the character multiset, never on order.
 //!
+//! What driving input asserts beyond the keystroke itself: that the guest
+//! settles at all. A guest paces no frames of its own — the host runs one
+//! turn per exchange with it, and a turn that draws leads to the next one —
+//! so a view that asks for another frame from inside the frame it is
+//! drawing (any repeating `gpui::Animation`, e.g. gpui-component's
+//! `Spinner`) keeps handing itself work and `settle` never returns. Nothing
+//! turns a quiet guest, so such a view looks idle until the first input
+//! event arrives. A test that hangs here after a `press` is reporting that,
+//! not a slow guest; `.config/nextest.toml` turns the hang into a failure.
+//! See `docs/preview-pane-design.md`, "Frame pacing".
+//!
 //! What it cannot assert: the painted *colors*. `Surface::scene_summary()`
 //! counts primitives and reports glyph ids; the primitives' colors are not
 //! exposed. The sample preview paints its accent role's hex as text, so a
@@ -39,7 +50,7 @@ use gpui::{
 };
 use horizon_config::{RawConfig, RawThemeConfig};
 
-use crate::board_pane::previews as board;
+use crate::board::previews as board;
 use crate::preview::host::{PreviewHostRoot, PreviewThemeSource};
 use crate::preview::schema::{PreviewPlugin, PreviewPluginCaller as _};
 use crate::preview::{registry, sample};
@@ -209,9 +220,9 @@ const SLOT: Geometry = Geometry {
 };
 
 /// The board previews get a tall slot: gpui culls primitives outside the
-/// content mask, so a scroll region only paints what fits. The detail
-/// preview's thread sits below a multi-paragraph body, and an assertion on
-/// text that scrolled out of view would be an assertion on nothing.
+/// content mask, so a scroll region only paints what fits. The thread's
+/// posts sit below a multi-paragraph body, and an assertion on text that
+/// scrolled out of view would be an assertion on nothing.
 const BOARD_SLOT: Geometry = Geometry {
     width: 900.,
     height: 1600.,
@@ -258,6 +269,34 @@ fn settle(cx: &mut TestAppContext) {
         cx.executor().advance_clock(Duration::from_millis(100));
     }
     cx.executor().run_until_parked();
+}
+
+/// Send one keystroke to the guest's view and let it settle.
+///
+/// A guest paces no frames of its own, so a view that asks for another
+/// frame from inside the frame it is drawing never lets [`settle`] return
+/// (see the module doc). Driving a keystroke is therefore also the check
+/// that the view under test does not.
+fn press(surface: &Entity<Surface>, key: &str, cx: &mut TestAppContext) {
+    use embedded_gpui::surface::{KeyEvent, Keystroke, ViewApiCaller as _};
+
+    let view = surface
+        .read_with(cx, |surface, _| surface.view().cloned())
+        .expect("the guest attached a view");
+    cx.update(|cx| {
+        view.key(
+            KeyEvent::Down {
+                keystroke: Keystroke {
+                    modifiers: Default::default(),
+                    key: key.to_string(),
+                    key_char: Some(key.to_string()),
+                },
+                is_held: false,
+            },
+            cx,
+        )
+    });
+    settle(cx);
 }
 
 /// Hand the guest a surface of `slot` and drive one frame on it.
@@ -539,72 +578,177 @@ async fn preview_plugin_paints_reacts_to_the_theme_and_reloads(cx: &mut TestAppC
 
 #[gpui::test]
 #[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
-async fn preview_plugin_paints_the_board_over_its_sample_store(cx: &mut TestAppContext) {
+async fn preview_plugin_paints_the_board_thread(cx: &mut TestAppContext) {
     let built = built_artifact();
-    let live = live_artifact("board");
+    let live = live_artifact("board-thread");
     std::fs::copy(&built, &live).expect("stage the built artifact");
 
     cx.update(gpui_component::init);
     cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
 
-    // --- the list shows rows folded out of the sample events -------------
-    let list = load(&live, board::LIST, cx).expect("the board list preview instantiates");
-    let list_surface = cx.new(Surface::new);
-    mount(&list.host, &list_surface, BOARD_SLOT, cx);
-    let list_scene = summary(&list_surface, cx);
-    assert!(
-        list_scene.images > 0,
-        "no session-activity icon reached the host: {list_scene:?}"
+    // The leading character of each title occurs in exactly one string the
+    // sample board can paint (held by that module's own tests), so counting
+    // it separates "painted once" from "painted twice" and from "absent".
+    let first_marker = board::FIRST_TASK_TITLE.chars().next().expect("a title");
+    let second_marker = board::SECOND_TASK_TITLE.chars().next().expect("a title");
+
+    // --- one task's thread, with no list in it ---------------------------
+    let thread = load(&live, board::THREAD, cx).expect("the thread preview instantiates");
+    let surface = cx.new(Surface::new);
+    mount(&thread.host, &surface, BOARD_SLOT, cx);
+    let open = glyph_counts(&summary(&surface, cx));
+    assert_eq!(
+        count_of(&open, first_marker),
+        1,
+        "the thread view paints its task once, as the header band: {open:?}"
     );
-    let rows = glyph_counts(&list_scene);
     assert!(
-        painted(&rows, board::LIST_PROBE_LATIN),
-        "the board list painted no row carrying a Latin sample title: {rows:?}"
+        painted(&open, board::FIRST_TASK_TITLE),
+        "the thread view painted no task title: {open:?}"
+    );
+    assert_eq!(
+        count_of(&open, second_marker),
+        0,
+        "the thread view painted another task: the list is a pane of its own: {open:?}"
     );
     assert!(
-        painted(&rows, board::LIST_PROBE_JAPANESE),
-        "the board list painted no row carrying a Japanese sample title: {rows:?}"
+        painted(&open, board::THREAD_PROBE),
+        "the thread view painted no post under the title: {open:?}"
+    );
+
+    // A keystroke has to settle: a guest paces no frames, so a view that
+    // asks for another frame from inside the one it is drawing never lets
+    // `settle` return (see the module doc).
+    press(&surface, "j", cx);
+    let moved = glyph_counts(&summary(&surface, cx));
+    assert!(
+        painted(&moved, board::THREAD_PROBE),
+        "the post cursor left the thread it is reading: {moved:?}"
+    );
+    cx.update(|_| drop(thread));
+    settle(cx);
+
+    // --- the long thread: `j` twice reaches the long report, `e` opens it -
+    let long = load(&live, board::THREAD_LONG, cx).expect("the long-thread preview instantiates");
+    let long_surface = cx.new(Surface::new);
+    mount(&long.host, &long_surface, BOARD_SLOT, cx);
+    let folded = glyph_counts(&summary(&long_surface, cx));
+    assert!(
+        painted(&folded, board::FOLDED_PROBE),
+        "the long post's first line is not painted: {folded:?}"
+    );
+    assert!(
+        !painted(&folded, board::DEEP_PROBE),
+        "the long post was not folded: {folded:?}"
+    );
+
+    press(&long_surface, "j", cx);
+    press(&long_surface, "j", cx);
+    press(&long_surface, "e", cx);
+    let unfolded = glyph_counts(&summary(&long_surface, cx));
+    assert!(
+        painted(&unfolded, board::DEEP_PROBE),
+        "`e` on the cursored post did not unfold it: {unfolded:?}"
+    );
+
+    cx.update(|_| drop(long));
+    settle(cx);
+    std::fs::remove_file(&live).ok();
+}
+
+#[gpui::test]
+#[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
+async fn preview_plugin_paints_the_board_list(cx: &mut TestAppContext) {
+    let built = built_artifact();
+    let live = live_artifact("board-list");
+    std::fs::copy(&built, &live).expect("stage the built artifact");
+
+    cx.update(gpui_component::init);
+    cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
+
+    let first_marker = board::FIRST_TASK_TITLE.chars().next().expect("a title");
+    let second_marker = board::SECOND_TASK_TITLE.chars().next().expect("a title");
+    let child_marker = board::COLLAPSED_CHILD_TITLE
+        .chars()
+        .next()
+        .expect("a title");
+
+    // --- the rows the sample events fold into -----------------------------
+    let list = load(&live, board::LIST, cx).expect("the list preview instantiates");
+    let surface = cx.new(Surface::new);
+    mount(&list.host, &surface, BOARD_SLOT, cx);
+    let rows = glyph_counts(&summary(&surface, cx));
+    assert!(
+        painted(&rows, board::FIRST_TASK_TITLE),
+        "the list painted no first row: {rows:?}"
+    );
+    assert!(
+        painted(&rows, board::SECOND_TASK_TITLE),
+        "the list painted no second row: {rows:?}"
+    );
+    assert_eq!(
+        count_of(&rows, second_marker),
+        1,
+        "a task is painted as one row and nothing else: {rows:?}"
+    );
+    assert_eq!(
+        count_of(&rows, child_marker),
+        0,
+        "the first row starts folded, so its children are off the list: {rows:?}"
+    );
+
+    // --- `l` opens the folded parent, `h` closes it again -----------------
+    // The selection opens on the first row, which is the folded parent.
+    press(&surface, "l", cx);
+    let expanded = glyph_counts(&summary(&surface, cx));
+    assert!(
+        painted(&expanded, board::COLLAPSED_CHILD_TITLE),
+        "`l` on the folded parent painted no child row: {expanded:?}"
+    );
+    press(&surface, "h", cx);
+    let refolded = glyph_counts(&summary(&surface, cx));
+    assert_eq!(
+        count_of(&refolded, child_marker),
+        0,
+        "`h` left the child on the list: {refolded:?}"
+    );
+
+    // --- `j` then Enter reports the task it landed on ---------------------
+    press(&surface, "j", cx);
+    press(&surface, "enter", cx);
+    let opened = glyph_counts(&summary(&surface, cx));
+    let notice = format!("スレッドを開く: {}", board::SECOND_TASK_TITLE);
+    assert!(
+        painted(&opened, &notice),
+        "Enter painted no open notice: {opened:?}"
+    );
+    assert_eq!(
+        count_of(&opened, second_marker),
+        2,
+        "the notice names a task other than the selected row: {opened:?}"
     );
     cx.update(|_| drop(list));
     settle(cx);
 
-    // --- the same view over an empty store -------------------------------
-    // The Japanese probe is the discriminator in both directions: its
-    // katakana appear in no other string any board preview paints.
-    let empty = load(&live, board::LIST_EMPTY, cx).expect("the empty board preview instantiates");
+    // --- the same view over an empty store --------------------------------
+    let empty = load(&live, board::LIST_EMPTY, cx).expect("the empty list instantiates");
     let empty_surface = cx.new(Surface::new);
     mount(&empty.host, &empty_surface, BOARD_SLOT, cx);
     let blank = glyph_counts(&summary(&empty_surface, cx));
-    assert!(
-        !blank.is_empty(),
-        "the empty board painted no chrome at all"
+    assert!(!blank.is_empty(), "the empty list painted no chrome");
+    assert_eq!(
+        count_of(&blank, first_marker),
+        0,
+        "the empty list painted a sample row: {blank:?}"
     );
+    // The add-task input is pinned under the rows, so an empty board still
+    // offers the one way to put work on it.
     assert!(
-        !painted(&blank, board::LIST_PROBE_JAPANESE),
-        "the empty board painted a sample row: {blank:?}"
+        painted(&blank, "タスクを追加"),
+        "the empty list painted no add-task input: {blank:?}"
     );
+
     cx.update(|_| drop(empty));
-    settle(cx);
-
-    // --- the detail view, reached by confirming the row ------------------
-    let detail = load(&live, board::DETAIL, cx).expect("the board detail preview instantiates");
-    let detail_surface = cx.new(Surface::new);
-    mount(&detail.host, &detail_surface, BOARD_SLOT, cx);
-    let open = glyph_counts(&summary(&detail_surface, cx));
-    assert!(
-        painted(&open, board::DETAIL_BODY_PROBE),
-        "the detail view painted no item body: {open:?}"
-    );
-    assert!(
-        painted(&open, board::DETAIL_COMMENT_PROBE),
-        "the detail view painted no comment thread: {open:?}"
-    );
-    assert!(
-        !painted(&open, board::LIST_PROBE_JAPANESE),
-        "the detail view never replaced the list: {open:?}"
-    );
-
-    cx.update(|_| drop(detail));
     settle(cx);
     std::fs::remove_file(&live).ok();
 }

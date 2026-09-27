@@ -76,9 +76,12 @@ fn view_choices() -> Vec<ViewChoice> {
             role_id: None,
             isolate: false,
         },
+        // Only the list: a thread needs a task, which the chooser has no
+        // way to name. The list opens one (`CommandId::
+        // OpenBoardRelatedItem`).
         ViewChoice {
             title: "Board",
-            kind: PaneKind::View(ViewKind::Board),
+            kind: PaneKind::View(ViewKind::BoardList),
             role_id: None,
             isolate: false,
         },

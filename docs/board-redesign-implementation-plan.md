@@ -6,7 +6,9 @@ gate, isolated daemon flow, native GUI inspection, selected-data rehearsal,
 and live transition passed. After explicit owner approval, matching binaries
 from main at `eb6c99c` were activated and 47 tasks / 185 messages migrated.
 The existing terminal daemon, terminal and ordinary agent session identities,
-attachments, and workspace layout were preserved.
+attachments, and workspace layout were preserved. Package D's single
+list/detail pane was replaced 2026-09-27 by two panes in `src/board/`; the
+line numbers this document cites point at code that no longer exists.
 
 ### Implementation map
 

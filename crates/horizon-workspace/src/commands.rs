@@ -33,22 +33,21 @@ pub enum CommandId {
     /// 4a) -- v1's "hunt down the agent's worktree and cd there" fix,
     /// scoped to the active session only.
     OpenTerminalInSessionDirectory,
-    /// Opens the task-board pane (`ViewKind::Board`): a session-less
+    /// Opens the board's task list (`ViewKind::BoardList`): a session-less
     /// first-party view over the `horizon-board` event store where the owner
-    /// can browse the ranked task hierarchy and read or post consultation
-    /// messages. The pane is placed as a new tab or split
-    /// via the view chooser's placement flow. Palette-only -- no default
-    /// keybinding (see `keymap::command_for`'s `"open-board"` entry for an
-    /// optional user binding).
+    /// can browse the ranked task hierarchy. The pane is placed as a new
+    /// tab or split via the view chooser's placement flow. Palette-only --
+    /// no default keybinding (see `keymap::command_for`'s `"open-board"`
+    /// entry for an optional user binding).
     OpenBoard,
-    /// Toggles the board pane between top-level-only (the "roadmap view")
-    /// and the expanded parent→child tree (children indented under their
-    /// parent). No-op unless the active pane is a board pane. Palette-only --
+    /// Folds the selected task's children away, or opens them again.
+    /// No-op unless the active pane is the board's list. Palette-only --
     /// no default keybinding (see `keymap::command_for`'s
     /// `"toggle-board-expansion"` entry for an optional user binding).
     ToggleBoardExpansion,
-    /// Includes or hides closed tasks in the board list.
-    ToggleBoardClosedVisibility,
+    /// Folds the board list's finished band -- the finished top-level
+    /// tasks gathered behind one row at the bottom -- open or shut.
+    ToggleBoardFinishedBand,
     /// Reloads the active preview pane's plugin from the artifact on disk
     /// (`src/preview/`). The pane also reloads on its own when the file
     /// changes; this is the manual path. Palette-only -- no default
@@ -71,7 +70,12 @@ pub enum CommandId {
     ResetFontSize,
     OpenBoardOrganizer,
     OpenBoardTaskSession,
+    /// Opens the task the board list has selected: retargets the tab's
+    /// thread pane at it when there is one, otherwise splits the list pane
+    /// with a fresh thread pane. Focus follows the thread either way.
     OpenBoardRelatedItem,
+    /// From a thread pane, moves focus to the list pane in the same tab.
+    /// No-op when the tab has none.
     BackBoardList,
     AddBoardTask,
     PostBoardMessage,
@@ -80,8 +84,6 @@ pub enum CommandId {
     ReorderBoardTask,
     SaveBoardState,
     ToggleBoardClosed,
-    AddBoardDependency,
-    RemoveBoardDependency,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -274,15 +276,14 @@ pub fn core_commands() -> Vec<CommandSpec> {
             id: CommandId::OpenBoard,
             title: "Open Board",
             category: CommandCategory::Workspace,
-            description: "Browse the task board and post owner comments.",
+            description: "Browse the task board's ranked task list.",
             destructive: false,
         },
         CommandSpec {
             id: CommandId::ToggleBoardExpansion,
             title: "Toggle Board Expansion",
             category: CommandCategory::Workspace,
-            description: "Switch the board between top-level-only (roadmap) and expanded \
-                          child view.",
+            description: "Fold the selected task's children away, or open them again.",
             destructive: false,
         },
         CommandSpec {
@@ -310,9 +311,9 @@ pub fn core_commands() -> Vec<CommandSpec> {
     commands.extend(
         [
             (
-                CommandId::ToggleBoardClosedVisibility,
-                "Show or Hide Closed Tasks",
-                "Include or hide closed tasks in the board list.",
+                CommandId::ToggleBoardFinishedBand,
+                "Show or Hide Finished Tasks",
+                "Fold the board list's finished band open or shut.",
             ),
             (
                 CommandId::OpenBoardTaskSession,
@@ -322,12 +323,12 @@ pub fn core_commands() -> Vec<CommandSpec> {
             (
                 CommandId::OpenBoardRelatedItem,
                 "Open Board Task",
-                "Open the selected task in this board.",
+                "Open the selected task's thread beside the board list.",
             ),
             (
                 CommandId::BackBoardList,
                 "Back to Task List",
-                "Return to the saved board list position.",
+                "Move focus from this thread back to the board list beside it.",
             ),
             (
                 CommandId::AddBoardTask,
@@ -365,19 +366,9 @@ pub fn core_commands() -> Vec<CommandSpec> {
                 "Close or reopen the task independently of its project-defined state.",
             ),
             (
-                CommandId::AddBoardDependency,
-                "Add Task Prerequisite",
-                "Add the task selected in prerequisite search.",
-            ),
-            (
                 CommandId::OpenBoardOrganizer,
                 "Open Board Organizer",
                 "Create or resume this board’s organizer and open its agent view.",
-            ),
-            (
-                CommandId::RemoveBoardDependency,
-                "Remove Task Prerequisite",
-                "Remove the selected prerequisite from this task.",
             ),
             (
                 CommandId::ReloadPreview,
@@ -413,7 +404,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::ReloadConfig
         | CommandId::OpenBoard
         | CommandId::ToggleBoardExpansion
-        | CommandId::ToggleBoardClosedVisibility
+        | CommandId::ToggleBoardFinishedBand
         | CommandId::IncreaseFontSize
         | CommandId::DecreaseFontSize
         | CommandId::ResetFontSize
@@ -427,8 +418,6 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::ReorderBoardTask
         | CommandId::SaveBoardState
         | CommandId::ToggleBoardClosed
-        | CommandId::AddBoardDependency
-        | CommandId::RemoveBoardDependency
         | CommandId::ReloadPreview => true,
         CommandId::OpenBoardOrganizer => state.has_cursor_board,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
@@ -489,7 +478,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 38);
+        assert_eq!(commands.len(), 36);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);

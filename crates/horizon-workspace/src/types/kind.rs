@@ -23,7 +23,14 @@ pub enum SessionKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ViewKind {
     ThemeSettings,
-    Board,
+    /// The board's task list.
+    BoardList,
+    /// One board task's thread. The task id is part of the kind, so the
+    /// pane restores on the same task and two thread panes in one
+    /// workspace are distinct kinds.
+    BoardThread {
+        task: u64,
+    },
     /// A gpui view compiled into a wasm plugin, drawn through
     /// `embedded_gpui` (`src/preview/`). Which artifact and which named
     /// preview a pane shows is shell-side state keyed by pane id, not part
@@ -33,10 +40,14 @@ pub enum ViewKind {
 }
 
 impl ViewKind {
+    /// A pane's fallback title. `&'static str`: a session-less pane's
+    /// title comes from its kind alone, and the board thread's task title
+    /// lives in the store, which the model never reads.
     pub fn title(self) -> &'static str {
         match self {
             Self::ThemeSettings => "Theme Settings",
-            Self::Board => "Board",
+            Self::BoardList => "Board",
+            Self::BoardThread { .. } => "Thread",
             Self::Preview => "Preview",
         }
     }

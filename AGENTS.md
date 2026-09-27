@@ -335,6 +335,12 @@ The shell is GPUI-based (the Floem shell retired at tag
   approvals). Contract/providers/tools/persistence live in
   `crates/horizon-agent`, hosted by `crates/horizon-agentd` — see
   `docs/agent-runtime-split-design.md`.
+- `board/` — the task board as two session-less views: `list.rs` (the
+  rank-ordered task tree) and `thread.rs` (one task's posts), each taking
+  a pane of its own, with a pane split putting them side by side. They
+  read `crates/horizon-board` through `execute.rs` and reach the shell
+  only as events (`events.rs`), so both also build for the preview
+  plugin's wasm target. See `docs/board-redesign-design.md`.
 - `palette.rs` / `session_manager.rs` / `view_chooser.rs` — the control
   surface modals, all delegates over gpui-component's searchable List.
 - `control_plane.rs` — the GPUI-side bridge and dispatcher for the CLI

@@ -386,6 +386,24 @@ impl Workspace {
         true
     }
 
+    /// Points an existing session-less pane at a different view kind,
+    /// keeping the pane itself -- its id, its place in the layout tree,
+    /// and whatever view entity the shell holds for it. The board's list
+    /// aims the tab's thread pane at another task this way. `false`, a
+    /// no-op, when `pane_id` is unknown or is session-backed: a pane
+    /// carrying a session cannot become session-less without detaching
+    /// that session, which is a different operation.
+    pub fn retarget_view_pane(&mut self, pane_id: PaneId, kind: ViewKind) -> bool {
+        let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == pane_id) else {
+            return false;
+        };
+        if !matches!(pane.kind, PaneKind::View(_)) {
+            return false;
+        }
+        pane.kind = PaneKind::View(kind);
+        true
+    }
+
     pub(crate) fn detach_pane(&mut self, pane_id: PaneId) -> Option<SessionId> {
         let session_id = self
             .panes

@@ -153,7 +153,15 @@ enum PaneKindState {
 #[serde(rename_all = "snake_case")]
 enum ViewKindState {
     ThemeSettings,
-    Board,
+    /// Serialized as `"board"`: a board pane written before the board
+    /// became two views restores as the list.
+    #[serde(rename = "board")]
+    BoardList,
+    /// `{"board_thread": {"task": 42}}` -- the one view kind carrying a
+    /// payload, so a thread pane restores on the task it was opened for.
+    BoardThread {
+        task: u64,
+    },
     /// A preview pane restores empty: the artifact path and preview name
     /// live in the shell's pane map, which does not survive the process, so
     /// a restored pane shows its "nothing loaded" state until `horizon
@@ -527,7 +535,8 @@ impl From<ViewKind> for ViewKindState {
     fn from(kind: ViewKind) -> Self {
         match kind {
             ViewKind::ThemeSettings => Self::ThemeSettings,
-            ViewKind::Board => Self::Board,
+            ViewKind::BoardList => Self::BoardList,
+            ViewKind::BoardThread { task } => Self::BoardThread { task },
             ViewKind::Preview => Self::Preview,
         }
     }
@@ -537,7 +546,8 @@ impl From<ViewKindState> for ViewKind {
     fn from(kind: ViewKindState) -> Self {
         match kind {
             ViewKindState::ThemeSettings => Self::ThemeSettings,
-            ViewKindState::Board => Self::Board,
+            ViewKindState::BoardList => Self::BoardList,
+            ViewKindState::BoardThread { task } => Self::BoardThread { task },
             ViewKindState::Preview => Self::Preview,
         }
     }
@@ -691,11 +701,11 @@ mod tests {
     }
 
     #[test]
-    fn state_round_trip_preserves_a_board_pane_without_a_session() {
+    fn state_round_trip_preserves_a_board_list_pane_without_a_session() {
         let mut workspace = Workspace::mvp();
         let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
         let view_pane =
-            workspace.split_active_tab_with_view(ViewKind::Board, SplitAxis::Horizontal);
+            workspace.split_active_tab_with_view(ViewKind::BoardList, SplitAxis::Horizontal);
 
         let json = workspace.to_persisted_json().expect("serialize");
         let value: Value = serde_json::from_str(&json).expect("json");
@@ -709,7 +719,7 @@ mod tests {
 
         assert_eq!(
             restored.pane_kind(view_pane),
-            Some(PaneKind::View(ViewKind::Board))
+            Some(PaneKind::View(ViewKind::BoardList))
         );
         assert_eq!(
             restored
@@ -723,6 +733,52 @@ mod tests {
         assert_eq!(restored.session_count(), workspace.session_count());
         assert!(restored.all_pane_ids().contains(&terminal_pane));
         assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
+    }
+
+    /// A thread pane carries the task it was opened for, so a restart
+    /// brings back that task's thread rather than an unaimed pane.
+    #[test]
+    fn state_round_trip_preserves_a_board_thread_pane_and_its_task() {
+        let mut workspace = Workspace::mvp();
+        let view_pane = workspace
+            .split_active_tab_with_view(ViewKind::BoardThread { task: 42 }, SplitAxis::Horizontal);
+
+        let json = workspace.to_persisted_json().expect("serialize");
+        let value: Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(
+            value["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"],
+            json!({"view": {"board_thread": {"task": 42}}})
+        );
+
+        let restored = Workspace::from_persisted_json(&json).expect("restore");
+
+        assert_eq!(
+            restored.pane_kind(view_pane),
+            Some(PaneKind::View(ViewKind::BoardThread { task: 42 }))
+        );
+        assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
+    }
+
+    /// `"board"` is the tag a board pane was written with before the board
+    /// became two views, and it is still the list's: a file from then
+    /// restores as a list pane. Substituted into a thread pane's document
+    /// so the tag being parsed is the bare string, not one this test just
+    /// produced.
+    #[test]
+    fn a_pane_persisted_as_the_old_board_restores_as_the_list() {
+        let mut workspace = Workspace::mvp();
+        let view_pane = workspace
+            .split_active_tab_with_view(ViewKind::BoardThread { task: 42 }, SplitAxis::Horizontal);
+        let thread_json = workspace.to_persisted_json().expect("serialize");
+        let mut value: Value = serde_json::from_str(&thread_json).expect("json");
+        value["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"] = json!({"view": "board"});
+        let old_file = serde_json::to_string(&value).expect("serialize the old shape");
+
+        let restored = Workspace::from_persisted_json(&old_file).expect("restore");
+        assert_eq!(
+            restored.pane_kind(view_pane),
+            Some(PaneKind::View(ViewKind::BoardList))
+        );
     }
 
     /// A preview pane's artifact path and preview name live in the shell's
