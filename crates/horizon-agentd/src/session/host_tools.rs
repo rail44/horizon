@@ -13,7 +13,7 @@ use super::state::AgentdState;
 /// How long a session thread waits for Horizon to answer a `host_tool_*`
 /// round trip before giving up. Generous but finite: a client that never
 /// answers must not hang a session forever.
-const HOST_TOOL_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const HOST_TOOL_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Sends a host-tool request through the current connection's
 /// `HubHello::host_tools` bridge, if a connection is live. Returns whether

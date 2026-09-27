@@ -72,12 +72,10 @@ use horizon_agent::config::AgentConfig;
 use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::registry::ProviderRegistry;
-use horizon_agent::wire::SessionHubServerShared;
 use horizon_wire::daemon;
 use horizon_wire::socket::default_agentd_socket_path;
-use horizon_wire::WireCodec;
-use hub::{flush_event_log_before_exit, Hub};
-use session::{AgentdState, Connection};
+use hub::flush_event_log_before_exit;
+use session::AgentdState;
 use tokio::net::{UnixListener, UnixStream};
 
 /// This daemon's name in every log line and diagnostic, including the ones
@@ -304,23 +302,15 @@ async fn run(
     .await
 }
 
-/// Builds one connection's [`Hub`] and serves it for as long as the client
-/// lives ([`daemon::serve_connection`] owns the remoc handshake, the size
-/// caps, and the serve loop). The [`Connection`] is this daemon's
-/// per-connection seam onto process-lifetime state, so it is also what the
-/// post-connection cleanup closes: the sessions themselves keep running
-/// (they are scoped to the process, not the connection), but their bridges
-/// to this connection are dead.
+/// Serves one connection's ACP agent side for as long as the client lives
+/// ([`hub::serve`]). The sessions themselves keep running after it ends
+/// (they are scoped to the process, not the connection); only their
+/// bridges to this connection die.
 async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyhow::Result<()> {
-    let connection = Connection::new(state);
-    let hub = Hub::new(connection.clone(), BINARY_ID);
-    daemon::serve_connection::<_, SessionHubServerShared<_, WireCodec>>(
-        stream,
-        DAEMON_NAME,
-        Arc::new(hub),
-        || connection.disconnect(),
-    )
-    .await
+    let (read, write) = stream.into_split();
+    hub::serve(read, write, state, BINARY_ID)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 #[cfg(test)]

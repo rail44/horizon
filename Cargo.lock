@@ -4292,9 +4292,11 @@ dependencies = [
 name = "horizon-agentd"
 version = "0.1.0"
 dependencies = [
+ "agent-client-protocol",
  "anyhow",
  "crossbeam-channel",
  "duckdb",
+ "horizon-acp",
  "horizon-agent",
  "horizon-board",
  "horizon-config",
@@ -4307,6 +4309,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 
@@ -4359,9 +4362,13 @@ dependencies = [
 name = "horizon-daemon-testkit"
 version = "0.1.0"
 dependencies = [
+ "agent-client-protocol",
+ "horizon-acp",
  "horizon-wire",
  "remoc",
+ "serde_json",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 
@@ -9947,6 +9954,7 @@ checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "libc",
  "pin-project-lite",
