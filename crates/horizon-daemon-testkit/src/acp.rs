@@ -192,30 +192,3 @@ pub async fn connect_initialized(stream: UnixStream, client_name: &str) -> AcpCl
         .expect("initialize should succeed at a matching extension version");
     client
 }
-
-/// Sends `_horizon/drain` on a connection that never initialized -- the
-/// recovery a client whose `initialize` was refused uses. The daemon exits
-/// inside the call.
-pub async fn drain_uninitialized(stream: UnixStream) {
-    let (cx_tx, cx_rx) = oneshot::channel();
-    let transport = byte_streams(stream);
-    let task = tokio::spawn(async move {
-        let _ = Client
-            .builder()
-            .without_acp_version_guard()
-            .connect_with(transport, async move |cx| {
-                let _ = cx_tx.send(cx.clone());
-                cx.incoming_closed().await;
-                Ok(())
-            })
-            .await;
-    });
-    if let Ok(cx) = cx_rx.await {
-        let _ = tokio::time::timeout(
-            DRAIN_TIMEOUT,
-            cx.send_request(acp::DrainRequest {}).block_task(),
-        )
-        .await;
-    }
-    task.abort();
-}

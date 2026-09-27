@@ -42,39 +42,12 @@ fn ready_state() -> Arc<AgentdState> {
     state
 }
 
-/// Every method but `initialize` (and `_horizon/drain`, which exits the
-/// process and so cannot be exercised here) is refused until `initialize`
-/// succeeds; a rejected `initialize` leaves them refused, and a connection
+/// Methods are refused until `initialize` succeeds, and a connection
 /// initializes once.
 #[tokio::test]
 async fn methods_are_refused_until_initialize_succeeds() {
     let cx = connect(ready_state()).await;
 
-    let refused = cx
-        .send_request(v2::ListSessionsRequest::new())
-        .block_task()
-        .await
-        .unwrap_err();
-    assert!(refused.message.contains("initialize"), "{refused:?}");
-
-    let mismatch = cx
-        .send_request(initialize_request(acp::HORIZON_ACP_EXT_VERSION + 1))
-        .block_task()
-        .await
-        .unwrap_err();
-    assert!(
-        mismatch.message.starts_with("horizon ext version mismatch"),
-        "{mismatch:?}"
-    );
-    assert!(
-        mismatch
-            .message
-            .contains(&(acp::HORIZON_ACP_EXT_VERSION + 1).to_string())
-            && mismatch
-                .message
-                .contains(&acp::HORIZON_ACP_EXT_VERSION.to_string()),
-        "both versions are named: {mismatch:?}"
-    );
     assert!(cx
         .send_request(v2::ListSessionsRequest::new())
         .block_task()
@@ -106,6 +79,50 @@ async fn methods_are_refused_until_initialize_succeeds() {
         .block_task()
         .await
         .is_err());
+}
+
+/// A client at another extension version still initializes and learns the
+/// daemon's version; every later method but `_horizon/drain` (which exits
+/// the process, so it is covered end to end) is refused, naming both
+/// versions.
+#[tokio::test]
+async fn an_ext_version_mismatch_initializes_but_refuses_everything_else() {
+    let cx = connect(ready_state()).await;
+    let client_version = acp::HORIZON_ACP_EXT_VERSION + 1;
+
+    let response = cx
+        .send_request(initialize_request(client_version))
+        .block_task()
+        .await
+        .expect("a v2 client initializes whatever its extension version");
+    let meta: acp::InitializeMeta = acp::read_horizon_meta(response.meta.as_ref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.ext_version, acp::HORIZON_ACP_EXT_VERSION);
+
+    for refused in [
+        cx.send_request(v2::ListSessionsRequest::new())
+            .block_task()
+            .await
+            .map(drop),
+        cx.send_request(acp::ListProvidersRequest {})
+            .block_task()
+            .await
+            .map(drop),
+    ] {
+        let error = refused.unwrap_err();
+        assert!(
+            error.message.starts_with("horizon ext version mismatch"),
+            "{error:?}"
+        );
+        assert!(
+            error.message.contains(&client_version.to_string())
+                && error
+                    .message
+                    .contains(&acp::HORIZON_ACP_EXT_VERSION.to_string()),
+            "both versions are named: {error:?}"
+        );
+    }
 }
 
 /// `_horizon/reload_provider_config` re-reads the config file at the

@@ -33,9 +33,8 @@ use horizon_agent::contract::{
 use horizon_agent::persistence::event_log::{Appender, WriterHandle, WriterInit};
 use horizon_daemon_testkit::{
     agentd_hermetic_command, cargo_bin_exe_var, connect_acp, connect_initialized,
-    connect_with_retry, drain_uninitialized, initialize_request, resolve_daemon_binary,
-    spawn_with_link_retry, wait_for_exit, AcpClient, AgentdPaths, AgentdProcess, AgentdSpawn,
-    Inbound,
+    connect_with_retry, initialize_request, resolve_daemon_binary, spawn_with_link_retry,
+    wait_for_exit, AcpClient, AgentdPaths, AgentdProcess, AgentdSpawn, Inbound,
 };
 
 /// The env var `horizon-agentd`'s `main` reads to artificially delay its
@@ -684,20 +683,30 @@ async fn initialize_lists_sessions_and_drains_over_the_real_socket() {
     );
 }
 
-/// A client at another extension version is refused by `initialize` with
-/// an error naming both versions -- and `_horizon/drain` still works
-/// without an `initialize`, so the auto-recovery path can restart the
-/// daemon at a compatible version.
+/// A client at another extension version still initializes and learns the
+/// daemon's version from the reply; every later method is refused with an
+/// error naming both versions -- except `_horizon/drain`, so the
+/// auto-recovery path can restart the daemon at a compatible version on
+/// the same connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
     let mut agentd = spawn_agentd();
 
     let future = acp::HORIZON_ACP_EXT_VERSION + 5;
     let client = connect_acp(connect_with_retry(&agentd.socket_path).await).await;
-    let error = client
+    let response = client
         .request(initialize_request("future-horizon", future))
         .await
-        .expect_err("a different extension version must be rejected");
+        .expect("a v2 client initializes whatever its extension version");
+    let meta: acp::InitializeMeta = acp::read_horizon_meta(response.meta.as_ref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.ext_version, acp::HORIZON_ACP_EXT_VERSION);
+
+    let error = client
+        .request(session_new(SessionId::new()))
+        .await
+        .expect_err("a mismatched connection must not start sessions");
     assert!(
         error.message.starts_with("horizon ext version mismatch"),
         "{error:?}"
@@ -709,10 +718,8 @@ async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
             .contains(&acp::HORIZON_ACP_EXT_VERSION.to_string()),
         "{error:?}"
     );
-    // The accept loop serves one connection at a time.
-    drop(client);
 
-    drain_uninitialized(connect_with_retry(&agentd.socket_path).await).await;
+    client.drain().await;
     let status = wait_for_exit(&mut agentd.child).await;
     assert!(
         status.success(),
@@ -817,7 +824,7 @@ async fn auto_tool_executes_agentd_side_via_host_tool_round_trip() {
 async fn approve_and_finish(
     client: &mut AcpClient,
     text: &str,
-) -> (acp::ApprovalMeta, Vec<Inbound>) {
+) -> (SessionId, acp::ApprovalMeta, Vec<Inbound>) {
     let session_id = SessionId::new();
     open_session(client, session_new(session_id)).await;
     prompt(client, session_id, text).await;
@@ -851,16 +858,27 @@ async fn approve_and_finish(
         }),
         "approving should have started the tool call before finishing it, got: {collected:?}"
     );
-    (approval, collected)
+    (session_id, approval, collected)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approval_round_trip_request_out_approve_in_result_event_out() {
     let agentd = spawn_agentd();
     let mut client = connect(&agentd.socket_path).await;
-    let (approval, collected) = approve_and_finish(&mut client, "please run a tool").await;
+    let (session_id, approval, collected) =
+        approve_and_finish(&mut client, "please run a tool").await;
     let (_, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
     assert_eq!(meta.call_id, approval.call_id);
+    assert_eq!(meta.human_decision, Some(acp::HumanDecision::Approved));
+
+    // The human decision survives a reattachment.
+    let replay = resume(&mut client, session_id).await.unwrap();
+    let (_, replayed) = replay
+        .iter()
+        .rev()
+        .find_map(finished_tool)
+        .expect("the finished call is replayed");
+    assert_eq!(replayed.human_decision, Some(acp::HumanDecision::Approved));
 }
 
 /// `bash` runs agentd-side: approving a real `bash` tool call spawns an
@@ -870,7 +888,7 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
 async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     let agentd = spawn_agentd();
     let mut client = connect(&agentd.socket_path).await;
-    let (approval, collected) = approve_and_finish(&mut client, "please run bash").await;
+    let (_, approval, collected) = approve_and_finish(&mut client, "please run bash").await;
     let (call, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
     assert_eq!(meta.call_id, approval.call_id);
     assert_eq!(meta.tool_id, "bash");

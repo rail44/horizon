@@ -26,9 +26,7 @@ pub mod binary;
 pub mod hub;
 pub mod process;
 
-pub use acp::{
-    connect_acp, connect_initialized, drain_uninitialized, initialize_request, AcpClient, Inbound,
-};
+pub use acp::{connect_acp, connect_initialized, initialize_request, AcpClient, Inbound};
 pub use agentd::{agentd_hermetic_command, AgentdPaths, AgentdProcess, AgentdSpawn};
 pub use binary::{
     cargo_bin_exe_var, resolve_daemon_binary, sibling_daemon_binary, spawn_with_link_retry,

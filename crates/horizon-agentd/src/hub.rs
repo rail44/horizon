@@ -5,10 +5,9 @@
 //! [`crate::session::AgentdState`], reached through the same
 //! [`Connection`] seam.
 //!
-//! The connection runs without the crate's protocol-version guard so that
-//! `_horizon/drain` is served before (or after a rejected) `initialize`;
-//! every other method is refused until `initialize` has succeeded, and
-//! `initialize` succeeds once per connection.
+//! `initialize` succeeds for any v2 client. A client at another extension
+//! version gets the daemon's version in the reply, and from then on only
+//! `_horizon/drain` is served on that connection.
 //!
 //! Handlers run one at a time on the connection's dispatch loop, so any
 //! handler that waits (resume readiness, a replay, a provider listing)
@@ -23,7 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::{v2, ProtocolVersion};
-use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Error, Responder};
+use agent_client_protocol::{Agent, ByteStreams, Client, Error, Responder, V2ConnectionTo};
 use horizon_acp as acp;
 use horizon_agent::contract::{Command, ProviderId, SessionId};
 use horizon_agent::persistence::event_log::WriterHandle;
@@ -63,6 +62,8 @@ pub(crate) struct Shared {
     connection: Connection,
     binary_id: &'static str,
     initialized: AtomicBool,
+    /// Set when the client initialized at another extension version.
+    mismatch: Mutex<Option<String>>,
     slots: Mutex<HashMap<SessionId, Slot>>,
     next_generation: AtomicU64,
 }
@@ -73,16 +74,27 @@ impl Shared {
             connection,
             binary_id,
             initialized: AtomicBool::new(false),
+            mismatch: Mutex::new(None),
             slots: Mutex::new(HashMap::new()),
             next_generation: AtomicU64::new(1),
         }
     }
 
     fn gate(&self) -> Result<(), Error> {
-        if self.initialized.load(Ordering::Acquire) {
-            Ok(())
-        } else {
-            Err(not_initialized())
+        if !self.initialized.load(Ordering::Acquire) {
+            return Err(not_initialized());
+        }
+        match self
+            .mismatch
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+        {
+            Some(message) => Err(Error::new(
+                i32::from(agent_client_protocol::ErrorCode::InvalidRequest),
+                message.clone(),
+            )),
+            None => Ok(()),
         }
     }
 
@@ -192,7 +204,7 @@ impl Shared {
         self: &Arc<Self>,
         request: v2::InitializeRequest,
         responder: Responder<v2::InitializeResponse>,
-        cx: ConnectionTo<Client>,
+        cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         if self.initialized.load(Ordering::Acquire) {
             return responder.respond_with_error(Error::new(
@@ -211,20 +223,21 @@ impl Shared {
         }
         let client = acp::read_horizon_meta::<acp::InitializeMeta>(request.meta.as_ref())
             .and_then(Result::ok);
-        if client.as_ref().map(|meta| meta.ext_version) != Some(acp::HORIZON_ACP_EXT_VERSION) {
+        let matched =
+            client.as_ref().map(|meta| meta.ext_version) == Some(acp::HORIZON_ACP_EXT_VERSION);
+        if !matched {
             let client = client
                 .map(|meta| meta.ext_version.to_string())
                 .unwrap_or_else(|| "none".to_string());
-            return responder.respond_with_error(Error::new(
-                i32::from(agent_client_protocol::ErrorCode::InvalidRequest),
-                format!(
-                    "horizon ext version mismatch: client {client}, daemon {}",
-                    acp::HORIZON_ACP_EXT_VERSION
-                ),
+            *self
+                .mismatch
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = Some(format!(
+                "horizon ext version mismatch: client {client}, daemon {}",
+                acp::HORIZON_ACP_EXT_VERSION
             ));
         }
         self.initialized.store(true, Ordering::Release);
-        self.connect_host_tools(cx.clone());
 
         let meta = mapping::horizon_meta(&acp::InitializeMeta {
             ext_version: acp::HORIZON_ACP_EXT_VERSION,
@@ -238,6 +251,10 @@ impl Shared {
             .capabilities(v2::AgentCapabilities::new().session(v2::SessionCapabilities::new()))
             .meta(meta),
         )?;
+        if !matched {
+            return Ok(());
+        }
+        self.connect_host_tools(cx.clone());
 
         // Startup diagnostics: at most one notice, after the resume
         // finishes.
@@ -255,7 +272,7 @@ impl Shared {
     /// Sessions push host-tool requests into the connection-global bridge;
     /// each one is sent to the client from its own task, and its answer
     /// wakes the session thread waiting on it.
-    fn connect_host_tools(&self, cx: ConnectionTo<Client>) {
+    fn connect_host_tools(&self, cx: V2ConnectionTo<Client>) {
         let (requests, mut incoming) = mpsc::unbounded_channel::<HostToolRequest>();
         self.connection.connect_host_tools(requests);
         let connection = self.connection.clone();
@@ -290,7 +307,7 @@ impl Shared {
         self: &Arc<Self>,
         request: v2::NewSessionRequest,
         responder: Responder<v2::NewSessionResponse>,
-        cx: ConnectionTo<Client>,
+        cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         if let Err(error) = self.gate() {
             return responder.respond_with_error(error);
@@ -343,7 +360,7 @@ impl Shared {
         self: &Arc<Self>,
         request: v2::ResumeSessionRequest,
         responder: Responder<v2::ResumeSessionResponse>,
-        cx: ConnectionTo<Client>,
+        cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         if let Err(error) = self.gate() {
             return responder.respond_with_error(error);
@@ -369,7 +386,7 @@ impl Shared {
         self: &Arc<Self>,
         session_id: SessionId,
         opening: Opening,
-        cx: ConnectionTo<Client>,
+        cx: V2ConnectionTo<Client>,
     ) {
         let generation = self.claim(session_id);
         match self.connection.attach(session_id).await {
@@ -397,7 +414,7 @@ impl Shared {
         self: &Arc<Self>,
         _request: v2::ListSessionsRequest,
         responder: Responder<v2::ListSessionsResponse>,
-        _cx: ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         if let Err(error) = self.gate() {
             return responder.respond_with_error(error);
@@ -440,7 +457,7 @@ impl Shared {
         self: &Arc<Self>,
         request: v2::PromptRequest,
         responder: Responder<v2::PromptResponse>,
-        _cx: ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         let text: String = request
             .prompt
@@ -460,7 +477,7 @@ impl Shared {
         self: &Arc<Self>,
         request: v2::CloseSessionRequest,
         responder: Responder<v2::CloseSessionResponse>,
-        _cx: ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         let result = self
             .session_command(&request.session_id, Command::Shutdown)
@@ -475,7 +492,7 @@ impl Shared {
         self: &Arc<Self>,
         request: v2::SetSessionConfigOptionRequest,
         responder: Responder<v2::SetSessionConfigOptionResponse>,
-        _cx: ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         let result = (|| {
             self.gate()?;
@@ -507,7 +524,7 @@ impl Shared {
         self: &Arc<Self>,
         request: acp::ContinueTurnRequest,
         responder: Responder<acp::EmptyResponse>,
-        _cx: ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         let result = self
             .gate()
@@ -520,7 +537,7 @@ impl Shared {
         self: &Arc<Self>,
         _request: acp::ListProvidersRequest,
         responder: Responder<acp::ListProvidersResponse>,
-        _cx: ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         let result = self.gate().map(|()| acp::ListProvidersResponse {
             providers: self
@@ -545,7 +562,7 @@ impl Shared {
         self: &Arc<Self>,
         request: acp::ListProviderModelsRequest,
         responder: Responder<acp::ListProviderModelsResponse>,
-        _cx: ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         if let Err(error) = self.gate() {
             return responder.respond_with_error(error);
@@ -562,7 +579,7 @@ impl Shared {
         self: &Arc<Self>,
         request: acp::WatchBoardRequest,
         responder: Responder<acp::EmptyResponse>,
-        _cx: ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         if let Err(error) = self.gate() {
             return responder.respond_with_error(error);
@@ -583,7 +600,7 @@ impl Shared {
         self: &Arc<Self>,
         request: acp::EnsureBoardOrganizerRequest,
         responder: Responder<acp::EnsureBoardOrganizerResponse>,
-        _cx: ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         if let Err(error) = self.gate() {
             return responder.respond_with_error(error);
@@ -607,7 +624,7 @@ impl Shared {
         self: &Arc<Self>,
         _request: acp::ReloadProviderConfigRequest,
         responder: Responder<acp::EmptyResponse>,
-        _cx: ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         let result = self.gate().map(|()| {
             if let Err(error) = self.connection.reload_provider_config() {
@@ -620,13 +637,14 @@ impl Shared {
         answer(responder, result)
     }
 
-    /// Served without `initialize`. Flushes the event log and exits; every
+    /// Served on a connection at another extension version too: the
+    /// recovery such a client uses. Flushes the event log and exits; every
     /// PTY lives in `horizon-terminald`, so nothing else ends with it.
     fn drain(
         self: &Arc<Self>,
         _request: acp::DrainRequest,
         _responder: Responder<acp::EmptyResponse>,
-        _cx: ConnectionTo<Client>,
+        _cx: V2ConnectionTo<Client>,
     ) -> Result<(), Error> {
         flush_event_log_before_exit(self.connection.writer());
         eprintln!("horizon-agentd: drained, exiting");
@@ -671,7 +689,7 @@ where
                             responder: Responder<
                     <$ty as agent_client_protocol::JsonRpcRequest>::Response,
                 >,
-                            cx: ConnectionTo<Client>| {
+                            cx: V2ConnectionTo<Client>| {
                     shared.$method(request, responder, cx)
                 },
                 agent_client_protocol::on_receive_request!(),
@@ -679,10 +697,7 @@ where
         }};
     }
 
-    let builder = Agent
-        .builder()
-        .without_acp_version_guard()
-        .name(DAEMON_NAME);
+    let builder = Agent.v2().name(DAEMON_NAME);
     let builder = on_request!(builder, v2::InitializeRequest, initialize);
     let builder = on_request!(builder, v2::NewSessionRequest, new_session);
     let builder = on_request!(builder, v2::ResumeSessionRequest, resume_session);
@@ -715,7 +730,7 @@ where
     let builder = on_request!(builder, acp::DrainRequest, drain);
     let cancel = shared.clone();
     let builder = builder.on_receive_notification(
-        async move |notification: v2::CancelSessionNotification, _cx: ConnectionTo<Client>| {
+        async move |notification: v2::CancelSessionNotification, _cx: V2ConnectionTo<Client>| {
             if let Err(error) = cancel.session_command(
                 &notification.session_id,
                 Command::Cancel { request_id: None },

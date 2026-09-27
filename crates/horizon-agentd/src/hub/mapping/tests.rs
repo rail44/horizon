@@ -214,6 +214,7 @@ fn a_tool_call_is_one_update_series_keyed_by_its_occurrence() {
             outcome: Some(acp::ToolOutcome::Succeeded),
             auto_approved: Some(true),
             policy_tier: Some("contained".into()),
+            human_decision: None,
         }
     );
 }
@@ -288,4 +289,46 @@ fn model_announcements_become_one_select_option() {
         panic!("expected a select option");
     };
     assert_eq!(&*select.current_value.0, "moa/mix");
+}
+
+#[test]
+fn a_human_decision_patches_the_call_and_stays_on_its_result() {
+    let mut mapper = mapper();
+    let updates = updates(
+        &mut mapper,
+        &[
+            Event::ToolCallRequested(tool_request("call-1", "occ-1", "bash")),
+            approval("occ-1"),
+            Event::ApprovalResolved(ApprovalResolved {
+                call_id: ToolCallId("call-1".into()),
+                occurrence_id: OccurrenceId("occ-1".into()),
+                decision: ApprovalDecisionPayload::Deny {
+                    reason: Some("not now".into()),
+                },
+            }),
+            Event::ToolCallFinished(ToolCallResult {
+                call_id: ToolCallId("call-1".into()),
+                occurrence_id: OccurrenceId("occ-1".into()),
+                output: serde_json::json!({"is_error": true}).into(),
+                outcome: ToolOutcome::Denied,
+            }),
+        ],
+    );
+    let decisions: Vec<_> = updates
+        .iter()
+        .map(|update| match update {
+            v2::SessionUpdate::ToolCallUpdate(call) => {
+                assert_eq!(&*call.tool_call_id.0, "occ-1");
+                acp::read_horizon_meta::<acp::ToolCallMeta>(call.meta.as_opt_ref().flatten())
+                    .unwrap()
+                    .unwrap()
+                    .human_decision
+            }
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    let denied = Some(acp::HumanDecision::Denied {
+        reason: Some("not now".into()),
+    });
+    assert_eq!(decisions, vec![None, denied.clone(), denied]);
 }

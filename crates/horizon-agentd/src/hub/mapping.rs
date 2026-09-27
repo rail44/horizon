@@ -59,6 +59,7 @@ pub(super) struct Mapper {
     selection: Option<ModelSelection>,
     message_seq: u64,
     tool_ids: HashMap<String, String>,
+    decisions: HashMap<String, acp::HumanDecision>,
     stop_reason: Option<v2::StopReason>,
     state: Option<StateKind>,
     pending_approvals: Vec<ApprovalRequest>,
@@ -123,6 +124,7 @@ impl Mapper {
             selection: None,
             message_seq: 0,
             tool_ids: HashMap::new(),
+            decisions: HashMap::new(),
             stop_reason: None,
             state: None,
             pending_approvals: Vec::new(),
@@ -287,6 +289,7 @@ impl Mapper {
                         outcome: None,
                         auto_approved: None,
                         policy_tier: None,
+                        human_decision: None,
                     }));
                 vec![Outgoing::Update(v2::SessionUpdate::ToolCallUpdate(update))]
             }
@@ -317,6 +320,7 @@ impl Mapper {
                         .get("policy_tier")
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
+                    human_decision: self.decisions.get(&occurrence).cloned(),
                 };
                 let update = v2::ToolCallUpdate::new(occurrence.clone())
                     .status(status)
@@ -334,7 +338,31 @@ impl Mapper {
                     vec![Outgoing::AskPermission(request.clone())]
                 }
             }
-            Event::ApprovalResolved(resolved) => self.settle_approval(&resolved.occurrence_id.0),
+            Event::ApprovalResolved(resolved) => {
+                let occurrence = resolved.occurrence_id.0.clone();
+                let decision = match &resolved.decision {
+                    contract::ApprovalDecisionPayload::Approve => acp::HumanDecision::Approved,
+                    contract::ApprovalDecisionPayload::Deny { reason } => {
+                        acp::HumanDecision::Denied {
+                            reason: reason.clone(),
+                        }
+                    }
+                };
+                self.decisions.insert(occurrence.clone(), decision.clone());
+                let meta = acp::ToolCallMeta {
+                    call_id: resolved.call_id.0.clone(),
+                    tool_id: self.tool_ids.get(&occurrence).cloned().unwrap_or_default(),
+                    outcome: None,
+                    auto_approved: None,
+                    policy_tier: None,
+                    human_decision: Some(decision),
+                };
+                let mut out = vec![Outgoing::Update(v2::SessionUpdate::ToolCallUpdate(
+                    v2::ToolCallUpdate::new(occurrence.clone()).meta(horizon_meta(&meta)),
+                ))];
+                out.extend(self.settle_approval(&occurrence));
+                out
+            }
             Event::TurnEnded(reason) => {
                 self.stop_reason = Some(stop_reason(*reason));
                 Vec::new()

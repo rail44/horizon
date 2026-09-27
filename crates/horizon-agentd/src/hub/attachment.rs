@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v2;
-use agent_client_protocol::{Client, ConnectionTo, Responder};
+use agent_client_protocol::{Client, Responder, V2ConnectionTo};
 use horizon_acp as acp;
 use horizon_agent::contract::{ApprovalRequest, Command, SessionId};
 use horizon_agent::wire::{AgentWireEvent, AttachmentEnd};
@@ -37,7 +37,7 @@ impl Opening {
 #[derive(Clone)]
 pub(super) struct Sink {
     shared: Arc<Shared>,
-    cx: ConnectionTo<Client>,
+    cx: V2ConnectionTo<Client>,
     session_id: SessionId,
     acp_id: v2::SessionId,
     generation: u64,
@@ -189,7 +189,7 @@ async fn ask_permission(sink: Sink, request: ApprovalRequest, cancelled: oneshot
 
 pub(super) fn start(
     shared: Arc<Shared>,
-    cx: ConnectionTo<Client>,
+    cx: V2ConnectionTo<Client>,
     session_id: SessionId,
     generation: u64,
     bootstrap: Bootstrap,
@@ -204,7 +204,7 @@ pub(super) fn start(
 /// Owns the lease for the attachment's whole life; any exit revokes it.
 async fn run(
     shared: Arc<Shared>,
-    cx: ConnectionTo<Client>,
+    cx: V2ConnectionTo<Client>,
     session_id: SessionId,
     generation: u64,
     bootstrap: Bootstrap,
