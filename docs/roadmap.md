@@ -211,16 +211,14 @@ lands:
 - **First-party viewers** (image / markdown / git diff). Native Rust
   views on the session-less pane plumbing the theme settings view
   introduced (`PaneKind::View`, `docs/theme-settings-view-design.md`).
-- **ACP client — external agents in agent panes.** Host ACP-speaking
-  agents (Claude Code via `claude-agent-acp`, Codex/Gemini adapters)
-  as agent sessions; auth stays agent-side, harness quality is
-  delegated to the vendor. Build on the official
-  `agent-client-protocol` crate; the contract was shaped for this
-  (`docs/agent-runtime-split-design.md`, "ACP compatibility
-  guardrails"). Key in-session decision: placement — a separate ACP
-  session path vs an ACP-proxy provider inside agentd
-  (detach/persistence semantics differ). v1 scope: spawn + prompt +
-  `session/update` streaming + permission mapping.
+- **ACP as the shell↔agentd line — design 2026-09-27**
+  (`docs/acp-agentd-design.md`; decision on board #63). The shell
+  becomes an ACP client; `horizon-agentd` speaks ACP v2 in place of the
+  remoc agent hub (terminald/logd stay remoc), and external ACP agents
+  (Claude Code via `claude-agent-acp`, v1) attach to the same client
+  directly, with their session management left to the agent. Build on
+  the official `agent-client-protocol` crate; Horizon-only traffic
+  rides `_horizon/*` extensions and `_meta`.
 - **Model-routing OpenAI-compatible API.** Router over synthetic.new,
   co-located as an independent crate — no horizon dependencies
   (extractable later), SSE streaming required (horizon-agent assumes

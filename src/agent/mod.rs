@@ -2,6 +2,7 @@
 //! ownership lives in `crate::agentd`.
 
 pub(crate) mod auxiliary;
+pub(crate) mod model;
 mod session;
 mod turns;
 mod view;

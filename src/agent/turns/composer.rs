@@ -2,13 +2,9 @@
 //! approval target, the placeholder text, and the model chip (the
 //! provider→model picker's entry point as of the 2026-09-19 model-switcher
 //! addendum to `docs/agent-output-ui-amendment.md`). `latest_turn_model`
-//! (the model chip's other input) moved to
-//! `horizon_agent::transcript` -- it's plain model-id extraction, not
-//! wording -- and is re-exported from `super` under its original name
-//! (see `turns/mod.rs`'s doc comment).
+//! (the model chip's other input) lives in `crate::agent::model`.
 
-use horizon_agent::contract::ToolCallIdentity;
-use horizon_agent::wire::ModelSelection;
+use super::super::model::{ModelSelection, ToolCallIdentity};
 
 /// The approval keyboard-capture state (`docs/agent-output-ui-
 /// amendment.md` decision 4, stage E; re-scoped to row-centric v2):
@@ -35,7 +31,7 @@ pub(crate) enum ComposerMode {
 
 /// Recomputes [`ComposerMode`] from the session's actionable pending
 /// queue (oldest-first -- the same ordering
-/// `horizon_agent::frame::actionable_pending_approval_identities_in`
+/// `crate::agent::model::actionable_pending_approval_identities_in`
 /// returns, ghost-excluded per the round-4 post-review fix) and
 /// `dismissed`: the identity, if any, the composer most recently reverted
 /// to `Normal` for because the user started typing instead of deciding.
@@ -113,7 +109,7 @@ pub(crate) fn composer_placeholder(turn_in_flight: bool) -> &'static str {
 /// explicitly assumed *there is no model switcher yet*. One exists now
 /// (parent task #1's Phase 2): every mid-session change flows through the
 /// explicit `set_session_model` RPC, and the daemon re-announces the
-/// resolved model (`AgentWireEvent::SessionModel`) on every switch, so the
+/// selected model (`config_option_update`) on every switch, so the
 /// session value is no longer a possibly-stale startup snapshot -- it is
 /// the freshest intent signal there is, arriving ahead of any turn that
 /// could reflect it. The drift protection the old rule provided is now the
@@ -155,11 +151,23 @@ pub(crate) fn composer_model_label(
 mod tests {
     use super::super::test_support::*;
     use super::*;
+    use crate::agent::model::{
+        actionable_pending_approval_identities_in, AgentFrameItem, PermissionDecision,
+    };
+
     fn approval_identity(id: &str) -> ToolCallIdentity {
         ToolCallIdentity {
-            call_id: horizon_agent::contract::ToolCallId(id.into()),
-            occurrence_id: horizon_agent::contract::OccurrenceId(id.into()),
+            call_id: id.into(),
+            occurrence_id: id.into(),
         }
+    }
+
+    fn approved(id: &str) -> AgentFrameItem {
+        let mut item = approval_requested(id);
+        if let AgentFrameItem::Permission(permission) = &mut item {
+            permission.decision = Some(PermissionDecision::Approved);
+        }
+        item
     }
 
     #[test]
@@ -172,11 +180,8 @@ mod tests {
 
     #[test]
     fn composer_model_chip_shows_the_session_model_before_any_turn_completes() {
-        // The gap `horizon_agent::transcript::grouping::tests::
-        // latest_turn_model_is_none_before_any_turn_completes` exercises
-        // (`latest_turn_model` moved there, see this module's doc
-        // comment): with a session-start model now known, the chip no
-        // longer has to wait for the first turn to complete.
+        // With the session's selected model known from the `model` config
+        // option, the chip does not wait for the first turn to complete.
         assert_eq!(composer_model_chip(Some("gpt-5"), None), Some("gpt-5"));
     }
 
@@ -192,7 +197,7 @@ mod tests {
     fn composer_model_chip_prefers_the_session_model_when_the_turn_diverges() {
         // Reversing the original turn-wins rule: with the model switcher
         // live, every mid-session change is
-        // an explicit `set_session_model` echoed back as a `SessionModel`
+        // an explicit `set_session_model` echoed back as a `config_option_update`
         // re-announcement, so the session value IS "what would happen if
         // you sent a message right now" and the latest completed turn is
         // one switch behind it by construction.
@@ -218,7 +223,7 @@ mod tests {
     #[test]
     fn composer_model_label_shows_the_selection_pair_when_known() {
         // A MoA switch: the chip reads `moa · mix`, not the aggregator's
-        // resolved model id the `SessionModel` announcement carries.
+        // resolved model id alone would show.
         let selection = ModelSelection {
             provider: "moa".to_string(),
             model: "mix".to_string(),
@@ -300,16 +305,13 @@ mod tests {
     }
 
     #[test]
-    fn approving_a_bash_call_advances_composer_mode_the_instant_started_folds() {
-        // End-to-end through the real seam `AgentView::sync_composer_mode`
-        // uses (`horizon_agent::frame::actionable_pending_approval_identities_in`
-        // feeding `next_composer_mode`): approving targets the oldest
-        // actionable call; the daemon's synchronous ack for that click
-        // folds `ToolCallStarted` immediately, well before `bash`'s
-        // eventual `ToolCallFinished` -- the composer must advance to the
-        // next actionable call right there, not wait for the result.
+    fn approving_a_call_advances_composer_mode_the_instant_the_answer_folds() {
+        // Through the seam the composer uses
+        // (`actionable_pending_approval_identities_in` feeding
+        // `next_composer_mode`): answering the oldest permission request
+        // advances to the next one without waiting for the tool result.
         let before = vec![approval_requested("a"), approval_requested("b")];
-        let queue_before = horizon_agent::frame::actionable_pending_approval_identities_in(&before);
+        let queue_before = actionable_pending_approval_identities_in(&before);
         assert_eq!(
             next_composer_mode(&queue_before, None),
             ComposerMode::Approval {
@@ -317,12 +319,8 @@ mod tests {
             }
         );
 
-        let after = vec![
-            approval_requested("a"),
-            approval_requested("b"),
-            tool_started("a"),
-        ];
-        let queue_after = horizon_agent::frame::actionable_pending_approval_identities_in(&after);
+        let after = vec![approved("a"), approval_requested("b")];
+        let queue_after = actionable_pending_approval_identities_in(&after);
         assert_eq!(
             next_composer_mode(&queue_after, None),
             ComposerMode::Approval {
@@ -332,9 +330,9 @@ mod tests {
     }
 
     #[test]
-    fn approving_the_only_pending_call_clears_composer_mode_once_started_folds() {
-        let items = vec![approval_requested("a"), tool_started("a")];
-        let queue = horizon_agent::frame::actionable_pending_approval_identities_in(&items);
+    fn approving_the_only_pending_call_clears_composer_mode_once_the_answer_folds() {
+        let items = vec![approved("a")];
+        let queue = actionable_pending_approval_identities_in(&items);
         assert_eq!(next_composer_mode(&queue, None), ComposerMode::Normal);
     }
 
@@ -362,7 +360,7 @@ mod tests {
     fn dismissing_an_old_occurrence_does_not_hide_a_retry_with_the_same_call_id() {
         let first = approval_identity("reused");
         let mut retry = first.clone();
-        retry.occurrence_id = horizon_agent::contract::OccurrenceId("retry".into());
+        retry.occurrence_id = "retry".into();
         let mode = next_composer_mode(std::slice::from_ref(&retry), Some(&first));
         assert_eq!(
             mode,

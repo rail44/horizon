@@ -1,15 +1,13 @@
 //! Receipt status/duration text and the collapsed-receipt prose (owner
 //! feedback 2026-07-13: query/edit/bash calls fold into prose counts
 //! rather than a row of low-signal chips). The aggregation itself
-//! (`CallClass`/`ReceiptAggregate`/`aggregate_receipt`) moved to
-//! `horizon_agent::transcript` -- this file holds only the wording built
-//! on top of it, re-exported from `super` under its original name (see
-//! `turns/mod.rs`'s doc comment).
+//! (`ReceiptAggregate`/`aggregate_receipt`) lives in `crate::agent::model`
+//! -- this file holds only the wording built on top of it.
 
 use std::time::Duration;
 
+use super::super::model::TurnEndReason;
 use horizon_agent::config::{DEFAULT_DOOM_LOOP_WINDOW, DEFAULT_ITERATION_CAP};
-use horizon_agent::contract::TurnEndReason;
 
 use super::{pluralize, ReceiptAggregate, TurnEnd};
 
@@ -23,14 +21,9 @@ use super::{pluralize, ReceiptAggregate, TurnEnd};
 /// a `&TurnEnd` rather than duplicating its fields so it can never drift
 /// from [`receipt_status`]'s own reading of it.
 ///
-/// Stayed in this (wording) crate rather than moving to
-/// `horizon_agent::transcript` alongside `TurnEnd`: it has no structural
-/// consumer of its own -- `view.rs` decides `Final` vs. `Intermediate`
-/// itself (whether this burst is the turn's last, closed one), and the
-/// only thing this type is ever used for is selecting which of
-/// [`receipt_status`]'s wording branches `render_receipt` takes. Moving
-/// it would have stranded a borrowed-lifetime type in the crate with no
-/// structural code ever touching it.
+/// The view decides `Final` vs. `Intermediate` itself (whether this burst
+/// is the turn's last, closed one); this type only selects which of
+/// [`receipt_status`]'s wording branches `render_receipt` takes.
 pub(crate) enum ReceiptTail<'a> {
     Final(&'a TurnEnd),
     Intermediate,
@@ -201,34 +194,34 @@ mod tests {
     #[test]
     fn aggregate_receipt_folds_mixed_classes_into_prose_counts() {
         let items = vec![
-            tool_requested("q1", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
             tool_finished(
                 "q1",
+                "fs.grep",
+                json!({"base_path": ".", "pattern": "x"}),
                 json!({"returned_count": 1, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 1}),
             ),
-            tool_requested(
+            tool_finished(
                 "q2",
                 "fs.glob",
                 json!({"base_path": ".", "pattern": "*.rs"}),
-            ),
-            tool_finished(
-                "q2",
                 json!({"returned_count": 2, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 2}),
             ),
-            tool_requested("r1", "fs.read", json!({"path": "a.rs"})),
             tool_finished(
                 "r1",
+                "fs.read",
+                json!({"path": "a.rs"}),
                 json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
             ),
-            tool_requested(
+            tool_finished(
                 "e1",
                 "fs.edit",
                 json!({"edits": [{"path": "b.rs", "old_string": "x", "new_string": "y"}]}),
+                edit_result("b.rs"),
             ),
-            tool_finished("e1", edit_result("b.rs")),
-            tool_requested("b1", "bash", json!({"command": "cargo test"})),
             tool_finished(
                 "b1",
+                "bash",
+                json!({"command": "cargo test"}),
                 json!({"exit_code": 0, "output": "", "termination": "exited", "output_file": null, "truncated": false}),
             ),
         ];
@@ -248,30 +241,34 @@ mod tests {
     #[test]
     fn aggregate_receipt_counts_distinct_paths_not_call_counts() {
         let items = vec![
-            tool_requested("r1", "fs.read", json!({"path": "a.rs"})),
             tool_finished(
                 "r1",
+                "fs.read",
+                json!({"path": "a.rs"}),
                 json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
             ),
-            tool_requested("r2", "fs.read", json!({"path": "a.rs"})),
             tool_finished(
                 "r2",
+                "fs.read",
+                json!({"path": "a.rs"}),
                 json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
             ),
-            tool_requested("r3", "fs.read", json!({"path": "b.rs"})),
             tool_finished(
                 "r3",
+                "fs.read",
+                json!({"path": "b.rs"}),
                 json!({"total_lines": 5, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 5}),
             ),
-            tool_requested(
+            tool_finished(
                 "e1",
                 "fs.edit",
                 json!({"edits": [{"path": "c.rs", "old_string": "x", "new_string": "y"}]}),
+                edit_result("c.rs"),
             ),
-            tool_finished("e1", edit_result("c.rs")),
-            tool_requested("e2", "fs.write", json!({"path": "c.rs", "content": "z"})),
             tool_finished(
                 "e2",
+                "fs.write",
+                json!({"path": "c.rs", "content": "z"}),
                 json!({"path": "c.rs", "created": false, "bytes_written": 1}),
             ),
         ];
@@ -335,14 +332,16 @@ mod tests {
         // into prose exactly like query/edit calls, leaving no chip
         // behind for a successful run.
         let items = vec![
-            tool_requested("b1", "bash", json!({"command": "cargo build"})),
             tool_finished(
                 "b1",
+                "bash",
+                json!({"command": "cargo build"}),
                 json!({"exit_code": 0, "output": "", "termination": "exited", "output_file": null, "truncated": false}),
             ),
-            tool_requested("b2", "bash", json!({"command": "cargo test"})),
             tool_finished(
                 "b2",
+                "bash",
+                json!({"command": "cargo test"}),
                 json!({"exit_code": 0, "output": "", "termination": "exited", "output_file": null, "truncated": false}),
             ),
         ];
@@ -385,20 +384,20 @@ mod tests {
         // A closed burst's own item range feeds `aggregate_receipt`/
         // `receipt_prose` exactly the way a whole completed turn's items
         // used to -- proving per-burst aggregation reuses the existing
-        // machinery verbatim, just scoped to the burst's own range. Lives
-        // here (not with `segment_bursts`, which moved to
-        // `horizon_agent::transcript`) because its punchline assertion is
-        // on `receipt_prose`'s wording output.
+        // machinery verbatim, just scoped to the burst's own range. Its
+        // punchline assertion is on `receipt_prose`'s wording output.
         let items = vec![
             user_message("fix the bug"),
-            tool_requested("a", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
             tool_finished(
                 "a",
+                "fs.grep",
+                json!({"base_path": ".", "pattern": "x"}),
                 json!({"returned_count": 2, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 2}),
             ),
-            tool_requested("b", "fs.read", json!({"path": "a.rs"})),
             tool_finished(
                 "b",
+                "fs.read",
+                json!({"path": "a.rs"}),
                 json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
             ),
             assistant_delta("Looking at the code, I"),

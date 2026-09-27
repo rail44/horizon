@@ -1,5 +1,6 @@
 //! Render completed burst receipts and running cards, with their expansion state.
 
+use super::super::super::model::{AgentFrameItem, SessionState, TurnEndReason};
 use super::super::super::turns;
 use super::AgentTranscript;
 use crate::theme;
@@ -9,10 +10,6 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     tag::Tag,
     Sizable as _,
-};
-use horizon_agent::{
-    contract::{SessionState, TurnEndReason},
-    frame::AgentFrameItem,
 };
 use horizon_workspace::commands::CommandId;
 
@@ -292,8 +289,9 @@ impl AgentTranscript {
         let state_label = self
             .session
             .read(cx)
+            .model
             .frame
-            .state
+            .state()
             .map(running_state_label)
             .unwrap_or("running…");
 
@@ -447,8 +445,7 @@ fn accent_tint(alpha: f32) -> Hsla {
 /// The running card's header label for the three in-flight
 /// `SessionState`s (`state_indicates_turn_in_flight`'s own set). The
 /// label set itself lives in `session_state_label` (shared with the
-/// status line): terminal states return their own labels, and only the
-/// quiet states (`Created`/`WaitingForUser`) fall back to the generic
+/// status line): only the quiet idle state falls back to the generic
 /// label — purely defensive, since the card only ever renders while a
 /// turn is in flight.
 fn running_state_label(state: SessionState) -> &'static str {
@@ -459,9 +456,8 @@ fn running_state_label(state: SessionState) -> &'static str {
 mod tests {
     #[test]
     fn running_state_label_covers_in_flight_and_falls_back_for_quiet_states() {
-        use horizon_agent::contract::SessionState;
-
         use super::running_state_label;
+        use crate::agent::model::SessionState;
         assert_eq!(running_state_label(SessionState::Running), "running…");
         assert_eq!(
             running_state_label(SessionState::ToolRunning),
@@ -471,12 +467,8 @@ mod tests {
             running_state_label(SessionState::WaitingForApproval),
             "waiting for approval"
         );
-        // Defensive fallback: the card never renders in these states, but
-        // the mapping stays total.
-        assert_eq!(running_state_label(SessionState::Created), "running…");
-        assert_eq!(
-            running_state_label(SessionState::WaitingForUser),
-            "running…"
-        );
+        // Defensive fallback: the card never renders idle, but the mapping
+        // stays total.
+        assert_eq!(running_state_label(SessionState::Idle), "running…");
     }
 }

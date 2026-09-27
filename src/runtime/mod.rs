@@ -1,9 +1,10 @@
-//! Horizon's eager clients for the per-view-kind runtimes — since v10
-//! remoc hub clients (`docs/remoc-adoption-design.md` §2), and since v17
-//! **two of them**: [`AgentdHandle`] speaks to `horizon-agentd` (the
-//! agent runtime) and [`TerminaldHandle`] to `horizon-terminald` (the
-//! terminal runtime), each over its own socket, connection, op queue, and
-//! `RuntimeControl` (`docs/terminald-split-design.md`).
+//! Horizon's eager clients for the per-view-kind runtimes, **two of
+//! them**: [`AgentdHandle`] speaks ACP v2 to `horizon-agentd` (the agent
+//! runtime, `docs/acp-agentd-design.md`) and [`TerminaldHandle`] remoc to
+//! `horizon-terminald` (the terminal runtime,
+//! `docs/remoc-adoption-design.md` §2), each over its own socket,
+//! connection, op queue, and `RuntimeControl`
+//! (`docs/terminald-split-design.md`).
 //!
 //! That separation is the whole point: reloading one runtime drains and
 //! respawns exactly one daemon and leaves the other's sessions — and, for
@@ -29,15 +30,16 @@ mod link;
 mod notify;
 mod request;
 mod routing;
-pub(crate) use attachment::{AgentUpdate, AttachmentState};
+pub(crate) use agent::SessionSummary;
+pub(crate) use attachment::{AgentCommand, AgentUpdate, AttachmentState};
+pub(crate) use routing::WorkspaceRootUpdate;
 mod terminal;
 
 use std::path::Path;
 use std::sync::Arc;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use horizon_agent::contract::{self, Command};
-use horizon_agent::wire::{self, HostToolRequest, HostToolResponse};
+use horizon_acp::{HostToolRequest, ProviderSummary, SessionId, SessionNewMeta};
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
@@ -88,7 +90,7 @@ impl Drop for RuntimeLifetime {
 }
 
 pub(crate) struct AgentdResponder {
-    ops: tokio::sync::mpsc::WeakUnboundedSender<agent::Op>,
+    routes: std::sync::Weak<AgentRoutes>,
 }
 
 /// A live view of `WorkspaceShell::terminald`, threaded into panes that can
@@ -123,9 +125,9 @@ impl TerminaldSlot {
 }
 
 pub(crate) struct AgentSessionHandle {
-    commands: Sender<Command>,
+    commands: Sender<AgentCommand>,
     events: Option<tokio::sync::mpsc::Receiver<AgentUpdate>>,
-    route: RouteKey<contract::SessionId>,
+    route: RouteKey<SessionId>,
     routes: Arc<AgentRoutes>,
 }
 
@@ -143,7 +145,7 @@ pub(crate) struct TerminalSessionHandle {
 }
 
 impl AgentSessionHandle {
-    pub(crate) fn sender(&self) -> Sender<Command> {
+    pub(crate) fn sender(&self) -> Sender<AgentCommand> {
         self.commands.clone()
     }
 
@@ -153,10 +155,10 @@ impl AgentSessionHandle {
             .expect("attachment has one event consumer")
     }
 
-    /// The daemon-side session id, for hub-level RPCs that address the
-    /// session by id (`SessionHub::set_session_model` -- the model picker's
-    /// confirm path).
-    pub(crate) fn session_id(&self) -> contract::SessionId {
+    /// The daemon-side session id, for connection-level requests that
+    /// address the session by id (`session/set_config_option` -- the model
+    /// picker's confirm path).
+    pub(crate) fn session_id(&self) -> SessionId {
         self.route.session_id()
     }
 }
@@ -188,9 +190,9 @@ impl Drop for TerminalSessionHandle {
 }
 
 impl AgentdResponder {
-    pub(crate) fn respond_host_tool(&self, response: HostToolResponse) {
-        if let Some(ops) = self.ops.upgrade() {
-            let _ = ops.send(agent::Op::HostToolResponse(response));
+    pub(crate) fn respond_host_tool(&self, request_id: &str, output: serde_json::Value) {
+        if let Some(routes) = self.routes.upgrade() {
+            routes.respond_host_tool(request_id, output);
         }
     }
 }
@@ -201,7 +203,7 @@ impl AgentdHandle {
     }
 
     /// Starts the agent-runtime connection and returns before the
-    /// connection (or the `hello` negotiation) completes. Typed requests
+    /// connection (or the `initialize` handshake) completes. Typed requests
     /// enqueue onto the op queue meanwhile; once the hub is live each op
     /// is *dispatched* in queue order but *executed* on its own task, so
     /// there is no cross-op completion-order guarantee — a slow
@@ -214,7 +216,7 @@ impl AgentdHandle {
     ) -> (
         Self,
         Receiver<HostToolRequest>,
-        Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
+        Receiver<(SessionId, WorkspaceRootUpdate)>,
     ) {
         let (handle, host_tools, workspace_roots, ops) = Self::parts();
         agent::spawn(
@@ -231,7 +233,7 @@ impl AgentdHandle {
     fn parts() -> (
         Self,
         Receiver<HostToolRequest>,
-        Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
+        Receiver<(SessionId, WorkspaceRootUpdate)>,
         tokio::sync::mpsc::UnboundedReceiver<agent::Op>,
     ) {
         let (ops_tx, ops_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -261,10 +263,10 @@ impl AgentdHandle {
     ) -> (
         Self,
         Receiver<HostToolRequest>,
-        Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
+        Receiver<(SessionId, WorkspaceRootUpdate)>,
     )
     where
-        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
     {
         let (handle, host_tools, workspace_roots, ops) = Self::parts();
         agent::spawn_test_stream(stream, ops, handle.routes.clone(), handle.control.clone());
@@ -273,8 +275,8 @@ impl AgentdHandle {
 
     /// `workspace_root` is computed shell-side (`WorkspaceShell::reconcile`)
     /// and recorded on the workspace model before this is called, so the
-    /// model and the daemon spawn can never disagree -- see `wire::
-    /// SessionNew::workspace_root`'s doc comment. `spawn_source_session_id`/
+    /// model and the daemon spawn can never disagree; it travels as
+    /// `session/new`'s `cwd`. `spawn_source_session_id`/
     /// `isolate` are `docs/session-relationship-design.md` decision 3's
     /// per-spawn knobs: the pane this spawn was invoked "from"
     /// (kind-agnostic -- may be a terminal or an agent session id) and
@@ -285,34 +287,36 @@ impl AgentdHandle {
     /// forwards whatever concrete choice it's given. Note that for an
     /// isolated spawn, `workspace_root` here is only the *pre-isolation*
     /// value -- the daemon overrides it with the worktree path it creates,
-    /// reported back via `wire::SessionSummary::workspace_root` (see
+    /// reported back via `SessionInfoMeta::workspace_root` (see
     /// `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore`).
     pub(crate) fn start_session(
         &self,
-        session_id: contract::SessionId,
-        provider_id: contract::ProviderId,
+        session_id: SessionId,
+        provider_id: horizon_agent::contract::ProviderId,
         role_id: Option<horizon_agent::roles::RoleId>,
         workspace_root: Option<std::path::PathBuf>,
-        spawn_source_session_id: Option<contract::SessionId>,
+        spawn_source_session_id: Option<SessionId>,
         isolate: bool,
     ) -> AgentSessionHandle {
         let (handle, commands) = self.register_agent(session_id);
         let _ = self.ops.send(agent::Op::NewAgent {
             route: handle.route,
-            new: wire::SessionNew {
-                session_id,
-                provider_id,
-                role_id,
+            new: Box::new(agent::SessionNew {
+                meta: SessionNewMeta {
+                    session_id,
+                    provider_id: provider_id.0,
+                    role_id: role_id.map(|role| role.0),
+                    isolate,
+                    spawn_source_session_id,
+                },
                 workspace_root,
-                spawn_source_session_id,
-                isolate,
-            },
+            }),
             commands,
         });
         handle
     }
 
-    pub(crate) fn attach_session(&self, session_id: contract::SessionId) -> AgentSessionHandle {
+    pub(crate) fn attach_session(&self, session_id: SessionId) -> AgentSessionHandle {
         let (handle, commands) = self.register_agent(session_id);
         let _ = self.ops.send(agent::Op::AttachAgent {
             route: handle.route,
@@ -323,17 +327,16 @@ impl AgentdHandle {
 
     /// Registers the pane-facing channels for one agent session and starts
     /// the bridge thread that carries its commands from the sync world
-    /// into the runtime (crossbeam → tokio unbounded; the runtime pumps
-    /// the tokio half into the attachment's remote channel once the rtc
-    /// call returns).
+    /// into the runtime (crossbeam → tokio unbounded; the attachment task
+    /// carries them out once the attachment is ready).
     fn register_agent(
         &self,
-        session_id: contract::SessionId,
+        session_id: SessionId,
     ) -> (
         AgentSessionHandle,
-        tokio::sync::mpsc::UnboundedReceiver<Command>,
+        tokio::sync::mpsc::UnboundedReceiver<AgentCommand>,
     ) {
-        let (command_tx, command_rx) = unbounded::<Command>();
+        let (command_tx, command_rx) = unbounded::<AgentCommand>();
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<AgentUpdate>(256);
         let route = self.routes.register_agent(session_id, event_tx);
 
@@ -358,11 +361,11 @@ impl AgentdHandle {
 
     pub(crate) fn responder(&self) -> AgentdResponder {
         AgentdResponder {
-            ops: self.ops.downgrade(),
+            routes: Arc::downgrade(&self.routes),
         }
     }
 
-    pub(crate) fn session_list(&self) -> Result<Vec<wire::SessionSummary>, String> {
+    pub(crate) fn session_list(&self) -> Result<Vec<SessionSummary>, String> {
         request(&self.ops, |reply| agent::Op::SessionList { reply }).map_err(|error| {
             error.describe(
                 "session runtime stopped before the agent list was sent",
@@ -374,7 +377,7 @@ impl AgentdHandle {
 
     /// Call from a background task: the model picker fetches it on open
     /// (parent task #1's Phase 2). Same shape as [`Self::session_list`].
-    pub(crate) fn list_providers(&self) -> Result<Vec<wire::ProviderSummary>, String> {
+    pub(crate) fn list_providers(&self) -> Result<Vec<ProviderSummary>, String> {
         request(&self.ops, |reply| agent::Op::ListProviders { reply }).map_err(|error| {
             error.describe(
                 "session runtime stopped before the provider list was sent",
@@ -405,11 +408,11 @@ impl AgentdHandle {
     /// Call from a background task: the model picker's confirm path. The
     /// reply carries the daemon's synchronous validation error (unknown
     /// provider, unknown session, empty model id) when the switch was
-    /// rejected; on success the `SessionModel` re-announcement on the
-    /// attachment's event channel is the UI's confirmation.
+    /// rejected; on success the `config_option_update` on the attachment's
+    /// event channel is the UI's confirmation.
     pub(crate) fn set_session_model(
         &self,
-        session_id: contract::SessionId,
+        session_id: SessionId,
         provider: String,
         model: String,
     ) -> Result<(), String> {
@@ -446,7 +449,7 @@ impl AgentdHandle {
     pub(crate) fn ensure_board_organizer(
         &self,
         root: std::path::PathBuf,
-    ) -> Result<contract::SessionId, String> {
+    ) -> Result<SessionId, String> {
         request(&self.ops, |reply| agent::Op::EnsureBoardOrganizer {
             root,
             reply,

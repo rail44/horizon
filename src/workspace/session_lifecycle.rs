@@ -26,7 +26,7 @@ fn agent_session_id(id: SessionId) -> AgentSessionId {
 
 /// Everything the shell records about a daemon-side agent session it is
 /// adopting, normalized out of where the knowledge came from: a
-/// `wire::SessionSummary` (daemon-reported board/resume/attach-lookup
+/// `runtime::SessionSummary` (daemon-reported board/resume/attach-lookup
 /// adoption) or the model plus the cwd default (`reconcile`'s brand-new
 /// spawn, which has no daemon report yet).
 pub(super) struct DaemonAgentAdoption {
@@ -35,8 +35,8 @@ pub(super) struct DaemonAgentAdoption {
     parent_session_id: Option<SessionId>,
 }
 
-impl From<&horizon_agent::wire::SessionSummary> for DaemonAgentAdoption {
-    fn from(summary: &horizon_agent::wire::SessionSummary) -> Self {
+impl From<&crate::runtime::SessionSummary> for DaemonAgentAdoption {
+    fn from(summary: &crate::runtime::SessionSummary) -> Self {
         Self {
             session_id: SessionId::from_uuid(summary.session_id.as_uuid()),
             workspace_root: summary.workspace_root.clone(),
@@ -81,7 +81,7 @@ fn register_daemon_agent_summary(
     // -- for an isolated session this is the worktree path agentd actually
     // created, which nothing on the shell side could have known at spawn
     // time (worktree creation finishes asynchronously, after `start_session`
-    // already returned -- see `wire::SessionSummary::workspace_root`'s doc
+    // already returned -- see `SessionInfoMeta::workspace_root`'s doc
     // comment). Overwrites whatever the model already had, if anything.
     if let Some(root) = &adoption.workspace_root {
         workspace.set_session_workspace_root(adoption.session_id, root.clone());
@@ -101,9 +101,9 @@ fn register_daemon_agent_summary(
 /// The attach-time lookup fallback's filter: the daemon inventory entry
 /// for `session_id`, if the daemon reported one at all.
 pub(super) fn daemon_summary_for(
-    summaries: Vec<horizon_agent::wire::SessionSummary>,
+    summaries: Vec<crate::runtime::SessionSummary>,
     session_id: SessionId,
-) -> Option<horizon_agent::wire::SessionSummary> {
+) -> Option<crate::runtime::SessionSummary> {
     summaries
         .into_iter()
         .find(|summary| summary.session_id.as_uuid() == session_id.as_uuid())
@@ -260,7 +260,7 @@ impl WorkspaceShell {
                     // *pre-isolation* value -- agentd overrides it with the
                     // worktree path it creates and reports the
                     // authoritative root back via
-                    // `wire::SessionSummary::workspace_root`, which the
+                    // `SessionInfoMeta::workspace_root`, which the
                     // resume/restore sweeps re-apply through the same
                     // adoption path.
                     let workspace_root =
@@ -707,7 +707,7 @@ mod tests {
     // GPUI-entity/async-shaped and not unit-testable without a window and a
     // live agentd connection, same as `handle_terminal_exited` above --
     // but their model-level step (`Workspace::set_session_workspace_root`,
-    // called with `wire::SessionSummary.workspace_root` once the daemon's
+    // called with `SessionInfoMeta::workspace_root` once the daemon's
     // own report of it arrives) is the same pure building block, standing
     // in for an end-to-end resume/adopt test.
 
@@ -718,7 +718,7 @@ mod tests {
         // right away (the value it sent in `SessionNew`), since agentd's
         // real isolated worktree only resolves asynchronously afterward.
         // `spawn_agent_resume`/`spawn_workspace_restore` must overwrite that
-        // with whatever `wire::SessionSummary.workspace_root` the daemon
+        // with whatever `SessionInfoMeta::workspace_root` the daemon
         // reports later -- the authoritative post-isolation root -- not
         // leave the stale pre-spawn value standing.
         let mut workspace = Workspace::mvp();
@@ -789,14 +789,13 @@ mod tests {
         // The attach-time lookup fallback's filter: an id the daemon didn't
         // report yields None (the fallback's silent no-op), a reported id
         // yields its summary.
-        let summary =
-            |id: horizon_agent::contract::SessionId| horizon_agent::wire::SessionSummary {
-                session_id: id,
-                provider_id: horizon_agent::contract::ProviderId("mock".into()),
-                role_id: None,
-                parent_session_id: None,
-                workspace_root: None,
-            };
+        let summary = |id: horizon_agent::contract::SessionId| crate::runtime::SessionSummary {
+            session_id: id,
+            provider_id: "mock".into(),
+            role_id: None,
+            parent_session_id: None,
+            workspace_root: None,
+        };
         let target = horizon_agent::contract::SessionId::new();
         let other = horizon_agent::contract::SessionId::new();
         let model_id = SessionId::from_uuid(target.as_uuid());
@@ -816,7 +815,7 @@ mod tests {
     /// `spawn_workspace_restore` above, GPUI-entity/async-shaped and not
     /// unit-testable without a window and a live agentd connection -- but
     /// its whole fold body is exactly these two model setters, called
-    /// together the moment a `wire::Control::WorkspaceRootResolved`
+    /// together the moment a `session_info_update`
     /// announcement arrives. Unlike the test above, this never goes through
     /// a resume/restore sweep at all: it stands in for a session created and
     /// used within one continuous run, which used to keep its pre-spawn

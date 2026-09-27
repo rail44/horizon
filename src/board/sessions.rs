@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use gpui::{App, Context, Entity, Subscription, WeakEntity};
-use horizon_agent::frame::SessionStatus;
+use crate::agent::model::SessionStatus;
 use horizon_workspace::SessionId;
 
 use super::activity::BoardSessionActivity;
@@ -38,6 +38,7 @@ impl BoardSessionActivity {
             Self::Unavailable
         } else {
             session
+                .model
                 .frame
                 .status()
                 .map(Self::from)
@@ -152,7 +153,7 @@ pub(crate) fn observe_sessions<V: SessionActivityHost>(
 #[cfg(test)]
 mod tests {
     use super::BoardSessionActivity;
-    use horizon_agent::frame::SessionStatus;
+    use crate::agent::model::SessionStatus;
 
     /// Every runtime status a session can report reaches the board as a
     /// distinct activity; nothing collapses onto the two shell-side states.

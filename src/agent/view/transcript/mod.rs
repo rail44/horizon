@@ -40,7 +40,7 @@ impl AgentTranscript {
         composer_mode: turns::ComposerMode,
         cx: &mut Context<Self>,
     ) -> Self {
-        let projection = TranscriptProjection::from_items(&session.read(cx).frame.items);
+        let projection = TranscriptProjection::from_items(&session.read(cx).model.frame.items);
         let scroller = cx.new(|cx| MessageScrollerState::new(projection.rows.len(), cx));
 
         let subscriptions =
@@ -146,7 +146,7 @@ impl Render for AgentTranscript {
 impl AgentTranscript {
     /// Apply the pure row update plan; GPUI owns measured heights and tail following.
     fn sync_transcript_rows(&mut self, cx: &mut Context<Self>) {
-        let next = TranscriptProjection::from_items(&self.session.read(cx).frame.items);
+        let next = TranscriptProjection::from_items(&self.session.read(cx).model.frame.items);
         match next.update_from(&self.projection) {
             RowUpdate::Splice { old, new_count } => {
                 self.scroller
@@ -177,7 +177,7 @@ impl AgentTranscript {
                 let turn_start = turn.start;
                 let turn_items = {
                     let session = self.session.read(cx);
-                    session.frame.items.get(turn).map(<[_]>::to_vec)
+                    session.model.frame.items.get(turn).map(<[_]>::to_vec)
                 };
                 let Some(turn_items) = turn_items else {
                     return Empty.into_any_element();
@@ -195,7 +195,7 @@ impl AgentTranscript {
             } => {
                 let items = {
                     let session = self.session.read(cx);
-                    session.frame.items.get(items).map(<[_]>::to_vec)
+                    session.model.frame.items.get(items).map(<[_]>::to_vec)
                 };
                 let Some(items) = items else {
                     return Empty.into_any_element();

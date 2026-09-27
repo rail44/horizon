@@ -1,30 +1,20 @@
 //! Wording and composer-interaction view-model for the agent transcript
 //! (`docs/agent-output-ui-amendment.md` stage C, decisions 1-2). The
-//! *structural* reading of the event stream this used to hold in full --
-//! turn/burst grouping, tool-call/approval derivation, and receipt/change
-//! aggregation -- moved to `horizon_agent::transcript` (shape c:
-//! "structure moves, presentation stays"), so any
-//! future frontend shares one official reading of "which turn is this
-//! item in" / "did the user approve this call" rather than each
-//! reimplementing it. What's left here is display-only: humanized
+//! *structural* reading of the frame -- turn/burst grouping, tool-call and
+//! approval derivation, receipt and change aggregation -- lives in
+//! `crate::agent::model`. What's here is display-only: humanized
 //! durations, receipt/changes-overview prose, the composer's placeholder
 //! and mode state machine, the model chip's text composition, and the
-//! per-tool expanded body (which leans on a wording fallback, so it
-//! stayed whole rather than splitting one function across the crate
-//! boundary -- see `horizon_agent::transcript`'s module doc for the full
-//! boundary rule and the two items that didn't cleanly split).
+//! per-tool expanded body.
 //!
 //! Split into responsibility-focused submodules -- `receipt` (status/
-//! duration text, the collapsed-receipt prose, and `ReceiptTail`, a
-//! thin view-side wrapper that only ever selects between two wording
-//! branches), `tool_call` (the expanded per-tool body and its terse
-//! summary fallback), `composer` (composer mode/placeholder/model chip)
-//! and `diff` (the changes-overview summary text) -- each re-exported
-//! here so every `turns::X` call site elsewhere in the crate is
-//! unaffected by the split. This module also re-exports every moved
-//! structural type/function from `horizon_agent::transcript` under its
-//! original name, so call sites outside `turns/` (`view.rs`,
-//! `session.rs`) needed no changes at all.
+//! duration text and the collapsed-receipt prose), `tool_call` (the
+//! expanded per-tool body and its terse summary fallback), `composer`
+//! (composer mode/placeholder/model chip) and `diff` (the
+//! changes-overview summary text) -- each re-exported here, together with
+//! the structural items from `crate::agent::model` and the plain per-tool
+//! JSON readers from `horizon_agent::transcript`, so every `turns::X`
+//! call site reads one namespace.
 
 mod composer;
 mod diff;
@@ -36,17 +26,15 @@ pub(crate) use diff::*;
 pub(crate) use receipt::*;
 pub(crate) use tool_call::*;
 
-// Re-exported under their original names so every pre-move `turns::X`
-// call site elsewhere in the crate (`view.rs`, `session.rs`) keeps
-// working unchanged -- the structural reading itself now lives in
-// `horizon_agent::transcript` (see this module's own doc comment).
-pub(crate) use horizon_agent::transcript::segment_bursts;
+pub(crate) use super::model::{
+    aggregate_changes, aggregate_receipt, build_tool_call_views, contains_user_message,
+    group_into_turns, is_approval_still_pending, latest_turn_model, progress,
+    running_row_expandable, segment_bursts, tool_call_source, ReceiptAggregate, ToolCallView,
+    TurnEnd,
+};
 pub(crate) use horizon_agent::transcript::{
-    aggregate_changes, aggregate_receipt, build_tool_call_views, cap_lines_head, cap_lines_tail,
-    classify, contains_user_message, edit_entries, group_into_turns, is_approval_still_pending,
-    latest_turn_model, progress, reconstruct_line_diff, running_row_expandable, str_field,
-    ApprovalState, DiffLine, DiffLineKind, FileChange, ReceiptAggregate, ToolCallKind,
-    ToolCallView, TurnEnd,
+    cap_lines_head, cap_lines_tail, classify, edit_entries, reconstruct_line_diff, str_field,
+    ApprovalState, DiffLine, DiffLineKind, FileChange, ToolCallKind,
 };
 
 /// `1 {singular}` / `{count} {plural}`. Shared by `receipt::receipt_prose`
@@ -62,43 +50,81 @@ fn pluralize(count: usize, singular: &str, plural: &str) -> String {
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    use horizon_agent::contract::{
-        ApprovalKind, ApprovalRequest, Message, MessageDelta, MessageRole, ToolCallId,
-        ToolCallRequest, ToolCallResult,
-    };
-    use horizon_agent::frame::AgentFrameItem;
+    use horizon_acp::{ApprovalKind, ToolCallMeta, ToolOutcome};
     use serde_json::Value;
 
+    use super::super::model::{
+        AgentFrameItem, Message, MessageRole, Permission, Thought, ToolCall, ToolCallIdentity,
+        ToolCallStatus,
+    };
     use super::{DiffLine, DiffLineKind};
 
     pub(crate) fn user_message(text: &str) -> AgentFrameItem {
         AgentFrameItem::Message(Message {
+            id: format!("user:{text}"),
             role: MessageRole::User,
             text: text.to_string(),
         })
     }
 
     pub(crate) fn assistant_delta(text: &str) -> AgentFrameItem {
-        AgentFrameItem::AssistantTextDelta(MessageDelta {
+        AgentFrameItem::Message(Message {
+            id: "assistant".to_string(),
             role: MessageRole::Assistant,
             text: text.to_string(),
         })
     }
 
     pub(crate) fn reasoning_delta(text: &str) -> AgentFrameItem {
-        AgentFrameItem::ReasoningDelta(MessageDelta {
-            role: MessageRole::Assistant,
+        AgentFrameItem::Thought(Thought {
+            id: "thought".to_string(),
             text: text.to_string(),
         })
     }
 
+    fn call(call_id: &str, tool_id: &str, input: Value) -> ToolCall {
+        ToolCall {
+            occurrence_id: call_id.to_string(),
+            meta: ToolCallMeta {
+                call_id: call_id.to_string(),
+                tool_id: tool_id.to_string(),
+                outcome: None,
+                auto_approved: None,
+                policy_tier: None,
+                human_decision: None,
+            },
+            status: ToolCallStatus::Pending,
+            input,
+            output: None,
+        }
+    }
+
+    /// A requested call that has not started.
     pub(crate) fn tool_requested(call_id: &str, tool_id: &str, input: Value) -> AgentFrameItem {
-        AgentFrameItem::ToolCallRequested(ToolCallRequest {
-            call_id: ToolCallId(call_id.to_string()),
-            tool_id: tool_id.to_string(),
-            input: input.into(),
-            occurrence_id: horizon_agent::contract::OccurrenceId(call_id.to_string()),
-        })
+        AgentFrameItem::ToolCall(call(call_id, tool_id, input))
+    }
+
+    /// A finished call; an output with `is_error: true` reads as failed.
+    pub(crate) fn tool_finished(
+        call_id: &str,
+        tool_id: &str,
+        input: Value,
+        output: Value,
+    ) -> AgentFrameItem {
+        let failed = output.get("is_error").and_then(Value::as_bool) == Some(true);
+        let mut call = call(call_id, tool_id, input);
+        call.status = if failed {
+            ToolCallStatus::Failed
+        } else {
+            ToolCallStatus::Completed
+        };
+        call.meta.outcome = Some(if failed {
+            ToolOutcome::Failed
+        } else {
+            ToolOutcome::Succeeded
+        });
+        call.output = Some(output);
+        AgentFrameItem::ToolCall(call)
     }
 
     pub(crate) fn edit_result(path: &str) -> Value {
@@ -117,27 +143,15 @@ pub(crate) mod test_support {
         .unwrap()
     }
 
-    pub(crate) fn tool_finished(call_id: &str, output: Value) -> AgentFrameItem {
-        AgentFrameItem::ToolCallFinished(ToolCallResult::new(
-            ToolCallId(call_id.to_string()),
-            horizon_agent::contract::OccurrenceId(call_id.to_string()),
-            output,
-        ))
-    }
-
-    pub(crate) fn tool_started(call_id: &str) -> AgentFrameItem {
-        AgentFrameItem::ToolCallStarted(horizon_agent::contract::ToolCallIdentity {
-            call_id: ToolCallId(call_id.into()),
-            occurrence_id: horizon_agent::contract::OccurrenceId(call_id.into()),
-        })
-    }
-
     pub(crate) fn approval_requested(call_id: &str) -> AgentFrameItem {
-        AgentFrameItem::ApprovalRequested(ApprovalRequest {
-            call_id: ToolCallId(call_id.to_string()),
-            occurrence_id: horizon_agent::contract::OccurrenceId(call_id.to_string()),
-            reason: "writes a file".to_string(),
+        AgentFrameItem::Permission(Permission {
+            identity: ToolCallIdentity {
+                call_id: call_id.to_string(),
+                occurrence_id: call_id.to_string(),
+            },
             kind: ApprovalKind::Standard,
+            reason: "writes a file".to_string(),
+            decision: None,
         })
     }
 

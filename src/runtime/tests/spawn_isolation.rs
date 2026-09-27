@@ -40,8 +40,8 @@ fn stub_recovery_never_launches_inherited_daemon_binaries() {
     let attempts = scratch.0.join("spawned.txt");
 
     for case in [
-        "a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping",
-        "a_range_rejecting_remoc_daemon_is_drained_via_rtc_and_the_respawn_adopted",
+        "agent::a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping",
+        "agent::a_version_mismatched_daemon_is_drained_on_the_same_connection_and_the_respawn_adopted",
         "a_range_rejecting_terminald_is_drained_via_rtc_and_the_respawn_adopted",
     ] {
         let output_path = scratch.0.join("test-output.txt");

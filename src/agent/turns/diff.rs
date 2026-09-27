@@ -1,8 +1,7 @@
 //! The Changes overview bar's summary text. The reconstructed-diff and
 //! file-change aggregation this is built on (`FileChange`/
 //! `aggregate_changes`/`DiffLine`/`DiffLineKind`/`reconstruct_line_diff`)
-//! moved to `horizon_agent::transcript`, re-exported from `super` under
-//! their original names (see `turns/mod.rs`'s doc comment).
+//! is re-exported from `super` (see `turns/mod.rs`'s doc comment).
 
 use super::{pluralize, FileChange};
 
@@ -35,10 +34,12 @@ mod tests {
 
     #[test]
     fn aggregate_changes_is_empty_when_no_file_was_ever_touched() {
-        let items = vec![
-            tool_requested("q1", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
-            tool_finished("q1", json!({"returned_count": 1})),
-        ];
+        let items = vec![tool_finished(
+            "q1",
+            "fs.grep",
+            json!({"base_path": ".", "pattern": "x"}),
+            json!({"returned_count": 1}),
+        )];
         let tool_calls = build_tool_call_views(&items);
         assert!(aggregate_changes(&tool_calls).is_empty());
         assert_eq!(changes_summary_text(&aggregate_changes(&tool_calls)), None);

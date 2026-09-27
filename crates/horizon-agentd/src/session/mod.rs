@@ -61,8 +61,9 @@ mod subscription;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub(crate) use self::attachment::Bootstrap;
+pub(crate) use self::attachment::{AttachmentLease, Bootstrap};
 pub(crate) use self::connection::Connection;
+pub(crate) use self::host_tools::HOST_TOOL_TIMEOUT;
 pub(crate) use self::resume::{resume_persisted_sessions, resume_session};
 pub(crate) use self::spawn::spawn_session_thread;
 pub(crate) use self::state::AgentdState;

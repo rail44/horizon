@@ -1,6 +1,6 @@
 //! Validate external command arguments before any shell operation runs.
 
-use horizon_agent::contract::{OccurrenceId, ToolCallId, ToolCallIdentity};
+use crate::agent::model::ToolCallIdentity;
 use horizon_agent::roles::RoleId;
 use horizon_control::contract::Invoke;
 use horizon_workspace::commands::CommandId;
@@ -223,8 +223,8 @@ fn approval_identity_arg(args: &serde_json::Value) -> Result<ToolCallIdentity, S
         return Err("approval requires non-empty call_id and occurrence_id".into());
     }
     Ok(ToolCallIdentity {
-        call_id: ToolCallId(call_id),
-        occurrence_id: OccurrenceId(occurrence_id),
+        call_id,
+        occurrence_id,
     })
 }
 
@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn approval_identity_requires_both_ids_and_preserves_the_supplied_occurrence() {
         use super::approval_identity_arg;
-        use horizon_agent::contract::{OccurrenceId, ToolCallId, ToolCallIdentity};
+        use crate::agent::model::ToolCallIdentity;
         for args in [
             serde_json::json!({"call_id":"same"}),
             serde_json::json!({"call_id":"same", "occurrence_id":""}),
@@ -431,8 +431,8 @@ mod tests {
             approval_identity_arg(&serde_json::json!({"call_id":"same", "occurrence_id":"old"}))
                 .unwrap(),
             ToolCallIdentity {
-                call_id: ToolCallId("same".into()),
-                occurrence_id: OccurrenceId("old".into())
+                call_id: "same".into(),
+                occurrence_id: "old".into()
             }
         );
     }

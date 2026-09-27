@@ -5,17 +5,16 @@
 
 use std::time::Instant;
 
-use gpui::*;
-use horizon_agent::frame::state_indicates_turn_in_flight;
-
+use super::super::super::model::state_indicates_turn_in_flight;
 use super::super::super::turns;
+use gpui::*;
 
 use super::AgentTranscript;
 
 /// View-local tracking of the currently running turn's start, so the
 /// running card's elapsed-seconds header keeps ticking across renders
-/// without depending on any wall-clock data from the contract (frame
-/// items carry none — see `frame::TurnClock`'s doc comment). Reset
+/// without depending on any wall-clock data from the wire (frame items
+/// carry none). Reset
 /// whenever the running turn's opening item index changes, i.e. a new
 /// turn started.
 #[derive(Clone, Copy)]
@@ -31,8 +30,8 @@ impl AgentTranscript {
     /// the next render reads it.
     pub(super) fn sync_running_turn_clock(&mut self, cx: &mut Context<Self>) {
         let running_turn_start = {
-            let frame = &self.session.read(cx).frame;
-            if !state_indicates_turn_in_flight(frame.state) {
+            let frame = &self.session.read(cx).model.frame;
+            if !state_indicates_turn_in_flight(frame.state()) {
                 None
             } else {
                 turns::group_into_turns(&frame.items)

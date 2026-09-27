@@ -87,7 +87,7 @@ fn dropping_an_old_agent_registration_keeps_the_replacement() {
     let (host, _host_rx) = crossbeam_channel::unbounded();
     let (roots, _roots_rx) = crossbeam_channel::unbounded();
     let routes = AgentRoutes::new(host, roots);
-    let id = contract::SessionId::new();
+    let id = SessionId::new();
     let (old_tx, _old_rx) = tokio::sync::mpsc::channel(16);
     let old = routes.register_agent(id, old_tx);
     let (new_tx, mut new_rx) = tokio::sync::mpsc::channel(16);
@@ -101,28 +101,51 @@ fn dropping_an_old_agent_registration_keeps_the_replacement() {
 
 #[tokio::test]
 async fn stale_agent_events_and_workspace_roots_do_not_reach_a_new_attachment() {
+    use agent_client_protocol::schema::v2;
     let (host, _host_rx) = crossbeam_channel::unbounded();
     let (roots, roots_rx) = crossbeam_channel::unbounded();
     let routes = AgentRoutes::new(host, roots);
-    let id = contract::SessionId::new();
+    let id = SessionId::new();
     let (old_tx, _old_rx) = tokio::sync::mpsc::channel(16);
     let old = routes.register_agent(id, old_tx);
-    let (new_tx, mut new_rx) = tokio::sync::mpsc::channel(16);
+    let _old_inbound = routes.open_inbound(old).unwrap();
+    let (new_tx, _new_rx) = tokio::sync::mpsc::channel(16);
     let current = routes.register_agent(id, new_tx);
+    assert!(
+        routes.open_inbound(old).is_none(),
+        "a replaced route opens nothing"
+    );
+    let mut inbound = routes.open_inbound(current).unwrap();
     routes.agent_failed(old, "stale failure".into());
-    let root = wire::WorkspaceRootResolved {
-        workspace_root: "/stale".into(),
-        parent_session_id: None,
+    routes.deliver_to(old, Inbound::Opened(Ok(())));
+    assert!(inbound.try_recv().is_err());
+
+    let mut meta = None;
+    horizon_acp::write_horizon_meta(
+        &mut meta,
+        &SessionInfoMeta {
+            workspace_root: Some("/resolved".into()),
+            parent_session_id: None,
+            role_id: None,
+            provider_id: "default".into(),
+        },
+    )
+    .unwrap();
+    let mut info = v2::SessionInfoUpdate::new();
+    info.meta = agent_client_protocol::schema::MaybeUndefined::Value(meta.unwrap());
+    let update = |session: SessionId| {
+        v2::UpdateSessionNotification::new(
+            session.as_uuid().to_string(),
+            v2::SessionUpdate::SessionInfoUpdate(info.clone()),
+        )
     };
-    routes
-        .route_agent_event(old, AgentWireEvent::WorkspaceRootResolved(root.clone()))
-        .await;
-    assert!(new_rx.try_recv().is_err());
-    assert!(roots_rx.try_recv().is_err());
-    routes
-        .route_agent_event(current, AgentWireEvent::WorkspaceRootResolved(root))
-        .await;
-    assert_eq!(roots_rx.try_recv().unwrap().0, id);
+    routes.route_update(update(SessionId::new()));
+    assert!(roots_rx.try_recv().is_err(), "an unregistered session");
+    routes.route_update(update(id));
+    let (routed, root) = roots_rx.try_recv().unwrap();
+    assert_eq!(routed, id);
+    assert_eq!(root.workspace_root, std::path::PathBuf::from("/resolved"));
+    assert!(matches!(inbound.try_recv(), Ok(Inbound::Event(_))));
 }
 
 #[test]
@@ -148,7 +171,7 @@ async fn replacing_a_route_cancels_a_send_blocked_by_a_slow_view() {
     let (host, _host_rx) = crossbeam_channel::unbounded();
     let (roots, _roots_rx) = crossbeam_channel::unbounded();
     let routes = std::sync::Arc::new(AgentRoutes::new(host, roots));
-    let id = contract::SessionId::new();
+    let id = SessionId::new();
     let (old_tx, mut old_rx) = tokio::sync::mpsc::channel(1);
     let old = routes.register_agent(id, old_tx);
     assert!(

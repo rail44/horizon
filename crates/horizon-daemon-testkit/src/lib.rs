@@ -15,19 +15,18 @@
 //! green while it tested a less hermetic daemon.
 //!
 //! The seam this crate draws is deliberately narrow. It owns process-level
-//! concerns only -- finding a binary, spawning it, cleaning up after it, and
-//! opening a remoc connection to its socket -- plus [`agentd`]'s one
-//! definition of how `horizon-agentd` must be spawned in a test. It owns no
-//! hub-level test client: the two suites' clients are genuinely different
-//! (agentd's carries the connection-global `HubHello` channels terminald's
-//! channel-free hello has no counterpart for), and flattening that
-//! difference would erase a real property of the two protocols.
+//! concerns -- finding a binary, spawning it, cleaning up after it, and
+//! opening a connection to its socket (remoc for the remoc hubs, ACP for
+//! `horizon-agentd` in [`acp`]) -- plus [`agentd`]'s one definition of how
+//! `horizon-agentd` must be spawned in a test.
 
+pub mod acp;
 pub mod agentd;
 pub mod binary;
 pub mod hub;
 pub mod process;
 
+pub use acp::{connect_acp, connect_initialized, initialize_request, AcpClient, Inbound};
 pub use agentd::{agentd_hermetic_command, AgentdPaths, AgentdProcess, AgentdSpawn};
 pub use binary::{
     cargo_bin_exe_var, resolve_daemon_binary, sibling_daemon_binary, spawn_with_link_retry,

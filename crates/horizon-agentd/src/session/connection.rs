@@ -7,7 +7,7 @@ use std::time::Duration;
 use horizon_agent::contract::SessionId;
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::wire::{
-    HostToolRequest, HostToolResponse, ProviderSummary, SessionNew, SessionSummary,
+    HostToolRequest, HostToolResponse, ModelSelection, ProviderSummary, SessionNew, SessionSummary,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -274,6 +274,32 @@ impl Connection {
                 workspace_root: entry.workspace_root.clone(),
             })
             .collect()
+    }
+
+    /// One session's summary, exploration sessions included (an attachment
+    /// to one needs its facts even though the list withholds it).
+    pub(crate) fn session_summary(&self, session_id: SessionId) -> Option<SessionSummary> {
+        lock_unpoisoned(&self.state.sessions)
+            .get(&session_id)
+            .map(|entry| SessionSummary {
+                session_id,
+                provider_id: entry.provider_id.clone(),
+                role_id: entry.role_id.clone(),
+                parent_session_id: entry.parent_session_id,
+                workspace_root: entry.workspace_root.clone(),
+            })
+    }
+
+    /// The session's applied model id and selection, as the last
+    /// announcement left them.
+    pub(crate) fn session_model_state(
+        &self,
+        session_id: SessionId,
+    ) -> (Option<String>, Option<ModelSelection>) {
+        lock_unpoisoned(&self.state.sessions)
+            .get(&session_id)
+            .map(|entry| (entry.model.clone(), entry.selection.clone()))
+            .unwrap_or_default()
     }
 
     /// This session's resolved model id, if any -- see [`super::state::SessionEntry::model`]'s

@@ -52,7 +52,7 @@ mod tests {
     use crate::workspace::modals::ModelPickerReply;
     use futures::channel::oneshot;
     use gpui::{AppContext, Empty, TestAppContext};
-    use horizon_agent::wire::ProviderSummary;
+    use horizon_acp::ProviderSummary;
     use std::cell::Cell;
     use std::rc::Rc;
 

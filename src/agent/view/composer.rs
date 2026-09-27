@@ -2,16 +2,14 @@
 //! send interaction. It stays uncached so the auto-growing input participates
 //! in the parent flex layout on every intrinsic-height change.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::input::{Escape, InputEvent, Textarea, TextareaState};
-use horizon_agent::contract::ToolCallIdentity;
-use horizon_agent::frame::state_indicates_turn_in_flight;
-
+use super::super::model::{state_indicates_turn_in_flight, ToolCallIdentity};
 use super::super::{session::AgentSession, turns};
 use super::AgentTranscript;
 use crate::theme;
 use crate::workspace::RunCommand;
+use gpui::prelude::FluentBuilder as _;
+use gpui::*;
+use gpui_component::input::{Escape, InputEvent, Textarea, TextareaState};
 use horizon_workspace::commands::CommandId;
 
 const COMPOSER_MAX_ROWS: usize = 8;
@@ -103,11 +101,11 @@ impl AgentComposer {
         cx: &App,
     ) -> (bool, Option<String>, turns::ComposerMode) {
         let session = session.read(cx);
-        let turn_in_flight = state_indicates_turn_in_flight(session.frame.state);
+        let turn_in_flight = state_indicates_turn_in_flight(session.model.frame.state());
         let model = turns::composer_model_label(
-            session.selection.as_ref(),
-            session.model.as_deref(),
-            turns::latest_turn_model(&session.frame.items),
+            session.model.selection.as_ref(),
+            None,
+            turns::latest_turn_model(&session.model.frame.items),
         );
         let mode = turns::next_composer_mode(&session.pending_approval_identities(), dismissed);
         (turn_in_flight, model, mode)

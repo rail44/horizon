@@ -1,14 +1,12 @@
 //! Session-status projection and its small, ordinary entity view.
 
-use gpui::*;
-use gpui_component::status_bar::StatusBar;
-use horizon_agent::contract::SessionState;
-use horizon_agent::frame::state_indicates_turn_in_flight;
-
+use super::super::model::{SessionState, SessionStatus};
 use super::super::session::AgentSession;
 use super::transcript::render_stop_button;
 use crate::runtime::AttachmentState;
 use crate::theme;
+use gpui::*;
+use gpui_component::status_bar::StatusBar;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StatusTone {
@@ -23,24 +21,46 @@ struct StatusProjection {
     turn_in_flight: bool,
 }
 
-/// The display label for one folded `SessionState`, shared by the status
-/// line and the transcript's running card so the two wordings can't
-/// drift. `None` for the quiet states (`Created`/`WaitingForUser`) the
-/// status line hides entirely; each caller picks its own fallback.
+/// The display label for one in-flight `SessionState`, shared by the
+/// status line and the transcript's running card so the two wordings
+/// can't drift. `None` for the idle state; each caller picks its own
+/// fallback.
 pub(super) fn session_state_label(state: SessionState) -> Option<&'static str> {
     match state {
         SessionState::Running => Some("running…"),
         SessionState::ToolRunning => Some("tool running…"),
         SessionState::WaitingForApproval => Some("waiting for approval"),
-        SessionState::Cancelled => Some("cancelled"),
-        SessionState::Completed => Some("completed"),
-        SessionState::Failed => Some("failed"),
         SessionState::Terminated => Some("terminated"),
-        SessionState::Created | SessionState::WaitingForUser => None,
+        SessionState::Idle => None,
     }
 }
 
-fn project_status(state: Option<SessionState>, runtime_unreachable: bool) -> StatusProjection {
+/// The status line's label for a session status: the in-flight states'
+/// shared labels plus the retained turn results. `None` for the quiet
+/// statuses the status line hides.
+fn session_status_label(status: SessionStatus) -> Option<&'static str> {
+    match status {
+        SessionStatus::Running => session_state_label(SessionState::Running),
+        SessionStatus::ToolRunning => session_state_label(SessionState::ToolRunning),
+        SessionStatus::WaitingForApproval => session_state_label(SessionState::WaitingForApproval),
+        SessionStatus::Terminated => session_state_label(SessionState::Terminated),
+        SessionStatus::Cancelled => Some("cancelled"),
+        SessionStatus::Completed => Some("completed"),
+        SessionStatus::Failed => Some("failed"),
+        SessionStatus::Starting | SessionStatus::WaitingForInput | SessionStatus::Paused => None,
+    }
+}
+
+fn status_indicates_turn_in_flight(status: Option<SessionStatus>) -> bool {
+    matches!(
+        status,
+        Some(
+            SessionStatus::Running | SessionStatus::ToolRunning | SessionStatus::WaitingForApproval
+        )
+    )
+}
+
+fn project_status(status: Option<SessionStatus>, runtime_unreachable: bool) -> StatusProjection {
     // A dead agentd channel wins over the folded session state: all pane
     // interactions are otherwise heading nowhere. The independent in-flight
     // bit keeps Stop reachable even while that error is shown.
@@ -48,15 +68,15 @@ fn project_status(state: Option<SessionState>, runtime_unreachable: bool) -> Sta
         return StatusProjection {
             text: "session runtime unreachable — try Reload Agent Runtime".into(),
             tone: StatusTone::Danger,
-            turn_in_flight: state_indicates_turn_in_flight(state),
+            turn_in_flight: status_indicates_turn_in_flight(status),
         };
     }
 
-    let text = state.and_then(session_state_label).unwrap_or("");
+    let text = status.and_then(session_status_label).unwrap_or("");
     StatusProjection {
         text: text.into(),
         tone: StatusTone::Muted,
-        turn_in_flight: state_indicates_turn_in_flight(state),
+        turn_in_flight: status_indicates_turn_in_flight(status),
     }
 }
 
@@ -68,7 +88,7 @@ fn attachment_status(session: &AgentSession) -> StatusProjection {
             (message.clone(), StatusTone::Danger)
         }
         AttachmentState::Ready => {
-            return project_status(session.frame.state, session.runtime_unreachable())
+            return project_status(session.model.frame.status(), session.runtime_unreachable())
         }
     };
     StatusProjection {
@@ -132,9 +152,8 @@ impl Render for AgentStatus {
 
 #[cfg(test)]
 mod tests {
-    use horizon_agent::contract::SessionState;
-
-    use super::{project_status, StatusTone};
+    use super::{project_status, session_status_label, StatusTone};
+    use crate::agent::model::{SessionState, SessionStatus};
 
     #[test]
     fn session_state_label_covers_every_state_and_hides_the_quiet_ones() {
@@ -150,26 +169,16 @@ mod tests {
             Some("waiting for approval")
         );
         assert_eq!(
-            session_state_label(SessionState::Cancelled),
-            Some("cancelled")
-        );
-        assert_eq!(
-            session_state_label(SessionState::Completed),
-            Some("completed")
-        );
-        assert_eq!(session_state_label(SessionState::Failed), Some("failed"));
-        assert_eq!(
             session_state_label(SessionState::Terminated),
             Some("terminated")
         );
-        // The quiet states the status line hides entirely.
-        assert_eq!(session_state_label(SessionState::Created), None);
-        assert_eq!(session_state_label(SessionState::WaitingForUser), None);
+        // The quiet state the status line hides entirely.
+        assert_eq!(session_state_label(SessionState::Idle), None);
     }
 
     #[test]
     fn runtime_failure_wins_and_turn_state_controls_the_stop_affordance() {
-        let projection = project_status(Some(SessionState::Running), true);
+        let projection = project_status(Some(SessionStatus::Running), true);
         assert_eq!(projection.tone, StatusTone::Danger);
         assert_eq!(
             projection.text,
@@ -177,15 +186,35 @@ mod tests {
         );
         assert!(projection.turn_in_flight);
 
-        for state in [None, Some(SessionState::Created)] {
-            let projection = project_status(state, false);
+        for status in [
+            None,
+            Some(SessionStatus::Starting),
+            Some(SessionStatus::WaitingForInput),
+            Some(SessionStatus::Paused),
+        ] {
+            let projection = project_status(status, false);
             assert_eq!(projection.text, "");
             assert!(!projection.turn_in_flight);
             assert_eq!(projection.tone, StatusTone::Muted);
         }
 
-        let projection = project_status(Some(SessionState::ToolRunning), false);
+        let projection = project_status(Some(SessionStatus::ToolRunning), false);
         assert_eq!(projection.text, "tool running…");
         assert!(projection.turn_in_flight);
+    }
+
+    #[test]
+    fn retained_turn_results_are_labelled_while_idle() {
+        for (status, label) in [
+            (SessionStatus::Completed, "completed"),
+            (SessionStatus::Cancelled, "cancelled"),
+            (SessionStatus::Failed, "failed"),
+            (SessionStatus::Terminated, "terminated"),
+        ] {
+            assert_eq!(session_status_label(status), Some(label));
+            let projection = project_status(Some(status), false);
+            assert_eq!(projection.text, label);
+            assert!(!projection.turn_in_flight);
+        }
     }
 }

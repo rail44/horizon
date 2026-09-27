@@ -1,0 +1,1289 @@
+{
+  "$comment": "Generated from the live horizon-acp extension types (the _horizon/* methods and the _meta.horizon payloads). Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh.",
+  "$defs": {
+    "ApprovalKind": {
+      "description": "Mirrors `contract::ApprovalKind` (crates/horizon-agent/src/contract.rs).",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "standard",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "domains": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "prior_result": {
+              "$ref": "#/$defs/ToolResult"
+            },
+            "type": {
+              "const": "domain_denial_retry",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "domains",
+            "prior_result"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "denials": {
+              "items": {
+                "$ref": "#/$defs/FilesystemDenial"
+              },
+              "type": "array"
+            },
+            "grants": {
+              "items": {
+                "$ref": "#/$defs/FilesystemGrant"
+              },
+              "type": "array"
+            },
+            "prior_result": {
+              "$ref": "#/$defs/ToolResult"
+            },
+            "type": {
+              "const": "filesystem_denial_retry",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "denials",
+            "grants",
+            "prior_result"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "domains": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "domain_grant",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "domains"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "git_operation",
+              "type": "string"
+            },
+            "writable_roots": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "writable_roots"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "prior_result": {
+              "$ref": "#/$defs/ToolResult"
+            },
+            "services": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "mach_service_grant",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "services",
+            "prior_result"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ApprovalMeta": {
+      "description": "Mirrors `contract::ApprovalRequest` minus `reason`, keyed by its\n`ToolCallIdentity` (crates/horizon-agent/src/contract.rs).",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ApprovalKind"
+        },
+        "occurrence_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "occurrence_id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "AttachmentEnd": {
+      "description": "Mirrors `wire::AttachmentEnd` (crates/horizon-agent/src/wire.rs).",
+      "enum": [
+        "replaced",
+        "lagged",
+        "detached",
+        "session_ended"
+      ],
+      "type": "string"
+    },
+    "ContinueTurnRequest": {
+      "description": "Mirrors `contract::Command::ContinueTurn` (crates/horizon-agent/src/contract.rs).",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "DrainRequest": {
+      "description": "Mirrors `SessionHub::drain` (crates/horizon-agent/src/wire/hub.rs).",
+      "type": "object"
+    },
+    "EmptyResponse": {
+      "description": "Reply of the extension requests that return nothing.",
+      "type": "object"
+    },
+    "EnsureBoardOrganizerRequest": {
+      "description": "Mirrors `SessionHub::ensure_board_organizer` (crates/horizon-agent/src/wire/hub.rs).",
+      "properties": {
+        "workspace_root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_root"
+      ],
+      "type": "object"
+    },
+    "EnsureBoardOrganizerResponse": {
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "FilesystemDenial": {
+      "description": "A mediated attempt and the smallest enforceable grant that can satisfy it.",
+      "properties": {
+        "attempted_path": {
+          "type": "string"
+        },
+        "grant": {
+          "$ref": "#/$defs/FilesystemGrant"
+        }
+      },
+      "required": [
+        "attempted_path",
+        "grant"
+      ],
+      "type": "object"
+    },
+    "FilesystemGrant": {
+      "description": "A canonical, enforceable filesystem grant for a fresh sandbox.\n\n`excluded_subpaths` names relative subpaths within a `DirectoryTree`\ngrant that remain read-only even though the parent tree is writable. The\nseccomp supervisor (Linux) denies writes to these subpaths before checking\ncapability sufficiency, so a ReadWrite grant on `.git/` can exclude\n`.git/hooks/` and `.git/config/` — the host-escalation vectors a deceived\njudge could otherwise enable. On macOS (no seccomp supervisor) the field\nis advisory. Board #38; see\n`docs/agent-approval-design.md`.",
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/FilesystemGrantAccess"
+        },
+        "excluded_subpaths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/FilesystemGrantScope"
+        }
+      },
+      "required": [
+        "path",
+        "access",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "FilesystemGrantAccess": {
+      "description": "Access added by an approved, session-scoped containment grant.",
+      "enum": [
+        "Read",
+        "ReadWrite"
+      ],
+      "type": "string"
+    },
+    "FilesystemGrantScope": {
+      "description": "The actual enforcement scope shown to the approver.",
+      "enum": [
+        "File",
+        "DirectoryTree"
+      ],
+      "type": "string"
+    },
+    "FoldedLogRange": {
+      "description": "Mirrors `contract::FoldedLogRange` (crates/horizon-agent/src/contract.rs).",
+      "properties": {
+        "from_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from_seq",
+        "to_seq"
+      ],
+      "type": "object"
+    },
+    "HostToolRequest": {
+      "description": "Mirrors `wire::HostToolRequest` (crates/horizon-agent/src/wire.rs).",
+      "properties": {
+        "input": true,
+        "request_id": {
+          "type": "string"
+        },
+        "tool_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "tool_id",
+        "input"
+      ],
+      "type": "object"
+    },
+    "HostToolResponse": {
+      "description": "Mirrors `wire::HostToolResponse` (crates/horizon-agent/src/wire.rs).",
+      "properties": {
+        "output": true
+      },
+      "required": [
+        "output"
+      ],
+      "type": "object"
+    },
+    "HumanDecision": {
+      "description": "Mirrors `contract::ApprovalDecisionPayload` (crates/horizon-agent/src/contract.rs),\ncarried on the call's `tool_call_update` after `ApprovalResolved`.",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "approved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reason": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "denied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InitializeMeta": {
+      "description": "`initialize` request and response, both directions.",
+      "properties": {
+        "binary_id": {
+          "type": "string"
+        },
+        "ext_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ext_version",
+        "binary_id"
+      ],
+      "type": "object"
+    },
+    "ListProviderModelsRequest": {
+      "description": "Mirrors `SessionHub::list_provider_models` (crates/horizon-agent/src/wire/hub.rs).",
+      "properties": {
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "type": "object"
+    },
+    "ListProviderModelsResponse": {
+      "properties": {
+        "models": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "models"
+      ],
+      "type": "object"
+    },
+    "ListProvidersRequest": {
+      "description": "Mirrors `SessionHub::list_providers` (crates/horizon-agent/src/wire/hub.rs).",
+      "type": "object"
+    },
+    "ListProvidersResponse": {
+      "properties": {
+        "providers": {
+          "items": {
+            "$ref": "#/$defs/ProviderSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "type": "object"
+    },
+    "MemoryDigest": {
+      "description": "Mirrors `contract::MemoryDigest` (crates/horizon-agent/src/contract.rs).",
+      "properties": {
+        "folded_log_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FoldedLogRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "no_update_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updates": {
+          "items": {
+            "$ref": "#/$defs/MemoryFieldUpdate"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "updates"
+      ],
+      "type": "object"
+    },
+    "MemoryField": {
+      "description": "Mirrors `contract::MemoryField` (crates/horizon-agent/src/contract.rs).",
+      "enum": [
+        "goal",
+        "decisions",
+        "completed",
+        "in_progress",
+        "stuck",
+        "next_step",
+        "related"
+      ],
+      "type": "string"
+    },
+    "MemoryFieldUpdate": {
+      "description": "Mirrors `contract::MemoryFieldUpdate` (crates/horizon-agent/src/contract.rs).",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "field": {
+          "$ref": "#/$defs/MemoryField"
+        },
+        "op": {
+          "$ref": "#/$defs/MemoryOp"
+        }
+      },
+      "required": [
+        "field",
+        "op",
+        "content"
+      ],
+      "type": "object"
+    },
+    "MemoryNotification": {
+      "description": "Mirrors `contract::Event::{MemoryDigest, MemoryCheckpointMissed}`\n(crates/horizon-agent/src/contract.rs).",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/MemoryDigest",
+          "properties": {
+            "type": {
+              "const": "digest",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "checkpoint_missed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "MemoryOp": {
+      "description": "Mirrors `contract::MemoryOp` (crates/horizon-agent/src/contract.rs).",
+      "enum": [
+        "set",
+        "append",
+        "clear"
+      ],
+      "type": "string"
+    },
+    "MessageMeta": {
+      "description": "Mirrors the non-human `contract::MessageRole` variants (crates/horizon-agent/src/contract.rs).",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/MessageRole"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "type": "object"
+    },
+    "MessageRole": {
+      "enum": [
+        "task_notification",
+        "auto_continue"
+      ],
+      "type": "string"
+    },
+    "ModelOptionMeta": {
+      "description": "Carried under `_meta.horizon` on each `model` config option entry.",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "type": "object"
+    },
+    "PermissionResponseMeta": {
+      "description": "Mirrors `contract::Command::DenyToolCall::reason` (crates/horizon-agent/src/contract.rs).",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ProviderRequestNotification": {
+      "description": "Mirrors `contract::Event::{ProviderRequestSent, ProviderRequestFirstToken,\nProviderRequestFinished}` (crates/horizon-agent/src/contract.rs).",
+      "oneOf": [
+        {
+          "properties": {
+            "model": {
+              "type": "string"
+            },
+            "type": {
+              "const": "sent",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "model"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "first_token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "finished",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "ProviderSummary": {
+      "description": "Mirrors `wire::ProviderSummary` (crates/horizon-agent/src/wire.rs).",
+      "properties": {
+        "api_key_env": {
+          "description": "The environment variable name the entry's API key is read from.",
+          "type": "string"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "base_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default": {
+          "type": "boolean"
+        },
+        "default_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "api_key_env",
+        "available",
+        "default"
+      ],
+      "type": "object"
+    },
+    "ReloadProviderConfigRequest": {
+      "description": "Mirrors `SessionHub::reload_provider_config` (crates/horizon-agent/src/wire/hub.rs).",
+      "type": "object"
+    },
+    "SessionEventNotification": {
+      "description": "Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,\nHistoryCleared, Error, Exited}` (crates/horizon-agent/src/contract.rs),\n`wire::AgentWireEvent::AttachmentClosed` (crates/horizon-agent/src/wire.rs)\nand `HubHello::skipped_lines` (crates/horizon-agent/src/wire/hub.rs).",
+      "oneOf": [
+        {
+          "properties": {
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "const": "session_resumed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "backoff_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "status": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "provider_rate_limited",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "attempt",
+            "backoff_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cleared_occurrence_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "recovered_chars": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "const": "history_cleared",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "cleared_occurrence_ids",
+            "recovered_chars"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/AttachmentEnd"
+            },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "const": "attachment_closed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A mid-session failure the daemon reports outside any request.",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The session's process-level exit.",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "const": "exited",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The daemon's startup event-log corruption summary; not per-session.",
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "type": {
+              "const": "skipped_lines",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "summary"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SessionId": {
+      "description": "This crate's own session identifier: a UUID newtype that serializes as a\nbare UUID string (serde's transparent treatment of one-field tuple\nstructs) — the shape a future wire/IPC boundary will use (see\n`docs/agent-runtime-split-design.md`). Horizon has its own shared\n`session::SessionId` (used across terminal and agent sessions alike) —\nthis crate cannot depend on it (that's the whole point of the split), so\nthe two are distinct types connected by `From` impls at the seam in\nHorizon's `agent` module.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "SessionInfoMeta": {
+      "description": "Mirrors `wire::SessionSummary` minus `session_id` (crates/horizon-agent/src/wire.rs).",
+      "properties": {
+        "parent_session_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_id": {
+          "type": "string"
+        },
+        "role_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace_root": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "provider_id"
+      ],
+      "type": "object"
+    },
+    "SessionNewMeta": {
+      "description": "Mirrors `wire::SessionNew` minus `workspace_root` (crates/horizon-agent/src/wire.rs).",
+      "properties": {
+        "isolate": {
+          "type": "boolean"
+        },
+        "provider_id": {
+          "type": "string"
+        },
+        "role_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "spawn_source_session_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "provider_id",
+        "isolate"
+      ],
+      "type": "object"
+    },
+    "TaskProgressNotification": {
+      "description": "Mirrors `contract::TaskProgress` (crates/horizon-agent/src/contract.rs).",
+      "properties": {
+        "activity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The requesting session the progress row belongs to."
+        },
+        "started_at_epoch_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskProgressState"
+        },
+        "task_session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id",
+        "task_session_id",
+        "description",
+        "state",
+        "started_at_epoch_ms"
+      ],
+      "type": "object"
+    },
+    "TaskProgressState": {
+      "description": "Mirrors `contract::TaskProgressState` (crates/horizon-agent/src/contract.rs).",
+      "enum": [
+        "running",
+        "finished"
+      ],
+      "type": "string"
+    },
+    "ToolCallMeta": {
+      "description": "`tool_call_update`, whose `toolCallId` is the occurrence id. Mirrors\n`contract::ToolCallRequest`/`ToolCallResult` (crates/horizon-agent/src/contract.rs)\nand the result evidence fields (crates/horizon-agent/src/tools/output/evidence.rs).",
+      "properties": {
+        "auto_approved": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "human_decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Present once a human has decided on the call's approval."
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Present once the call has a result."
+        },
+        "policy_tier": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "tool_id"
+      ],
+      "type": "object"
+    },
+    "ToolCallProgressNotification": {
+      "description": "Mirrors `wire::AgentWireEvent::{ToolCallProgress, ToolCallProgressClosed}`\n(crates/horizon-agent/src/wire.rs).",
+      "oneOf": [
+        {
+          "description": "Mirrors `contract::ToolCallProgress` (crates/horizon-agent/src/contract.rs).",
+          "properties": {
+            "bytes": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "key": {
+              "type": "string"
+            },
+            "tool_id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "progress",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "key",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "type": {
+              "const": "closed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "key"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "ToolOutcome": {
+      "description": "Mirrors `contract::ToolOutcome` (crates/horizon-agent/src/contract/tool_result.rs).",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "succeeded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "denied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "retry_occurrence_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "superseded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "retry_occurrence_id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ToolResult": {
+      "description": "Mirrors `contract::ToolCallResult` (crates/horizon-agent/src/contract/tool_result.rs).",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "occurrence_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ToolOutcome"
+        },
+        "output": true
+      },
+      "required": [
+        "call_id",
+        "occurrence_id",
+        "output",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "WatchBoardRequest": {
+      "description": "Mirrors `SessionHub::watch_board` (crates/horizon-agent/src/wire/hub.rs).",
+      "properties": {
+        "workspace_root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_root"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "agent_to_client": {
+    "_horizon/host_tool": {
+      "reply": {
+        "$ref": "#/$defs/HostToolResponse"
+      },
+      "request": {
+        "$ref": "#/$defs/HostToolRequest"
+      }
+    }
+  },
+  "client_to_agent": {
+    "_horizon/continue_turn": {
+      "reply": {
+        "$ref": "#/$defs/EmptyResponse"
+      },
+      "request": {
+        "$ref": "#/$defs/ContinueTurnRequest"
+      }
+    },
+    "_horizon/drain": {
+      "reply": {
+        "$ref": "#/$defs/EmptyResponse"
+      },
+      "request": {
+        "$ref": "#/$defs/DrainRequest"
+      }
+    },
+    "_horizon/ensure_board_organizer": {
+      "reply": {
+        "$ref": "#/$defs/EnsureBoardOrganizerResponse"
+      },
+      "request": {
+        "$ref": "#/$defs/EnsureBoardOrganizerRequest"
+      }
+    },
+    "_horizon/list_provider_models": {
+      "reply": {
+        "$ref": "#/$defs/ListProviderModelsResponse"
+      },
+      "request": {
+        "$ref": "#/$defs/ListProviderModelsRequest"
+      }
+    },
+    "_horizon/list_providers": {
+      "reply": {
+        "$ref": "#/$defs/ListProvidersResponse"
+      },
+      "request": {
+        "$ref": "#/$defs/ListProvidersRequest"
+      }
+    },
+    "_horizon/reload_provider_config": {
+      "reply": {
+        "$ref": "#/$defs/EmptyResponse"
+      },
+      "request": {
+        "$ref": "#/$defs/ReloadProviderConfigRequest"
+      }
+    },
+    "_horizon/watch_board": {
+      "reply": {
+        "$ref": "#/$defs/EmptyResponse"
+      },
+      "request": {
+        "$ref": "#/$defs/WatchBoardRequest"
+      }
+    }
+  },
+  "meta": {
+    "config_option": {
+      "$ref": "#/$defs/ModelOptionMeta"
+    },
+    "initialize": {
+      "$ref": "#/$defs/InitializeMeta"
+    },
+    "message": {
+      "$ref": "#/$defs/MessageMeta"
+    },
+    "request_permission": {
+      "$ref": "#/$defs/ApprovalMeta"
+    },
+    "request_permission_response": {
+      "$ref": "#/$defs/PermissionResponseMeta"
+    },
+    "session_info": {
+      "$ref": "#/$defs/SessionInfoMeta"
+    },
+    "session_new": {
+      "$ref": "#/$defs/SessionNewMeta"
+    },
+    "tool_call": {
+      "$ref": "#/$defs/ToolCallMeta"
+    }
+  },
+  "notifications": {
+    "_horizon/memory": {
+      "$ref": "#/$defs/MemoryNotification"
+    },
+    "_horizon/provider_request": {
+      "$ref": "#/$defs/ProviderRequestNotification"
+    },
+    "_horizon/session_event": {
+      "$ref": "#/$defs/SessionEventNotification"
+    },
+    "_horizon/task_progress": {
+      "$ref": "#/$defs/TaskProgressNotification"
+    },
+    "_horizon/tool_call_progress": {
+      "$ref": "#/$defs/ToolCallProgressNotification"
+    }
+  },
+  "stop_reasons": [
+    "_horizon/failed",
+    "_horizon/doom_loop"
+  ],
+  "title": "horizon-acp-ext-wire",
+  "x-session-protocol-version": 1
+}

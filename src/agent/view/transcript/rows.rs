@@ -5,11 +5,11 @@
 //! shared per-tool expanded body (`render_tool_call_body`) reused by
 //! both plus the failure log.
 
+use super::super::super::model::AgentFrameItem;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::Sizable as _;
-use horizon_agent::frame::AgentFrameItem;
 
 use super::super::super::turns;
 use crate::theme;
@@ -581,13 +581,12 @@ impl ToolCallMark {
 /// branch first the chip read it as a plain success.
 pub(super) fn finished_tool_call_mark(call: &turns::ToolCallView) -> ToolCallMark {
     match &call.outcome {
-        Some(horizon_agent::contract::ToolOutcome::Superseded { .. }) => ToolCallMark::Superseded,
-        Some(horizon_agent::contract::ToolOutcome::Cancelled) => ToolCallMark::Cancelled,
-        Some(
-            horizon_agent::contract::ToolOutcome::Failed
-            | horizon_agent::contract::ToolOutcome::Denied,
-        ) => ToolCallMark::Error,
-        Some(horizon_agent::contract::ToolOutcome::Succeeded) => ToolCallMark::Success,
+        Some(horizon_acp::ToolOutcome::Superseded { .. }) => ToolCallMark::Superseded,
+        Some(horizon_acp::ToolOutcome::Cancelled) => ToolCallMark::Cancelled,
+        Some(horizon_acp::ToolOutcome::Failed | horizon_acp::ToolOutcome::Denied) => {
+            ToolCallMark::Error
+        }
+        Some(horizon_acp::ToolOutcome::Succeeded) => ToolCallMark::Success,
         None => unreachable!("a running call has no finished mark"),
     }
 }
@@ -739,12 +738,12 @@ mod tests {
     use super::finished_tool_call_mark;
     use super::turns::{ApprovalState, ToolCallKind, ToolCallView};
     use super::ToolCallMark;
-    use horizon_agent::contract::{OccurrenceId, ToolCallId, ToolOutcome};
+    use horizon_acp::ToolOutcome;
 
     fn finished_view(outcome: ToolOutcome) -> ToolCallView {
         ToolCallView {
-            occurrence_id: horizon_agent::contract::OccurrenceId::new(),
-            call_id: ToolCallId("c".to_string()),
+            occurrence_id: "o".to_string(),
+            call_id: "c".to_string(),
             request_index: 0,
             result_index: Some(1),
             tool_id: "bash".to_string(),
@@ -769,7 +768,7 @@ mod tests {
             (ToolOutcome::Cancelled, ToolCallMark::Cancelled),
             (
                 ToolOutcome::Superseded {
-                    retry_occurrence_id: OccurrenceId("retry".into()),
+                    retry_occurrence_id: "retry".into(),
                 },
                 ToolCallMark::Superseded,
             ),
