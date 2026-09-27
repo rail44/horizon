@@ -118,6 +118,10 @@ gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
 # a deprecated wrapper around it. Same rev pin as gpui-component above; bump
 # all three gpui-kit crates together.
 gpui-base = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
+# The shell is the ACP v2 client of `horizon-agentd`
+# (docs/acp-agentd-design.md); `horizon-acp` carries the extension vocabulary.
+agent-client-protocol = { workspace = true }
+horizon-acp = { path = "crates/horizon-acp" }
 horizon-agent = { path = "crates/horizon-agent" }
 horizon-cli = { path = "crates/horizon-cli" }
 horizon-control = { path = "crates/horizon-control" }
@@ -136,6 +140,8 @@ notify = "7"
 remoc = { workspace = true }
 termwiz = "0.23.3"
 tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"] }
+# `ByteStreams` takes `futures::io` traits; `compat` adapts the agentd socket.
+tokio-util = { version = "0.7", features = ["compat"] }
 # The theme settings view's explicit-Save writer (`src/theme_settings/save.rs`):
 # edits only the `[theme]`/`[theme.ansi]` seed keys in the user's config
 # file, preserving every other section, comment, and ordering byte-for-byte

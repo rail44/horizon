@@ -1,7 +1,7 @@
 //! What both daemon client runtimes share: the per-runtime control handle,
-//! the remoc connect prelude every establishment opens with, the
-//! establishment deadlines and their classification, the per-call deadline
-//! wrapper, and the drained-daemon probe.
+//! the establishment deadlines and their classification, and the
+//! drained-daemon probe; plus the remoc connect prelude and per-call
+//! deadline wrapper the terminald client uses.
 //!
 //! Since the terminald split (`docs/terminald-split-design.md`) Horizon runs
 //! *two* of these runtimes — one per daemon, each with its own connection,

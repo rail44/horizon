@@ -1,9 +1,9 @@
 //! Live background-`task` rows for the agent pane: one quiet line per
 //! still-running child, with its elapsed time and last observed activity.
 //!
-//! The rows are the pane-facing projection of `AgentSession::tasks` — the
-//! ephemeral `wire::AgentWireEvent::TaskProgress` fold (see
-//! `contract::TaskProgress`). A child's completion retires its row there;
+//! The rows are the pane-facing projection of the session model's `tasks`
+//! -- the ephemeral `_horizon/task_progress` fold. A child's completion
+//! retires its row there;
 //! the durable record (the `TaskNotification` transcript message) needs no
 //! help from this strip.
 
@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::*;
 
-use horizon_agent::contract::TaskProgress;
+use horizon_acp::TaskProgressNotification as TaskProgress;
 
 use super::super::session::AgentSession;
 use crate::theme;
@@ -23,9 +23,9 @@ pub(super) struct BackgroundTasks {
 
 impl BackgroundTasks {
     pub(super) fn new(session: Entity<AgentSession>, cx: &mut Context<Self>) -> Self {
-        let rows = session.read(cx).tasks.clone();
+        let rows = session.read(cx).model.tasks.clone();
         let subscription = cx.observe(&session, |tasks: &mut Self, session, cx| {
-            let next = session.read(cx).tasks.clone();
+            let next = session.read(cx).model.tasks.clone();
             if tasks.rows != next {
                 tasks.rows = next;
                 cx.notify();

@@ -2,8 +2,7 @@
 
 use std::ops::Range;
 
-use horizon_agent::frame::AgentFrameItem;
-
+use super::super::super::model::AgentFrameItem;
 use super::super::super::turns;
 
 pub(super) struct TranscriptProjection {
@@ -114,7 +113,7 @@ pub(super) fn build_transcript_rows(
             }
 
             let item = &turn_items[index];
-            // Thinking (`ReasoningDelta`) content is deliberately never a
+            // Thinking (`Thought`) content is deliberately never a
             // row — hidden in full, streaming and replayed alike (owner
             // decision 2026-09-10, superseding 2026-07-13's tail-capped
             // view). Same-day owner feedback carves out exactly one
@@ -125,7 +124,6 @@ pub(super) fn build_transcript_rows(
             let visible = matches!(
                 item,
                 AgentFrameItem::Message(_)
-                    | AgentFrameItem::AssistantTextDelta(_)
                     | AgentFrameItem::Error(_)
                     | AgentFrameItem::Exited(_)
                     // The compaction divider always gets its own row --
@@ -135,9 +133,9 @@ pub(super) fn build_transcript_rows(
                     | AgentFrameItem::ProviderRateLimited(_)
             ) || matches!(
                 item,
-                AgentFrameItem::ApprovalRequested(request)
+                AgentFrameItem::Permission(request)
                     if span.ended.is_some()
-                        && turns::is_approval_still_pending(turn_items, &request.call_id)
+                        && turns::is_approval_still_pending(turn_items, &request.identity)
             ) || matches!(
                 // The thinking-indicator carve-out: only while this
                 // reasoning delta is the open turn's latest item. Anything
@@ -145,7 +143,7 @@ pub(super) fn build_transcript_rows(
                 // turn ending retires the indicator, so it can never
                 // linger as a stale pulse.
                 item,
-                AgentFrameItem::ReasoningDelta(_)
+                AgentFrameItem::Thought(_)
                     if span.ended.is_none() && index + 1 == turn_items.len()
             );
             if visible {
@@ -171,11 +169,10 @@ pub(super) fn build_transcript_rows(
 mod tests {
     use std::time::Duration;
 
-    use horizon_agent::contract::TurnEndReason;
-    use horizon_agent::frame::AgentFrameItem;
+    use crate::agent::model::{AgentFrameItem, TurnEndReason};
 
     use super::super::super::super::turns::test_support::{
-        assistant_delta, reasoning_delta, tool_finished, tool_requested, tool_started, user_message,
+        assistant_delta, reasoning_delta, tool_finished, tool_requested, user_message,
     };
     use super::{
         build_transcript_rows, BurstPresentation, RowUpdate, TranscriptProjection, TranscriptRow,
@@ -193,9 +190,12 @@ mod tests {
     fn projection_preserves_message_burst_receipt_and_prose_order() {
         let items = vec![
             user_message("fix it"),
-            tool_requested("a", "fs.read", serde_json::json!({"path":"a.rs"})),
-            tool_started("a"),
-            tool_finished("a", serde_json::json!({"contents":"..."})),
+            tool_finished(
+                "a",
+                "fs.read",
+                serde_json::json!({"path":"a.rs"}),
+                serde_json::json!({"contents":"..."}),
+            ),
             assistant_delta("done"),
             turn_end(),
             user_message("thanks"),
@@ -212,11 +212,11 @@ mod tests {
                 items,
                 receipt_key: 1,
                 presentation: BurstPresentation::Final(_),
-            } if items == &(1..4)
+            } if items == &(1..2)
         ));
-        assert!(matches!(&rows[2], TranscriptRow::Item { index: 4, .. }));
-        assert!(matches!(&rows[3], TranscriptRow::Item { index: 6, .. }));
-        assert!(matches!(&rows[4], TranscriptRow::Item { index: 7, .. }));
+        assert!(matches!(&rows[2], TranscriptRow::Item { index: 2, .. }));
+        assert!(matches!(&rows[3], TranscriptRow::Item { index: 4, .. }));
+        assert!(matches!(&rows[4], TranscriptRow::Item { index: 5, .. }));
         assert_eq!(rows.len(), 5, "TurnEnded markers are not visual rows");
     }
 
@@ -351,7 +351,13 @@ mod tests {
                 new_count: 2
             }
         );
-        items.push(tool_finished("a", serde_json::json!({"contents":"ok"})));
+        items.pop();
+        items.push(tool_finished(
+            "a",
+            "fs.read",
+            serde_json::json!({"path":"a.rs"}),
+            serde_json::json!({"contents":"ok"}),
+        ));
         items.push(turn_end());
         let finished = TranscriptProjection::from_items(&items);
         assert_eq!(

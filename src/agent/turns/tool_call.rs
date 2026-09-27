@@ -1,23 +1,16 @@
 //! A tool call's expanded-row body (diff/content-preview/command/summary/
 //! raw-JSON) and its terse one-line summary fallback. The per-call
-//! view-model, approval-lifecycle derivation, and classifier
-//! (`ToolCallView`/`ApprovalState`/`build_tool_call_views`/`ToolCallKind`/
-//! `classify`) moved to `horizon_agent::transcript`, re-exported from
-//! `super` under their original names (see `turns/mod.rs`'s doc comment).
-//! This file's own contents stayed behind because [`build_tool_call_body`]'s
-//! fallback arm for a terse, known-but-not-specially-bodied tool calls
-//! [`terse_summary`], a wording function -- see `horizon_agent::
-//! transcript`'s module doc for why that kept the whole family together
-//! rather than splitting the enum from its one constructor.
+//! view-model and approval derivation live in `crate::agent::model`; the
+//! per-tool classifier is `horizon_agent::transcript::classify`.
 
 use horizon_agent::contract::tool_output::{
     decode, BashOutput, EditOutcome, FileEdits, FileRead, FileWritten, Location, Matches,
 };
-use horizon_agent::frame::AgentFrameItem;
 use horizon_agent::transcript::ToolCallClassification;
 use serde_json::Value;
 
-use super::{cap_lines_head, cap_lines_tail, reconstruct_line_diff};
+use super::super::model::AgentFrameItem;
+use super::{cap_lines_head, cap_lines_tail, reconstruct_line_diff, tool_call_source};
 use super::{classify, edit_entries, str_field, DiffLine, DiffLineKind, ToolCallView};
 
 /// A tool call's expanded-row body (stage D, decision 3's "each row
@@ -277,31 +270,14 @@ pub(crate) fn build_tool_call_body(
     }
 }
 
-/// Builds a row's body from the request/result positions already correlated by
-/// `build_tool_call_views`. `items` must be the same slice used to build `call`.
-/// This preserves occurrence-aware matching and legacy replay ordering without
-/// letting the view independently bind a reused call id to a different attempt.
+/// Builds a row's body from the call item `build_tool_call_views` bound the
+/// view to. `items` must be the same slice used to build `call`.
 pub(crate) fn tool_call_body(
     items: &[AgentFrameItem],
     call: &ToolCallView,
 ) -> Option<ToolCallBody> {
-    let AgentFrameItem::ToolCallRequested(request) = items.get(call.request_index)? else {
-        return None;
-    };
-    let output = match call.result_index {
-        Some(index) => {
-            let AgentFrameItem::ToolCallFinished(result) = items.get(index)? else {
-                return None;
-            };
-            Some(&result.output.0)
-        }
-        None => None,
-    };
-    Some(build_tool_call_body(
-        &request.tool_id,
-        &request.input,
-        output,
-    ))
+    let (tool_id, input, output) = tool_call_source(items, call)?;
+    Some(build_tool_call_body(tool_id, input, output))
 }
 
 #[cfg(test)]
@@ -312,85 +288,85 @@ mod tests {
     use super::super::{build_tool_call_views, ApprovalState, DiffLineKind};
     use super::*;
 
-    #[test]
-    fn expanded_bodies_keep_each_reused_call_occurrence_and_pending_result_separate() {
-        {
-            let mut items = vec![
-                tool_requested("dup", "bash", json!({"command": "echo first"})),
-                tool_finished(
-                    "dup",
-                    json!({"exit_code": 0, "output": "first", "termination": "exited", "output_file": null, "truncated": false}),
-                ),
-                tool_requested("dup", "bash", json!({"command": "echo second"})),
-            ];
-            {
-                use horizon_agent::contract::OccurrenceId;
-                for (index, item) in items.iter_mut().enumerate() {
-                    let occurrence =
-                        OccurrenceId(if index < 2 { "first" } else { "second" }.into());
-                    match item {
-                        AgentFrameItem::ToolCallRequested(request) => {
-                            request.occurrence_id = occurrence
-                        }
-                        AgentFrameItem::ToolCallFinished(result) => {
-                            result.occurrence_id = occurrence
-                        }
-                        _ => unreachable!(),
-                    }
-                }
+    fn with_occurrence(mut item: AgentFrameItem, occurrence: &str) -> AgentFrameItem {
+        match &mut item {
+            AgentFrameItem::ToolCall(call) => call.occurrence_id = occurrence.to_string(),
+            AgentFrameItem::Permission(permission) => {
+                permission.identity.occurrence_id = occurrence.to_string()
             }
-            let views = build_tool_call_views(&items);
-            assert_eq!(
-                tool_call_body(&items, &views[0]),
-                Some(ToolCallBody::Command {
-                    command: "echo first".into(),
-                    exit_code: Some(0),
-                    lines: vec!["first".into()],
-                    omitted: 0,
-                }),
-                "the completed row must retain its own request and output",
-            );
-            assert_eq!(
-                tool_call_body(&items, &views[1]),
-                Some(ToolCallBody::Command {
-                    command: "echo second".into(),
-                    exit_code: None,
-                    lines: vec![],
-                    omitted: 0,
-                }),
-                "a pending row must not borrow the previous output",
-            );
+            _ => unreachable!(),
         }
+        item
     }
 
     #[test]
-    fn expanded_body_follows_occurrence_binding_when_an_old_attempt_finishes_last() {
-        use horizon_agent::contract::{OccurrenceId, ToolCallId, ToolCallResult};
-
-        let mut items = vec![
-            tool_requested("dup", "bash", json!({"command": "first"})),
-            tool_requested("dup", "bash", json!({"command": "retry"})),
-            tool_finished(
-                "dup",
-                json!({"exit_code": 0, "output": "retry result", "termination": "exited", "output_file": null, "truncated": false}),
+    fn expanded_bodies_keep_each_reused_call_occurrence_and_pending_result_separate() {
+        let items = vec![
+            with_occurrence(
+                tool_finished(
+                    "dup",
+                    "bash",
+                    json!({"command": "echo first"}),
+                    json!({"exit_code": 0, "output": "first", "termination": "exited", "output_file": null, "truncated": false}),
+                ),
+                "first",
             ),
-            AgentFrameItem::ToolCallFinished(
-                ToolCallResult::new(
-                    ToolCallId("dup".into()),
-                    OccurrenceId("first".into()),
-                    json!({}),
-                )
-                .superseded_by_retry(&OccurrenceId("retry".into())),
+            with_occurrence(
+                tool_requested("dup", "bash", json!({"command": "echo second"})),
+                "second",
             ),
         ];
-        for (item, id) in items.iter_mut().zip(["first", "retry", "retry", "first"]) {
-            let occurrence = OccurrenceId(id.into());
-            match item {
-                AgentFrameItem::ToolCallRequested(request) => request.occurrence_id = occurrence,
-                AgentFrameItem::ToolCallFinished(result) => result.occurrence_id = occurrence,
-                _ => unreachable!(),
-            }
+        let views = build_tool_call_views(&items);
+        assert_eq!(
+            tool_call_body(&items, &views[0]),
+            Some(ToolCallBody::Command {
+                command: "echo first".into(),
+                exit_code: Some(0),
+                lines: vec!["first".into()],
+                omitted: 0,
+            }),
+            "the completed row must retain its own request and output",
+        );
+        assert_eq!(
+            tool_call_body(&items, &views[1]),
+            Some(ToolCallBody::Command {
+                command: "echo second".into(),
+                exit_code: None,
+                lines: vec![],
+                omitted: 0,
+            }),
+            "a pending row must not borrow the previous output",
+        );
+    }
+
+    #[test]
+    fn a_superseded_attempt_and_its_retry_keep_their_own_bodies() {
+        let mut first = with_occurrence(
+            tool_finished(
+                "dup",
+                "bash",
+                json!({"command": "first"}),
+                json!({"message": "this attempt ended; a new attempt of the same call replaces it"}),
+            ),
+            "first",
+        );
+        if let AgentFrameItem::ToolCall(call) = &mut first {
+            call.meta.outcome = Some(horizon_acp::ToolOutcome::Superseded {
+                retry_occurrence_id: "retry".into(),
+            });
         }
+        let items = vec![
+            first,
+            with_occurrence(
+                tool_finished(
+                    "dup",
+                    "bash",
+                    json!({"command": "retry"}),
+                    json!({"exit_code": 0, "output": "retry result", "termination": "exited", "output_file": null, "truncated": false}),
+                ),
+                "retry",
+            ),
+        ];
         let views = build_tool_call_views(&items);
         assert!(views[0].superseded());
         assert!(
@@ -613,68 +589,49 @@ mod tests {
 
     #[test]
     fn a_reused_call_id_still_shows_the_second_occurrence_as_waiting() {
-        // Root-caused 2026-07-18: the owner's real agent session (a
-        // rig/Kimi-K2.7-Code provider) reused the exact call_id
-        // "functions.fs.edit:66" for two structurally different `fs.edit`
-        // calls -- the first fully resolved (approved and finished
-        // successfully) before the second was ever requested. Forward
-        // `.find()` in `build_tool_call_views` kept attributing every
-        // subsequent event for that call_id to the first (already
-        // resolved) entry, so the second occurrence's own
-        // `ApprovalRequested` never reached it: it stayed
-        // `ApprovalState::None` (misread as "never needed approval")
-        // forever, with no Approve/Deny row -- the session the owner had
-        // to interrupt because no approval UI ever appeared, though the
-        // daemon really was sitting in `WaitingForApproval`.
-        let mut items = vec![
-            tool_requested(
+        // A provider reused the call id "dup" for two distinct `fs.edit`
+        // calls; the second one's permission request must attach to its
+        // own occurrence, not the finished first one.
+        let mut first = with_occurrence(
+            tool_finished(
                 "dup",
                 "fs.edit",
                 json!({"edits": [{"path": "a.rs", "old_string": "first old", "new_string": "first new"}]}),
+                edit_result("a.rs"),
             ),
-            approval_requested("dup"),
-            tool_started("dup"),
-            tool_finished("dup", edit_result("a.rs")),
-            // A second, distinct call reuses the same call_id after the
-            // first one's cycle is fully closed.
-            tool_requested(
-                "dup",
-                "fs.edit",
-                json!({"edits": [{"path": "b.rs", "old_string": "second old", "new_string": "second new"}]}),
-            ),
-            approval_requested("dup"),
-            // No `ToolCallStarted`/`ToolCallFinished` yet for this second
-            // occurrence: it's the one currently pending approval.
-        ];
-        for (index, item) in items.iter_mut().enumerate() {
-            let occurrence = horizon_agent::contract::OccurrenceId(
-                if index < 4 { "first" } else { "second" }.into(),
-            );
-            match item {
-                AgentFrameItem::ToolCallRequested(request) => request.occurrence_id = occurrence,
-                AgentFrameItem::ToolCallStarted(identity) => identity.occurrence_id = occurrence,
-                AgentFrameItem::ToolCallFinished(result) => result.occurrence_id = occurrence,
-                AgentFrameItem::ApprovalRequested(approval) => approval.occurrence_id = occurrence,
-                _ => unreachable!(),
-            }
+            "first",
+        );
+        if let AgentFrameItem::ToolCall(call) = &mut first {
+            call.status = crate::agent::model::ToolCallStatus::Completed;
         }
+        let mut first_approval = with_occurrence(approval_requested("dup"), "first");
+        if let AgentFrameItem::Permission(permission) = &mut first_approval {
+            permission.decision = Some(crate::agent::model::PermissionDecision::Approved);
+        }
+        let items = vec![
+            first,
+            first_approval,
+            with_occurrence(
+                tool_requested(
+                    "dup",
+                    "fs.edit",
+                    json!({"edits": [{"path": "b.rs", "old_string": "second old", "new_string": "second new"}]}),
+                ),
+                "second",
+            ),
+            with_occurrence(approval_requested("dup"), "second"),
+        ];
         let views = build_tool_call_views(&items);
         assert_eq!(views.len(), 2);
 
-        // The first occurrence keeps its own, correct resolution.
         assert_eq!(views[0].approval, ApprovalState::Approved);
         assert!(views[0].finished());
         assert_eq!(views[0].target.as_deref(), Some("a.rs"));
 
-        // The second occurrence -- the actionable one -- must render as
-        // `Waiting`, not `None`, so the UI shows Approve/Deny for it.
         assert_eq!(views[1].approval, ApprovalState::Waiting);
         assert!(!views[1].finished());
         assert_eq!(views[1].target.as_deref(), Some("b.rs"));
 
-        // Its proposal body must reflect the *second* call's own content,
-        // not the already-finished first one that happens to share the
-        // id. The body uses the view's existing source binding.
         match tool_call_body(&items, &views[1]) {
             Some(ToolCallBody::Diff { lines, .. }) => {
                 assert_eq!(
@@ -692,17 +649,18 @@ mod tests {
     #[test]
     fn tool_call_body_finds_the_matching_call_within_a_turns_items() {
         let items = vec![
-            tool_requested("a", "fs.read", json!({"path": "a.rs"})),
-            tool_requested(
+            tool_finished(
+                "a",
+                "fs.read",
+                json!({"path": "a.rs"}),
+                json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
+            ),
+            tool_finished(
                 "b",
                 "fs.edit",
                 json!({"edits": [{"path": "b.rs", "old_string": "x", "new_string": "y"}]}),
+                edit_result("b.rs"),
             ),
-            tool_finished(
-                "a",
-                json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
-            ),
-            tool_finished("b", edit_result("b.rs")),
         ];
         let views = build_tool_call_views(&items);
         match tool_call_body(&items, &views[1]) {
@@ -725,20 +683,13 @@ mod tests {
 
     #[test]
     fn tool_call_body_for_a_waiting_bash_call_carries_the_full_command_not_the_row_head() {
-        // Row-centric approval v2: a `Waiting` row auto-displays this body
-        // as its proposal (decision 4's "proposal — not applied") before
-        // any `ToolCallFinished` exists -- unlike `ToolCallKind::Bash`'s
-        // `command_head` (the row's own collapsed line and the receipt
-        // chip), which truncates to the first line's first 32 characters
-        // (see `bash_chip_carries_a_truncated_command_head`, now in
-        // `horizon_agent::transcript::tool_call::tests` alongside
-        // `ToolCallKind`).
         let long_command = format!("echo {}", "x".repeat(50));
         let items = vec![
             tool_requested("a", "bash", json!({"command": long_command})),
             approval_requested("a"),
         ];
         let views = build_tool_call_views(&items);
+        assert_eq!(views[0].approval, ApprovalState::Waiting);
         match tool_call_body(&items, &views[0]) {
             Some(ToolCallBody::Command {
                 command, exit_code, ..

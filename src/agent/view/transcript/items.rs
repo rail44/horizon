@@ -1,5 +1,6 @@
 //! Render individual transcript messages and defensive orphan tool rows.
 
+use super::super::super::model::{AgentFrameItem, MessageRole, ToolCallIdentity};
 use super::super::super::turns;
 use super::AgentTranscript;
 use crate::theme;
@@ -7,26 +8,21 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::text::TextView;
-use horizon_agent::{
-    contract::{MessageRole, OccurrenceId, ToolCallId},
-    frame::AgentFrameItem,
-};
 use std::time::Duration;
 
 impl AgentTranscript {
     /// Renders one item outside its normal turn/burst/receipt grouping --
-    /// either as one projected virtual row (`Message`/
-    /// `AssistantTextDelta`/`Error`/`Exited`, plus the defensive
-    /// already-ended-turn-with-a-dangling-approval case), or, defensively,
+    /// either as one projected virtual row (`Message`/`Error`/`Exited`,
+    /// plus the defensive already-ended-turn-with-a-dangling-approval
+    /// case), or, defensively,
     /// an item that has genuinely ended up outside every turn span at all
     /// (`AgentTranscript::render`'s own item walk -- see
     /// `turns::group_into_turns`'s
     /// invariant notes for why that should be unreachable for any
     /// legitimate sequence now). `all_items` is whatever superset of
     /// `item` the caller has in scope (a turn's own slice, or the whole
-    /// frame) -- used only by the tool-related arms below to correlate a
-    /// possibly-orphaned `ToolCallRequested`/`ToolCallFinished` back to
-    /// its call's other items for humane rendering.
+    /// frame) -- used only by the tool-related arm below to correlate a
+    /// possibly-orphaned tool call back to its view for humane rendering.
     pub(super) fn render_item(
         &self,
         all_items: &[AgentFrameItem],
@@ -77,6 +73,9 @@ impl AgentTranscript {
                     theme::info()
                 };
                 if message.role == MessageRole::Assistant {
+                    if message.text.is_empty() {
+                        return None;
+                    }
                     Some(markdown_block(
                         label,
                         color,
@@ -92,12 +91,6 @@ impl AgentTranscript {
                     ))
                 }
             }
-            AgentFrameItem::AssistantTextDelta(delta) => Some(markdown_block(
-                "agent…",
-                theme::info(),
-                ("agent-delta", index),
-                delta.text.clone(),
-            )),
             // Thinking content is hidden in full (superseding 2026-07-13's
             // tail-capped "thinking…" view) — but one affordance is kept
             // while a reasoning delta is the open
@@ -109,7 +102,7 @@ impl AgentTranscript {
             // `build_transcript_rows` routes only the tail-of-open-turn
             // item to this arm, so the indicator is always retired by the
             // next streamed item or the turn end.
-            AgentFrameItem::ReasoningDelta(_) => {
+            AgentFrameItem::Thought(_) => {
                 // One full breath per cycle: the eased delta runs 0→1 and
                 // repeats, so fold it into a triangle wave (0→1→0) and
                 // ride the dot's opacity between a dim floor and full
@@ -165,21 +158,10 @@ impl AgentTranscript {
             // genuinely unknown future shape must still degrade to the
             // same humane verb/target/summary vocabulary the running
             // card/receipt rows use, not `Display`-dumped JSON).
-            AgentFrameItem::ToolCallRequested(request) => self.render_orphan_tool_row(
-                all_items,
-                index,
-                &request.call_id,
-                &request.occurrence_id,
-                cx,
-            ),
-            AgentFrameItem::ToolCallFinished(result) => self.render_orphan_tool_row(
-                all_items,
-                index,
-                &result.call_id,
-                &result.occurrence_id,
-                cx,
-            ),
-            AgentFrameItem::ApprovalRequested(request) => {
+            AgentFrameItem::ToolCall(call) => {
+                self.render_orphan_tool_row(all_items, index, &call.identity(), cx)
+            }
+            AgentFrameItem::Permission(request) => {
                 // The actionable (ghost-excluding) reading: this arm only
                 // renders at all for the defensive completed-turn-with-a-
                 // dangling-approval case (`turns::is_approval_still_pending`,
@@ -194,9 +176,9 @@ impl AgentTranscript {
                     .session
                     .read(cx)
                     .pending_approval_identities()
-                    .contains(&request.identity());
-                let call_id = request.identity();
-                let deny_id = request.identity();
+                    .contains(&request.identity);
+                let call_id = request.identity.clone();
+                let deny_id = request.identity.clone();
                 Some(
                     div()
                         .flex()
@@ -311,58 +293,39 @@ impl AgentTranscript {
                 "error",
                 theme::danger(),
                 ("error", index),
-                format!("{error:?}"),
+                error.clone(),
             )),
             AgentFrameItem::Exited(reason) => Some(block(
                 "exited",
                 theme::text_muted(),
                 ("exited", index),
-                format!("{reason:?}"),
+                reason.clone(),
             )),
-            AgentFrameItem::ToolCallStarted(_) => None,
             // Consumed by turn grouping (`turns::group_into_turns`) into
             // the turn's receipt line; never reaches this per-item path in
             // practice (see `AgentTranscript::render`'s span walk), kept only as a
             // defensive no-op.
-            AgentFrameItem::TurnEnded { .. } | AgentFrameItem::ApprovalResolved(_) => None,
+            AgentFrameItem::TurnEnded { .. } => None,
         }
     }
 
     /// [`Self::render_item`]'s defensive fallback for a tool call whose
-    /// `ToolCallRequested`/`ToolCallFinished` item has genuinely ended up
-    /// outside every turn span: renders it with the same glyph +
-    /// verb/target/summary vocabulary as a running-card row
-    /// ([`tool_call_glyph`]/[`tool_call_line_text`]), correlating across
-    /// `all_items` (rather than just the one orphaned item) so the result
-    /// still reflects the call's actual tool id/input/output wherever its
-    /// other items happen to live. Skips re-rendering a call whose row
-    /// already appeared at an earlier index within `all_items` -- a
-    /// call's `ToolCallRequested`/`ApprovalRequested`/`ToolCallFinished`
-    /// items can each independently land in this fallback if they're all
-    /// orphaned, and would otherwise each mint their own duplicate row.
-    /// Falls back to a minimal call-id-only line (never a raw-JSON dump)
-    /// in the genuinely-shouldn't-happen case where `all_items` doesn't
-    /// even contain the call's own `ToolCallRequested` to classify from.
+    /// item has genuinely ended up outside every turn span: renders it with
+    /// the same glyph + verb/target/summary vocabulary as a running-card
+    /// row ([`tool_call_glyph`]/[`tool_call_line_text`]). Falls back to a
+    /// minimal call-id-only line (never a raw-JSON dump) when no view
+    /// binds to the item.
     fn render_orphan_tool_row(
         &self,
         all_items: &[AgentFrameItem],
         index: usize,
-        call_id: &ToolCallId,
-        occurrence_id: &OccurrenceId,
+        identity: &ToolCallIdentity,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let already_rendered = all_items[..index]
-            .iter()
-            .filter_map(item_execution)
-            .any(|seen| seen == (call_id, occurrence_id));
-        if already_rendered {
-            return None;
-        }
         match turns::build_tool_call_views(all_items)
             .into_iter()
-            .find(|call| {
-                item_execution(&all_items[call.request_index]) == Some((call_id, occurrence_id))
-            }) {
+            .find(|call| call.request_index == index && &call.identity() == identity)
+        {
             Some(call) => Some(self.render_tool_call_row(index, all_items, &call, false, cx)),
             None => Some(
                 div()
@@ -374,27 +337,10 @@ impl AgentTranscript {
                     .py_1()
                     .text_size(px(12.0))
                     .text_color(theme::text_muted())
-                    .child(format!("tool call {}", call_id.0))
+                    .child(format!("tool call {}", identity.call_id))
                     .into_any_element(),
             ),
         }
-    }
-}
-
-/// Execution identity used to correlate and deduplicate defensive orphan rows.
-fn item_execution(item: &AgentFrameItem) -> Option<(&ToolCallId, &OccurrenceId)> {
-    match item {
-        AgentFrameItem::ToolCallRequested(request) => {
-            Some((&request.call_id, &request.occurrence_id))
-        }
-        AgentFrameItem::ToolCallStarted(identity) => {
-            Some((&identity.call_id, &identity.occurrence_id))
-        }
-        AgentFrameItem::ToolCallFinished(result) => Some((&result.call_id, &result.occurrence_id)),
-        AgentFrameItem::ApprovalRequested(request) => {
-            Some((&request.call_id, &request.occurrence_id))
-        }
-        _ => None,
     }
 }
 

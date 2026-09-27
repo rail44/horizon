@@ -1,14 +1,12 @@
 //! Session-status projection and its small, ordinary entity view.
 
-use gpui::*;
-use gpui_component::status_bar::StatusBar;
-use horizon_agent::contract::SessionState;
-use horizon_agent::frame::state_indicates_turn_in_flight;
-
+use super::super::model::{state_indicates_turn_in_flight, SessionState};
 use super::super::session::AgentSession;
 use super::transcript::render_stop_button;
 use crate::runtime::AttachmentState;
 use crate::theme;
+use gpui::*;
+use gpui_component::status_bar::StatusBar;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StatusTone {
@@ -25,18 +23,15 @@ struct StatusProjection {
 
 /// The display label for one folded `SessionState`, shared by the status
 /// line and the transcript's running card so the two wordings can't
-/// drift. `None` for the quiet states (`Created`/`WaitingForUser`) the
-/// status line hides entirely; each caller picks its own fallback.
+/// drift. `None` for the quiet idle state the status line hides entirely;
+/// each caller picks its own fallback.
 pub(super) fn session_state_label(state: SessionState) -> Option<&'static str> {
     match state {
         SessionState::Running => Some("running…"),
         SessionState::ToolRunning => Some("tool running…"),
         SessionState::WaitingForApproval => Some("waiting for approval"),
-        SessionState::Cancelled => Some("cancelled"),
-        SessionState::Completed => Some("completed"),
-        SessionState::Failed => Some("failed"),
         SessionState::Terminated => Some("terminated"),
-        SessionState::Created | SessionState::WaitingForUser => None,
+        SessionState::Idle => None,
     }
 }
 
@@ -68,7 +63,7 @@ fn attachment_status(session: &AgentSession) -> StatusProjection {
             (message.clone(), StatusTone::Danger)
         }
         AttachmentState::Ready => {
-            return project_status(session.frame.state, session.runtime_unreachable())
+            return project_status(session.model.frame.state(), session.runtime_unreachable())
         }
     };
     StatusProjection {
@@ -132,9 +127,8 @@ impl Render for AgentStatus {
 
 #[cfg(test)]
 mod tests {
-    use horizon_agent::contract::SessionState;
-
     use super::{project_status, StatusTone};
+    use crate::agent::model::SessionState;
 
     #[test]
     fn session_state_label_covers_every_state_and_hides_the_quiet_ones() {
@@ -150,21 +144,11 @@ mod tests {
             Some("waiting for approval")
         );
         assert_eq!(
-            session_state_label(SessionState::Cancelled),
-            Some("cancelled")
-        );
-        assert_eq!(
-            session_state_label(SessionState::Completed),
-            Some("completed")
-        );
-        assert_eq!(session_state_label(SessionState::Failed), Some("failed"));
-        assert_eq!(
             session_state_label(SessionState::Terminated),
             Some("terminated")
         );
-        // The quiet states the status line hides entirely.
-        assert_eq!(session_state_label(SessionState::Created), None);
-        assert_eq!(session_state_label(SessionState::WaitingForUser), None);
+        // The quiet state the status line hides entirely.
+        assert_eq!(session_state_label(SessionState::Idle), None);
     }
 
     #[test]
@@ -177,7 +161,7 @@ mod tests {
         );
         assert!(projection.turn_in_flight);
 
-        for state in [None, Some(SessionState::Created)] {
+        for state in [None, Some(SessionState::Idle)] {
             let projection = project_status(state, false);
             assert_eq!(projection.text, "");
             assert!(!projection.turn_in_flight);

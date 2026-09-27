@@ -1,7 +1,7 @@
 //! Restore a workspace in inventory, attachment, and model-adoption phases.
 
+use crate::runtime::SessionSummary;
 use gpui::*;
-use horizon_agent::wire::SessionSummary;
 use horizon_terminal_core::TerminalSummary;
 use horizon_workspace::{types::SessionKind, PaneKind, SessionId, SessionInventory, Workspace};
 
@@ -41,7 +41,7 @@ impl RestoreCandidates {
         // the daemon's own report of each session's
         // `workspace_root` (the authoritative post-isolation
         // worktree path for an isolated session; see
-        // `wire::SessionSummary::workspace_root`'s doc comment),
+        // `SessionInfoMeta::workspace_root`'s doc comment),
         // applied to the surviving candidates further down.
         let agent_workspace_roots: HashMap<Uuid, std::path::PathBuf> = agent_summaries
             .iter()
@@ -323,7 +323,7 @@ impl WorkspaceShell {
 #[cfg(test)]
 mod tests {
     use super::{RestoreCandidates, SessionSummary, TerminalSummary, Workspace};
-    use horizon_agent::contract::{ProviderId, SessionId as AgentSessionId};
+    use horizon_acp::SessionId as AgentSessionId;
     use horizon_workspace::SessionId;
     use std::collections::HashSet;
     use uuid::Uuid;
@@ -331,7 +331,7 @@ mod tests {
     fn agent(id: Uuid) -> SessionSummary {
         SessionSummary {
             session_id: AgentSessionId::from_uuid(id),
-            provider_id: ProviderId("test".into()),
+            provider_id: "test".into(),
             role_id: None,
             parent_session_id: None,
             workspace_root: None,

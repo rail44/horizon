@@ -3,21 +3,19 @@
 //! [`BoardSessionActivity`].
 
 use super::*;
+use crate::agent::model::SessionStatus;
 use crate::agent::AgentSession;
-use horizon_agent::frame::SessionStatus;
 use horizon_workspace::SessionId;
 use std::collections::HashMap;
 
 impl From<SessionStatus> for BoardSessionActivity {
     fn from(status: SessionStatus) -> Self {
         match status {
-            SessionStatus::Starting => Self::Starting,
             SessionStatus::Running => Self::Running,
             SessionStatus::ToolRunning => Self::ToolRunning,
             SessionStatus::WaitingForInput => Self::WaitingForInput,
             SessionStatus::WaitingForApproval => Self::WaitingForApproval,
             SessionStatus::Cancelled => Self::Cancelled,
-            SessionStatus::Completed => Self::Completed,
             SessionStatus::Failed => Self::Failed,
             SessionStatus::Paused => Self::Paused,
             SessionStatus::Terminated => Self::Terminated,
@@ -31,6 +29,7 @@ impl BoardSessionActivity {
             Self::Unavailable
         } else {
             session
+                .model
                 .frame
                 .status()
                 .map(Self::from)
@@ -120,14 +119,13 @@ impl BoardPaneView {
 #[cfg(test)]
 mod tests {
     use super::BoardSessionActivity;
-    use horizon_agent::frame::SessionStatus;
+    use crate::agent::model::SessionStatus;
 
     /// Every runtime status a session can report reaches the board as a
     /// distinct activity; nothing collapses onto the two shell-side states.
     #[test]
     fn every_runtime_status_maps_to_its_own_activity() {
         for (status, expected) in [
-            (SessionStatus::Starting, BoardSessionActivity::Starting),
             (SessionStatus::Running, BoardSessionActivity::Running),
             (
                 SessionStatus::ToolRunning,
@@ -142,7 +140,6 @@ mod tests {
                 BoardSessionActivity::WaitingForApproval,
             ),
             (SessionStatus::Cancelled, BoardSessionActivity::Cancelled),
-            (SessionStatus::Completed, BoardSessionActivity::Completed),
             (SessionStatus::Failed, BoardSessionActivity::Failed),
             (SessionStatus::Paused, BoardSessionActivity::Paused),
             (SessionStatus::Terminated, BoardSessionActivity::Terminated),

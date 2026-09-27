@@ -4213,6 +4213,7 @@ dependencies = [
 name = "horizon"
 version = "0.1.0"
 dependencies = [
+ "agent-client-protocol",
  "alacritty_terminal",
  "anyhow",
  "crossbeam-channel",
@@ -4223,6 +4224,7 @@ dependencies = [
  "gpui-kit-assets",
  "gpui-pre",
  "gpui-pre-platform",
+ "horizon-acp",
  "horizon-agent",
  "horizon-board",
  "horizon-cli",
@@ -4237,6 +4239,7 @@ dependencies = [
  "serde_json",
  "termwiz",
  "tokio",
+ "tokio-util",
  "toml_edit 0.25.13+spec-1.1.0",
  "unicode-width",
  "uuid",
@@ -9947,6 +9950,7 @@ checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "libc",
  "pin-project-lite",

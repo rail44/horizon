@@ -1,17 +1,11 @@
-//! Client-runtime tests against in-process fake daemons, served over the
-//! same remoc stack production uses (`Connect::io` + the rtc
-//! `*ServerShared`, Postbag codec). Each fake hub records every call
-//! (handing the test the *peer* halves of each attachment's channels, so
-//! tests drive updates and observe commands), which replaces the JSONL era's
-//! envelope scripting.
-//!
-//! Since the terminald split there are two of everything: a
-//! [`FakeSessionHub`] standing in for `horizon-agentd` and a
-//! [`FakeTerminalHub`] for `horizon-terminald`, driven through
-//! [`AgentdHandle`] and [`TerminaldHandle`] respectively. The tests that
-//! matter most for the split are the ones that run *both* at once and prove
-//! they are independent — routing per call site, and a drain of one leaving
-//! the other's sessions live.
+//! Client-runtime tests against in-process fake daemons, each served over
+//! the transport production uses: a fake remoc `TerminalHub` for
+//! `horizon-terminald` here (`Connect::io` + the rtc `*ServerShared`,
+//! Postbag codec), and a fake ACP v2 agent for `horizon-agentd` in
+//! [`agent`]. Each fake records every call, so tests drive updates and
+//! observe commands. The tests that matter most for the terminald split
+//! run *both* runtimes at once and prove they are independent — routing
+//! per call site, and a drain of one leaving the other's sessions live.
 //!
 //! Adoption condition 3 note: the client half of every stream here is polled
 //! by the runtime's own dedicated thread (`spawn`/`spawn_test_stream`), so
@@ -26,17 +20,13 @@
 //! A listener gap during simulated recovery must not start a real daemon;
 //! process spawning is covered separately by the daemon e2e suites.
 
+mod agent;
 mod spawn_isolation;
 
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
-use horizon_agent::contract::{Event, ProviderId, SessionId, SessionState};
-use horizon_agent::wire::{
-    agent_version_range, AgentAttachment, AgentWireEvent, HubHello, SessionHub, SessionHubClient,
-    SessionHubServerShared, SessionNew, WorkspaceRootResolved, AGENT_PROTOCOL_VERSION,
-};
 use horizon_terminal_core::wire::{
     TerminalAttachment, TerminalHub, TerminalHubClient, TerminalHubHello, TerminalHubServerShared,
     TERMINAL_PROTOCOL_VERSION,
@@ -75,13 +65,6 @@ struct TerminalPeer {
     commands: rch::mpsc::Receiver<TerminalCommand, WireCodec>,
 }
 
-/// The peer halves of an agent attachment.
-struct AgentPeer {
-    events: rch::mpsc::Sender<AgentWireEvent, WireCodec>,
-    #[allow(dead_code)]
-    commands: rch::mpsc::Receiver<Command, WireCodec>,
-}
-
 /// One recorded terminal-hub call, with whatever live halves the fake
 /// daemon kept.
 enum TerminalCall {
@@ -103,22 +86,6 @@ enum TerminalCall {
     Drain,
 }
 
-/// One recorded agent-hub call.
-enum AgentCall {
-    Hello,
-    EnsureBoardOrganizer(std::path::PathBuf, SessionId),
-    NewAgent {
-        new: SessionNew,
-        peer: AgentPeer,
-    },
-    AttachAgent {
-        session_id: SessionId,
-        peer: AgentPeer,
-    },
-    ListAgents,
-    Drain,
-}
-
 impl std::fmt::Debug for TerminalCall {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
@@ -132,24 +99,9 @@ impl std::fmt::Debug for TerminalCall {
     }
 }
 
-impl std::fmt::Debug for AgentCall {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = match self {
-            AgentCall::Hello => "Hello",
-            AgentCall::EnsureBoardOrganizer(..) => "EnsureBoardOrganizer",
-            AgentCall::NewAgent { .. } => "NewAgent",
-            AgentCall::AttachAgent { .. } => "AttachAgent",
-            AgentCall::ListAgents => "ListAgents",
-            AgentCall::Drain => "Drain",
-        };
-        f.write_str(name)
-    }
-}
-
 /// Scripted behavior shared by both fake hubs.
 #[derive(Default)]
 struct FakeBehavior {
-    manual_agent_bootstrap: bool,
     /// Reject `hello` with a version-range error.
     reject_hello: bool,
     /// Never answer `hello` (the call blocks forever) — for the
@@ -176,11 +128,6 @@ struct FakeTerminalHub {
     calls: tokio::sync::mpsc::UnboundedSender<TerminalCall>,
 }
 
-struct FakeSessionHub {
-    behavior: StdMutex<FakeBehavior>,
-    calls: tokio::sync::mpsc::UnboundedSender<AgentCall>,
-}
-
 impl FakeTerminalHub {
     fn terminal_attachment(&self, seed: TerminalFrame) -> (TerminalAttachment, TerminalPeer) {
         let (frame_tx, frame_rx) = rch::watch::channel::<TerminalFrame, WireCodec>(seed)
@@ -204,35 +151,15 @@ impl FakeTerminalHub {
     }
 }
 
-impl FakeSessionHub {
-    async fn agent_attachment(&self) -> (AgentAttachment, AgentPeer) {
-        let (event_tx, event_rx) = rch::mpsc::channel::<AgentWireEvent, WireCodec>(16);
-        let event_rx = event_rx.set_max_item_size::<{ horizon_wire::TOOL_IO_MAX_ITEM_BYTES }>();
-        let (command_tx, command_rx) = rch::mpsc::channel::<Command, WireCodec>(16);
-        let automatic = !self.behavior.lock().unwrap().manual_agent_bootstrap;
-        if automatic {
-            event_tx.send(AgentWireEvent::ReplayStarted).await.unwrap();
-            event_tx.send(AgentWireEvent::ReplayComplete).await.unwrap();
-        }
-        (
-            AgentAttachment {
-                events: event_rx,
-                commands: command_tx,
-            },
-            AgentPeer {
-                events: event_tx,
-                commands: command_rx,
-            },
-        )
-    }
-}
-
 fn rejected_hello() -> HubError {
     HubError::IncompatibleVersion {
-        client: agent_version_range(),
+        client: VersionRange {
+            min_supported: TERMINAL_PROTOCOL_VERSION,
+            current: TERMINAL_PROTOCOL_VERSION,
+        },
         daemon: VersionRange {
-            min_supported: AGENT_PROTOCOL_VERSION + 5,
-            current: AGENT_PROTOCOL_VERSION + 5,
+            min_supported: TERMINAL_PROTOCOL_VERSION + 5,
+            current: TERMINAL_PROTOCOL_VERSION + 5,
         },
     }
 }
@@ -314,89 +241,6 @@ impl TerminalHub for FakeTerminalHub {
     }
 }
 
-impl SessionHub for FakeSessionHub {
-    async fn list_providers(&self) -> Result<Vec<horizon_agent::wire::ProviderSummary>, HubError> {
-        // The fake never drives the provider picker; an empty surface is
-        // the honest shape for it.
-        Ok(Vec::new())
-    }
-
-    async fn list_provider_models(&self, _provider: String) -> Result<Vec<String>, HubError> {
-        // Same: the fake has no live provider to discover models from.
-        Ok(Vec::new())
-    }
-
-    async fn set_session_model(
-        &self,
-        _session_id: SessionId,
-        _provider: String,
-        _model: String,
-    ) -> Result<(), HubError> {
-        Ok(())
-    }
-
-    async fn ensure_board_organizer(
-        &self,
-        _root: std::path::PathBuf,
-    ) -> Result<SessionId, HubError> {
-        let id = SessionId::new();
-        let _ = self.calls.send(AgentCall::EnsureBoardOrganizer(_root, id));
-        Ok(id)
-    }
-
-    async fn watch_board(&self, _root: std::path::PathBuf) -> Result<(), HubError> {
-        Ok(())
-    }
-
-    async fn hello(&self, _client: ClientHello) -> Result<HubHello, HubError> {
-        if self.behavior.lock().unwrap().hang_hello {
-            std::future::pending::<()>().await;
-        }
-        if self.behavior.lock().unwrap().reject_hello {
-            return Err(rejected_hello());
-        }
-        let _ = self.calls.send(AgentCall::Hello);
-        let (_request_tx, request_rx) = rch::mpsc::channel::<HostToolRequest, WireCodec>(4);
-        let request_rx = request_rx.set_max_item_size::<{ horizon_wire::TOOL_IO_MAX_ITEM_BYTES }>();
-        let (response_tx, _response_rx) = rch::mpsc::channel::<HostToolResponse, WireCodec>(4);
-        let (_skipped_tx, skipped_rx) = rch::mpsc::channel::<String, WireCodec>(1);
-        let skipped_rx = skipped_rx.set_max_item_size::<{ horizon_wire::CONTROL_MAX_ITEM_BYTES }>();
-        Ok(HubHello {
-            negotiated: AGENT_PROTOCOL_VERSION,
-            binary_id: "fake-agentd".to_string(),
-            host_tools: request_rx,
-            host_tool_responses: response_tx,
-            skipped_lines: skipped_rx,
-        })
-    }
-
-    async fn list_agents(&self) -> Result<Vec<wire::SessionSummary>, HubError> {
-        let _ = self.calls.send(AgentCall::ListAgents);
-        Ok(Vec::new())
-    }
-
-    async fn new_agent(&self, new: SessionNew) -> Result<AgentAttachment, HubError> {
-        let (attachment, peer) = self.agent_attachment().await;
-        let _ = self.calls.send(AgentCall::NewAgent { new, peer });
-        Ok(attachment)
-    }
-
-    async fn attach_agent(&self, session_id: SessionId) -> Result<AgentAttachment, HubError> {
-        let (attachment, peer) = self.agent_attachment().await;
-        let _ = self.calls.send(AgentCall::AttachAgent { session_id, peer });
-        Ok(attachment)
-    }
-
-    async fn drain(&self) -> Result<(), HubError> {
-        let _ = self.calls.send(AgentCall::Drain);
-        Ok(())
-    }
-
-    async fn reload_provider_config(&self) -> Result<(), HubError> {
-        Ok(())
-    }
-}
-
 /// Serves a [`FakeTerminalHub`] over `stream`. Returns the recorded-call
 /// receiver plus the serve/mux task handles (abort them to simulate the
 /// daemon dying).
@@ -444,49 +288,6 @@ where
     (calls_rx, conn_task, serve_task)
 }
 
-/// [`serve_fake_terminal_hub`]'s agent-daemon twin.
-async fn serve_fake_session_hub<S>(
-    stream: S,
-    behavior: FakeBehavior,
-) -> (
-    tokio::sync::mpsc::UnboundedReceiver<AgentCall>,
-    JoinHandle<()>,
-    JoinHandle<()>,
-)
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
-{
-    let (read_half, write_half) = tokio::io::split(stream);
-    let (conn, mut base_tx, _base_rx) =
-        remoc::Connect::io::<_, _, SessionHubClient<WireCodec>, (), WireCodec>(
-            remoc::Cfg::default(),
-            read_half,
-            write_half,
-        )
-        .await
-        .expect("fake agentd remoc connect");
-    let conn_task = tokio::spawn(async move {
-        let _ = conn.await;
-    });
-    let (calls_tx, calls_rx) = tokio::sync::mpsc::unbounded_channel();
-    let hub = FakeSessionHub {
-        behavior: StdMutex::new(behavior),
-        calls: calls_tx,
-    };
-    let (server, mut client) =
-        SessionHubServerShared::<_, WireCodec>::new(std::sync::Arc::new(hub), 8);
-    client.set_max_request_size(horizon_wire::RTC_MAX_REQUEST_BYTES);
-    client.set_max_reply_size(horizon_wire::RTC_MAX_REPLY_BYTES);
-    base_tx
-        .send(client)
-        .await
-        .expect("hand the hub client to the runtime");
-    let serve_task = tokio::spawn(async move {
-        let _ = server.serve(true).await;
-    });
-    (calls_rx, conn_task, serve_task)
-}
-
 async fn next_terminal_call(
     calls: &mut tokio::sync::mpsc::UnboundedReceiver<TerminalCall>,
 ) -> TerminalCall {
@@ -494,13 +295,6 @@ async fn next_terminal_call(
         .await
         .expect("timed out waiting for a terminal hub call")
         .expect("fake terminald stopped recording calls")
-}
-
-async fn next_agent_call(calls: &mut tokio::sync::mpsc::UnboundedReceiver<AgentCall>) -> AgentCall {
-    tokio::time::timeout(Duration::from_secs(5), calls.recv())
-        .await
-        .expect("timed out waiting for an agent hub call")
-        .expect("fake agentd stopped recording calls")
 }
 
 /// The runtime probes `list_terminals` right after `hello`
@@ -583,7 +377,7 @@ fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
     let (terminal_event_tx, terminal_event_rx) = unbounded();
     let (command_tx, _command_rx) = tokio::sync::mpsc::unbounded_channel();
     terminal_routes.register_terminal(terminal_id, frame_tx, terminal_event_tx, command_tx);
-    let agent_id = SessionId::new();
+    let agent_id = horizon_acp::SessionId::new();
     let (agent_event_tx, mut agent_event_rx) = tokio::sync::mpsc::channel(16);
     agent_routes.register_agent(agent_id, agent_event_tx);
 
@@ -639,178 +433,6 @@ async fn start_returns_before_the_connection_and_a_queued_create_arrives_after()
     let frame = TerminalFrame::from_text("ready".into());
     peer.frames.send(frame.clone()).unwrap();
     assert_eq!(recv_frame(terminal.frames(), "ready").await, frame);
-}
-
-/// Routing per call site, the split's client-runtime contract: terminal ops
-/// reach the terminal daemon and agent ops the agent daemon, with neither
-/// hub ever seeing the other's traffic.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
-    let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
-    let (agent_client, agent_server) = tokio::io::duplex(64 * 1024);
-    let terminald = TerminaldHandle::start_on_stream(terminal_client);
-    let (agentd, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(agent_client);
-
-    let terminal_id = Uuid::new_v4();
-    let terminal = terminald.start_terminal(terminal_id, spec());
-    let agent_id = SessionId::new();
-    let mut agent =
-        agentd.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
-
-    let (mut terminal_calls, _tconn, _tserve) =
-        serve_fake_terminal_hub(terminal_server, FakeBehavior::default()).await;
-    let (mut agent_calls, _aconn, _aserve) =
-        serve_fake_session_hub(agent_server, FakeBehavior::default()).await;
-
-    expect_terminald_handshake(&mut terminal_calls).await;
-    let TerminalCall::CreateTerminal {
-        session_id, peer, ..
-    } = next_terminal_call(&mut terminal_calls).await
-    else {
-        panic!("the terminal create must land on terminald");
-    };
-    assert_eq!(session_id, terminal_id);
-    let terminal_peer = peer;
-
-    assert!(matches!(
-        next_agent_call(&mut agent_calls).await,
-        AgentCall::Hello
-    ));
-    let AgentCall::NewAgent { new, peer } = next_agent_call(&mut agent_calls).await else {
-        panic!("the agent spawn must land on agentd");
-    };
-    assert_eq!(new.session_id, agent_id);
-    let agent_peer = peer;
-
-    let frame = TerminalFrame::from_text("terminal".into());
-    terminal_peer.frames.send(frame.clone()).unwrap();
-    let event = Event::StateChanged(SessionState::WaitingForUser);
-    agent_peer
-        .events
-        .send(AgentWireEvent::Event(event.clone()))
-        .await
-        .unwrap();
-    terminal
-        .sender()
-        .send(TerminalCommand::Input(b"fifo".to_vec()))
-        .unwrap();
-
-    assert_eq!(recv_frame(terminal.frames(), "terminal").await, frame);
-    assert_eq!(next_agent_event(&mut agent).await, event);
-    let mut commands = terminal_peer.commands;
-    let command = tokio::time::timeout(Duration::from_secs(5), commands.recv())
-        .await
-        .expect("timed out waiting for the terminal command")
-        .unwrap()
-        .expect("terminal command");
-    assert_eq!(command, TerminalCommand::Input(b"fifo".to_vec()));
-
-    // Neither daemon saw a call belonging to the other domain.
-    assert!(terminal_calls.try_recv().is_err());
-    assert!(agent_calls.try_recv().is_err());
-}
-
-/// `Reload Agent Runtime`'s client-runtime core (design decision 2): the
-/// agent runtime's drain reaches *only* agentd, and the terminal session
-/// keeps streaming frames right through it. This is the acceptance property
-/// the daemon-level e2e (`horizon-terminald::e2e`'s
-/// `an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable`)
-/// proves against real processes; here it is proven at the seam that decides
-/// *which* daemon a drain is sent to.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn draining_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
-    let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
-    let (agent_client, agent_server) = tokio::io::duplex(64 * 1024);
-    let terminald = TerminaldHandle::start_on_stream(terminal_client);
-    let (agentd, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(agent_client);
-
-    let terminal = terminald.start_terminal(Uuid::new_v4(), spec());
-    let (mut terminal_calls, _tconn, _tserve) =
-        serve_fake_terminal_hub(terminal_server, FakeBehavior::default()).await;
-    let (mut agent_calls, _aconn, _aserve) =
-        serve_fake_session_hub(agent_server, FakeBehavior::default()).await;
-    expect_terminald_handshake(&mut terminal_calls).await;
-    let TerminalCall::CreateTerminal { peer, .. } = next_terminal_call(&mut terminal_calls).await
-    else {
-        panic!("expected the create call");
-    };
-    assert!(matches!(
-        next_agent_call(&mut agent_calls).await,
-        AgentCall::Hello
-    ));
-
-    // `Hello` is only the *server's* view of the handshake; the client marks
-    // the runtime established after the reply lands, and that flag is exactly
-    // what `begin_reload` reads. Drive one full round trip through the client
-    // instead -- the op loop that answers it starts only once the runtime is
-    // established, so a returned list is the established-side signal the
-    // assertion below actually depends on.
-    let list_handle = agentd.clone();
-    let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
-    assert_eq!(listed.unwrap(), Ok(Vec::new()));
-    assert!(matches!(
-        next_agent_call(&mut agent_calls).await,
-        AgentCall::ListAgents
-    ));
-
-    assert!(agentd.begin_reload(), "the agent runtime was established");
-    assert!(matches!(
-        next_agent_call(&mut agent_calls).await,
-        AgentCall::Drain
-    ));
-
-    // The terminal daemon was never asked to drain, and its session is
-    // still live: a frame published after the agent drain still arrives.
-    let frame = TerminalFrame::from_text("still alive".into());
-    peer.frames.send(frame.clone()).unwrap();
-    assert_eq!(recv_frame(terminal.frames(), "still alive").await, frame);
-    assert!(
-        terminal_calls.try_recv().is_err(),
-        "draining agentd must not send anything to terminald"
-    );
-}
-
-/// `AgentWireEvent::WorkspaceRootResolved` is a live daemon->shell
-/// announcement (`docs/session-relationship-design.md`'s "still eventual,
-/// not live" gap), not a `contract::ProviderEvent` any per-session route
-/// folds -- `AgentRoutes` sends it on its own `workspace_roots` channel
-/// instead.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn incoming_workspace_root_resolved_reaches_its_own_channel() {
-    let (client, server) = tokio::io::duplex(64 * 1024);
-    let (handle, _host_tools, workspace_roots) = AgentdHandle::start_on_stream(client);
-    let session_id = SessionId::new();
-    let _agent = handle.attach_session(session_id);
-
-    let (mut calls, _conn, _serve) = serve_fake_session_hub(server, FakeBehavior::default()).await;
-    assert!(matches!(
-        next_agent_call(&mut calls).await,
-        AgentCall::Hello
-    ));
-    let AgentCall::AttachAgent {
-        session_id: attached_id,
-        peer,
-    } = next_agent_call(&mut calls).await
-    else {
-        panic!("expected the attach call");
-    };
-    assert_eq!(attached_id, session_id);
-
-    let parent_id = SessionId::new();
-    let resolved = WorkspaceRootResolved {
-        workspace_root: std::path::PathBuf::from("/tmp/repo/.horizon/worktrees/abcd1234"),
-        parent_session_id: Some(parent_id),
-    };
-    peer.events
-        .send(AgentWireEvent::WorkspaceRootResolved(resolved.clone()))
-        .await
-        .unwrap();
-
-    let (received_session_id, received_resolved) = workspace_roots
-        .recv_timeout(Duration::from_secs(5))
-        .expect("the WorkspaceRootResolved event should reach its own channel");
-    assert_eq!(received_session_id, session_id);
-    assert_eq!(received_resolved, resolved);
 }
 
 /// The JSONL wire needed a `request_id` correlation map to keep two
@@ -1010,36 +632,6 @@ async fn a_large_clipboard_event_reaches_the_pane() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn dropping_the_runtime_does_not_send_drain() {
-    let (client, server) = tokio::io::duplex(4096);
-    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
-    let responder = handle.responder();
-    let (mut calls, _conn, serve) = serve_fake_session_hub(server, FakeBehavior::default()).await;
-    assert!(matches!(
-        next_agent_call(&mut calls).await,
-        AgentCall::Hello
-    ));
-
-    drop(handle);
-
-    // The serve loop ends because the client went away -- and the call log
-    // closes without ever recording a Drain.
-    tokio::time::timeout(Duration::from_secs(5), serve)
-        .await
-        .expect("the fake daemon's serve loop should end after the runtime drops")
-        .unwrap();
-    let mut saw = Vec::new();
-    while let Ok(call) = calls.try_recv() {
-        saw.push(call);
-    }
-    assert!(
-        !saw.iter().any(|call| matches!(call, AgentCall::Drain)),
-        "dropping the runtime must not drain the daemon: {saw:?}"
-    );
-    drop(responder);
-}
-
 /// The terminal runtime gets the same guarantee: dropping it (a window
 /// closing, a handle going out of scope) must never kill the PTYs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1063,49 +655,6 @@ async fn dropping_the_terminal_runtime_does_not_send_drain() {
         !saw.iter().any(|call| matches!(call, TerminalCall::Drain)),
         "dropping the terminal runtime must not drain the daemon: {saw:?}"
     );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn stopping_before_the_daemon_answers_cancels_the_runtime() {
-    let (client, _server) = tokio::io::duplex(4096);
-    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
-    // Nothing serves the daemon side, so the runtime is still trying to
-    // establish; stop_and_wait must cancel that and return promptly.
-    let stopped = std::thread::spawn(move || handle.stop_and_wait());
-    tokio::task::spawn_blocking(move || stopped.join().unwrap())
-        .await
-        .unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn established_disconnect_reports_errors_without_reconnecting() {
-    let (client, server) = tokio::io::duplex(64 * 1024);
-    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
-    let agent_id = SessionId::new();
-    let mut agent =
-        handle.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
-
-    let (mut calls, conn, serve) = serve_fake_session_hub(server, FakeBehavior::default()).await;
-    assert!(matches!(
-        next_agent_call(&mut calls).await,
-        AgentCall::Hello
-    ));
-    next_agent_call(&mut calls).await;
-
-    // The daemon dies: mux and serve loop torn down.
-    conn.abort();
-    serve.abort();
-
-    let agent_error = next_agent_update(&mut agent).await;
-    assert!(matches!(
-        agent_error,
-        AgentUpdate::State(AttachmentState::Failed(_))
-    ));
-
-    assert!(handle
-        .session_list()
-        .unwrap_err()
-        .contains("runtime stopped"));
 }
 
 /// The terminal runtime's counterpart: an established terminald that dies
@@ -1138,43 +687,6 @@ async fn an_established_terminald_disconnect_reports_errors_without_reconnecting
             .unwrap(),
         TerminalUpdate::Error(_)
     ));
-}
-
-/// A version-range rejection on a test stream (no real socket to drain, no
-/// daemon to respawn) must surface as a terminal failure rather than being
-/// retried or recovered.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_rejected_hello_on_a_test_stream_is_a_terminal_failure() {
-    let (client, server) = tokio::io::duplex(4096);
-    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
-    let behavior = FakeBehavior {
-        reject_hello: true,
-        ..FakeBehavior::default()
-    };
-    let (_calls, _conn, _serve) = serve_fake_session_hub(server, behavior).await;
-
-    let error = handle.session_list().unwrap_err();
-    assert!(
-        error.contains("runtime stopped"),
-        "the runtime should stop after a rejected hello; error was: {error}"
-    );
-    let mut agent = handle.start_session(
-        SessionId::new(),
-        ProviderId("mock".into()),
-        None,
-        None,
-        None,
-        false,
-    );
-    let event = next_agent_update(&mut agent).await;
-    let AgentUpdate::State(AttachmentState::Failed(message)) = &event else {
-        panic!("expected the rejection to fan out as an error, got {event:?}");
-    };
-    assert!(
-        message.contains("rejected the handshake"),
-        "error was: {}",
-        message
-    );
 }
 
 /// Decision 6's skew insurance, end to end through the runtime: a terminald
@@ -1258,184 +770,6 @@ fn hold_silently(stream: tokio::net::UnixStream) -> tokio::task::JoinHandle<()> 
             }
         }
     })
-}
-
-/// A daemon generation this build cannot reach at all — a still-running
-/// pre-remoc (JSONL) agentd, which presents as persistent silence (its
-/// pre-hello `read_line` never completes on chmux bytes) — is no longer
-/// auto-recoverable: the JSONL drain prober that used to clear it was
-/// deleted on 2026-08-01. The detection half is unchanged
-/// (`SILENCE_MISMATCH_THRESHOLD` consecutive bounded-timeout silences,
-/// single timeouts staying transient), and the one recovery attempt now
-/// travels as the version-stable rtc `drain` over a fresh remoc connection —
-/// which such a daemon cannot answer either, so the runtime reports the
-/// failure with the manual-stop instruction instead of looping.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_pre_remoc_daemon_is_reported_as_needing_a_manual_stop() {
-    // Shrink the establish deadline so three consecutive silences take
-    // fractions of a second, not 15 s of wall clock.
-    std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300");
-    let (socket_path, control_socket) = stub_socket_paths("probe");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
-    let mut agent = handle.start_session(
-        SessionId::new(),
-        ProviderId("mock".into()),
-        None,
-        None,
-        None,
-        false,
-    );
-
-    // Connections 1..3: the silent JSONL daemon, once per establish
-    // attempt (the runtime redials between timeouts).
-    let mut held = Vec::new();
-    for _ in 0..3 {
-        let (stream, _) = listener.accept().await.unwrap();
-        held.push(hold_silently(stream));
-    }
-
-    // Connection 4: the one recovery attempt this runtime is allowed. It is
-    // a remoc connect carrying an rtc `drain`, never a JSONL line — and this
-    // daemon can no more answer that than it could answer the handshake, so
-    // it keeps accepting afterwards.
-    {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let bytes = read_until_closed(&mut stream).await;
-        assert!(
-            !bytes.is_empty() && !bytes.starts_with(b"{"),
-            "the recovery must dial remoc, not a JSONL envelope; got {:?}",
-            String::from_utf8_lossy(&bytes)
-        );
-    }
-
-    // The daemon is still there, so the drain could not be confirmed: the
-    // runtime says so, naming the manual fix, and stops.
-    let event = next_agent_update(&mut agent).await;
-    let AgentUpdate::State(AttachmentState::Failed(message)) = &event else {
-        panic!("expected the unrecoverable mismatch to fan out as an error, got {event:?}");
-    };
-    assert!(
-        message.contains("stop it manually"),
-        "error was: {}",
-        message
-    );
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
-}
-
-/// Recovery is attempted exactly once per runtime: if the replacement
-/// daemon still can't speak remoc (a stale horizon-agentd binary that a
-/// rebuild never touched), the runtime must fail loudly instead of
-/// drain-and-restarting forever, with the rebuild hint in the error.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping() {
-    std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300");
-    let (socket_path, control_socket) = stub_socket_paths("fatal");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
-    let mut agent = handle.start_session(
-        SessionId::new(),
-        ProviderId("mock".into()),
-        None,
-        None,
-        None,
-        false,
-    );
-
-    // Connections 1..3: silent JSONL-generation daemon, up to the
-    // consecutive-silence threshold.
-    let mut held = Vec::new();
-    for _ in 0..3 {
-        let (stream, _) = listener.accept().await.unwrap();
-        held.push(hold_silently(stream));
-    }
-    // Connection 4: the one drain attempt this runtime is allowed.
-    {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let _ = read_until_closed(&mut stream).await;
-    }
-    drop(listener);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let listener = bind_stub_listener(&socket_path);
-
-    // Connections 5..7: the "respawned" daemon is just as stale (silent).
-    for _ in 0..3 {
-        let (stream, _) = listener.accept().await.unwrap();
-        held.push(hold_silently(stream));
-    }
-
-    // The runtime gives up rather than draining again, with the rebuild
-    // hint, fanned out to the registered routes.
-    let event = next_agent_update(&mut agent).await;
-    let AgentUpdate::State(AttachmentState::Failed(message)) = &event else {
-        panic!("expected the fatal mismatch to fan out as an error, got {event:?}");
-    };
-    assert!(
-        message.contains("already attempted") && message.contains("rebuild"),
-        "error was: {}",
-        message
-    );
-    let no_more_connections =
-        tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
-    assert!(
-        no_more_connections.is_err(),
-        "the runtime must not reconnect (or drain again) after going fatal"
-    );
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
-}
-
-/// A healthy *remoc* daemon whose hub rejects the version range is drained
-/// over a fresh hub connection (the rtc successor of the JSONL
-/// `HandshakeRejected` recovery) and the respawned daemon is adopted.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_range_rejecting_remoc_daemon_is_drained_via_rtc_and_the_respawn_adopted() {
-    let (socket_path, control_socket) = stub_socket_paths("rej");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
-
-    // Connection 1: hub answers hello with a range rejection.
-    let (stream, _) = listener.accept().await.unwrap();
-    let behavior = FakeBehavior {
-        reject_hello: true,
-        ..FakeBehavior::default()
-    };
-    let (_calls_1, _conn_1, _serve_1) = serve_fake_session_hub(stream, behavior).await;
-
-    // Connection 2: the recovery drain arrives as an rtc call.
-    let (stream, _) = listener.accept().await.unwrap();
-    let behavior = FakeBehavior {
-        reject_hello: true,
-        ..FakeBehavior::default()
-    };
-    let (mut drain_calls, _conn_2, _serve_2) = serve_fake_session_hub(stream, behavior).await;
-    let drain = next_agent_call(&mut drain_calls).await;
-    assert!(matches!(drain, AgentCall::Drain), "got {drain:?}");
-
-    // "Exit", then come back as a compatible daemon.
-    drop(listener);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let listener = bind_stub_listener(&socket_path);
-    let (stream, _) = listener.accept().await.unwrap();
-    let (mut calls, _conn_3, _serve_3) =
-        serve_fake_session_hub(stream, FakeBehavior::default()).await;
-    assert!(matches!(
-        next_agent_call(&mut calls).await,
-        AgentCall::Hello
-    ));
-
-    let list_handle = handle.clone();
-    let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
-    assert_eq!(listed.unwrap(), Ok(Vec::new()));
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
 }
 
 /// The terminal runtime's own recovery: a terminald whose hub rejects the
@@ -1550,84 +884,6 @@ async fn broadcast_terminal_color_scheme_targets_exactly_the_attached_sessions()
     assert!(peers.remove(&missing).flatten().is_none());
 }
 
-/// Review fix (establishment classification): transient failures —
-/// connections the daemon drops before/during the handshake — are retried
-/// with backoff and never consume the once-per-runtime recovery budget.
-/// Two immediate closes followed by a healthy daemon must end established,
-/// where the old classification would have burned the budget on close #1
-/// and gone fatal on close #2.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_transient_failures_do_not_consume_the_recovery_budget() {
-    let (socket_path, control_socket) = stub_socket_paths("transient");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
-
-    // Connections 1 and 2: accepted and immediately dropped (a crashing
-    // daemon; `ChMux(StreamClosed)` on the runtime's side).
-    for _ in 0..2 {
-        let (stream, _) = listener.accept().await.unwrap();
-        drop(stream);
-    }
-
-    // Connection 3: a healthy daemon — must be adopted normally.
-    let (stream, _) = listener.accept().await.unwrap();
-    let (mut calls, _conn, _serve) = serve_fake_session_hub(stream, FakeBehavior::default()).await;
-    assert!(matches!(
-        next_agent_call(&mut calls).await,
-        AgentCall::Hello
-    ));
-
-    let list_handle = handle.clone();
-    let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
-    assert_eq!(listed.unwrap(), Ok(Vec::new()));
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
-}
-
-/// Review fix (establishment classification): a connection dropping while
-/// the `hello` call itself is in flight (`HubError::Call`) is a transient,
-/// retried like any other pre-hello drop — the old classification sent it
-/// straight to a fatal stop.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_connection_drop_during_hello_is_retried_not_fatal() {
-    let (socket_path, control_socket) = stub_socket_paths("hellodrop");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
-
-    // Connection 1: a daemon that completes the handshake and hands over
-    // its hub, then dies while hello is pending.
-    let (stream, _) = listener.accept().await.unwrap();
-    let behavior = FakeBehavior {
-        hang_hello: true,
-        ..FakeBehavior::default()
-    };
-    let (_calls, conn, serve) = serve_fake_session_hub(stream, behavior).await;
-    // Give the runtime a moment to get its hello call in flight, then
-    // kill the daemon under it.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    conn.abort();
-    serve.abort();
-
-    // Connection 2: a healthy daemon — the runtime must have retried
-    // rather than stopped.
-    let (stream, _) = listener.accept().await.unwrap();
-    let (mut calls, _conn, _serve) = serve_fake_session_hub(stream, FakeBehavior::default()).await;
-    assert!(matches!(
-        next_agent_call(&mut calls).await,
-        AgentCall::Hello
-    ));
-
-    let list_handle = handle.clone();
-    let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
-    assert_eq!(listed.unwrap(), Ok(Vec::new()));
-
-    drop(handle);
-    let _ = std::fs::remove_file(&socket_path);
-}
-
 /// Review fix (size caps), pinning the *measured* oversized-request
 /// semantics: the daemon drops a request over `RTC_MAX_REQUEST_BYTES`
 /// per-item, so the op fails loudly (the pane gets an error, never a
@@ -1663,69 +919,6 @@ async fn an_oversized_rtc_request_fails_the_op_and_stops_the_runtime() {
         late.events().recv_timeout(Duration::from_secs(10)).unwrap(),
         TerminalUpdate::Error(_)
     ));
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn organizer_request_uses_existing_agent_connection() {
-    let (client, server) = tokio::io::duplex(64 * 1024);
-    let (agentd, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
-    let (mut calls, _connection, _serve) =
-        serve_fake_session_hub(server, FakeBehavior::default()).await;
-    let root = std::path::PathBuf::from("/project/organizer");
-    let expected_root = root.clone();
-    let request = tokio::task::spawn_blocking(move || agentd.ensure_board_organizer(root));
-    assert!(matches!(
-        next_agent_call(&mut calls).await,
-        AgentCall::Hello
-    ));
-    let AgentCall::EnsureBoardOrganizer(root, id) = next_agent_call(&mut calls).await else {
-        panic!("organizer request must reach the existing agent hub");
-    };
-    assert_eq!(root, expected_root);
-    assert_eq!(request.await.unwrap().unwrap(), id);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn replacing_an_agent_handle_keeps_the_new_wire_attachment_live() {
-    let (client, server) = tokio::io::duplex(64 * 1024);
-    let (agentd, _host, _roots) = AgentdHandle::start_on_stream(client);
-    let id = SessionId::new();
-    let old = agentd.attach_session(id);
-    let (mut calls, _conn, _serve) = serve_fake_session_hub(server, FakeBehavior::default()).await;
-    assert!(matches!(
-        next_agent_call(&mut calls).await,
-        AgentCall::Hello
-    ));
-    let AgentCall::AttachAgent {
-        peer: _old_peer, ..
-    } = next_agent_call(&mut calls).await
-    else {
-        panic!("expected the old attachment");
-    };
-    let mut current = agentd.attach_session(id);
-    let AgentCall::AttachAgent {
-        session_id,
-        mut peer,
-    } = next_agent_call(&mut calls).await
-    else {
-        panic!("expected the replacement attachment");
-    };
-    assert_eq!(session_id, id);
-    drop(old);
-    let event = Event::StateChanged(SessionState::WaitingForUser);
-    peer.events
-        .send(AgentWireEvent::Event(event.clone()))
-        .await
-        .unwrap();
-    assert_eq!(next_agent_event(&mut current).await, event);
-    current.sender().send(Command::ContinueTurn).unwrap();
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), peer.commands.recv())
-            .await
-            .unwrap()
-            .unwrap(),
-        Some(Command::ContinueTurn)
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1772,116 +965,5 @@ async fn replacing_a_terminal_handle_keeps_the_new_wire_attachment_live() {
             .unwrap()
             .unwrap(),
         Some(input)
-    );
-}
-
-async fn next_agent_update(handle: &mut AgentSessionHandle) -> AgentUpdate {
-    let events = handle.events.as_mut().unwrap();
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let update = events.recv().await.expect("agent update stream ended");
-            if matches!(
-                update,
-                AgentUpdate::State(
-                    AttachmentState::Connecting
-                        | AttachmentState::Restoring
-                        | AttachmentState::Ready
-                )
-            ) {
-                continue;
-            }
-            return update;
-        }
-    })
-    .await
-    .expect("agent update timed out")
-}
-
-async fn next_agent_event(handle: &mut AgentSessionHandle) -> Event {
-    match next_agent_update(handle).await {
-        AgentUpdate::Event(event) => event.into_event().expect("conversation event"),
-        update => panic!("expected conversation event, got {update:?}"),
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn agent_commands_wait_for_replay_completion_and_incomplete_replay_fails() {
-    let (client, server) = tokio::io::duplex(64 * 1024);
-    let (agentd, _host, _roots) = AgentdHandle::start_on_stream(client);
-    let mut handle = agentd.attach_session(SessionId::new());
-    let (mut calls, _conn, _serve) = serve_fake_session_hub(
-        server,
-        FakeBehavior {
-            manual_agent_bootstrap: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    next_agent_call(&mut calls).await;
-    let AgentCall::AttachAgent { mut peer, .. } = next_agent_call(&mut calls).await else {
-        panic!("attach");
-    };
-    handle.sender().send(Command::ContinueTurn).unwrap();
-    peer.events
-        .send(AgentWireEvent::ReplayStarted)
-        .await
-        .unwrap();
-    peer.events
-        .send(AgentWireEvent::Event(Event::StateChanged(
-            SessionState::Running,
-        )))
-        .await
-        .unwrap();
-    assert_eq!(
-        next_agent_event(&mut handle).await,
-        Event::StateChanged(SessionState::Running)
-    );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), peer.commands.recv())
-            .await
-            .is_err()
-    );
-    peer.events
-        .send(AgentWireEvent::ReplayComplete)
-        .await
-        .unwrap();
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), peer.commands.recv())
-            .await
-            .unwrap()
-            .unwrap(),
-        Some(Command::ContinueTurn)
-    );
-
-    let mut interrupted = agentd.attach_session(SessionId::new());
-    let AgentCall::AttachAgent { peer, .. } = next_agent_call(&mut calls).await else {
-        panic!("attach");
-    };
-    peer.events
-        .send(AgentWireEvent::ReplayStarted)
-        .await
-        .unwrap();
-    drop(peer.events);
-    assert!(
-        matches!(next_agent_update(&mut interrupted).await, AgentUpdate::State(AttachmentState::Failed(message)) if message.contains("interrupted"))
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn repeated_replay_boundary_fails_without_becoming_a_conversation_error() {
-    let (client, server) = tokio::io::duplex(64 * 1024);
-    let (agentd, _host, _roots) = AgentdHandle::start_on_stream(client);
-    let mut handle = agentd.attach_session(SessionId::new());
-    let (mut calls, _conn, _serve) = serve_fake_session_hub(server, FakeBehavior::default()).await;
-    next_agent_call(&mut calls).await;
-    let AgentCall::AttachAgent { peer, .. } = next_agent_call(&mut calls).await else {
-        panic!("attach");
-    };
-    peer.events
-        .send(AgentWireEvent::ReplayStarted)
-        .await
-        .unwrap();
-    assert!(
-        matches!(next_agent_update(&mut handle).await, AgentUpdate::State(AttachmentState::Failed(message)) if message.contains("boundary"))
     );
 }

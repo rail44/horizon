@@ -25,7 +25,7 @@ enum ModelPickerQuery {
 }
 
 enum ModelPickerReply {
-    Providers(Vec<horizon_agent::wire::ProviderSummary>),
+    Providers(Vec<horizon_acp::ProviderSummary>),
     Models { provider: usize, ids: Vec<String> },
 }
 
@@ -317,9 +317,9 @@ impl WorkspaceShell {
         );
     }
 
-    /// Fires `SessionHub::set_session_model` for the confirmed
+    /// Fires `session/set_config_option` for the confirmed
     /// (provider, model id) pair off the UI thread. Failure is a no-op beyond
-    /// the log line: the chip keeps showing whatever the last `SessionModel`
+    /// the log line: the chip keeps showing whatever the last `config_option_update`
     /// announcement said, which is exactly "the switch didn't take". On
     /// success the daemon's re-announcement drives the chip update through
     /// the existing composer projection -- no dedicated reply handling.
@@ -599,7 +599,7 @@ mod tests {
     fn an_off_stage_model_reply_keeps_the_current_stage() {
         use super::ModelPickerReply;
         use crate::model_picker::{PickerStage, PickerState};
-        use horizon_agent::wire::ProviderSummary;
+        use horizon_acp::ProviderSummary;
         let mut state = PickerState::new();
         state.set_providers(
             ["first", "second"]

@@ -43,9 +43,9 @@ fn prepare_workspace_for_terminal_runtime_reload(workspace: &mut Workspace) {
 /// Binding writes precede asynchronous daemon installation. Retry only this
 /// board's missing bindings; never start a session or adopt unrelated sessions.
 fn load_board_summaries(
-    mut list: impl FnMut() -> Result<Vec<horizon_agent::wire::SessionSummary>, String>,
+    mut list: impl FnMut() -> Result<Vec<crate::runtime::SessionSummary>, String>,
     needed: &std::collections::HashSet<SessionId>,
-) -> Result<Vec<horizon_agent::wire::SessionSummary>, String> {
+) -> Result<Vec<crate::runtime::SessionSummary>, String> {
     for attempt in 0..20 {
         let summaries = list()?;
         if attempt == 19
@@ -78,7 +78,7 @@ impl WorkspaceShell {
     fn adopt_board_session(
         &mut self,
         handle: &crate::runtime::AgentdHandle,
-        summary: horizon_agent::wire::SessionSummary,
+        summary: crate::runtime::SessionSummary,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         self.adopt_daemon_agent_session(
@@ -777,7 +777,7 @@ impl WorkspaceShell {
     pub(crate) fn control_plane_approve(
         &mut self,
         session_id: SessionId,
-        identity: horizon_agent::contract::ToolCallIdentity,
+        identity: crate::agent::model::ToolCallIdentity,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let session = self
@@ -791,7 +791,7 @@ impl WorkspaceShell {
     pub(crate) fn control_plane_deny(
         &mut self,
         session_id: SessionId,
-        identity: horizon_agent::contract::ToolCallIdentity,
+        identity: crate::agent::model::ToolCallIdentity,
         reason: Option<String>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
@@ -957,9 +957,9 @@ mod tests {
 
     #[test]
     fn board_inventory_retries_a_binding_before_daemon_installation() {
-        let summary = horizon_agent::wire::SessionSummary {
+        let summary = crate::runtime::SessionSummary {
             session_id: horizon_agent::contract::SessionId::new(),
-            provider_id: horizon_agent::contract::ProviderId("mock".into()),
+            provider_id: "mock".into(),
             role_id: None,
             parent_session_id: None,
             workspace_root: None,

@@ -13,7 +13,7 @@ impl WorkspaceShell {
     pub(super) fn wire_host_tools(
         &mut self,
         responder: AgentdResponder,
-        host_tool_rx: crossbeam_channel::Receiver<horizon_agent::wire::HostToolRequest>,
+        host_tool_rx: crossbeam_channel::Receiver<horizon_acp::HostToolRequest>,
         cx: &mut Context<Self>,
     ) {
         let mut async_rx = crate::runtime::event_stream(host_tool_rx);
@@ -32,20 +32,16 @@ impl WorkspaceShell {
                     .unwrap_or_else(
                         |_| serde_json::json!({ "error": "the workspace shell is gone" }),
                     );
-                responder.respond_host_tool(horizon_agent::wire::HostToolResponse {
-                    request_id: request.request_id,
-                    output: output.into(),
-                });
+                responder.respond_host_tool(&request.request_id, output);
             }
         })
         .detach();
     }
 
     /// Wires the live push of a freshly isolated session's authoritative
-    /// `workspace_root`/`parent_session_id` (`wire::Control::
-    /// WorkspaceRootResolved`, routed onto its own process-wide channel by
-    /// `runtime::routing::AgentRoutes` -- see that `Control` variant's own doc
-    /// comment) straight into the model the moment it arrives, closing the
+    /// `workspace_root`/`parent_session_id` (`SessionInfoMeta` on
+    /// `session/new`'s response or a `session_info_update`, routed onto its
+    /// own process-wide channel by `runtime::routing::AgentRoutes`) straight into the model the moment it arrives, closing the
     /// gap `spawn_agent_resume`/`spawn_workspace_restore` only closed on the
     /// next resume/reload sweep: a session created and used within one
     /// continuous run now sees its corrected root/parent immediately.
@@ -54,8 +50,8 @@ impl WorkspaceShell {
     pub(super) fn wire_workspace_root_updates(
         &mut self,
         workspace_root_rx: crossbeam_channel::Receiver<(
-            horizon_agent::contract::SessionId,
-            horizon_agent::wire::WorkspaceRootResolved,
+            horizon_acp::SessionId,
+            crate::runtime::WorkspaceRootUpdate,
         )>,
         cx: &mut Context<Self>,
     ) {

@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use gpui::*;
 use gpui_component::list::{ListDelegate, ListItem, ListState};
 use gpui_component::{h_flex, IndexPath};
-use horizon_agent::wire::ProviderSummary;
+use horizon_acp::ProviderSummary;
 
 use crate::theme;
 
@@ -42,7 +42,7 @@ pub(crate) enum PickerItem {
 }
 
 /// What a model-stage confirm hands back to the shell: the provider name and
-/// the model id to send to `SessionHub::set_session_model`. The `SessionModel`
+/// the model id to send to `session/set_config_option`. The `config_option_update`
 /// echo, not this pair, is authoritative for what will actually run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ConfirmedModel {
@@ -51,7 +51,7 @@ pub(crate) struct ConfirmedModel {
 }
 
 /// A provider's live `/models` discovery state (see
-/// `SessionHub::list_provider_models`).
+/// `_horizon/list_provider_models`).
 #[derive(Clone, Debug, Default)]
 struct LiveListings {
     /// Ids the provider itself listed, in that listing's order. Empty until
@@ -417,7 +417,7 @@ impl ListDelegate for ModelPickerDelegate {
 #[cfg(test)]
 mod tests {
     use gpui_component::IndexPath;
-    use horizon_agent::wire::ProviderSummary;
+    use horizon_acp::ProviderSummary;
 
     use super::{unavailable_reason, ConfirmedModel, PickerItem, PickerStage, PickerState};
 
