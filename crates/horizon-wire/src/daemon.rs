@@ -1,5 +1,5 @@
 //! The daemon-side lifecycle every runtime process repeats verbatim: bind
-//! the socket, accept one connection at a time, serve a hub over remoc,
+//! the socket, accept one connection at a time, serve each one (a hub over remoc, or any other protocol on the raw stream),
 //! unlink on the way out. [`crate::spawn`] is the client's half of the same
 //! seam; [`crate::socket`] says where the path is.
 //!
@@ -92,6 +92,9 @@ pub fn socket_path_from_args<I: Iterator<Item = String>>(mut args: I) -> Option<
 
 /// The accept loop: serve connections one at a time until SIGTERM, then run
 /// `on_sigterm` and unlink the socket.
+///
+/// `serve` receives the accepted stream itself: a remoc hub passes it to
+/// [`serve_connection`], `horizon-agentd` speaks ACP on it directly.
 ///
 /// `on_sigterm` is the one thing that is genuinely per-daemon here (see the
 /// module doc) and it runs *before* the socket is unlinked, so a client that

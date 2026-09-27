@@ -21,9 +21,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use horizon_agent::wire::{agent_client_hello, SessionHub as _, SessionHubClient};
 use horizon_daemon_testkit::{
-    connect_hub_client, connect_with_retry, drain_with_timeout, resolve_daemon_binary,
+    connect_hub_client, connect_initialized, connect_with_retry, drain_with_timeout, resolve_daemon_binary,
     scratch_socket, sibling_daemon_binary, wait_for_exit, AgentdPaths, AgentdProcess, AgentdSpawn,
     DaemonProcess,
 };
@@ -456,19 +455,13 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// Drains a `horizon-agentd` over its own hub — exactly what
-/// `Reload Agent Runtime` sends (`AgentdHandle::begin_reload` →
-/// `SessionHub::drain`). The reply never travels (the daemon exits inside
-/// the call), so the transport error is expected; the caller confirms the
+/// Drains a `horizon-agentd` over its own connection — exactly what
+/// `Reload Agent Runtime` sends (`_horizon/drain`). The answer never
+/// travels (the daemon exits inside the call); the caller confirms the
 /// exit with [`wait_for_exit`].
 async fn drain_agentd(socket_path: &Path) {
-    let stream = connect_with_retry(socket_path).await;
-    let (hub, conn_task) = connect_hub_client::<SessionHubClient<WireCodec>>(stream).await;
-    hub.hello(agent_client_hello("terminald-e2e"))
-        .await
-        .expect("hello should succeed at a matching version range");
-    drain_with_timeout(hub.drain()).await;
-    conn_task.abort();
+    let client = connect_initialized(connect_with_retry(socket_path).await, "terminald-e2e").await;
+    client.drain().await;
 }
 
 /// **The terminald split's acceptance property**

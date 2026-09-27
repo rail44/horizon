@@ -1,12 +1,12 @@
 //! `horizon-agentd`: steps 2-4 of `docs/agent-runtime-split-design.md`'s
-//! agent-runtime split. Owns the Unix socket, the `hello` handshake, and (as
-//! of step 3) real agent sessions: the hub's `new_agent` spawns the
+//! agent-runtime split. Owns the Unix socket, the `initialize` handshake, and (as
+//! of step 3) real agent sessions: `session/new` spawns the
 //! provider/tool/persistence machinery this binary hosts (see
 //! `session::run_session`), commands and events route by session id, and
 //! this process owns the event log + DuckDB projection -- Horizon never
 //! opens either itself. As of step 4, every session found in the log at
 //! startup is resumed live (see `session::resume_persisted_sessions`) and
-//! `attach_agent` re-emits a session's committed events to a (re)connecting
+//! `session/resume` re-emits a session's committed events to a (re)connecting
 //! client.
 //!
 //! **Bind first (startup ordering).** [`main`] binds/listens on the socket
@@ -27,10 +27,10 @@
 //! it ever opens its own log.
 //!
 //! The event-log read and session resume move to a background task
-//! ([`spawn_resume_task`]) that races the accept loop. `hello` -- the one
-//! [`Hub`] method that never touches session state -- is answered
+//! ([`spawn_resume_task`]) that races the accept loop. `initialize` -- the one
+//! method that never touches session state -- is answered
 //! immediately regardless of whether that background work has finished;
-//! `list_agents`/`attach_agent`/`new_agent` would return an incomplete (or,
+//! `session/list`/`session/resume`/`session/new` would return an incomplete (or,
 //! right after bind, empty) view of history if answered too early, so they
 //! block on [`session::AgentdState::wait_until_resume_ready`] first -- a
 //! readiness gate, not a protocol change.
@@ -81,16 +81,14 @@ use tokio::net::{UnixListener, UnixStream};
 /// This daemon's name in every log line and diagnostic, including the ones
 /// `horizon-wire`'s shared daemon plumbing emits on its behalf.
 const DAEMON_NAME: &str = "horizon-agentd";
-
-/// Reported in this binary's `hello` reply's `binary_id`. The negotiated
-/// protocol version is carried separately in the same `HubHello`.
+/// Reported in this binary's `initialize` reply, as `_meta.horizon.binary_id`.
 const BINARY_ID: &str = concat!("horizon-agentd/", env!("CARGO_PKG_VERSION"));
 
 /// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
 /// number of milliseconds, [`spawn_resume_task`] sleeps that long before
 /// opening the event log, so a test can prove the bind-first ordering
-/// (hello answers well before this delay elapses; `list_agents`/
-/// `attach_agent` don't) instead of relying on incidental timing. Never set
+/// (`initialize` answers well before this delay elapses; `session/list`/
+/// `session/resume` don't) instead of relying on incidental timing. Never set
 /// in production.
 const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
 
@@ -228,8 +226,8 @@ fn test_resume_delay() -> Option<Duration> {
 /// so the caller can resume every session they belong to
 /// ([`session::resume_persisted_sessions`]), and the human-readable
 /// skipped-lines summary (if any corrupt/torn lines were found) so
-/// [`spawn_resume_task`] can stash it on [`AgentdState`] for the [`Hub`]'s
-/// `hello` to forward to a connecting client over `HubHello::skipped_lines`
+/// [`spawn_resume_task`] can stash it on [`AgentdState`] for the hub's
+/// `initialize` to forward to a connecting client as `_horizon/session_event`
 /// -- restoring the step-3 trim recorded in
 /// `docs/agent-runtime-split-design.md`
 /// ("Skipped-lines status reporting is omitted").
