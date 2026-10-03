@@ -49,7 +49,11 @@ never changes.
 Use the `quick` profile: load time tracks component size, and a debug
 component loads several times slower. Your own verification is tests, not
 the pane — assert on what the preview paints and how it reacts to input
-the way `src/preview/e2e.rs` does. You cannot see the pane.
+the way `src/preview/e2e.rs` does. You cannot see the pane. Nothing draws
+a frame in those tests unless the harness drives one (`host_frames()`
+there), and a view with a repeating animation keeps asking for frames, so
+check an animated view the way `preview_plugin_paces_a_repeating_animation`
+checks the `animation` preview.
 
 ## 4. Ask the owner to look
 
@@ -72,4 +76,6 @@ judged.
 IME composition, clipboard, and modifier-key state do not reach a preview;
 Latin typing, clicks, scrolling, hover, and focus do. A guest's window is
 the pane's rectangle; how popovers and modals behave inside it has not
-been checked.
+been checked. Animations advance once per host frame, but sprite
+transformations are painted untransformed, so a rotating icon does not
+rotate.

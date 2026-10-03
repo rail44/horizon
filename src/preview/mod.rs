@@ -14,6 +14,7 @@
 //! (the plugin's entry point); `host`, `pane` and `watch` are the native
 //! half.
 
+pub mod animation;
 pub mod registry;
 pub mod sample;
 pub mod schema;
