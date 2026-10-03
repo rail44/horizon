@@ -46,14 +46,7 @@ built after it still needs a full app restart: the respawned daemon
 mismatches again. `Reload Agent Runtime` cannot fix this because it only
 replaces the daemon side. The terminal hub runs the same lockstep over
 its `hello` (`MIN_SUPPORTED == current`). Rebuild, then restart the app
-itself (hit 2026-08-03 merging the v19 bump of the former remoc agent
-hub, where the shell reported sessions it created while nothing reached
-the daemon — no events, no transcript, silent; diagnosed only after a
-standalone `horizon-agentd` proved the writer was healthy).
-
-One-time migration: a `horizon-agentd` from before the ACP cutover
-(2026-09-27, still speaking remoc) cannot be drained by an ACP shell.
-Stop it manually before the first launch of an ACP build.
+itself.
 
 There is no CI. The local quality gate below is mandatory before finishing
 any work that changes something the gate reads — run it yourself and make
@@ -70,7 +63,7 @@ cargo nextest run --workspace --locked
 
 **Inside a sandboxed agent session, run the `sandboxed` nextest profile
 instead of the default one** (`cargo nextest run --profile sandboxed
---workspace --locked`; the other four steps are unchanged). 63 tests
+--workspace --locked`; the other four steps are unchanged). Some tests
 verify the host boundary the sandbox enforces — they bind real sockets,
 write to literal `/tmp`, need directories outside any repository, or
 spawn a real `horizon-agentd` — so they cannot pass from inside
@@ -78,10 +71,8 @@ containment, and making them pass would mean removing the containment
 they verify. The profile skips exactly those (`.config/nextest.toml`
 lists them with reasons); the integrator running the default profile
 covers them when the branch lands. Do not hand-build an exclusion
-list: a failure *outside* the profile's skip set is a real finding, and
-one session burned 92 rounds growing a 30-term filter one failure at a
-time before this profile existed (`docs/issues/010`). When you add a
-boundary test that cannot pass under containment, also add it to the
+list: a failure *outside* the profile's skip set is a real finding. When
+you add a boundary test that cannot pass under containment, also add it to the
 `sandboxed` profile's filter in `.config/nextest.toml` — the skip set is
 not self-maintaining, and a missed exclusion surfaces as a red test
 rather than a skipped one. nextest filter expressions (the string inside
@@ -109,9 +100,9 @@ is itself a red nextest test).
 
 The fifth step checks that the root package's library still builds for
 `wasm32-wasip2`, the target preview-pane plugins are compiled for
-(`docs/preview-pane-design.md`). It needs that target installed once per
-machine (`rustup target add wasm32-wasip2`); the first run compiles gpui
-for it and takes minutes, later runs take seconds. When it fails, a module
+(`docs/preview-pane-design.md`). It needs that target installed (see Build
+setup); the first run compiles gpui for it and takes minutes, later runs
+take seconds. When it fails, a module
 reachable from the plugin started using something a wasm guest does not
 have: mark the module `#[cfg(not(target_family = "wasm"))]` at its
 declaration in `src/lib.rs`, or move the dependency under the root
@@ -181,91 +172,42 @@ reflinks the main checkout's `target/` into the new worktree (btrfs
 copy-on-write — metadata-only, seconds for a multi-GB tree) and then
 strips workspace-member artifacts (`cargo clean -p` per member, names
 from `cargo metadata`), so the worktree rebuilds its own code but never
-the dependency graph. Measured 2026-08-02: worktree creation ~5s, full
-`cargo build --workspace` on the seed ~33s. The member strip is
+the dependency graph. The member strip is
 load-bearing, not an optimization: copied member fingerprints reference
 the main checkout's sources and would otherwise validate as fresh,
-handing the worktree main's binaries instead of its own (backlog 43's
-stale-artifact confusion, privately reborn). Do not skip it.
+handing the worktree main's binaries instead of its own. Do not skip it.
 `HORIZON_SKIP_TARGET_SEED=1` disables seeding (e.g. to measure cold
 builds). The hook degrades to a cold build on any failure and works the
 same for agentd session worktrees, `.claude/worktrees` workers, and
 review checkouts — they are all created via plain `git worktree add`.
 
-Two build-sharing schemes preceded this and were both retired
-(2026-07-30 shared build-dir with per-worktree wrapper keying: correct
-but leaked ~260GB of unmappable orphans in three days; 2026-08-02
-morning, sccache as `rustc-wrapper`: its cache keys for build-script
-crates are worktree-path-dependent — verified: stable within a
-worktree, split across them — and gpui/arrow/aws-lc-sys are all in that
-class, so fresh worktrees stayed ~11-minute builds). The full history
-lives in `.cargo/config.toml`'s comment, which is deliberately
-config-free today. If backlog 43-style phantom errors (E0432 on symbols
-that exist, a sibling's binaries running as yours) ever reappear,
-suspect artifact-level sharing having crept back in.
+Two build-sharing schemes preceded this and were both retired; their
+history lives in `.cargo/config.toml`'s comment, which is deliberately
+config-free today. If phantom errors (E0432 on symbols that exist, a
+sibling's binaries running as yours) ever appear, suspect artifact-level
+sharing having crept back in.
 
 ## Configuration
 
 Horizon reads one optional TOML file: `$XDG_CONFIG_HOME/horizon/config.toml`
 (falling back to `~/.config/horizon/config.toml`), overridable via
-`HORIZON_CONFIG`. Precedence is env var > config file > built-in default;
-existing env vars keep winning. Secrets (`OPENAI_API_KEY`, `EXA_API_KEY`) are
-environment-only and never read from the file.
+`HORIZON_CONFIG`. `config.example.toml` at the repo root is the reference:
+every key, precedence (env var > config file > built-in default), what
+`Reload Config` applies live and what needs a restart, and the
+environment-only path overrides. Provider entries are described in
+`docs/provider-configuration.md`, `[[moa]]` in `docs/agent-moa-design.md`.
 
-Provider file configuration uses `[[providers]]`, `default_provider`, and
-`auxiliary_provider`. The last selects one named OpenAI-compatible provider
-for both AI titles and automatic approval judgments, independently of the
-conversation provider. With no entries, the built-in OpenAI-compatible
-`default` entry serves both. Named configurations must select the auxiliary
-entry explicitly. Each entry's `api_key_env` names an environment variable;
-keys themselves never go in TOML. The removed `[provider]` table requires
-one-time conversion: see `docs/provider-configuration.md`.
+Secrets (`OPENAI_API_KEY`, `EXA_API_KEY`) are environment-only and never
+read from the file. Two more settings exist only as environment variables
+and are not in the example file: `HORIZON_AGENT_JUDGE_MODEL` (the enforcing
+judge's model id) and `HORIZON_AGENT_CLEARING_THRESHOLD_PCT` (Tier 1
+compaction's trigger percentage, clamped 1..=100 — a measurement switch,
+see `docs/agent-compaction-design.md`).
 
-The remaining surface includes `[[moa]]`, `[terminal] font_size`, `[ui]
-font_family`, `[keybindings]`, `[theme]`, `[grants]`, and `trusted_projects`.
-Retired tool caps, turn-loop thresholds, history budgets, and rendering knobs
-remain built-in constants or the documented environment-only overrides.
-Unknown keys inside known sections warn on stderr through `horizon-config`.
-`crates/horizon-agent`'s event log/DuckDB-projection
-paths keep an environment-only override
-(`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`) with no file key at
-all; `HORIZON_AGENT_JUDGE_MODEL` (the enforcing judge's model id) and
-`HORIZON_AGENT_CLEARING_THRESHOLD_PCT` (Tier 1 compaction's trigger
-percentage, clamped 1..=100 — a measurement switch, see
-`docs/agent-compaction-design.md`) are environment-only in the same way.
-
-`[[moa]]` names Mixture-of-Agents entries over the `[[providers]]` entries
-(`docs/agent-moa-design.md`): each has one `aggregator` and a list of
-`proposers`, every member a `{provider, model}` pair with the model id
-written out. In model selection they appear as a `moa` group whose items
-are the entry names; a session on one runs each message as a two-layer
-pass — read-only proposer sessions answer, the aggregator writes the answer
-the pane shows. The name `moa` is reserved for that group, so a
-`[[providers]]` entry called `moa` cannot be selected (warned on stderr).
-
-Config is applied at startup only, with these exceptions: `Reload Config`
-(palette / `reload-config` keybinding id / CLI `horizon reload-config`)
-re-reads the file and applies `[theme]` (chrome, `[theme.ansi]`, and the
-derived terminal colors), `[keybindings]` (built-in defaults plus every
-chord/command override, unbinding whatever the previous apply's chords
-were first — see `workspace::apply_bindings`), and provider configuration.
-The shell updates future title calls; `_horizon/reload_provider_config` pushes the
-provider reload to `horizon-agentd` without respawning it. New sessions use the
-new conversation and judge settings. Existing sessions retain their judge
-connection; explicit model switching resolves the latest conversation catalog.
-`Reload Agent Runtime` applies agent-code changes. `[terminal]`/`[ui]` need a
-full restart, with one runtime exception: the
-`Increase/Decrease/Reset Font Size` commands (palette / `increase-font-size`
-et al. keybinding ids / built-in `secondary+=`/`secondary+-`/`secondary+0`
-chords -- cmd on macOS, ctrl on Linux/Windows) move the
-live `[terminal] font_size` state (the shell crate's `terminal::font_size_store`)
-without touching the file; `Reset Font Size` restores the startup-configured
-value. See `config.example.toml` at the repo
-root for every knob, and `crates/horizon-config` for the loader (the
-single file-schema/parse/path-resolution owner; `horizon-agentd` depends
-on it directly, and `horizon-agent` takes resolved named provider values
-as plain arguments rather than parsing the file itself — see that crate's
-`config` module doc).
+`crates/horizon-config` is the loader — the single file-schema, parse, and
+path-resolution owner. `horizon-agentd` depends on it directly, and
+`horizon-agent` takes resolved named provider values as plain arguments
+rather than parsing the file itself (see that crate's `config` module doc).
 
 ## GUI Verification
 
@@ -328,39 +270,38 @@ The shell is GPUI-based (the Floem shell retired at tag
   tree, session attachments, operations/queries, mode state, spatial
   navigation, the pure command model, and the `workspace.snapshot`
   payload — is `crates/horizon-workspace`.
-- `runtime/` — the shell's two eager runtime clients (`agent.rs`, the
-  ACP v2 client of `horizon-agentd`; `terminal.rs`, the remoc client of
-  `horizon-terminald` over the connect machinery in `common.rs`, which
-  also holds what both share), each with its own connection, op
-  queue, and route table: non-blocking connect/spawn, per-domain routing,
-  and explicit per-daemon drain. See `docs/terminald-split-design.md` for why reloading
-  one must not disturb the other. `link.rs` and `notify.rs` are the same
-  layer's view-facing half — the per-session machinery every view kind
-  needs (`RuntimeLink`'s command channel plus reachability and the
-  `&self` notify pump, the blocking-receiver→stream bridge) and the
-  optional repaint coalescer the agent pane uses — so a third view kind
-  inherits them instead of copying the second one's copy.
-- `terminal/` — the terminal pane: the daemon-backed per-session model entity
-  (`session.rs`) and the view (grid painting, key/mouse/IME handling,
-  `input.rs` mapping). PTY ownership lives in `crates/horizon-terminald`;
+- `runtime/` — the shell's two eager runtime clients (the ACP v2 client
+  of `horizon-agentd`; the remoc client of `horizon-terminald`), each with
+  its own connection, op queue, and route table: non-blocking
+  connect/spawn, per-domain routing, and explicit per-daemon drain. See
+  `docs/terminald-split-design.md` for why reloading one must not disturb
+  the other. The same directory holds the view-facing half — the
+  per-session machinery every view kind needs (`RuntimeLink`'s command
+  channel plus reachability and the `&self` notify pump, the
+  blocking-receiver→stream bridge) and the optional repaint coalescer the
+  agent pane uses — so a third view kind inherits them instead of copying
+  the second one's copy.
+- `terminal/` — the terminal pane: the daemon-backed per-session model
+  entity and the view (grid painting, key/mouse/IME handling, input
+  mapping). PTY ownership lives in `crates/horizon-terminald`;
   emulation and the session loop live in `crates/horizon-terminal-core` — see
   `docs/session-daemon-design.md` and `docs/terminald-split-design.md`;
   print the kitty conformance matrix with `cargo test -p
   horizon-terminal-core print_compliance_matrix -- --nocapture`.
-- `agent/` — the agent pane: per-session model entities (`session.rs`),
-  `model/` (the fold from ACP session updates and `_horizon/*`
-  notifications to the pane's frame), and the view (Markdown transcript,
-  composer, approvals). Contract/providers/tools/persistence live in
+- `agent/` — the agent pane: per-session model entities, the fold from
+  ACP session updates and `_horizon/*` notifications to the pane's frame,
+  and the view (Markdown transcript, composer, approvals).
+  Contract/providers/tools/persistence live in
   `crates/horizon-agent`, hosted by `crates/horizon-agentd`; the
   `_horizon/*` and `_meta.horizon` vocabulary shared by the shell and the
   daemon is `crates/horizon-acp` — see `docs/acp-agentd-design.md` and
   `docs/agent-runtime-split-design.md`.
-- `board/` — the task board as two session-less views: `list.rs` (the
-  rank-ordered task tree) and `thread.rs` (one task's posts), each taking
+- `board/` — the task board as two session-less views: the list (the
+  rank-ordered task tree) and the thread (one task's posts), each taking
   a pane of its own, with a pane split putting them side by side. They
-  read `crates/horizon-board` through `execute.rs` and reach the shell
-  only as events (`events.rs`), so both also build for the preview
-  plugin's wasm target. See `docs/board-redesign-design.md`.
+  read `crates/horizon-board` through one executor and reach the shell
+  only as events, so both also build for the preview plugin's wasm
+  target. See `docs/board-redesign-design.md`.
 - `palette.rs` / `session_manager.rs` / `view_chooser.rs` — the control
   surface modals, all delegates over gpui-component's searchable List.
 - `control_plane.rs` — the GPUI-side bridge and dispatcher for the CLI
@@ -382,9 +323,8 @@ The shell is GPUI-based (the Floem shell retired at tag
   preview plugin cannot build (`#[cfg(not(target_family = "wasm"))]`),
   `entry.rs` is the CLI-vs-GUI entry point, and `main.rs` only calls
   `horizon::run()`.
-- There is no cross-domain UI-primitive module and no plugin module:
-  `ui/` and `plugins/` were Floem-era directories, both deleted when that
-  shell was retired. The shared visual vocabulary is gpui-component's
+- There is no cross-domain UI-primitive module and no plugin module.
+  The shared visual vocabulary is gpui-component's
   widgets plus `theme/` (and `theme_settings/`, the live theme editor
   pane); every view lives next to its domain. WASM plugin views are a
   prospective third *runtime*, not a `src/` directory — see
@@ -398,11 +338,9 @@ The shell is GPUI-based (the Floem shell retired at tag
   cases) is fine and deliberate; docs under `docs/research/` are
   Japanese by choice.
 - **Keep module internals crate-local.** Default to `pub(crate)` (or private)
-  and re-export a narrow surface from each `mod.rs`. See the long run of
-  "Keep ... crate-local" commits for the pattern.
+  and re-export a narrow surface from each `mod.rs`.
 - **Split modules by responsibility.** Domain directories hold small focused
-  files (e.g. `board/{list,thread,events,execute}.rs`) rather than large
-  monolith modules; see the "Split ... by responsibility" commits.
+  files rather than large monolith modules.
 - **Operations go through the command model.** User-visible operations are
   `CommandId` variants executed via `WorkspaceShell::execute`
   (`src/workspace/commands.rs`). Buttons, keyboard shortcuts, and the palette
