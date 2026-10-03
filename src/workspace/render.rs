@@ -1043,6 +1043,7 @@ impl Render for WorkspaceShell {
                 "Workspace"
             })
             .track_focus(&self.focus_handle)
+            .child(crate::keystroke_input::keystroke_only(&self.focus_handle))
             .on_action(cx.listener(|shell, _: &ToggleWorkspaceMode, window, cx| {
                 shell.toggle_mode(window, cx);
             }))
