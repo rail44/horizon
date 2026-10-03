@@ -1,6 +1,6 @@
 # Horizon — Agent Guide
 
-Horizon is a Floem-based desktop shell for tabbed and split-pane applications:
+Horizon is a GPUI-based desktop shell for tabbed and split-pane applications:
 a keyboard-first command workspace where terminals, AI agent sessions, and
 (future) WASM plugin views run as sessions attached to panes. The product
 direction is recorded in `docs/ux-principles.md`; the implementation plan is
@@ -150,8 +150,8 @@ Apple Silicon) is *not* on the linker's default search path, so set
 no extra setup — Homebrew dylibs carry absolute install names. The same
 two vars also cover a manually-placed prebuilt lib on any OS
 (libduckdb-sys's standard discovery).
-Version skew note: libduckdb-sys 1.10504.0 (the pin as of this writing)
-encodes an expected DuckDB 1.5.4; Void's `duckdb-devel` currently ships
+Version skew note: libduckdb-sys 1.10505.0 (the pin as of this writing)
+encodes an expected DuckDB 1.5.5; Void's `duckdb-devel` currently ships
 1.5.0 — confirmed ABI-compatible (full `horizon-agent` suite green against
 it), but re-verify on any libduckdb-sys bump or when Void catches up.
 Machines without a system libduckdb can build with
@@ -250,7 +250,7 @@ The shell updates future title calls; `_horizon/reload_provider_config` pushes t
 provider reload to `horizon-agentd` without respawning it. New sessions use the
 new conversation and judge settings. Existing sessions retain their judge
 connection; explicit model switching resolves the latest conversation catalog.
-`Reload Agent Runtime` applies agent-code changes. `[terminal]`/`[ui] need a
+`Reload Agent Runtime` applies agent-code changes. `[terminal]`/`[ui]` need a
 full restart, with one runtime exception: the
 `Increase/Decrease/Reset Font Size` commands (palette / `increase-font-size`
 et al. keybinding ids / built-in `secondary+=`/`secondary+-`/`secondary+0`
@@ -317,7 +317,7 @@ The shell is GPUI-based (the Floem shell retired at tag
 `docs/gpui-migration-design.md`). Domain logic lives in shared crates;
 `src/` holds only the view projections and wiring:
 
-- `workspace.rs` — the shell root (`WorkspaceShell`): renders the shared
+- `workspace/` — the shell root (`WorkspaceShell`): renders the shared
   workspace model (tab strip, recursive splits on gpui-component's
   resizable primitives), owns the session stores (terminal + agent, the
   close-vs-detach seam), workspace mode, command dispatch (`execute`),
@@ -372,7 +372,7 @@ The shell is GPUI-based (the Floem shell retired at tag
   targets; the pane, watcher, and theme publication are native-only. See
   `docs/preview-pane-design.md`.
 - `keymap.rs` — `[keybindings]` chord/command translation;
-  `theme.rs` — config-driven color scheme; `terminal_focus.rs` — the
+  `theme/` — config-driven color scheme; `terminal_focus.rs` — the
   focus-reporting decision.
 - `lib.rs` / `entry.rs` / `main.rs` — the root package is a library plus a
   thin binary: `lib.rs` declares the modules and marks the ones a
@@ -398,20 +398,20 @@ The shell is GPUI-based (the Floem shell retired at tag
   and re-export a narrow surface from each `mod.rs`. See the long run of
   "Keep ... crate-local" commits for the pattern.
 - **Split modules by responsibility.** Domain directories hold small focused
-  files (e.g. `terminal/core/{events,input,render}.rs`) rather than large
+  files (e.g. `board/{list,thread,events,execute}.rs`) rather than large
   monolith modules; see the "Split ... by responsibility" commits.
 - **Operations go through the command model.** User-visible operations are
   `CommandId` variants executed via `WorkspaceShell::execute`
-  (`src/workspace.rs`). Buttons, keyboard shortcuts, and the palette
+  (`src/workspace/commands.rs`). Buttons, keyboard shortcuts, and the palette
   are bindings to commands — do not add ad-hoc behavior in UI handlers.
 - **Close vs. terminate are distinct.** Closing a pane/tab detaches sessions;
   `Terminate Active Session` is the explicit destructive command. Preserve
   this separation (see `docs/ux-principles.md`).
 - **Tests are colocated** next to the code, either as an external `tests.rs`
   declared via `#[cfg(test)] mod tests;` (e.g. `crates/horizon-workspace/src/tests.rs`,
-  `crates/horizon-agent/src/tests.rs`, `src/terminal/tests.rs`) or, more
+  `crates/horizon-agent/src/tests.rs`, `src/runtime/tests.rs`) or, more
   commonly in `src/`, an inline `#[cfg(test)] mod tests { ... }` block at the
-  bottom of the file itself (e.g. `src/workspace.rs`, `src/agent/session.rs`).
+  bottom of the file itself (e.g. `src/workspace/mod.rs`, `src/agent/session.rs`).
 - **Design decisions are recorded under `docs/`** (e.g.
   `agent-pane-design.md`, `agent-provider-contract.md`,
   `agent-duckdb-state-design.md`). Add or update a doc when making a
