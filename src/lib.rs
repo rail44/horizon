@@ -34,6 +34,8 @@ mod entry;
 mod input_trace;
 #[cfg(not(target_family = "wasm"))]
 mod keymap;
+// Built for the plugin target too: the board views use it.
+mod keystroke_input;
 #[cfg(not(target_family = "wasm"))]
 mod model_picker;
 #[cfg(not(target_family = "wasm"))]

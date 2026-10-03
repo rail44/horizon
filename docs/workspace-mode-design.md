@@ -235,3 +235,37 @@ at all."
 Explicitly out of scope here (per issue 003's own resolution note): the
 pane-bound visual signals themselves (cursor-pane border, scrim dim) for
 a *non-empty* workspace are untouched.
+
+## Keystroke-only focus states turn the IME off (2026-10-03)
+
+With an IME on (the owner's setup: GNOME Wayland + ibus-mozc), bare keys
+in workspace mode — `h`/`j`/`k`/`l`, `:` — never reached the bindings.
+gpui's Wayland backend enables `zwp_text_input_v3` every frame unless the
+installed input handler's `accepts_text_input` says no, and treats *no*
+handler as yes. Workspace mode focuses the shell root, which registered
+no handler, so the IME stayed on, turned the key into preedit, and gpui
+dropped the preedit for lack of a receiver.
+
+**Decision.** `src/keystroke_input.rs` provides an inert input handler
+that refuses text input, and an invisible zero-size element that installs
+it during paint for one focus handle. It is mounted on the three
+keystroke-only focus targets: the shell root (`WorkspaceShell`'s root
+`div`), `BoardListView`, and `BoardThreadView`. `Window::handle_input`
+registers only when that handle is *exactly* focused, so a focused
+descendant with its own handler (the terminal, a modal's input, the
+board's add-task / reply / status fields) keeps the IME as before. The
+root needs no `mode_active` condition: the root handle is focused only in
+keystroke-only states.
+
+**Platform scope.** Wayland is where this lever exists. On macOS, by code
+reading (gpui-pre-macos `window.rs`, `is_ime_printable_key` requires the
+handler's `prefers_ime_for_printable_keys`), bindings already win when no
+handler prefers the IME, so this changes nothing there. X11 routes every
+key through XIM with no `accepts_text_input` gate, so it is not covered.
+Neither the compositor behaviour nor macOS has been verified on a real
+machine; the owner checks the Wayland case by hand.
+
+**Not covered: the preview pane.** Keys reach a preview guest through two
+focus handles, one owned by `embedded_gpui::Surface`; covering only one
+would make the IME's behaviour depend on which of them holds focus, so the
+pane is left as it is.
