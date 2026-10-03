@@ -56,7 +56,9 @@ One-time migration: a `horizon-agentd` from before the ACP cutover
 Stop it manually before the first launch of an ACP build.
 
 There is no CI. The local quality gate below is mandatory before finishing
-any work — run it yourself and make sure all five are clean:
+any work that changes something the gate reads — run it yourself and make
+sure all five are clean. A change that touches only `AGENTS.md`, `CLAUDE.md`,
+`README.md`, or files under `docs/` is exempt: no step reads those.
 
 ```sh
 cargo fmt
@@ -122,8 +124,9 @@ each test in its own process (no cross-test env leakage) but does not run
 doctests; the workspace currently has none — add `cargo test --doc` here if
 that changes.
 
-The same gate runs as a pre-commit hook (`hooks/pre-commit`). One-time
-setup per clone:
+The same gate runs as a pre-commit hook (`hooks/pre-commit`), which skips
+it for a commit that stages only the exempt files above. One-time setup per
+clone:
 
 ```sh
 git config core.hooksPath hooks

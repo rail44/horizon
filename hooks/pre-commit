@@ -2,6 +2,29 @@
 # Local quality gate — same checks AGENTS.md requires before finishing work.
 set -e
 
+# No gate step reads the instruction and documentation files below, so a
+# commit that stages nothing else gives the gate nothing to check. The list
+# is an allowlist on purpose: Markdown elsewhere can be compiled in (the
+# agent's built-in skills are `include_str!`ed) and `config.example.toml` is
+# read by tests. `--no-renames` lists both sides of a rename, so moving a
+# source file under `docs/` still runs the gate.
+staged_any=false
+gate_reads_staged=false
+while IFS= read -r -d '' path; do
+  staged_any=true
+  case "$path" in
+    AGENTS.md | CLAUDE.md | README.md | docs/*) ;;
+    *)
+      gate_reads_staged=true
+      break
+      ;;
+  esac
+done < <(git diff --cached --name-only --no-renames -z)
+if $staged_any && ! $gate_reads_staged; then
+  echo "pre-commit: only instruction and documentation files staged; skipping the gate"
+  exit 0
+fi
+
 echo "pre-commit: cargo fmt --check"
 cargo fmt --all -- --check
 
