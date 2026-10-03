@@ -833,6 +833,7 @@ impl Render for BoardListView {
         v_flex()
             .id("board-next-list")
             .track_focus(&self.focus_handle)
+            .child(crate::keystroke_input::keystroke_only(&self.focus_handle))
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                 view.on_key(event, window, cx);
             }))
