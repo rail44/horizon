@@ -61,13 +61,18 @@ impl Plugin for PreviewGuest {
                                 return;
                             }
                         };
-                        let font_size: f32 = match size_receipt.await {
-                            Ok(size) => size,
+                        // A shell built before the theme object grew a font
+                        // size answers this read with "no method". The theme
+                        // still applies, so a plugin from a newer tree opens
+                        // in a running shell; only the size stays at the
+                        // guest's default.
+                        let font_size: Option<f32> = match size_receipt.await {
+                            Ok(size) => Some(size),
                             Err(error) => {
-                                embedded_gpui::log::error!(
-                                    "preview: font size read failed: {error:#}"
+                                embedded_gpui::log::warn!(
+                                    "preview: font size unavailable from the host, keeping the default: {error:#}"
                                 );
-                                return;
+                                None
                             }
                         };
                         cx.update(|cx| {
@@ -109,9 +114,9 @@ struct GuestRoot {
 impl GuestRoot {
     /// Resolves the shell's `[theme]` section into this guest's own scheme
     /// and gpui-component theme — the same two calls the shell makes for
-    /// itself — installs the shell's font size, then repaints every mounted
-    /// preview.
-    fn apply_theme(&mut self, json: &str, font_size: f32, cx: &mut Context<Self>) {
+    /// itself — installs the shell's font size when the host served one,
+    /// then repaints every mounted preview.
+    fn apply_theme(&mut self, json: &str, font_size: Option<f32>, cx: &mut Context<Self>) {
         let theme = match serde_json::from_str::<RawThemeConfig>(json) {
             Ok(theme) => theme,
             Err(error) => {
@@ -124,7 +129,9 @@ impl GuestRoot {
             ..RawConfig::default()
         });
         crate::theme::apply_gpui_component_theme(cx);
-        crate::ui::font::set_font_size(font_size);
+        if let Some(font_size) = font_size {
+            crate::ui::font::set_font_size(font_size);
+        }
         self.windows
             .retain(|window| window.update(cx, |_, window, _| window.refresh()).is_ok());
     }
