@@ -611,14 +611,21 @@ fn read_tail(path: &Path, cursor: &LogCursor) -> Result<StartedLog> {
     })
 }
 
+/// A completed full rebuild, on its way to the writer loop.
+struct RebuiltStore {
+    store: Store,
+    applied: usize,
+}
+
 /// The full mode's projection step: drops and rebuilds every table from the
 /// whole-log read, committing a cursor with each chunk. Runs on its own
 /// thread after [`WriterInit::Ready`], so neither readiness nor the writer
 /// loop waits on it; the loop catches up what it appended meanwhile before
-/// the store is shared (see [`run_writer_loop`]). Prints "rebuilt (N
-/// record(s))" -- the original line, kept unchanged so operators (and
-/// `horizon-agentd`'s own e2e tests, which poll for these exact strings)
-/// see the same signal.
+/// the store is shared (see [`run_writer_loop`]). The loop, not this
+/// function, prints "rebuilt (N record(s))" -- the original line, kept
+/// unchanged so operators (and `horizon-agentd`'s own e2e tests, which poll
+/// for these exact strings) see the same signal -- so a command sent after
+/// that line is seen queues behind the post-rebuild catch-up.
 ///
 /// Failure is reported to stderr and returns `None`, for the same reason
 /// [`open_duckdb_store`] does.
@@ -640,7 +647,7 @@ fn read_tail(path: &Path, cursor: &LogCursor) -> Result<StartedLog> {
 /// (see `persistence::projection::duckdb::SharedDuckdbStore`, and this
 /// function's caller in [`WriterHandle::open_inner`]) rather than letting
 /// anyone open the file again.
-fn rebuild_duckdb_projection(store: Store, report: ReadReport) -> Option<Store> {
+fn rebuild_duckdb_projection(store: Store, report: ReadReport) -> Option<RebuiltStore> {
     if let Some(delay) = test_duckdb_rebuild_delay() {
         thread::sleep(delay);
     }
@@ -651,11 +658,10 @@ fn rebuild_duckdb_projection(store: Store, report: ReadReport) -> Option<Store> 
             if report.skipped != 0 {
                 return None;
             }
-            eprintln!(
-                "horizon-agentd: DuckDB projection rebuilt ({} record(s))",
-                report.applied
-            );
-            Some(store)
+            Some(RebuiltStore {
+                store,
+                applied: report.applied,
+            })
         }
         Err(error) => {
             eprintln!(
@@ -731,7 +737,7 @@ fn retain_write_failure<T>(result: &Result<T>, failure: &mut Option<String>) {
 /// A full rebuild still running on its own thread: its outcome arrives on
 /// `outcome_rx`, and the writer loop owes `duckdb_tx` exactly one answer.
 struct PendingRebuild {
-    outcome_rx: Receiver<Option<Store>>,
+    outcome_rx: Receiver<Option<RebuiltStore>>,
     duckdb_tx: Sender<Option<DuckdbStoreHandle>>,
 }
 
@@ -812,8 +818,12 @@ fn run_writer_loop(
                 let Some(PendingRebuild { duckdb_tx, .. }) = rebuild.take() else {
                     continue;
                 };
-                duckdb_store = outcome.ok().flatten().and_then(|store| {
-                    finish_rebuild(store, path, &mut writer, failure.as_deref())
+                duckdb_store = outcome.ok().flatten().and_then(|rebuilt| {
+                    eprintln!(
+                        "horizon-agentd: DuckDB projection rebuilt ({} record(s))",
+                        rebuilt.applied
+                    );
+                    finish_rebuild(rebuilt.store, path, &mut writer, failure.as_deref())
                 });
                 let _ = duckdb_tx.send(duckdb_store.clone());
                 continue;

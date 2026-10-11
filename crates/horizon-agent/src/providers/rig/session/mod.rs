@@ -25,7 +25,7 @@ use crate::{
         Command, Event, Message as AgentMessage, MessageRole, ProviderEvent, SessionState,
         StartSession,
     },
-    persistence::projection::duckdb::SharedDuckdbStore,
+    persistence::projection::duckdb::{DuckdbStoreState, SharedDuckdbStore},
     registry::SessionHandle,
     roles::RoleDefinition,
     runtime_panic::catch_runtime_panic,
@@ -90,16 +90,21 @@ pub(super) fn spawn_rig_session(
     let panic_events_tx = events_tx.clone();
     thread::spawn(move || {
         let outcome = catch_runtime_panic(move || {
-            // Blocks this dedicated thread (never the caller of `start_session`,
-            // and never agentd's async accept loop) until the event-log
-            // writer's own rebuild-or-open decision has landed -- see
-            // `SharedDuckdbStore`'s doc comment for why this must be a genuine
-            // wait, not "read whatever's there right now": reading too early
-            // here (or through a fresh `Store::open`) is exactly the
-            // resumed-session bug this fixed -- a session's own real history
-            // silently not showing up.
-            let duckdb_store = duckdb_cell.wait();
-            let store_was_available = duckdb_store.is_some();
+            // Reads the shared projection slot without waiting: while the
+            // writer's first full rebuild is still running the slot is
+            // `Pending`, and the session starts anyway with no store (owner
+            // decision, 2026-10-11). History does not change for it: every
+            // fresh spawn passes an empty history, which the store would
+            // answer with nothing either, and a resume passes the session's
+            // own records, whose `StateChanged` events send
+            // `load_rig_session_history` down the event-log path before the
+            // store is consulted. Never a fresh `Store::open` of the same
+            // path -- see `SharedDuckdbStore`'s doc comment.
+            let (duckdb_store, store_unavailable) = match duckdb_cell.current() {
+                DuckdbStoreState::Ready(store) => (Some(store), false),
+                DuckdbStoreState::Pending => (None, false),
+                DuckdbStoreState::Unavailable => (None, true),
+            };
             let persisted =
                 match load_rig_session_history(duckdb_store.as_ref(), session_id, &fallback_events)
                 {
@@ -122,8 +127,10 @@ pub(super) fn spawn_rig_session(
             // a resumed session (events were present but produced no
             // messages), don't proceed silently — surface the failure as a
             // visible error in the frame so the operator knows the session
-            // resumed without its provider history.
-            if !store_was_available && !fallback_events.is_empty() && rig_history.is_empty() {
+            // resumed without its provider history. Only a decided
+            // `Unavailable` qualifies: a still-pending rebuild is not a
+            // failure.
+            if store_unavailable && !fallback_events.is_empty() && rig_history.is_empty() {
                 let _ = events_tx.send(
                     Event::Error(crate::contract::Error {
                         message: "Provider history could not be loaded: the DuckDB \

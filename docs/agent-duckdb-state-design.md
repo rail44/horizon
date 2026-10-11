@@ -472,7 +472,26 @@ beginning when the rebuild had no records), catches those records up, and
 only then shares the store and projects live, so no reader ever sees a
 projection missing what was appended during the rebuild. A drain during a
 rebuild no longer waits for it: the rebuild is abandoned with the process,
-the projection stays unstamped, and the next start rebuilds again. A tail
+the projection stays unstamped, and the next start rebuilds again. The
+writer prints the "rebuilt" line when it takes the rebuilt store, so a drain
+sent after that line queues behind the catch-up.
+
+Nothing waits for the shared projection slot either (owner decision,
+2026-10-11). `SharedDuckdbStore` used to make every session's construction
+block until the writer's decision landed, so during a full rebuild no
+session -- new or resumed -- could start, and `session/new` timed out. The
+slot is now read without waiting, per use (`SharedDuckdbStore::current`:
+`Pending`, `Ready`, or `Unavailable`), and a session's `RecallContext`
+holds the slot itself rather than its value. While the rebuild is pending,
+`recall.search`/`recall.read` answer "the history index is still being
+rebuilt; retry later"; once it lands, the same session's next recall
+queries the store, without a restart. The rig provider reads the slot once
+at session start and proceeds with no store while it is pending, and only
+a decided `Unavailable` raises the issue-012 "history could not be loaded"
+error. Provider history is unaffected: every fresh spawn passes an empty
+history, which the store would answer with nothing either, and a resume
+passes the session's own records, whose `StateChanged` events make
+`load_rig_session_history` rebuild from them before the store is consulted. A tail
 that cannot be caught up (a
 skipped record) leaves the projection unavailable for the run and removes
 its stamp, since later chunks may already have moved the cursor past the

@@ -443,6 +443,11 @@ full resolution/closing records.
     test-group (`.config/nextest.toml`) serializing the whole
     `horizon-sessiond::e2e` binary (`max-threads = 1`) as belt-and-braces
     against self-contention, given the repeated merge-tax history.
+    (2026-10-11: the session-construction wait described above no longer
+    exists -- `wait_for_duckdb_store` was removed, and a session's recall
+    context and the rig provider read the shared projection slot without
+    waiting; see `docs/agent-duckdb-state-design.md`'s "Incremental
+    startup" addendum.)
 29. **Git dependencies carry no `rev` pins in Cargo.toml — Cargo.lock is
     the only pin** — the root `Cargo.toml` declares `gpui`, `gpui_platform`,
     `gpui-component`, and `gpui-component-assets` as bare `git = ...` deps

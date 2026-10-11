@@ -337,6 +337,27 @@ fn respond_to_user_message(
         );
         return ControlFlow::Continue(());
     }
+    if let Some(query) = lower_text.strip_prefix("recall ") {
+        // Test hook for the read-only `recall.search` tool over every
+        // session's history, so `horizon-agentd`'s e2e suite can exercise
+        // recall without a network provider.
+        let call_id = ToolCallId("mock-recall-1".to_string());
+        let occurrence_id = OccurrenceId::new();
+        *pending_tool_call = Some(ToolCallIdentity {
+            call_id: call_id.clone(),
+            occurrence_id: occurrence_id.clone(),
+        });
+        let _ = events_tx.send(
+            Event::ToolCallRequested(ToolCallRequest {
+                call_id,
+                tool_id: "recall.search".to_string(),
+                input: serde_json::json!({ "query": query.trim(), "scope": "all" }).into(),
+                occurrence_id,
+            })
+            .into(),
+        );
+        return ControlFlow::Continue(());
+    }
     if lower_text.contains("tool") {
         let call_id = ToolCallId("mock-tool-1".to_string());
         let occurrence_id = OccurrenceId::new();

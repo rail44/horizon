@@ -67,14 +67,12 @@ impl SessionEnvironment<'_> {
             isolated,
             trusted,
         } = location;
-        // Blocks this session's own dedicated thread (never `main`'s accept
-        // loop, and never the readiness gate `session_list`/`session_new`
-        // block on) until the event-log writer thread's own DuckDB
-        // rebuild-or-open decision has landed -- see `AgentdState::
-        // wait_for_duckdb_store`'s doc comment.
+        // The shared projection slot itself, not its current value: recall
+        // reads it per query, so a session started while the projection is
+        // still being rebuilt can recall as soon as the rebuild lands.
         let recall = RecallContext {
             session_id: Some(session_id),
-            store: state.wait_for_duckdb_store(),
+            store: state.duckdb_cell(),
         };
         // Use the same resolved root as the provider's prompt-side skill
         // listing. Otherwise an isolated session can be told that a repository

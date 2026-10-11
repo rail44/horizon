@@ -2986,6 +2986,60 @@ fn config_role_start_session_advertises_only_its_three_allowed_tools() {
     }
 }
 
+/// A session must start while the projection is still being rebuilt: the
+/// slot stays `Pending` for this whole test (never `set`), the session
+/// still reaches `WaitingForUser`, and a pending slot is not mistaken for
+/// the issue-012 "store unavailable" failure even when the restored
+/// history yields no messages.
+#[test]
+fn a_session_starts_over_a_pending_projection_without_an_issue_012_error() {
+    let slot = crate::persistence::projection::duckdb::SharedDuckdbStore::pending();
+    let provider = Provider::for_entry(
+        ProviderId("builtin.agent.rig".to_string()),
+        RigAgentConfig {
+            api_key_present: false,
+            ..Default::default()
+        },
+        slot.clone(),
+    );
+    let handle = AgentProvider::start_session(
+        &provider,
+        StartSession {
+            session_id: SessionId::new(),
+            provider_id: AgentProvider::provider_id(&provider),
+            role_id: None,
+            workspace_root: None,
+            history: vec![
+                Event::StateChanged(SessionState::Created),
+                Event::StateChanged(SessionState::WaitingForUser),
+            ],
+            trusted_project: true,
+        },
+    );
+
+    let rx = handle.events();
+    let mut seen = Vec::new();
+    loop {
+        let event = recv(&rx);
+        assert!(
+            !matches!(event, Event::Error(_)),
+            "a pending projection is not a failure: {seen:?} then {event:?}"
+        );
+        let waiting = event == Event::StateChanged(SessionState::WaitingForUser);
+        seen.push(event);
+        if waiting {
+            break;
+        }
+    }
+    assert!(
+        matches!(
+            slot.current(),
+            crate::persistence::projection::duckdb::DuckdbStoreState::Pending
+        ),
+        "the session must not have needed the slot decided"
+    );
+}
+
 #[test]
 fn role_adjusted_config_restricts_allowed_tool_ids_to_the_roles_list() {
     let base = RigAgentConfig::default();

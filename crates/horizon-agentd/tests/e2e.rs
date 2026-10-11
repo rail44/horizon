@@ -1169,7 +1169,15 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
     drop(client);
     agentd.kill_and_wait();
 
-    let mut respawned = spawn_agentd_at(socket_path, event_log_path);
+    // Fresh projection path, so this start rebuilds; stderr is captured to
+    // wait for that rebuild below.
+    let mut respawned = agentd_spawn(AgentdPaths::scratch_at(
+        "agentd-e2e",
+        socket_path,
+        event_log_path,
+    ))
+    .capture_stderr()
+    .spawn();
     let mut client = connect(&respawned.socket_path).await;
 
     assert_listed(
@@ -1243,6 +1251,11 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
             if message.role == MessageRole::Assistant && message.text == "Mock response: hello again")
     })
     .await;
+    // Sessions no longer wait for the projection, and a drain abandons a
+    // rebuild still running, so let it land before draining.
+    respawned
+        .wait_for_stderr_line("DuckDB projection rebuilt (")
+        .await;
     client.drain().await;
     assert!(wait_for_exit(&mut respawned.child).await.success());
 
@@ -1730,6 +1743,106 @@ async fn duckdb_rebuild_delay_does_not_block_initialize_or_session_list() {
         "session/list must not wait on the (slow) duckdb rebuild, took {list_elapsed:?}"
     );
     assert_listed(&sessions, live_session, None, None);
+}
+
+/// Owner decision 2026-10-11: session start must not wait on the DuckDB
+/// projection. With the full rebuild artificially slowed, `session/new`
+/// answers and a turn runs while the rebuild is still going, recall on that
+/// session says the index is still being rebuilt, and once the rebuild has
+/// landed the same session's recall works without a restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_starts_and_recalls_across_a_slow_duckdb_rebuild() {
+    let socket_path = std::env::temp_dir().join(format!(
+        "hzn-e2e-{}.sock",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    ));
+    let event_log_path = std::env::temp_dir().join(format!(
+        "horizon-agentd-e2e-events-{}-{}.jsonl",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    write_session_fixture(
+        &event_log_path,
+        vec![(
+            SessionId::new(),
+            vec![
+                Event::MessageCommitted(horizon_agent::contract::Message {
+                    role: horizon_agent::contract::MessageRole::User,
+                    text: "widget history".to_string(),
+                }),
+                Event::StateChanged(SessionState::Terminated),
+            ],
+        )],
+    );
+
+    const REBUILD_DELAY_MS: u64 = 8000;
+    let started = Instant::now();
+    let agentd = agentd_spawn(AgentdPaths::scratch_at(
+        "agentd-e2e",
+        socket_path,
+        event_log_path,
+    ))
+    .env(
+        TEST_DUCKDB_REBUILD_DELAY_MS_VAR,
+        REBUILD_DELAY_MS.to_string(),
+    )
+    .capture_stderr()
+    .spawn();
+    let mut client = connect(&agentd.socket_path).await;
+
+    let session_id = SessionId::new();
+    open_session(&client, session_new(session_id)).await;
+    // The recall call's final update is the first one carrying an output.
+    let tool_output = |inbound: &Inbound| -> Option<String> {
+        tool_update(inbound)?
+            .raw_output
+            .as_opt_ref()
+            .flatten()
+            .map(|output| output.to_string())
+    };
+    let recall_output = |collected: &[Inbound]| -> String {
+        collected
+            .iter()
+            .find_map(tool_output)
+            .expect("the recall call finished")
+    };
+    prompt(&client, session_id, "recall widget").await;
+    let pending =
+        recall_output(&collect_until(&mut client, |inbound| tool_output(inbound).is_some()).await);
+    assert!(
+        started.elapsed() < Duration::from_millis(REBUILD_DELAY_MS),
+        "session/new and a recall turn must not wait for the rebuild, took {:?}",
+        started.elapsed()
+    );
+    assert!(
+        pending.contains("still being rebuilt"),
+        "recall during the rebuild must say so: {pending}"
+    );
+
+    agentd
+        .wait_for_stderr_line("DuckDB projection rebuilt (")
+        .await;
+    // The store is shared just after that line, once the writer has caught
+    // it up; poll the same session until recall sees it.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        prompt(&client, session_id, "recall widget").await;
+        let output = recall_output(
+            &collect_until(&mut client, |inbound| tool_output(inbound).is_some()).await,
+        );
+        if !output.contains("still being rebuilt") {
+            assert!(
+                output.contains("widget history"),
+                "recall after the rebuild must find the fixture: {output}"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "recall never saw the rebuilt store"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 /// Task 2's skip path: a second spawn against an *unchanged* event log must

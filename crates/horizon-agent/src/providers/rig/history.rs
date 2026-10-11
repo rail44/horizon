@@ -51,7 +51,16 @@ impl RigSessionHistory {
 /// history.
 ///
 /// `store` is `None` when the DuckDB projection failed to open or rebuild
-/// (issue 012: lock contention, corrupt file, etc.). Before the fix this
+/// (issue 012: lock contention, corrupt file, etc.), and also while the
+/// writer's first full rebuild is still running (the shared slot is
+/// `Pending`; the caller does not wait for it). The pending case changes no
+/// outcome: every fresh spawn passes empty `fallback_events`, which the
+/// store would answer with an empty history too, and a resume passes the
+/// session's own records, whose `StateChanged` events take the event-log
+/// path at the top of this function before the store is consulted. (No
+/// fresh spawn supplies `MemoryDigest`-only seed events today -- the keeper
+/// seed-spawn supplier was removed in 8e057dd7 -- so the seed branch below
+/// is not reached without a store.) Before the fix this
 /// returned an empty history silently, so a resumed session answered as if
 /// the conversation never happened while the UI transcript stayed complete.
 /// Now `fallback_events` -- the JSONL event log's events the resume path

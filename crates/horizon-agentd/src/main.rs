@@ -119,13 +119,13 @@ async fn main() -> anyhow::Result<()> {
     // the socket path, and it happens before the event log is even opened.
     let listener = daemon::bind_listener(&socket_path, DAEMON_NAME).await?;
 
-    // Shared, multi-reader-blocking handle onto the live DuckDB projection
-    // -- see `SharedDuckdbStore`'s doc comment. Created empty here (before
+    // The shared slot for the live DuckDB projection -- see
+    // `SharedDuckdbStore`'s doc comment. Created pending here (before
     // the event log's writer thread, and therefore any real DuckDB store,
     // exists) and handed to both the provider registry (the rig provider's
     // history replay) and `AgentdState` (the recall tools' context);
     // populated later, once, by `spawn_resume_task`'s propagator.
-    let duckdb_cell = SharedDuckdbStore::new();
+    let duckdb_cell = SharedDuckdbStore::pending();
     let providers =
         ProviderRegistry::builtin_with_config(agent_config.clone(), duckdb_cell.clone());
     let state = Arc::new(AgentdState::new(

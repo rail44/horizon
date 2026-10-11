@@ -31,7 +31,8 @@ use crate::tools::output::{
 };
 
 use crate::contract::SessionId;
-use crate::persistence::projection::duckdb::RecallEntry;
+use crate::persistence::projection::duckdb::{DuckdbStoreHandle, DuckdbStoreState, RecallEntry};
+use crate::tools::state::RecallContext;
 use crate::tools::state::ToolSessionState;
 
 /// Half-width (in characters) of the context window built around a search
@@ -60,10 +61,9 @@ pub(super) fn search(
         .map(crate::tools::input::TurnOutcome::as_str);
 
     let recall = tool_state.recall_context();
-    let Some(store) = recall.store.as_ref() else {
-        return error_output(
-            "recall is unavailable: history database is not configured or could not be rebuilt completely",
-        );
+    let store = match resolve_store(&recall) {
+        Ok(store) => store,
+        Err(response) => return response,
     };
 
     let scope = match input.scope {
@@ -91,6 +91,20 @@ pub(super) fn search(
         total: report.total,
         hits,
     })
+}
+
+/// Reads the shared projection slot for this one query, so a session
+/// started while the rebuild ran can recall as soon as it lands.
+fn resolve_store(recall: &RecallContext) -> Result<DuckdbStoreHandle, Response> {
+    match recall.store.current() {
+        DuckdbStoreState::Ready(store) => Ok(store),
+        DuckdbStoreState::Pending => Err(error_output(
+            "recall is unavailable: the history index is still being rebuilt; retry later",
+        )),
+        DuckdbStoreState::Unavailable => Err(error_output(
+            "recall is unavailable: history database is not configured or could not be rebuilt completely",
+        )),
+    }
 }
 
 fn hit_json(
@@ -123,10 +137,9 @@ pub(super) fn read(
     input: &crate::tools::input::RecallRead,
 ) -> Response {
     let recall = tool_state.recall_context();
-    let Some(store) = recall.store.as_ref() else {
-        return error_output(
-            "recall is unavailable: history database is not configured or could not be rebuilt completely",
-        );
+    let store = match resolve_store(&recall) {
+        Ok(store) => store,
+        Err(response) => return response,
     };
 
     let Some(session_id) = input

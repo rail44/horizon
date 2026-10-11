@@ -40,12 +40,10 @@ pub(crate) struct Provider {
     /// authoritative), for any other entry its `NamedProviderConfig::
     /// resolved`.
     config: RigAgentConfig,
-    /// Shared, multi-reader-blocking handle onto the live DuckDB projection
-    /// -- see [`SharedDuckdbStore`]'s doc comment. Cloned into every
-    /// session's own dedicated rig thread (`start_session`/
-    /// `spawn_rig_session`), which blocks on it (never this method, and
-    /// never agentd's async accept loop) until the event-log writer's own
-    /// rebuild-or-open decision is known.
+    /// The shared slot for the live DuckDB projection -- see
+    /// [`SharedDuckdbStore`]'s doc comment. Cloned into every session's own
+    /// dedicated rig thread (`start_session`/`spawn_rig_session`), which
+    /// reads it once at start without waiting.
     duckdb_cell: SharedDuckdbStore,
 }
 

@@ -16,23 +16,26 @@ use crate::contract::SessionId;
 use crate::frame::AgentFrame;
 use crate::judge::JudgeHandle;
 use crate::live::LiveState;
-use crate::persistence::projection::duckdb::DuckdbStoreHandle;
+use crate::persistence::projection::duckdb::SharedDuckdbStore;
 use crate::skills::SkillRegistry;
 use crate::tools::network::{SessionDomainPolicy, SessionNetworkProxy};
 use crate::tools::ToolCompletion;
 
 /// Where this session's persisted history lives, for the recall tools
 /// (`tools::recall`) to search/read it: the session's own id (the tools'
-/// default search/read scope) and the *shared* live DuckDB projection
-/// handle (`persistence::projection::duckdb::SharedDuckdbStore::wait`'s
-/// result -- see that type's doc comment). `tools::recall` locks this same
-/// `Arc` per query; it must never open its own fresh `Store::open` of the
+/// default search/read scope) and the *shared* live DuckDB projection slot
+/// (`persistence::projection::duckdb::SharedDuckdbStore` -- see that type's
+/// doc comment). `tools::recall` reads the slot per query, without waiting,
+/// so a session started while the projection is still being rebuilt can
+/// recall once it lands; it locks the same shared `Arc` the writer appends
+/// through and must never open its own fresh `Store::open` of the
 /// same path -- a second independent DuckDB instance against one file is
 /// unsound (not just redundant) with `duckdb-rs`'s lack of a cross-instance
 /// cache and DuckDB's relaxed durability, confirmed in production as a
-/// fresh open reading zero rows for a session with real history. `None`
-/// fields mean recall degrades to a clear error instead of a silent no-op
-/// or a silent "search everything".
+/// fresh open reading zero rows for a session with real history. A missing
+/// session id, a pending slot, or an unavailable one makes recall answer
+/// with a clear error instead of a silent no-op or a silent "search
+/// everything".
 ///
 /// Only `horizon-agentd`'s real session construction site
 /// (`session::run_session`) populates both fields. Every other
@@ -40,11 +43,20 @@ use crate::tools::ToolCompletion;
 /// (`ToolSessionState::new`/`without_root`), and Horizon's UI-side
 /// dummy-tool-state test helper in `src/agent/host_tools.rs` -- uses
 /// `RecallContext::default()` and keeps behaving exactly as it did before
-/// recall existed.
-#[derive(Clone, Default)]
+/// recall existed: no session id, and a slot already decided as unavailable.
+#[derive(Clone)]
 pub struct RecallContext {
     pub session_id: Option<SessionId>,
-    pub store: Option<DuckdbStoreHandle>,
+    pub store: SharedDuckdbStore,
+}
+
+impl Default for RecallContext {
+    fn default() -> Self {
+        Self {
+            session_id: None,
+            store: SharedDuckdbStore::unavailable(),
+        }
+    }
 }
 
 /// Per-session file-tool state: the workspace root every absolute path is

@@ -13,7 +13,7 @@ use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::{Command, ProviderId, SessionId};
 use horizon_agent::hosting::{HostToolRequest, HostToolResponse};
 use horizon_agent::persistence::event_log::WriterHandle;
-use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
+use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
 use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::roles::RoleId;
 use tokio::sync::mpsc::UnboundedSender;
@@ -83,13 +83,13 @@ pub(crate) struct AgentdState {
     /// and `initialize` (`crate::hub`), which forwards this once per
     /// connection as a `_horizon/session_event` `SkippedLines` notice.
     skipped_lines_summary: Mutex<Option<String>>,
-    /// Shared, multi-reader-blocking handle onto the live DuckDB projection
-    /// (see [`SharedDuckdbStore`]'s doc comment) -- the *same* instance
-    /// `main` also hands to the rig provider, so both consumers observe the
-    /// event-log writer thread's one rebuild-or-open decision. `run_session`
-    /// blocks on [`Self::wait_for_duckdb_store`] (never `main`'s accept loop
-    /// or the readiness gate above) to populate a spawned session's
-    /// `RecallContext`.
+    /// The shared slot for the live DuckDB projection (see
+    /// [`SharedDuckdbStore`]'s doc comment) -- the *same* instance `main`
+    /// also hands to the rig provider, so every consumer observes the
+    /// event-log writer thread's one decision. A spawned session's
+    /// `RecallContext` gets a clone ([`Self::duckdb_cell`]) and reads it per
+    /// query; nothing waits on it, so a session starts even while the
+    /// projection is still being rebuilt.
     duckdb_cell: SharedDuckdbStore,
     /// Horizon's single config file's host-resolved path (`main`'s
     /// `horizon_config::resolved_path()` call), injected into every
@@ -196,15 +196,10 @@ impl AgentdState {
         *self.writer.lock().unwrap() = writer;
     }
 
-    /// Blocks the calling (dedicated session, per the module doc) OS
-    /// thread until the event-log writer thread's own DuckDB rebuild-or-
-    /// open decision has landed, then returns the shared handle (`None` if
-    /// no DuckDB path was configured, or the rebuild/open failed). Never
-    /// called from `main`'s accept loop or from anything gated on
-    /// [`Self::wait_until_resume_ready`] -- this is a wholly separate wait,
-    /// scoped to one session's own construction.
-    pub(crate) fn wait_for_duckdb_store(&self) -> Option<DuckdbStoreHandle> {
-        self.duckdb_cell.wait()
+    /// A clone of the shared projection slot, for a session's
+    /// `RecallContext` to read per query.
+    pub(crate) fn duckdb_cell(&self) -> SharedDuckdbStore {
+        self.duckdb_cell.clone()
     }
 
     /// Called once from [`crate::spawn_resume_task`], alongside
