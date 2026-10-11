@@ -10,7 +10,9 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use crate::persistence::projection::duckdb::{ApplyRecordsReport, DuckdbStoreHandle, Store};
 
-use super::{health::WriterHealth, read, ReadReport, Record};
+use super::{
+    cursor_line_matches, health::WriterHealth, read, read_from, LogCursor, ReadReport, Record,
+};
 
 /// A single append-only JSONL event log file must have **at most one**
 /// `WriterHandle` alive per process. Each handle owns its own background
@@ -126,13 +128,25 @@ impl WriterHandle {
     ///
     /// `duckdb_path`, when `Some`, is also this call's seam onto the live
     /// DuckDB projection (`docs/agent-duckdb-state-design.md`'s "Runtime
-    /// Boundary" addendum): once the startup read finishes and
-    /// [`WriterInit::Ready`] has been sent, the background thread opens
-    /// (and, if needed, rebuilds) the projection at that path and *keeps*
-    /// the `Store` open (behind an `Arc<Mutex<_>>` -- see
-    /// [`rebuild_and_open_duckdb_projection`]'s doc comment for why a
-    /// second independent open of the same path is unsound, not just
-    /// redundant) for the rest of the process's life, projecting every
+    /// Boundary" and "Incremental startup" addenda). The background thread
+    /// opens the projection *before* the startup read and picks one of two
+    /// modes:
+    ///
+    /// - **Incremental**: the projection carries the current format stamp
+    ///   and a log cursor whose line still matches the log
+    ///   ([`super::cursor_line_matches`]). Only the bytes after the cursor
+    ///   are read; that tail is caught up into the projection, the store is
+    ///   delivered on the second receiver, and only then is
+    ///   [`WriterInit::Ready`] sent -- carrying just the tail, with
+    ///   [`ReadReport::read_after`] set to the cursor.
+    /// - **Full**: anything else. The whole log is read, `Ready` carries
+    ///   every record, and the full rebuild runs *after* `Ready`, off the
+    ///   readiness path, exactly as before the cursor existed.
+    ///
+    /// Either way the thread then *keeps* the `Store` open (behind an
+    /// `Arc<Mutex<_>>` -- see [`rebuild_duckdb_projection`]'s doc comment
+    /// for why a second independent open of the same path is unsound, not
+    /// just redundant) for the rest of the process's life, projecting every
     /// subsequent [`Self::append`] right after its JSONL line is durably
     /// written -- see [`run_writer`]. The decision (`Some(store)`, or
     /// `None` if there's nothing to share) is delivered exactly once on the
@@ -192,8 +206,45 @@ impl WriterHandle {
         let worker_health = health.clone();
         thread::spawn(move || {
             let _exit = super::health::WriterExit(worker_health.clone());
+            let mut store = duckdb_path.as_deref().and_then(open_duckdb_store);
+            if let Some(opened) = store.take() {
+                match start_up_incrementally(&path, opened) {
+                    IncrementalStartup::Ready(started, store) => {
+                        // The tail is already projected, so the store goes
+                        // out first: a caller that sees `Ready` with
+                        // `read_after` set can rely on the store's answer
+                        // without waiting on anything else.
+                        let store = DuckdbStoreHandle::new(store);
+                        let _ = duckdb_tx.send(Some(store.clone()));
+                        let StartedLog {
+                            file,
+                            report,
+                            next_sequence,
+                            end_offset,
+                        } = started;
+                        let _ = init_tx.send(WriterInit::Ready(report));
+                        run_writer(
+                            file,
+                            &path,
+                            rx,
+                            next_sequence,
+                            end_offset,
+                            Some(store),
+                            worker_health,
+                        );
+                        return;
+                    }
+                    IncrementalStartup::Rebuild(opened) => store = Some(opened),
+                    IncrementalStartup::Unavailable => {}
+                }
+            }
             match start_up(&path, reader, log_skipped_summary) {
-                Ok((file, report, next_sequence)) => {
+                Ok(StartedLog {
+                    file,
+                    report,
+                    next_sequence,
+                    end_offset,
+                }) => {
                     // Seed the rebuild from this read's records *before* handing
                     // `report` to `WriterInit::Ready` below (which moves it) --
                     // readiness (this send) must not wait on the rebuild, so it
@@ -202,16 +253,22 @@ impl WriterHandle {
                     // draining the channel (see this fn's doc comment and
                     // `run_writer`'s doc comment for why appends sent in that
                     // window queue harmlessly rather than racing anything).
-                    let duckdb_seed_records = duckdb_path.is_some().then(|| report.records.clone());
+                    let duckdb_seed = store.is_some().then(|| report.clone());
                     let _ = init_tx.send(WriterInit::Ready(report));
-                    let duckdb_store = match (duckdb_path.as_deref(), duckdb_seed_records) {
-                        (Some(duckdb_path), Some(records)) => {
-                            rebuild_and_open_duckdb_projection(duckdb_path, &records)
-                        }
+                    let duckdb_store = match (store, duckdb_seed) {
+                        (Some(store), Some(seed)) => rebuild_duckdb_projection(store, seed),
                         _ => None,
                     };
                     let _ = duckdb_tx.send(duckdb_store.clone());
-                    run_writer(file, &path, rx, next_sequence, duckdb_store, worker_health);
+                    run_writer(
+                        file,
+                        &path,
+                        rx,
+                        next_sequence,
+                        end_offset,
+                        duckdb_store,
+                        worker_health,
+                    );
                 }
                 Err(error) => {
                     worker_health.fail(format!("{error:#}"));
@@ -283,6 +340,17 @@ enum AgentEventLogWriterCommand {
     Flush(Sender<Result<()>>),
 }
 
+/// What a successful startup hands to [`run_writer`]: the open append
+/// handle, the read's report, the next sequence to assign, and the file
+/// length after any torn tail was discarded (the offset the next appended
+/// line starts at).
+struct StartedLog {
+    file: std::fs::File,
+    report: ReadReport,
+    next_sequence: u64,
+    end_offset: u64,
+}
+
 /// Creates the log's parent directory if needed, performs the startup read
 /// via `reader` (the real [`read`] in production; a test-substitutable
 /// closure in tests — see [`WriterHandle::open_with_reader`]), computes the
@@ -295,7 +363,7 @@ fn start_up(
     path: &Path,
     reader: impl FnOnce(&Path) -> Result<ReadReport>,
     log_skipped_summary: bool,
-) -> Result<(std::fs::File, ReadReport, u64)> {
+) -> Result<StartedLog> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).with_context(|| {
@@ -317,20 +385,34 @@ fn start_up(
         .max_known_sequence
         .map(|sequence| sequence + 1)
         .unwrap_or(0);
+    let (file, end_offset) = open_for_append(path, report.ignored_partial_line)?;
+    Ok(StartedLog {
+        file,
+        report,
+        next_sequence,
+        end_offset,
+    })
+}
 
+/// Opens the log for appending, first discarding an unterminated tail the
+/// read excluded, and returns the resulting file length.
+fn open_for_append(path: &Path, discard_partial: bool) -> Result<(std::fs::File, u64)> {
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .read(true)
         .append(true)
         .open(path)
         .with_context(|| format!("open agent event log for writing {}", path.display()))?;
-    if report.ignored_partial_line {
+    if discard_partial {
         discard_partial_tail(&mut file).with_context(|| {
             format!("discard unfinished agent event log tail {}", path.display())
         })?;
     }
-
-    Ok((file, report, next_sequence))
+    let end_offset = file
+        .metadata()
+        .with_context(|| format!("stat agent event log {}", path.display()))?
+        .len();
+    Ok((file, end_offset))
 }
 
 /// The reader excludes an unterminated tail. Remove those same bytes before
@@ -351,37 +433,161 @@ fn discard_partial_tail(file: &mut std::fs::File) -> std::io::Result<()> {
     file.set_len(0)
 }
 
-/// Opens (creating parent directories as needed) and reconciles the DuckDB
-/// projection at `duckdb_path` against `records` -- this is where
-/// `horizon-agentd`'s old `main::rebuild_duckdb_projection` (a separate,
-/// short-lived `Store::open` spawned only after readiness) now lives,
-/// folded into the event-log writer's own startup so the `Store` returned
-/// here can be *kept* by [`run_writer`] afterward instead of being dropped
-/// right after the rebuild -- that's what makes every subsequent append
-/// project live instead of only at the next restart (see
-/// `docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
+/// Opens (creating parent directories as needed) the DuckDB projection at
+/// `duckdb_path`. Failure is reported to stderr and returns `None`: a
+/// rebuildable, non-authoritative derived view failing here must never take
+/// down the JSONL writer thread it shares a process with -- JSONL stays the
+/// source of truth regardless, and the next restart's rebuild reconciles.
+fn open_duckdb_store(duckdb_path: &Path) -> Option<Store> {
+    if let Some(parent) = duckdb_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(error) = std::fs::create_dir_all(parent) {
+                eprintln!(
+                    "horizon-agentd: failed to create DuckDB projection directory {} ({error}); \
+                     live projection disabled for this run",
+                    parent.display()
+                );
+                return None;
+            }
+        }
+    }
+
+    match Store::open(duckdb_path) {
+        Ok(store) => Some(store),
+        Err(error) => {
+            eprintln!(
+                "horizon-agentd: DuckDB projection unavailable ({error}); live projection \
+                 disabled for this run"
+            );
+            None
+        }
+    }
+}
+
+/// The incremental mode's outcome (see [`WriterHandle::open_silently`]).
+// `Ready` carries the whole startup; it is built and consumed once.
+#[allow(clippy::large_enum_variant)]
+enum IncrementalStartup {
+    /// The cursor matched and the tail is projected: `Ready` may go out.
+    Ready(StartedLog, Store),
+    /// The projection cannot vouch for the log; read everything and rebuild
+    /// it after `Ready`.
+    Rebuild(Store),
+    /// The tail contained a record the projection cannot take. A rebuild
+    /// would skip the same record, so run the full read without one, the
+    /// same outcome a skipped record has always had.
+    Unavailable,
+}
+
+/// Tries the incremental mode: a current format stamp, a log cursor, and a
+/// matching line at the cursor's offset let startup read only the tail.
+/// Prints the same "already current" / "caught up incrementally" lines the
+/// whole-log reconciliation used to, so operators keep the same signal.
+fn start_up_incrementally(path: &Path, store: Store) -> IncrementalStartup {
+    let cursor = match projection_cursor(path, &store) {
+        Ok(Ok(cursor)) => cursor,
+        Ok(Err(reason)) => {
+            eprintln!("horizon-agentd: DuckDB projection {reason}; rebuilding from the event log");
+            return IncrementalStartup::Rebuild(store);
+        }
+        Err(error) => {
+            eprintln!(
+                "horizon-agentd: DuckDB projection cursor check failed ({error:#}); rebuilding \
+                 from the event log"
+            );
+            return IncrementalStartup::Rebuild(store);
+        }
+    };
+    let started = match read_tail(path, &cursor) {
+        Ok(started) => started,
+        Err(error) => {
+            // The full read surfaces the same error (or succeeds) on its own.
+            eprintln!(
+                "horizon-agentd: reading the event log after the DuckDB cursor failed \
+                 ({error:#}); reading the whole log"
+            );
+            return IncrementalStartup::Rebuild(store);
+        }
+    };
+    if started.report.records.is_empty() {
+        eprintln!("horizon-agentd: DuckDB projection already current, skipping rebuild");
+        return IncrementalStartup::Ready(started, store);
+    }
+    match store.catch_up_from_event_log(started.report.clone()) {
+        Ok(report) if report.skipped == 0 => {
+            eprintln!(
+                "horizon-agentd: DuckDB projection caught up incrementally ({} record(s))",
+                report.applied
+            );
+            IncrementalStartup::Ready(started, store)
+        }
+        Ok(report) => {
+            log_skipped_record_summary(&report);
+            // Records after the skipped one may have committed, moving the
+            // cursor past a hole. Drop the stamp so no later start trusts it.
+            if let Err(error) = store.invalidate_format() {
+                eprintln!(
+                    "horizon-agentd: failed to invalidate the DuckDB projection after a \
+                     skipped catch-up ({error}); the next start may hand it out"
+                );
+            }
+            IncrementalStartup::Unavailable
+        }
+        Err(error) => {
+            eprintln!(
+                "horizon-agentd: DuckDB incremental catch-up failed ({error}), falling back to a \
+                 full rebuild"
+            );
+            IncrementalStartup::Rebuild(store)
+        }
+    }
+}
+
+/// The projection's cursor when the boundary check passes, or the reason it
+/// cannot be trusted.
+fn projection_cursor(path: &Path, store: &Store) -> Result<Result<LogCursor, &'static str>> {
+    // An unreadable stamp (a file from before the shape stamp existed) is
+    // just as stale as a mismatching one.
+    if !store.has_current_format().unwrap_or(false) {
+        return Ok(Err("is not stamped with the current format"));
+    }
+    let Some(cursor) = store.log_cursor()? else {
+        return Ok(Err("has no event log cursor"));
+    };
+    if !path.exists() || !cursor_line_matches(path, &cursor)? {
+        return Ok(Err("cursor does not match the event log"));
+    }
+    Ok(Ok(cursor))
+}
+
+/// Reads only the bytes after `cursor` and opens the log for appending.
+/// Sequences continue past both the cursor's record and anything the tail
+/// holds, including lines whose event this build cannot decode.
+fn read_tail(path: &Path, cursor: &LogCursor) -> Result<StartedLog> {
+    let mut report = read_from(path, cursor.offset)?;
+    report.read_after = Some(cursor.clone());
+    let next_sequence = report
+        .max_known_sequence
+        .map_or(cursor.sequence, |sequence| sequence.max(cursor.sequence))
+        + 1;
+    let (file, end_offset) = open_for_append(path, report.ignored_partial_line)?;
+    Ok(StartedLog {
+        file,
+        report,
+        next_sequence,
+        end_offset,
+    })
+}
+
+/// The full mode's projection step: drops and rebuilds every table from the
+/// whole-log read, committing a cursor with each chunk. Runs after
+/// [`WriterInit::Ready`], so readiness never waits on it. Prints "rebuilt
+/// (N record(s))" -- the original line, kept unchanged so operators (and
+/// `horizon-agentd`'s own e2e tests, which poll for these exact strings)
+/// see the same signal.
 ///
-/// Three outcomes, decided by [`duckdb_projection_currency`]:
-///
-/// - **Current**: the mark already matches the log's tail. No work; prints
-///   "already current, skipping rebuild".
-/// - **Behind**: the mark is behind the tail by a known amount. Only the
-///   records beyond it are projected ([`Store::catch_up_from_event_log_records`]);
-///   prints "caught up incrementally (N record(s))". Falls back to a full
-///   rebuild if the catch-up itself errors.
-/// - **RebuildNeeded** (mark ahead of the tail, or absent while the log is
-///   non-empty) or a freshness-check error: a full rebuild
-///   ([`Store::replace_from_event_log_records`]); prints
-///   "rebuilt (N record(s))" -- the original, pre-incremental-catch-up
-///   line, kept unchanged so operators (and `horizon-agentd`'s own e2e
-///   tests, which poll for these exact strings) see the same signal for
-///   this case.
-///
-/// Failure (creating the parent directory, opening the store, or the
-/// rebuild itself) is reported to stderr and returns `None`: a rebuildable,
-/// non-authoritative derived view failing here must never take down the
-/// JSONL writer thread it shares a process with -- JSONL stays the source
-/// of truth regardless, and the next restart's rebuild reconciles.
+/// Failure is reported to stderr and returns `None`, for the same reason
+/// [`open_duckdb_store`] does.
 ///
 /// Returns the store wrapped in `Arc<Mutex<_>>`, not a bare `Store`: a
 /// second, independent `Store::open` against the same path from elsewhere
@@ -399,74 +605,12 @@ fn discard_partial_tail(file: &mut std::fs::File) -> std::io::Result<()> {
 /// (see `persistence::projection::duckdb::SharedDuckdbStore`, and this
 /// function's caller in [`WriterHandle::open_inner`]) rather than letting
 /// anyone open the file again.
-fn rebuild_and_open_duckdb_projection(
-    duckdb_path: &Path,
-    records: &[Record],
-) -> Option<DuckdbStoreHandle> {
+fn rebuild_duckdb_projection(store: Store, report: ReadReport) -> Option<DuckdbStoreHandle> {
     if let Some(delay) = test_duckdb_rebuild_delay() {
         thread::sleep(delay);
     }
 
-    if let Some(parent) = duckdb_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            if let Err(error) = std::fs::create_dir_all(parent) {
-                eprintln!(
-                    "horizon-agentd: failed to create DuckDB projection directory {} ({error}); \
-                     live projection disabled for this run",
-                    parent.display()
-                );
-                return None;
-            }
-        }
-    }
-
-    let store = match Store::open(duckdb_path) {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!(
-                "horizon-agentd: DuckDB projection unavailable ({error}); live projection \
-                 disabled for this run"
-            );
-            return None;
-        }
-    };
-
-    match duckdb_projection_currency(&store, records) {
-        Ok(ProjectionCurrency::Current) => {
-            eprintln!("horizon-agentd: DuckDB projection already current, skipping rebuild");
-            return Some(DuckdbStoreHandle::new(store));
-        }
-        Ok(ProjectionCurrency::Behind(mark)) => {
-            let tail = records
-                .iter()
-                .filter(|record| record.sequence as i64 > mark)
-                .cloned();
-            match store.catch_up_from_event_log_records(tail) {
-                Ok(report) => {
-                    log_skipped_record_summary(&report);
-                    if report.skipped != 0 {
-                        return None;
-                    }
-                    eprintln!(
-                        "horizon-agentd: DuckDB projection caught up incrementally \
-                             ({} record(s))",
-                        report.applied
-                    );
-                    return Some(DuckdbStoreHandle::new(store));
-                }
-                Err(error) => eprintln!(
-                    "horizon-agentd: DuckDB incremental catch-up failed ({error}), \
-                         falling back to a full rebuild"
-                ),
-            }
-        }
-        Ok(ProjectionCurrency::RebuildNeeded) => {}
-        Err(error) => eprintln!(
-            "horizon-agentd: DuckDB projection freshness check failed ({error}), rebuilding"
-        ),
-    }
-
-    match store.replace_from_event_log_records(records.iter().cloned()) {
+    match store.replace_from_event_log(report) {
         Ok(report) => {
             log_skipped_record_summary(&report);
             if report.skipped != 0 {
@@ -510,54 +654,10 @@ fn log_skipped_record_summary(report: &ApplyRecordsReport) {
     );
 }
 
-/// How [`rebuild_and_open_duckdb_projection`] should reconcile `store`'s
-/// existing high-water mark against the event log's own tail sequence.
-enum ProjectionCurrency {
-    /// The mark already matches the log's tail -- nothing to do.
-    Current,
-    /// The mark is behind the log's tail by a known amount: projecting only
-    /// `sequence > mark` reaches the same end state as a full rebuild, at a
-    /// fraction of the cost against a large real log.
-    Behind(i64),
-    /// The mark is ahead of the log's tail, or absent while the log is
-    /// non-empty -- either way the projection's own state can't be trusted
-    /// to be a prefix of the current log (a reset/corrupted store, or one
-    /// built against a log that has since been replaced), so a full rebuild
-    /// is the only safe path.
-    RebuildNeeded,
-}
-
-/// Compares `store`'s existing high-water mark ([`Store::max_last_sequence`])
-/// against `records`' own tail sequence to decide which
-/// [`ProjectionCurrency`] applies. `records` is already sorted ascending by
-/// `event_log::read`, so its last element carries the log's overall maximum
-/// sequence.
-fn duckdb_projection_currency(store: &Store, records: &[Record]) -> Result<ProjectionCurrency> {
-    // Conversion preserves sequence numbers. An old projection can have the
-    // same high-water mark while still containing undecodable result envelopes.
-    if !store.has_current_event_format()? {
-        return Ok(ProjectionCurrency::RebuildNeeded);
-    }
-    let log_final_sequence = records.last().map(|record| record.sequence as i64);
-    let mark = store.max_last_sequence()?;
-    let prefix_len = mark.map_or(0, |mark| {
-        records.partition_point(|record| record.sequence <= mark as u64)
-    });
-    if !store.matches_log_prefix(&records[..prefix_len])? {
-        return Ok(ProjectionCurrency::RebuildNeeded);
-    }
-    Ok(match (mark, log_final_sequence) {
-        (None, None) => ProjectionCurrency::Current,
-        (Some(mark), Some(tail)) if mark == tail => ProjectionCurrency::Current,
-        (Some(mark), Some(tail)) if mark < tail => ProjectionCurrency::Behind(mark),
-        _ => ProjectionCurrency::RebuildNeeded,
-    })
-}
-
 /// Test-only hook, mirroring `horizon-agentd::main`'s own resume-delay hook
 /// (`TEST_RESUME_DELAY_MS_VAR`): when set, artificially delays this thread's
-/// DuckDB rebuild (which runs *after* [`WriterInit::Ready`] has already been
-/// sent -- see [`WriterHandle::open_inner`]) so a test can prove the
+/// full DuckDB rebuild (which runs *after* [`WriterInit::Ready`] has already
+/// been sent -- see [`WriterHandle::open_inner`]) so a test can prove the
 /// rebuild never sits on the readiness path `session_list`/`session_new`
 /// block on. Never set outside `horizon-agentd`'s own e2e tests.
 const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS";
@@ -570,15 +670,19 @@ fn test_duckdb_rebuild_delay() -> Option<Duration> {
 }
 
 /// Encode and flush the complete JSONL record before updating derived state.
-fn append_jsonl_record(writer: &mut impl Write, record: &Record) -> Result<()> {
-    serde_json::to_writer(&mut *writer, record).context("encode/write record")?;
-    writer.write_all(b"\n").context("write record separator")?;
-    writer.flush().context("flush record")
+/// Returns how many bytes the line took, so the caller can track where the
+/// next one starts.
+fn append_jsonl_record(writer: &mut impl Write, record: &Record) -> Result<u64> {
+    let mut line = serde_json::to_vec(record).context("encode record")?;
+    line.push(b'\n');
+    writer.write_all(&line).context("write record")?;
+    writer.flush().context("flush record")?;
+    Ok(line.len() as u64)
 }
 
 /// A failed write may have left a partial record. Keep that failure until
 /// restart: another successful flush cannot establish a complete history.
-fn retain_write_failure(result: &Result<()>, failure: &mut Option<String>) {
+fn retain_write_failure<T>(result: &Result<T>, failure: &mut Option<String>) {
     if failure.is_none() {
         if let Err(error) = result {
             let message = format!("{error:#}");
@@ -598,7 +702,9 @@ fn retain_write_failure(result: &Result<()>, failure: &mut Option<String>) {
 /// via [`WriterHandle::open_silently`] with a DuckDB path -- see
 /// [`WriterHandle::open_inner`]), is locked and projected into right after
 /// each record's own JSONL line is durably written, keeping the projection
-/// live. The lock is only ever briefly held (one row's worth of inserts);
+/// live. `log_offset` (the file length when this loop starts) advances by
+/// each written line, so every projected record commits its own log cursor.
+/// The lock is only ever briefly held (one row's worth of inserts);
 /// write volume is low enough (roughly 1-2 events/s) that contention with
 /// another locker of the same handle is normally brief. The first projection
 /// failure disables writes and queries on every clone until restart; JSONL
@@ -608,6 +714,7 @@ fn run_writer(
     path: &Path,
     rx: Receiver<AgentEventLogWriterCommand>,
     mut next_sequence: u64,
+    mut log_offset: u64,
     duckdb_store: Option<DuckdbStoreHandle>,
     health: WriterHealth,
 ) {
@@ -630,11 +737,17 @@ fn run_writer(
                 if let Some(message) = &failure {
                     health.fail(message.clone());
                 }
-                if result.is_err() {
+                let Ok(written) = result else {
                     continue;
-                }
+                };
+                log_offset += written;
                 if let Some(store) = &duckdb_store {
-                    store.project(&record);
+                    let cursor = LogCursor {
+                        offset: log_offset,
+                        sequence: record.sequence,
+                        event_id: record.event_id.clone(),
+                    };
+                    store.project(&record, Some(&cursor));
                 }
             }
             AgentEventLogWriterCommand::Flush(reply) => {
@@ -923,6 +1036,7 @@ mod tests {
                 Path::new("injected.jsonl"),
                 rx,
                 0,
+                0,
                 Some(projected),
                 worker_health,
             );
@@ -977,6 +1091,7 @@ mod tests {
                     Path::new("injected-failure"),
                     rx,
                     0,
+                    0,
                     None,
                     worker_health,
                 );
@@ -1013,219 +1128,430 @@ mod tests {
         }
     }
 
-    // --- currency check + incremental catch-up (backlog-32) ----------------
+    // --- startup modes: full rebuild vs. cursor-verified tail -------------
 
-    fn temp_duckdb_path(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "horizon-agent-writer-{label}-{}.duckdb",
-            Uuid::new_v4()
-        ))
+    /// One `open_silently` start against `log`/`db`, waiting for both of its
+    /// outcomes.
+    pub(super) struct Boot {
+        pub(super) writer: WriterHandle,
+        pub(super) report: ReadReport,
+        pub(super) store: Option<DuckdbStoreHandle>,
     }
 
-    /// The bug this guards: `duckdb_projection_currency` must find the
-    /// projection current even when the log it was built from contains a
-    /// record whose own projection is a no-op (no dedicated table wants a
-    /// bare `StateChanged`, see `projection::Store::project_event`'s doc
-    /// comment) -- `agent_events`/`agent_sessions` are still updated for
-    /// that record (see `append::Store::append_record`'s doc comment), so
-    /// the high-water mark advances past it exactly like any other record.
-    #[test]
-    fn currency_check_is_current_after_seeding_with_a_skipped_record() {
-        let store = Store::open_in_memory().expect("open in-memory store");
-        let session_id = SessionId::new();
-        let records = vec![record_at(session_id, 0), record_at(session_id, 1)];
-
-        let report = store
-            .replace_from_event_log_records(records.clone())
-            .expect("seed store");
-        assert_eq!(report.applied, 2, "both records must be applied");
-
-        match duckdb_projection_currency(&store, &records).expect("currency check") {
-            ProjectionCurrency::Current => {}
-            _ => panic!(
-                "a skipped record must still advance agent_sessions.last_sequence, so a \
-                 re-check of the same log must read as current"
-            ),
+    pub(super) fn boot(log: &Path, db: &Path) -> Boot {
+        let (writer, init_rx, duckdb_rx) = WriterHandle::open_silently(log, Some(db.to_path_buf()));
+        let report = match init_rx.recv().expect("writer init outcome") {
+            WriterInit::Ready(report) => report,
+            WriterInit::Failed(error) => panic!("writer startup failed: {error:#}"),
+        };
+        let store = duckdb_rx.recv().ok().flatten();
+        Boot {
+            writer,
+            report,
+            store,
         }
     }
 
+    /// Stops the writer thread and waits until it has exited, so its store
+    /// is closed before the next boot opens the same file (two instances of
+    /// one DuckDB file in a process are unsound -- see
+    /// `rebuild_duckdb_projection`).
+    pub(super) fn shut_down(boot: Boot) {
+        let exited = boot.writer.subscribe_failure();
+        drop(boot.store);
+        drop(boot.writer);
+        exited
+            .receiver()
+            .recv_timeout(Duration::from_secs(10))
+            .expect("writer thread exits");
+    }
+
+    pub(super) fn write_log(path: &Path, records: &[Record]) {
+        let mut contents = Vec::new();
+        for record in records {
+            serde_json::to_writer(&mut contents, record).unwrap();
+            contents.push(b'\n');
+        }
+        std::fs::write(path, contents).unwrap();
+    }
+
+    fn append_raw(path: &Path, bytes: &[u8]) {
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        file.write_all(bytes).unwrap();
+    }
+
+    fn cursor_of(store: &DuckdbStoreHandle) -> Option<LogCursor> {
+        store.query(|store| store.log_cursor()).unwrap()
+    }
+
+    fn texts(store: &DuckdbStoreHandle, session: SessionId) -> Vec<String> {
+        store
+            .query(|store| store.messages_for_session(session))
+            .unwrap()
+            .into_iter()
+            .map(|message| message.text)
+            .collect()
+    }
+
+    fn file_len(path: &Path) -> u64 {
+        std::fs::metadata(path).unwrap().len()
+    }
+
     #[test]
-    fn an_old_projection_format_rebuilds_even_when_the_high_water_mark_matches() {
+    fn full_rebuild_commits_the_cursor_of_the_last_record() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("state.duckdb");
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
         let session = SessionId::new();
-        let records = vec![message_record(session, 10, "converted history")];
-        drop(rebuild_and_open_duckdb_projection(&path, &records).unwrap());
-        for version in [None, Some(2)] {
+        let records: Vec<_> = (0..3)
+            .map(|seq| message_record(session, seq, &format!("m{seq}")))
+            .collect();
+        write_log(&log, &records);
+
+        let boot = boot(&log, &db);
+        assert_eq!(boot.report.read_after, None, "no cursor yet: full mode");
+        assert_eq!(boot.report.records.len(), 3);
+        let store = boot.store.clone().expect("rebuilt store");
+        assert_eq!(
+            cursor_of(&store),
+            Some(LogCursor {
+                offset: file_len(&log),
+                sequence: 2,
+                event_id: records[2].event_id.clone(),
+            })
+        );
+        assert_eq!(cursor_of(&store), boot.report.last_record_cursor());
+        assert!(store.query(|store| store.has_current_format()).unwrap());
+        shut_down(boot);
+    }
+
+    #[test]
+    fn a_clean_restart_reads_only_the_tail_and_catches_it_up_before_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
+        let session = SessionId::new();
+        let first: Vec<_> = (0..2)
+            .map(|seq| message_record(session, seq, &format!("m{seq}")))
+            .collect();
+        write_log(&log, &first);
+        let first_boot = boot(&log, &db);
+        let first_cursor = cursor_of(first_boot.store.as_ref().unwrap()).unwrap();
+        shut_down(first_boot);
+
+        let second = message_record(session, 2, "m2");
+        append_raw(
+            &log,
+            format!("{}\n", serde_json::to_string(&second).unwrap()).as_bytes(),
+        );
+
+        let second_boot = boot(&log, &db);
+        assert_eq!(second_boot.report.read_after, Some(first_cursor));
+        assert_eq!(second_boot.report.records, vec![second.clone()]);
+        let store = second_boot.store.clone().expect("caught-up store");
+        assert_eq!(texts(&store, session), ["m0", "m1", "m2"]);
+        assert_eq!(
+            cursor_of(&store),
+            Some(LogCursor {
+                offset: file_len(&log),
+                sequence: 2,
+                event_id: second.event_id.clone(),
+            })
+        );
+
+        // Sequences continue past the tail.
+        second_boot.writer.append(record_at(session, 999)).unwrap();
+        second_boot.writer.flush().unwrap();
+        assert_eq!(read(&log).unwrap().records.last().unwrap().sequence, 3);
+        shut_down(second_boot);
+    }
+
+    #[test]
+    fn a_live_append_commits_its_own_cursor_and_the_next_start_is_already_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
+        let session = SessionId::new();
+        write_log(&log, &[message_record(session, 0, "seed")]);
+
+        let first_boot = boot(&log, &db);
+        first_boot
+            .writer
+            .append(message_record(session, 999, "live"))
+            .unwrap();
+        first_boot.writer.flush().unwrap();
+        let appended = read(&log).unwrap().records.pop().unwrap();
+        let store = first_boot.store.clone().unwrap();
+        assert_eq!(
+            cursor_of(&store),
+            Some(LogCursor {
+                offset: file_len(&log),
+                sequence: 1,
+                event_id: appended.event_id,
+            })
+        );
+        let updated_at = store.query(|store| store.sessions()).unwrap()[0]
+            .updated_at
+            .clone();
+        drop(store);
+        shut_down(first_boot);
+
+        thread::sleep(Duration::from_millis(20));
+        let second_boot = boot(&log, &db);
+        assert!(second_boot.report.read_after.is_some());
+        assert!(second_boot.report.records.is_empty());
+        let store = second_boot.store.clone().unwrap();
+        assert_eq!(texts(&store, session), ["seed", "live"]);
+        assert_eq!(
+            store.query(|store| store.sessions()).unwrap()[0].updated_at,
+            updated_at,
+            "an unchanged log must not touch the projection at all"
+        );
+        drop(store);
+        shut_down(second_boot);
+    }
+
+    #[test]
+    fn a_different_line_at_the_cursor_rebuilds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
+        let session = SessionId::new();
+        write_log(&log, &[message_record(session, 0, "original")]);
+        shut_down(boot(&log, &db));
+
+        // Same sequence and line length, different identity.
+        write_log(&log, &[message_record(session, 0, "replaced")]);
+        let boot = boot(&log, &db);
+        assert_eq!(boot.report.read_after, None);
+        assert_eq!(texts(boot.store.as_ref().unwrap(), session), ["replaced"]);
+        shut_down(boot);
+    }
+
+    #[test]
+    fn a_log_shorter_than_the_cursor_rebuilds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
+        let session = SessionId::new();
+        let records = vec![
+            message_record(session, 0, "a"),
+            message_record(session, 1, "b"),
+        ];
+        write_log(&log, &records);
+        shut_down(boot(&log, &db));
+
+        write_log(&log, &records[..1]);
+        let boot = boot(&log, &db);
+        assert_eq!(boot.report.read_after, None);
+        assert_eq!(
+            texts(boot.store.as_ref().unwrap(), session),
+            ["a"],
+            "the rebuild must reflect only what the log still has"
+        );
+        shut_down(boot);
+    }
+
+    #[test]
+    fn a_missing_cursor_rebuilds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
+        let session = SessionId::new();
+        write_log(&log, &[message_record(session, 0, "a")]);
+        shut_down(boot(&log, &db));
+        duckdb::Connection::open(&db)
+            .unwrap()
+            .execute_batch("DELETE FROM agent_log_cursor;")
+            .unwrap();
+
+        let boot = boot(&log, &db);
+        assert_eq!(boot.report.read_after, None);
+        assert!(cursor_of(boot.store.as_ref().unwrap()).is_some());
+        shut_down(boot);
+    }
+
+    #[test]
+    fn an_old_projection_format_rebuilds_even_when_the_cursor_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
+        let session = SessionId::new();
+        write_log(&log, &[message_record(session, 10, "converted history")]);
+        shut_down(boot(&log, &db));
+        for stamp in [None, Some((2, 2)), Some((4, 1))] {
             {
-                let conn = duckdb::Connection::open(&path).unwrap();
+                let conn = duckdb::Connection::open(&db).unwrap();
                 conn.execute_batch(
                     "DELETE FROM agent_projection_format;
                     UPDATE agent_messages SET text = 'old cached history';",
                 )
                 .unwrap();
-                if let Some(version) = version {
+                if let Some((event_log_version, schema_version)) = stamp {
                     conn.execute(
-                        "INSERT INTO agent_projection_format VALUES (true, ?)",
-                        [version],
+                        "INSERT INTO agent_projection_format VALUES (true, ?, ?)",
+                        [event_log_version, schema_version],
                     )
                     .unwrap();
                 }
             }
-            let rebuilt = rebuild_and_open_duckdb_projection(&path, &records).unwrap();
-            let store = rebuilt.lock().unwrap();
+            let boot = boot(&log, &db);
+            assert_eq!(boot.report.read_after, None);
             assert_eq!(
-                store.messages_for_session(session).unwrap()[0].text,
-                "converted history"
+                texts(boot.store.as_ref().unwrap(), session),
+                ["converted history"]
             );
-            assert!(matches!(
-                duckdb_projection_currency(&store, &records).unwrap(),
-                ProjectionCurrency::Current
-            ));
+            shut_down(boot);
         }
     }
 
-    /// End-to-end version of the check above, through the real entry point
-    /// (`rebuild_and_open_duckdb_projection`) two "boots" in a row against
-    /// an unchanged, skip-containing log: the second boot must not touch
-    /// the store at all. Proven by `agent_sessions.updated_at`, which every
-    /// write path (`Store::upsert_session`) stamps with `now()` -- if the
-    /// second boot did any work (a rebuild or a catch-up), that timestamp
-    /// would move; "already current" is the only outcome that leaves it
-    /// alone.
-    #[test]
-    fn already_current_on_second_boot_after_a_skip_containing_log() {
-        let duckdb_path = temp_duckdb_path("already-current");
-        let session_id = SessionId::new();
-        let records = vec![record_at(session_id, 0), record_at(session_id, 1)];
-
-        let first_boot =
-            rebuild_and_open_duckdb_projection(&duckdb_path, &records).expect("first boot store");
-        let first_updated_at = {
-            let guard = first_boot.lock().unwrap();
-            guard.sessions().expect("sessions")[0].updated_at.clone()
-        };
-        drop(first_boot);
-
-        thread::sleep(Duration::from_millis(20));
-
-        let second_boot =
-            rebuild_and_open_duckdb_projection(&duckdb_path, &records).expect("second boot store");
-        let second_updated_at = {
-            let guard = second_boot.lock().unwrap();
-            guard.sessions().expect("sessions")[0].updated_at.clone()
-        };
-
-        assert_eq!(
-            first_updated_at, second_updated_at,
-            "a second boot against an unchanged (skip-containing) log must skip the rebuild \
-             entirely; any real write would have advanced agent_sessions.updated_at"
+    /// The table shape before the cursor and the stored session context
+    /// existed: the format table has no schema-version column, and
+    /// `agent_sessions` has no `session_context_json`.
+    const PRE_CURSOR_SCHEMA_SQL: &str = "
+        CREATE TABLE agent_projection_format (
+            singleton BOOLEAN PRIMARY KEY CHECK (singleton),
+            event_log_version INTEGER NOT NULL
         );
-
-        drop(second_boot);
-        let _ = std::fs::remove_file(&duckdb_path);
-        let _ = std::fs::remove_file(duckdb_path.with_extension("duckdb.wal"));
-    }
-
-    /// A verified prefix permits incremental catch-up without rewriting
-    /// earlier rows. Existing event identities stay stable across both boots.
-    #[test]
-    fn behind_mark_triggers_incremental_catch_up_that_preserves_earlier_rows() {
-        let duckdb_path = temp_duckdb_path("incremental");
-        let session_id = SessionId::new();
-
-        let first_boot_records = vec![message_record(session_id, 0, "first")];
-        let first_boot = rebuild_and_open_duckdb_projection(&duckdb_path, &first_boot_records)
-            .expect("first boot store");
-        drop(first_boot);
-
-        let second_boot_records = vec![
-            first_boot_records[0].clone(),
-            message_record(session_id, 1, "second"),
-        ];
-        let second_boot = rebuild_and_open_duckdb_projection(&duckdb_path, &second_boot_records)
-            .expect("second boot store");
-
-        let guard = second_boot.lock().unwrap();
-        let messages = guard.messages_for_session(session_id).expect("messages");
-        assert_eq!(messages.len(), 2);
-        assert_eq!(
-            messages[0].text, "first",
-            "an incremental catch-up must not re-touch rows at or before the existing mark"
+        INSERT INTO agent_projection_format VALUES (true, 4);
+        CREATE TABLE agent_sessions (
+            session_id TEXT PRIMARY KEY,
+            provider_id TEXT,
+            role_id TEXT,
+            last_sequence BIGINT NOT NULL DEFAULT -1,
+            updated_at TIMESTAMP NOT NULL DEFAULT now()
         );
-        assert_eq!(messages[1].text, "second");
-        drop(guard);
+    ";
 
-        drop(second_boot);
-        let _ = std::fs::remove_file(&duckdb_path);
-        let _ = std::fs::remove_file(duckdb_path.with_extension("duckdb.wal"));
-    }
-
-    /// Work item 2's other named fallback case: a missing store (nothing to
-    /// catch up from) always does a full rebuild -- the ordinary first-boot
-    /// path, asserted explicitly here since the incremental-catch-up branch
-    /// above could otherwise plausibly regress it into the wrong shape.
     #[test]
-    fn missing_store_falls_back_to_a_full_rebuild() {
-        let duckdb_path = temp_duckdb_path("missing-store");
-        let session_id = SessionId::new();
-        let records = vec![message_record(session_id, 0, "hello")];
+    fn a_projection_with_the_pre_cursor_schema_is_rebuilt_with_the_current_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
+        duckdb::Connection::open(&db)
+            .unwrap()
+            .execute_batch(PRE_CURSOR_SCHEMA_SQL)
+            .unwrap();
+        let session = SessionId::new();
+        let context = crate::persistence::event_log::PersistedSessionContext {
+            workspace_root: Some(PathBuf::from("/tmp/old-schema-root")),
+            isolated_worktree: false,
+            parent_session_id: None,
+            filesystem_grants: Vec::new(),
+        };
+        let mut record = message_record(session, 0, "a");
+        record.session_context = Some(context.clone());
+        write_log(&log, &[record]);
 
-        let store =
-            rebuild_and_open_duckdb_projection(&duckdb_path, &records).expect("rebuilt store");
-        let guard = store.lock().unwrap();
-        let messages = guard.messages_for_session(session_id).expect("messages");
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].text, "hello");
-        drop(guard);
-
+        let first_boot = boot(&log, &db);
+        assert_eq!(first_boot.report.read_after, None);
+        let store = first_boot.store.clone().expect("rebuilt store");
+        assert!(store.query(|store| store.has_current_format()).unwrap());
+        assert_eq!(
+            store.session_records(session, 0).unwrap()[0].session_context,
+            Some(context),
+            "the rebuilt schema must carry the new column, populated"
+        );
         drop(store);
-        let _ = std::fs::remove_file(&duckdb_path);
-        let _ = std::fs::remove_file(duckdb_path.with_extension("duckdb.wal"));
+        shut_down(first_boot);
+
+        let second_boot = boot(&log, &db);
+        assert!(second_boot.report.read_after.is_some());
+        shut_down(second_boot);
     }
 
-    /// Work item 2's other named fallback case: a mark *ahead* of the log's
-    /// tail (a shorter log than what the projection was last built from --
-    /// e.g. a truncated or replaced event log) must trigger a full rebuild,
-    /// not an incremental catch-up (there is no well-defined "tail beyond
-    /// the mark" when the mark is already past the end) and not a stale
-    /// "already current". Proven by a row that only a full rebuild's own
-    /// `clear_all_agent_state` would remove: if the second boot wrongly
-    /// treated this as current or tried to catch up, the row from the
-    /// now-absent sequence 1 would still be there.
     #[test]
-    fn ahead_mark_falls_back_to_a_full_rebuild() {
-        let duckdb_path = temp_duckdb_path("ahead-mark");
-        let session_id = SessionId::new();
-
-        let first_boot_records = vec![
-            message_record(session_id, 0, "a"),
-            message_record(session_id, 1, "b"),
-        ];
-        let first_boot = rebuild_and_open_duckdb_projection(&duckdb_path, &first_boot_records)
-            .expect("first boot store");
-        drop(first_boot);
-
-        // Second "boot" sees a *shorter* log than what the projection was
-        // built from -- the store's mark (1) is now ahead of this log's own
-        // tail (0).
-        let second_boot_records = vec![message_record(session_id, 0, "a")];
-        let second_boot = rebuild_and_open_duckdb_projection(&duckdb_path, &second_boot_records)
-            .expect("second boot store");
-
-        let guard = second_boot.lock().unwrap();
-        let messages = guard.messages_for_session(session_id).expect("messages");
-        assert_eq!(
-            messages.len(),
-            1,
-            "an ahead mark must trigger a full rebuild reflecting only what the log currently \
-             has, not a stale extra row left over from the old state"
+    fn an_undecodable_tail_line_still_advances_the_next_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
         );
-        drop(guard);
+        let session = SessionId::new();
+        write_log(&log, &[message_record(session, 0, "a")]);
+        shut_down(boot(&log, &db));
+        let mut undecodable = serde_json::to_value(record_at(session, 50)).unwrap();
+        undecodable["event"] = serde_json::json!({"NotARealVariant": {}});
+        append_raw(&log, format!("{undecodable}\n").as_bytes());
 
-        drop(second_boot);
-        let _ = std::fs::remove_file(&duckdb_path);
-        let _ = std::fs::remove_file(duckdb_path.with_extension("duckdb.wal"));
+        let boot = boot(&log, &db);
+        assert!(boot.report.read_after.is_some());
+        assert!(boot.report.records.is_empty());
+        assert_eq!(boot.report.skipped_event_count, 1);
+        assert_eq!(boot.report.max_known_sequence, Some(50));
+        boot.writer.append(record_at(session, 999)).unwrap();
+        boot.writer.flush().unwrap();
+        assert_eq!(read(&log).unwrap().records.last().unwrap().sequence, 51);
+        shut_down(boot);
+    }
+
+    #[test]
+    fn a_torn_line_after_the_cursor_is_discarded_and_the_cursor_stays_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
+        let session = SessionId::new();
+        write_log(&log, &[message_record(session, 0, "a")]);
+        shut_down(boot(&log, &db));
+        let intact_len = file_len(&log);
+        append_raw(&log, b"{\"schema\":\"horizon.agent.event_log\",\"ver");
+
+        let torn_boot = boot(&log, &db);
+        assert!(torn_boot.report.read_after.is_some());
+        assert!(torn_boot.report.ignored_partial_line);
+        assert_eq!(file_len(&log), intact_len, "the torn bytes are discarded");
+        torn_boot
+            .writer
+            .append(message_record(session, 999, "b"))
+            .unwrap();
+        torn_boot.writer.flush().unwrap();
+        shut_down(torn_boot);
+
+        let next_boot = boot(&log, &db);
+        assert!(next_boot.report.read_after.is_some());
+        assert!(next_boot.report.records.is_empty());
+        assert_eq!(
+            texts(next_boot.store.as_ref().unwrap(), session),
+            ["a", "b"]
+        );
+        shut_down(next_boot);
+    }
+
+    #[test]
+    fn an_unopenable_projection_falls_back_to_the_full_read_without_a_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("events.jsonl");
+        let db = dir.path().join("not-a-database.duckdb");
+        std::fs::write(&db, b"this is not a DuckDB file").unwrap();
+        let session = SessionId::new();
+        write_log(&log, &[message_record(session, 0, "a")]);
+
+        let boot = boot(&log, &db);
+        assert_eq!(boot.report.read_after, None);
+        assert_eq!(boot.report.records.len(), 1);
+        assert!(boot.store.is_none());
+        boot.writer.append(record_at(session, 999)).unwrap();
+        boot.writer.flush().unwrap();
+        assert_eq!(read(&log).unwrap().records.len(), 2);
+        shut_down(boot);
     }
 }
 

@@ -44,16 +44,30 @@ existing handle clones then reject history searches; later JSONL writes continue
 Provider history prefers authoritative log events and can fall back to those
 when the index is unavailable.
 
-Startup compares the event-format stamp and the ordered `(sequence, event_id)`
-list against the JSONL prefix. Matching only the maximum sequence is insufficient:
-a missing middle event or a replaced log forces a full rebuild. A verified prefix
-allows incremental catch-up. Verification is linear in the prefix length; startup
-already reads the whole JSONL log, and this comparison reads only index identities.
-It does not audit arbitrary corruption of derived row contents.
+Startup checks one boundary instead of the whole prefix (owner decision,
+2026-10-11). The projection stores a cursor for the last record it ingested: the
+JSONL byte offset just past that record's line, plus its `sequence` and
+`event_id`, committed in the same transaction as the rows it covers. When the
+format stamp (event-log version and projection schema version) is current and
+the newline-terminated line ending exactly at the cursor's offset still decodes
+as an envelope with that sequence and event id, startup reads only the bytes
+after the offset and catches them up. A missing cursor, a stale or unreadable
+stamp, a file shorter than the offset, or a different line there falls back to
+the whole-log read and a full rebuild. A replaced log is caught only when its
+line at the offset differs.
+
+What startup no longer detects: anything before the cursor. A missing middle
+event, a hole a crash or an older bug left in the projection, or a log edited in
+place before the offset all go unnoticed while the cursor line still matches.
+Skipped and undecodable lines before the cursor are also no longer re-counted,
+so the client's skipped-lines summary covers only the tail. The check does not
+audit derived row contents either, as before.
 
 Rebuild and catch-up retain batched transactions and isolate invalid records for
 diagnostics. Any skipped record keeps search unavailable; a complete rebuild alone
-receives the current-format stamp. An unprojectable source record may therefore
+receives the current-format stamp, and a catch-up that skips a record removes it,
+because the chunks after the skipped one still commit and move the cursor past
+the hole. An unprojectable source record may therefore
 require a code or source-data repair before search can return. It never blocks
 saving new conversation history. Initialization uses explicit Pending, Ready and
 Unavailable states; a Ready handle can subsequently reject queries after failure.
@@ -62,7 +76,8 @@ Unavailable states; a Ready handle can subsequently reject queries after failure
 
 Regression tests inject write/flush failures, recover a partially committed batch
 on writer restart, verify broadcast to multiple and late subscribers, rebuild a
-DB with a missing middle row despite an equal tail, reject a replacement log with
+DB that has no cursor, a stale stamp, the pre-cursor schema, a different line at
+the cursor, or a log shorter than the cursor, reject a replacement log with
 reused sequences, and revoke existing search handles while later JSONL writes
 continue. Daemon tests cover failed input acceptance, preventing tool execution
 and provider release, replaying transient diagnostics, and startup refusal.

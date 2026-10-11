@@ -35,28 +35,29 @@
 //! block on [`session::AgentdState::wait_until_resume_ready`] first -- a
 //! readiness gate, not a protocol change.
 //!
-//! **The DuckDB rebuild is off the readiness path too.** It used to run
-//! synchronously inside [`open_persistence`], *before* [`AgentdState::
-//! set_writer`]/[`session::resume_persisted_sessions`]/[`AgentdState::
-//! mark_resume_ready`] -- meaning every readiness-gated request waited on a
-//! full synchronous rebuild of a derived, non-authoritative read model that
-//! no session actually needs (sessions resume from the JSONL log directly).
-//!
-//! As of the recall work, the rebuild (and the projection itself) moved
-//! again: it's no longer a separate task this binary spawns at all.
-//! [`open_persistence`] now passes `agent_config.persistence.duckdb_path`
-//! straight into [`WriterHandle::open_silently`], and the event log's own
-//! background writer thread (`horizon_agent::persistence::event_log::
-//! writer`) does the rebuild-or-skip itself, right after it sends
-//! `WriterInit::Ready` (which is what [`open_persistence`]'s blocking
-//! `init_rx.recv()` -- and therefore [`AgentdState::mark_resume_ready`] --
-//! actually waits on) and before it starts draining/durably writing further
-//! appends. Readiness still doesn't wait on DuckDB at all, and the same
-//! skip-when-current freshness check still applies (see that module's
-//! `rebuild_and_open_duckdb_projection` doc comment) -- but the writer
-//! thread now *keeps* the opened `Store` afterward instead of dropping it,
-//! projecting every later append live instead of only at the next restart
+//! **The DuckDB projection and readiness.** The event log's own background
+//! writer thread (`horizon_agent::persistence::event_log::writer`) owns
+//! the projection: [`open_persistence`] passes
+//! `agent_config.persistence.duckdb_path` into
+//! [`WriterHandle::open_silently`], and the writer keeps the opened `Store`
+//! for the rest of the process's life, projecting every append live
 //! (`docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
+//! Startup takes one of two modes (that doc's "Incremental startup"
+//! addendum):
+//!
+//! - **Incremental.** The projection's format stamp is current and the
+//!   log line at its cursor still matches. Opening the store, reading the
+//!   log after the cursor, and catching that tail up into the projection
+//!   all happen *before* `WriterInit::Ready`, so they are on the readiness
+//!   path -- deliberately, because they are small and resume then reads
+//!   the projection instead of the log
+//!   ([`session::resume_persisted_sessions_from_projection`]).
+//! - **Full.** Anything else (first start, a stale stamp, a cursor that no
+//!   longer matches the log). The whole log is read, `WriterInit::Ready`
+//!   carries every record, and the full rebuild of the projection runs
+//!   *after* `Ready` -- off the readiness path: readiness never waits on a
+//!   full rebuild of a derived, non-authoritative read model, since this
+//!   mode resumes sessions from the JSONL records directly.
 
 mod board_flow;
 mod hub;
@@ -69,7 +70,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use horizon_agent::config::AgentConfig;
-use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
+use horizon_agent::persistence::event_log::{LogCursor, Record, WriterHandle, WriterInit};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::registry::ProviderRegistry;
 use horizon_wire::daemon;
@@ -142,7 +143,13 @@ async fn main() -> anyhow::Result<()> {
 
 struct PersistenceStartup {
     writer: Option<WriterHandle>,
+    /// Every record in the full mode; only the records after `read_after`
+    /// in the incremental mode.
     records: Vec<Record>,
+    /// `Some` in the incremental mode: the projection cursor the startup
+    /// read began after.
+    read_after: Option<LogCursor>,
+    max_known_sequence: Option<u64>,
     skipped_lines_summary: Option<String>,
     duckdb_ready_rx: crossbeam_channel::Receiver<Option<DuckdbStoreHandle>>,
 }
@@ -154,17 +161,16 @@ struct PersistenceStartup {
 /// the event log and DuckDB projection") still holds: this uses this
 /// binary's own config load, never Horizon's.
 ///
-/// The DuckDB rebuild is no longer spawned from here at all -- see the
-/// module doc's "DuckDB rebuild is off the readiness path too" for where it
-/// actually happens now ([`open_persistence`]'s `WriterHandle::
-/// open_silently` call).
-///
+/// What readiness waits on depends on the writer's startup mode (see the
+/// module doc). In the incremental mode the writer has already delivered
+/// the caught-up store, so this task takes it, publishes it to
+/// `duckdb_cell`, and resumes from it; if that fails before anything was
+/// written it falls back to reading the whole log. In the full mode
 /// `duckdb_cell` is populated by a *separate*, fire-and-forget
-/// `spawn_blocking` task spawned right after `open_persistence` returns --
-/// deliberately not awaited by (or ordered against) `resume_persisted_
-/// sessions`/`mark_resume_ready` below, so populating it can never
-/// reintroduce DuckDB onto the readiness path this function's own doc
-/// comment describes avoiding.
+/// `spawn_blocking` task spawned after `mark_resume_ready` -- deliberately
+/// not awaited by (or ordered against) `resume_persisted_sessions`/
+/// `mark_resume_ready`, so the full rebuild never lands on the readiness
+/// path.
 fn spawn_resume_task(
     state: Arc<AgentdState>,
     agent_config: AgentConfig,
@@ -177,6 +183,8 @@ fn spawn_resume_task(
         let PersistenceStartup {
             writer,
             records,
+            read_after,
+            max_known_sequence,
             skipped_lines_summary,
             duckdb_ready_rx,
         } = match open_persistence(&agent_config) {
@@ -190,24 +198,70 @@ fn spawn_resume_task(
         };
         state.set_writer(writer);
         state.set_skipped_lines_summary(skipped_lines_summary);
-        // Step 4: "agentd restart = read own log, rebuild rig_history, mark
-        // turns that died mid-flight as cancelled ... sessions are live
-        // again".
-        session::resume_persisted_sessions(&state, records);
-        state.mark_resume_ready();
 
-        // Propagates the writer thread's own rebuild-or-open decision into
-        // the shared cell whenever it lands -- `duckdb_ready_rx.recv()`
-        // blocks this dedicated propagator task, never the resume/readiness
-        // path above (already completed by the time this line runs). A
-        // disconnected channel (the writer's startup itself failed, so it
-        // never reached the DuckDB step at all) is treated the same as an
-        // explicit "no store".
-        tokio::task::spawn_blocking(move || {
-            let store = duckdb_ready_rx.recv().ok().flatten();
-            duckdb_cell.set(store);
-        });
+        let Some(cursor) = read_after else {
+            // Step 4: "agentd restart = read own log, rebuild rig_history,
+            // mark turns that died mid-flight as cancelled ... sessions are
+            // live again".
+            session::resume_persisted_sessions(&state, records);
+            state.mark_resume_ready();
+
+            // Propagates the writer thread's own rebuild-or-open decision
+            // into the shared cell whenever it lands --
+            // `duckdb_ready_rx.recv()` blocks this dedicated propagator task,
+            // never the resume/readiness path above (already completed by
+            // the time this line runs). A disconnected channel (the writer's
+            // startup itself failed, so it never reached the DuckDB step at
+            // all) is treated the same as an explicit "no store".
+            tokio::task::spawn_blocking(move || {
+                let store = duckdb_ready_rx.recv().ok().flatten();
+                duckdb_cell.set(store);
+            });
+            return;
+        };
+
+        // The incremental mode sends the store before `Ready`, so this
+        // never waits.
+        let store = duckdb_ready_rx.recv().ok().flatten();
+        duckdb_cell.set(store.clone());
+        let through_sequence =
+            max_known_sequence.map_or(cursor.sequence, |sequence| sequence.max(cursor.sequence));
+        let resumed = match &store {
+            Some(store) => session::resume_persisted_sessions_from_projection(
+                &state,
+                store,
+                &records,
+                through_sequence,
+            ),
+            None => Err(anyhow::anyhow!("the projection is unavailable")),
+        };
+        if let Err(error) = resumed {
+            eprintln!(
+                "horizon-agentd: resuming from the DuckDB projection failed ({error:#}); \
+                 reading the whole event log"
+            );
+            match read_whole_log(&state, &agent_config) {
+                Ok(records) => session::resume_persisted_sessions(&state, records),
+                Err(error) => {
+                    eprintln!("horizon-agentd: startup refused: {error:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        state.mark_resume_ready();
     });
+}
+
+/// The incremental mode's fallback: everything the writer has made durable,
+/// read the same way the full mode's startup read does.
+fn read_whole_log(state: &AgentdState, agent_config: &AgentConfig) -> anyhow::Result<Vec<Record>> {
+    if let Some(writer) = state.writer() {
+        writer.flush()?;
+    }
+    Ok(
+        horizon_agent::persistence::event_log::read(&agent_config.persistence.event_log_path)?
+            .records,
+    )
 }
 
 fn test_resume_delay() -> Option<Duration> {
@@ -222,9 +276,12 @@ fn test_resume_delay() -> Option<Duration> {
 /// [`spawn_resume_task`]) task on the writer's startup read -- simpler than
 /// threading the `WriterInit` channel further, and no longer something the
 /// accept loop waits on (see the module doc). Also hands back the startup
-/// read's records (empty if persistence is disabled or there's nothing yet)
-/// so the caller can resume every session they belong to
-/// ([`session::resume_persisted_sessions`]), and the human-readable
+/// read's records (empty if persistence is disabled or there's nothing yet;
+/// only the tail after the projection cursor in the incremental mode, with
+/// that cursor in `read_after`) so the caller can resume every session
+/// ([`session::resume_persisted_sessions`] or
+/// [`session::resume_persisted_sessions_from_projection`]), and the
+/// human-readable
 /// skipped-lines summary (if any corrupt/torn lines were found) so
 /// [`spawn_resume_task`] can stash it on [`AgentdState`] for the hub's
 /// `initialize` to forward to a connecting client as `_horizon/session_event`
@@ -238,13 +295,15 @@ fn test_resume_delay() -> Option<Duration> {
 /// generic summary line would otherwise double up in agentd's stderr.
 /// `open_silently`'s `duckdb_path` argument is this binary's only real
 /// production use of the live DuckDB projection (see the module doc): the
-/// event log's own writer thread rebuilds (or skips, if already current)
-/// and then keeps that `Store` open for the rest of this process's life.
+/// event log's own writer thread either catches the projection up from its
+/// cursor before `Ready` or rebuilds it after `Ready`, and then keeps that
+/// `Store` open for the rest of this process's life.
 ///
 /// The fourth return value is `open_silently`'s own second receiver: the
-/// writer thread's DuckDB rebuild-or-open decision, delivered exactly once,
-/// whenever it lands (see [`spawn_resume_task`]'s propagator, which is the
-/// only consumer). A disconnected channel (writer startup itself failed)
+/// writer thread's DuckDB decision, delivered exactly once: before `Ready`
+/// in the incremental mode, whenever the rebuild lands in the full mode
+/// (see [`spawn_resume_task`], its only consumer). A disconnected channel
+/// (writer startup itself failed)
 /// is indistinguishable from -- and handled the same as -- an explicit
 /// `None`.
 fn open_persistence(agent_config: &AgentConfig) -> anyhow::Result<PersistenceStartup> {
@@ -264,6 +323,8 @@ fn open_persistence(agent_config: &AgentConfig) -> anyhow::Result<PersistenceSta
             Ok(PersistenceStartup {
                 writer: Some(writer),
                 records: report.records,
+                read_after: report.read_after,
+                max_known_sequence: report.max_known_sequence,
                 skipped_lines_summary: skipped_summary,
                 duckdb_ready_rx: duckdb_rx,
             })

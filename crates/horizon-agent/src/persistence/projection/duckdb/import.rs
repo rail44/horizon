@@ -1,8 +1,11 @@
 use anyhow::Result;
 
-use crate::persistence::event_log::Record;
+use crate::persistence::event_log::{LogCursor, ReadReport, Record};
 
-use super::{schema::CLEAR_ALL_AGENT_STATE_SQL, Store};
+use super::{
+    schema::{DROP_ALL_AGENT_STATE_SQL, INITIALIZE_SCHEMA_SQL, PROJECTION_SCHEMA_VERSION},
+    Store,
+};
 
 /// How many records one [`Store::apply_records`] transaction covers.
 ///
@@ -25,10 +28,10 @@ use super::{schema::CLEAR_ALL_AGENT_STATE_SQL, Store};
 /// -- the per-record projection work dominates either way.
 const APPLY_CHUNK_RECORDS: usize = 1024;
 
-/// Outcome of a batched [`Store::append_record`] pass ([`Store::
+/// Outcome of a batched append pass ([`Store::
 /// replace_from_event_log_records`]'s full rebuild, or [`Store::
-/// catch_up_from_event_log_records`]'s incremental tail) -- lets the caller
-/// (`event_log::writer::rebuild_and_open_duckdb_projection`) print one
+/// catch_up_from_event_log`]'s incremental tail) -- lets the caller
+/// (`event_log::writer`'s startup) print one
 /// summary line instead of the per-record noise the individual pieces used
 /// to print themselves.
 #[derive(Default)]
@@ -52,39 +55,58 @@ impl ApplyRecordsReport {
 }
 
 impl Store {
-    /// Full rebuild: clears every durable/derived agent table and reinserts
-    /// `records` from scratch. Used when there is no existing high-water
-    /// mark to catch up from (an empty store), the mark is ahead of the
-    /// log's own tail (a signal something is wrong, not just behind), or
-    /// checking/catching up the projection failed --
-    /// see `event_log::writer::rebuild_and_open_duckdb_projection`.
+    /// Full rebuild: drops and recreates every durable/derived agent table
+    /// and reinserts `records` from scratch. Used when the projection's
+    /// stamp or cursor does not match the log -- see
+    /// `event_log::writer::rebuild_duckdb_projection`. Records
+    /// passed here carry no log offsets, so no cursor is written; the
+    /// writer's startup uses [`Self::replace_from_event_log`] instead.
     pub(crate) fn replace_from_event_log_records(
         &self,
         records: impl IntoIterator<Item = Record>,
     ) -> Result<ApplyRecordsReport> {
-        self.clear_all_agent_state()?;
+        self.replace_positioned(records.into_iter().map(|record| (record, None)))
+    }
+
+    /// [`Self::replace_from_event_log_records`] over a whole-file read,
+    /// committing a log cursor with every chunk so a later start can verify
+    /// one line instead of re-reading the log.
+    pub(crate) fn replace_from_event_log(&self, report: ReadReport) -> Result<ApplyRecordsReport> {
+        self.replace_positioned(positioned(report))
+    }
+
+    fn replace_positioned(
+        &self,
+        records: impl IntoIterator<Item = (Record, Option<u64>)>,
+    ) -> Result<ApplyRecordsReport> {
+        self.drop_all_agent_state()?;
         let report = self.apply_records(records)?;
         if report.skipped == 0 {
             self.conn.execute(
-                "INSERT INTO agent_projection_format VALUES (true, ?)",
-                [crate::persistence::event_log::AGENT_EVENT_LOG_VERSION],
+                "INSERT INTO agent_projection_format VALUES (true, ?, ?)",
+                [
+                    crate::persistence::event_log::AGENT_EVENT_LOG_VERSION,
+                    PROJECTION_SCHEMA_VERSION,
+                ],
             )?;
         }
         Ok(report)
     }
 
-    /// Incremental catch-up: appends `records` -- expected to already be
-    /// filtered to those beyond the projection's existing high-water mark
-    /// (see [`Store::max_last_sequence`]) -- without clearing any existing
-    /// state first. Used when the mark is merely behind the log's tail, the
-    /// common case on every restart after the first: projecting just the
-    /// tail is what makes a restart against a large real corpus cheap
-    /// instead of re-doing the whole history every time.
-    pub(crate) fn catch_up_from_event_log_records(
-        &self,
-        records: impl IntoIterator<Item = Record>,
-    ) -> Result<ApplyRecordsReport> {
-        self.apply_records(records)
+    /// Incremental catch-up: appends a tail read (the records after the
+    /// projection's verified cursor) without clearing any existing state,
+    /// advancing the cursor with every chunk.
+    pub(crate) fn catch_up_from_event_log(&self, report: ReadReport) -> Result<ApplyRecordsReport> {
+        self.apply_records(positioned(report))
+    }
+
+    /// Removes the format stamp, so the next start rebuilds instead of
+    /// trusting the cursor. For a catch-up that skipped a record: chunks
+    /// after the skipped one still committed, with their cursor.
+    pub(crate) fn invalidate_format(&self) -> Result<()> {
+        self.conn
+            .execute_batch("DELETE FROM agent_projection_format;")?;
+        Ok(())
     }
 
     /// Appends every record in `records`, in order, in
@@ -101,8 +123,8 @@ impl Store {
     /// rebuild take minutes rather than seconds, which in practice meant
     /// `horizon-agentd` was routinely restarted before a rebuild ever
     /// reached a durable, checkpointed state -- so the next boot's
-    /// freshness check (`event_log::writer::duckdb_projection_currency`)
-    /// never found a matching mark and rebuilt again, every single time.
+    /// freshness check never found a matching mark and rebuilt again,
+    /// every single time.
     /// Batching the loop into transactions turns that into a handful of
     /// seconds.
     ///
@@ -112,19 +134,22 @@ impl Store {
     /// caller) -- see [`Self::apply_chunk`].
     fn apply_records(
         &self,
-        records: impl IntoIterator<Item = Record>,
+        records: impl IntoIterator<Item = (Record, Option<u64>)>,
     ) -> Result<ApplyRecordsReport> {
         let mut report = ApplyRecordsReport::default();
         let mut chunk = Vec::with_capacity(APPLY_CHUNK_RECORDS);
-        for record in records {
+        let mut line_ends = Vec::with_capacity(APPLY_CHUNK_RECORDS);
+        for (record, line_end) in records {
             chunk.push(record);
+            line_ends.push(line_end);
             if chunk.len() == APPLY_CHUNK_RECORDS {
-                self.apply_chunk(&chunk, &mut report);
+                self.apply_chunk(&chunk, &line_ends, &mut report);
                 chunk.clear();
+                line_ends.clear();
             }
         }
         if !chunk.is_empty() {
-            self.apply_chunk(&chunk, &mut report);
+            self.apply_chunk(&chunk, &line_ends, &mut report);
         }
         Ok(report)
     }
@@ -156,11 +181,29 @@ impl Store {
     /// [`super::projection::Store::most_recent_pending_approval`]
     /// documents needed uncommitted rows in the table to trigger), so a
     /// narrower retry is also where such a record legitimately succeeds.
-    fn apply_chunk(&self, chunk: &[Record], report: &mut ApplyRecordsReport) {
+    ///
+    /// Each transaction also commits the cursor of its own last record (when
+    /// that record's log offset is known), so the cursor always names a
+    /// record whose rows are committed with it.
+    fn apply_chunk(
+        &self,
+        chunk: &[Record],
+        line_ends: &[Option<u64>],
+        report: &mut ApplyRecordsReport,
+    ) {
         if chunk.is_empty() {
             return;
         }
-        let error = match self.append_records_atomic(chunk) {
+        let cursor =
+            chunk
+                .last()
+                .zip(line_ends.last().copied().flatten())
+                .map(|(record, offset)| LogCursor {
+                    offset,
+                    sequence: record.sequence,
+                    event_id: record.event_id.clone(),
+                });
+        let error = match self.append_records_atomic(chunk, cursor.as_ref()) {
             Ok(()) => {
                 report.applied += chunk.len();
                 return;
@@ -173,13 +216,26 @@ impl Store {
             report.record_skip(&error);
             return;
         }
-        let (head, tail) = chunk.split_at(chunk.len() / 2);
-        self.apply_chunk(head, report);
-        self.apply_chunk(tail, report);
+        let middle = chunk.len() / 2;
+        let (head, tail) = chunk.split_at(middle);
+        let (head_ends, tail_ends) = line_ends.split_at(middle);
+        self.apply_chunk(head, head_ends, report);
+        self.apply_chunk(tail, tail_ends, report);
     }
 
-    fn clear_all_agent_state(&self) -> Result<()> {
-        self.conn.execute_batch(CLEAR_ALL_AGENT_STATE_SQL)?;
+    fn drop_all_agent_state(&self) -> Result<()> {
+        self.conn.execute_batch(DROP_ALL_AGENT_STATE_SQL)?;
+        self.conn.execute_batch(INITIALIZE_SCHEMA_SQL)?;
         Ok(())
     }
+}
+
+/// Pairs each record of a read with its line's end offset.
+fn positioned(report: ReadReport) -> impl Iterator<Item = (Record, Option<u64>)> {
+    let line_ends = report.record_line_ends;
+    report
+        .records
+        .into_iter()
+        .enumerate()
+        .map(move |(index, record)| (record, line_ends.get(index).copied()))
 }

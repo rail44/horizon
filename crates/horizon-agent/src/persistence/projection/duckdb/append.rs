@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::contract::SessionId;
 #[cfg(test)]
 use crate::contract::{event_kind, Event, ProviderId};
-use crate::persistence::event_log::Record;
+use crate::persistence::event_log::{LogCursor, Record};
 
 use super::{projection::EventRecordRef, session_id_text, Store};
 #[cfg(test)]
@@ -27,32 +27,67 @@ impl Store {
     /// landed it) but `agent_sessions.last_sequence` doesn't yet reflect
     /// it. That specific inconsistency is fatal to incremental catch-up
     /// (`import::apply_records`'s other caller,
-    /// [`Self::catch_up_from_event_log_records`]): it trusts the mark to
-    /// mean "everything at or below this sequence is already fully
-    /// present", so a stale-behind mark next to an already-inserted row
-    /// makes the next catch-up try to insert that same `event_id` again and
-    /// fail on `agent_events`'s primary key -- reproduced by
+    /// [`Self::catch_up_from_event_log`]): it trusts the log cursor, written
+    /// in this same transaction, to mean "everything up to this line is
+    /// already fully present", so a cursor that disagreed with the rows
+    /// would make the next catch-up insert the same `event_id` again and
+    /// fail on `agent_events`'s primary key -- reproduced (against the
+    /// sequence high-water mark that preceded the cursor) by
     /// `horizon-agentd`'s own e2e suite (`stale_log_triggers_duckdb_
     /// rebuild_on_respawn`) once a resumed session's own live thread
     /// appended a record while a hard `SIGKILL` landed nearby. Wrapping
-    /// this one record's several statements in a transaction makes them
-    /// atomic: either both tables see it, or neither does.
+    /// this one record's several statements and the cursor in a transaction
+    /// makes them atomic: either every table sees it, or none does.
+    pub(crate) fn append_record_at(
+        &self,
+        record: &Record,
+        cursor: Option<&LogCursor>,
+    ) -> Result<()> {
+        self.append_records_atomic(std::slice::from_ref(record), cursor)
+    }
+
+    /// Test-only: [`Self::append_record_at`] without a log position.
+    #[cfg(test)]
     pub(crate) fn append_record(&self, record: &Record) -> Result<()> {
-        self.append_records_atomic(std::slice::from_ref(record))
+        self.append_records_atomic(std::slice::from_ref(record), None)
     }
 
     /// Shared transaction boundary for live appends and rebuild chunks.
-    /// Every event, session mark, and derived row commits together; the first
-    /// failed projection rolls the whole batch back and preserves its error.
-    pub(super) fn append_records_atomic(&self, records: &[Record]) -> Result<()> {
+    /// Every event, session mark, derived row, and the log cursor (when
+    /// given) commits together; the first failed projection rolls the whole
+    /// batch back and preserves its error.
+    pub(super) fn append_records_atomic(
+        &self,
+        records: &[Record],
+        cursor: Option<&LogCursor>,
+    ) -> Result<()> {
         self.conn.execute_batch("BEGIN TRANSACTION")?;
-        for record in records {
-            if let Err(error) = self.append_record_uncommitted(record) {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                return Err(error);
-            }
+        let mut result = records
+            .iter()
+            .try_for_each(|record| self.append_record_uncommitted(record));
+        if let (Ok(()), Some(cursor)) = (&result, cursor) {
+            result = self.write_log_cursor(cursor);
+        }
+        if let Err(error) = result {
+            let _ = self.conn.execute_batch("ROLLBACK");
+            return Err(error);
         }
         self.conn.execute_batch("COMMIT")?;
+        Ok(())
+    }
+
+    fn write_log_cursor(&self, cursor: &LogCursor) -> Result<()> {
+        let offset = i64::try_from(cursor.offset).context("agent event log offset overflow")?;
+        let sequence = i64::try_from(cursor.sequence).context("agent event sequence overflow")?;
+        self.conn.execute(
+            "INSERT INTO agent_log_cursor (singleton, log_offset, sequence, event_id)
+             VALUES (true, ?, ?, ?)
+             ON CONFLICT (singleton) DO UPDATE SET
+                log_offset = excluded.log_offset,
+                sequence = excluded.sequence,
+                event_id = excluded.event_id",
+            params![offset, sequence, &cursor.event_id],
+        )?;
         Ok(())
     }
 
@@ -72,11 +107,8 @@ impl Store {
     /// what [`Store::project_event`] does with the event -- a projection
     /// that deliberately ignores an event (no dedicated table wants it) has
     /// still *processed* it, so the session's `last_sequence` high-water
-    /// mark advances either way. This is why `event_log::writer::
-    /// duckdb_projection_currency` (the freshness check `rebuild_and_open_
-    /// duckdb_projection` runs at startup) does not need any special-casing
-    /// for skipped records: `agent_sessions.last_sequence` already reflects
-    /// every record this function was ever called with, projected or not.
+    /// mark advances either way, and the log cursor committed with the
+    /// record's transaction covers it like any other.
     pub(super) fn append_record_uncommitted(&self, record: &Record) -> Result<()> {
         let session_id_text = session_id_text(record.session_id)?;
         let sequence = i64::try_from(record.sequence).context("agent event sequence overflow")?;
@@ -91,6 +123,12 @@ impl Store {
             .context("serialize provider payload")?;
         let event_at_unix_ms =
             i64::try_from(record.created_at_unix_ms).context("event timestamp overflow")?;
+        let session_context_json = record
+            .session_context
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .context("serialize session context")?;
 
         self.conn.execute(
             "INSERT INTO agent_events (
@@ -123,6 +161,7 @@ impl Store {
             &session_id_text,
             provider_id_text.as_deref(),
             role_id_text.as_deref(),
+            session_context_json.as_deref(),
             sequence,
         )?;
         self.project_event(EventRecordRef {
@@ -185,6 +224,7 @@ impl Store {
             &session_id_text,
             provider_id_text.as_deref(),
             role_id_text.as_deref(),
+            None,
             sequence,
         )?;
         self.project_event(EventRecordRef {
@@ -249,17 +289,30 @@ impl Store {
         session_id: &str,
         provider_id: Option<&str>,
         role_id: Option<&str>,
+        session_context_json: Option<&str>,
         last_sequence: i64,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO agent_sessions (session_id, provider_id, role_id, last_sequence, updated_at)
-             VALUES (?, ?, ?, ?, now())
+            "INSERT INTO agent_sessions (
+                session_id, provider_id, role_id, session_context_json, last_sequence, updated_at
+             )
+             VALUES (?, ?, ?, ?, ?, now())
              ON CONFLICT (session_id) DO UPDATE SET
                 provider_id = COALESCE(excluded.provider_id, agent_sessions.provider_id),
                 role_id = COALESCE(excluded.role_id, agent_sessions.role_id),
+                session_context_json = COALESCE(
+                    excluded.session_context_json,
+                    agent_sessions.session_context_json
+                ),
                 last_sequence = excluded.last_sequence,
                 updated_at = now()",
-            params![session_id, provider_id, role_id, last_sequence],
+            params![
+                session_id,
+                provider_id,
+                role_id,
+                session_context_json,
+                last_sequence
+            ],
         )?;
         Ok(())
     }

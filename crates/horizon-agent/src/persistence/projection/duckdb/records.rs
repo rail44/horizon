@@ -45,6 +45,18 @@ pub(crate) struct AppendEvent {
     pub provider_payload: Option<Value>,
 }
 
+/// One session's resume pre-filter, answered by the projection instead of
+/// folding its whole history (see `Store::session_liveness`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionLiveness {
+    pub session_id: SessionId,
+    /// The session's last non-null role.
+    pub role_id: Option<RoleId>,
+    /// The latest state-bearing event is `StateChanged(Terminated)` or
+    /// `Exited`.
+    pub dead: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AgentStoredEvent {
     pub event_id: String,

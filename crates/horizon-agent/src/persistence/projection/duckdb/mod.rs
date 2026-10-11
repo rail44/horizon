@@ -20,6 +20,7 @@ pub(crate) use import::ApplyRecordsReport;
 
 use records::AgentStoredEvent;
 
+pub use records::SessionLiveness;
 #[cfg(test)]
 pub(crate) use records::{
     AgentStoredApproval, AgentStoredMessage, AgentStoredSession, AgentStoredSessionSnapshot,
@@ -63,18 +64,40 @@ impl DuckdbStoreHandle {
         query(&store)
     }
 
-    pub(crate) fn project(&self, record: &crate::persistence::event_log::Record) {
+    /// Projects one live append. `cursor`, when known, is the record's own
+    /// position in the JSONL file and is committed with it.
+    pub(crate) fn project(
+        &self,
+        record: &crate::persistence::event_log::Record,
+        cursor: Option<&crate::persistence::event_log::LogCursor>,
+    ) {
         let mut store = self
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if store.failure.is_some() {
             return;
         }
-        if let Err(error) = store.append_record(record) {
+        if let Err(error) = store.append_record_at(record, cursor) {
             let reason = format!("{error:#}");
             eprintln!("horizon-agent: history search disabled until rebuild: {reason}");
             store.failure = Some(reason);
         }
+    }
+
+    /// Resume's pre-filter over every session with an event at or below
+    /// `through_sequence` -- see [`SessionLiveness`].
+    pub fn session_liveness(&self, through_sequence: u64) -> Result<Vec<SessionLiveness>> {
+        self.query(|store| store.session_liveness(through_sequence))
+    }
+
+    /// One session's records at or below `through_sequence`, rebuilt from the
+    /// projection so resume need not read the event log before the cursor.
+    pub fn session_records(
+        &self,
+        session_id: SessionId,
+        through_sequence: u64,
+    ) -> Result<Vec<crate::persistence::event_log::Record>> {
+        self.query(|store| store.session_records(session_id, through_sequence))
     }
 
     /// Forwards to `Mutex::lock` verbatim (same `LockResult` return shape)

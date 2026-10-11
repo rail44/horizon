@@ -1500,3 +1500,124 @@ fn failed_live_projection_rolls_back_event_and_mark_then_accepts_the_next_record
         "turn-1"
     );
 }
+
+fn context_rooted_at(root: &str) -> crate::persistence::event_log::PersistedSessionContext {
+    crate::persistence::event_log::PersistedSessionContext {
+        workspace_root: Some(std::path::PathBuf::from(root)),
+        isolated_worktree: true,
+        parent_session_id: Some(SessionId::new()),
+        filesystem_grants: vec![horizon_sandbox::FilesystemGrant {
+            path: std::path::PathBuf::from(root).join("cache"),
+            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
+        }],
+    }
+}
+
+/// The stored context follows the same rule resume applies to the log:
+/// the latest non-null value wins, and a later record without one (the
+/// panic-recording path) does not clear it.
+#[test]
+fn session_context_round_trips_and_the_last_non_null_wins() {
+    let store = Store::open_in_memory().expect("store");
+    let session_id = SessionId::new();
+    let first = context_rooted_at("/tmp/first-root");
+    let second = context_rooted_at("/tmp/second-root");
+    let mut records: Vec<_> = (0..4)
+        .map(|sequence| {
+            label_record(
+                &format!("event-{sequence}"),
+                sequence,
+                session_id,
+                None,
+                None,
+                Event::StateChanged(SessionState::Running),
+                sequence + 1,
+            )
+        })
+        .collect();
+    records[0].session_context = Some(first.clone());
+    records[2].session_context = Some(second.clone());
+
+    store.append_record(&records[0]).unwrap();
+    assert_eq!(
+        store.session_records(session_id, 0).unwrap()[0].session_context,
+        Some(first)
+    );
+    for record in &records[1..] {
+        store.append_record(record).unwrap();
+    }
+    let rebuilt = store.session_records(session_id, 3).unwrap();
+    assert_eq!(rebuilt.len(), 4);
+    assert!(rebuilt
+        .iter()
+        .all(|record| record.session_context.as_ref() == Some(&second)));
+}
+
+/// Apart from the context (every rebuilt record carries the session's
+/// latest), a session's records come back from the projection exactly as
+/// the log holds them, bounded by sequence.
+#[test]
+fn session_records_rebuild_the_logged_records() {
+    let store = Store::open_in_memory().expect("store");
+    let session_id = SessionId::new();
+    let other_session = SessionId::new();
+    let context = context_rooted_at("/tmp/rebuilt-root");
+    let mut records = vec![
+        label_record(
+            "e0",
+            0,
+            session_id,
+            Some("turn-1"),
+            Some("worker"),
+            Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "hello".into(),
+            }),
+            1_700_000_000_123,
+        ),
+        label_record(
+            "e1",
+            1,
+            other_session,
+            None,
+            None,
+            Event::StateChanged(SessionState::Running),
+            1_700_000_000_200,
+        ),
+        label_record(
+            "e2",
+            2,
+            session_id,
+            Some("turn-1"),
+            Some("worker"),
+            Event::TurnEnded(TurnEndReason::Completed),
+            1_700_000_000_456,
+        ),
+        label_record(
+            "e3",
+            3,
+            session_id,
+            None,
+            Some("worker"),
+            Event::StateChanged(SessionState::WaitingForUser),
+            1_700_000_000_789,
+        ),
+    ];
+    for record in &mut records {
+        record.provider_id = Some(ProviderId("builtin.agent.mock".into()));
+        record.session_context = Some(context.clone());
+    }
+    records[0].provider_payload = Some(serde_json::json!({"raw": [1, 2, 3]}));
+    store
+        .replace_from_event_log_records(records.clone())
+        .unwrap();
+
+    let expected: Vec<_> = records
+        .iter()
+        .filter(|record| record.session_id == session_id && record.sequence <= 2)
+        .cloned()
+        .collect();
+    assert_eq!(store.session_records(session_id, 2).unwrap(), expected);
+}

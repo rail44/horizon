@@ -1,18 +1,23 @@
 use anyhow::{Context, Result};
-use duckdb::{params, params_from_iter, types::Value as DuckValue};
+use duckdb::{params, params_from_iter, types::Value as DuckValue, OptionalExt};
 #[cfg(test)]
 use serde_json::Value;
 
 use crate::contract::ProviderId;
 use crate::contract::SessionId;
+use crate::contract::{Event, SessionState};
 #[cfg(test)]
 use crate::contract::{MessageRole, ToolCallId};
 #[cfg(test)]
 use crate::frame::{agent_frame_from_events, AgentFrame};
+use crate::persistence::event_log::{
+    LogCursor, PersistedSessionContext, Record, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION,
+};
 use crate::roles::RoleId;
 
 use super::{
-    session_id_text, AgentStoredEvent, RecallEntry, RecallEntryKind, RecallSearchReport, Store,
+    schema::PROJECTION_SCHEMA_VERSION, session_id_text, AgentStoredEvent, RecallEntry,
+    RecallEntryKind, RecallSearchReport, SessionLiveness, Store,
 };
 #[cfg(test)]
 use super::{
@@ -35,8 +40,11 @@ const RESULT_CALL_JOIN: &str = "LEFT JOIN agent_tool_calls tc
     AND tc.occurrence_id = r.occurrence_id AND tc.sequence < r.sequence";
 
 impl Store {
-    /// A matching tail alone cannot prove completeness. Compare every event's
-    /// identity against the authoritative prefix, including holes and extras.
+    /// Test-only: whether the projection holds exactly `records`' identities,
+    /// in order. Startup no longer verifies the whole prefix (it checks the
+    /// one line its cursor names); tests still use this to assert a rebuild
+    /// is complete.
+    #[cfg(test)]
     pub(crate) fn matches_log_prefix(
         &self,
         records: &[crate::persistence::event_log::Record],
@@ -58,13 +66,144 @@ impl Store {
         Ok(rows.next()?.is_none())
     }
 
-    pub(crate) fn has_current_event_format(&self) -> Result<bool> {
-        let version: Option<u32> = self.conn.query_row(
-            "SELECT MAX(event_log_version) FROM agent_projection_format",
-            [],
-            |row| row.get(0),
+    /// Whether the last complete rebuild stamped this projection with the
+    /// current event-log version and the current table shape. A file from
+    /// before the shape stamp existed fails to answer at all (the column is
+    /// missing), which callers treat the same as `false`.
+    pub(crate) fn has_current_format(&self) -> Result<bool> {
+        let versions: Option<(u32, u32)> = self
+            .conn
+            .query_row(
+                "SELECT event_log_version, projection_schema_version
+                 FROM agent_projection_format",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        Ok(versions
+            == Some((
+                crate::persistence::event_log::AGENT_EVENT_LOG_VERSION,
+                PROJECTION_SCHEMA_VERSION,
+            )))
+    }
+
+    /// The last record this projection ingested, if any was committed with
+    /// its log position (see `agent_log_cursor` in `schema.rs`).
+    pub(crate) fn log_cursor(&self) -> Result<Option<LogCursor>> {
+        self.conn
+            .query_row(
+                "SELECT log_offset, sequence, event_id FROM agent_log_cursor",
+                [],
+                |row| {
+                    Ok(LogCursor {
+                        offset: row.get(0)?,
+                        sequence: row.get(1)?,
+                        event_id: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .context("query agent event log cursor")
+    }
+
+    /// Every session with an event at or below `through_sequence`, with the
+    /// verdict "already dead" taken from its latest state-bearing event:
+    /// the frame fold sets `AgentFrame::state` only from `StateChanged` and
+    /// `Exited` (which reads as `Terminated`), so a session is dead exactly
+    /// when the later of those, by sequence, is `StateChanged(Terminated)` or
+    /// `Exited`. Also returns the session's last non-null role, which resume
+    /// checks before liveness. `through_sequence` keeps the answer to the
+    /// startup snapshot even while the live writer projects new appends.
+    pub(crate) fn session_liveness(&self, through_sequence: u64) -> Result<Vec<SessionLiveness>> {
+        let through = i64::try_from(through_sequence).context("agent event sequence overflow")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                session_id,
+                arg_max(horizon_event_json, sequence)
+                    FILTER (WHERE event_kind IN ('state_changed', 'exited')),
+                arg_max(role_id, sequence) FILTER (WHERE role_id IS NOT NULL)
+             FROM agent_events
+             WHERE sequence <= ?
+             GROUP BY session_id",
         )?;
-        Ok(version == Some(crate::persistence::event_log::AGENT_EVENT_LOG_VERSION))
+        let rows = stmt.query_map(params![through], |row| {
+            let session_id = parse_session_id_column(0, &row.get::<_, String>(0)?)?;
+            let last_state_event = row
+                .get::<_, Option<String>>(1)?
+                .map(|json| decode_json_column::<Event>(1, &json))
+                .transpose()?;
+            Ok(SessionLiveness {
+                session_id,
+                role_id: row.get::<_, Option<String>>(2)?.map(RoleId),
+                dead: matches!(
+                    last_state_event,
+                    Some(Event::StateChanged(SessionState::Terminated) | Event::Exited(_))
+                ),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .context("query agent session liveness")
+    }
+
+    /// One session's records at or below `through_sequence`, rebuilt from the
+    /// projection in sequence order. Every record carries the session's
+    /// latest stored `session_context` (the only value a resume reads).
+    pub(crate) fn session_records(
+        &self,
+        session_id: SessionId,
+        through_sequence: u64,
+    ) -> Result<Vec<Record>> {
+        let session_id_text = session_id_text(session_id)?;
+        let through = i64::try_from(through_sequence).context("agent event sequence overflow")?;
+        let session_context: Option<PersistedSessionContext> = self
+            .conn
+            .query_row(
+                "SELECT session_context_json FROM agent_sessions WHERE session_id = ?",
+                params![&session_id_text],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .context("decode stored session context")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                event_id,
+                turn_id,
+                sequence,
+                event_kind,
+                horizon_event_json,
+                provider_id,
+                role_id,
+                provider_payload_json,
+                epoch_ms(event_at)
+             FROM agent_events
+             WHERE session_id = ? AND sequence <= ?
+             ORDER BY sequence",
+        )?;
+        let rows = stmt.query_map(params![&session_id_text, through], |row| {
+            Ok(Record {
+                schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
+                version: AGENT_EVENT_LOG_VERSION,
+                event_id: row.get(0)?,
+                sequence: row.get(2)?,
+                session_id,
+                turn_id: row.get(1)?,
+                provider_id: row.get::<_, Option<String>>(5)?.map(ProviderId),
+                role_id: row.get::<_, Option<String>>(6)?.map(RoleId),
+                session_context: session_context.clone(),
+                event_kind: row.get(3)?,
+                event: decode_json_column(4, &row.get::<_, String>(4)?)?,
+                provider_payload: row
+                    .get::<_, Option<String>>(7)?
+                    .map(|json| decode_json_column(7, &json))
+                    .transpose()?,
+                created_at_unix_ms: row.get(8)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .context("query agent session records")
     }
 
     /// Test-only: both current callers (`session_snapshots` below and
@@ -92,13 +231,11 @@ impl Store {
             .context("query agent sessions")
     }
 
-    /// The projection's high-water mark: the largest `last_sequence` any
-    /// session has recorded, or `None` if `agent_sessions` is empty. Not
-    /// test-only: `horizon-agentd`'s startup rebuild-skip check (task 2 of
-    /// the readiness fix) compares this against the event log's own final
-    /// record sequence to decide whether the projection is already current
-    /// -- cheap enough to run before every rebuild decision since it's a
-    /// single aggregate over a small table, not a scan of `agent_events`.
+    /// Test-only: the projection's high-water mark, the largest
+    /// `last_sequence` any session has recorded, or `None` if
+    /// `agent_sessions` is empty. Startup decides currency from the log
+    /// cursor ([`Self::log_cursor`]) instead.
+    #[cfg(test)]
     pub(crate) fn max_last_sequence(&self) -> Result<Option<i64>> {
         self.conn
             .query_row("SELECT MAX(last_sequence) FROM agent_sessions", [], |row| {
@@ -562,6 +699,15 @@ fn parse_role(value: &str) -> MessageRole {
         "task_notification" => MessageRole::TaskNotification,
         _ => MessageRole::Assistant,
     }
+}
+
+fn decode_json_column<T: serde::de::DeserializeOwned>(
+    column: usize,
+    json: &str,
+) -> duckdb::Result<T> {
+    serde_json::from_str(json).map_err(|err| {
+        duckdb::Error::FromSqlConversionFailure(column, duckdb::types::Type::Text, Box::new(err))
+    })
 }
 
 fn parse_session_id_column(column: usize, value: &str) -> duckdb::Result<SessionId> {

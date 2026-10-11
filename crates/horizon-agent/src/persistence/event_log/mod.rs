@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::Read,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
 
@@ -97,7 +97,7 @@ pub struct Record {
 /// is intact is never mistaken for full corruption just because its
 /// `event` key holds something this build can't decode.
 #[derive(Deserialize)]
-#[allow(dead_code)] // Only `schema`/`version`/`sequence` are read back out; the rest are a validity gate on the envelope's other keys.
+#[allow(dead_code)] // Only `schema`/`version`/`sequence`/`event_id` are read back out; the rest are a validity gate on the envelope's other keys.
 struct RecordEnvelope {
     schema: String,
     version: u32,
@@ -169,9 +169,52 @@ pub struct ReadReport {
     /// `records.iter().map(sequence).max()`, which would skip back over a
     /// skipped-event line's number and let the writer re-issue it.
     pub max_known_sequence: Option<u64>,
+    /// For each entry of [`Self::records`] (same order), the byte offset in
+    /// the log just past that record's newline. This is what a projection
+    /// cursor ([`LogCursor`]) stores, so a later start can verify one line
+    /// instead of the whole prefix.
+    pub record_line_ends: Vec<u64>,
+    /// `Some` when this report covers only the bytes after this cursor (a
+    /// tail read against an already-current projection); `None` for a read
+    /// of the whole file.
+    pub read_after: Option<LogCursor>,
+}
+
+/// Where a projection stopped ingesting the log: the byte offset just past
+/// the last ingested record's line, plus that record's identity. A restart
+/// trusts everything before `offset` once the line ending exactly there
+/// still decodes as this record (see [`cursor_line_matches`]).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LogCursor {
+    pub offset: u64,
+    pub sequence: u64,
+    pub event_id: String,
 }
 
 impl ReadReport {
+    /// The cursor of the decoded record that ends furthest into the file,
+    /// or `None` when no record decoded. Not the end of the file: a final
+    /// complete line may be corrupt or undecodable, and a cursor must point
+    /// at a line a later start can verify.
+    pub fn last_record_cursor(&self) -> Option<LogCursor> {
+        let (index, _) = self
+            .record_line_ends
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, offset)| **offset)?;
+        self.cursor_at(index)
+    }
+
+    /// The cursor for `records[index]`.
+    pub(crate) fn cursor_at(&self, index: usize) -> Option<LogCursor> {
+        let record = self.records.get(index)?;
+        Some(LogCursor {
+            offset: *self.record_line_ends.get(index)?,
+            sequence: record.sequence,
+            event_id: record.event_id.clone(),
+        })
+    }
+
     /// A short human-readable summary of lines `read` had to skip, or
     /// `None` when the file parsed cleanly. Every consumer of the raw JSONL
     /// (the writer's own startup re-read in `event_log::writer`, the DuckDB
@@ -216,13 +259,23 @@ impl ReadReport {
 }
 
 pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
-    let path = path.as_ref();
+    read_from(path.as_ref(), 0)
+}
+
+/// Reads only the bytes from `offset` on (a tail read), with every reported
+/// offset still absolute within the file. `offset` must be a line start;
+/// callers pass a verified [`LogCursor::offset`].
+pub(crate) fn read_from(path: &Path, offset: u64) -> Result<ReadReport> {
     if !path.exists() {
         return Ok(ReadReport::default());
     }
 
     let mut file =
         File::open(path).with_context(|| format!("open agent event log {}", path.display()))?;
+    if offset > 0 {
+        file.seek(SeekFrom::Start(offset))
+            .with_context(|| format!("seek agent event log {}", path.display()))?;
+    }
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .with_context(|| format!("read agent event log {}", path.display()))?;
@@ -244,7 +297,12 @@ pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
     let note_sequence = |sequence: u64, max: &mut Option<u64>| {
         *max = Some(max.map_or(sequence, |seen| seen.max(sequence)));
     };
-    for line in text.lines() {
+    let mut line_end = offset;
+    for raw_line in text.split_inclusive('\n') {
+        line_end += raw_line.len() as u64;
+        // The same line content `str::lines` yields: no `\n`, no trailing `\r`.
+        let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
         if line.trim().is_empty() {
             continue;
         }
@@ -269,7 +327,7 @@ pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
                     && record.version == AGENT_EVENT_LOG_VERSION =>
             {
                 note_sequence(record.sequence, &mut max_known_sequence);
-                records.push(record);
+                records.push((record, line_end));
             }
             DecodedLine::SkippedEvent {
                 schema,
@@ -283,14 +341,71 @@ pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
         }
     }
 
-    records.sort_by_key(|record| record.sequence);
+    records.sort_by_key(|(record, _)| record.sequence);
+    let (records, record_line_ends) = records.into_iter().unzip();
     Ok(ReadReport {
         records,
         corrupt_line_count,
         ignored_partial_line,
         skipped_event_count,
         max_known_sequence,
+        record_line_ends,
+        read_after: None,
     })
+}
+
+/// Whether the newline-terminated line ending exactly at `cursor.offset`
+/// still decodes as the envelope `cursor` names -- the one-line check that
+/// lets startup trust a projection without re-reading the log before it.
+/// A file shorter than the offset, or no newline right before it, is a
+/// mismatch rather than an error.
+pub(crate) fn cursor_line_matches(path: &Path, cursor: &LogCursor) -> Result<bool> {
+    let mut file =
+        File::open(path).with_context(|| format!("open agent event log {}", path.display()))?;
+    let len = file
+        .metadata()
+        .with_context(|| format!("stat agent event log {}", path.display()))?
+        .len();
+    if cursor.offset == 0 || len < cursor.offset {
+        return Ok(false);
+    }
+    // Walk backwards from the newline at `offset - 1` to the previous one,
+    // collecting the line between them chunk by chunk.
+    let mut chunks: Vec<Vec<u8>> = Vec::new();
+    let mut end = cursor.offset;
+    let mut first_chunk = true;
+    while end > 0 {
+        let start = end.saturating_sub(64 * 1024);
+        let mut chunk = vec![0u8; (end - start) as usize];
+        file.seek(SeekFrom::Start(start))
+            .with_context(|| format!("seek agent event log {}", path.display()))?;
+        file.read_exact(&mut chunk)
+            .with_context(|| format!("read agent event log {}", path.display()))?;
+        if first_chunk {
+            if chunk.pop() != Some(b'\n') {
+                return Ok(false);
+            }
+            first_chunk = false;
+        }
+        if let Some(index) = chunk.iter().rposition(|byte| *byte == b'\n') {
+            chunks.push(chunk.split_off(index + 1));
+            break;
+        }
+        chunks.push(chunk);
+        end = start;
+    }
+    let line: Vec<u8> = chunks.into_iter().rev().flatten().collect();
+    let Ok(text) = std::str::from_utf8(&line) else {
+        return Ok(false);
+    };
+    let text = text.strip_suffix('\r').unwrap_or(text);
+    let Ok(envelope) = serde_json::from_str::<RecordEnvelope>(text) else {
+        return Ok(false);
+    };
+    Ok(envelope.schema == AGENT_EVENT_LOG_SCHEMA
+        && envelope.version == AGENT_EVENT_LOG_VERSION
+        && envelope.sequence == cursor.sequence
+        && envelope.event_id == cursor.event_id)
 }
 
 #[cfg(test)]
@@ -923,5 +1038,109 @@ mod tests {
                 None
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+    use crate::contract::SessionState;
+
+    fn record(session_id: SessionId, sequence: u64) -> Record {
+        Record {
+            schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
+            version: AGENT_EVENT_LOG_VERSION,
+            event_id: format!("event-{sequence}"),
+            sequence,
+            session_id,
+            turn_id: None,
+            provider_id: None,
+            role_id: None,
+            session_context: None,
+            event_kind: "state_changed".to_string(),
+            event: Event::StateChanged(SessionState::Running),
+            provider_payload: None,
+            created_at_unix_ms: 1,
+        }
+    }
+
+    fn line(record: &Record) -> String {
+        format!("{}\n", serde_json::to_string(record).unwrap())
+    }
+
+    #[test]
+    fn line_ends_are_absolute_and_a_tail_read_returns_only_later_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let session = SessionId::new();
+        let (first, second, third) = (record(session, 0), record(session, 1), record(session, 2));
+        let mut undecodable = serde_json::to_value(record(session, 3)).unwrap();
+        undecodable["event"] = serde_json::json!({"NotARealVariant": {}});
+        let contents = format!(
+            "{}not json\n{}{}{undecodable}\n",
+            line(&first),
+            line(&second),
+            line(&third)
+        );
+        std::fs::write(&path, &contents).unwrap();
+
+        let whole = read(&path).unwrap();
+        let first_end = line(&first).len() as u64;
+        let second_end = first_end + "not json\n".len() as u64 + line(&second).len() as u64;
+        let third_end = second_end + line(&third).len() as u64;
+        assert_eq!(whole.record_line_ends, [first_end, second_end, third_end]);
+        assert_eq!(
+            whole.last_record_cursor(),
+            Some(LogCursor {
+                offset: third_end,
+                sequence: 2,
+                event_id: third.event_id.clone(),
+            }),
+            "the cursor names the last decoded record, not the undecodable final line"
+        );
+
+        let tail = read_from(&path, second_end).unwrap();
+        assert_eq!(tail.records, [third]);
+        assert_eq!(tail.record_line_ends, [third_end]);
+        assert_eq!(tail.skipped_event_count, 1);
+        assert_eq!(tail.max_known_sequence, Some(3));
+        assert_eq!(tail.corrupt_line_count, 0);
+    }
+
+    #[test]
+    fn the_cursor_line_must_match_identity_and_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let session = SessionId::new();
+        let first = record(session, 0);
+        // A line longer than one backward read chunk.
+        let mut second = record(session, 1);
+        second.provider_payload = Some(serde_json::json!("x".repeat(200_000)));
+        std::fs::write(&path, format!("{}{}", line(&first), line(&second))).unwrap();
+        let report = read(&path).unwrap();
+        let cursor = report.last_record_cursor().unwrap();
+        assert!(cursor_line_matches(&path, &cursor).unwrap());
+        assert!(cursor_line_matches(&path, &report.cursor_at(0).unwrap()).unwrap());
+
+        let wrong_id = LogCursor {
+            event_id: "someone-else".into(),
+            ..cursor.clone()
+        };
+        assert!(!cursor_line_matches(&path, &wrong_id).unwrap());
+        let wrong_sequence = LogCursor {
+            sequence: 7,
+            ..cursor.clone()
+        };
+        assert!(!cursor_line_matches(&path, &wrong_sequence).unwrap());
+        let mid_line = LogCursor {
+            offset: cursor.offset - 1,
+            ..cursor.clone()
+        };
+        assert!(!cursor_line_matches(&path, &mid_line).unwrap());
+        let past_the_end = LogCursor {
+            offset: cursor.offset + 1,
+            ..cursor
+        };
+        assert!(!cursor_line_matches(&path, &past_the_end).unwrap());
     }
 }

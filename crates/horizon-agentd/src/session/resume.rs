@@ -3,7 +3,7 @@
 
 mod environment;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -12,9 +12,10 @@ use horizon_agent::contract::{
     Error as AgentError, Event, ProviderEvent, SessionId, SessionState, TurnEndReason,
 };
 use horizon_agent::frame::{agent_frame_from_events, AgentFrame, AgentFrameItem};
-use horizon_agent::persistence::event_log::{Appender, Record};
 #[cfg(test)]
-use horizon_agent::persistence::event_log::{PersistedSessionContext, WriterHandle};
+use horizon_agent::persistence::event_log::PersistedSessionContext;
+use horizon_agent::persistence::event_log::{Appender, Record, WriterHandle};
+use horizon_agent::persistence::projection::duckdb::DuckdbStoreHandle;
 #[cfg(test)]
 use horizon_agent::roles::RoleId;
 use horizon_agent::tools::cancelled_tool_call_result;
@@ -45,6 +46,10 @@ use crate::worktree;
 /// loop, not printed per session -- a real archived log can carry dozens of
 /// long-dead sessions, which used to bury the "resumed session" lines for
 /// the ones that actually matter.
+///
+/// This is the full mode, over a whole-log read;
+/// [`resume_persisted_sessions_from_projection`] is the incremental one.
+/// Both share [`resume_one_session`].
 pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<Record>) {
     let Some(writer) = state.writer() else {
         return;
@@ -58,122 +63,230 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             .push(record);
     }
 
-    // Counted rather than printed per session (see the loop below): a real
-    // archived log can carry dozens of long-dead sessions, and a line per
-    // one drowned out the genuinely interesting "resumed session" lines
-    // right next to it.
-    let mut skipped_terminated = 0usize;
-    // Counted the same way, for the same reason -- see
-    // [`terminate_orphaned_exploration`].
-    let mut terminated_explorations = 0usize;
-
-    for (session_id, mut session_records) in by_session {
-        session_records.sort_by_key(|record| record.sequence);
-        let provider_id = session_records
-            .iter()
-            .rev()
-            .find_map(|record| record.provider_id.clone())
-            .unwrap_or_else(|| lock_unpoisoned(&state.providers).default_provider_id());
-        // Mirrors `provider_id` just above: every record `Appender` writes
-        // for a session carries the same `role_id` (see
-        // `event_log::Appender::new`), so the last one found scanning from
-        // the tail is the session's role for its whole lifetime.
-        let role_id = session_records
-            .iter()
-            .rev()
-            .find_map(|record| record.role_id.clone());
-        if role_id.as_ref().is_some_and(|role| retired_role(&role.0)) {
-            continue;
-        }
-        let recorded_events: Vec<_> = session_records
-            .iter()
-            .map(|record| record.event.clone())
-            .collect();
-        let frame = agent_frame_from_events(&recorded_events);
-        if session_is_dead(&frame) {
-            skipped_terminated += 1;
-            continue;
-        }
-        let persisted_context = session_records
-            .iter()
-            .rev()
-            .find_map(|record| record.session_context.clone());
-        let restored =
-            match environment::restore(session_id, &recorded_events, persisted_context.as_ref()) {
-                Ok(restored) => restored,
-                Err(error) => {
-                    eprintln!("horizon-agentd: {error}");
-                    continue;
-                }
-            };
-        let mut events = recorded_events;
-
-        let mut appender = Appender::new(
-            writer.clone(),
+    let mut tally = ResumeTally::default();
+    for (session_id, session_records) in by_session {
+        tally.note(resume_one_session(
+            state,
+            &writer,
             session_id,
-            Some(provider_id.clone()),
-            role_id.clone(),
-        )
-        .with_turn_history(&session_records);
-        if let Some(context) = persisted_context.clone() {
-            appender = appender.with_session_context(context);
-        }
+            session_records,
+        ));
+    }
+    tally.report();
+}
 
-        if role_id
-            .as_ref()
-            .is_some_and(horizon_agent::roles::is_exploration)
-        {
-            match terminate_orphaned_exploration(&mut appender, &frame) {
-                Ok(()) => terminated_explorations += 1,
-                Err(error) => eprintln!(
-                    "horizon-agentd: failed to commit orphaned exploration termination for \
-                     {session_id:?}: {error}"
-                ),
+/// The incremental mode of [`resume_persisted_sessions`]: the event log was
+/// read only after the projection's cursor (`tail`), and that tail is
+/// already caught up into `store`. Instead of folding every session ever
+/// recorded, the projection answers which sessions are already dead
+/// ([`DuckdbStoreHandle::session_liveness`]); only the others, plus every
+/// session the tail touched, get their records rebuilt from the projection
+/// and go through the same per-session body as the full mode, which still
+/// re-checks [`session_is_dead`] on the fold. The query is only a
+/// pre-filter: wrongly calling a session alive costs one fold, and the
+/// liveness equivalence test guards the other direction.
+///
+/// `through_sequence` is the last sequence the startup read knew about;
+/// every query is bounded by it so live appends projected meanwhile (this
+/// function's own fixups included) never leak into the startup snapshot.
+///
+/// Every projection query runs before anything is written or spawned, so
+/// an `Err` here has had no effect and the caller can fall back to the full
+/// mode over a whole-log read.
+pub(crate) fn resume_persisted_sessions_from_projection(
+    state: &Arc<AgentdState>,
+    store: &DuckdbStoreHandle,
+    tail: &[Record],
+    through_sequence: u64,
+) -> anyhow::Result<()> {
+    let Some(writer) = state.writer() else {
+        return Ok(());
+    };
+    let tail_sessions: HashSet<SessionId> = tail.iter().map(|record| record.session_id).collect();
+
+    let mut tally = ResumeTally::default();
+    let mut candidates = Vec::new();
+    for session in store.session_liveness(through_sequence)? {
+        if session.dead && !tail_sessions.contains(&session.session_id) {
+            // The full mode checks the role before liveness, so a retired
+            // role's session never counts as a terminated skip there either.
+            if !session
+                .role_id
+                .as_ref()
+                .is_some_and(|role| retired_role(&role.0))
+            {
+                tally.skipped_terminated += 1;
             }
             continue;
         }
+        candidates.push((
+            session.session_id,
+            store.session_records(session.session_id, through_sequence)?,
+        ));
+    }
 
-        if let Err(error) = settle_interrupted_turn(&mut appender, &frame, &mut events) {
+    for (session_id, session_records) in candidates {
+        tally.note(resume_one_session(
+            state,
+            &writer,
+            session_id,
+            session_records,
+        ));
+    }
+    tally.report();
+    Ok(())
+}
+
+/// What [`resume_one_session`] did with one session; only the counted
+/// outcomes feed [`ResumeTally`]'s summary lines.
+enum ResumeOutcome {
+    /// Retired role, unrestorable environment, or a failed fixup commit.
+    NotResumed,
+    AlreadyDead,
+    ExplorationTerminated,
+    Spawned,
+}
+
+/// Counted rather than printed per session: a real archived log can carry
+/// dozens of long-dead sessions, and a line per one drowned out the
+/// genuinely interesting "resumed session" lines right next to it.
+#[derive(Default)]
+struct ResumeTally {
+    skipped_terminated: usize,
+    // Counted the same way, for the same reason -- see
+    // [`terminate_orphaned_exploration`].
+    terminated_explorations: usize,
+}
+
+impl ResumeTally {
+    fn note(&mut self, outcome: ResumeOutcome) {
+        match outcome {
+            ResumeOutcome::AlreadyDead => self.skipped_terminated += 1,
+            ResumeOutcome::ExplorationTerminated => self.terminated_explorations += 1,
+            ResumeOutcome::NotResumed | ResumeOutcome::Spawned => {}
+        }
+    }
+
+    fn report(&self) {
+        if self.skipped_terminated > 0 {
             eprintln!(
-                "horizon-agentd: failed to commit interrupted work for {session_id:?}; \
-                 skipping resume: {error}"
+                "horizon-agentd: skipped resume of {} already-terminated session(s)",
+                self.skipped_terminated
             );
-            continue;
         }
 
-        eprintln!(
-            "horizon-agentd: resumed session {session_id:?} ({} event(s))",
-            events.len()
-        );
-        super::spawn::spawn_session_thread_with_context(
-            state.clone(),
-            session_id,
-            provider_id,
-            role_id,
-            restored.workspace_root,
-            restored.parent_session_id,
-            false,
-            restored.worktree,
-            events,
-            persisted_context,
-        );
-    }
-
-    if skipped_terminated > 0 {
-        eprintln!(
-            "horizon-agentd: skipped resume of {skipped_terminated} already-terminated \
-             session(s)"
-        );
-    }
-
-    if terminated_explorations > 0 {
-        eprintln!(
-            "horizon-agentd: terminated {terminated_explorations} orphaned exploration \
-             session(s) instead of resuming them"
-        );
+        if self.terminated_explorations > 0 {
+            eprintln!(
+                "horizon-agentd: terminated {} orphaned exploration session(s) instead of \
+                 resuming them",
+                self.terminated_explorations
+            );
+        }
     }
 }
 
+/// One session's startup resume, shared by both modes: provider and role
+/// lookup, the retired-role skip, the fold and [`session_is_dead`],
+/// environment restoration, then either the orphaned-exploration
+/// termination or the interrupted-turn fixup followed by the spawn.
+fn resume_one_session(
+    state: &Arc<AgentdState>,
+    writer: &WriterHandle,
+    session_id: SessionId,
+    mut session_records: Vec<Record>,
+) -> ResumeOutcome {
+    session_records.sort_by_key(|record| record.sequence);
+    let provider_id = session_records
+        .iter()
+        .rev()
+        .find_map(|record| record.provider_id.clone())
+        .unwrap_or_else(|| lock_unpoisoned(&state.providers).default_provider_id());
+    // Mirrors `provider_id` just above: every record `Appender` writes
+    // for a session carries the same `role_id` (see
+    // `event_log::Appender::new`), so the last one found scanning from
+    // the tail is the session's role for its whole lifetime.
+    let role_id = session_records
+        .iter()
+        .rev()
+        .find_map(|record| record.role_id.clone());
+    if role_id.as_ref().is_some_and(|role| retired_role(&role.0)) {
+        return ResumeOutcome::NotResumed;
+    }
+    let recorded_events: Vec<_> = session_records
+        .iter()
+        .map(|record| record.event.clone())
+        .collect();
+    let frame = agent_frame_from_events(&recorded_events);
+    if session_is_dead(&frame) {
+        return ResumeOutcome::AlreadyDead;
+    }
+    let persisted_context = session_records
+        .iter()
+        .rev()
+        .find_map(|record| record.session_context.clone());
+    let restored =
+        match environment::restore(session_id, &recorded_events, persisted_context.as_ref()) {
+            Ok(restored) => restored,
+            Err(error) => {
+                eprintln!("horizon-agentd: {error}");
+                return ResumeOutcome::NotResumed;
+            }
+        };
+    let mut events = recorded_events;
+
+    let mut appender = Appender::new(
+        writer.clone(),
+        session_id,
+        Some(provider_id.clone()),
+        role_id.clone(),
+    )
+    .with_turn_history(&session_records);
+    if let Some(context) = persisted_context.clone() {
+        appender = appender.with_session_context(context);
+    }
+
+    if role_id
+        .as_ref()
+        .is_some_and(horizon_agent::roles::is_exploration)
+    {
+        return match terminate_orphaned_exploration(&mut appender, &frame) {
+            Ok(()) => ResumeOutcome::ExplorationTerminated,
+            Err(error) => {
+                eprintln!(
+                    "horizon-agentd: failed to commit orphaned exploration termination for \
+                     {session_id:?}: {error}"
+                );
+                ResumeOutcome::NotResumed
+            }
+        };
+    }
+
+    if let Err(error) = settle_interrupted_turn(&mut appender, &frame, &mut events) {
+        eprintln!(
+            "horizon-agentd: failed to commit interrupted work for {session_id:?}; \
+             skipping resume: {error}"
+        );
+        return ResumeOutcome::NotResumed;
+    }
+
+    eprintln!(
+        "horizon-agentd: resumed session {session_id:?} ({} event(s))",
+        events.len()
+    );
+    super::spawn::spawn_session_thread_with_context(
+        state.clone(),
+        session_id,
+        provider_id,
+        role_id,
+        restored.workspace_root,
+        restored.parent_session_id,
+        false,
+        restored.worktree,
+        events,
+        persisted_context,
+    );
+    ResumeOutcome::Spawned
+}
 /// Commit interrupted work before a provider receives the restored history.
 /// The appender must already carry the original turn history and context.
 fn settle_interrupted_turn(
@@ -1127,5 +1240,324 @@ mod tests {
             assert!(!agent_frame_from_events(&events).is_turn_in_flight());
             state.send_command(session_id, horizon_agent::contract::Command::Shutdown);
         }
+    }
+}
+
+#[cfg(test)]
+mod projection_resume_tests {
+    use super::*;
+    use crate::session::test_support::test_state;
+    use horizon_agent::contract::{Exit, Message, MessageRole};
+    use horizon_agent::persistence::event_log::{ReadReport, WriterInit};
+    use std::path::Path;
+    use std::time::Duration;
+
+    fn mock_provider() -> ProviderId {
+        ProviderId("builtin.agent.mock".to_string())
+    }
+
+    fn user_message() -> Event {
+        Event::MessageCommitted(Message {
+            role: MessageRole::User,
+            text: "work".to_string(),
+        })
+    }
+
+    /// Appends each session's events through a plain writer and waits until
+    /// its thread has exited, so the next open of the file is the only one.
+    fn append_sessions(path: &Path, sessions: &[(SessionId, Option<RoleId>, Vec<Event>)]) {
+        let (writer, init) = WriterHandle::open(path);
+        assert!(matches!(init.recv().unwrap(), WriterInit::Ready(_)));
+        for (session_id, role_id, events) in sessions {
+            let mut appender = Appender::new(
+                writer.clone(),
+                *session_id,
+                Some(mock_provider()),
+                role_id.clone(),
+            );
+            appender
+                .append_provider_events(events.iter().cloned().map(ProviderEvent::from).collect())
+                .unwrap();
+        }
+        writer.flush().unwrap();
+        stop(writer, None);
+    }
+
+    fn stop(writer: WriterHandle, store: Option<DuckdbStoreHandle>) {
+        let exited = writer.subscribe_failure();
+        drop(store);
+        drop(writer);
+        exited
+            .receiver()
+            .recv_timeout(Duration::from_secs(10))
+            .expect("writer thread exits");
+    }
+
+    fn boot(log: &Path, db: &Path) -> (WriterHandle, ReadReport, Option<DuckdbStoreHandle>) {
+        let (writer, init, duckdb) = WriterHandle::open_silently(log, Some(db.to_path_buf()));
+        let WriterInit::Ready(report) = init.recv().unwrap() else {
+            panic!("writer startup failed");
+        };
+        (writer, report, duckdb.recv().ok().flatten())
+    }
+
+    fn through_sequence(report: &ReadReport) -> u64 {
+        let cursor = report.read_after.as_ref().expect("incremental startup");
+        report
+            .max_known_sequence
+            .map_or(cursor.sequence, |sequence| sequence.max(cursor.sequence))
+    }
+
+    /// Every ordering of state-bearing and non-state events the corpus
+    /// covers: the projection's verdict must equal the fold's.
+    #[test]
+    fn the_liveness_query_agrees_with_the_folded_frame() {
+        let mut alphabet: Vec<Event> = [
+            SessionState::Created,
+            SessionState::Running,
+            SessionState::WaitingForUser,
+            SessionState::WaitingForApproval,
+            SessionState::ToolRunning,
+            SessionState::Cancelled,
+            SessionState::Completed,
+            SessionState::Failed,
+            SessionState::Terminated,
+        ]
+        .into_iter()
+        .map(Event::StateChanged)
+        .collect();
+        let exited = Event::Exited(Exit {
+            reason: "shutdown".to_string(),
+        });
+        let error = Event::Error(AgentError {
+            message: "boom".to_string(),
+        });
+        alphabet.extend([exited.clone(), error.clone(), user_message()]);
+
+        let mut corpus: Vec<Vec<Event>> = Vec::new();
+        for first in &alphabet {
+            corpus.push(vec![first.clone()]);
+            for second in &alphabet {
+                corpus.push(vec![first.clone(), second.clone()]);
+            }
+        }
+        let short = [
+            Event::StateChanged(SessionState::Terminated),
+            Event::StateChanged(SessionState::Running),
+            exited,
+            error,
+        ];
+        for a in &short {
+            for b in &short {
+                for c in &short {
+                    corpus.push(vec![a.clone(), b.clone(), c.clone()]);
+                }
+            }
+        }
+        // Revival after an explicit resume, and later non-state events.
+        corpus.push(vec![
+            Event::StateChanged(SessionState::Terminated),
+            Event::SessionResumed,
+            Event::StateChanged(SessionState::Created),
+        ]);
+        corpus.push(vec![
+            Event::StateChanged(SessionState::Terminated),
+            user_message(),
+            Event::SessionResumed,
+        ]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
+        let sessions: Vec<_> = corpus
+            .into_iter()
+            .map(|events| (SessionId::new(), None, events))
+            .collect();
+        append_sessions(&log, &sessions);
+
+        let (writer, report, store) = boot(&log, &db);
+        let store = store.expect("rebuilt projection");
+        let verdicts: HashMap<SessionId, bool> = store
+            .session_liveness(report.max_known_sequence.unwrap())
+            .unwrap()
+            .into_iter()
+            .map(|session| (session.session_id, session.dead))
+            .collect();
+        assert_eq!(verdicts.len(), sessions.len());
+        let mut dead = 0;
+        for (session_id, _, events) in &sessions {
+            let expected = session_is_dead(&agent_frame_from_events(events));
+            dead += usize::from(expected);
+            assert_eq!(
+                verdicts[session_id], expected,
+                "liveness disagrees with the fold for {events:?}"
+            );
+        }
+        assert!(
+            dead > 0 && dead < sessions.len(),
+            "the corpus covers both verdicts"
+        );
+        stop(writer, Some(store));
+    }
+
+    /// The fixups resume committed after `sequence`, per session: a
+    /// resumed session's own thread starts by recording `Created`, which no
+    /// fixup ever writes, so everything before that is resume's.
+    fn resume_fixups_after(path: &Path, sequence: u64) -> HashMap<SessionId, Vec<Event>> {
+        let mut by_session: HashMap<SessionId, Vec<Event>> = HashMap::new();
+        for record in horizon_agent::persistence::event_log::read(path)
+            .unwrap()
+            .records
+        {
+            if record.sequence > sequence {
+                by_session
+                    .entry(record.session_id)
+                    .or_default()
+                    .push(record.event);
+            }
+        }
+        by_session
+            .into_iter()
+            .filter_map(|(session_id, events)| {
+                let fixups: Vec<_> = events
+                    .into_iter()
+                    .take_while(|event| *event != Event::StateChanged(SessionState::Created))
+                    .collect();
+                (!fixups.is_empty()).then_some((session_id, fixups))
+            })
+            .collect()
+    }
+
+    fn live_sessions(state: &Arc<AgentdState>) -> HashSet<SessionId> {
+        state.sessions.lock().unwrap().keys().copied().collect()
+    }
+
+    fn shut_down_sessions(state: &Arc<AgentdState>) {
+        for session_id in live_sessions(state) {
+            state.send_command(session_id, horizon_agent::contract::Command::Shutdown);
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !live_sessions(state).is_empty() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The same log resumed both ways must spawn the same sessions and
+    /// commit the same fixups: the incremental mode reads the projection
+    /// plus a tail, the full mode the whole log.
+    #[test]
+    fn incremental_resume_matches_full_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let full_log = dir.path().join("full.jsonl");
+        let incremental_log = dir.path().join("incremental.jsonl");
+        let db = dir.path().join("state.duckdb");
+        let created = Event::StateChanged(SessionState::Created);
+        let waiting = Event::StateChanged(SessionState::WaitingForUser);
+        let running = Event::StateChanged(SessionState::Running);
+        let terminated = Event::StateChanged(SessionState::Terminated);
+        let explore = Some(RoleId(horizon_agent::roles::EXPLORE_ROLE_ID.to_string()));
+        let [dead, waiting_session, mid_turn, exploration, revived, dies_in_tail, tail_only] =
+            std::array::from_fn(|_| SessionId::new());
+
+        append_sessions(
+            &full_log,
+            &[
+                (
+                    dead,
+                    None,
+                    vec![created.clone(), waiting.clone(), terminated.clone()],
+                ),
+                (
+                    waiting_session,
+                    None,
+                    vec![created.clone(), waiting.clone()],
+                ),
+                (
+                    mid_turn,
+                    None,
+                    vec![created.clone(), user_message(), running.clone()],
+                ),
+                (
+                    exploration,
+                    explore,
+                    vec![created.clone(), user_message(), running.clone()],
+                ),
+                (revived, None, vec![created.clone(), terminated.clone()]),
+                (dies_in_tail, None, vec![created.clone(), waiting.clone()]),
+            ],
+        );
+        std::fs::copy(&full_log, &incremental_log).unwrap();
+        let (writer, _, store) = boot(&incremental_log, &db);
+        stop(writer, store);
+
+        append_sessions(
+            &full_log,
+            &[
+                (revived, None, vec![Event::SessionResumed, created.clone()]),
+                (dies_in_tail, None, vec![terminated.clone()]),
+                (
+                    tail_only,
+                    None,
+                    vec![created.clone(), user_message(), running.clone()],
+                ),
+            ],
+        );
+        std::fs::copy(&full_log, &incremental_log).unwrap();
+
+        let full_state = test_state();
+        let (full_writer, full_ready) = WriterHandle::open(&full_log);
+        let WriterInit::Ready(full_report) = full_ready.recv().unwrap() else {
+            panic!("full startup failed");
+        };
+        let snapshot = full_report.max_known_sequence.unwrap();
+        full_state.set_writer(Some(full_writer.clone()));
+        resume_persisted_sessions(&full_state, full_report.records);
+        full_writer.flush().unwrap();
+
+        let incremental_state = test_state();
+        let (incremental_writer, report, store) = boot(&incremental_log, &db);
+        assert!(
+            report.read_after.is_some(),
+            "the second start is incremental"
+        );
+        assert_eq!(through_sequence(&report), snapshot);
+        let store = store.expect("caught-up projection");
+        incremental_state.set_writer(Some(incremental_writer.clone()));
+        resume_persisted_sessions_from_projection(
+            &incremental_state,
+            &store,
+            &report.records,
+            through_sequence(&report),
+        )
+        .unwrap();
+        incremental_writer.flush().unwrap();
+
+        let expected_live: HashSet<_> = [waiting_session, mid_turn, revived, tail_only].into();
+        assert_eq!(live_sessions(&full_state), expected_live);
+        assert_eq!(live_sessions(&incremental_state), expected_live);
+        let full_fixups = resume_fixups_after(&full_log, snapshot);
+        assert_eq!(full_fixups, resume_fixups_after(&incremental_log, snapshot));
+        let cancelled = vec![
+            Event::TurnEnded(TurnEndReason::Cancelled),
+            Event::StateChanged(SessionState::WaitingForUser),
+        ];
+        assert_eq!(full_fixups[&mid_turn], cancelled);
+        assert_eq!(full_fixups[&tail_only], cancelled);
+        assert_eq!(
+            full_fixups[&exploration].last(),
+            Some(&Event::StateChanged(SessionState::Terminated))
+        );
+        assert_eq!(
+            full_fixups.keys().copied().collect::<HashSet<_>>(),
+            HashSet::from([mid_turn, exploration, tail_only]),
+            "fixups land exactly where a turn was interrupted: {full_fixups:?}"
+        );
+
+        shut_down_sessions(&full_state);
+        shut_down_sessions(&incremental_state);
+        drop(store);
     }
 }

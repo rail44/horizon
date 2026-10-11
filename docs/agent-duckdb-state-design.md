@@ -416,3 +416,53 @@ resume if the commit fails. As of 2026-09-25, all persistent live events use thi
 acknowledged boundary before publication; see
 [the persistence contract](agent-persistence-contract.md). A batch is not transactional: a successfully written prefix can be
 recovered on restart even if a later record in that batch failed.
+
+### Incremental startup (2026-10-11)
+
+Owner decision, 2026-10-11: `horizon-agentd` no longer reads and parses the
+whole event log on every start when the projection is already current, and
+no longer folds every session ever recorded to find the few still alive.
+Three pieces make that possible:
+
+- **Log cursor.** `agent_log_cursor` is a singleton row holding the JSONL
+  byte offset just past the last ingested record's line, plus that record's
+  `sequence` and `event_id`. It commits in the same transaction as the rows
+  it covers: once per rebuild or catch-up chunk (`import::apply_chunk`) and
+  once per live append (`run_writer` tracks the file position itself, from
+  the length left after `discard_partial_tail` plus every line it writes).
+  A record whose JSONL write failed is never projected, so the cursor never
+  runs ahead of the file. Startup verifies only the line ending at the
+  offset; the persistence contract records what this stops detecting.
+- **`agent_sessions.session_context_json`.** The latest non-null
+  `Record::session_context` as JSON, with the same `COALESCE` upsert rule as
+  `provider_id`/`role_id`. With it, `Store::session_records` rebuilds a
+  session's full `Record`s from `agent_events` (every rebuilt record carries
+  the latest context, the only value resume reads).
+- **Liveness query.** The frame fold sets `AgentFrame::state` only from
+  `StateChanged` and `Exited` (which reads as `Terminated`), so a session is
+  already dead exactly when its latest `state_changed`/`exited` event by
+  `sequence` is `StateChanged(Terminated)` or `Exited`.
+  `Store::session_liveness` answers that per session with one aggregate;
+  `horizon-agentd`'s resume uses it as a pre-filter and still re-checks
+  `session_is_dead` on the fold of every session it does load. An
+  equivalence test compares the two over a corpus of orderings.
+
+The table shape itself is now versioned: `agent_projection_format` carries
+`projection_schema_version` next to `event_log_version`
+(`schema::PROJECTION_SCHEMA_VERSION`). `CREATE TABLE IF NOT EXISTS` never
+alters an existing file, so a stamp that mismatches or cannot be read (a
+file from before this column) means a full rebuild, and the rebuild drops
+and recreates every table instead of deleting rows.
+
+Startup now has two modes. **Incremental**: the writer thread opens the
+store first; if the stamp is current and the cursor's line matches, it
+reads only the tail after the offset, catches it up into the projection,
+hands the store out, and only then sends `WriterInit::Ready` with just the
+tail (`ReadReport::read_after` set). Opening the store and the tail
+catch-up are therefore on the readiness path, and resume reads the
+projection instead of the log. **Full**: anything else reads the whole log,
+sends `Ready` with every record, and runs the full rebuild after `Ready`,
+off the readiness path, as before. A tail that cannot be caught up (a
+skipped record) leaves the projection unavailable for the run and removes
+its stamp, since later chunks may already have moved the cursor past the
+skipped record.
