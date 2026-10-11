@@ -1,0 +1,179 @@
+//! The display model the pane draws: plain data, already worded in the
+//! chrome language. Whatever builds it from a live session does the wording;
+//! the view only lays it out.
+
+// The only producer in this build is the preview sample, which does not
+// construct every state; the adapter from a live session is not written yet.
+#![allow(dead_code)]
+
+/// One agent session, as the pane shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Transcript {
+    pub(crate) title: String,
+    pub(crate) model: String,
+    pub(crate) status: Status,
+    pub(crate) units: Vec<Unit>,
+    pub(crate) changes: Vec<ChangedFile>,
+    pub(crate) tasks: Vec<Task>,
+    pub(crate) composer: ComposerMode,
+}
+
+/// One unit of the conversation, in order.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Unit {
+    User(Message),
+    Turn(Turn),
+    Notice(Notice),
+}
+
+/// Something sent into the session: by the owner, by a task, or as an
+/// automatic continuation. Plain text, not markdown.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Message {
+    pub(crate) label: Label,
+    pub(crate) text: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Label {
+    You,
+    Task,
+    Continue,
+}
+
+/// One agent turn.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Turn {
+    pub(crate) state: TurnState,
+    pub(crate) parts: Vec<TurnPart>,
+    pub(crate) elapsed: Option<String>,
+    pub(crate) model: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TurnState {
+    Running,
+    Done,
+    Stopped,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TurnPart {
+    /// Markdown.
+    Text(String),
+    Receipt(Receipt),
+    Thinking,
+}
+
+/// A run of tool calls between two pieces of text, summarized on one line.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Receipt {
+    /// Unique within the transcript; the view keys its expansion on it.
+    pub(crate) key: usize,
+    pub(crate) summary: String,
+    pub(crate) running: bool,
+    pub(crate) failed: bool,
+    pub(crate) calls: Vec<Call>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Call {
+    pub(crate) title: String,
+    pub(crate) status: CallStatus,
+    pub(crate) body: Option<CallBody>,
+    pub(crate) approval: Option<Approval>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CallStatus {
+    Running,
+    Done,
+    Failed,
+    Denied,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CallBody {
+    Diff(Vec<DiffLine>),
+    Output { lines: Vec<String>, omitted: usize },
+    Text(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DiffLine {
+    pub(crate) kind: DiffKind,
+    pub(crate) text: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DiffKind {
+    Context,
+    Added,
+    Removed,
+}
+
+/// A permission request pending on a call.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Approval {
+    pub(crate) id: String,
+    pub(crate) reason: String,
+}
+
+/// A line from the system rather than from either speaker.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Notice {
+    pub(crate) tone: Tone,
+    pub(crate) text: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Tone {
+    Muted,
+    Warning,
+    Danger,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Status {
+    Idle,
+    Running,
+    ToolRunning,
+    WaitingForApproval,
+    Terminated,
+    Unreachable,
+}
+
+impl Status {
+    /// Whether a turn is in flight, which is when 「停止」 is offered.
+    pub(crate) fn running(self) -> bool {
+        matches!(
+            self,
+            Self::Running | Self::ToolRunning | Self::WaitingForApproval
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ChangedFile {
+    pub(crate) path: String,
+    pub(crate) added: usize,
+    pub(crate) removed: usize,
+}
+
+/// A background task the session started.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Task {
+    pub(crate) description: String,
+    pub(crate) elapsed: String,
+    pub(crate) activity: String,
+}
+
+/// What Enter and Escape in the composer mean.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ComposerMode {
+    Idle,
+    Running,
+    Approval { id: String },
+}

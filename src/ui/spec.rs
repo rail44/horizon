@@ -164,6 +164,11 @@ pub(crate) const RADIUS: Pixels = px(4.0);
 /// A chip's corner.
 pub(crate) const CHIP_RADIUS: Pixels = px(2.0);
 
+/// A view's own floor. A guest window opens at one pixel and is resized
+/// afterwards, so without one a view would have to lay out text in no width
+/// at all on its first frame.
+pub(crate) const VIEW_MIN_WIDTH: Pixels = px(240.0);
+
 /// How tall the fade over folded text is, and how many solid strips make
 /// it: a quad crosses the preview host boundary with one solid color, so
 /// the fade is stacked steps rather than a gradient

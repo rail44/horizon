@@ -10,6 +10,7 @@ use gpui::{
     div, rgb, AnyView, App, Context, IntoElement, ParentElement as _, Render, Styled as _, Window,
 };
 
+use crate::agent::next::previews as agent;
 use crate::board::previews as board;
 use crate::preview::{animation, sample};
 
@@ -41,6 +42,30 @@ const PREVIEWS: &[Preview] = &[
     Preview {
         name: board::THREAD_LONG,
         build: board::build_thread_long,
+    },
+    Preview {
+        name: agent::A,
+        build: agent::build_a,
+    },
+    Preview {
+        name: agent::B,
+        build: agent::build_b,
+    },
+    Preview {
+        name: agent::C,
+        build: agent::build_c,
+    },
+    Preview {
+        name: agent::A_IDLE,
+        build: agent::build_a_idle,
+    },
+    Preview {
+        name: agent::B_IDLE,
+        build: agent::build_b_idle,
+    },
+    Preview {
+        name: agent::C_IDLE,
+        build: agent::build_c_idle,
     },
     Preview {
         name: animation::NAME,

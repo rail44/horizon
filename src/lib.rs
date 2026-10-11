@@ -12,12 +12,13 @@
 //! inside each file. `scripts/check-preview-wasm.sh` is what holds the
 //! split.
 //!
-//! A module that carries previews of its own view ([`board`]) is not
-//! gated here; its native-only halves are gated inside it instead.
+//! A module that carries previews of its own view ([`board`], [`agent`]) is
+//! not gated here; its native-only halves are gated inside it instead.
 
 #![recursion_limit = "256"]
 
-#[cfg(not(target_family = "wasm"))]
+// The agent pane. Its runtime-facing halves are gated inside it; the
+// redrawn view in `agent::next` builds for the plugin target too.
 mod agent;
 // The board's two views. Their shell-facing halves — the commands, the
 // session observation, the events the workspace subscribes to — have no

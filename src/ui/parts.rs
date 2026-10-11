@@ -88,3 +88,33 @@ pub(crate) fn markdown_body(
                 .text_color(color),
         )
 }
+
+/// Escapes plain text for verbatim rendering through `TextView::markdown`:
+/// backslash-escaping every ASCII punctuation character keeps a reply's
+/// `*` or `1.` from turning into a GFM construct. CommonMark resolves each
+/// escape back to the literal character, so the painted text is unchanged.
+pub(crate) fn escape_markdown(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_ascii_punctuation() {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn escaping_keeps_a_plain_reply_plain() {
+        assert_eq!(
+            super::escape_markdown("# not a heading"),
+            "\\# not a heading"
+        );
+        assert_eq!(
+            super::escape_markdown("続行してください"),
+            "続行してください"
+        );
+    }
+}

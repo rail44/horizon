@@ -48,6 +48,7 @@ use gpui::{
 };
 use horizon_config::{RawConfig, RawThemeConfig};
 
+use crate::agent::next::previews as agent;
 use crate::board::previews as board;
 use crate::preview::host::{PreviewHostRoot, PreviewThemeSource};
 use crate::preview::schema::{PreviewPlugin, PreviewPluginCaller as _};
@@ -879,5 +880,113 @@ async fn preview_plugin_board_follows_the_shell_font_size(cx: &mut TestAppContex
     drop(text_system);
     cx.update(|_| drop(list));
     settle(cx);
+    std::fs::remove_file(&live).ok();
+}
+
+/// The agent previews get a slot short enough that the head of the sample
+/// conversation is off screen, so what is painted says where the column
+/// opened.
+const AGENT_SLOT: Geometry = Geometry {
+    width: 640.,
+    height: 520.,
+    scale_factor: 1.,
+};
+
+/// Like [`mount`], for a preview that animates and so never stops asking
+/// for frames: answer a fixed number of them instead of waiting for quiet.
+fn mount_animated(
+    host: &Entity<PluginHost>,
+    surface: &Entity<Surface>,
+    slot: Geometry,
+    cx: &mut TestAppContext,
+) {
+    use embedded_gpui::surface::ViewApiCaller as _;
+
+    let surface_ref = cx.update(|cx| host.share(surface, cx));
+    let plugin = cx.update(|cx| host.root::<PreviewPlugin>(cx));
+    cx.update(|cx| plugin.mount(surface_ref, cx));
+    settle(cx);
+    let view = surface
+        .read_with(cx, |surface, _| surface.view().cloned())
+        .expect("the guest attached a view");
+    cx.update(|cx| view.resize(slot, cx));
+    settle(cx);
+    for frame in 0..6 {
+        assert!(
+            surface.update(cx, |surface, cx| surface.drive_frame(cx)),
+            "the running turn's thinking dots stopped animating at frame {frame}"
+        );
+        settle(cx);
+    }
+}
+
+#[gpui::test]
+#[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
+async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
+    let built = built_artifact();
+    let live = live_artifact("agent");
+    std::fs::copy(&built, &live).expect("stage the built artifact");
+
+    cx.update(gpui_component::init);
+    cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
+
+    let title_marker = '追';
+    let first_marker = 'ホ';
+    let approval_marker = '換';
+
+    // (preview, running, draws the band)
+    let cases = [
+        (agent::A, true, true),
+        (agent::B, true, false),
+        (agent::C, true, true),
+        (agent::A_IDLE, false, true),
+        (agent::B_IDLE, false, false),
+        (agent::C_IDLE, false, true),
+    ];
+    for (name, running, band) in cases {
+        let loaded = load(&live, name, cx).expect("the agent preview instantiates");
+        let surface = cx.new(Surface::new);
+        if running {
+            // The thinking dots repeat, so a running preview never goes
+            // quiet.
+            mount_animated(&loaded.host, &surface, AGENT_SLOT, cx);
+        } else {
+            // An idle preview has nothing animating and must go quiet.
+            mount(&loaded.host, &surface, AGENT_SLOT, cx);
+        }
+        let painted_now = glyph_counts(&summary(&surface, cx));
+        assert!(
+            painted(&painted_now, agent::LAST_MESSAGE),
+            "{name}: the owner's last message is not painted: {painted_now:?}"
+        );
+        assert_eq!(
+            count_of(&painted_now, first_marker),
+            0,
+            "{name}: the conversation did not open at its tail: {painted_now:?}"
+        );
+        assert_eq!(
+            count_of(&painted_now, title_marker),
+            usize::from(band),
+            "{name}: the title is drawn exactly by the band: {painted_now:?}"
+        );
+        if running {
+            assert!(
+                painted(&painted_now, "承認"),
+                "{name}: no approval control is painted: {painted_now:?}"
+            );
+            assert!(
+                painted(&painted_now, agent::APPROVAL_REASON),
+                "{name}: the pending approval's reason is not painted: {painted_now:?}"
+            );
+        } else {
+            assert_eq!(
+                count_of(&painted_now, approval_marker),
+                0,
+                "{name}: an idle session painted an approval: {painted_now:?}"
+            );
+        }
+        cx.update(|_| drop(loaded));
+        settle(cx);
+    }
     std::fs::remove_file(&live).ok();
 }

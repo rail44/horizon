@@ -615,21 +615,6 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Escapes plain text for verbatim rendering through `TextView::markdown`:
-/// backslash-escaping every ASCII punctuation character keeps a reply's
-/// `*` or `1.` from turning into a GFM construct. CommonMark resolves each
-/// escape back to the literal character, so the painted text is unchanged.
-pub(crate) fn escape_markdown(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for ch in text.chars() {
-        if ch.is_ascii_punctuation() {
-            escaped.push('\\');
-        }
-        escaped.push(ch);
-    }
-    escaped
-}
-
 /// The status line a row and the thread header show.
 pub(crate) fn status_text(item: &Item) -> String {
     match (item.is_closed, item.status.trim().is_empty()) {
@@ -1108,18 +1093,6 @@ mod tests {
         assert_eq!(super::voice("system"), Voice::System);
         assert_eq!(super::voice("agent"), Voice::Agent);
         assert_eq!(super::voice("reviewer"), Voice::Agent);
-    }
-
-    #[test]
-    fn escaping_keeps_a_plain_reply_plain() {
-        assert_eq!(
-            super::escape_markdown("# not a heading"),
-            "\\# not a heading"
-        );
-        assert_eq!(
-            super::escape_markdown("続行してください"),
-            "続行してください"
-        );
     }
 
     #[test]

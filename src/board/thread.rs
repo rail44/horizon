@@ -19,12 +19,10 @@ use super::activity::{task_session_state, BoardSessionActivity};
 use super::events::{BoardSessionsRefreshed, OpenTaskSession};
 use super::execute::{run_store_job, BoardStoreSource, StoreJob};
 use super::model::{self, ThreadCommand};
-use super::parts::{
-    activity_label, author_label, post_cells, status_tone, write_refusal, VIEW_MIN_WIDTH,
-};
+use super::parts::{activity_label, author_label, post_cells, status_tone, write_refusal};
 use super::spec::*;
 use crate::theme;
-use crate::ui::parts::{chip, fade, key_chip, markdown_body};
+use crate::ui::parts::{chip, escape_markdown, fade, key_chip, markdown_body};
 use crate::ui::spec::*;
 
 /// One task's thread.
@@ -750,7 +748,7 @@ impl BoardThreadView {
         // writes markdown, so only an agent's post is parsed as markdown.
         let source = match voice {
             model::Voice::Agent => shown,
-            _ => model::escape_markdown(&shown),
+            _ => escape_markdown(&shown),
         };
         let body_color = match voice {
             model::Voice::System => theme::text_muted(),

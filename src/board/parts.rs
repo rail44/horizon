@@ -5,18 +5,13 @@
 //! Anything that belongs to one view's structure — the task header band, a
 //! post, a list row — lives in that view's own module.
 
-use gpui::{Hsla, Pixels, SharedString};
+use gpui::{Hsla, SharedString};
 use horizon_board::{Item, StoreError};
 
 use super::activity::BoardSessionActivity;
 use super::model;
 use super::spec::{MEASURE_CELLS, OWNER_MEASURE_CELLS};
 use crate::theme;
-
-/// A view's own floor. A guest window opens at one pixel and is resized
-/// afterwards, so without one a view would have to lay out text in no width
-/// at all on its first frame.
-pub(super) const VIEW_MIN_WIDTH: Pixels = gpui::px(240.0);
 
 // ---------------------------------------------------------------------------
 // Tones and labels
