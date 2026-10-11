@@ -98,8 +98,8 @@ impl Render for AgentView {
             // terminal instead of falling back to gpui-component's built-in
             // default. Children with their own `.text_size()` (labels, tool
             // rows, status) keep their deliberate sub-sizes.
-            .font(crate::terminal::resolved_font())
-            .text_size(px(crate::terminal::font_size()))
+            .font(crate::ui::font::resolved_font())
+            .text_size(px(crate::ui::font::font_size()))
             .track_focus(&self.focus_handle)
             // Transcript presses focus the pressed TextView (gpui-component's
             // window text selection claims focus on mouse-down), so a click

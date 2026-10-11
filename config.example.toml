@@ -136,15 +136,20 @@
 # /bin/sh) with no extra argv, and scrollback is always 10000 lines.
 # ---------------------------------------------------------------------------
 [terminal]
-# Font size (px) used to measure terminal cell width and lay out terminal
-# text. Active below because it's the current production default, shown as
-# a live, editable reference — not because you need to set it.
+# The app-wide font size (px), despite living in this section: terminal
+# cells, the agent transcript, and the task board are all drawn from it
+# (the board's type scale and spacing scale with it). The Increase / Decrease
+# / Reset Font Size commands move it live for all of them; Reset returns to
+# this value. Active below because it's the current production default,
+# shown as a live, editable reference — not because you need to set it.
 font_size = 13.0
 
 # ---------------------------------------------------------------------------
 # [ui] — the app-wide font family, shared by the terminal, agent transcript,
-# and workspace agent controls. The window's initial size is fixed now
-# (1100x720), not configurable.
+# and workspace agent controls. The app-wide font size is [terminal]
+# font_size above (terminal, agent transcript, board), moved live by the
+# font-size commands. The window's initial size is fixed now (1100x720),
+# not configurable.
 # ---------------------------------------------------------------------------
 [ui]
 # Comma-separated font stack: the first entry is the primary family, the
@@ -184,7 +189,7 @@ font_size = 13.0
 # toggle-board-closed,
 # reload-preview (reload the active preview pane's plugin from disk),
 # increase-font-size / decrease-font-size / reset-font-size (move the live
-# terminal font size; already bound by default to the platform-standard zoom
+# app-wide font size: terminal, agent transcript, board; already bound by default to the platform-standard zoom
 # chords -- cmd+= / cmd+- / cmd+0 on macOS, ctrl+= / ctrl+- / ctrl+0 on
 # Linux/Windows (one built-in set spelled via gpui's `secondary` modifier), so
 # an entry here overrides that default). The reserved pseudo-command

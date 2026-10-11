@@ -13,10 +13,9 @@ use gpui::{
 };
 use horizon_board::{tree_order, Item, Position};
 
-use super::spec::{
-    ACTION_PAD, BODY, CELL_EM, GAP_TIGHT, GAP_UNIT, HEADER_TITLE_MIN_CELLS, PAD_X, T1,
-};
+use super::spec::{action_pad, CELL_EM, HEADER_TITLE_MIN_CELLS};
 use crate::theme;
+use crate::ui::spec::{body, gap_tight, gap_unit, pad_x, t1};
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -462,16 +461,16 @@ pub(crate) fn message_visible(marker: &Bounds<Pixels>, viewport: &Bounds<Pixels>
 /// one row: the band's own padding, the title's floor, the gap to the
 /// actions, and the actions themselves at their label widths.
 pub(crate) fn header_one_row_width(actions: &[&str]) -> Pixels {
-    let cell = BODY.size * CELL_EM;
+    let cell = body().size * CELL_EM;
     let buttons = actions.iter().fold(px(0.0), |total, label| {
-        total + cell * display_width(label) as f32 + ACTION_PAD
+        total + cell * display_width(label) as f32 + action_pad()
     });
-    let gaps = GAP_TIGHT * actions.len().saturating_sub(1) as f32;
-    PAD_X * 2.0 + measure_title_floor() + GAP_UNIT + buttons + gaps
+    let gaps = gap_tight() * actions.len().saturating_sub(1) as f32;
+    pad_x() * 2.0 + measure_title_floor() + gap_unit() + buttons + gaps
 }
 
 fn measure_title_floor() -> Pixels {
-    T1.size * (CELL_EM * HEADER_TITLE_MIN_CELLS)
+    t1().size * (CELL_EM * HEADER_TITLE_MIN_CELLS)
 }
 
 /// Whether the band stacks into two rows — the title on its own, the chips

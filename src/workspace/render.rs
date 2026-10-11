@@ -1036,7 +1036,7 @@ impl Render for WorkspaceShell {
             // font_size`) is deliberately not applied to chrome, so modals
             // keep their own sizing. The terminal grid resolves its font
             // directly (`text_system.resolve_font`) and ignores this.
-            .font(crate::terminal::resolved_font())
+            .font(crate::ui::font::resolved_font())
             .key_context(if mode_active {
                 MODE_CONTEXT
             } else {

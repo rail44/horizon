@@ -57,12 +57,30 @@ use crate::preview::{animation, registry, sample};
 // A text system that makes rendered text visible to assertions
 // ---------------------------------------------------------------------------
 
-pub(super) struct ProbeTextSystem;
+#[derive(Default)]
+pub(super) struct ProbeTextSystem {
+    /// Every line laid out, with the size it was laid out at, so a test can
+    /// see what size a string was drawn at.
+    laid_out: std::sync::Mutex<Vec<(String, Pixels)>>,
+}
 
 const UNITS_PER_EM: u32 = 1000;
 const ADVANCE_UNITS: f32 = 500.0;
 
 impl ProbeTextSystem {
+    /// The sizes every laid-out line containing `needle` was laid out at,
+    /// since the last call; clears the record.
+    fn take_sizes_of(&self, needle: &str) -> std::collections::BTreeSet<u32> {
+        let mut laid_out = self.laid_out.lock().unwrap();
+        let sizes = laid_out
+            .iter()
+            .filter(|(text, _)| text.contains(needle))
+            .map(|(_, size)| f32::from(*size) as u32)
+            .collect();
+        laid_out.clear();
+        sizes
+    }
+
     fn metrics() -> FontMetrics {
         FontMetrics {
             units_per_em: UNITS_PER_EM,
@@ -150,6 +168,10 @@ impl PlatformTextSystem for ProbeTextSystem {
     }
 
     fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {
+        self.laid_out
+            .lock()
+            .unwrap()
+            .push((text.to_string(), font_size));
         let font_id = runs.first().map(|run| run.font_id).unwrap_or(FontId(1));
         let em_width = font_size * (ADVANCE_UNITS / UNITS_PER_EM as f32);
         let mut position = px(0.);
@@ -240,7 +262,7 @@ struct Loaded {
 }
 
 fn load(path: &std::path::Path, preview: &str, cx: &mut TestAppContext) -> anyhow::Result<Loaded> {
-    let text_system = Arc::new(ProbeTextSystem);
+    let text_system = Arc::new(ProbeTextSystem::default());
     let weak = Arc::downgrade(&text_system);
     let options = PluginOptions::new(text_system);
     let instance = cx.update(|_| PluginInstance::new(path, options))?;
@@ -815,6 +837,47 @@ async fn preview_plugin_paints_the_board_list(cx: &mut TestAppContext) {
     );
 
     cx.update(|_| drop(empty));
+    settle(cx);
+    std::fs::remove_file(&live).ok();
+}
+
+#[gpui::test]
+#[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
+async fn preview_plugin_board_follows_the_shell_font_size(cx: &mut TestAppContext) {
+    let built = built_artifact();
+    let live = live_artifact("board-font-size");
+    std::fs::copy(&built, &live).expect("stage the built artifact");
+
+    cx.update(gpui_component::init);
+    cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
+
+    // At the reference body size the list row's title is drawn at the
+    // designed body size.
+    crate::ui::font::set_font_size(crate::ui::spec::REFERENCE_BODY);
+    let list = load(&live, board::LIST, cx).expect("the list preview instantiates");
+    let surface = cx.new(Surface::new);
+    mount(&list.host, &surface, BOARD_SLOT, cx);
+    let text_system = list.text_system.upgrade().expect("the guest is loaded");
+    assert_eq!(
+        text_system.take_sizes_of(board::FIRST_TASK_TITLE),
+        [14].into(),
+        "the row title is not drawn at the body size"
+    );
+
+    // Doubling the shell's size reaches the guest through the theme object
+    // and doubles the title.
+    crate::ui::font::set_font_size(crate::ui::spec::REFERENCE_BODY * 2.0);
+    cx.update(crate::preview::publish_font_size);
+    settle(cx);
+    host_frames(&surface, cx);
+    assert_eq!(
+        text_system.take_sizes_of(board::FIRST_TASK_TITLE),
+        [28].into(),
+        "the row title did not follow the shell's font size"
+    );
+
+    drop(text_system);
+    cx.update(|_| drop(list));
     settle(cx);
     std::fs::remove_file(&live).ok();
 }

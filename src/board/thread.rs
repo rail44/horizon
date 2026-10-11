@@ -20,11 +20,12 @@ use super::events::{BoardSessionsRefreshed, OpenTaskSession};
 use super::execute::{run_store_job, BoardStoreSource, StoreJob};
 use super::model::{self, ThreadCommand};
 use super::parts::{
-    activity_label, author_label, chip, fade, key_chip, markdown_body, post_cells, status_tone,
-    write_refusal, VIEW_MIN_WIDTH,
+    activity_label, author_label, post_cells, status_tone, write_refusal, VIEW_MIN_WIDTH,
 };
 use super::spec::*;
 use crate::theme;
+use crate::ui::parts::{chip, fade, key_chip, markdown_body};
+use crate::ui::spec::*;
 
 /// One task's thread.
 pub(crate) struct BoardThreadView {
@@ -580,12 +581,12 @@ impl BoardThreadView {
         let actions = h_flex()
             .flex_none()
             .items_center()
-            .gap(GAP_TIGHT)
+            .gap(gap_tight())
             .child(
                 Button::new("board-next-primary")
                     .primary()
                     .small()
-                    .h(PRIMARY_HEIGHT)
+                    .h(primary_height())
                     .label("返信")
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.execute(ThreadCommand::FocusComposer, window, cx);
@@ -595,7 +596,7 @@ impl BoardThreadView {
                 Button::new(("board-next-closed", id))
                     .ghost()
                     .small()
-                    .h(PRIMARY_HEIGHT)
+                    .h(primary_height())
                     .label(if closed { "再開" } else { "閉じる" })
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.execute(ThreadCommand::ToggleClosed, window, cx);
@@ -606,7 +607,7 @@ impl BoardThreadView {
                     Button::new(("board-next-session", id))
                         .ghost()
                         .small()
-                        .h(PRIMARY_HEIGHT)
+                        .h(primary_height())
                         .label("セッション")
                         .on_click(cx.listener(|view, _, window, cx| {
                             view.execute(ThreadCommand::OpenTaskSession, window, cx);
@@ -626,7 +627,7 @@ impl BoardThreadView {
             .relative()
             .w_full()
             .flex_none()
-            .p(PAD_X)
+            .p(pad_x())
             .bg(theme::tint_over_background(
                 theme::text_primary(),
                 BAND_TINT,
@@ -637,13 +638,13 @@ impl BoardThreadView {
                 h_flex()
                     .w_full()
                     .items_start()
-                    .gap(GAP_UNIT)
+                    .gap(gap_unit())
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .text_size(T1.size)
-                            .line_height(T1.line_height)
+                            .text_size(t1().size)
+                            .line_height(t1().line_height)
                             .font_weight(ANCHOR)
                             .text_color(theme::text_primary())
                             .overflow_hidden()
@@ -657,8 +658,8 @@ impl BoardThreadView {
                 h_flex()
                     .w_full()
                     .items_center()
-                    .gap(GAP_TIGHT)
-                    .mt(GAP_TIGHT)
+                    .gap(gap_tight())
+                    .mt(gap_tight())
                     .when(!status.is_empty(), |line| {
                         line.child(chip(status.clone(), status_tone(item)))
                     })
@@ -671,8 +672,8 @@ impl BoardThreadView {
                     .when_some(updated, |line, at| {
                         line.child(
                             div()
-                                .text_size(META.size)
-                                .line_height(META.line_height)
+                                .text_size(meta().size)
+                                .line_height(meta().line_height)
                                 .text_color(theme::text_muted())
                                 .child(format!("更新 {}", model::relative_time(at, now))),
                         )
@@ -689,8 +690,8 @@ impl BoardThreadView {
     fn render_status_field(&self) -> impl IntoElement {
         div()
             .flex_none()
-            .w(STATUS_FIELD)
-            .text_size(META.size)
+            .w(status_field())
+            .text_size(meta().size)
             .child(Input::new(&self.status).appearance(false).xsmall())
     }
 
@@ -766,7 +767,7 @@ impl BoardThreadView {
             .w_full()
             .flex_none()
             .when(owner, |post| {
-                post.ml(OWNER_INDENT)
+                post.ml(owner_indent())
                     .bg(theme::tint_over_background(
                         theme::text_primary(),
                         BAND_TINT,
@@ -778,8 +779,8 @@ impl BoardThreadView {
                     .border_color(theme::border())
                     .rounded(RADIUS)
             })
-            .px(PAD_X)
-            .py(PAD_Y)
+            .px(pad_x())
+            .py(pad_y())
             .child(
                 div()
                     .absolute()
@@ -794,7 +795,7 @@ impl BoardThreadView {
                 div()
                     .relative()
                     .w_full()
-                    .mt(GAP_TIGHT)
+                    .mt(gap_tight())
                     .child(markdown_body(
                         SharedString::from(format!("board-next-post-body-{}", comment.id)),
                         source,
@@ -810,10 +811,10 @@ impl BoardThreadView {
                             "board-next-unfold-{}",
                             comment.id
                         )))
-                        .mt(GAP_TIGHT)
+                        .mt(gap_tight())
                         .cursor_pointer()
-                        .text_size(META.size)
-                        .line_height(META.line_height)
+                        .text_size(meta().size)
+                        .line_height(meta().line_height)
                         .text_color(theme::accent())
                         .child(format!("残り{}行", fold.hidden_lines))
                         .on_click(cx.listener(move |view, _, window, cx| {
@@ -871,12 +872,12 @@ impl BoardThreadView {
         h_flex()
             .w_full()
             .items_baseline()
-            .gap(GAP_TIGHT)
+            .gap(gap_tight())
             .child(
                 div()
                     .flex_none()
-                    .text_size(BODY.size)
-                    .line_height(BODY.line_height)
+                    .text_size(body().size)
+                    .line_height(body().line_height)
                     .font_weight(ANCHOR)
                     .text_color(theme::text_primary())
                     .child(author_label(&comment.author)),
@@ -885,8 +886,8 @@ impl BoardThreadView {
                 line.child(
                     div()
                         .flex_none()
-                        .text_size(META.size)
-                        .line_height(META.line_height)
+                        .text_size(meta().size)
+                        .line_height(meta().line_height)
                         .text_color(theme::text_muted())
                         .child(model::relative_time(at, now)),
                 )
@@ -898,7 +899,7 @@ impl BoardThreadView {
                 // hovered.
                 h_flex()
                     .flex_none()
-                    .gap(GAP_TIGHT)
+                    .gap(gap_tight())
                     .opacity(0.0)
                     .group_hover(group.clone(), |style| style.opacity(1.0))
                     .child(
@@ -908,8 +909,8 @@ impl BoardThreadView {
                                 comment.id
                             )))
                             .cursor_pointer()
-                            .text_size(META.size)
-                            .line_height(META.line_height)
+                            .text_size(meta().size)
+                            .line_height(meta().line_height)
                             .text_color(theme::text_muted())
                             .child("返信")
                             .on_click(cx.listener(|view, _, window, cx| {
@@ -924,8 +925,8 @@ impl BoardThreadView {
                                     comment.id
                                 )))
                                 .cursor_pointer()
-                                .text_size(META.size)
-                                .line_height(META.line_height)
+                                .text_size(meta().size)
+                                .line_height(meta().line_height)
                                 .text_color(theme::text_muted())
                                 .child("畳む")
                                 .on_click(cx.listener(move |view, _, window, cx| {
@@ -946,15 +947,15 @@ impl BoardThreadView {
         v_flex()
             .w_full()
             .flex_none()
-            .px(THREAD_GUTTER)
-            .py(PAD_Y)
-            .gap(GAP_LABEL)
+            .px(thread_gutter())
+            .py(pad_y())
+            .gap(gap_label())
             .border_t_1()
             .border_color(theme::border())
             .child(
                 div()
                     .w_full()
-                    .text_size(BODY.size)
+                    .text_size(body().size)
                     .child(Textarea::new(&self.reply).appearance(false)),
             )
             .child(
@@ -962,12 +963,12 @@ impl BoardThreadView {
                     .w_full()
                     .items_center()
                     .justify_end()
-                    .gap(GAP_LABEL)
+                    .gap(gap_label())
                     .child(key_chip("Enter"))
                     .child(
                         div()
-                            .text_size(MICRO.size)
-                            .line_height(MICRO.line_height)
+                            .text_size(micro().size)
+                            .line_height(micro().line_height)
                             .text_color(theme::text_muted())
                             .child("で送信"),
                     ),
@@ -997,9 +998,9 @@ impl Render for BoardThreadView {
         let Some(item) = self.item.clone() else {
             return shell.child(
                 div()
-                    .p(PAD_X)
-                    .text_size(META.size)
-                    .line_height(META.line_height)
+                    .p(pad_x())
+                    .text_size(meta().size)
+                    .line_height(meta().line_height)
                     .text_color(theme::text_muted())
                     .child("このタスクは見つかりません"),
             );
@@ -1012,10 +1013,10 @@ impl Render for BoardThreadView {
                 column.child(
                     div()
                         .flex_none()
-                        .px(THREAD_GUTTER)
-                        .pt(GAP_TIGHT)
-                        .text_size(META.size)
-                        .line_height(META.line_height)
+                        .px(thread_gutter())
+                        .pt(gap_tight())
+                        .text_size(meta().size)
+                        .line_height(meta().line_height)
                         .text_color(theme::danger())
                         .child(notice),
                 )
@@ -1027,24 +1028,20 @@ impl Render for BoardThreadView {
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
-                    .px(THREAD_GUTTER)
-                    .pt(GAP_SECTION)
-                    .pb(GAP_COMPOSER)
-                    .gap(GAP_UNIT)
+                    .px(thread_gutter())
+                    .pt(gap_section())
+                    .pb(gap_composer())
+                    .gap(gap_unit())
                     .when(self.has_body(), |column| {
                         // The container's own 16 plus this 8 puts the first
                         // post 24 under the body.
-                        column.child(
-                            div()
-                                .w_full()
-                                .flex_none()
-                                .mb(GAP_TIGHT)
-                                .child(markdown_body(
-                                    ("board-next-task-body", item.id),
-                                    item.body.clone(),
-                                    theme::text_primary(),
-                                )),
-                        )
+                        column.child(div().w_full().flex_none().mb(gap_tight()).child(
+                            markdown_body(
+                                ("board-next-task-body", item.id),
+                                item.body.clone(),
+                                theme::text_primary(),
+                            ),
+                        ))
                     })
                     .children(
                         item.comments

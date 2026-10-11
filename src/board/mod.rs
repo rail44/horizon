@@ -6,8 +6,10 @@
 //! the two side by side.
 //!
 //! What they share is [`model`] (the tree order, folding, the post cursor,
-//! drag placement, both key maps), [`spec`] (the measurements), [`parts`]
-//! (the chips, tones, and running text they draw with), [`activity`] (what
+//! drag placement, both key maps), [`spec`] (the board-only measurements,
+//! scaled from the app-wide font size like `crate::ui::spec`), [`parts`]
+//! (the tones and labels they draw with, beside `crate::ui::parts`),
+//! [`activity`] (what
 //! a bound session reports), and the store hand-off: both read a
 //! [`Store`](horizon_board::Store) through the same
 //! [`BoardStoreSource`](execute::BoardStoreSource) /

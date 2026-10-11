@@ -11,10 +11,11 @@ use embedded_gpui::{interface, Ref};
 /// The shell's root object.
 #[interface]
 pub trait PreviewHost {
-    /// The theme input the guest resolves its colors from. The returned
-    /// object notifies (`Remote::observe`) whenever the shell's scheme
-    /// changes, and re-reading [`PreviewThemeApi::theme_json`] then yields
-    /// the new one.
+    /// The theme input the guest resolves its colors and font size from.
+    /// The returned object notifies (`Remote::observe`) whenever the shell's
+    /// scheme or font size changes, and re-reading
+    /// [`PreviewThemeApi::theme_json`] / [`PreviewThemeApi::font_size`] then
+    /// yields the new one.
     fn theme(&mut self, cx: &mut gpui::Context<Self>) -> Ref<PreviewThemeApi>;
 
     /// Which of the plugin's previews the pane wants shown, by name.
@@ -28,6 +29,11 @@ pub trait PreviewHost {
 #[interface]
 pub trait PreviewThemeApi {
     fn theme_json(&mut self, cx: &mut gpui::Context<Self>) -> String;
+
+    /// The shell's live font size, in px, which the guest installs as its
+    /// own (`ui::font::set_font_size`). Read on the same notification as
+    /// the theme.
+    fn font_size(&mut self, cx: &mut gpui::Context<Self>) -> f32;
 }
 
 /// The plugin's root object.

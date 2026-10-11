@@ -63,7 +63,7 @@ fn preview_plugin_pane_releases_loaded_resources_on_reload_and_retarget(cx: &mut
     let artifact = PathBuf::from(std::env::var_os("HORIZON_PREVIEW_WASM").unwrap());
     let pane = cx.new(|cx| PreviewPane::new(None, "sample".into(), cx));
     for retarget in [false, true] {
-        let text_system = Arc::new(ProbeTextSystem);
+        let text_system = Arc::new(ProbeTextSystem::default());
         let lifetime = Arc::downgrade(&text_system);
         let instance = PluginInstance::new(&artifact, PluginOptions::new(text_system)).unwrap();
         let host = cx.new(|cx| PluginHost::new(instance, cx));
@@ -96,7 +96,7 @@ fn preview_plugin_pane_releases_loaded_resources_on_reload_and_retarget(cx: &mut
     }
     // Exercise the real asynchronous completion too: retiring the Loading
     // state's task from inside its own callback must leave a usable guest.
-    cx.update(|cx| cx.set_global(PreviewTextSystem(Arc::new(ProbeTextSystem))));
+    cx.update(|cx| cx.set_global(PreviewTextSystem(Arc::new(ProbeTextSystem::default()))));
     pane.update(cx, |pane, cx| pane.retarget(artifact, "sample".into(), cx));
     cx.executor().run_until_parked();
     pane.read_with(cx, |pane, _| {

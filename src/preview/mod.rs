@@ -36,6 +36,6 @@ mod tests;
 mod e2e;
 
 #[cfg(not(target_family = "wasm"))]
-pub(crate) use host::publish_theme;
+pub(crate) use host::{publish_font_size, publish_theme};
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use pane::{preview_pane_for_path, PreviewPane, PreviewTarget, PreviewTextSystem};

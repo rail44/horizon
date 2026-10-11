@@ -1097,9 +1097,9 @@ mod tests {
     /// built-in default it documents, so the example never quietly falls
     /// out of sync with the code. Lives here (rather than in
     /// `horizon-config`, which has no dependency on this crate and so
-    /// can't see `ANSI16_DEFAULT`/`terminal::DEFAULT_FONT_SIZE`) because
+    /// can't see `ANSI16_DEFAULT`/`ui::font::DEFAULT_FONT_SIZE`) because
     /// this is where those constants are reachable -- see
-    /// `terminal::DEFAULT_FONT_SIZE`'s own doc comment for the other half
+    /// `ui::font::DEFAULT_FONT_SIZE`'s own doc comment for the other half
     /// of this guard's cross-reference.
     #[test]
     fn config_example_toml_matches_its_documented_defaults() {
@@ -1110,9 +1110,9 @@ mod tests {
         // [terminal]'s only active example value.
         assert_eq!(
             example.terminal.font_size,
-            Some(crate::terminal::DEFAULT_FONT_SIZE),
+            Some(crate::ui::font::DEFAULT_FONT_SIZE),
             "config.example.toml's active [terminal] font_size must match \
-             terminal::DEFAULT_FONT_SIZE"
+             ui::font::DEFAULT_FONT_SIZE"
         );
 
         // [theme.ansi]'s six active hue slots, against ANSI16_DEFAULT's

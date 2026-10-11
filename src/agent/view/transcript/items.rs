@@ -48,7 +48,7 @@ impl AgentTranscript {
                     .child(
                         TextView::markdown(id, text)
                             .selectable(true)
-                            .text_size(px(crate::terminal::font_size()))
+                            .text_size(px(crate::ui::font::font_size()))
                             .text_color(theme::text_primary()),
                     )
                     .into_any_element()

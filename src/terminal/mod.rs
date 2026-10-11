@@ -30,11 +30,6 @@ mod shape_cache;
 mod shaping;
 
 use crate::theme;
-#[cfg(test)]
-pub(crate) use font::DEFAULT_FONT_SIZE;
-pub(crate) use font::{
-    adjust_font_size, font_size, reset_font_size, resolved_font, FONT_SIZE_STEP,
-};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use horizon_terminal_core::TerminalSize;

@@ -1,20 +1,16 @@
-//! The vocabulary both board views draw with: chips, the tones a status and
-//! an author read in, running text, and the fade over a folded post.
+//! The board-only vocabulary both board views draw with: the tones a status
+//! and an author read in, and the labels they show. The generic parts
+//! (chips, running text, the fade) are [`crate::ui::parts`].
 //!
 //! Anything that belongs to one view's structure — the task header band, a
 //! post, a list row — lives in that view's own module.
 
-use gpui::{
-    div, rems, rgb, ElementId, Hsla, IntoElement, Overflow, ParentElement as _, Pixels,
-    SharedString, StyleRefinement, Styled as _,
-};
-use gpui_component::text::{TextView, TextViewStyle};
-use gpui_component::v_flex;
+use gpui::{Hsla, Pixels, SharedString};
 use horizon_board::{Item, StoreError};
 
 use super::activity::BoardSessionActivity;
 use super::model;
-use super::spec::*;
+use super::spec::{MEASURE_CELLS, OWNER_MEASURE_CELLS};
 use crate::theme;
 
 /// A view's own floor. A guest window opens at one pixel and is resized
@@ -23,30 +19,8 @@ use crate::theme;
 pub(super) const VIEW_MIN_WIDTH: Pixels = gpui::px(240.0);
 
 // ---------------------------------------------------------------------------
-// Chips and tones
+// Tones and labels
 // ---------------------------------------------------------------------------
-
-/// A status chip: micro type on a tint of its own tone, with the label
-/// contrast-floored against the tint it lands on.
-pub(super) fn chip(label: impl Into<SharedString>, tone: Hsla) -> impl IntoElement {
-    let surface = theme::tint_over_background(tone, CHIP_TINT);
-    div()
-        .flex_none()
-        .px(GAP_LABEL)
-        .rounded(CHIP_RADIUS)
-        .bg(surface)
-        .text_size(MICRO.size)
-        .line_height(MICRO.line_height)
-        .font_weight(REGULAR)
-        .text_color(theme::readable_on(tone, surface))
-        .child(label.into())
-}
-
-/// A keyboard hint. Latin inside a chip is the one place Latin sits in a
-/// Japanese label.
-pub(super) fn key_chip(key: &'static str) -> impl IntoElement {
-    chip(key, theme::text_muted())
-}
 
 /// The tone a task's status reads in.
 pub(super) fn status_tone(item: &Item) -> Hsla {
@@ -111,60 +85,6 @@ pub(super) fn write_refusal(error: &StoreError) -> String {
         }
         other => other.to_string(),
     }
-}
-
-// ---------------------------------------------------------------------------
-// Running text
-// ---------------------------------------------------------------------------
-
-/// The steps that fade a folded post out into the background. A quad
-/// crosses the host boundary carrying one solid color, so the fade is
-/// stacked solid strips rather than a gradient
-/// (`docs/preview-pane-design.md`, the display list's `quad` record).
-pub(super) fn fade() -> impl IntoElement {
-    let base: Hsla = rgb(theme::background()).into();
-    let step = FADE_HEIGHT / FADE_STEPS as f32;
-    v_flex()
-        .absolute()
-        .bottom_0()
-        .left_0()
-        .right_0()
-        .h(FADE_HEIGHT)
-        .children((0..FADE_STEPS).map(|index| {
-            let alpha = (index + 1) as f32 / FADE_STEPS as f32;
-            div().h(step).w_full().bg(base.alpha(alpha))
-        }))
-}
-
-/// Running text across the pane's width, with the in-post heading scale
-/// clamped below the task title. Code blocks scroll horizontally instead of
-/// widening the column.
-///
-/// `TextView` renders markdown itself and exposes a heading's *size* per
-/// level; its weight and color are the renderer's own, so H3+ is not
-/// separately muted and a heading's weight is whatever the renderer draws
-/// bold as.
-pub(super) fn markdown_body(
-    id: impl Into<ElementId>,
-    source: String,
-    color: Hsla,
-) -> impl IntoElement {
-    let mut code = StyleRefinement::default();
-    code.overflow.x = Some(Overflow::Scroll);
-    let style = TextViewStyle::default()
-        .paragraph_gap(rems(0.5))
-        .heading_font_size(|level, _base| if level <= 1 { T2.size } else { BODY.size })
-        .code_block(code);
-    div()
-        .w_full()
-        .text_size(BODY.size)
-        .line_height(BODY.line_height)
-        .font_weight(REGULAR)
-        .child(
-            TextView::markdown(id, source)
-                .style(style)
-                .text_color(color),
-        )
 }
 
 #[cfg(test)]

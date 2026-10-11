@@ -50,19 +50,29 @@ impl Plugin for PreviewGuest {
                 let source = theme.clone();
                 let target = weak_root.clone();
                 let observer = theme.observe(cx, move |cx| {
-                    let receipt = source.theme_json(cx);
+                    let json_receipt = source.theme_json(cx);
+                    let size_receipt = source.font_size(cx);
                     let target = target.clone();
                     cx.spawn(async move |cx| {
-                        let json: String = match receipt.await {
+                        let json: String = match json_receipt.await {
                             Ok(json) => json,
                             Err(error) => {
                                 embedded_gpui::log::error!("preview: theme read failed: {error:#}");
                                 return;
                             }
                         };
+                        let font_size: f32 = match size_receipt.await {
+                            Ok(size) => size,
+                            Err(error) => {
+                                embedded_gpui::log::error!(
+                                    "preview: font size read failed: {error:#}"
+                                );
+                                return;
+                            }
+                        };
                         cx.update(|cx| {
                             target
-                                .update(cx, |root, cx| root.apply_theme(&json, cx))
+                                .update(cx, |root, cx| root.apply_theme(&json, font_size, cx))
                                 .ok();
                         });
                     })
@@ -88,7 +98,8 @@ impl Plugin for PreviewGuest {
 
 struct GuestRoot {
     host: Remote<PreviewHost>,
-    /// One per mounted surface; kept so a theme change can repaint them.
+    /// One per mounted surface; kept so a theme or font-size change can
+    /// repaint them.
     windows: Vec<WindowHandle<PreviewRoot>>,
     /// Held so the host's theme object stays connected.
     theme: Option<Remote<PreviewThemeApi>>,
@@ -98,8 +109,9 @@ struct GuestRoot {
 impl GuestRoot {
     /// Resolves the shell's `[theme]` section into this guest's own scheme
     /// and gpui-component theme — the same two calls the shell makes for
-    /// itself — then repaints every mounted preview.
-    fn apply_theme(&mut self, json: &str, cx: &mut Context<Self>) {
+    /// itself — installs the shell's font size, then repaints every mounted
+    /// preview.
+    fn apply_theme(&mut self, json: &str, font_size: f32, cx: &mut Context<Self>) {
         let theme = match serde_json::from_str::<RawThemeConfig>(json) {
             Ok(theme) => theme,
             Err(error) => {
@@ -112,6 +124,7 @@ impl GuestRoot {
             ..RawConfig::default()
         });
         crate::theme::apply_gpui_component_theme(cx);
+        crate::ui::font::set_font_size(font_size);
         self.windows
             .retain(|window| window.update(cx, |_, window, _| window.refresh()).is_ok());
     }

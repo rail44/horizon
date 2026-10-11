@@ -1,5 +1,6 @@
 //! The host half of the shared vocabulary: the two shell-side entities a
-//! preview plugin reaches through its root, and the theme input they serve.
+//! preview plugin reaches through its root, and the theme and font-size
+//! input they serve.
 
 use embedded_gpui::{shared, Ref};
 use gpui::{App, Context, Entity, Global, Subscription};
@@ -30,6 +31,19 @@ pub(crate) fn publish_theme(theme: &RawThemeConfig, cx: &mut App) {
     });
 }
 
+/// Marks a change of the shell's live font size (`ui::font`) for every
+/// loaded preview; the value itself is read from the live store.
+#[derive(Clone, Copy, Default)]
+struct PreviewFontSizeInput;
+
+impl Global for PreviewFontSizeInput {}
+
+/// Publishes the shell's live font size to every loaded preview. Called by
+/// the font-size commands after they move it.
+pub(crate) fn publish_font_size(cx: &mut App) {
+    cx.set_global(PreviewFontSizeInput);
+}
+
 fn current_theme_json(cx: &App) -> String {
     match cx.try_global::<PreviewThemeInput>() {
         Some(input) => input.json.clone(),
@@ -41,18 +55,24 @@ fn current_theme_json(cx: &App) -> String {
 /// as the guest's `Remote::observe` callback.
 pub(crate) struct PreviewThemeSource {
     json: String,
-    _observer: Subscription,
+    font_size: f32,
+    _observers: [Subscription; 2],
 }
 
 impl PreviewThemeSource {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
-        let observer = cx.observe_global::<PreviewThemeInput>(|this, cx| {
+        let theme = cx.observe_global::<PreviewThemeInput>(|this, cx| {
             this.json = current_theme_json(cx);
+            cx.notify();
+        });
+        let font_size = cx.observe_global::<PreviewFontSizeInput>(|this, cx| {
+            this.font_size = crate::ui::font::font_size();
             cx.notify();
         });
         Self {
             json: current_theme_json(cx),
-            _observer: observer,
+            font_size: crate::ui::font::font_size(),
+            _observers: [theme, font_size],
         }
     }
 }
@@ -61,6 +81,10 @@ impl PreviewThemeSource {
 impl PreviewThemeApi for PreviewThemeSource {
     fn theme_json(&mut self, _cx: &mut Context<Self>) -> String {
         self.json.clone()
+    }
+
+    fn font_size(&mut self, _cx: &mut Context<Self>) -> f32 {
+        self.font_size
     }
 }
 

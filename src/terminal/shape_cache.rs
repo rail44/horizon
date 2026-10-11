@@ -24,7 +24,7 @@
 //! The font size rides in the epoch too: a cached `ShapedLine` bakes in
 //! font + font size + cell metrics, and the `Increase/Decrease/Reset
 //! Font Size` commands move the live size at runtime (see
-//! `crate::terminal::font_size`), so a size change must clear every row
+//! `crate::ui::font::font_size`), so a size change must clear every row
 //! the same way a theme swap does. (`font_family` itself is still
 //! startup-only, so it needs no axis.) Window scale factor is applied
 //! at paint time, not baked into shaping, so DPI changes need no axis.
@@ -63,7 +63,7 @@ pub(super) struct CacheEpoch {
     /// invalidate here, not per row.
     pub(super) palette_overrides: Vec<(u16, [u8; 3])>,
     /// The terminal font size, in px, the cached items were shaped under
-    /// (`crate::terminal::font_size()` at paint time). A
+    /// (`crate::ui::font::font_size()` at paint time). A
     /// `ShapedLine`/geometric glyph bakes in font + size + cell metrics,
     /// so the `Increase/Decrease/Reset Font Size` commands must drop
     /// every row at once, like a theme swap.

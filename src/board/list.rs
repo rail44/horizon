@@ -20,9 +20,11 @@ use super::activity::{task_session_state, BoardSessionActivity};
 use super::events::{BoardSessionsRefreshed, OpenTaskThread};
 use super::execute::{run_store_job, BoardStoreSource, StoreJob};
 use super::model::{self, BoardDragValue, DropHalf, ListCommand, Row};
-use super::parts::{activity_label, chip, status_tone, write_refusal};
+use super::parts::{activity_label, status_tone, write_refusal};
 use super::spec::*;
 use crate::theme;
+use crate::ui::parts::chip;
+use crate::ui::spec::*;
 
 /// The board's task list.
 pub(crate) struct BoardListView {
@@ -584,7 +586,7 @@ impl BoardListView {
             .id(("board-next-row", id))
             .relative()
             .w_full()
-            .h(ROW_HEIGHT)
+            .h(row_height())
             .flex_none()
             .items_center()
             .cursor_pointer()
@@ -618,30 +620,30 @@ impl BoardListView {
             .child(
                 div()
                     .flex_none()
-                    .w(UNREAD_GUTTER)
+                    .w(unread_gutter())
                     .h_full()
                     .flex()
                     .items_center()
                     .justify_center()
                     .when(row.subtree_unread > 0, |gutter| {
-                        gutter.child(div().size(UNREAD_DOT).rounded_full().bg(theme::accent()))
+                        gutter.child(div().size(unread_dot()).rounded_full().bg(theme::accent()))
                     }),
             )
-            .child(div().flex_none().w(ROW_INDENT * row.depth as f32))
+            .child(div().flex_none().w(row_indent() * row.depth as f32))
             .child(self.render_disclosure(row, cx))
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .gap(GAP_LABEL)
+                    .gap(gap_label())
                     .child(
                         div()
                             .w_full()
                             .overflow_hidden()
                             .text_ellipsis()
                             .whitespace_nowrap()
-                            .text_size(BODY.size)
-                            .line_height(BODY.line_height)
+                            .text_size(body().size)
+                            .line_height(body().line_height)
                             .font_weight(if unread { ANCHOR } else { REGULAR })
                             .text_color(title_color)
                             .child(row.item.title.clone()),
@@ -651,8 +653,8 @@ impl BoardListView {
                             .w_full()
                             .overflow_hidden()
                             .whitespace_nowrap()
-                            .text_size(MICRO.size)
-                            .line_height(MICRO.line_height)
+                            .text_size(micro().size)
+                            .line_height(micro().line_height)
                             .text_color(theme::text_muted())
                             .child(row_meta(last, row.item.comments.len(), now)),
                     ),
@@ -660,9 +662,9 @@ impl BoardListView {
             .child(
                 h_flex()
                     .flex_none()
-                    .pl(GAP_TIGHT)
-                    .pr(PAD_X)
-                    .gap(GAP_LABEL)
+                    .pl(gap_tight())
+                    .pr(pad_x())
+                    .gap(gap_label())
                     .items_center()
                     .when(hidden_unread > 0, |line| {
                         line.child(chip(
@@ -675,7 +677,7 @@ impl BoardListView {
                     })
                     .child(if row.finished || status.is_empty() {
                         div()
-                            .size(STATUS_DOT)
+                            .size(status_dot())
                             .rounded_full()
                             .bg(tone.alpha(0.55))
                             .into_any_element()
@@ -708,12 +710,12 @@ impl BoardListView {
         div()
             .id(("board-next-disclosure", id))
             .flex_none()
-            .w(DISCLOSURE)
+            .w(disclosure())
             .flex()
             .items_center()
             .justify_center()
-            .text_size(MICRO.size)
-            .line_height(MICRO.line_height)
+            .text_size(micro().size)
+            .line_height(micro().line_height)
             .text_color(theme::text_muted())
             .when(row.has_children, |cell| {
                 cell.cursor_pointer()
@@ -736,13 +738,13 @@ impl BoardListView {
             .id("board-next-finished")
             .w_full()
             .flex_none()
-            .px(PAD_X)
-            .py(GAP_TIGHT)
-            .gap(GAP_LABEL)
+            .px(pad_x())
+            .py(gap_tight())
+            .gap(gap_label())
             .items_center()
             .cursor_pointer()
-            .text_size(META.size)
-            .line_height(META.line_height)
+            .text_size(meta().size)
+            .line_height(meta().line_height)
             .text_color(theme::text_muted())
             .hover(|line| line.bg(theme::tint_over_background(theme::text_subtle(), 0.05)))
             .child(if self.finished_expanded { "▾" } else { "▸" })
@@ -790,11 +792,11 @@ impl BoardListView {
         div()
             .w_full()
             .flex_none()
-            .px(PAD_X)
-            .py(GAP_TIGHT)
+            .px(pad_x())
+            .py(gap_tight())
             .border_t_1()
             .border_color(theme::border())
-            .text_size(BODY.size)
+            .text_size(body().size)
             .child(Input::new(&self.new_task).appearance(false))
     }
 }
@@ -838,19 +840,19 @@ impl Render for BoardListView {
                 view.on_key(event, window, cx);
             }))
             .size_full()
-            .min_w(LIST_MIN_WIDTH)
+            .min_w(list_min_width())
             .bg(rgb(theme::background()))
             .text_color(theme::text_primary())
             .child(
                 h_flex()
                     .w_full()
                     .flex_none()
-                    .px(PAD_X)
-                    .py(GAP_TIGHT)
+                    .px(pad_x())
+                    .py(gap_tight())
                     .border_b_1()
                     .border_color(theme::border())
-                    .text_size(META.size)
-                    .line_height(META.line_height)
+                    .text_size(meta().size)
+                    .line_height(meta().line_height)
                     .text_color(theme::text_muted())
                     .child(model::list_header_text(self.rows.len(), unread_total)),
             )
@@ -875,10 +877,10 @@ impl Render for BoardListView {
                     div()
                         .w_full()
                         .flex_none()
-                        .px(PAD_X)
-                        .py(GAP_TIGHT)
-                        .text_size(META.size)
-                        .line_height(META.line_height)
+                        .px(pad_x())
+                        .py(gap_tight())
+                        .text_size(meta().size)
+                        .line_height(meta().line_height)
                         .text_color(theme::text_muted())
                         .child(notice),
                 )

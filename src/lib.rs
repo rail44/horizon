@@ -54,6 +54,10 @@ pub mod theme;
 mod theme_settings;
 #[cfg(not(target_family = "wasm"))]
 mod title;
+// The shared visual vocabulary. Built for the plugin target too; the font
+// commands that move the live size have no caller there.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+mod ui;
 #[cfg(not(target_family = "wasm"))]
 mod view_chooser;
 #[cfg(not(target_family = "wasm"))]

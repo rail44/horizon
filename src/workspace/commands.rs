@@ -567,26 +567,30 @@ impl WorkspaceShell {
             CommandId::ReloadPreview => self.reload_active_preview(cx),
             CommandId::OpenBoardOrganizer => self.open_board_organizer(cx),
             CommandId::OpenBoardTaskSession => self.open_board_task_session(cx),
-            // The font-size commands mutate the shell crate's live font
-            // store (`terminal::font_size_store`) and refresh the window:
-            // the next paint recomputes cell metrics from the new size,
-            // resizes the PTY grid when cols/rows moved, and the shape
-            // cache drops its rows via `CacheEpoch::font_size`. No-op
-            // (no refresh) at a clamp bound or an already-configured
-            // size, so holding the chord doesn't thrash repaints.
+            // The font-size commands move the app-wide live size
+            // (`ui::font`) and refresh the window, which re-renders every
+            // pane (cached panes included) at the new size: the terminal
+            // recomputes its cell metrics and PTY grid, and its shape cache
+            // drops its rows via `CacheEpoch::font_size`. Loaded preview
+            // plugins get the new size through `publish_font_size`. No-op
+            // (no refresh) at a clamp bound or an already-configured size,
+            // so holding the chord doesn't thrash repaints.
             CommandId::IncreaseFontSize => {
-                if crate::terminal::adjust_font_size(crate::terminal::FONT_SIZE_STEP) {
+                if crate::ui::font::adjust_font_size(crate::ui::font::FONT_SIZE_STEP) {
                     window.refresh();
+                    crate::preview::publish_font_size(cx);
                 }
             }
             CommandId::DecreaseFontSize => {
-                if crate::terminal::adjust_font_size(-crate::terminal::FONT_SIZE_STEP) {
+                if crate::ui::font::adjust_font_size(-crate::ui::font::FONT_SIZE_STEP) {
                     window.refresh();
+                    crate::preview::publish_font_size(cx);
                 }
             }
             CommandId::ResetFontSize => {
-                if crate::terminal::reset_font_size() {
+                if crate::ui::font::reset_font_size() {
                     window.refresh();
+                    crate::preview::publish_font_size(cx);
                 }
             }
             CommandId::ApproveToolCall => {

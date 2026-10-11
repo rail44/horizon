@@ -323,11 +323,14 @@ The shell is GPUI-based (the Floem shell retired at tag
   preview plugin cannot build (`#[cfg(not(target_family = "wasm"))]`),
   `entry.rs` is the CLI-vs-GUI entry point, and `main.rs` only calls
   `horizon::run()`.
-- There is no cross-domain UI-primitive module and no plugin module.
-  The shared visual vocabulary is gpui-component's
-  widgets plus `theme/` (and `theme_settings/`, the live theme editor
-  pane); every view lives next to its domain. WASM plugin views are a
-  prospective third *runtime*, not a `src/` directory — see
+- `ui/` — the shared visual vocabulary every view draws from on top of
+  gpui-component's widgets and `theme/`: the app-wide live font size
+  (`[terminal] font_size`, moved by the font-size commands), the type
+  scale and rhythm scaled from it, and generic parts (chips, running
+  text). Builds for both targets, so preview plugins draw from it too.
+  Anything with a domain's structure (a post, a list row, a tool receipt)
+  stays next to its view. There is no plugin module: WASM plugin views are
+  a prospective third *runtime*, not a `src/` directory — see
   `docs/view-runtime-principle.md`.
 
 ## Conventions
