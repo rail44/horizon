@@ -32,7 +32,8 @@ gpui_kit_assets::icon_assets!(
         TriangleAlert,
         Pause,
         CircleX,
-        CircleCheck
+        CircleCheck,
+        Loader
     ]
 );
 

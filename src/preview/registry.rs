@@ -11,7 +11,7 @@ use gpui::{
 };
 
 use crate::board::previews as board;
-use crate::preview::sample;
+use crate::preview::{animation, sample};
 
 /// One entry: the name the shell selects by, and the constructor that builds
 /// the view with whatever sample data it needs.
@@ -41,6 +41,10 @@ const PREVIEWS: &[Preview] = &[
     Preview {
         name: board::THREAD_LONG,
         build: board::build_thread_long,
+    },
+    Preview {
+        name: animation::NAME,
+        build: animation::build,
     },
 ];
 

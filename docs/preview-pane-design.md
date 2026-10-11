@@ -56,6 +56,7 @@ for `wasm32-wasip2`:
 | `schema` | both | The two root interfaces the ends talk through. |
 | `registry` | both | The list of named previews. |
 | `sample` | both | The one seeded preview; the template for new ones. |
+| `animation` | both | A preview that animates without end, for frame pacing. |
 | `guest` | wasm | The plugin's entry point. |
 | `host`, `pane`, `watch` | native | Theme publication, the pane entity, the file watcher. |
 
@@ -89,6 +90,7 @@ The previews in this build:
 | `sample` | The seeded widget gallery (`src/preview/sample.rs`). |
 | `board-thread`, `board-thread-long` | One task's thread, over an in-memory store (`src/board/previews.rs`): the task header band, the task body, agent posts as bordered cards and owner replies as tinted blocks, and the composer pinned under them. The long one opens on a forty-message thread whose third post is long enough to fold. |
 | `board-list`, `board-list-empty` | The same board's task list as a view of its own: one row per task in rank order as a tree, children indented under their parent and foldable per parent, finished top-level work behind one 「完了」 row at the bottom, and the add-task input pinned under everything. |
+| `animation` | gpui-component's `Spinner` beside a bar whose width loops, both repeating animations (`src/preview/animation.rs`); for looking at frame pacing (see "Frame pacing"). |
 
 `src/board/` is two views, not one — a thread and a list, each
 taking a pane's whole width, with a pane split putting them side by side.
@@ -206,7 +208,8 @@ primary entry point and the view chooser does not list the preview kind.
   none of the folded first row's children until `l` opens it (and `h`
   folds them away again), and `j` then Enter adds the open notice naming
   the row the cursor landed on; `board-list-empty` paints chrome, no
-  row, and the add-task input. A board
+  row, and the add-task input. The `animation` preview asks for a next
+  frame after every host frame it is given. A board
   preview's surface is tall, because gpui culls primitives outside the
   content mask and an assertion on text that scrolled out of view is an
   assertion on nothing. Minutes when cold; not part of the gate.
@@ -251,28 +254,29 @@ exits.
 
 ## Frame pacing
 
-A guest window has none. Nothing inside the guest drives frames: the host
-runs one guest turn per exchange with it, and a turn draws a dirty window
-once and reports the delay until the guest's earliest pending timer. A
-quiet guest therefore costs nothing — the pane sits at 0% CPU with the
-window's frame request pending and no turn to service it.
+Guest frames are paced by the host's display. When gpui inside the guest
+has frame demand for a window — the window became dirty, or a next-frame
+callback such as an animation's is queued — the guest sends the pane's
+`Surface` one `request_frame` and does not send another until it is
+answered. The surface answers from its prepaint with the view's `frame`,
+and only then does the guest draw. A surface is prepainted at most once
+per host frame, so a guest draws at most once per host frame: a repeating
+`gpui::Animation` (gpui-component's `Spinner`, the `animation` preview)
+advances once per host frame and no faster. A guest with no demand sends
+no request and runs no turn, so an idle preview costs nothing. Input is
+applied in the turn that carries it, and its result is drawn on the next
+host frame.
 
-The consequence is that `window.request_animation_frame` has no rate. A
-turn that draws leads to the next turn, so a view that requests an
-animation frame from inside the frame it draws (every repeating
-`gpui::Animation`, including gpui-component's `Spinner`) keeps handing
-itself another one, as fast as the host can turn one around: measured at
-about 500 guest frames a second on a 900×1600 surface, with the host
-repainting each. Nothing starts that exchange while the guest is quiet, so
-such a view idles until the first input event and then never goes idle
-again. Which frame of the exchange carries the next turn was not traced;
-what was measured is that the requests are unpaced, that the executor call
-driving the guest never returns, and that removing the animation returns
-both to idle.
+Under gpui's test executor there is no display: nothing renders the
+surface, so nothing answers a request on its own. `src/preview/e2e.rs`
+therefore drives frames itself with `Surface::drive_frame`, the call the
+prepaint makes. Its `host_frames()` answers requests until the guest
+stops asking, and fails when the guest asks for many frames in a row. A
+view that animates never stops asking, so that failure means the view
+under test animates; `preview_plugin_paces_a_repeating_animation` drives
+the `animation` preview a fixed number of frames instead and checks that
+every one is answered with a request for the next.
 
-`src/preview/e2e.rs` drives a keystroke into the board previews partly for
-this: the run to quiescence after it does not return when the view paints
-a repeating animation, so a preview that survives a keystroke is a
-preview that has none. A previewable view therefore says its running
-states in still marks — the board's rows carry a text chip for a running
-session, not a spinner.
+embedded_gpui paints sprite transformations untransformed, so a rotating
+icon such as the `Spinner`'s does not visibly rotate in a preview pane;
+animated sizes, positions and colors do show.

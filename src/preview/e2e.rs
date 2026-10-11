@@ -17,15 +17,13 @@
 //!   the scene is serialized, so glyphs from different strings interleave.
 //!   Every assertion here is on the character multiset, never on order.
 //!
-//! What driving input asserts beyond the keystroke itself: that the guest
-//! settles at all. A guest paces no frames of its own — the host runs one
-//! turn per exchange with it, and a turn that draws leads to the next one —
-//! so a view that asks for another frame from inside the frame it is
-//! drawing (any repeating `gpui::Animation`, e.g. gpui-component's
-//! `Spinner`) keeps handing itself work and `settle` never returns. Nothing
-//! turns a quiet guest, so such a view looks idle until the first input
-//! event arrives. A test that hangs here after a `press` is reporting that,
-//! not a slow guest; `.config/nextest.toml` turns the hang into a failure.
+//! A guest draws only on a host frame: it asks its surface for one, and the
+//! surface answers when the host renders it. Nothing renders a surface
+//! here, so the harness is the frame clock — [`host_frames`] answers the
+//! guest's requests until it stops asking. A view that asks for another
+//! frame from inside every frame it draws (any repeating `gpui::Animation`,
+//! e.g. gpui-component's `Spinner`) never stops asking, so a non-animated
+//! preview that trips [`host_frames`]' bound is reporting that it animates.
 //! See `docs/preview-pane-design.md`, "Frame pacing".
 //!
 //! What it cannot assert: the painted *colors*. `Surface::scene_summary()`
@@ -53,7 +51,7 @@ use horizon_config::{RawConfig, RawThemeConfig};
 use crate::board::previews as board;
 use crate::preview::host::{PreviewHostRoot, PreviewThemeSource};
 use crate::preview::schema::{PreviewPlugin, PreviewPluginCaller as _};
-use crate::preview::{registry, sample};
+use crate::preview::{animation, registry, sample};
 
 // ---------------------------------------------------------------------------
 // A text system that makes rendered text visible to assertions
@@ -271,12 +269,27 @@ fn settle(cx: &mut TestAppContext) {
     cx.executor().run_until_parked();
 }
 
-/// Send one keystroke to the guest's view and let it settle.
-///
-/// A guest paces no frames of its own, so a view that asks for another
-/// frame from inside the frame it is drawing never lets [`settle`] return
-/// (see the module doc). Driving a keystroke is therefore also the check
-/// that the view under test does not.
+/// The most host frames a non-animated preview may ask for in a row before
+/// it goes quiet; gpui-component widgets settle within a few.
+const MAX_QUIET_FRAMES: usize = 16;
+
+/// Stand in for the host rendering `surface`: answer the guest's frame
+/// requests, one host frame at a time, until it stops asking. Panics if it
+/// never does (see the module doc). Returns how many frames were sent.
+fn host_frames(surface: &Entity<Surface>, cx: &mut TestAppContext) -> usize {
+    for sent in 0..MAX_QUIET_FRAMES {
+        if !surface.update(cx, |surface, cx| surface.drive_frame(cx)) {
+            return sent;
+        }
+        settle(cx);
+    }
+    panic!(
+        "the guest asked for {MAX_QUIET_FRAMES} host frames in a row: \
+         the view under test animates"
+    );
+}
+
+/// Send one keystroke to the guest's view and let it draw the result.
 fn press(surface: &Entity<Surface>, key: &str, cx: &mut TestAppContext) {
     use embedded_gpui::surface::{KeyEvent, Keystroke, ViewApiCaller as _};
 
@@ -297,9 +310,11 @@ fn press(surface: &Entity<Surface>, key: &str, cx: &mut TestAppContext) {
         )
     });
     settle(cx);
+    host_frames(surface, cx);
 }
 
-/// Hand the guest a surface of `slot` and drive one frame on it.
+/// Hand the guest a surface of `slot` and drive frames on it until it is
+/// drawn.
 fn mount(
     host: &Entity<PluginHost>,
     surface: &Entity<Surface>,
@@ -318,6 +333,10 @@ fn mount(
         view.resize(slot, cx);
     });
     settle(cx);
+    assert!(
+        host_frames(surface, cx) > 0,
+        "the guest never asked to draw its first frame"
+    );
 }
 
 fn summary(surface: &Entity<Surface>, cx: &mut TestAppContext) -> SceneSummary {
@@ -486,6 +505,7 @@ async fn preview_plugin_paints_reacts_to_the_theme_and_reloads(cx: &mut TestAppC
         )
     });
     settle(cx);
+    host_frames(&surface, cx);
 
     let after = glyph_counts(&summary(&surface, cx));
     assert!(
@@ -578,6 +598,52 @@ async fn preview_plugin_paints_reacts_to_the_theme_and_reloads(cx: &mut TestAppC
 
 #[gpui::test]
 #[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
+async fn preview_plugin_paces_a_repeating_animation(cx: &mut TestAppContext) {
+    use embedded_gpui::surface::ViewApiCaller as _;
+
+    let built = built_artifact();
+    let live = live_artifact("animation");
+    std::fs::copy(&built, &live).expect("stage the built artifact");
+
+    cx.update(gpui_component::init);
+    cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
+
+    let loaded = load(&live, animation::NAME, cx).expect("the animation preview instantiates");
+    let surface = cx.new(Surface::new);
+    let surface_ref = cx.update(|cx| loaded.host.share(&surface, cx));
+    let plugin = cx.update(|cx| loaded.host.root::<PreviewPlugin>(cx));
+    cx.update(|cx| plugin.mount(surface_ref, cx));
+    settle(cx);
+    let view = surface
+        .read_with(cx, |surface, _| surface.view().cloned())
+        .expect("the guest attached a view");
+    cx.update(|cx| view.resize(SLOT, cx));
+    // Returning at all is the point: with no host frame the animation does
+    // not run, however long the executor is left to it.
+    settle(cx);
+
+    // Every host frame is answered with one drawn frame and a request for
+    // the next: the animation advances on the host's clock and no faster.
+    for frame in 0..5 {
+        assert!(
+            surface.update(cx, |surface, cx| surface.drive_frame(cx)),
+            "the animation stopped asking for frames at frame {frame}"
+        );
+        settle(cx);
+    }
+    let scene = summary(&surface, cx);
+    assert!(
+        painted(&glyph_counts(&scene), animation::LABEL),
+        "the animation preview painted no label: {scene:?}"
+    );
+
+    cx.update(|_| drop(loaded));
+    settle(cx);
+    std::fs::remove_file(&live).ok();
+}
+
+#[gpui::test]
+#[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
 async fn preview_plugin_paints_the_board_thread(cx: &mut TestAppContext) {
     let built = built_artifact();
     let live = live_artifact("board-thread");
@@ -616,9 +682,9 @@ async fn preview_plugin_paints_the_board_thread(cx: &mut TestAppContext) {
         "the thread view painted no post under the title: {open:?}"
     );
 
-    // A keystroke has to settle: a guest paces no frames, so a view that
-    // asks for another frame from inside the one it is drawing never lets
-    // `settle` return (see the module doc).
+    // A keystroke has to go quiet within a few host frames: a view that
+    // asks for another frame from inside every one it draws never does
+    // (see the module doc).
     press(&surface, "j", cx);
     let moved = glyph_counts(&summary(&surface, cx));
     assert!(
