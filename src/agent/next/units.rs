@@ -13,8 +13,8 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::{h_flex, v_flex, Sizable as _};
 
 use super::display::{
-    Call, CallBody, CallStatus, ChangedFile, DiffKind, Label, Message, Notice, Receipt, Status,
-    Task, Tone, Turn, TurnPart, TurnState,
+    Call, CallBody, CallStatus, DiffKind, Label, Message, Notice, Receipt, Status, Task, Tone,
+    Turn, TurnPart, TurnState,
 };
 use super::spec::{button_height, user_indent, THINKING_CYCLE_MS};
 use super::{AgentNextEvent, AgentNextView, UiState};
@@ -26,20 +26,7 @@ use crate::ui::spec::*;
 // Labels and tones
 // ---------------------------------------------------------------------------
 
-/// The session's status, in the board's activity words and tones.
-pub(super) fn status_chip(status: Status) -> impl IntoElement {
-    let (label, tone) = match status {
-        Status::Idle => ("入力待ち", theme::text_muted()),
-        Status::Running => ("実行中", theme::accent()),
-        Status::ToolRunning => ("ツール実行中", theme::accent()),
-        Status::WaitingForApproval => ("承認待ち", theme::accent()),
-        Status::Terminated => ("終了", theme::text_muted()),
-        Status::Unreachable => ("到達不能", theme::text_muted()),
-    };
-    chip(label, tone)
-}
-
-/// A running session's state, as the running turn's card carries it.
+/// A running session's state, as the running turn carries it.
 fn session_state_chip(status: Status) -> impl IntoElement {
     if status == Status::WaitingForApproval {
         chip("承認待ち", theme::accent())
@@ -61,8 +48,7 @@ fn call_chip(status: CallStatus) -> impl IntoElement {
 
 fn turn_chip(state: TurnState) -> Option<impl IntoElement> {
     let (label, tone) = match state {
-        TurnState::Done => return None,
-        TurnState::Running => ("実行中", theme::accent()),
+        TurnState::Done | TurnState::Running => return None,
         TurnState::Stopped => ("中断", theme::text_muted()),
         TurnState::Failed => ("失敗", theme::danger()),
     };
@@ -82,7 +68,7 @@ fn anchor(color: Hsla, text: impl Into<SharedString>) -> Div {
 }
 
 // ---------------------------------------------------------------------------
-// Chips that act
+// Controls
 // ---------------------------------------------------------------------------
 
 /// The model chip; a click asks to switch the model.
@@ -95,65 +81,52 @@ pub(super) fn model_chip(model: &str, cx: &mut Context<AgentNextView>) -> impl I
         .on_click(cx.listener(|_, _, _, cx| cx.emit(AgentNextEvent::SwitchModel)))
 }
 
-/// 「変更 n件」; a click opens and closes the overview. Absent when nothing
-/// changed.
-pub(super) fn changes_chip(
-    changes: &[ChangedFile],
-    cx: &mut Context<AgentNextView>,
-) -> Option<impl IntoElement> {
-    (!changes.is_empty()).then(|| {
-        div()
-            .id("agent-next-changes")
-            .flex_none()
-            .cursor_pointer()
-            .child(chip(format!("変更 {}件", changes.len()), theme::accent()))
-            .on_click(cx.listener(|view, _, _, cx| view.toggle_overview(cx)))
-    })
-}
-
 /// 「停止」, offered while a turn runs.
-pub(super) fn stop_button(id: &'static str, cx: &mut Context<AgentNextView>) -> Button {
+fn stop_button(id: &'static str, cx: &mut Context<AgentNextView>) -> Button {
     Button::new(id)
         .ghost()
         .xsmall()
         .label("停止")
-        .on_click(cx.listener(|_, _, _, cx| cx.emit(AgentNextEvent::Stop)))
+        .on_click(cx.listener(|_, _, _, cx| {
+            cx.stop_propagation();
+            cx.emit(AgentNextEvent::Stop);
+        }))
+}
+
+/// The session's state chip, a spacer, and 「停止」 at the row's right end.
+fn running_controls(
+    status: Status,
+    id: &'static str,
+    cx: &mut Context<AgentNextView>,
+) -> [AnyElement; 3] {
+    [
+        session_state_chip(status).into_any_element(),
+        div().flex_1().min_w_0().into_any_element(),
+        stop_button(id, cx).into_any_element(),
+    ]
+}
+
+/// The session's state, when `turn` is the running one that carries it.
+pub(super) fn carried(turn: &Turn, status: Status) -> Option<Status> {
+    (turn.state == TurnState::Running && status.running()).then_some(status)
+}
+
+/// 「{elapsed} · {model}」 for a finished turn.
+fn done_meta(turn: &Turn) -> Option<Div> {
+    if turn.state != TurnState::Done {
+        return None;
+    }
+    let text = [turn.elapsed.clone(), turn.model.clone()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
+    (!text.is_empty()).then(|| text_at(meta(), theme::text_muted(), text).flex_none())
 }
 
 // ---------------------------------------------------------------------------
 // Session-wide lines
 // ---------------------------------------------------------------------------
-
-/// One line per changed file with its added and removed counts.
-pub(super) fn overview(changes: &[ChangedFile]) -> Div {
-    v_flex().w_full().children(changes.iter().map(|change| {
-        h_flex()
-            .w_full()
-            .gap(gap_label())
-            .text_size(meta().size)
-            .line_height(meta().line_height)
-            .child(
-                div()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .text_color(theme::text_primary())
-                    .child(change.path.clone()),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(theme::diff_added_text())
-                    .child(format!("+{}", change.added)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(theme::diff_removed_text())
-                    .child(format!("−{}", change.removed)),
-            )
-    }))
-}
 
 /// One muted line per background task.
 pub(super) fn task_lines(tasks: &[Task]) -> impl Iterator<Item = Div> + '_ {
@@ -162,10 +135,26 @@ pub(super) fn task_lines(tasks: &[Task]) -> impl Iterator<Item = Div> + '_ {
             meta(),
             theme::text_muted(),
             format!(
-                "タスク · {} · {} · {}",
+                "バックグラウンド · {} · {} · {}",
                 task.description, task.elapsed, task.activity
             ),
         )
+        .w_full()
+        .flex_none()
+        .px(pad_x())
+    })
+}
+
+/// The notice a session that can no longer run ends its column with.
+pub(super) fn session_end(status: Status) -> Option<Notice> {
+    let (tone, text) = match status {
+        Status::Terminated => (Tone::Muted, "セッションは終了しました"),
+        Status::Unreachable => (Tone::Danger, "ランタイムに到達できません"),
+        _ => return None,
+    };
+    Some(Notice {
+        tone,
+        text: text.to_string(),
     })
 }
 
@@ -173,8 +162,9 @@ pub(super) fn task_lines(tasks: &[Task]) -> impl Iterator<Item = Div> + '_ {
 // The conversation's units
 // ---------------------------------------------------------------------------
 
-/// A message sent into the session: the board's owner reply.
-pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
+/// A message sent into the session: the board's owner reply, under its
+/// label when `labeled`.
+pub(super) fn user(index: usize, message: &Message, labeled: bool) -> impl IntoElement {
     let (label, color) = match message.label {
         Label::You => ("あなた", theme::text_primary()),
         Label::Task => ("タスク", theme::text_muted()),
@@ -191,8 +181,10 @@ pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
             theme::text_primary(),
             BAND_TINT,
         ))
-        .child(anchor(color, label))
-        .child(div().w_full().mt(gap_tight()).child(markdown_body(
+        .when(labeled, |block| {
+            block.child(anchor(color, label).mb(gap_tight()))
+        })
+        .child(div().w_full().child(markdown_body(
             SharedString::from(format!("agent-next-user-{index}")),
             escape_markdown(&message.text),
             color,
@@ -209,6 +201,21 @@ fn card() -> Div {
         .border_1()
         .border_color(theme::border())
         .rounded(RADIUS)
+}
+
+/// The bar down a running turn's left edge.
+fn with_accent_bar(card: Div, running: bool) -> Div {
+    card.relative().when(running, |card| {
+        card.child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(ACCENT_BAR)
+                .bg(theme::accent()),
+        )
+    })
 }
 
 fn text_body(id: SharedString, text: &str) -> impl IntoElement {
@@ -257,56 +264,35 @@ pub(super) fn thinking(id: usize) -> Div {
         }))
 }
 
-/// One whole turn as a single card: its text, receipts and thinking state
-/// in order. Given the session's `status`, a running turn's header carries
-/// that state and 「停止」 in place of the turn's own chip.
+/// One whole turn as a single card under 「エージェント」: its text,
+/// receipts and thinking state in order. While the turn runs, the author
+/// line carries the session's state and 「停止」; once done, the turn's
+/// elapsed time and model.
 pub(super) fn turn_card(
     index: usize,
     turn: &Turn,
-    status: Option<Status>,
+    status: Status,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
 ) -> impl IntoElement {
-    let done_meta = (turn.state == TurnState::Done).then(|| {
-        [turn.elapsed.clone(), turn.model.clone()]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(" · ")
-    });
-    let carried = status.filter(|status| turn.state == TurnState::Running && status.running());
     let header = h_flex()
         .w_full()
         .gap(gap_tight())
         .child(anchor(theme::text_primary(), "エージェント"));
-    let header = match carried {
-        Some(status) => header
-            .items_center()
-            .child(session_state_chip(status))
-            .child(div().flex_1().min_w_0())
-            .child(stop_button("agent-next-card-stop", cx)),
+    let header = match carried(turn, status) {
+        Some(status) => {
+            header
+                .items_center()
+                .children(running_controls(status, "agent-next-card-stop", cx))
+        }
         None => header
             .items_baseline()
             .children(turn_chip(turn.state))
             .child(div().flex_1().min_w_0())
-            .when_some(done_meta.filter(|meta| !meta.is_empty()), |line, done| {
-                line.child(text_at(meta(), theme::text_muted(), done).flex_none())
-            }),
+            .children(done_meta(turn)),
     };
-    card()
-        .relative()
-        .when(turn.state == TurnState::Running, |card| {
-            card.child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(ACCENT_BAR)
-                    .bg(theme::accent()),
-            )
-        })
+    with_accent_bar(card(), turn.state == TurnState::Running)
         .child(header)
         .children(turn.parts.iter().enumerate().map(|(part_index, part)| {
             let part = match part {
@@ -315,7 +301,8 @@ pub(super) fn turn_card(
                     .child(text_body(part_id(index, part_index), text))
                     .into_any_element(),
                 TurnPart::Receipt(receipt) => {
-                    receipt_block(receipt, false, ui, mono, cx).into_any_element()
+                    receipt_block(ReceiptLine::single(receipt), false, None, ui, mono, cx)
+                        .into_any_element()
                 }
                 TurnPart::Thinking => thinking(index).into_any_element(),
             };
@@ -323,26 +310,199 @@ pub(super) fn turn_card(
         }))
 }
 
+/// One whole turn as an unlabeled card: its text first, then all of its
+/// receipts merged into one footer line, then its thinking state. While
+/// the turn runs, a header row carries the session's state and 「停止」;
+/// otherwise the footer line ends with the turn's elapsed time and model.
+pub(super) fn footnote_card(
+    index: usize,
+    turn: &Turn,
+    status: Status,
+    ui: &UiState,
+    mono: &SharedString,
+    cx: &mut Context<AgentNextView>,
+) -> impl IntoElement {
+    let receipts: Vec<&Receipt> = turn
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            TurnPart::Receipt(receipt) => Some(receipt),
+            _ => None,
+        })
+        .collect();
+    let end = (turn.state != TurnState::Running).then(|| {
+        h_flex()
+            .flex_none()
+            .items_baseline()
+            .gap(gap_tight())
+            .children(turn_chip(turn.state))
+            .children(done_meta(turn))
+    });
+    let footer = if receipts.is_empty() {
+        end.map(|end| {
+            h_flex()
+                .w_full()
+                .child(div().flex_1().min_w_0())
+                .child(end)
+                .into_any_element()
+        })
+    } else {
+        let end = end.map(IntoElement::into_any_element);
+        Some(
+            receipt_block(ReceiptLine::merged(&receipts), false, end, ui, mono, cx)
+                .into_any_element(),
+        )
+    };
+
+    let mut parts: Vec<AnyElement> = Vec::new();
+    if let Some(status) = carried(turn, status) {
+        parts.push(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap(gap_tight())
+                .children(running_controls(status, "agent-next-card-stop", cx))
+                .into_any_element(),
+        );
+    }
+    parts.extend(
+        turn.parts
+            .iter()
+            .enumerate()
+            .filter_map(|(part_index, part)| match part {
+                TurnPart::Text(text) => Some(
+                    div()
+                        .w_full()
+                        .child(text_body(part_id(index, part_index), text))
+                        .into_any_element(),
+                ),
+                _ => None,
+            }),
+    );
+    parts.extend(footer);
+    if turn.parts.contains(&TurnPart::Thinking) {
+        parts.push(thinking(index).into_any_element());
+    }
+    with_accent_bar(card(), turn.state == TurnState::Running).children(
+        parts.into_iter().enumerate().map(|(position, part)| {
+            div()
+                .w_full()
+                .when(position > 0, |part| part.mt(gap_tight()))
+                .child(part)
+        }),
+    )
+}
+
 /// The element id of one piece of a turn's text.
 pub(super) fn part_id(unit: usize, part: usize) -> SharedString {
     SharedString::from(format!("agent-next-text-{unit}-{part}"))
+}
+
+/// The running turn's thinking state standing between cards, carrying the
+/// session's state and 「停止」 when given it.
+pub(super) fn bare_thinking(
+    index: usize,
+    carried: Option<Status>,
+    cx: &mut Context<AgentNextView>,
+) -> impl IntoElement {
+    h_flex()
+        .w_full()
+        .flex_none()
+        .items_center()
+        .gap(gap_tight())
+        .px(pad_x())
+        .child(thinking(index))
+        .when_some(carried, |line, status| {
+            line.children(running_controls(status, "agent-next-thinking-stop", cx))
+        })
 }
 
 // ---------------------------------------------------------------------------
 // Receipts
 // ---------------------------------------------------------------------------
 
-/// A receipt: its activity line and, when expanded, its calls. `inset`
-/// pads the line to the cards' text, for a receipt standing between cards.
-pub(super) fn receipt_block(
+/// What one activity line summarizes: a single receipt, or several merged.
+pub(super) struct ReceiptLine<'a> {
+    /// The key the line's expansion is held under.
+    key: usize,
+    summary: String,
+    failed: usize,
+    /// Whether a call is in flight, which keeps the line open.
+    running: bool,
+    /// The session's state, shown in place of the line's own 「実行中」.
+    carried: Option<Status>,
+    /// Each call with the key of its receipt and its index there, which
+    /// its body's open state is held under.
+    calls: Vec<(usize, usize, &'a Call)>,
+}
+
+impl<'a> ReceiptLine<'a> {
+    pub(super) fn single(receipt: &'a Receipt) -> Self {
+        Self::merged(&[receipt])
+    }
+
+    /// `receipts` must not be empty.
+    pub(super) fn merged(receipts: &[&'a Receipt]) -> Self {
+        let calls: Vec<(usize, usize, &Call)> = receipts
+            .iter()
+            .flat_map(|receipt| {
+                receipt
+                    .calls
+                    .iter()
+                    .enumerate()
+                    .map(|(index, call)| (receipt.key, index, call))
+            })
+            .collect();
+        let running = receipts.iter().any(|receipt| receipt.running);
+        Self {
+            key: receipts[0].key,
+            summary: receipts
+                .iter()
+                .map(|receipt| receipt.summary.as_str())
+                .collect::<Vec<_>>()
+                .join(" · "),
+            failed: calls
+                .iter()
+                .filter(|(_, _, call)| call.status == CallStatus::Failed)
+                .count(),
+            running,
+            carried: None,
+            calls,
+        }
+    }
+}
+
+/// A receipt standing between cards, its line inset to the cards' text.
+/// Given the session's state, a running receipt carries it and 「停止」 in
+/// place of its own running chip.
+pub(super) fn bare_receipt(
     receipt: &Receipt,
-    inset: bool,
+    carried: Option<Status>,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
 ) -> impl IntoElement {
-    let expanded = receipt.running || ui.expanded_receipts.contains(&receipt.key);
-    let key = receipt.key;
+    let mut line = ReceiptLine::single(receipt);
+    line.carried = carried.filter(|_| receipt.running);
+    let end = line
+        .carried
+        .map(|_| stop_button("agent-next-receipt-stop", cx).into_any_element());
+    receipt_block(line, true, end, ui, mono, cx)
+}
+
+/// An activity line and, when expanded, its calls. `inset` pads the line
+/// to the cards' text; `end` sits at the line's right end.
+fn receipt_block(
+    line: ReceiptLine<'_>,
+    inset: bool,
+    end: Option<AnyElement>,
+    ui: &UiState,
+    mono: &SharedString,
+    cx: &mut Context<AgentNextView>,
+) -> impl IntoElement {
+    let expanded = line.running || ui.expanded_receipts.contains(&line.key);
+    let key = line.key;
+    let has_end = end.is_some();
     v_flex()
         .w_full()
         .flex_none()
@@ -350,21 +510,27 @@ pub(super) fn receipt_block(
             h_flex()
                 .id(("agent-next-receipt", key))
                 .w_full()
-                .items_baseline()
                 .gap(gap_tight())
                 .cursor_pointer()
-                .when(inset, |line| line.px(pad_x()))
-                .child(text_at(meta(), theme::text_muted(), receipt.summary.clone()).min_w_0())
-                .when(receipt.failed, |line| {
-                    let failed = receipt
-                        .calls
-                        .iter()
-                        .filter(|call| call.status == CallStatus::Failed)
-                        .count();
-                    line.child(chip(format!("失敗 {failed}件"), theme::danger()))
+                .map(|row| {
+                    if has_end {
+                        row.items_center()
+                    } else {
+                        row.items_baseline()
+                    }
                 })
-                .when(receipt.running, |line| {
-                    line.child(chip("実行中", theme::accent()))
+                .when(inset, |row| row.px(pad_x()))
+                .child(text_at(meta(), theme::text_muted(), line.summary).min_w_0())
+                .when(line.failed > 0, |row| {
+                    row.child(chip(format!("失敗 {}件", line.failed), theme::danger()))
+                })
+                .map(|row| match line.carried {
+                    Some(status) => row.child(session_state_chip(status)),
+                    None if line.running => row.child(chip("実行中", theme::accent())),
+                    None => row,
+                })
+                .when_some(end, |row, end| {
+                    row.child(div().flex_1().min_w_0()).child(end)
                 })
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx))),
         )
@@ -379,13 +545,9 @@ pub(super) fn receipt_block(
                     .px(pad_x())
                     .py(gap_tight())
                     .gap(gap_label())
-                    .children(
-                        receipt
-                            .calls
-                            .iter()
-                            .enumerate()
-                            .map(|(index, call)| call_row(key, index, call, ui, mono, cx)),
-                    ),
+                    .children(line.calls.iter().map(|(receipt, index, call)| {
+                        call_row(*receipt, *index, call, ui, mono, cx)
+                    })),
             )
         })
 }
@@ -448,6 +610,7 @@ fn call_row(
                             .flex_1()
                             .min_w_0(),
                     )
+                    .child(key_chip("Enter"))
                     .child(
                         Button::new(SharedString::from(format!(
                             "agent-next-approve-{receipt}-{index}"
@@ -460,6 +623,7 @@ fn call_row(
                             cx.emit(AgentNextEvent::Approve(approve.clone()))
                         })),
                     )
+                    .child(key_chip("Esc"))
                     .child(
                         Button::new(SharedString::from(format!(
                             "agent-next-deny-{receipt}-{index}"
@@ -538,28 +702,5 @@ fn call_body(
         CallBody::Text(text) => text_at(meta(), theme::text_muted(), text.clone())
             .w_full()
             .into_any_element(),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The composer's hint row
-// ---------------------------------------------------------------------------
-
-/// What Enter (and Escape) do in the composer's current mode.
-pub(super) fn key_hints(mode: &super::display::ComposerMode) -> Vec<AnyElement> {
-    use super::display::ComposerMode;
-    let words = |text: &'static str| text_at(micro(), theme::text_muted(), text).into_any_element();
-    match mode {
-        ComposerMode::Idle => vec![key_chip("Enter").into_any_element(), words("で送信")],
-        ComposerMode::Running => vec![
-            key_chip("Enter").into_any_element(),
-            words("で次のターンへ"),
-        ],
-        ComposerMode::Approval { .. } => vec![
-            key_chip("Enter").into_any_element(),
-            words("で承認"),
-            key_chip("Esc").into_any_element(),
-            words("で拒否"),
-        ],
     }
 }

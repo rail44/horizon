@@ -52,8 +52,8 @@ const PREVIEWS: &[Preview] = &[
         build: agent::build_per_item,
     },
     Preview {
-        name: agent::STATE_ON_CARD,
-        build: agent::build_state_on_card,
+        name: agent::FOOTNOTE,
+        build: agent::build_footnote,
     },
     Preview {
         name: agent::TURN_CARDS_IDLE,
@@ -64,8 +64,8 @@ const PREVIEWS: &[Preview] = &[
         build: agent::build_per_item_idle,
     },
     Preview {
-        name: agent::STATE_ON_CARD_IDLE,
-        build: agent::build_state_on_card_idle,
+        name: agent::FOOTNOTE_IDLE,
+        build: agent::build_footnote_idle,
     },
     Preview {
         name: animation::NAME,

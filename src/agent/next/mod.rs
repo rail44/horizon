@@ -3,20 +3,21 @@
 //!
 //! [`AgentNextView`] holds a [`Transcript`](display::Transcript) handed in
 //! from outside, a [`Layout`], and its own UI state (which receipts and
-//! call bodies are open, whether the changes overview is). It never reaches
-//! the shell, a runtime, or a session: everything the owner asks for leaves
-//! as an [`AgentNextEvent`].
+//! call bodies are open). It never reaches the shell, a runtime, or a
+//! session: everything the owner asks for leaves as an [`AgentNextEvent`].
 //!
-//! The three layouts draw the same units ([`units`]):
+//! Every layout puts the same things in the same places: the composer
+//! holds the input, the model chip and the send hint only; the session's
+//! state and 「停止」 ride on the running turn; an approval sits under the
+//! call that asks for it; background tasks and a session that can no
+//! longer run end the column. The layouts differ in how a turn is cut
+//! into units ([`units`]):
 //!
-//! - [`Layout::TurnCards`]: one card per turn; the session's status, model,
-//!   changes and stop control in the composer's hint row.
+//! - [`Layout::TurnCards`]: one card per turn under 「エージェント」.
 //! - [`Layout::PerItem`]: each turn part as its own unit — text as a card,
-//!   a receipt as a bare activity line between cards — with the composer
-//!   of [`Layout::TurnCards`].
-//! - [`Layout::StateOnCard`]: the turn cards of [`Layout::TurnCards`], the
-//!   session's state and stop control on the running turn's card, and the
-//!   composer drawn as the next message sent into the session.
+//!   a receipt or the thinking state as a bare line between cards.
+//! - [`Layout::Footnote`]: one card per turn without author labels, its
+//!   receipts merged into one footer line.
 
 pub(crate) mod display;
 pub(crate) mod previews;
@@ -25,28 +26,22 @@ mod units;
 
 use std::collections::HashSet;
 
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{InputEvent, Textarea, TextareaState};
 use gpui_component::{h_flex, v_flex, ActiveTheme as _};
 
 use crate::theme;
+use crate::ui::parts::key_chip;
 use crate::ui::spec::*;
 use display::{ComposerMode, Status, Transcript, TurnPart, Unit};
-use spec::{thread_gutter, user_indent, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
+use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
 
 /// Which arrangement of the units the view draws.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Layout {
     TurnCards,
     PerItem,
-    StateOnCard,
-}
-
-impl Layout {
-    fn turn_cards(self) -> bool {
-        matches!(self, Self::TurnCards | Self::StateOnCard)
-    }
+    Footnote,
 }
 
 /// What the view asks of whatever holds it.
@@ -69,7 +64,6 @@ pub(crate) struct UiState {
     pub(crate) expanded_receipts: HashSet<usize>,
     /// Call bodies opened by a click, by receipt key and call index.
     pub(crate) open_bodies: HashSet<(usize, usize)>,
-    pub(crate) overview_open: bool,
 }
 
 /// The agent pane over a display model.
@@ -97,7 +91,7 @@ impl AgentNextView {
     ) -> Self {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder(placeholder(&transcript.composer))
+                .placeholder(placeholder(transcript.status))
                 .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MAX_ROWS)
                 .submit_on_enter(true)
         });
@@ -133,8 +127,8 @@ impl AgentNextView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if transcript.composer != self.transcript.composer {
-            let text = placeholder(&transcript.composer);
+        if placeholder(transcript.status) != placeholder(self.transcript.status) {
+            let text = placeholder(transcript.status);
             self.composer
                 .update(cx, |input, cx| input.set_placeholder(text, window, cx));
         }
@@ -153,11 +147,6 @@ impl AgentNextView {
         if !self.ui.open_bodies.remove(&(receipt, call)) {
             self.ui.open_bodies.insert((receipt, call));
         }
-        cx.notify();
-    }
-
-    pub(super) fn toggle_overview(&mut self, cx: &mut Context<Self>) {
-        self.ui.overview_open = !self.ui.overview_open;
         cx.notify();
     }
 
@@ -195,77 +184,58 @@ impl AgentNextView {
     /// The scroll column's children for the current layout.
     fn units(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mono = cx.theme().mono_font_family.clone();
-        let carried = (self.layout == Layout::StateOnCard).then_some(self.transcript.status);
+        let status = self.transcript.status;
+        let labeled = self.layout != Layout::Footnote;
         let mut children = Vec::new();
         for (index, unit) in self.transcript.units.iter().enumerate() {
             match unit {
                 Unit::User(message) => {
-                    children.push(units::user(index, message).into_any_element())
+                    children.push(units::user(index, message, labeled).into_any_element())
                 }
                 Unit::Notice(notice) => children.push(units::notice(notice).into_any_element()),
-                Unit::Turn(turn) if self.layout.turn_cards() => children.push(
-                    units::turn_card(index, turn, carried, &self.ui, &mono, cx).into_any_element(),
-                ),
-                Unit::Turn(turn) => {
-                    for (part_index, part) in turn.parts.iter().enumerate() {
-                        children.push(match part {
-                            TurnPart::Text(text) => {
-                                units::text_card(units::part_id(index, part_index), text)
-                                    .into_any_element()
-                            }
-                            TurnPart::Receipt(receipt) => {
-                                units::receipt_block(receipt, true, &self.ui, &mono, cx)
-                                    .into_any_element()
-                            }
-                            TurnPart::Thinking => {
-                                units::thinking(index).px(pad_x()).into_any_element()
-                            }
-                        });
+                Unit::Turn(turn) => match self.layout {
+                    Layout::TurnCards => children.push(
+                        units::turn_card(index, turn, status, &self.ui, &mono, cx)
+                            .into_any_element(),
+                    ),
+                    Layout::Footnote => children.push(
+                        units::footnote_card(index, turn, status, &self.ui, &mono, cx)
+                            .into_any_element(),
+                    ),
+                    Layout::PerItem => {
+                        let carried = units::carried(turn, status);
+                        let on_receipt = turn.parts.iter().any(
+                            |part| matches!(part, TurnPart::Receipt(receipt) if receipt.running),
+                        );
+                        for (part_index, part) in turn.parts.iter().enumerate() {
+                            children.push(match part {
+                                TurnPart::Text(text) => {
+                                    units::text_card(units::part_id(index, part_index), text)
+                                        .into_any_element()
+                                }
+                                TurnPart::Receipt(receipt) => {
+                                    units::bare_receipt(receipt, carried, &self.ui, &mono, cx)
+                                        .into_any_element()
+                                }
+                                TurnPart::Thinking => {
+                                    units::bare_thinking(index, carried.filter(|_| !on_receipt), cx)
+                                        .into_any_element()
+                                }
+                            });
+                        }
                     }
-                }
+                },
             }
         }
+        if let Some(end) = units::session_end(status) {
+            children.push(units::notice(&end).into_any_element());
+        }
+        children
+            .extend(units::task_lines(&self.transcript.tasks).map(IntoElement::into_any_element));
         children
     }
 
-    /// The left half of the hint row: the session's status and controls,
-    /// less whatever the running turn's card already carries.
-    fn session_group(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let transcript = &self.transcript;
-        let on_card = self.layout == Layout::StateOnCard;
-        let show_status =
-            !on_card || matches!(transcript.status, Status::Terminated | Status::Unreachable);
-        h_flex()
-            .items_center()
-            .gap(gap_tight())
-            .when(show_status, |group| {
-                group.child(units::status_chip(transcript.status))
-            })
-            .child(units::model_chip(&transcript.model, cx))
-            .children(units::changes_chip(&transcript.changes, cx))
-            .when(!on_card && transcript.status.running(), |group| {
-                group.child(units::stop_button("agent-next-hint-stop", cx))
-            })
-    }
-
-    fn field(&self) -> impl IntoElement {
-        div()
-            .w_full()
-            .text_size(body().size)
-            .child(Textarea::new(&self.composer).appearance(false))
-    }
-
-    fn hint_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .w_full()
-            .items_center()
-            .gap(gap_label())
-            .child(self.session_group(cx))
-            .child(div().flex_1().min_w_0())
-            .children(units::key_hints(&self.transcript.composer))
-    }
-
-    /// The composer as a strip under the column.
+    /// The composer: the field, the model chip, and the send hint.
     fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .w_full()
@@ -275,49 +245,28 @@ impl AgentNextView {
             .gap(gap_label())
             .border_t_1()
             .border_color(theme::border())
-            .when(self.ui.overview_open, |composer| {
-                composer.child(units::overview(&self.transcript.changes).mt(gap_tight()))
-            })
-            .child(self.field())
-            .child(self.hint_row(cx))
-    }
-
-    /// The composer as the next message sent into the session.
-    fn render_next_message(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .flex_none()
-            .ml(thread_gutter() + user_indent())
-            .mr(thread_gutter())
-            .mb(gap_unit())
-            .px(pad_x())
-            .py(pad_y())
-            .rounded(RADIUS)
-            .bg(theme::tint_over_background(
-                theme::text_primary(),
-                BAND_TINT,
-            ))
-            .gap(gap_label())
-            .child(self.field())
-            .when(self.ui.overview_open, |composer| {
-                composer.child(units::overview(&self.transcript.changes).mt(gap_tight()))
-            })
-            .child(self.hint_row(cx))
-    }
-
-    fn render_tasks(&self) -> impl IntoElement {
-        let tasks = v_flex()
-            .w_full()
-            .flex_none()
-            .px(thread_gutter())
-            .children(units::task_lines(&self.transcript.tasks));
-        if self.layout == Layout::StateOnCard {
-            tasks.pb(gap_tight())
-        } else {
-            tasks
-                .py(gap_tight())
-                .border_t_1()
-                .border_color(theme::border())
-        }
+            .child(
+                div()
+                    .w_full()
+                    .text_size(body().size)
+                    .child(Textarea::new(&self.composer).appearance(false)),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(gap_label())
+                    .child(units::model_chip(&self.transcript.model, cx))
+                    .child(div().flex_1().min_w_0())
+                    .child(key_chip("Enter"))
+                    .child(
+                        div()
+                            .text_size(micro().size)
+                            .line_height(micro().line_height)
+                            .text_color(theme::text_muted())
+                            .child("で送信"),
+                    ),
+            )
     }
 
     /// Keeps the tail in view while following it, and resumes following
@@ -333,11 +282,11 @@ impl AgentNextView {
     }
 }
 
-fn placeholder(mode: &ComposerMode) -> &'static str {
-    match mode {
-        ComposerMode::Idle => "メッセージを書く",
-        ComposerMode::Running => "次のターンで送る",
-        ComposerMode::Approval { .. } => "承認を待っています",
+fn placeholder(status: Status) -> &'static str {
+    match status {
+        Status::Terminated => "このセッションは終了しています",
+        Status::Unreachable => "ランタイムに到達できません",
+        _ => "メッセージを書く",
     }
 }
 
@@ -350,7 +299,6 @@ impl Focusable for AgentNextView {
 impl Render for AgentNextView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.track_tail();
-        let next_message = self.layout == Layout::StateOnCard;
         let column = self.units(cx);
         v_flex()
             .id("agent-next")
@@ -374,23 +322,10 @@ impl Render for AgentNextView {
                     }))
                     .px(thread_gutter())
                     .pt(gap_section())
-                    .pb(if next_message {
-                        gap_unit()
-                    } else {
-                        gap_composer()
-                    })
+                    .pb(gap_composer())
                     .gap(gap_unit())
                     .children(column),
             )
-            .when(!self.transcript.tasks.is_empty(), |view| {
-                view.child(self.render_tasks())
-            })
-            .map(|view| {
-                if next_message {
-                    view.child(self.render_next_message(cx).into_any_element())
-                } else {
-                    view.child(self.render_composer(cx).into_any_element())
-                }
-            })
+            .child(self.render_composer(cx))
     }
 }

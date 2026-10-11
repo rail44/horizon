@@ -12,7 +12,6 @@ pub(crate) struct Transcript {
     pub(crate) model: String,
     pub(crate) status: Status,
     pub(crate) units: Vec<Unit>,
-    pub(crate) changes: Vec<ChangedFile>,
     pub(crate) tasks: Vec<Task>,
     pub(crate) composer: ComposerMode,
 }
@@ -159,13 +158,6 @@ impl Status {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ChangedFile {
-    pub(crate) path: String,
-    pub(crate) added: usize,
-    pub(crate) removed: usize,
-}
-
 /// A background task the session started.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Task {
@@ -174,7 +166,7 @@ pub(crate) struct Task {
     pub(crate) activity: String,
 }
 
-/// What Enter and Escape in the composer mean.
+/// What Enter and Escape in an empty composer mean.
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ComposerMode {

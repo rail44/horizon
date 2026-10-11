@@ -931,19 +931,26 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
     cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
 
     let first_marker = 'ホ';
-    let approval_marker = '換';
+    let approval_marker = '承';
+    let reason_marker = '換';
     let stop_marker = '停';
+    let agent_marker = 'エ';
+    let you_marker = 'あ';
+    let changes_marker = '更';
 
-    // (preview, running)
+    // (preview, running, whether units carry author labels, whether an
+    // agent label is in the slot). The per-item layout's running turn is a
+    // receipt line and the thinking state with no text card, and the text
+    // card before it is above the slot.
     let cases = [
-        (agent::TURN_CARDS, true),
-        (agent::PER_ITEM, true),
-        (agent::STATE_ON_CARD, true),
-        (agent::TURN_CARDS_IDLE, false),
-        (agent::PER_ITEM_IDLE, false),
-        (agent::STATE_ON_CARD_IDLE, false),
+        (agent::TURN_CARDS, true, true, true),
+        (agent::PER_ITEM, true, true, false),
+        (agent::FOOTNOTE, true, false, false),
+        (agent::TURN_CARDS_IDLE, false, true, true),
+        (agent::PER_ITEM_IDLE, false, true, true),
+        (agent::FOOTNOTE_IDLE, false, false, false),
     ];
-    for (name, running) in cases {
+    for (name, running, labeled, agent_label_in_slot) in cases {
         let loaded = load(&live, name, cx).expect("the agent preview instantiates");
         let surface = cx.new(Surface::new);
         if running {
@@ -964,6 +971,32 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             0,
             "{name}: the conversation did not open at its tail: {painted_now:?}"
         );
+        assert_eq!(
+            count_of(&painted_now, changes_marker),
+            0,
+            "{name}: a changes overview is painted: {painted_now:?}"
+        );
+        if labeled {
+            assert!(
+                !agent_label_in_slot || painted(&painted_now, "エージェント"),
+                "{name}: no agent label is painted: {painted_now:?}"
+            );
+            assert!(
+                painted(&painted_now, "あなた"),
+                "{name}: no owner label is painted: {painted_now:?}"
+            );
+        } else {
+            assert_eq!(
+                count_of(&painted_now, agent_marker),
+                0,
+                "{name}: an agent label is painted: {painted_now:?}"
+            );
+            assert_eq!(
+                count_of(&painted_now, you_marker),
+                0,
+                "{name}: an owner label is painted: {painted_now:?}"
+            );
+        }
         if running {
             assert!(
                 painted(&painted_now, "停止"),
@@ -982,6 +1015,11 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
                 count_of(&painted_now, approval_marker),
                 0,
                 "{name}: an idle session painted an approval: {painted_now:?}"
+            );
+            assert_eq!(
+                count_of(&painted_now, reason_marker),
+                0,
+                "{name}: an idle session painted an approval's reason: {painted_now:?}"
             );
             assert_eq!(
                 count_of(&painted_now, stop_marker),

@@ -6,17 +6,17 @@
 use gpui::{AnyView, App, AppContext as _, Window};
 
 use super::display::{
-    Approval, Call, CallBody, CallStatus, ChangedFile, ComposerMode, DiffKind, DiffLine, Label,
-    Message, Notice, Receipt, Status, Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
+    Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Label, Message, Notice,
+    Receipt, Status, Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };
 use super::{AgentNextView, Layout};
 
-pub(crate) const TURN_CARDS: &str = "agent-1";
-pub(crate) const PER_ITEM: &str = "agent-2";
-pub(crate) const STATE_ON_CARD: &str = "agent-3";
-pub(crate) const TURN_CARDS_IDLE: &str = "agent-1-idle";
-pub(crate) const PER_ITEM_IDLE: &str = "agent-2-idle";
-pub(crate) const STATE_ON_CARD_IDLE: &str = "agent-3-idle";
+pub(crate) const TURN_CARDS: &str = "agent-4";
+pub(crate) const PER_ITEM: &str = "agent-5";
+pub(crate) const FOOTNOTE: &str = "agent-6";
+pub(crate) const TURN_CARDS_IDLE: &str = "agent-4-idle";
+pub(crate) const PER_ITEM_IDLE: &str = "agent-5-idle";
+pub(crate) const FOOTNOTE_IDLE: &str = "agent-6-idle";
 
 // ---------------------------------------------------------------------------
 // Probes
@@ -56,8 +56,8 @@ pub(crate) fn build_per_item(window: &mut Window, cx: &mut App) -> AnyView {
     build(Layout::PerItem, true, window, cx)
 }
 
-pub(crate) fn build_state_on_card(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::StateOnCard, true, window, cx)
+pub(crate) fn build_footnote(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::Footnote, true, window, cx)
 }
 
 pub(crate) fn build_turn_cards_idle(window: &mut Window, cx: &mut App) -> AnyView {
@@ -68,8 +68,8 @@ pub(crate) fn build_per_item_idle(window: &mut Window, cx: &mut App) -> AnyView 
     build(Layout::PerItem, false, window, cx)
 }
 
-pub(crate) fn build_state_on_card_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::StateOnCard, false, window, cx)
+pub(crate) fn build_footnote_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::Footnote, false, window, cx)
 }
 
 // ---------------------------------------------------------------------------
@@ -116,13 +116,13 @@ fn text(text: &str) -> Option<CallBody> {
 }
 
 const INVESTIGATION: &str = "\
-ボードの文字サイズは `src/board/spec.rs` の定数に直書きされていて、シェルのフォント設定を一度も読んでいません。端末側は `src/terminal/font.rs` が現在のサイズを持っていて、設定の再読み込みとサイズ変更のコマンドはそこだけを書き直しています。
+ボードの文字サイズは `src/board/spec.rs` の定数に直書きされていて、シェルのフォント設定を一度も読んでいません。端末側は `src/terminal/font.rs` が現在のサイズを持っていて、設定の再読み込みとサイズを変えるコマンドはそこだけを書き直しています。
 
 なので、端末が持っている現在サイズをアプリ全体で共有する形に寄せるのが素直です。
 
 - `src/terminal/font.rs` の現在サイズを、端末に依存しない場所へ移す
 - `src/board/spec.rs` の寸法を、基準サイズからの倍率で計算する関数にする
-- サイズ変更のコマンドが、ボードのペインにも再描画を知らせるようにする";
+- サイズを変えるコマンドが、ボードのペインにも再描画を知らせるようにする";
 
 const SCALING: &str = "\
 倍率は本文サイズを基準に取り、丸めてから使います。こうしておけば、14 のときは今と同じ見た目のまま、設定を変えたときだけ全体が比例して動きます。
@@ -135,7 +135,7 @@ pub(crate) fn scaled(px_at_reference: f32) -> Pixels {
 ```";
 
 const FAILURE: &str = "\
-変更は通りましたが、テストが 1 件落ちています。
+修正は通りましたが、テストが 1 件落ちています。
 
 - `header_stacks_below_the_title_floor` は、帯のタイトルが折り返すかどうかを固定の 14px で見積もっています
 - 見積もりに使う幅も今回から倍率で動くので、テスト側の想定幅が古いままです
@@ -331,23 +331,6 @@ pub(crate) fn sample(running: bool) -> Transcript {
             Status::Idle
         },
         units,
-        changes: vec![
-            ChangedFile {
-                path: "src/ui/font.rs".to_string(),
-                added: 2,
-                removed: 1,
-            },
-            ChangedFile {
-                path: "src/board/spec.rs".to_string(),
-                added: 3,
-                removed: 1,
-            },
-            ChangedFile {
-                path: "src/workspace/commands.rs".to_string(),
-                added: 1,
-                removed: 0,
-            },
-        ],
         tasks: vec![Task {
             description: "cargo build --workspace".to_string(),
             elapsed: "1分03秒".to_string(),
@@ -370,35 +353,29 @@ mod tests {
     /// Every string the pane draws besides the transcript's own: the chrome
     /// words of every unit, chip, hint and placeholder.
     const CHROME: &[&str] = &[
-        "入力待ち",
         "実行中",
-        "ツール実行中",
         "承認待ち",
-        "終了",
-        "到達不能",
         "完了",
         "失敗",
+        "失敗 件",
         "拒否",
         "中断",
-        "変更 件",
-        "タスク · · ·",
+        "バックグラウンド · · ·",
         "停止",
         "あなた",
+        "タスク",
         "続行",
         "エージェント",
         "システム",
+        "セッションは終了しました",
+        "ランタイムに到達できません",
         "考え中・",
         "…他 行",
-        "+−",
         "Enter",
         "Esc",
         "で送信",
-        "で次のターンへ",
-        "で承認",
-        "で拒否",
         "メッセージを書く",
-        "次のターンで送る",
-        "承認を待っています",
+        "このセッションは終了しています",
         "承認",
     ];
 
@@ -438,9 +415,6 @@ mod tests {
                 }
             }
         }
-        for change in &transcript.changes {
-            strings.push(change.path.clone());
-        }
         for task in &transcript.tasks {
             strings.extend([
                 task.description.clone(),
@@ -460,6 +434,8 @@ mod tests {
             (LAST_MESSAGE, '警'),
             (APPROVAL_REASON, '換'),
             ("停止", '停'),
+            ("エージェント", 'エ'),
+            ("あなた", 'あ'),
         ] {
             assert_eq!(probe.matches(marker).count(), 1, "{probe}");
             let owners: Vec<&String> = all.iter().filter(|s| s.contains(marker)).collect();
@@ -469,6 +445,22 @@ mod tests {
                 "`{marker}` is painted by more than {probe}"
             );
         }
+    }
+
+    /// So a painted `更` can only be a changes chip, which the pane no
+    /// longer draws.
+    #[test]
+    fn nothing_the_pane_paints_contains_the_changes_word() {
+        let all = strings(&sample(true));
+        assert!(!all.iter().any(|s| s.contains('更')), "{all:?}");
+    }
+
+    /// So a painted `承` can only be the pending approval.
+    #[test]
+    fn only_the_approval_paints_its_first_character() {
+        let all = strings(&sample(true));
+        let owners: Vec<&String> = all.iter().filter(|s| s.contains('承')).collect();
+        assert_eq!(owners, vec!["承認待ち", "承認"]);
     }
 
     #[test]
