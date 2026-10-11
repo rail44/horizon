@@ -460,9 +460,20 @@ reads only the tail after the offset, catches it up into the projection,
 hands the store out, and only then sends `WriterInit::Ready` with just the
 tail (`ReadReport::read_after` set). Opening the store and the tail
 catch-up are therefore on the readiness path, and resume reads the
-projection instead of the log. **Full**: anything else reads the whole log,
-sends `Ready` with every record, and runs the full rebuild after `Ready`,
-off the readiness path, as before. A tail that cannot be caught up (a
+projection instead of the log. **Full**: anything else reads the whole log
+and sends `Ready` with every record; the full rebuild then runs on a thread
+of its own (amended 2026-10-11, owner-approved). Before, it ran on the writer
+thread between `Ready` and the writer loop, so every flush -- and with it
+every acknowledged commit, including resume's interrupted-turn fixups --
+waited for the whole rebuild (26-33 minutes on the owner's log). Now the
+writer appends from the start without projecting; when the rebuilt store
+arrives, the writer reads the log after the rebuild's own cursor (from the
+beginning when the rebuild had no records), catches those records up, and
+only then shares the store and projects live, so no reader ever sees a
+projection missing what was appended during the rebuild. A drain during a
+rebuild no longer waits for it: the rebuild is abandoned with the process,
+the projection stays unstamped, and the next start rebuilds again. A tail
+that cannot be caught up (a
 skipped record) leaves the projection unavailable for the run and removes
 its stamp, since later chunks may already have moved the cursor past the
 skipped record.

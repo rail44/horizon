@@ -140,8 +140,11 @@ impl WriterHandle {
     ///   [`WriterInit::Ready`] sent -- carrying just the tail, with
     ///   [`ReadReport::read_after`] set to the cursor.
     /// - **Full**: anything else. The whole log is read, `Ready` carries
-    ///   every record, and the full rebuild runs *after* `Ready`, off the
-    ///   readiness path, exactly as before the cursor existed.
+    ///   every record, and the full rebuild runs on its own thread after
+    ///   `Ready`, so neither readiness nor any append or flush waits on it.
+    ///   The writer catches the rebuilt store up with what it appended
+    ///   meanwhile before delivering it on the second receiver (see
+    ///   [`run_writer_loop`]).
     ///
     /// Either way the thread then *keeps* the `Store` open (behind an
     /// `Arc<Mutex<_>>` -- see [`rebuild_duckdb_projection`]'s doc comment
@@ -246,27 +249,37 @@ impl WriterHandle {
                     end_offset,
                 }) => {
                     // Seed the rebuild from this read's records *before* handing
-                    // `report` to `WriterInit::Ready` below (which moves it) --
-                    // readiness (this send) must not wait on the rebuild, so it
-                    // fires first; the rebuild itself runs right after, still on
-                    // this same background thread, before `run_writer` starts
-                    // draining the channel (see this fn's doc comment and
-                    // `run_writer`'s doc comment for why appends sent in that
-                    // window queue harmlessly rather than racing anything).
+                    // `report` to `WriterInit::Ready` below (which moves it).
+                    // The rebuild runs on its own thread, so neither readiness
+                    // nor any append or flush waits on it; the writer loop
+                    // catches up what was appended meanwhile before it hands
+                    // the store out (see `run_writer`).
                     let duckdb_seed = store.is_some().then(|| report.clone());
                     let _ = init_tx.send(WriterInit::Ready(report));
-                    let duckdb_store = match (store, duckdb_seed) {
-                        (Some(store), Some(seed)) => rebuild_duckdb_projection(store, seed),
-                        _ => None,
+                    let rebuild = match (store, duckdb_seed) {
+                        (Some(store), Some(seed)) => {
+                            let (outcome_tx, outcome_rx) = crossbeam_channel::bounded(1);
+                            thread::spawn(move || {
+                                let _ = outcome_tx.send(rebuild_duckdb_projection(store, seed));
+                            });
+                            Some(PendingRebuild {
+                                outcome_rx,
+                                duckdb_tx,
+                            })
+                        }
+                        _ => {
+                            let _ = duckdb_tx.send(None);
+                            None
+                        }
                     };
-                    let _ = duckdb_tx.send(duckdb_store.clone());
-                    run_writer(
+                    run_writer_loop(
                         file,
                         &path,
                         rx,
                         next_sequence,
                         end_offset,
-                        duckdb_store,
+                        None,
+                        rebuild,
                         worker_health,
                     );
                 }
@@ -513,33 +526,52 @@ fn start_up_incrementally(path: &Path, store: Store) -> IncrementalStartup {
         eprintln!("horizon-agentd: DuckDB projection already current, skipping rebuild");
         return IncrementalStartup::Ready(started, store);
     }
-    match store.catch_up_from_event_log(started.report.clone()) {
-        Ok(report) if report.skipped == 0 => {
+    match catch_up_tail(&store, started.report.clone()) {
+        TailCatchUp::Applied(applied) => {
             eprintln!(
-                "horizon-agentd: DuckDB projection caught up incrementally ({} record(s))",
-                report.applied
+                "horizon-agentd: DuckDB projection caught up incrementally ({applied} record(s))"
             );
             IncrementalStartup::Ready(started, store)
         }
-        Ok(report) => {
-            log_skipped_record_summary(&report);
-            // Records after the skipped one may have committed, moving the
-            // cursor past a hole. Drop the stamp so no later start trusts it.
-            if let Err(error) = store.invalidate_format() {
-                eprintln!(
-                    "horizon-agentd: failed to invalidate the DuckDB projection after a \
-                     skipped catch-up ({error}); the next start may hand it out"
-                );
-            }
-            IncrementalStartup::Unavailable
-        }
-        Err(error) => {
+        TailCatchUp::Skipped => IncrementalStartup::Unavailable,
+        TailCatchUp::Failed(error) => {
             eprintln!(
                 "horizon-agentd: DuckDB incremental catch-up failed ({error}), falling back to a \
                  full rebuild"
             );
             IncrementalStartup::Rebuild(store)
         }
+    }
+}
+
+/// How catching a tail read up into the projection went.
+enum TailCatchUp {
+    /// Every record landed (the count may be zero).
+    Applied(usize),
+    /// A record could not be projected. Already reported, and the stamp is
+    /// already removed: the projection must not be handed out.
+    Skipped,
+    Failed(anyhow::Error),
+}
+
+/// Catches `tail` up into `store`, shared by the incremental startup and the
+/// writer loop's post-rebuild catch-up. A skipped record removes the format
+/// stamp: chunks after it still committed and moved the cursor past the
+/// hole, so no later start may trust that cursor.
+fn catch_up_tail(store: &Store, tail: ReadReport) -> TailCatchUp {
+    match store.catch_up_from_event_log(tail) {
+        Ok(report) if report.skipped == 0 => TailCatchUp::Applied(report.applied),
+        Ok(report) => {
+            log_skipped_record_summary(&report);
+            if let Err(error) = store.invalidate_format() {
+                eprintln!(
+                    "horizon-agentd: failed to invalidate the DuckDB projection after a \
+                     skipped catch-up ({error}); the next start may hand it out"
+                );
+            }
+            TailCatchUp::Skipped
+        }
+        Err(error) => TailCatchUp::Failed(error),
     }
 }
 
@@ -580,16 +612,19 @@ fn read_tail(path: &Path, cursor: &LogCursor) -> Result<StartedLog> {
 }
 
 /// The full mode's projection step: drops and rebuilds every table from the
-/// whole-log read, committing a cursor with each chunk. Runs after
-/// [`WriterInit::Ready`], so readiness never waits on it. Prints "rebuilt
-/// (N record(s))" -- the original line, kept unchanged so operators (and
+/// whole-log read, committing a cursor with each chunk. Runs on its own
+/// thread after [`WriterInit::Ready`], so neither readiness nor the writer
+/// loop waits on it; the loop catches up what it appended meanwhile before
+/// the store is shared (see [`run_writer_loop`]). Prints "rebuilt (N
+/// record(s))" -- the original line, kept unchanged so operators (and
 /// `horizon-agentd`'s own e2e tests, which poll for these exact strings)
 /// see the same signal.
 ///
 /// Failure is reported to stderr and returns `None`, for the same reason
 /// [`open_duckdb_store`] does.
 ///
-/// Returns the store wrapped in `Arc<Mutex<_>>`, not a bare `Store`: a
+/// The store is later shared wrapped in `Arc<Mutex<_>>`
+/// ([`DuckdbStoreHandle`]), never opened twice: a
 /// second, independent `Store::open` against the same path from elsewhere
 /// in this process (a recall tool's lookup, the rig provider's history
 /// replay, an external `duckdb` CLI invocation) does *not* share this
@@ -605,7 +640,7 @@ fn read_tail(path: &Path, cursor: &LogCursor) -> Result<StartedLog> {
 /// (see `persistence::projection::duckdb::SharedDuckdbStore`, and this
 /// function's caller in [`WriterHandle::open_inner`]) rather than letting
 /// anyone open the file again.
-fn rebuild_duckdb_projection(store: Store, report: ReadReport) -> Option<DuckdbStoreHandle> {
+fn rebuild_duckdb_projection(store: Store, report: ReadReport) -> Option<Store> {
     if let Some(delay) = test_duckdb_rebuild_delay() {
         thread::sleep(delay);
     }
@@ -620,7 +655,7 @@ fn rebuild_duckdb_projection(store: Store, report: ReadReport) -> Option<DuckdbS
                 "horizon-agentd: DuckDB projection rebuilt ({} record(s))",
                 report.applied
             );
-            Some(DuckdbStoreHandle::new(store))
+            Some(store)
         }
         Err(error) => {
             eprintln!(
@@ -656,10 +691,11 @@ fn log_skipped_record_summary(report: &ApplyRecordsReport) {
 
 /// Test-only hook, mirroring `horizon-agentd::main`'s own resume-delay hook
 /// (`TEST_RESUME_DELAY_MS_VAR`): when set, artificially delays this thread's
-/// full DuckDB rebuild (which runs *after* [`WriterInit::Ready`] has already
-/// been sent -- see [`WriterHandle::open_inner`]) so a test can prove the
-/// rebuild never sits on the readiness path `session_list`/`session_new`
-/// block on. Never set outside `horizon-agentd`'s own e2e tests.
+/// full DuckDB rebuild (which runs on its own thread after
+/// [`WriterInit::Ready`] has been sent -- see [`WriterHandle::open_inner`])
+/// so a test can prove the rebuild never sits on the readiness path
+/// `session_list`/`session_new` block on, nor in front of a flush. Never set
+/// outside tests.
 const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS";
 
 fn test_duckdb_rebuild_delay() -> Option<Duration> {
@@ -692,6 +728,36 @@ fn retain_write_failure<T>(result: &Result<T>, failure: &mut Option<String>) {
     }
 }
 
+/// A full rebuild still running on its own thread: its outcome arrives on
+/// `outcome_rx`, and the writer loop owes `duckdb_tx` exactly one answer.
+struct PendingRebuild {
+    outcome_rx: Receiver<Option<Store>>,
+    duckdb_tx: Sender<Option<DuckdbStoreHandle>>,
+}
+
+/// [`run_writer_loop`] with the projection already decided (the incremental
+/// mode, the no-DuckDB writers, and tests).
+fn run_writer(
+    file: impl Write,
+    path: &Path,
+    rx: Receiver<AgentEventLogWriterCommand>,
+    next_sequence: u64,
+    log_offset: u64,
+    duckdb_store: Option<DuckdbStoreHandle>,
+    health: WriterHealth,
+) {
+    run_writer_loop(
+        file,
+        path,
+        rx,
+        next_sequence,
+        log_offset,
+        duckdb_store,
+        None,
+        health,
+    );
+}
+
 /// Drains `rx` for the lifetime of the writer, assigning each `Append`
 /// command the next sequence number in `next_sequence` (seeded by
 /// [`start_up`] from the startup read) — see the "Ordering guarantee"
@@ -709,19 +775,50 @@ fn retain_write_failure<T>(result: &Result<T>, failure: &mut Option<String>) {
 /// another locker of the same handle is normally brief. The first projection
 /// failure disables writes and queries on every clone until restart; JSONL
 /// appends continue independently.
-fn run_writer(
+///
+/// `rebuild`, when `Some` (the full mode), is a rebuild still running on its
+/// own thread. Meanwhile the loop appends without projecting. When the
+/// rebuilt store arrives it reads the log after the rebuild's own cursor
+/// (everything appended during the rebuild), catches that up, and only then
+/// shares the store on `duckdb_tx` and starts projecting live: a store handed
+/// out earlier would answer without those records. If every handle is
+/// dropped first, the loop just returns and the rebuild is abandoned with
+/// the process; the projection stays unstamped and the next start rebuilds.
+#[allow(clippy::too_many_arguments)]
+fn run_writer_loop(
     file: impl Write,
     path: &Path,
     rx: Receiver<AgentEventLogWriterCommand>,
     mut next_sequence: u64,
     mut log_offset: u64,
-    duckdb_store: Option<DuckdbStoreHandle>,
+    mut duckdb_store: Option<DuckdbStoreHandle>,
+    mut rebuild: Option<PendingRebuild>,
     health: WriterHealth,
 ) {
     let mut writer = BufWriter::new(file);
     let mut failure = None;
+    let no_rebuild = crossbeam_channel::never();
 
-    while let Ok(command) = rx.recv() {
+    loop {
+        let outcome_rx = rebuild
+            .as_ref()
+            .map_or(&no_rebuild, |pending| &pending.outcome_rx);
+        let command = crossbeam_channel::select! {
+            recv(rx) -> command => match command {
+                Ok(command) => command,
+                Err(_) => break,
+            },
+            recv(outcome_rx) -> outcome => {
+                let Some(PendingRebuild { duckdb_tx, .. }) = rebuild.take() else {
+                    continue;
+                };
+                duckdb_store = outcome.ok().flatten().and_then(|store| {
+                    finish_rebuild(store, path, &mut writer, failure.as_deref())
+                });
+                let _ = duckdb_tx.send(duckdb_store.clone());
+                continue;
+            },
+        };
         match command {
             AgentEventLogWriterCommand::Append(mut record) => {
                 if failure.is_some() {
@@ -775,6 +872,65 @@ fn run_writer(
     }
     // Do not let BufWriter::drop silently retry bytes after an uncertain write.
     let _ = writer.into_parts();
+}
+
+/// Brings a freshly rebuilt store level with the log: everything the writer
+/// appended while the rebuild ran sits after the rebuild's own cursor (or
+/// from the start, when the rebuild had no records). Returns the store to
+/// share, or `None` when it must stay unavailable.
+fn finish_rebuild(
+    store: Store,
+    path: &Path,
+    writer: &mut impl Write,
+    failure: Option<&str>,
+) -> Option<DuckdbStoreHandle> {
+    if let Some(message) = failure {
+        eprintln!(
+            "horizon-agentd: DuckDB projection disabled for this run: the event log writer \
+             stopped during the rebuild ({message})"
+        );
+        return None;
+    }
+    // Every append already flushes; this keeps the read below independent
+    // of that detail.
+    if let Err(error) = writer.flush() {
+        eprintln!(
+            "horizon-agentd: DuckDB projection disabled for this run: flushing the event log \
+             before the post-rebuild catch-up failed ({error})"
+        );
+        return None;
+    }
+    let tail = store
+        .log_cursor()
+        .and_then(|cursor| read_from(path, cursor.map_or(0, |cursor| cursor.offset)));
+    let tail = match tail {
+        Ok(tail) => tail,
+        Err(error) => {
+            eprintln!(
+                "horizon-agentd: DuckDB projection disabled for this run: reading the records \
+                 appended during the rebuild failed ({error:#})"
+            );
+            return None;
+        }
+    };
+    match catch_up_tail(&store, tail) {
+        TailCatchUp::Applied(0) => Some(DuckdbStoreHandle::new(store)),
+        TailCatchUp::Applied(applied) => {
+            eprintln!(
+                "horizon-agentd: DuckDB projection caught up {applied} record(s) appended during \
+                 the rebuild"
+            );
+            Some(DuckdbStoreHandle::new(store))
+        }
+        TailCatchUp::Skipped => None,
+        TailCatchUp::Failed(error) => {
+            eprintln!(
+                "horizon-agentd: DuckDB projection disabled for this run: catching up the \
+                 records appended during the rebuild failed ({error})"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1552,6 +1708,85 @@ mod tests {
         boot.writer.flush().unwrap();
         assert_eq!(read(&log).unwrap().records.len(), 2);
         shut_down(boot);
+    }
+
+    /// The full mode's rebuild runs beside the writer: appends and flushes
+    /// complete while it is still running, and the store is handed out only
+    /// once everything appended meanwhile is in it.
+    fn assert_rebuild_does_not_hold_the_writer(seed_records: u64) {
+        // nextest runs every test in its own process, so this cannot leak.
+        std::env::set_var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR, "1500");
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
+        let session = SessionId::new();
+        let seed: Vec<_> = (0..seed_records)
+            .map(|seq| message_record(session, seq, &format!("seed{seq}")))
+            .collect();
+        write_log(&log, &seed);
+
+        let (writer, init_rx, duckdb_rx) = WriterHandle::open_silently(&log, Some(db.clone()));
+        let report = match init_rx.recv().unwrap() {
+            WriterInit::Ready(report) => report,
+            WriterInit::Failed(error) => panic!("writer startup failed: {error:#}"),
+        };
+        assert_eq!(report.read_after, None, "full mode");
+        for text in ["window0", "window1"] {
+            writer.append(message_record(session, 999, text)).unwrap();
+        }
+        writer.flush().unwrap();
+        assert!(
+            matches!(
+                duckdb_rx.try_recv(),
+                Err(crossbeam_channel::TryRecvError::Empty)
+            ),
+            "the flush must return while the rebuild is still running"
+        );
+
+        let store = duckdb_rx.recv().unwrap().expect("rebuilt store");
+        let mut expected: Vec<String> = (0..seed_records).map(|seq| format!("seed{seq}")).collect();
+        expected.extend(["window0".to_string(), "window1".to_string()]);
+        assert_eq!(
+            texts(&store, session),
+            expected,
+            "the store must already hold the in-window records when it is handed out"
+        );
+        let last = read(&log).unwrap().records.pop().unwrap();
+        assert_eq!(last.sequence, seed_records + 1);
+        assert_eq!(
+            cursor_of(&store),
+            Some(LogCursor {
+                offset: file_len(&log),
+                sequence: last.sequence,
+                event_id: last.event_id,
+            })
+        );
+        std::env::remove_var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR);
+        shut_down(Boot {
+            writer,
+            report,
+            store: Some(store),
+        });
+
+        let next = boot(&log, &db);
+        assert!(
+            next.report.read_after.is_some(),
+            "the next start is incremental"
+        );
+        assert!(next.report.records.is_empty());
+        shut_down(next);
+    }
+
+    #[test]
+    fn a_full_rebuild_does_not_hold_the_writer_and_catches_up_its_window() {
+        assert_rebuild_does_not_hold_the_writer(3);
+    }
+
+    #[test]
+    fn a_rebuild_from_an_empty_log_catches_up_its_window() {
+        assert_rebuild_does_not_hold_the_writer(0);
     }
 }
 

@@ -70,9 +70,10 @@ fn projection_failure_revokes_readers_but_keeps_writing_the_authoritative_log() 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("events.jsonl");
     let db_path = dir.path().join("history.duckdb");
-    let store =
+    let store = DuckdbStoreHandle::new(
         rebuild_duckdb_projection(open_duckdb_store(&db_path).unwrap(), ReadReport::default())
-            .unwrap();
+            .unwrap(),
+    );
     let reader = store.clone();
     let (tx, rx) = unbounded();
     let health = WriterHealth::default();

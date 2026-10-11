@@ -1560,4 +1560,69 @@ mod projection_resume_tests {
         shut_down_sessions(&incremental_state);
         drop(store);
     }
+
+    /// A full-mode start's rebuild must not hold resume: committing an
+    /// interrupted turn's fixups waits on the writer, and the writer no
+    /// longer waits on the rebuild.
+    #[test]
+    fn full_mode_resume_commits_fixups_while_the_rebuild_is_still_running() {
+        // nextest runs every test in its own process, so this cannot leak.
+        std::env::set_var("HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS", "3000");
+        let dir = tempfile::tempdir().unwrap();
+        let (log, db) = (
+            dir.path().join("events.jsonl"),
+            dir.path().join("state.duckdb"),
+        );
+        let mid_turn = SessionId::new();
+        append_sessions(
+            &log,
+            &[(
+                mid_turn,
+                None,
+                vec![
+                    Event::StateChanged(SessionState::Created),
+                    user_message(),
+                    Event::StateChanged(SessionState::Running),
+                ],
+            )],
+        );
+
+        let started = std::time::Instant::now();
+        let (writer, init, duckdb) = WriterHandle::open_silently(&log, Some(db.clone()));
+        let WriterInit::Ready(report) = init.recv().unwrap() else {
+            panic!("writer startup failed");
+        };
+        assert!(
+            report.read_after.is_none(),
+            "a fresh projection means full mode"
+        );
+        let state = test_state();
+        state.set_writer(Some(writer.clone()));
+        resume_persisted_sessions(&state, report.records);
+        assert!(
+            started.elapsed() < Duration::from_millis(3000),
+            "resume took {:?}, as long as the delayed rebuild",
+            started.elapsed()
+        );
+        assert!(
+            duckdb.try_recv().is_err(),
+            "resume must have finished before the rebuild did"
+        );
+        assert!(live_sessions(&state).contains(&mid_turn));
+
+        let store = duckdb.recv().unwrap().expect("rebuilt projection");
+        let events: Vec<_> = store
+            .session_records(mid_turn, u64::MAX >> 1)
+            .unwrap()
+            .into_iter()
+            .map(|record| record.event)
+            .collect();
+        assert!(
+            events.contains(&Event::TurnEnded(TurnEndReason::Cancelled)),
+            "the fixup committed during the rebuild reached the projection: {events:?}"
+        );
+        shut_down_sessions(&state);
+        drop(store);
+        drop(writer);
+    }
 }

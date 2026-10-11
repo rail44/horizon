@@ -54,10 +54,14 @@
 //!   ([`session::resume_persisted_sessions_from_projection`]).
 //! - **Full.** Anything else (first start, a stale stamp, a cursor that no
 //!   longer matches the log). The whole log is read, `WriterInit::Ready`
-//!   carries every record, and the full rebuild of the projection runs
-//!   *after* `Ready` -- off the readiness path: readiness never waits on a
-//!   full rebuild of a derived, non-authoritative read model, since this
-//!   mode resumes sessions from the JSONL records directly.
+//!   carries every record, and the full rebuild of the projection runs on
+//!   its own thread after `Ready` -- off the readiness path, and off the
+//!   writer too: appends and flushes (resume's fixup commits included) go
+//!   through meanwhile, and the writer catches the rebuilt store up with
+//!   them before sharing it. Readiness never waits on a full rebuild of a
+//!   derived, non-authoritative read model, since this mode resumes
+//!   sessions from the JSONL records directly. A drain during a rebuild
+//!   abandons it; the next start rebuilds again.
 
 mod board_flow;
 mod hub;
@@ -301,8 +305,9 @@ fn test_resume_delay() -> Option<Duration> {
 ///
 /// The fourth return value is `open_silently`'s own second receiver: the
 /// writer thread's DuckDB decision, delivered exactly once: before `Ready`
-/// in the incremental mode, whenever the rebuild lands in the full mode
-/// (see [`spawn_resume_task`], its only consumer). A disconnected channel
+/// in the incremental mode, once the rebuilt store has caught up in the
+/// full mode (see [`spawn_resume_task`], its only consumer). A disconnected
+/// channel
 /// (writer startup itself failed)
 /// is indistinguishable from -- and handled the same as -- an explicit
 /// `None`.
