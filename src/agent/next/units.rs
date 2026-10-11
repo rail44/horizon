@@ -518,7 +518,7 @@ fn call_row(
                     .mt(gap_label())
                     .items_center()
                     .gap(gap_tight())
-                    .child(chip("承認待ち", theme::warning()))
+                    .child(chip("承認待ち", theme::accent()))
                     .child(
                         text_at(meta(), theme::text_primary(), approval.reason.clone())
                             .flex_1()

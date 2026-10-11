@@ -174,7 +174,7 @@ fn investigation_turn() -> Turn {
             TurnPart::Text(INVESTIGATION.to_string()),
             TurnPart::Receipt(Receipt {
                 key: 0,
-                summary: "ファイル 6件を読み取り · 検索 2件 · 41秒".to_string(),
+                summary: "ファイル 6件を読み取り · 検索 2件".to_string(),
                 running: false,
                 failed: false,
                 calls,
@@ -259,7 +259,7 @@ fn fix_turn() -> Turn {
         parts: vec![
             TurnPart::Receipt(Receipt {
                 key: 1,
-                summary: "ファイル 3件を編集 · コマンド 2件を実行 · 失敗 1件 · 2分10秒".to_string(),
+                summary: "ファイル 3件を編集 · コマンド 2件を実行".to_string(),
                 running: false,
                 failed: true,
                 calls,
@@ -289,7 +289,7 @@ fn running_turn() -> Turn {
         parts: vec![
             TurnPart::Receipt(Receipt {
                 key: 2,
-                summary: "コマンド 1件を実行中".to_string(),
+                summary: "コマンド 1件を実行".to_string(),
                 running: true,
                 failed: false,
                 calls: vec![
