@@ -9,11 +9,14 @@
 //!
 //! The three layouts draw the same units ([`units`]):
 //!
-//! - [`Layout::A`]: the header band, then each turn part as its own unit —
-//!   text as a card, a receipt as a bare activity line between cards.
-//! - [`Layout::B`]: no band; one card per turn; the session's status,
-//!   model, changes and stop control in the composer's hint row.
-//! - [`Layout::C`]: the band of A with the turn cards of B.
+//! - [`Layout::TurnCards`]: one card per turn; the session's status, model,
+//!   changes and stop control in the composer's hint row.
+//! - [`Layout::PerItem`]: each turn part as its own unit — text as a card,
+//!   a receipt as a bare activity line between cards — with the composer
+//!   of [`Layout::TurnCards`].
+//! - [`Layout::StateOnCard`]: the turn cards of [`Layout::TurnCards`], the
+//!   session's state and stop control on the running turn's card, and the
+//!   composer drawn as the next message sent into the session.
 
 pub(crate) mod display;
 pub(crate) mod previews;
@@ -29,24 +32,20 @@ use gpui_component::{h_flex, v_flex, ActiveTheme as _};
 
 use crate::theme;
 use crate::ui::spec::*;
-use display::{ComposerMode, Transcript, TurnPart, Unit};
-use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
+use display::{ComposerMode, Status, Transcript, TurnPart, Unit};
+use spec::{thread_gutter, user_indent, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
 
 /// Which arrangement of the units the view draws.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Layout {
-    A,
-    B,
-    C,
+    TurnCards,
+    PerItem,
+    StateOnCard,
 }
 
 impl Layout {
-    fn has_band(self) -> bool {
-        matches!(self, Self::A | Self::C)
-    }
-
     fn turn_cards(self) -> bool {
-        matches!(self, Self::B | Self::C)
+        matches!(self, Self::TurnCards | Self::StateOnCard)
     }
 }
 
@@ -196,6 +195,7 @@ impl AgentNextView {
     /// The scroll column's children for the current layout.
     fn units(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mono = cx.theme().mono_font_family.clone();
+        let carried = (self.layout == Layout::StateOnCard).then_some(self.transcript.status);
         let mut children = Vec::new();
         for (index, unit) in self.transcript.units.iter().enumerate() {
             match unit {
@@ -203,8 +203,9 @@ impl AgentNextView {
                     children.push(units::user(index, message).into_any_element())
                 }
                 Unit::Notice(notice) => children.push(units::notice(notice).into_any_element()),
-                Unit::Turn(turn) if self.layout.turn_cards() => children
-                    .push(units::turn_card(index, turn, &self.ui, &mono, cx).into_any_element()),
+                Unit::Turn(turn) if self.layout.turn_cards() => children.push(
+                    units::turn_card(index, turn, carried, &self.ui, &mono, cx).into_any_element(),
+                ),
                 Unit::Turn(turn) => {
                     for (part_index, part) in turn.parts.iter().enumerate() {
                         children.push(match part {
@@ -227,22 +228,45 @@ impl AgentNextView {
         children
     }
 
-    /// The left half of B's hint row: the session's status and controls.
+    /// The left half of the hint row: the session's status and controls,
+    /// less whatever the running turn's card already carries.
     fn session_group(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let transcript = &self.transcript;
+        let on_card = self.layout == Layout::StateOnCard;
+        let show_status =
+            !on_card || matches!(transcript.status, Status::Terminated | Status::Unreachable);
         h_flex()
             .items_center()
             .gap(gap_tight())
-            .child(units::status_chip(transcript.status))
+            .when(show_status, |group| {
+                group.child(units::status_chip(transcript.status))
+            })
             .child(units::model_chip(&transcript.model, cx))
             .children(units::changes_chip(&transcript.changes, cx))
-            .when(transcript.status.running(), |group| {
-                group.child(units::stop_button("agent-next-hint-stop", true, cx))
+            .when(!on_card && transcript.status.running(), |group| {
+                group.child(units::stop_button("agent-next-hint-stop", cx))
             })
     }
 
+    fn field(&self) -> impl IntoElement {
+        div()
+            .w_full()
+            .text_size(body().size)
+            .child(Textarea::new(&self.composer).appearance(false))
+    }
+
+    fn hint_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap(gap_label())
+            .child(self.session_group(cx))
+            .child(div().flex_1().min_w_0())
+            .children(units::key_hints(&self.transcript.composer))
+    }
+
+    /// The composer as a strip under the column.
     fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let in_row = self.layout == Layout::B;
         v_flex()
             .w_full()
             .flex_none()
@@ -251,38 +275,49 @@ impl AgentNextView {
             .gap(gap_label())
             .border_t_1()
             .border_color(theme::border())
-            .when(in_row && self.ui.overview_open, |composer| {
+            .when(self.ui.overview_open, |composer| {
                 composer.child(units::overview(&self.transcript.changes).mt(gap_tight()))
             })
-            .child(
-                div()
-                    .w_full()
-                    .text_size(body().size)
-                    .child(Textarea::new(&self.composer).appearance(false)),
-            )
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap(gap_label())
-                    .when(in_row, |row| {
-                        row.child(self.session_group(cx))
-                            .child(div().flex_1().min_w_0())
-                    })
-                    .when(!in_row, |row| row.justify_end())
-                    .children(units::key_hints(&self.transcript.composer)),
-            )
+            .child(self.field())
+            .child(self.hint_row(cx))
+    }
+
+    /// The composer as the next message sent into the session.
+    fn render_next_message(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .flex_none()
+            .ml(thread_gutter() + user_indent())
+            .mr(thread_gutter())
+            .mb(gap_unit())
+            .px(pad_x())
+            .py(pad_y())
+            .rounded(RADIUS)
+            .bg(theme::tint_over_background(
+                theme::text_primary(),
+                BAND_TINT,
+            ))
+            .gap(gap_label())
+            .child(self.field())
+            .when(self.ui.overview_open, |composer| {
+                composer.child(units::overview(&self.transcript.changes).mt(gap_tight()))
+            })
+            .child(self.hint_row(cx))
     }
 
     fn render_tasks(&self) -> impl IntoElement {
-        v_flex()
+        let tasks = v_flex()
             .w_full()
             .flex_none()
             .px(thread_gutter())
-            .py(gap_tight())
-            .border_t_1()
-            .border_color(theme::border())
-            .children(units::task_lines(&self.transcript.tasks))
+            .children(units::task_lines(&self.transcript.tasks));
+        if self.layout == Layout::StateOnCard {
+            tasks.pb(gap_tight())
+        } else {
+            tasks
+                .py(gap_tight())
+                .border_t_1()
+                .border_color(theme::border())
+        }
     }
 
     /// Keeps the tail in view while following it, and resumes following
@@ -315,7 +350,7 @@ impl Focusable for AgentNextView {
 impl Render for AgentNextView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.track_tail();
-        let layout = self.layout;
+        let next_message = self.layout == Layout::StateOnCard;
         let column = self.units(cx);
         v_flex()
             .id("agent-next")
@@ -327,9 +362,6 @@ impl Render for AgentNextView {
             .min_w(VIEW_MIN_WIDTH)
             .bg(rgb(theme::background()))
             .text_color(theme::text_primary())
-            .when(layout.has_band(), |view| {
-                view.child(units::band(&self.transcript, &self.ui, cx))
-            })
             .child(
                 v_flex()
                     .id("agent-next-scroll")
@@ -342,14 +374,23 @@ impl Render for AgentNextView {
                     }))
                     .px(thread_gutter())
                     .pt(gap_section())
-                    .pb(gap_composer())
+                    .pb(if next_message {
+                        gap_unit()
+                    } else {
+                        gap_composer()
+                    })
                     .gap(gap_unit())
                     .children(column),
             )
-            .when(
-                layout == Layout::B && !self.transcript.tasks.is_empty(),
-                |view| view.child(self.render_tasks()),
-            )
-            .child(self.render_composer(cx))
+            .when(!self.transcript.tasks.is_empty(), |view| {
+                view.child(self.render_tasks())
+            })
+            .map(|view| {
+                if next_message {
+                    view.child(self.render_next_message(cx).into_any_element())
+                } else {
+                    view.child(self.render_composer(cx).into_any_element())
+                }
+            })
     }
 }

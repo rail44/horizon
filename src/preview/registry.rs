@@ -44,28 +44,28 @@ const PREVIEWS: &[Preview] = &[
         build: board::build_thread_long,
     },
     Preview {
-        name: agent::A,
-        build: agent::build_a,
+        name: agent::TURN_CARDS,
+        build: agent::build_turn_cards,
     },
     Preview {
-        name: agent::B,
-        build: agent::build_b,
+        name: agent::PER_ITEM,
+        build: agent::build_per_item,
     },
     Preview {
-        name: agent::C,
-        build: agent::build_c,
+        name: agent::STATE_ON_CARD,
+        build: agent::build_state_on_card,
     },
     Preview {
-        name: agent::A_IDLE,
-        build: agent::build_a_idle,
+        name: agent::TURN_CARDS_IDLE,
+        build: agent::build_turn_cards_idle,
     },
     Preview {
-        name: agent::B_IDLE,
-        build: agent::build_b_idle,
+        name: agent::PER_ITEM_IDLE,
+        build: agent::build_per_item_idle,
     },
     Preview {
-        name: agent::C_IDLE,
-        build: agent::build_c_idle,
+        name: agent::STATE_ON_CARD_IDLE,
+        build: agent::build_state_on_card_idle,
     },
     Preview {
         name: animation::NAME,

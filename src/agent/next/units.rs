@@ -14,7 +14,7 @@ use gpui_component::{h_flex, v_flex, Sizable as _};
 
 use super::display::{
     Call, CallBody, CallStatus, ChangedFile, DiffKind, Label, Message, Notice, Receipt, Status,
-    Task, Tone, Transcript, Turn, TurnPart, TurnState,
+    Task, Tone, Turn, TurnPart, TurnState,
 };
 use super::spec::{button_height, user_indent, THINKING_CYCLE_MS};
 use super::{AgentNextEvent, AgentNextView, UiState};
@@ -37,6 +37,15 @@ pub(super) fn status_chip(status: Status) -> impl IntoElement {
         Status::Unreachable => ("到達不能", theme::text_muted()),
     };
     chip(label, tone)
+}
+
+/// A running session's state, as the running turn's card carries it.
+fn session_state_chip(status: Status) -> impl IntoElement {
+    if status == Status::WaitingForApproval {
+        chip("承認待ち", theme::accent())
+    } else {
+        chip("実行中", theme::accent())
+    }
 }
 
 fn call_chip(status: CallStatus) -> impl IntoElement {
@@ -102,113 +111,18 @@ pub(super) fn changes_chip(
     })
 }
 
-/// 「タスク n件」. Absent when there are none.
-pub(super) fn tasks_chip(tasks: &[Task]) -> Option<impl IntoElement> {
-    (!tasks.is_empty()).then(|| chip(format!("タスク {}件", tasks.len()), theme::text_muted()))
-}
-
 /// 「停止」, offered while a turn runs.
-pub(super) fn stop_button(
-    id: &'static str,
-    compact: bool,
-    cx: &mut Context<AgentNextView>,
-) -> Button {
-    let button = Button::new(id).ghost().label("停止");
-    let button = if compact {
-        button.xsmall()
-    } else {
-        button.small().h(button_height())
-    };
-    button.on_click(cx.listener(|_, _, _, cx| cx.emit(AgentNextEvent::Stop)))
+pub(super) fn stop_button(id: &'static str, cx: &mut Context<AgentNextView>) -> Button {
+    Button::new(id)
+        .ghost()
+        .xsmall()
+        .label("停止")
+        .on_click(cx.listener(|_, _, _, cx| cx.emit(AgentNextEvent::Stop)))
 }
 
 // ---------------------------------------------------------------------------
-// The band (layouts A and C)
+// Session-wide lines
 // ---------------------------------------------------------------------------
-
-/// The elapsed time of the turn in flight, if one is.
-fn running_elapsed(transcript: &Transcript) -> Option<String> {
-    transcript.units.iter().rev().find_map(|unit| match unit {
-        super::display::Unit::Turn(turn) if turn.state == TurnState::Running => {
-            turn.elapsed.clone()
-        }
-        _ => None,
-    })
-}
-
-/// The header band over the conversation: the title, the stop action, the
-/// session's chips, the changes overview, and the task lines.
-pub(super) fn band(
-    transcript: &Transcript,
-    ui: &UiState,
-    cx: &mut Context<AgentNextView>,
-) -> impl IntoElement {
-    let running = transcript.status.running();
-    let elapsed = running.then(|| running_elapsed(transcript)).flatten();
-    v_flex()
-        .w_full()
-        .flex_none()
-        .p(pad_x())
-        .bg(theme::tint_over_background(
-            theme::text_primary(),
-            BAND_TINT,
-        ))
-        .border_b_1()
-        .border_color(theme::border())
-        .child(
-            h_flex()
-                .w_full()
-                .items_start()
-                .gap(gap_unit())
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(t1().size)
-                        .line_height(t1().line_height)
-                        .font_weight(ANCHOR)
-                        .text_color(theme::text_primary())
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .line_clamp(2)
-                        .child(transcript.title.clone()),
-                )
-                .when(running, |row| {
-                    row.child(h_flex().flex_none().items_center().child(stop_button(
-                        "agent-next-band-stop",
-                        false,
-                        cx,
-                    )))
-                }),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap(gap_tight())
-                .mt(gap_tight())
-                .child(status_chip(transcript.status))
-                .child(model_chip(&transcript.model, cx))
-                .children(changes_chip(&transcript.changes, cx))
-                .children(tasks_chip(&transcript.tasks))
-                .child(div().flex_1().min_w_0())
-                .when_some(elapsed, |row, elapsed| {
-                    row.child(
-                        text_at(meta(), theme::text_muted(), format!("経過 {elapsed}")).flex_none(),
-                    )
-                }),
-        )
-        .when(ui.overview_open, |band| {
-            band.child(overview(&transcript.changes).mt(gap_tight()))
-        })
-        .when(!transcript.tasks.is_empty(), |band| {
-            band.child(
-                v_flex()
-                    .mt(gap_tight())
-                    .children(task_lines(&transcript.tasks)),
-            )
-        })
-}
 
 /// One line per changed file with its added and removed counts.
 pub(super) fn overview(changes: &[ChangedFile]) -> Div {
@@ -301,7 +215,7 @@ fn text_body(id: SharedString, text: &str) -> impl IntoElement {
     markdown_body(id, text.to_string(), theme::text_primary())
 }
 
-/// One piece of an agent's text as a card of its own (layout A).
+/// One piece of an agent's text as a card of its own.
 pub(super) fn text_card(id: SharedString, text: &str) -> impl IntoElement {
     card()
         .child(anchor(theme::text_primary(), "エージェント"))
@@ -343,11 +257,13 @@ pub(super) fn thinking(id: usize) -> Div {
         }))
 }
 
-/// One whole turn as a single card (layouts B and C): its text, receipts
-/// and thinking state in order.
+/// One whole turn as a single card: its text, receipts and thinking state
+/// in order. Given the session's `status`, a running turn's header carries
+/// that state and 「停止」 in place of the turn's own chip.
 pub(super) fn turn_card(
     index: usize,
     turn: &Turn,
+    status: Option<Status>,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
@@ -359,6 +275,25 @@ pub(super) fn turn_card(
             .collect::<Vec<_>>()
             .join(" · ")
     });
+    let carried = status.filter(|status| turn.state == TurnState::Running && status.running());
+    let header = h_flex()
+        .w_full()
+        .gap(gap_tight())
+        .child(anchor(theme::text_primary(), "エージェント"));
+    let header = match carried {
+        Some(status) => header
+            .items_center()
+            .child(session_state_chip(status))
+            .child(div().flex_1().min_w_0())
+            .child(stop_button("agent-next-card-stop", cx)),
+        None => header
+            .items_baseline()
+            .children(turn_chip(turn.state))
+            .child(div().flex_1().min_w_0())
+            .when_some(done_meta.filter(|meta| !meta.is_empty()), |line, done| {
+                line.child(text_at(meta(), theme::text_muted(), done).flex_none())
+            }),
+    };
     card()
         .relative()
         .when(turn.state == TurnState::Running, |card| {
@@ -372,18 +307,7 @@ pub(super) fn turn_card(
                     .bg(theme::accent()),
             )
         })
-        .child(
-            h_flex()
-                .w_full()
-                .items_baseline()
-                .gap(gap_tight())
-                .child(anchor(theme::text_primary(), "エージェント"))
-                .children(turn_chip(turn.state))
-                .child(div().flex_1().min_w_0())
-                .when_some(done_meta.filter(|meta| !meta.is_empty()), |line, done| {
-                    line.child(text_at(meta(), theme::text_muted(), done).flex_none())
-                }),
-        )
+        .child(header)
         .children(turn.parts.iter().enumerate().map(|(part_index, part)| {
             let part = match part {
                 TurnPart::Text(text) => div()

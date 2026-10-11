@@ -930,20 +930,20 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
 
-    let title_marker = '追';
     let first_marker = 'ホ';
     let approval_marker = '換';
+    let stop_marker = '停';
 
-    // (preview, running, draws the band)
+    // (preview, running)
     let cases = [
-        (agent::A, true, true),
-        (agent::B, true, false),
-        (agent::C, true, true),
-        (agent::A_IDLE, false, true),
-        (agent::B_IDLE, false, false),
-        (agent::C_IDLE, false, true),
+        (agent::TURN_CARDS, true),
+        (agent::PER_ITEM, true),
+        (agent::STATE_ON_CARD, true),
+        (agent::TURN_CARDS_IDLE, false),
+        (agent::PER_ITEM_IDLE, false),
+        (agent::STATE_ON_CARD_IDLE, false),
     ];
-    for (name, running, band) in cases {
+    for (name, running) in cases {
         let loaded = load(&live, name, cx).expect("the agent preview instantiates");
         let surface = cx.new(Surface::new);
         if running {
@@ -964,12 +964,11 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             0,
             "{name}: the conversation did not open at its tail: {painted_now:?}"
         );
-        assert_eq!(
-            count_of(&painted_now, title_marker),
-            usize::from(band),
-            "{name}: the title is drawn exactly by the band: {painted_now:?}"
-        );
         if running {
+            assert!(
+                painted(&painted_now, "停止"),
+                "{name}: no stop control is painted: {painted_now:?}"
+            );
             assert!(
                 painted(&painted_now, "承認"),
                 "{name}: no approval control is painted: {painted_now:?}"
@@ -983,6 +982,11 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
                 count_of(&painted_now, approval_marker),
                 0,
                 "{name}: an idle session painted an approval: {painted_now:?}"
+            );
+            assert_eq!(
+                count_of(&painted_now, stop_marker),
+                0,
+                "{name}: an idle session painted a stop control: {painted_now:?}"
             );
         }
         cx.update(|_| drop(loaded));

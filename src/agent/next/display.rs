@@ -1,15 +1,14 @@
 //! The display model the pane draws: plain data, already worded in the
 //! chrome language. Whatever builds it from a live session does the wording;
 //! the view only lays it out.
-
-// The only producer in this build is the preview sample, which does not
-// construct every state; the adapter from a live session is not written yet.
-#![allow(dead_code)]
+//!
+//! The preview sample is the only producer in this build and does not reach
+//! every state; the enums with states only a live session would produce
+//! allow dead code until the adapter from one is written.
 
 /// One agent session, as the pane shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Transcript {
-    pub(crate) title: String,
     pub(crate) model: String,
     pub(crate) status: Status,
     pub(crate) units: Vec<Unit>,
@@ -34,6 +33,7 @@ pub(crate) struct Message {
     pub(crate) text: String,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Label {
     You,
@@ -50,6 +50,7 @@ pub(crate) struct Turn {
     pub(crate) model: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TurnState {
     Running,
@@ -85,6 +86,7 @@ pub(crate) struct Call {
     pub(crate) approval: Option<Approval>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CallStatus {
     Running,
@@ -128,6 +130,7 @@ pub(crate) struct Notice {
     pub(crate) text: String,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Tone {
     Muted,
@@ -135,6 +138,7 @@ pub(crate) enum Tone {
     Danger,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Status {
     Idle,
@@ -171,6 +175,7 @@ pub(crate) struct Task {
 }
 
 /// What Enter and Escape in the composer mean.
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ComposerMode {
     Idle,

@@ -11,12 +11,12 @@ use super::display::{
 };
 use super::{AgentNextView, Layout};
 
-pub(crate) const A: &str = "agent-a";
-pub(crate) const B: &str = "agent-b";
-pub(crate) const C: &str = "agent-c";
-pub(crate) const A_IDLE: &str = "agent-a-idle";
-pub(crate) const B_IDLE: &str = "agent-b-idle";
-pub(crate) const C_IDLE: &str = "agent-c-idle";
+pub(crate) const TURN_CARDS: &str = "agent-1";
+pub(crate) const PER_ITEM: &str = "agent-2";
+pub(crate) const STATE_ON_CARD: &str = "agent-3";
+pub(crate) const TURN_CARDS_IDLE: &str = "agent-1-idle";
+pub(crate) const PER_ITEM_IDLE: &str = "agent-2-idle";
+pub(crate) const STATE_ON_CARD_IDLE: &str = "agent-3-idle";
 
 // ---------------------------------------------------------------------------
 // Probes
@@ -25,10 +25,6 @@ pub(crate) const C_IDLE: &str = "agent-c-idle";
 // multiset of glyphs and no order. Each probe owns one character no other
 // string the pane can paint contains — the tests below hold that.
 // ---------------------------------------------------------------------------
-
-/// The session's title. Its `追` occurs nowhere else, so counting it says
-/// whether a layout drew the band.
-pub(crate) const TITLE: &str = "ボードのフォントサイズ追従";
 
 /// The first message, at the head of the conversation. Its `ホ` occurs
 /// nowhere else, so its absence says the column opened at the tail.
@@ -52,28 +48,28 @@ fn build(layout: Layout, running: bool, window: &mut Window, cx: &mut App) -> An
         .into()
 }
 
-pub(crate) fn build_a(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::A, true, window, cx)
+pub(crate) fn build_turn_cards(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::TurnCards, true, window, cx)
 }
 
-pub(crate) fn build_b(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::B, true, window, cx)
+pub(crate) fn build_per_item(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::PerItem, true, window, cx)
 }
 
-pub(crate) fn build_c(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::C, true, window, cx)
+pub(crate) fn build_state_on_card(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::StateOnCard, true, window, cx)
 }
 
-pub(crate) fn build_a_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::A, false, window, cx)
+pub(crate) fn build_turn_cards_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::TurnCards, false, window, cx)
 }
 
-pub(crate) fn build_b_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::B, false, window, cx)
+pub(crate) fn build_per_item_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::PerItem, false, window, cx)
 }
 
-pub(crate) fn build_c_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::C, false, window, cx)
+pub(crate) fn build_state_on_card_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::StateOnCard, false, window, cx)
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +324,6 @@ pub(crate) fn sample(running: bool) -> Transcript {
         units.push(Unit::Turn(running_turn()));
     }
     Transcript {
-        title: TITLE.to_string(),
         model: MODEL.to_string(),
         status: if running {
             Status::WaitingForApproval
@@ -386,10 +381,8 @@ mod tests {
         "拒否",
         "中断",
         "変更 件",
-        "タスク 件",
         "タスク · · ·",
         "停止",
-        "経過",
         "あなた",
         "続行",
         "エージェント",
@@ -424,7 +417,7 @@ mod tests {
     }
 
     fn strings(transcript: &Transcript) -> Vec<String> {
-        let mut strings = vec![transcript.title.clone(), transcript.model.clone()];
+        let mut strings = vec![transcript.model.clone()];
         for unit in &transcript.units {
             match unit {
                 Unit::User(message) => strings.push(message.text.clone()),
@@ -463,10 +456,10 @@ mod tests {
     fn each_probe_owns_a_character_nothing_else_paints() {
         let all = strings(&sample(true));
         for (probe, marker) in [
-            (TITLE, '追'),
             (FIRST_MESSAGE, 'ホ'),
             (LAST_MESSAGE, '警'),
             (APPROVAL_REASON, '換'),
+            ("停止", '停'),
         ] {
             assert_eq!(probe.matches(marker).count(), 1, "{probe}");
             let owners: Vec<&String> = all.iter().filter(|s| s.contains(marker)).collect();

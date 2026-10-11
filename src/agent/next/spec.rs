@@ -16,7 +16,7 @@ pub(crate) fn user_indent() -> Pixels {
     scaled(24.0)
 }
 
-/// A small action button: 「停止」 in the band, 「承認」 and 「拒否」.
+/// A small action button: 「承認」 and 「拒否」.
 pub(crate) fn button_height() -> Pixels {
     scaled(28.0)
 }
