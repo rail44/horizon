@@ -44,28 +44,36 @@ const PREVIEWS: &[Preview] = &[
         build: board::build_thread_long,
     },
     Preview {
-        name: agent::TURN_CARDS,
-        build: agent::build_turn_cards,
-    },
-    Preview {
-        name: agent::PER_ITEM,
-        build: agent::build_per_item,
-    },
-    Preview {
         name: agent::FOOTNOTE,
         build: agent::build_footnote,
     },
     Preview {
-        name: agent::TURN_CARDS_IDLE,
-        build: agent::build_turn_cards_idle,
-    },
-    Preview {
-        name: agent::PER_ITEM_IDLE,
-        build: agent::build_per_item_idle,
-    },
-    Preview {
         name: agent::FOOTNOTE_IDLE,
         build: agent::build_footnote_idle,
+    },
+    Preview {
+        name: agent::BORDERLESS,
+        build: agent::build_borderless,
+    },
+    Preview {
+        name: agent::BORDERLESS_IDLE,
+        build: agent::build_borderless_idle,
+    },
+    Preview {
+        name: agent::RECEIPT_FIRST,
+        build: agent::build_receipt_first,
+    },
+    Preview {
+        name: agent::RECEIPT_FIRST_IDLE,
+        build: agent::build_receipt_first_idle,
+    },
+    Preview {
+        name: agent::FOLD_OLDER,
+        build: agent::build_fold_older,
+    },
+    Preview {
+        name: agent::FOLD_OLDER_IDLE,
+        build: agent::build_fold_older_idle,
     },
     Preview {
         name: animation::NAME,

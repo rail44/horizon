@@ -10,14 +10,17 @@
 //! holds the input, the model chip and the send hint only; the session's
 //! state and 「停止」 ride on the running turn; an approval sits under the
 //! call that asks for it; background tasks and a session that can no
-//! longer run end the column. The layouts differ in how a turn is cut
-//! into units ([`units`]):
+//! longer run end the column. Neither speaker is labeled, and a turn's
+//! receipts merge into one line. The layouts differ in how a turn is
+//! drawn ([`units`]):
 //!
-//! - [`Layout::TurnCards`]: one card per turn under 「エージェント」.
-//! - [`Layout::PerItem`]: each turn part as its own unit — text as a card,
-//!   a receipt or the thinking state as a bare line between cards.
-//! - [`Layout::Footnote`]: one card per turn without author labels, its
-//!   receipts merged into one footer line.
+//! - [`Layout::Footnote`]: one card per turn, the receipt line its footer.
+//! - [`Layout::Borderless`]: a turn without a frame, 「停止」 at the
+//!   footer's right end, notices as bare lines.
+//! - [`Layout::ReceiptFirst`]: [`Layout::Footnote`] with the receipt line
+//!   first.
+//! - [`Layout::FoldOlder`]: [`Layout::Footnote`] with long earlier turns
+//!   folded to their first lines.
 
 pub(crate) mod display;
 pub(crate) mod previews;
@@ -31,17 +34,22 @@ use gpui_component::input::{InputEvent, Textarea, TextareaState};
 use gpui_component::{h_flex, v_flex, ActiveTheme as _};
 
 use crate::theme;
+use crate::ui::measure::rendered_lines;
 use crate::ui::parts::key_chip;
 use crate::ui::spec::*;
-use display::{ComposerMode, Status, Transcript, TurnPart, Unit};
-use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
+use display::{ComposerMode, Status, Transcript, TurnPart, TurnState, Unit};
+use spec::{
+    thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS, FOLD_LINES, FOLD_VISIBLE_LINES,
+    MEASURE_CELLS,
+};
 
 /// Which arrangement of the units the view draws.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Layout {
-    TurnCards,
-    PerItem,
     Footnote,
+    Borderless,
+    ReceiptFirst,
+    FoldOlder,
 }
 
 /// What the view asks of whatever holds it.
@@ -64,6 +72,8 @@ pub(crate) struct UiState {
     pub(crate) expanded_receipts: HashSet<usize>,
     /// Call bodies opened by a click, by receipt key and call index.
     pub(crate) open_bodies: HashSet<(usize, usize)>,
+    /// Folded turns opened by a click, by unit index.
+    pub(crate) unfolded_turns: HashSet<usize>,
 }
 
 /// The agent pane over a display model.
@@ -150,6 +160,13 @@ impl AgentNextView {
         cx.notify();
     }
 
+    pub(super) fn toggle_turn(&mut self, index: usize, cx: &mut Context<Self>) {
+        if !self.ui.unfolded_turns.remove(&index) {
+            self.ui.unfolded_turns.insert(index);
+        }
+        cx.notify();
+    }
+
     /// Enter in the composer: send what it holds, or, waiting on an
     /// approval with nothing typed, approve.
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -185,50 +202,31 @@ impl AgentNextView {
     fn units(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mono = cx.theme().mono_font_family.clone();
         let status = self.transcript.status;
-        let labeled = self.layout != Layout::Footnote;
+        let bare_notices = self.layout == Layout::Borderless;
+        let notice = |notice: &display::Notice| {
+            if bare_notices {
+                units::notice_line(notice).into_any_element()
+            } else {
+                units::notice(notice).into_any_element()
+            }
+        };
         let mut children = Vec::new();
         for (index, unit) in self.transcript.units.iter().enumerate() {
-            match unit {
-                Unit::User(message) => {
-                    children.push(units::user(index, message, labeled).into_any_element())
+            children.push(match unit {
+                Unit::User(message) => units::user(index, message).into_any_element(),
+                Unit::Notice(item) => notice(item),
+                Unit::Turn(turn) => {
+                    let fold = (self.layout == Layout::FoldOlder)
+                        .then(|| folded_lines(&self.transcript.units, index))
+                        .flatten()
+                        .filter(|_| !self.ui.unfolded_turns.contains(&index));
+                    units::turn(index, turn, status, self.layout, fold, &self.ui, &mono, cx)
+                        .into_any_element()
                 }
-                Unit::Notice(notice) => children.push(units::notice(notice).into_any_element()),
-                Unit::Turn(turn) => match self.layout {
-                    Layout::TurnCards => children.push(
-                        units::turn_card(index, turn, status, &self.ui, &mono, cx)
-                            .into_any_element(),
-                    ),
-                    Layout::Footnote => children.push(
-                        units::footnote_card(index, turn, status, &self.ui, &mono, cx)
-                            .into_any_element(),
-                    ),
-                    Layout::PerItem => {
-                        let carried = units::carried(turn, status);
-                        let on_receipt = turn.parts.iter().any(
-                            |part| matches!(part, TurnPart::Receipt(receipt) if receipt.running),
-                        );
-                        for (part_index, part) in turn.parts.iter().enumerate() {
-                            children.push(match part {
-                                TurnPart::Text(text) => {
-                                    units::text_card(units::part_id(index, part_index), text)
-                                        .into_any_element()
-                                }
-                                TurnPart::Receipt(receipt) => {
-                                    units::bare_receipt(receipt, carried, &self.ui, &mono, cx)
-                                        .into_any_element()
-                                }
-                                TurnPart::Thinking => {
-                                    units::bare_thinking(index, carried.filter(|_| !on_receipt), cx)
-                                        .into_any_element()
-                                }
-                            });
-                        }
-                    }
-                },
-            }
+            });
         }
         if let Some(end) = units::session_end(status) {
-            children.push(units::notice(&end).into_any_element());
+            children.push(notice(&end));
         }
         children
             .extend(units::task_lines(&self.transcript.tasks).map(IntoElement::into_any_element));
@@ -280,6 +278,32 @@ impl AgentNextView {
             self.scroll.scroll_to_bottom();
         }
     }
+}
+
+/// How many lines the turn at `index` hides when folded, or `None` when it
+/// is drawn whole: only a finished turn before the last message sent into
+/// the session, other than the last turn, whose text estimates to more
+/// than [`FOLD_LINES`] rendered lines, folds.
+fn folded_lines(units: &[Unit], index: usize) -> Option<usize> {
+    let Some(Unit::Turn(turn)) = units.get(index) else {
+        return None;
+    };
+    let last_user = units
+        .iter()
+        .rposition(|unit| matches!(unit, Unit::User(_)))?;
+    let last_turn = units.iter().rposition(|unit| matches!(unit, Unit::Turn(_)));
+    if index > last_user || Some(index) == last_turn || turn.state == TurnState::Running {
+        return None;
+    }
+    let lines: usize = turn
+        .parts
+        .iter()
+        .map(|part| match part {
+            TurnPart::Text(text) => rendered_lines(text, MEASURE_CELLS),
+            _ => 0,
+        })
+        .sum();
+    (lines > FOLD_LINES).then(|| lines - FOLD_VISIBLE_LINES)
 }
 
 fn placeholder(status: Status) -> &'static str {

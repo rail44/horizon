@@ -1,5 +1,5 @@
 //! The pane's named previews: one sample transcript drawn in each of the
-//! three layouts, once with a turn running and an approval pending at its
+//! four layouts, once with a turn running and an approval pending at its
 //! tail and once with the session idle. What differs between two previews
 //! of the same state is the layout, not the data.
 
@@ -11,12 +11,14 @@ use super::display::{
 };
 use super::{AgentNextView, Layout};
 
-pub(crate) const TURN_CARDS: &str = "agent-4";
-pub(crate) const PER_ITEM: &str = "agent-5";
 pub(crate) const FOOTNOTE: &str = "agent-6";
-pub(crate) const TURN_CARDS_IDLE: &str = "agent-4-idle";
-pub(crate) const PER_ITEM_IDLE: &str = "agent-5-idle";
+pub(crate) const BORDERLESS: &str = "agent-7";
+pub(crate) const RECEIPT_FIRST: &str = "agent-8";
+pub(crate) const FOLD_OLDER: &str = "agent-9";
 pub(crate) const FOOTNOTE_IDLE: &str = "agent-6-idle";
+pub(crate) const BORDERLESS_IDLE: &str = "agent-7-idle";
+pub(crate) const RECEIPT_FIRST_IDLE: &str = "agent-8-idle";
+pub(crate) const FOLD_OLDER_IDLE: &str = "agent-9-idle";
 
 // ---------------------------------------------------------------------------
 // Probes
@@ -48,28 +50,36 @@ fn build(layout: Layout, running: bool, window: &mut Window, cx: &mut App) -> An
         .into()
 }
 
-pub(crate) fn build_turn_cards(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::TurnCards, true, window, cx)
-}
-
-pub(crate) fn build_per_item(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::PerItem, true, window, cx)
-}
-
 pub(crate) fn build_footnote(window: &mut Window, cx: &mut App) -> AnyView {
     build(Layout::Footnote, true, window, cx)
 }
 
-pub(crate) fn build_turn_cards_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::TurnCards, false, window, cx)
+pub(crate) fn build_borderless(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::Borderless, true, window, cx)
 }
 
-pub(crate) fn build_per_item_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::PerItem, false, window, cx)
+pub(crate) fn build_receipt_first(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::ReceiptFirst, true, window, cx)
+}
+
+pub(crate) fn build_fold_older(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::FoldOlder, true, window, cx)
 }
 
 pub(crate) fn build_footnote_idle(window: &mut Window, cx: &mut App) -> AnyView {
     build(Layout::Footnote, false, window, cx)
+}
+
+pub(crate) fn build_borderless_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::Borderless, false, window, cx)
+}
+
+pub(crate) fn build_receipt_first_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::ReceiptFirst, false, window, cx)
+}
+
+pub(crate) fn build_fold_older_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::FoldOlder, false, window, cx)
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +126,7 @@ fn text(text: &str) -> Option<CallBody> {
 }
 
 const INVESTIGATION: &str = "\
-ボードの文字サイズは `src/board/spec.rs` の定数に直書きされていて、シェルのフォント設定を一度も読んでいません。端末側は `src/terminal/font.rs` が現在のサイズを持っていて、設定の再読み込みとサイズを変えるコマンドはそこだけを書き直しています。
+ボードの文字サイズは `src/board/spec.rs` の定数に直書きされていて、アプリのフォント設定を一度も読んでいません。端末側は `src/terminal/font.rs` が現在のサイズを持っていて、設定の再読み込みとサイズを変えるコマンドはそこだけを書き直しています。
 
 なので、端末が持っている現在サイズをアプリ全体で共有する形に寄せるのが素直です。
 
@@ -139,7 +149,13 @@ const FAILURE: &str = "\
 
 - `header_stacks_below_the_title_floor` は、帯のタイトルが折り返すかどうかを固定の 14px で見積もっています
 - 見積もりに使う幅も今回から倍率で動くので、テスト側の想定幅が古いままです
-- 判定そのものは正しく、テストの前提を現在のサイズから計算するように直せば通ります";
+- 判定そのものは正しく、テストの前提を現在のサイズから計算するように直せば通ります
+
+テストの前提を直す手順は次のとおりです。
+
+1. 想定幅を `header_one_row_width` から計算するように書き直す
+2. 基準サイズと 2 倍のサイズの両方で、帯が折り返すかどうかを確かめる
+3. 同じ見積もりを使っている他のテストがないかを検索で確かめる";
 
 fn investigation_turn() -> Turn {
     let reads = [
@@ -362,11 +378,8 @@ mod tests {
         "中断",
         "バックグラウンド · · ·",
         "停止",
-        "あなた",
-        "タスク",
-        "続行",
-        "エージェント",
         "システム",
+        "残り 行",
         "セッションは終了しました",
         "ランタイムに到達できません",
         "考え中・",
@@ -434,8 +447,7 @@ mod tests {
             (LAST_MESSAGE, '警'),
             (APPROVAL_REASON, '換'),
             ("停止", '停'),
-            ("エージェント", 'エ'),
-            ("あなた", 'あ'),
+            ("残り 行", '残'),
         ] {
             assert_eq!(probe.matches(marker).count(), 1, "{probe}");
             let owners: Vec<&String> = all.iter().filter(|s| s.contains(marker)).collect();
@@ -447,12 +459,30 @@ mod tests {
         }
     }
 
-    /// So a painted `更` can only be a changes chip, which the pane no
-    /// longer draws.
+    /// So a painted `更` can only be a changes chip, and a painted `エ` or
+    /// `あ` an author label, none of which the pane draws.
     #[test]
-    fn nothing_the_pane_paints_contains_the_changes_word() {
+    fn nothing_the_pane_paints_contains_a_retired_word() {
         let all = strings(&sample(true));
-        assert!(!all.iter().any(|s| s.contains('更')), "{all:?}");
+        for marker in ['更', 'エ', 'あ'] {
+            assert!(!all.iter().any(|s| s.contains(marker)), "{marker}: {all:?}");
+        }
+    }
+
+    /// So a painted `シ` can only be the notice label: the other two are
+    /// drawn only for a session that has ended, which the sample is not.
+    #[test]
+    fn only_the_notice_label_and_an_ended_session_paint_its_first_character() {
+        let all = strings(&sample(true));
+        let owners: Vec<&String> = all.iter().filter(|s| s.contains('シ')).collect();
+        assert_eq!(
+            owners,
+            vec![
+                "システム",
+                "セッションは終了しました",
+                "このセッションは終了しています"
+            ]
+        );
     }
 
     /// So a painted `承` can only be the pending approval.
@@ -497,5 +527,16 @@ mod tests {
             .collect();
         let unique: std::collections::HashSet<_> = keys.iter().collect();
         assert_eq!(unique.len(), keys.len());
+    }
+
+    #[test]
+    fn the_first_answer_folds_in_both_states_and_the_second_only_while_running() {
+        let folded = |transcript: Transcript| -> Vec<usize> {
+            (0..transcript.units.len())
+                .filter(|index| super::super::folded_lines(&transcript.units, *index).is_some())
+                .collect()
+        };
+        assert_eq!(folded(sample(true)), vec![1, 3]);
+        assert_eq!(folded(sample(false)), vec![1]);
     }
 }
