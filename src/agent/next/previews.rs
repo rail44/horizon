@@ -1,5 +1,5 @@
 //! The pane's named previews: one sample transcript drawn in each of the
-//! four layouts, once with a turn running and an approval pending at its
+//! layouts, once with a turn running and an approval pending at its
 //! tail and once with the session idle. What differs between two previews
 //! of the same state is the layout, not the data.
 
@@ -11,14 +11,14 @@ use super::display::{
 };
 use super::{AgentNextView, Layout};
 
-pub(crate) const FOOTNOTE: &str = "agent-6";
-pub(crate) const BORDERLESS: &str = "agent-7";
 pub(crate) const RECEIPT_FIRST: &str = "agent-8";
-pub(crate) const FOLD_OLDER: &str = "agent-9";
-pub(crate) const FOOTNOTE_IDLE: &str = "agent-6-idle";
-pub(crate) const BORDERLESS_IDLE: &str = "agent-7-idle";
+pub(crate) const HEADER_STRIP: &str = "agent-10";
+pub(crate) const FLUSH: &str = "agent-11";
+pub(crate) const CALLS_LISTED: &str = "agent-12";
 pub(crate) const RECEIPT_FIRST_IDLE: &str = "agent-8-idle";
-pub(crate) const FOLD_OLDER_IDLE: &str = "agent-9-idle";
+pub(crate) const HEADER_STRIP_IDLE: &str = "agent-10-idle";
+pub(crate) const FLUSH_IDLE: &str = "agent-11-idle";
+pub(crate) const CALLS_LISTED_IDLE: &str = "agent-12-idle";
 
 // ---------------------------------------------------------------------------
 // Probes
@@ -41,6 +41,19 @@ pub(crate) const LAST_MESSAGE: &str = "clippy の警告も直してください"
 /// occurs nowhere else.
 pub(crate) const APPROVAL_REASON: &str = "リポジトリの外のファイルを書き換えます";
 
+/// The verb of the first answer's read calls. Its `読` occurs once in each
+/// of the [`READ_CALLS`] titles and [`READ_ELSEWHERE`] times in everything
+/// else the pane paints.
+pub(crate) const READ_VERB: &str = "読み取り";
+
+/// How many of the first answer's calls are reads.
+pub(crate) const READ_CALLS: usize = 6;
+
+/// How many times `読` occurs outside the read calls' titles: twice in the
+/// first answer's text and once in its receipt summary.
+#[cfg(test)]
+pub(crate) const READ_ELSEWHERE: usize = 3;
+
 // ---------------------------------------------------------------------------
 // The previews
 // ---------------------------------------------------------------------------
@@ -50,36 +63,36 @@ fn build(layout: Layout, running: bool, window: &mut Window, cx: &mut App) -> An
         .into()
 }
 
-pub(crate) fn build_footnote(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::Footnote, true, window, cx)
-}
-
-pub(crate) fn build_borderless(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::Borderless, true, window, cx)
-}
-
 pub(crate) fn build_receipt_first(window: &mut Window, cx: &mut App) -> AnyView {
     build(Layout::ReceiptFirst, true, window, cx)
 }
 
-pub(crate) fn build_fold_older(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::FoldOlder, true, window, cx)
+pub(crate) fn build_header_strip(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::HeaderStrip, true, window, cx)
 }
 
-pub(crate) fn build_footnote_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::Footnote, false, window, cx)
+pub(crate) fn build_flush(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::Flush, true, window, cx)
 }
 
-pub(crate) fn build_borderless_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::Borderless, false, window, cx)
+pub(crate) fn build_calls_listed(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::CallsListed, true, window, cx)
 }
 
 pub(crate) fn build_receipt_first_idle(window: &mut Window, cx: &mut App) -> AnyView {
     build(Layout::ReceiptFirst, false, window, cx)
 }
 
-pub(crate) fn build_fold_older_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::FoldOlder, false, window, cx)
+pub(crate) fn build_header_strip_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::HeaderStrip, false, window, cx)
+}
+
+pub(crate) fn build_flush_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::Flush, false, window, cx)
+}
+
+pub(crate) fn build_calls_listed_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::CallsListed, false, window, cx)
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +171,7 @@ const FAILURE: &str = "\
 3. 同じ見積もりを使っている他のテストがないかを検索で確かめる";
 
 fn investigation_turn() -> Turn {
-    let reads = [
+    let reads: [&str; READ_CALLS] = [
         "src/board/spec.rs",
         "src/board/thread.rs",
         "src/board/list.rs",
@@ -168,7 +181,7 @@ fn investigation_turn() -> Turn {
     ];
     let mut calls: Vec<Call> = reads
         .iter()
-        .map(|path| call(&format!("読み取り {path}"), CallStatus::Done, None))
+        .map(|path| call(&format!("{READ_VERB} {path}"), CallStatus::Done, None))
         .collect();
     calls.push(call(
         "検索 font_size",
@@ -379,7 +392,6 @@ mod tests {
         "バックグラウンド · · ·",
         "停止",
         "システム",
-        "残り 行",
         "セッションは終了しました",
         "ランタイムに到達できません",
         "考え中・",
@@ -447,7 +459,6 @@ mod tests {
             (LAST_MESSAGE, '警'),
             (APPROVAL_REASON, '換'),
             ("停止", '停'),
-            ("残り 行", '残'),
         ] {
             assert_eq!(probe.matches(marker).count(), 1, "{probe}");
             let owners: Vec<&String> = all.iter().filter(|s| s.contains(marker)).collect();
@@ -459,12 +470,13 @@ mod tests {
         }
     }
 
-    /// So a painted `更` can only be a changes chip, and a painted `エ` or
-    /// `あ` an author label, none of which the pane draws.
+    /// So a painted `更` can only be a changes chip, a painted `エ` or `あ`
+    /// an author label, and a painted `残` a fold marker, none of which the
+    /// pane draws.
     #[test]
     fn nothing_the_pane_paints_contains_a_retired_word() {
         let all = strings(&sample(true));
-        for marker in ['更', 'エ', 'あ'] {
+        for marker in ['更', 'エ', 'あ', '残'] {
             assert!(!all.iter().any(|s| s.contains(marker)), "{marker}: {all:?}");
         }
     }
@@ -529,14 +541,15 @@ mod tests {
         assert_eq!(unique.len(), keys.len());
     }
 
+    /// So a count of `読` above [`READ_ELSEWHERE`] can only be the first
+    /// answer's call rows.
     #[test]
-    fn the_first_answer_folds_in_both_states_and_the_second_only_while_running() {
-        let folded = |transcript: Transcript| -> Vec<usize> {
-            (0..transcript.units.len())
-                .filter(|index| super::super::folded_lines(&transcript.units, *index).is_some())
-                .collect()
-        };
-        assert_eq!(folded(sample(true)), vec![1, 3]);
-        assert_eq!(folded(sample(false)), vec![1]);
+    fn the_read_verb_occurs_a_known_number_of_times_outside_the_read_calls() {
+        let all = strings(&sample(true));
+        let total: usize = all.iter().map(|s| s.matches('読').count()).sum();
+        let titles = all.iter().filter(|s| s.starts_with(READ_VERB)).count();
+        assert_eq!(READ_VERB.matches('読').count(), 1);
+        assert_eq!(titles, READ_CALLS);
+        assert_eq!(total - titles, READ_ELSEWHERE, "{all:?}");
     }
 }

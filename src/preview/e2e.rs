@@ -964,22 +964,22 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
     let agent_marker = 'エ';
     let you_marker = 'あ';
     let changes_marker = '更';
-    let system_marker = 'シ';
     let fold_marker = '残';
+    let read_marker = '読';
 
-    // (preview, running, whether notices are cards under 「システム」,
-    // whether earlier turns fold).
+    // (preview, running, whether the first answer's calls are listed while
+    // its receipt line is closed).
     let cases = [
-        (agent::FOOTNOTE, true, true, false),
-        (agent::BORDERLESS, true, false, false),
-        (agent::RECEIPT_FIRST, true, true, false),
-        (agent::FOLD_OLDER, true, true, true),
-        (agent::FOOTNOTE_IDLE, false, true, false),
-        (agent::BORDERLESS_IDLE, false, false, false),
-        (agent::RECEIPT_FIRST_IDLE, false, true, false),
-        (agent::FOLD_OLDER_IDLE, false, true, true),
+        (agent::RECEIPT_FIRST, true, false),
+        (agent::HEADER_STRIP, true, false),
+        (agent::FLUSH, true, false),
+        (agent::CALLS_LISTED, true, true),
+        (agent::RECEIPT_FIRST_IDLE, false, false),
+        (agent::HEADER_STRIP_IDLE, false, false),
+        (agent::FLUSH_IDLE, false, false),
+        (agent::CALLS_LISTED_IDLE, false, true),
     ];
-    for (name, running, system_card, folds) in cases {
+    for (name, running, calls_listed) in cases {
         let loaded = load(&live, name, cx).expect("the agent preview instantiates");
         let surface = cx.new(Surface::new);
         if running {
@@ -1015,6 +1015,11 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             0,
             "{name}: an owner label is painted: {painted_now:?}"
         );
+        assert_eq!(
+            count_of(&painted_now, fold_marker),
+            0,
+            "{name}: a folded turn is painted: {painted_now:?}"
+        );
         if running {
             assert!(
                 painted(&painted_now, "停止"),
@@ -1049,41 +1054,34 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
         // is painted no longer depends on where the slot cuts it.
         redraw_at(&surface, AGENT_TALL_SLOT, running, cx);
         let painted_whole = glyph_counts(&summary(&surface, cx));
-        if system_card {
-            assert!(
-                painted(&painted_whole, "システム"),
-                "{name}: no notice card is painted: {painted_whole:?}"
-            );
-        } else {
-            assert_eq!(
-                count_of(&painted_whole, system_marker),
-                0,
-                "{name}: a notice card is painted: {painted_whole:?}"
-            );
-        }
-        if folds {
-            // The first answer folds in both states; the second only while
-            // a later turn runs.
-            assert_eq!(
-                count_of(&painted_whole, fold_marker),
-                if running { 2 } else { 1 },
-                "{name}: the wrong turns are folded: {painted_whole:?}"
-            );
-        } else {
-            assert_eq!(
-                count_of(&painted_whole, fold_marker),
-                0,
-                "{name}: a folded turn is painted: {painted_whole:?}"
-            );
-        }
-        if name == agent::RECEIPT_FIRST || name == agent::RECEIPT_FIRST_IDLE {
-            // The display list carries no order, so this holds the receipt
-            // line's presence, not its place above the answer.
-            assert!(
-                painted(&painted_whole, "ファイル 3件を編集 · コマンド 2件を実行"),
-                "{name}: no receipt line is painted: {painted_whole:?}"
-            );
-        }
+        assert!(
+            painted(&painted_whole, "システム"),
+            "{name}: no notice card is painted: {painted_whole:?}"
+        );
+        assert_eq!(
+            count_of(&painted_whole, fold_marker),
+            0,
+            "{name}: a folded turn is painted: {painted_whole:?}"
+        );
+        // The display list carries no order or position, so this holds the
+        // receipt lines' presence only: neither agent-10's strip nor
+        // agent-11's flush user blocks are asserted.
+        assert!(
+            painted(&painted_whole, "ファイル 6件を読み取り · 検索 2件"),
+            "{name}: the first answer's receipt line is not painted: {painted_whole:?}"
+        );
+        assert!(
+            painted(&painted_whole, "ファイル 3件を編集 · コマンド 2件を実行"),
+            "{name}: the second answer's receipt line is not painted: {painted_whole:?}"
+        );
+        // `読` is painted a fixed number of times outside the first answer's
+        // read calls, and once more per read call row on screen.
+        let listed_rows = if calls_listed { agent::READ_CALLS } else { 0 };
+        assert_eq!(
+            count_of(&painted_whole, read_marker),
+            agent::READ_ELSEWHERE + listed_rows,
+            "{name}: the first answer's read calls are not listed as expected: {painted_whole:?}"
+        );
         cx.update(|_| drop(loaded));
         settle(cx);
     }

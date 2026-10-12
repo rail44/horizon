@@ -44,22 +44,6 @@ const PREVIEWS: &[Preview] = &[
         build: board::build_thread_long,
     },
     Preview {
-        name: agent::FOOTNOTE,
-        build: agent::build_footnote,
-    },
-    Preview {
-        name: agent::FOOTNOTE_IDLE,
-        build: agent::build_footnote_idle,
-    },
-    Preview {
-        name: agent::BORDERLESS,
-        build: agent::build_borderless,
-    },
-    Preview {
-        name: agent::BORDERLESS_IDLE,
-        build: agent::build_borderless_idle,
-    },
-    Preview {
         name: agent::RECEIPT_FIRST,
         build: agent::build_receipt_first,
     },
@@ -68,12 +52,28 @@ const PREVIEWS: &[Preview] = &[
         build: agent::build_receipt_first_idle,
     },
     Preview {
-        name: agent::FOLD_OLDER,
-        build: agent::build_fold_older,
+        name: agent::HEADER_STRIP,
+        build: agent::build_header_strip,
     },
     Preview {
-        name: agent::FOLD_OLDER_IDLE,
-        build: agent::build_fold_older_idle,
+        name: agent::HEADER_STRIP_IDLE,
+        build: agent::build_header_strip_idle,
+    },
+    Preview {
+        name: agent::FLUSH,
+        build: agent::build_flush,
+    },
+    Preview {
+        name: agent::FLUSH_IDLE,
+        build: agent::build_flush_idle,
+    },
+    Preview {
+        name: agent::CALLS_LISTED,
+        build: agent::build_calls_listed,
+    },
+    Preview {
+        name: agent::CALLS_LISTED_IDLE,
+        build: agent::build_calls_listed_idle,
     },
     Preview {
         name: animation::NAME,

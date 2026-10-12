@@ -27,13 +27,3 @@ pub(crate) const COMPOSER_MAX_ROWS: usize = 8;
 
 /// One cycle of the thinking dots.
 pub(crate) const THINKING_CYCLE_MS: u64 = 1200;
-
-/// An earlier turn whose text estimates to more than this many rendered
-/// lines is drawn folded.
-pub(crate) const FOLD_LINES: usize = 12;
-
-/// How many lines of a folded turn's text stay visible.
-pub(crate) const FOLD_VISIBLE_LINES: usize = 3;
-
-/// The column width, in cells, a turn's text is estimated at.
-pub(crate) const MEASURE_CELLS: usize = 72;

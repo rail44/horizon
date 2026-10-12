@@ -16,10 +16,10 @@ use super::display::{
     Call, CallBody, CallStatus, DiffKind, Label, Message, Notice, Receipt, Status, Task, Tone,
     Turn, TurnPart, TurnState,
 };
-use super::spec::{button_height, user_indent, FOLD_VISIBLE_LINES, THINKING_CYCLE_MS};
+use super::spec::{button_height, user_indent, THINKING_CYCLE_MS};
 use super::{AgentNextEvent, AgentNextView, Layout, UiState};
 use crate::theme;
-use crate::ui::parts::{chip, escape_markdown, fade, key_chip, markdown_body};
+use crate::ui::parts::{chip, escape_markdown, key_chip, markdown_body};
 use crate::ui::spec::*;
 
 // ---------------------------------------------------------------------------
@@ -162,8 +162,9 @@ pub(super) fn session_end(status: Status) -> Option<Notice> {
 // The conversation's units
 // ---------------------------------------------------------------------------
 
-/// A message sent into the session: the board's owner reply.
-pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
+/// A message sent into the session: the board's owner reply, indented
+/// when `indented`.
+pub(super) fn user(index: usize, message: &Message, indented: bool) -> impl IntoElement {
     let color = match message.label {
         Label::You => theme::text_primary(),
         Label::Task | Label::Continue => theme::text_muted(),
@@ -171,7 +172,7 @@ pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
     v_flex()
         .w_full()
         .flex_none()
-        .ml(user_indent())
+        .when(indented, |block| block.ml(user_indent()))
         .px(pad_x())
         .py(pad_y())
         .rounded(RADIUS)
@@ -188,11 +189,14 @@ pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
 
 /// The bordered frame a turn and a notice sit in.
 fn card() -> Div {
+    frame().px(pad_x()).py(pad_y())
+}
+
+/// [`card`] without its padding.
+fn frame() -> Div {
     v_flex()
         .w_full()
         .flex_none()
-        .px(pad_x())
-        .py(pad_y())
         .border_1()
         .border_color(theme::border())
         .rounded(RADIUS)
@@ -235,14 +239,6 @@ pub(super) fn notice(notice: &Notice) -> impl IntoElement {
     )
 }
 
-/// A line from the system as a bare line in its tone.
-pub(super) fn notice_line(notice: &Notice) -> impl IntoElement {
-    text_at(meta(), tone(notice.tone), notice.text.clone())
-        .w_full()
-        .flex_none()
-        .px(pad_x())
-}
-
 /// 「考え中」 and three dots whose opacity cycles.
 pub(super) fn thinking(id: usize) -> Div {
     let micro = micro();
@@ -264,47 +260,27 @@ pub(super) fn thinking(id: usize) -> Div {
         }))
 }
 
-/// One whole turn without an author label: its text, all of its receipts
-/// merged into one line, and its thinking state. While the turn runs it
-/// carries 「停止」; otherwise the receipt line ends with the turn's elapsed
-/// time and model. `layout` decides whether the turn is framed, where the
-/// receipt line goes and where 「停止」 sits; `fold`, the number of lines a
-/// folded turn hides, clips its text.
-#[allow(clippy::too_many_arguments)]
+/// One whole turn without an author label: its receipts merged into one
+/// line, its text, and its thinking state. While the turn runs it carries
+/// the session's state and 「停止」; otherwise the receipt line ends with
+/// the turn's elapsed time and model. `layout` decides where the receipt
+/// line sits and whether its calls fold.
 pub(super) fn turn(
     index: usize,
     turn: &Turn,
     status: Status,
     layout: Layout,
-    fold: Option<usize>,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
-) -> impl IntoElement {
-    let framed = layout != Layout::Borderless;
+) -> AnyElement {
+    if layout == Layout::HeaderStrip {
+        return strip_turn(index, turn, status, ui, mono, cx).into_any_element();
+    }
     let carried = carried(turn, status);
-    let receipts: Vec<&Receipt> = turn
-        .parts
-        .iter()
-        .filter_map(|part| match part {
-            TurnPart::Receipt(receipt) => Some(receipt),
-            _ => None,
-        })
-        .collect();
-    let end = if !framed && carried.is_some() {
-        Some(stop_button("agent-next-card-stop", cx).into_any_element())
-    } else {
-        (turn.state != TurnState::Running).then(|| {
-            h_flex()
-                .flex_none()
-                .items_baseline()
-                .gap(gap_tight())
-                .children(turn_chip(turn.state))
-                .children(done_meta(turn))
-                .into_any_element()
-        })
-    };
-    let mut receipt_line = if receipts.is_empty() {
+    let receipts = receipts(turn);
+    let end = (turn.state != TurnState::Running).then(|| finished_end(turn).into_any_element());
+    let receipt_line = if receipts.is_empty() {
         end.map(|end| {
             h_flex()
                 .w_full()
@@ -313,25 +289,22 @@ pub(super) fn turn(
                 .into_any_element()
         })
     } else {
-        Some(receipt_block(ReceiptLine::merged(&receipts), end, ui, mono, cx).into_any_element())
+        let collapsible = layout != Layout::CallsListed;
+        Some(
+            receipt_block(
+                ReceiptLine::merged(&receipts),
+                end,
+                collapsible,
+                ui,
+                mono,
+                cx,
+            )
+            .into_any_element(),
+        )
     };
-    let texts: Vec<AnyElement> = turn
-        .parts
-        .iter()
-        .enumerate()
-        .filter_map(|(part_index, part)| match part {
-            TurnPart::Text(text) => Some(
-                div()
-                    .w_full()
-                    .child(text_body(part_id(index, part_index), text))
-                    .into_any_element(),
-            ),
-            _ => None,
-        })
-        .collect();
 
     let mut parts: Vec<AnyElement> = Vec::new();
-    if let Some(status) = carried.filter(|_| framed) {
+    if let Some(status) = carried {
         parts.push(
             h_flex()
                 .w_full()
@@ -341,49 +314,140 @@ pub(super) fn turn(
                 .into_any_element(),
         );
     }
-    let receipt_first = layout == Layout::ReceiptFirst;
-    if receipt_first {
-        parts.extend(receipt_line.take());
-    }
-    match fold {
-        Some(hidden) => {
-            parts.push(
-                div()
-                    .w_full()
-                    .relative()
-                    .max_h(body().line_height * FOLD_VISIBLE_LINES as f32)
-                    .overflow_hidden()
-                    .child(v_flex().w_full().gap(gap_tight()).children(texts))
-                    .child(fade())
-                    .into_any_element(),
-            );
-            parts.push(
-                text_at(meta(), theme::accent(), format!("残り {hidden} 行"))
-                    .id(("agent-next-fold", index))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |view, _, _, cx| view.toggle_turn(index, cx)))
-                    .into_any_element(),
-            );
-        }
-        None => parts.extend(texts),
-    }
     parts.extend(receipt_line);
+    parts.extend(texts(index, turn));
     if turn.parts.contains(&TurnPart::Thinking) {
         parts.push(thinking(index).into_any_element());
     }
-    let frame = if framed {
-        card()
-    } else {
-        v_flex().w_full().flex_none().px(pad_x()).py(pad_y())
-    };
-    with_accent_bar(frame, turn.state == TurnState::Running).children(
-        parts.into_iter().enumerate().map(|(position, part)| {
-            div()
-                .w_full()
-                .when(position > 0, |part| part.mt(gap_tight()))
-                .child(part)
-        }),
+    with_accent_bar(card(), turn.state == TurnState::Running)
+        .children(spaced(parts))
+        .into_any_element()
+}
+
+/// [`turn`] with the receipt line as a tinted strip across the card's
+/// top: the state chip, the merged summary, and 「停止」 or the turn's
+/// elapsed time and model. A click on the strip opens the calls at the top
+/// of the body.
+fn strip_turn(
+    index: usize,
+    turn: &Turn,
+    status: Status,
+    ui: &UiState,
+    mono: &SharedString,
+    cx: &mut Context<AgentNextView>,
+) -> impl IntoElement {
+    let carried = carried(turn, status);
+    let receipts = receipts(turn);
+    let line = (!receipts.is_empty()).then(|| ReceiptLine::merged(&receipts));
+    let end = (turn.state != TurnState::Running)
+        .then(|| (turn_chip(turn.state), done_meta(turn)))
+        .filter(|(chip, meta)| chip.is_some() || meta.is_some());
+
+    let strip = (line.is_some() || carried.is_some() || end.is_some()).then(|| {
+        let key = line.as_ref().map(|line| line.key);
+        h_flex()
+            .id(("agent-next-strip", index))
+            .w_full()
+            .items_center()
+            .gap(gap_tight())
+            .px(pad_x())
+            .py(gap_tight())
+            .bg(theme::tint_over_background(
+                theme::text_primary(),
+                BAND_TINT,
+            ))
+            .border_b_1()
+            .border_color(theme::border())
+            .rounded_t(RADIUS)
+            .children(carried.map(session_state_chip))
+            .when_some(line.as_ref(), |row, line| {
+                row.child(text_at(meta(), theme::text_muted(), line.summary.clone()).min_w_0())
+                    .when(line.failed > 0, |row| {
+                        row.child(chip(format!("失敗 {}件", line.failed), theme::danger()))
+                    })
+                    .when(line.running, |row| {
+                        row.child(chip("実行中", theme::accent()))
+                    })
+            })
+            .child(div().flex_1().min_w_0())
+            .when(carried.is_some(), |row| {
+                row.child(stop_button("agent-next-card-stop", cx))
+            })
+            .when_some(end, |row, (chip, meta)| row.children(chip).children(meta))
+            .when_some(key, |row, key| {
+                row.cursor_pointer()
+                    .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx)))
+            })
+    });
+
+    let mut parts: Vec<AnyElement> = Vec::new();
+    if let Some(line) = line.filter(|line| line.running || ui.expanded_receipts.contains(&line.key))
+    {
+        parts.push(call_list(&line, ui, mono, cx).into_any_element());
+    }
+    parts.extend(texts(index, turn));
+    if turn.parts.contains(&TurnPart::Thinking) {
+        parts.push(thinking(index).into_any_element());
+    }
+    let body = (!parts.is_empty()).then(|| {
+        v_flex()
+            .w_full()
+            .px(pad_x())
+            .py(pad_y())
+            .children(spaced(parts))
+    });
+    with_accent_bar(
+        frame().children(strip).children(body),
+        turn.state == TurnState::Running,
     )
+}
+
+/// Every receipt of `turn`, in order.
+fn receipts(turn: &Turn) -> Vec<&Receipt> {
+    turn.parts
+        .iter()
+        .filter_map(|part| match part {
+            TurnPart::Receipt(receipt) => Some(receipt),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A finished turn's chip and 「{elapsed} · {model}」, for the receipt
+/// line's right end.
+fn finished_end(turn: &Turn) -> impl IntoElement {
+    h_flex()
+        .flex_none()
+        .items_baseline()
+        .gap(gap_tight())
+        .children(turn_chip(turn.state))
+        .children(done_meta(turn))
+}
+
+/// Each piece of `turn`'s text, in order.
+fn texts(index: usize, turn: &Turn) -> impl Iterator<Item = AnyElement> + '_ {
+    turn.parts
+        .iter()
+        .enumerate()
+        .filter_map(move |(part_index, part)| match part {
+            TurnPart::Text(text) => Some(
+                div()
+                    .w_full()
+                    .child(text_body(part_id(index, part_index), text))
+                    .into_any_element(),
+            ),
+            _ => None,
+        })
+}
+
+/// `parts` stacked with the tight gap between them.
+fn spaced(parts: Vec<AnyElement>) -> impl Iterator<Item = Div> {
+    parts.into_iter().enumerate().map(|(position, part)| {
+        div()
+            .w_full()
+            .when(position > 0, |part| part.mt(gap_tight()))
+            .child(part)
+    })
 }
 
 /// The element id of one piece of a turn's text.
@@ -440,15 +504,17 @@ impl<'a> ReceiptLine<'a> {
 }
 
 /// An activity line and, when expanded, its calls. `end` sits at the
-/// line's right end.
+/// line's right end. When `collapsible`, a click on the line opens and
+/// closes its calls; otherwise they are always listed.
 fn receipt_block(
     line: ReceiptLine<'_>,
     end: Option<AnyElement>,
+    collapsible: bool,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
 ) -> impl IntoElement {
-    let expanded = line.running || ui.expanded_receipts.contains(&line.key);
+    let expanded = !collapsible || line.running || ui.expanded_receipts.contains(&line.key);
     let key = line.key;
     let has_end = end.is_some();
     v_flex()
@@ -459,7 +525,6 @@ fn receipt_block(
                 .id(("agent-next-receipt", key))
                 .w_full()
                 .gap(gap_tight())
-                .cursor_pointer()
                 .map(|row| {
                     if has_end {
                         row.items_center()
@@ -467,7 +532,7 @@ fn receipt_block(
                         row.items_baseline()
                     }
                 })
-                .child(text_at(meta(), theme::text_muted(), line.summary).min_w_0())
+                .child(text_at(meta(), theme::text_muted(), line.summary.clone()).min_w_0())
                 .when(line.failed > 0, |row| {
                     row.child(chip(format!("失敗 {}件", line.failed), theme::danger()))
                 })
@@ -477,24 +542,36 @@ fn receipt_block(
                 .when_some(end, |row, end| {
                     row.child(div().flex_1().min_w_0()).child(end)
                 })
-                .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx))),
+                .when(collapsible, |row| {
+                    row.cursor_pointer()
+                        .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx)))
+                }),
         )
         .when(expanded, |block| {
-            block.child(
-                v_flex()
-                    .w_full()
-                    .mt(gap_label())
-                    .border_1()
-                    .border_color(theme::border())
-                    .rounded(RADIUS)
-                    .px(pad_x())
-                    .py(gap_tight())
-                    .gap(gap_label())
-                    .children(line.calls.iter().map(|(receipt, index, call)| {
-                        call_row(*receipt, *index, call, ui, mono, cx)
-                    })),
-            )
+            block.child(call_list(&line, ui, mono, cx).mt(gap_label()))
         })
+}
+
+/// The bordered list of a receipt line's calls.
+fn call_list(
+    line: &ReceiptLine<'_>,
+    ui: &UiState,
+    mono: &SharedString,
+    cx: &mut Context<AgentNextView>,
+) -> Div {
+    v_flex()
+        .w_full()
+        .border_1()
+        .border_color(theme::border())
+        .rounded(RADIUS)
+        .px(pad_x())
+        .py(gap_tight())
+        .gap(gap_label())
+        .children(
+            line.calls
+                .iter()
+                .map(|(receipt, index, call)| call_row(*receipt, *index, call, ui, mono, cx)),
+        )
 }
 
 fn call_row(
