@@ -959,6 +959,8 @@ fn without_whitespace(counts: BTreeMap<char, i64>) -> BTreeMap<char, i64> {
 #[gpui::test]
 #[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
 async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
+    use crate::agent::next::chrome::Chrome;
+
     let built = built_artifact();
     let live = live_artifact("agent");
     std::fs::copy(&built, &live).expect("stage the built artifact");
@@ -976,26 +978,38 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
     let fold_marker = '残';
     let read_marker = '読';
 
-    // The receipt lines every layout paints for the two finished turns.
+    // The receipt lines the Japanese layouts paint for the two finished
+    // turns, and the English ones.
     let summaries = [
         "ファイル 6件を読み取り · 検索 2件",
         "ファイル 3件を編集 · コマンド 2件を実行",
+    ];
+    let english_summaries = [
+        "Read 6 files · 2 searches",
+        "Edited 3 files · Ran 2 commands",
     ];
 
     // Each baseline comes before the variations of the same state, which
     // are checked against what it painted.
     let cases = [
         (agent::BASELINE, true),
-        (agent::ACCENT_USER, true),
-        (agent::DOTS_ONLY_THINKING, true),
-        (agent::ONE_ROW_COMPOSER, true),
+        (agent::ENGLISH_CHROME, true),
+        (agent::TURN_TIME, true),
+        (agent::FOLDED_THOUGHT, true),
         (agent::BASELINE_IDLE, false),
-        (agent::ACCENT_USER_IDLE, false),
-        (agent::DOTS_ONLY_THINKING_IDLE, false),
-        (agent::ONE_ROW_COMPOSER_IDLE, false),
+        (agent::ENGLISH_CHROME_IDLE, false),
+        (agent::TURN_TIME_IDLE, false),
+        (agent::FOLDED_THOUGHT_IDLE, false),
     ];
     let mut baseline: Option<BTreeMap<char, usize>> = None;
     for (name, running) in cases {
+        let english = name == agent::ENGLISH_CHROME || name == agent::ENGLISH_CHROME_IDLE;
+        let labels = if english {
+            Chrome::English
+        } else {
+            Chrome::Japanese
+        }
+        .labels();
         let loaded = load(&live, name, cx).expect("the agent preview instantiates");
         let surface = cx.new(Surface::new);
         if running {
@@ -1025,15 +1039,15 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             );
         }
         if running {
-            // This holds 「停止」's presence only: the display list carries
-            // no geometry, so that it sits on the receipt line rather than a
-            // row of its own is not asserted.
+            // This holds the stop word's presence only: the display list
+            // carries no geometry, so that it sits on the receipt line
+            // rather than a row of its own is not asserted.
             assert!(
-                painted(&painted_now, "停止"),
+                painted(&painted_now, labels.stop),
                 "{name}: no stop control is painted: {painted_now:?}"
             );
             assert!(
-                painted(&painted_now, "承認"),
+                painted(&painted_now, labels.approve),
                 "{name}: no approval control is painted: {painted_now:?}"
             );
             assert!(
@@ -1041,6 +1055,9 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
                 "{name}: the pending approval's reason is not painted: {painted_now:?}"
             );
         } else {
+            // The English words are made of letters other text paints too,
+            // so their absence is held by the Japanese markers and the
+            // reason's only.
             for (marker, what) in [
                 (approval_marker, "an approval"),
                 (reason_marker, "an approval's reason"),
@@ -1098,13 +1115,60 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             );
         }
         // `読` is painted a fixed number of times outside the first answer's
-        // read calls, which stay folded.
+        // read calls, which stay folded; the English sample's summary and
+        // verbs hold none.
         assert_eq!(
             count_of(&painted_whole, read_marker),
-            agent::READ_ELSEWHERE,
+            if english {
+                agent::READ_IN_TEXT
+            } else {
+                agent::READ_ELSEWHERE
+            },
             "{name}: the first answer's read calls are not folded: {painted_whole:?}"
         );
-        if name == agent::BASELINE || name == agent::BASELINE_IDLE {
+        if english {
+            // Every character only the Japanese chrome or the Japanese
+            // sample's worded strings hold: 「停止」, 「承認」, 「考え中」,
+            // 「で送信」, 「バックグラウンド」 and the elapsed times.
+            for marker in ['停', '承', '考', '送', 'バ', '秒'] {
+                assert_eq!(
+                    count_of(&painted_whole, marker),
+                    0,
+                    "{name}: `{marker}` from the Japanese chrome is painted: {painted_whole:?}"
+                );
+            }
+            let mut words = vec![
+                labels.send_hint.to_string(),
+                labels.placeholder.to_string(),
+                "Background · cargo build --workspace · 1m 03s · running".to_string(),
+                format!("{} · 48s", english_summaries[0]),
+                format!("{} · 2m 10s", english_summaries[1]),
+                "History compacted: 12 tool outputs (31,204 chars) reclaimed".to_string(),
+            ];
+            if running {
+                words.extend(
+                    [
+                        labels.thinking,
+                        labels.waiting_for_approval,
+                        labels.approval_needed,
+                        labels.deny,
+                        labels.running,
+                        "Ran 1 command",
+                    ]
+                    .map(str::to_string),
+                );
+            } else {
+                words.push("Edit src/ui/font.rs".to_string());
+                words.push("Run cargo nextest run --workspace".to_string());
+                words.push(Chrome::English.more_lines(212));
+            }
+            for word in &words {
+                assert!(
+                    painted(&painted_whole, word),
+                    "{name}: {word:?} is not painted: {painted_whole:?}"
+                );
+            }
+        } else if name == agent::BASELINE || name == agent::BASELINE_IDLE {
             // The display list carries no order or position, so this holds
             // the receipt lines' presence only.
             assert!(
@@ -1117,20 +1181,24 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             );
             baseline = Some(painted_whole);
         } else {
-            // Against agent-28 in the same state: agent-30 running drops the
-            // thinking line's word; agent-29 changes only a color and agent-31
-            // only a height, neither of which the glyph counts carry.
-            let base = baseline.as_ref().expect("agent-28 is checked first");
+            // Against agent-32 in the same state: agent-34 adds each
+            // finished turn's start time and its separator; agent-35 adds
+            // the thought's line, its text closed.
+            let base = baseline.as_ref().expect("agent-32 is checked first");
+            let added = if name == agent::TURN_TIME || name == agent::TURN_TIME_IDLE {
+                agent::turn_time_additions(running)
+            } else {
+                agent::thought_lines(running)
+            };
+            assert!(!added.is_empty(), "{name}: nothing to add");
             let mut expected: BTreeMap<char, i64> = BTreeMap::new();
-            if name == agent::DOTS_ONLY_THINKING {
-                for ch in agent::THINKING_WORD.chars() {
-                    *expected.entry(ch).or_insert(0) -= 1;
-                }
+            for ch in added.iter().flat_map(|line| line.chars()) {
+                *expected.entry(ch).or_insert(0) += 1;
             }
             assert_eq!(
                 without_whitespace(delta(base, &painted_whole)),
-                expected,
-                "{name}: does not differ from agent-28 as designed"
+                without_whitespace(expected),
+                "{name}: does not differ from agent-32 as designed"
             );
         }
         cx.update(|_| drop(loaded));

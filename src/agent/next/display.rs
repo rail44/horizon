@@ -46,6 +46,8 @@ pub(crate) struct Turn {
     pub(crate) state: TurnState,
     pub(crate) parts: Vec<TurnPart>,
     pub(crate) elapsed: Option<String>,
+    /// The clock time the turn started at, already worded: `14:32`.
+    pub(crate) started_at: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -63,6 +65,8 @@ pub(crate) enum TurnPart {
     Text(String),
     Receipt(Receipt),
     Thinking,
+    /// The model's reasoning for the turn, as plain text.
+    Thought(String),
 }
 
 /// A run of tool calls between two pieces of text, summarized on one line.
@@ -78,7 +82,7 @@ pub(crate) struct Receipt {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Call {
-    /// What the call does, worded as a noun: 「読み取り」, 「実行」.
+    /// What the call does, worded as a noun: 「読み取り」, `Run`.
     pub(crate) verb: String,
     /// What it does it to: a path, a command line, a pattern.
     pub(crate) target: String,

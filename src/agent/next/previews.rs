@@ -1,26 +1,28 @@
 //! The pane's named previews: one sample transcript drawn in each of the
 //! layouts, once with a turn running and an approval pending at its
 //! tail and once with the session idle. What differs between two previews
-//! of the same state is the layout, not the data. An idle preview opens
-//! with the last turn's receipt, its first diff and its failed command's
-//! output open.
+//! of the same state is the layout, and under [`Layout::EnglishChrome`] the
+//! sample's worded strings, not the data. An idle preview opens with the
+//! last turn's receipt, its first diff and its failed command's output
+//! open.
 
 use gpui::{AnyView, App, AppContext as _, Window};
 
+use super::chrome::Chrome;
 use super::display::{
     Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Label, Message, Notice,
     Receipt, Status, Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };
 use super::{AgentNextView, Layout, UiState};
 
-pub(crate) const BASELINE: &str = "agent-28";
-pub(crate) const ACCENT_USER: &str = "agent-29";
-pub(crate) const DOTS_ONLY_THINKING: &str = "agent-30";
-pub(crate) const ONE_ROW_COMPOSER: &str = "agent-31";
-pub(crate) const BASELINE_IDLE: &str = "agent-28-idle";
-pub(crate) const ACCENT_USER_IDLE: &str = "agent-29-idle";
-pub(crate) const DOTS_ONLY_THINKING_IDLE: &str = "agent-30-idle";
-pub(crate) const ONE_ROW_COMPOSER_IDLE: &str = "agent-31-idle";
+pub(crate) const BASELINE: &str = "agent-32";
+pub(crate) const ENGLISH_CHROME: &str = "agent-33";
+pub(crate) const TURN_TIME: &str = "agent-34";
+pub(crate) const FOLDED_THOUGHT: &str = "agent-35";
+pub(crate) const BASELINE_IDLE: &str = "agent-32-idle";
+pub(crate) const ENGLISH_CHROME_IDLE: &str = "agent-33-idle";
+pub(crate) const TURN_TIME_IDLE: &str = "agent-34-idle";
+pub(crate) const FOLDED_THOUGHT_IDLE: &str = "agent-35-idle";
 
 // ---------------------------------------------------------------------------
 // Probes
@@ -51,10 +53,15 @@ pub(crate) const READ_VERB: &str = "読み取り";
 /// How many of the first answer's calls are reads.
 pub(crate) const READ_CALLS: usize = 6;
 
-/// How many times `読` occurs outside the read calls' titles: twice in the
-/// first answer's text and once in its receipt summary.
+/// How many times `読` occurs in the conversation's own text: twice in the
+/// first answer's text. That is every `読` the English sample has.
 #[cfg(test)]
-pub(crate) const READ_ELSEWHERE: usize = 3;
+pub(crate) const READ_IN_TEXT: usize = 2;
+
+/// How many times `読` occurs outside the read calls' titles: in the first
+/// answer's text and once in its receipt summary.
+#[cfg(test)]
+pub(crate) const READ_ELSEWHERE: usize = READ_IN_TEXT + 1;
 
 /// A character only the diff an idle preview opens contains, and how many
 /// times: once in its removed line and four times in the lines around it.
@@ -71,23 +78,53 @@ pub(crate) const OPENED_OUTPUT_MARKER: char = '9';
 #[cfg(test)]
 pub(crate) const OPENED_OUTPUT_MARKERS: usize = 2;
 
-/// The word the thinking line carries, which [`Layout::DotsOnlyThinking`]
-/// drops.
-#[cfg(test)]
-pub(crate) const THINKING_WORD: &str = "考え中";
-
 /// How many added and removed lines the diff an idle preview opens has.
 #[cfg(test)]
 pub(crate) const OPENED_DIFF_ADDED: usize = 2;
 #[cfg(test)]
 pub(crate) const OPENED_DIFF_REMOVED: usize = 1;
 
+/// What [`Layout::TurnTime`] adds to the sample's receipt lines: each
+/// finished turn's start time and the separator before its elapsed time.
+#[cfg(test)]
+pub(crate) fn turn_time_additions(running: bool) -> Vec<String> {
+    turns(&sample(running))
+        .filter(|turn| turn.state == TurnState::Done)
+        .filter_map(|turn| turn.started_at.as_ref())
+        .map(|started_at| format!("{started_at} ·"))
+        .collect()
+}
+
+/// What [`Layout::FoldedThought`] adds to the sample, its thoughts closed:
+/// each thought's line.
+#[cfg(test)]
+pub(crate) fn thought_lines(running: bool) -> Vec<String> {
+    turns(&sample(running))
+        .flat_map(|turn| &turn.parts)
+        .filter_map(|part| match part {
+            TurnPart::Thought(text) => Some(Chrome::Japanese.thought(text.chars().count())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn turns(transcript: &Transcript) -> impl Iterator<Item = &Turn> {
+    transcript.units.iter().filter_map(|unit| match unit {
+        Unit::Turn(turn) => Some(turn),
+        _ => None,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // The previews
 // ---------------------------------------------------------------------------
 
 fn build(layout: Layout, running: bool, window: &mut Window, cx: &mut App) -> AnyView {
-    let transcript = sample(running);
+    let transcript = match layout.chrome() {
+        Chrome::Japanese => sample(running),
+        Chrome::English => english_sample(running),
+    };
     let ui = if running {
         UiState::default()
     } else {
@@ -150,33 +187,87 @@ pub(crate) fn build_baseline_idle(window: &mut Window, cx: &mut App) -> AnyView 
     build(Layout::Baseline, false, window, cx)
 }
 
-pub(crate) fn build_accent_user(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::AccentUser, true, window, cx)
+pub(crate) fn build_english_chrome(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::EnglishChrome, true, window, cx)
 }
 
-pub(crate) fn build_accent_user_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::AccentUser, false, window, cx)
+pub(crate) fn build_english_chrome_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::EnglishChrome, false, window, cx)
 }
 
-pub(crate) fn build_dots_only_thinking(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::DotsOnlyThinking, true, window, cx)
+pub(crate) fn build_turn_time(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::TurnTime, true, window, cx)
 }
 
-pub(crate) fn build_dots_only_thinking_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::DotsOnlyThinking, false, window, cx)
+pub(crate) fn build_turn_time_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::TurnTime, false, window, cx)
 }
 
-pub(crate) fn build_one_row_composer(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::OneRowComposer, true, window, cx)
+pub(crate) fn build_folded_thought(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::FoldedThought, true, window, cx)
 }
 
-pub(crate) fn build_one_row_composer_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::OneRowComposer, false, window, cx)
+pub(crate) fn build_folded_thought_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::FoldedThought, false, window, cx)
 }
 
 // ---------------------------------------------------------------------------
 // The sample transcript
 // ---------------------------------------------------------------------------
+
+/// The sample's worded strings: what a live session's adapter would word in
+/// the chrome language. Everything else in the sample is the conversation's
+/// own text and is the same in both.
+struct Words {
+    read: &'static str,
+    search: &'static str,
+    edit: &'static str,
+    run: &'static str,
+    write: &'static str,
+    investigation_summary: &'static str,
+    fix_summary: &'static str,
+    running_summary: &'static str,
+    compaction: &'static str,
+    investigation_elapsed: &'static str,
+    fix_elapsed: &'static str,
+    running_elapsed: &'static str,
+    task_elapsed: &'static str,
+    task_activity: &'static str,
+}
+
+const JAPANESE_WORDS: Words = Words {
+    read: READ_VERB,
+    search: "検索",
+    edit: "編集",
+    run: "実行",
+    write: "書き込み",
+    investigation_summary: "ファイル 6件を読み取り · 検索 2件",
+    fix_summary: "ファイル 3件を編集 · コマンド 2件を実行",
+    running_summary: "コマンド 1件を実行",
+    compaction: "履歴を圧縮しました: ツール出力 12件(31,204 文字)を回収",
+    investigation_elapsed: "48秒",
+    fix_elapsed: "2分10秒",
+    running_elapsed: "12秒",
+    task_elapsed: "1分03秒",
+    task_activity: "実行中",
+};
+
+const ENGLISH_WORDS: Words = Words {
+    read: "Read",
+    search: "Search",
+    edit: "Edit",
+    run: "Run",
+    write: "Write",
+    investigation_summary: "Read 6 files · 2 searches",
+    fix_summary: "Edited 3 files · Ran 2 commands",
+    running_summary: "Ran 1 command",
+    compaction: "History compacted: 12 tool outputs (31,204 chars) reclaimed",
+    investigation_elapsed: "48s",
+    fix_elapsed: "2m 10s",
+    running_elapsed: "12s",
+    task_elapsed: "1m 03s",
+    task_activity: "running",
+};
 
 fn you(text: &str) -> Unit {
     Unit::User(Message {
@@ -250,7 +341,12 @@ const FAILURE: &str = "\
 2. 基準サイズと 2 倍のサイズの両方で、帯が折り返すかどうかを確かめる
 3. 同じ見積もりを使っている他のテストがないかを検索で確かめる";
 
-fn investigation_turn() -> Turn {
+/// The second answer's reasoning, which only [`Layout::FoldedThought`]
+/// draws.
+const THOUGHT: &str = "\
+見積もりは本文の大きさに比例するはずなので、まず基準の 14 で帯のタイトルが一行に収まる幅を求め、それを倍率で割り戻せば今の大きさでの想定幅が出る。テストが古い 14px 前提のままだと、倍率を掛けた幅と比べたときに折り返しの判定がずれて、正しい実装でも落ちてしまう。直すならテスト側の想定幅を、帯の一行の幅を返す関数から計算させる形にするのが筋がよさそう。ただ、丸めの順番次第で一画素ずれる可能性も捨てきれないので、基準の大きさと二倍の大きさの両方で判定が変わらないことを確かめておきたい。同じ見積もりを使っているテストが他にないかも、念のため検索で洗い出しておく。まずは想定幅の計算を関数に寄せてから、落ちているテストを一件ずつ直していく。";
+
+fn investigation_turn(words: &Words) -> Turn {
     let reads: [&str; READ_CALLS] = [
         "src/board/spec.rs",
         "src/board/thread.rs",
@@ -261,16 +357,16 @@ fn investigation_turn() -> Turn {
     ];
     let mut calls: Vec<Call> = reads
         .iter()
-        .map(|path| call(READ_VERB, path, CallStatus::Done, None))
+        .map(|path| call(words.read, path, CallStatus::Done, None))
         .collect();
     calls.push(call(
-        "検索",
+        words.search,
         "font_size",
         CallStatus::Done,
         text("12 件: src/terminal/font.rs, src/workspace/commands.rs ほか"),
     ));
     calls.push(call(
-        "検索",
+        words.search,
         "px\\(",
         CallStatus::Done,
         text("src/board/spec.rs に 31 件、src/board/thread.rs に 4 件"),
@@ -281,22 +377,23 @@ fn investigation_turn() -> Turn {
             TurnPart::Text(INVESTIGATION.to_string()),
             TurnPart::Receipt(Receipt {
                 key: 0,
-                summary: "ファイル 6件を読み取り · 検索 2件".to_string(),
+                summary: words.investigation_summary.to_string(),
                 running: false,
                 failed: false,
                 calls,
             }),
             TurnPart::Text(SCALING.to_string()),
         ],
-        elapsed: Some("48秒".to_string()),
+        elapsed: Some(words.investigation_elapsed.to_string()),
+        started_at: Some("14:21".to_string()),
     }
 }
 
-fn fix_turn() -> Turn {
+fn fix_turn(words: &Words) -> Turn {
     use DiffKind::{Added, Context, Removed};
     let calls = vec![
         call(
-            "編集", "src/ui/font.rs",
+            words.edit, "src/ui/font.rs",
             CallStatus::Done,
             diff(&[
                 (Context, "pub(crate) fn font_size() -> f32 {"),
@@ -310,7 +407,7 @@ fn fix_turn() -> Turn {
             ]),
         ),
         call(
-            "編集", "src/board/spec.rs",
+            words.edit, "src/board/spec.rs",
             CallStatus::Done,
             diff(&[
                 (Removed, "pub(crate) const ROW_HEIGHT: f32 = 48.0;"),
@@ -320,7 +417,7 @@ fn fix_turn() -> Turn {
             ]),
         ),
         call(
-            "編集", "src/workspace/commands.rs",
+            words.edit, "src/workspace/commands.rs",
             CallStatus::Done,
             diff(&[
                 (Context, "CommandId::IncreaseFontSize => {"),
@@ -329,7 +426,7 @@ fn fix_turn() -> Turn {
             ]),
         ),
         call(
-            "実行", "cargo clippy --workspace --all-targets",
+            words.run, "cargo clippy --workspace --all-targets",
             CallStatus::Done,
             output(
                 &[
@@ -341,7 +438,7 @@ fn fix_turn() -> Turn {
             ),
         ),
         call(
-            "実行", "cargo nextest run --workspace",
+            words.run, "cargo nextest run --workspace",
             CallStatus::Failed,
             output(
                 &[
@@ -363,25 +460,27 @@ fn fix_turn() -> Turn {
     Turn {
         state: TurnState::Done,
         parts: vec![
+            TurnPart::Thought(THOUGHT.to_string()),
             TurnPart::Receipt(Receipt {
                 key: 1,
-                summary: "ファイル 3件を編集 · コマンド 2件を実行".to_string(),
+                summary: words.fix_summary.to_string(),
                 running: false,
                 failed: true,
                 calls,
             }),
             TurnPart::Text(FAILURE.to_string()),
         ],
-        elapsed: Some("2分10秒".to_string()),
+        elapsed: Some(words.fix_elapsed.to_string()),
+        started_at: Some("14:24".to_string()),
     }
 }
 
 /// The id the pending approval carries.
 const APPROVAL_ID: &str = "approval-1";
 
-fn running_turn() -> Turn {
+fn running_turn(words: &Words) -> Turn {
     let mut write = call(
-        "書き込み",
+        words.write,
         "~/.config/horizon/config.toml",
         CallStatus::Running,
         None,
@@ -395,12 +494,12 @@ fn running_turn() -> Turn {
         parts: vec![
             TurnPart::Receipt(Receipt {
                 key: 2,
-                summary: "コマンド 1件を実行".to_string(),
+                summary: words.running_summary.to_string(),
                 running: true,
                 failed: false,
                 calls: vec![
                     call(
-                        "実行",
+                        words.run,
                         "cargo clippy --workspace --all-targets",
                         CallStatus::Running,
                         None,
@@ -410,7 +509,8 @@ fn running_turn() -> Turn {
             }),
             TurnPart::Thinking,
         ],
-        elapsed: Some("12秒".to_string()),
+        elapsed: Some(words.running_elapsed.to_string()),
+        started_at: Some("14:31".to_string()),
     }
 }
 
@@ -420,19 +520,28 @@ const MODEL: &str = "syn:large:text";
 /// The sample: two finished exchanges, a compaction notice, and the owner's
 /// next request, answered by a running turn when `running`.
 pub(crate) fn sample(running: bool) -> Transcript {
+    sample_in(&JAPANESE_WORDS, running)
+}
+
+/// [`sample`] with its worded strings in English.
+pub(crate) fn english_sample(running: bool) -> Transcript {
+    sample_in(&ENGLISH_WORDS, running)
+}
+
+fn sample_in(words: &Words, running: bool) -> Transcript {
     let mut units = vec![
         you(FIRST_MESSAGE),
-        Unit::Turn(investigation_turn()),
+        Unit::Turn(investigation_turn(words)),
         you("ではその方針で直してください"),
-        Unit::Turn(fix_turn()),
+        Unit::Turn(fix_turn(words)),
         Unit::Notice(Notice {
             tone: Tone::Muted,
-            text: "履歴を圧縮しました: ツール出力 12件(31,204 文字)を回収".to_string(),
+            text: words.compaction.to_string(),
         }),
         you(LAST_MESSAGE),
     ];
     if running {
-        units.push(Unit::Turn(running_turn()));
+        units.push(Unit::Turn(running_turn(words)));
     }
     Transcript {
         model: MODEL.to_string(),
@@ -444,8 +553,8 @@ pub(crate) fn sample(running: bool) -> Transcript {
         units,
         tasks: vec![Task {
             description: "cargo build --workspace".to_string(),
-            elapsed: "1分03秒".to_string(),
-            activity: "実行中".to_string(),
+            elapsed: words.task_elapsed.to_string(),
+            activity: words.task_activity.to_string(),
         }],
         composer: if running {
             ComposerMode::Approval {
@@ -459,32 +568,9 @@ pub(crate) fn sample(running: bool) -> Transcript {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::BTreeSet;
 
-    /// Every string the pane draws besides the transcript's own: the chrome
-    /// words of every unit, chip, hint and placeholder.
-    const CHROME: &[&str] = &[
-        "実行中",
-        "承認待ち",
-        "失敗",
-        "失敗 件",
-        "拒否",
-        "中断",
-        "バックグラウンド · · ·",
-        "停止",
-        "セッションは終了しました",
-        "ランタイムに到達できません",
-        "考え中・",
-        "…他 行",
-        "Enter",
-        "Esc",
-        "で送信",
-        "メッセージを書く",
-        "このセッションは終了しています",
-        "承認",
-        "+",
-        "−",
-    ];
+    use super::*;
 
     fn call_strings(call: &Call) -> Vec<String> {
         let mut strings = vec![call.title()];
@@ -500,7 +586,11 @@ mod tests {
         strings
     }
 
-    fn strings(transcript: &Transcript) -> Vec<String> {
+    /// Every string a layout in `chrome` can paint over `transcript`: the
+    /// transcript's own, a thought both as its line and as its text (only
+    /// a Japanese layout draws one), the chrome's every label, the key
+    /// chips and the diff gutter marks.
+    fn strings(transcript: &Transcript, chrome: Chrome) -> Vec<String> {
         let mut strings = vec![transcript.model.clone()];
         for unit in &transcript.units {
             match unit {
@@ -508,6 +598,7 @@ mod tests {
                 Unit::Notice(notice) => strings.push(notice.text.clone()),
                 Unit::Turn(turn) => {
                     strings.extend(turn.elapsed.clone());
+                    strings.extend(turn.started_at.clone());
                     for part in &turn.parts {
                         match part {
                             TurnPart::Text(text) => strings.push(text.clone()),
@@ -515,39 +606,64 @@ mod tests {
                                 strings.push(receipt.summary.clone());
                                 strings.extend(receipt.calls.iter().flat_map(call_strings));
                             }
+                            TurnPart::Thought(text) if chrome == Chrome::Japanese => {
+                                strings.push(chrome.thought(text.chars().count()));
+                                strings.push(text.clone());
+                            }
+                            TurnPart::Thought(_) => {}
                             TurnPart::Thinking => {}
                         }
                     }
                 }
             }
         }
-        for task in &transcript.tasks {
-            strings.extend([
-                task.description.clone(),
-                task.elapsed.clone(),
-                task.activity.clone(),
-            ]);
-        }
-        strings.extend(CHROME.iter().map(|s| s.to_string()));
+        strings.extend(chrome.all(0, &transcript.tasks[0]));
+        strings.extend(["Enter", "Esc", "+", "−"].map(str::to_string));
         strings
+    }
+
+    /// Both samples, each with the chrome its layouts draw it in.
+    fn both(running: bool) -> [(Vec<String>, Chrome); 2] {
+        [
+            (
+                strings(&sample(running), Chrome::Japanese),
+                Chrome::Japanese,
+            ),
+            (
+                strings(&english_sample(running), Chrome::English),
+                Chrome::English,
+            ),
+        ]
+    }
+
+    fn owners(all: &[String], marker: char) -> BTreeSet<&str> {
+        all.iter()
+            .filter(|s| s.contains(marker))
+            .map(String::as_str)
+            .collect()
     }
 
     #[test]
     fn each_probe_owns_a_character_nothing_else_paints() {
-        let all = strings(&sample(true));
-        for (probe, marker) in [
-            (FIRST_MESSAGE, 'ホ'),
-            (LAST_MESSAGE, '警'),
-            (APPROVAL_REASON, '換'),
-            ("停止", '停'),
-        ] {
-            assert_eq!(probe.matches(marker).count(), 1, "{probe}");
-            let owners: Vec<&String> = all.iter().filter(|s| s.contains(marker)).collect();
-            assert_eq!(
-                owners,
-                vec![probe],
-                "`{marker}` is painted by more than {probe}"
-            );
+        for (all, chrome) in both(true) {
+            for (probe, marker, english) in [
+                (FIRST_MESSAGE, 'ホ', true),
+                (LAST_MESSAGE, '警', true),
+                (APPROVAL_REASON, '換', true),
+                ("停止", '停', false),
+            ] {
+                assert_eq!(probe.matches(marker).count(), 1, "{probe}");
+                let expected: BTreeSet<&str> = if chrome == Chrome::Japanese || english {
+                    [probe].into()
+                } else {
+                    BTreeSet::new()
+                };
+                assert_eq!(
+                    owners(&all, marker),
+                    expected,
+                    "{chrome:?}: `{marker}` is painted by more than {probe}"
+                );
+            }
         }
     }
 
@@ -556,9 +672,13 @@ mod tests {
     /// pane draws.
     #[test]
     fn nothing_the_pane_paints_contains_a_retired_word() {
-        let all = strings(&sample(true));
-        for marker in ['更', 'エ', 'あ', '残'] {
-            assert!(!all.iter().any(|s| s.contains(marker)), "{marker}: {all:?}");
+        for (all, chrome) in both(true) {
+            for marker in ['更', 'エ', 'あ', '残'] {
+                assert!(
+                    !all.iter().any(|s| s.contains(marker)),
+                    "{chrome:?} {marker}: {all:?}"
+                );
+            }
         }
     }
 
@@ -567,147 +687,218 @@ mod tests {
     /// session that has ended, which the sample is not.
     #[test]
     fn only_an_ended_session_paints_the_notice_labels_first_character() {
-        let all = strings(&sample(true));
-        let owners: Vec<&String> = all.iter().filter(|s| s.contains('シ')).collect();
-        assert_eq!(
-            owners,
-            vec!["セッションは終了しました", "このセッションは終了しています"]
-        );
+        for (all, chrome) in both(true) {
+            let labels = chrome.labels();
+            let ended: BTreeSet<&str> = [labels.session_ended, labels.placeholder_ended]
+                .into_iter()
+                .filter(|s| s.contains('シ'))
+                .collect();
+            assert_eq!(owners(&all, 'シ'), ended, "{chrome:?}");
+        }
+        assert_eq!(owners(&both(true)[0].0, 'シ').len(), 2);
     }
 
     /// So a count of [`OPENED_DIFF_MARKER`] says the idle previews' opened
     /// diff, its removed line included, is painted.
     #[test]
     fn the_opened_diff_owns_its_marker() {
-        let idle = sample(false);
-        let ui = last_turn_opened(&idle);
-        let all = strings(&sample(true));
-        let total: usize = all
-            .iter()
-            .map(|s| s.matches(OPENED_DIFF_MARKER).count())
-            .sum();
-        assert_eq!(total, OPENED_DIFF_MARKERS);
-        let Some(Unit::Turn(last)) = idle.units.iter().rev().find(|u| matches!(u, Unit::Turn(_)))
-        else {
-            panic!("the idle sample has a turn");
-        };
-        let Some(TurnPart::Receipt(receipt)) = last
-            .parts
-            .iter()
-            .find(|p| matches!(p, TurnPart::Receipt(_)))
-        else {
-            panic!("the last turn has a receipt");
-        };
-        assert_eq!(ui.expanded_receipts, [receipt.key].into());
-        assert_eq!(ui.open_bodies, [(receipt.key, 0), (receipt.key, 4)].into());
-        let Some(CallBody::Diff(lines)) = &receipt.calls[0].body else {
-            panic!("the first call's body is a diff");
-        };
-        let in_diff: usize = lines
-            .iter()
-            .map(|line| line.text.matches(OPENED_DIFF_MARKER).count())
-            .sum();
-        assert_eq!(in_diff, OPENED_DIFF_MARKERS);
-        let count = |kind| lines.iter().filter(|line| line.kind == kind).count();
-        assert_eq!(count(DiffKind::Added), OPENED_DIFF_ADDED);
-        assert_eq!(count(DiffKind::Removed), OPENED_DIFF_REMOVED);
-        assert!(lines
-            .iter()
-            .any(|line| line.kind == DiffKind::Removed && line.text.contains(OPENED_DIFF_MARKER)));
+        for (all, chrome) in both(true) {
+            let total: usize = all
+                .iter()
+                .map(|s| s.matches(OPENED_DIFF_MARKER).count())
+                .sum();
+            assert_eq!(total, OPENED_DIFF_MARKERS, "{chrome:?}");
+        }
+        for idle in [sample(false), english_sample(false)] {
+            let ui = last_turn_opened(&idle);
+            let Some(last) = turns(&idle).last() else {
+                panic!("the idle sample has a turn");
+            };
+            let Some(TurnPart::Receipt(receipt)) = last
+                .parts
+                .iter()
+                .find(|p| matches!(p, TurnPart::Receipt(_)))
+            else {
+                panic!("the last turn has a receipt");
+            };
+            assert_eq!(ui.expanded_receipts, [receipt.key].into());
+            assert_eq!(ui.open_bodies, [(receipt.key, 0), (receipt.key, 4)].into());
+            let Some(CallBody::Diff(lines)) = &receipt.calls[0].body else {
+                panic!("the first call's body is a diff");
+            };
+            let in_diff: usize = lines
+                .iter()
+                .map(|line| line.text.matches(OPENED_DIFF_MARKER).count())
+                .sum();
+            assert_eq!(in_diff, OPENED_DIFF_MARKERS);
+            let count = |kind| lines.iter().filter(|line| line.kind == kind).count();
+            assert_eq!(count(DiffKind::Added), OPENED_DIFF_ADDED);
+            assert_eq!(count(DiffKind::Removed), OPENED_DIFF_REMOVED);
+            assert!(lines.iter().any(
+                |line| line.kind == DiffKind::Removed && line.text.contains(OPENED_DIFF_MARKER)
+            ));
+        }
     }
 
     /// So a count of [`OPENED_OUTPUT_MARKER`] says the idle previews' opened
     /// output is painted.
     #[test]
     fn the_opened_output_owns_its_marker() {
-        let idle = sample(false);
-        let ui = last_turn_opened(&idle);
-        let all = strings(&sample(true));
-        let total: usize = all
-            .iter()
-            .map(|s| s.matches(OPENED_OUTPUT_MARKER).count())
-            .sum();
-        assert_eq!(total, OPENED_OUTPUT_MARKERS, "{all:?}");
-        let Some(Unit::Turn(last)) = idle.units.iter().rev().find(|u| matches!(u, Unit::Turn(_)))
-        else {
-            panic!("the idle sample has a turn");
-        };
-        let Some(TurnPart::Receipt(receipt)) = last
-            .parts
-            .iter()
-            .find(|p| matches!(p, TurnPart::Receipt(_)))
-        else {
-            panic!("the last turn has a receipt");
-        };
-        let call = &receipt.calls[4];
-        assert!(ui.open_bodies.contains(&(receipt.key, 4)));
-        assert_eq!(call.title(), "実行 cargo nextest run --workspace");
-        assert_eq!(call.status, CallStatus::Failed);
-        let Some(CallBody::Output { lines, .. }) = &call.body else {
-            panic!("the failed call's body is an output");
-        };
-        let in_output: usize = lines
-            .iter()
-            .map(|line| line.matches(OPENED_OUTPUT_MARKER).count())
-            .sum();
-        assert_eq!(in_output, OPENED_OUTPUT_MARKERS);
+        for (all, chrome) in both(true) {
+            let total: usize = all
+                .iter()
+                .map(|s| s.matches(OPENED_OUTPUT_MARKER).count())
+                .sum();
+            assert_eq!(total, OPENED_OUTPUT_MARKERS, "{chrome:?}: {all:?}");
+        }
+        for (idle, run) in [
+            (sample(false), JAPANESE_WORDS.run),
+            (english_sample(false), ENGLISH_WORDS.run),
+        ] {
+            let ui = last_turn_opened(&idle);
+            let Some(last) = turns(&idle).last() else {
+                panic!("the idle sample has a turn");
+            };
+            let Some(TurnPart::Receipt(receipt)) = last
+                .parts
+                .iter()
+                .find(|p| matches!(p, TurnPart::Receipt(_)))
+            else {
+                panic!("the last turn has a receipt");
+            };
+            let call = &receipt.calls[4];
+            assert!(ui.open_bodies.contains(&(receipt.key, 4)));
+            assert_eq!(call.title(), format!("{run} cargo nextest run --workspace"));
+            assert_eq!(call.status, CallStatus::Failed);
+            let Some(CallBody::Output { lines, .. }) = &call.body else {
+                panic!("the failed call's body is an output");
+            };
+            let in_output: usize = lines
+                .iter()
+                .map(|line| line.matches(OPENED_OUTPUT_MARKER).count())
+                .sum();
+            assert_eq!(in_output, OPENED_OUTPUT_MARKERS);
+        }
     }
 
-    /// So the running previews paint [`THINKING_WORD`] once, on the running
+    /// So the running previews paint the thinking word once, on the running
     /// turn's thinking line, and the idle ones not at all.
     #[test]
     fn only_the_running_turn_thinks() {
         let thinking = |transcript: &Transcript| {
-            transcript
-                .units
-                .iter()
-                .filter_map(|unit| match unit {
-                    Unit::Turn(turn) => Some(turn),
-                    _ => None,
-                })
+            turns(transcript)
                 .flat_map(|turn| &turn.parts)
                 .filter(|part| **part == TurnPart::Thinking)
                 .count()
         };
-        assert_eq!(thinking(&sample(true)), 1);
-        assert_eq!(thinking(&sample(false)), 0);
-        assert!(CHROME.contains(&format!("{THINKING_WORD}・").as_str()));
+        for (running, expected) in [(true, 1), (false, 0)] {
+            assert_eq!(thinking(&sample(running)), expected);
+            assert_eq!(thinking(&english_sample(running)), expected);
+        }
     }
 
-    /// So a painted `承` can only be the pending approval.
+    /// So a painted `承` can only be the pending approval, and the English
+    /// chrome paints none.
     #[test]
     fn only_the_approval_paints_its_first_character() {
-        let all = strings(&sample(true));
-        let owners: Vec<&String> = all.iter().filter(|s| s.contains('承')).collect();
-        assert_eq!(owners, vec!["承認待ち", "承認"]);
+        let [(japanese, _), (english, _)] = both(true);
+        assert_eq!(owners(&japanese, '承'), ["承認待ち", "承認"].into());
+        assert!(owners(&english, '承').is_empty());
+    }
+
+    /// So the English previews painting no `停`, `承` or `考` says their
+    /// chrome is English.
+    #[test]
+    fn the_english_previews_paint_none_of_the_japanese_label_markers() {
+        let [(japanese, _), (english, _)] = both(true);
+        for marker in ['停', '承', '考'] {
+            assert!(!owners(&japanese, marker).is_empty(), "{marker}");
+            assert!(owners(&english, marker).is_empty(), "{marker}");
+        }
     }
 
     #[test]
     fn the_idle_sample_is_the_running_one_without_its_last_turn() {
-        let running = sample(true);
-        let idle = sample(false);
-        assert_eq!(running.units[..running.units.len() - 1], idle.units[..]);
-        assert!(matches!(
-            running.units.last(),
-            Some(Unit::Turn(Turn {
-                state: TurnState::Running,
-                ..
-            }))
-        ));
-        assert!(!strings(&idle).iter().any(|s| s.contains('換')));
-        assert_eq!(idle.composer, ComposerMode::Idle);
-        assert!(matches!(running.composer, ComposerMode::Approval { .. }));
+        for (running, idle) in [
+            (sample(true), sample(false)),
+            (english_sample(true), english_sample(false)),
+        ] {
+            assert_eq!(running.units[..running.units.len() - 1], idle.units[..]);
+            assert!(matches!(
+                running.units.last(),
+                Some(Unit::Turn(Turn {
+                    state: TurnState::Running,
+                    ..
+                }))
+            ));
+            assert_eq!(idle.composer, ComposerMode::Idle);
+            assert!(matches!(running.composer, ComposerMode::Approval { .. }));
+        }
+        for (all, _) in both(false) {
+            assert!(!all.iter().any(|s| s.contains('換')));
+        }
+    }
+
+    /// The sample with every worded string blanked.
+    fn unworded(mut transcript: Transcript) -> Transcript {
+        for unit in &mut transcript.units {
+            match unit {
+                Unit::Notice(notice) => notice.text.clear(),
+                Unit::Turn(turn) => {
+                    turn.elapsed = None;
+                    for part in &mut turn.parts {
+                        if let TurnPart::Receipt(receipt) = part {
+                            receipt.summary.clear();
+                            for call in &mut receipt.calls {
+                                call.verb.clear();
+                            }
+                        }
+                    }
+                }
+                Unit::User(_) => {}
+            }
+        }
+        for task in &mut transcript.tasks {
+            task.elapsed.clear();
+            task.activity.clear();
+        }
+        transcript
+    }
+
+    #[test]
+    fn the_english_sample_differs_only_in_its_worded_strings() {
+        for running in [true, false] {
+            assert_ne!(english_sample(running), sample(running));
+            assert_eq!(unworded(english_sample(running)), unworded(sample(running)));
+        }
+    }
+
+    #[test]
+    fn every_turn_has_a_start_time_and_the_second_answer_a_thought() {
+        let sample = sample(true);
+        let times: Vec<&str> = turns(&sample)
+            .filter_map(|turn| turn.started_at.as_deref())
+            .collect();
+        assert_eq!(times, ["14:21", "14:24", "14:31"]);
+        assert_eq!(turn_time_additions(true), ["14:21 ·", "14:24 ·"]);
+        assert_eq!(turn_time_additions(false), ["14:21 ·", "14:24 ·"]);
+        let thoughts: Vec<usize> = turns(&sample)
+            .map(|turn| {
+                turn.parts
+                    .iter()
+                    .filter(|part| matches!(part, TurnPart::Thought(_)))
+                    .count()
+            })
+            .collect();
+        assert_eq!(thoughts, [0, 1, 0]);
+        let chars = THOUGHT.chars().count();
+        assert!((250..=350).contains(&chars), "{chars}");
+        assert_eq!(thought_lines(true), [format!("思考 {chars} 文字")]);
     }
 
     #[test]
     fn receipt_keys_are_unique() {
-        let keys: Vec<usize> = sample(true)
-            .units
-            .iter()
-            .filter_map(|unit| match unit {
-                Unit::Turn(turn) => Some(turn),
-                _ => None,
-            })
+        let keys: Vec<usize> = turns(&sample(true))
             .flat_map(|turn| &turn.parts)
             .filter_map(|part| match part {
                 TurnPart::Receipt(receipt) => Some(receipt.key),
@@ -719,14 +910,16 @@ mod tests {
     }
 
     /// So a count of `読` above [`READ_ELSEWHERE`] can only be the first
-    /// answer's call rows.
+    /// answer's call rows, and the English sample paints [`READ_IN_TEXT`].
     #[test]
     fn the_read_verb_occurs_a_known_number_of_times_outside_the_read_calls() {
-        let all = strings(&sample(true));
-        let total: usize = all.iter().map(|s| s.matches('読').count()).sum();
-        let titles = all.iter().filter(|s| s.starts_with(READ_VERB)).count();
+        let [(japanese, _), (english, _)] = both(true);
+        let total: usize = japanese.iter().map(|s| s.matches('読').count()).sum();
+        let titles = japanese.iter().filter(|s| s.starts_with(READ_VERB)).count();
         assert_eq!(READ_VERB.matches('読').count(), 1);
         assert_eq!(titles, READ_CALLS);
-        assert_eq!(total - titles, READ_ELSEWHERE, "{all:?}");
+        assert_eq!(total - titles, READ_ELSEWHERE, "{japanese:?}");
+        let english_total: usize = english.iter().map(|s| s.matches('読').count()).sum();
+        assert_eq!(english_total, READ_IN_TEXT, "{english:?}");
     }
 }

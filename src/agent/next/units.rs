@@ -12,6 +12,7 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::{h_flex, v_flex, Sizable as _};
 
+use super::chrome::Chrome;
 use super::display::{
     Approval, Call, CallBody, CallStatus, DiffKind, DiffLine, Label, Message, Notice, Receipt,
     Status, Task, Tone, Turn, TurnPart, TurnState,
@@ -27,11 +28,12 @@ use crate::ui::spec::*;
 // ---------------------------------------------------------------------------
 
 /// A running session's state, as the running turn carries it.
-fn session_state_chip(status: Status) -> impl IntoElement {
+fn session_state_chip(status: Status, chrome: Chrome) -> impl IntoElement {
+    let labels = chrome.labels();
     if status == Status::WaitingForApproval {
-        chip("承認待ち", theme::accent())
+        chip(labels.waiting_for_approval, theme::accent())
     } else {
-        chip("実行中", theme::accent())
+        chip(labels.running, theme::accent())
     }
 }
 
@@ -56,11 +58,12 @@ fn call_dot_cell(status: CallStatus) -> impl IntoElement {
         .child(div().size(call_dot()).rounded_full().bg(tone))
 }
 
-fn turn_chip(state: TurnState) -> Option<impl IntoElement> {
+fn turn_chip(state: TurnState, chrome: Chrome) -> Option<impl IntoElement> {
+    let labels = chrome.labels();
     let (label, tone) = match state {
         TurnState::Done | TurnState::Running => return None,
-        TurnState::Stopped => ("中断", theme::text_muted()),
-        TurnState::Failed => ("失敗", theme::danger()),
+        TurnState::Stopped => (labels.stopped, theme::text_muted()),
+        TurnState::Failed => (labels.failed, theme::danger()),
     };
     Some(chip(label, tone))
 }
@@ -88,11 +91,11 @@ pub(super) fn model_chip(model: &str, cx: &mut Context<AgentNextView>) -> impl I
 }
 
 /// 「停止」, offered while a turn runs.
-fn stop_button(id: &'static str, cx: &mut Context<AgentNextView>) -> Button {
+fn stop_button(id: &'static str, chrome: Chrome, cx: &mut Context<AgentNextView>) -> Button {
     Button::new(id)
         .ghost()
         .xsmall()
-        .label("停止")
+        .label(chrome.labels().stop)
         .on_click(cx.listener(|_, _, _, cx| {
             cx.stop_propagation();
             cx.emit(AgentNextEvent::Stop);
@@ -104,14 +107,23 @@ fn carried(turn: &Turn, status: Status) -> Option<Status> {
     (turn.state == TurnState::Running && status.running()).then_some(status)
 }
 
-/// 「{elapsed}」 for a finished turn.
-fn done_meta(turn: &Turn) -> Option<Div> {
+/// 「{elapsed}」 for a finished turn, or with [`Layout::TurnTime`]
+/// 「{started_at} · {elapsed}」.
+fn done_meta(turn: &Turn, layout: Layout) -> Option<Div> {
     if turn.state != TurnState::Done {
         return None;
     }
-    turn.elapsed
-        .clone()
-        .map(|elapsed| text_at(meta(), theme::text_muted(), elapsed).flex_none())
+    let started_at = turn
+        .started_at
+        .as_deref()
+        .filter(|_| layout == Layout::TurnTime);
+    let text = match (started_at, turn.elapsed.as_deref()) {
+        (Some(started_at), Some(elapsed)) => format!("{started_at} · {elapsed}"),
+        (Some(started_at), None) => started_at.to_string(),
+        (None, Some(elapsed)) => elapsed.to_string(),
+        (None, None) => return None,
+    };
+    Some(text_at(meta(), theme::text_muted(), text).flex_none())
 }
 
 // ---------------------------------------------------------------------------
@@ -119,27 +131,21 @@ fn done_meta(turn: &Turn) -> Option<Div> {
 // ---------------------------------------------------------------------------
 
 /// One muted line per background task.
-pub(super) fn task_lines(tasks: &[Task]) -> impl Iterator<Item = Div> + '_ {
-    tasks.iter().map(|task| {
-        text_at(
-            meta(),
-            theme::text_muted(),
-            format!(
-                "バックグラウンド · {} · {} · {}",
-                task.description, task.elapsed, task.activity
-            ),
-        )
-        .w_full()
-        .flex_none()
-        .px(pad_x())
+pub(super) fn task_lines(tasks: &[Task], chrome: Chrome) -> impl Iterator<Item = Div> + '_ {
+    tasks.iter().map(move |task| {
+        text_at(meta(), theme::text_muted(), chrome.task_line(task))
+            .w_full()
+            .flex_none()
+            .px(pad_x())
     })
 }
 
 /// The notice a session that can no longer run ends its column with.
-pub(super) fn session_end(status: Status) -> Option<Notice> {
+pub(super) fn session_end(status: Status, chrome: Chrome) -> Option<Notice> {
+    let labels = chrome.labels();
     let (tone, text) = match status {
-        Status::Terminated => (Tone::Muted, "セッションは終了しました"),
-        Status::Unreachable => (Tone::Danger, "ランタイムに到達できません"),
+        Status::Terminated => (Tone::Muted, labels.session_ended),
+        Status::Unreachable => (Tone::Danger, labels.runtime_unreachable),
         _ => return None,
     };
     Some(Notice {
@@ -153,17 +159,13 @@ pub(super) fn session_end(status: Status) -> Option<Notice> {
 // ---------------------------------------------------------------------------
 
 /// A message sent into the session: the board's owner reply, indented, on
-/// a grey tint, or with [`Layout::AccentUser`] on an accent tint.
-pub(super) fn user(index: usize, message: &Message, layout: Layout) -> impl IntoElement {
+/// a grey tint.
+pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
     let color = match message.label {
         Label::You => theme::text_primary(),
         Label::Task | Label::Continue => theme::text_muted(),
     };
-    let surface = if layout == Layout::AccentUser {
-        theme::tint_over_background(theme::accent(), SELECTION_TINT)
-    } else {
-        theme::tint_over_background(theme::text_primary(), BAND_TINT)
-    };
+    let surface = theme::tint_over_background(theme::text_primary(), BAND_TINT);
     v_flex()
         .w_full()
         .flex_none()
@@ -226,18 +228,15 @@ pub(super) fn notice(notice: &Notice) -> Div {
         .px(pad_x())
 }
 
-/// 「考え中」 and three dots whose opacity cycles; with
-/// [`Layout::DotsOnlyThinking`] the dots alone.
-pub(super) fn thinking(id: usize, layout: Layout) -> Div {
+/// 「考え中」 and three dots whose opacity cycles.
+pub(super) fn thinking(id: usize, chrome: Chrome) -> Div {
     let micro = micro();
     h_flex()
         .items_baseline()
         .text_size(micro.size)
         .line_height(micro.line_height)
         .text_color(theme::text_muted())
-        .when(layout != Layout::DotsOnlyThinking, |line| {
-            line.child("考え中")
-        })
+        .child(chrome.labels().thinking)
         .children((0..3).map(move |dot| {
             div().child("・").with_animation(
                 ("agent-next-thinking", id * 3 + dot),
@@ -264,12 +263,13 @@ pub(super) fn turn(
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
 ) -> AnyElement {
+    let chrome = layout.chrome();
     let carried = carried(turn, status);
     let receipts = receipts(turn);
     let end = if turn.state != TurnState::Running {
-        Some(finished_end(turn).into_any_element())
+        Some(finished_end(turn, layout).into_any_element())
     } else if carried.is_some() && !receipts.is_empty() {
-        Some(stop_button("agent-next-card-stop", cx).into_any_element())
+        Some(stop_button("agent-next-card-stop", chrome, cx).into_any_element())
     } else {
         None
     };
@@ -283,13 +283,13 @@ pub(super) fn turn(
         })
     } else {
         let line = ReceiptLine::merged(&receipts);
-        let lead = carried.map(|status| session_state_chip(status).into_any_element());
-        Some(receipt_block(line, lead, end, ui, mono, cx).into_any_element())
+        let lead = carried.map(|status| session_state_chip(status, chrome).into_any_element());
+        Some(receipt_block(line, lead, end, chrome, ui, mono, cx).into_any_element())
     };
 
     let mut parts: Vec<AnyElement> = Vec::new();
     parts.extend(receipt_line);
-    parts.extend(texts(index, turn));
+    parts.extend(texts(index, turn, layout, ui, cx));
     let thinks = turn.parts.contains(&TurnPart::Thinking);
     match carried.filter(|_| receipts.is_empty()) {
         Some(status) => parts.push(
@@ -297,13 +297,13 @@ pub(super) fn turn(
                 .w_full()
                 .items_center()
                 .gap(gap_tight())
-                .child(session_state_chip(status))
-                .when(thinks, |row| row.child(thinking(index, layout)))
+                .child(session_state_chip(status, chrome))
+                .when(thinks, |row| row.child(thinking(index, chrome)))
                 .child(div().flex_1().min_w_0())
-                .child(stop_button("agent-next-card-stop", cx))
+                .child(stop_button("agent-next-card-stop", chrome, cx))
                 .into_any_element(),
         ),
-        None if thinks => parts.push(thinking(index, layout).into_any_element()),
+        None if thinks => parts.push(thinking(index, chrome).into_any_element()),
         None => {}
     }
     let running = turn.state == TurnState::Running;
@@ -325,29 +325,73 @@ fn receipts(turn: &Turn) -> Vec<&Receipt> {
 
 /// A finished turn's chip and its [`done_meta`], for the receipt line's
 /// right end.
-fn finished_end(turn: &Turn) -> impl IntoElement {
+fn finished_end(turn: &Turn, layout: Layout) -> impl IntoElement {
     h_flex()
         .flex_none()
         .items_baseline()
         .gap(gap_tight())
-        .children(turn_chip(turn.state))
-        .children(done_meta(turn))
+        .children(turn_chip(turn.state, layout.chrome()))
+        .children(done_meta(turn, layout))
 }
 
-/// Each piece of `turn`'s text, in order.
-fn texts(index: usize, turn: &Turn) -> impl Iterator<Item = AnyElement> + '_ {
-    turn.parts
-        .iter()
-        .enumerate()
-        .filter_map(move |(part_index, part)| match part {
-            TurnPart::Text(text) => Some(
+/// Each piece of `turn`'s text, in order, and with [`Layout::FoldedThought`]
+/// each of its thoughts among them.
+fn texts(
+    index: usize,
+    turn: &Turn,
+    layout: Layout,
+    ui: &UiState,
+    cx: &mut Context<AgentNextView>,
+) -> Vec<AnyElement> {
+    let mut texts = Vec::new();
+    for (part_index, part) in turn.parts.iter().enumerate() {
+        match part {
+            TurnPart::Text(text) => texts.push(
                 div()
                     .w_full()
                     .child(text_body(part_id(index, part_index), text))
                     .into_any_element(),
             ),
-            _ => None,
+            TurnPart::Thought(text) if layout == Layout::FoldedThought => {
+                let open = ui.open_thoughts.contains(&(index, part_index));
+                texts.push(thought(index, part_index, text, open, layout.chrome(), cx));
+            }
+            _ => {}
+        }
+    }
+    texts
+}
+
+/// 「思考 {n} 文字」; a click opens the thought's text under it.
+fn thought(
+    unit: usize,
+    part: usize,
+    text: &str,
+    open: bool,
+    chrome: Chrome,
+    cx: &mut Context<AgentNextView>,
+) -> AnyElement {
+    let line = text_at(
+        meta(),
+        theme::text_muted(),
+        chrome.thought(text.chars().count()),
+    )
+    .id(SharedString::from(format!(
+        "agent-next-thought-{unit}-{part}"
+    )))
+    .cursor_pointer()
+    .on_click(cx.listener(move |view, _, _, cx| view.toggle_thought(unit, part, cx)));
+    v_flex()
+        .w_full()
+        .child(line)
+        .when(open, |block| {
+            block.child(
+                text_at(meta(), theme::text_muted(), text.to_string())
+                    .w_full()
+                    .mt(gap_label()),
+            )
         })
+        .into_any_element()
 }
 
 /// `parts` stacked with `gap` between them.
@@ -420,6 +464,7 @@ fn receipt_block(
     line: ReceiptLine<'_>,
     lead: Option<AnyElement>,
     end: Option<AnyElement>,
+    chrome: Chrome,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
@@ -445,10 +490,10 @@ fn receipt_block(
                 .children(lead)
                 .child(text_at(meta(), theme::text_muted(), line.summary.clone()).min_w_0())
                 .when(line.failed > 0, |row| {
-                    row.child(chip(format!("失敗 {}件", line.failed), theme::danger()))
+                    row.child(chip(chrome.failed_calls(line.failed), theme::danger()))
                 })
                 .when(line.running, |row| {
-                    row.child(chip("実行中", theme::accent()))
+                    row.child(chip(chrome.labels().running, theme::accent()))
                 })
                 .when_some(end, |row, end| {
                     row.child(div().flex_1().min_w_0()).child(end)
@@ -457,13 +502,14 @@ fn receipt_block(
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx))),
         )
         .when(expanded, |block| {
-            block.child(call_list(&line, ui, mono, cx).mt(gap_label()))
+            block.child(call_list(&line, chrome, ui, mono, cx).mt(gap_label()))
         })
 }
 
 /// A receipt line's calls, under a left rule.
 fn call_list(
     line: &ReceiptLine<'_>,
+    chrome: Chrome,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
@@ -475,9 +521,9 @@ fn call_list(
         .border_color(theme::border())
         .gap(gap_label())
         .children(
-            line.calls
-                .iter()
-                .map(|(receipt, index, call)| call_row(*receipt, *index, call, ui, mono, cx)),
+            line.calls.iter().map(|(receipt, index, call)| {
+                call_row(*receipt, *index, call, chrome, ui, mono, cx)
+            }),
         )
 }
 
@@ -485,6 +531,7 @@ fn call_row(
     receipt: usize,
     index: usize,
     call: &Call,
+    chrome: Chrome,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
@@ -521,11 +568,11 @@ fn call_row(
                 div()
                     .w_full()
                     .mt(gap_label())
-                    .child(call_body(receipt, index, body, mono)),
+                    .child(call_body(receipt, index, body, chrome, mono)),
             )
         })
         .when_some(call.approval.as_ref(), |row, approval| {
-            row.child(approval_block(receipt, index, approval, cx).mt(gap_label()))
+            row.child(approval_block(receipt, index, approval, chrome, cx).mt(gap_label()))
         })
 }
 
@@ -534,8 +581,10 @@ fn approval_block(
     receipt: usize,
     index: usize,
     approval: &Approval,
+    chrome: Chrome,
     cx: &mut Context<AgentNextView>,
 ) -> Div {
+    let labels = chrome.labels();
     let approve = approval.id.clone();
     let deny = approval.id.clone();
     let controls = [
@@ -546,7 +595,7 @@ fn approval_block(
         .primary()
         .small()
         .h(button_height())
-        .label("承認")
+        .label(labels.approve)
         .on_click(cx.listener(move |_, _, _, cx| cx.emit(AgentNextEvent::Approve(approve.clone()))))
         .into_any_element(),
         key_chip("Esc").into_any_element(),
@@ -556,7 +605,7 @@ fn approval_block(
         .ghost()
         .small()
         .h(button_height())
-        .label("拒否")
+        .label(labels.deny)
         .on_click(cx.listener(move |_, _, _, cx| cx.emit(AgentNextEvent::Deny(deny.clone()))))
         .into_any_element(),
     ];
@@ -567,7 +616,7 @@ fn approval_block(
         .w_full()
         .items_center()
         .gap(gap_tight())
-        .child(chip("承認待ち", theme::accent()))
+        .child(chip(labels.approval_needed, theme::accent()))
         .child(reason)
         .children(controls)
 }
@@ -609,6 +658,7 @@ fn call_body(
     receipt: usize,
     index: usize,
     body: &CallBody,
+    chrome: Chrome,
     mono: &SharedString,
 ) -> impl IntoElement {
     match body {
@@ -632,7 +682,7 @@ fn call_body(
                     output.child(text_at(
                         micro(),
                         theme::text_muted(),
-                        format!("…他 {omitted} 行"),
+                        chrome.more_lines(*omitted),
                     ))
                 })
                 .into_any_element()

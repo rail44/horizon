@@ -23,14 +23,17 @@
 //!   family; a diff line's `+` or `−` sits in a gutter before it, and a
 //!   command's output is drawn without a box. A pending approval is one
 //!   line, a message sent into the session sits on a grey tint, and the
-//!   composer is one bordered box whose field starts at two rows.
-//! - [`Layout::AccentUser`]: [`Layout::Baseline`] with a message sent into
-//!   the session on an accent tint.
-//! - [`Layout::DotsOnlyThinking`]: [`Layout::Baseline`] with the thinking
-//!   line's word dropped, leaving its three dots.
-//! - [`Layout::OneRowComposer`]: [`Layout::Baseline`] with the composer's
-//!   field starting at one row.
+//!   composer is one bordered box whose field starts at one row. The
+//!   model's thoughts are not drawn.
+//! - [`Layout::EnglishChrome`]: [`Layout::Baseline`] with every fixed label
+//!   in English ([`chrome`]).
+//! - [`Layout::TurnTime`]: [`Layout::Baseline`] with a finished turn's
+//!   receipt line ending in its start time before its elapsed time.
+//! - [`Layout::FoldedThought`]: [`Layout::Baseline`] with each of the
+//!   model's thoughts drawn as a line counting its characters, which a
+//!   click opens to the thought's text.
 
+pub(crate) mod chrome;
 pub(crate) mod display;
 pub(crate) mod previews;
 mod spec;
@@ -45,16 +48,27 @@ use gpui_component::{h_flex, v_flex, ActiveTheme as _};
 use crate::theme;
 use crate::ui::parts::key_chip;
 use crate::ui::spec::*;
+use chrome::Chrome;
 use display::{ComposerMode, Status, Transcript, Unit};
-use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS, COMPOSER_ONE_ROW};
+use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
 
 /// Which arrangement of the units the view draws.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Layout {
     Baseline,
-    AccentUser,
-    DotsOnlyThinking,
-    OneRowComposer,
+    EnglishChrome,
+    TurnTime,
+    FoldedThought,
+}
+
+impl Layout {
+    /// The language the layout's fixed labels are drawn in.
+    pub(crate) fn chrome(self) -> Chrome {
+        match self {
+            Self::EnglishChrome => Chrome::English,
+            Self::Baseline | Self::TurnTime | Self::FoldedThought => Chrome::Japanese,
+        }
+    }
 }
 
 /// What the view asks of whatever holds it.
@@ -77,6 +91,8 @@ pub(crate) struct UiState {
     pub(crate) expanded_receipts: HashSet<usize>,
     /// Call bodies opened by a click, by receipt key and call index.
     pub(crate) open_bodies: HashSet<(usize, usize)>,
+    /// Thoughts opened by a click, by unit index and part index.
+    pub(crate) open_thoughts: HashSet<(usize, usize)>,
 }
 
 /// The agent pane over a display model.
@@ -103,15 +119,10 @@ impl AgentNextView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let min_rows = if layout == Layout::OneRowComposer {
-            COMPOSER_ONE_ROW
-        } else {
-            COMPOSER_MIN_ROWS
-        };
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder(placeholder(transcript.status))
-                .auto_grow(min_rows, COMPOSER_MAX_ROWS)
+                .placeholder(placeholder(transcript.status, layout.chrome()))
+                .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MAX_ROWS)
                 .submit_on_enter(true)
         });
         let _composer_subscription = cx.subscribe_in(
@@ -146,8 +157,9 @@ impl AgentNextView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if placeholder(transcript.status) != placeholder(self.transcript.status) {
-            let text = placeholder(transcript.status);
+        let chrome = self.layout.chrome();
+        if placeholder(transcript.status, chrome) != placeholder(self.transcript.status, chrome) {
+            let text = placeholder(transcript.status, chrome);
             self.composer
                 .update(cx, |input, cx| input.set_placeholder(text, window, cx));
         }
@@ -165,6 +177,13 @@ impl AgentNextView {
     pub(super) fn toggle_body(&mut self, receipt: usize, call: usize, cx: &mut Context<Self>) {
         if !self.ui.open_bodies.remove(&(receipt, call)) {
             self.ui.open_bodies.insert((receipt, call));
+        }
+        cx.notify();
+    }
+
+    pub(super) fn toggle_thought(&mut self, unit: usize, part: usize, cx: &mut Context<Self>) {
+        if !self.ui.open_thoughts.remove(&(unit, part)) {
+            self.ui.open_thoughts.insert((unit, part));
         }
         cx.notify();
     }
@@ -204,21 +223,23 @@ impl AgentNextView {
     fn units(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mono = cx.theme().mono_font_family.clone();
         let status = self.transcript.status;
+        let chrome = self.layout.chrome();
         let mut children = Vec::new();
         for (index, unit) in self.transcript.units.iter().enumerate() {
             children.push(match unit {
-                Unit::User(message) => units::user(index, message, self.layout).into_any_element(),
+                Unit::User(message) => units::user(index, message).into_any_element(),
                 Unit::Notice(notice) => units::notice(notice).into_any_element(),
                 Unit::Turn(turn) => {
                     units::turn(index, turn, status, self.layout, &self.ui, &mono, cx)
                 }
             });
         }
-        if let Some(end) = units::session_end(status) {
+        if let Some(end) = units::session_end(status, chrome) {
             children.push(units::notice(&end).into_any_element());
         }
-        children
-            .extend(units::task_lines(&self.transcript.tasks).map(IntoElement::into_any_element));
+        children.extend(
+            units::task_lines(&self.transcript.tasks, chrome).map(IntoElement::into_any_element),
+        );
         children
     }
 
@@ -262,7 +283,7 @@ impl AgentNextView {
                     .text_size(micro().size)
                     .line_height(micro().line_height)
                     .text_color(theme::text_muted())
-                    .child("で送信"),
+                    .child(self.layout.chrome().labels().send_hint),
             )
     }
 
@@ -279,11 +300,12 @@ impl AgentNextView {
     }
 }
 
-fn placeholder(status: Status) -> &'static str {
+fn placeholder(status: Status, chrome: Chrome) -> &'static str {
+    let labels = chrome.labels();
     match status {
-        Status::Terminated => "このセッションは終了しています",
-        Status::Unreachable => "ランタイムに到達できません",
-        _ => "メッセージを書く",
+        Status::Terminated => labels.placeholder_ended,
+        Status::Unreachable => labels.placeholder_unreachable,
+        _ => labels.placeholder,
     }
 }
 
