@@ -892,9 +892,10 @@ const AGENT_SLOT: Geometry = Geometry {
     scale_factor: 1.,
 };
 
-/// A slot tall enough to hold the whole sample conversation.
+/// A slot tall enough to hold the whole sample conversation, and wide
+/// enough that no receipt line is cut short with an ellipsis.
 const AGENT_TALL_SLOT: Geometry = Geometry {
-    width: 640.,
+    width: 960.,
     height: 2400.,
     scale_factor: 1.,
 };
@@ -947,6 +948,23 @@ fn mount_animated(
     }
 }
 
+/// How a preview's layout departs from `agent-8`'s.
+#[derive(Clone, Copy, PartialEq)]
+enum AgentVariant {
+    Baseline,
+    NamedTargets,
+    PlainNotices,
+    InlineRunning,
+}
+
+/// `counts` without whitespace, which a line may or may not paint as glyphs.
+fn without_whitespace(counts: BTreeMap<char, i64>) -> BTreeMap<char, i64> {
+    counts
+        .into_iter()
+        .filter(|(ch, _)| !ch.is_whitespace())
+        .collect()
+}
+
 #[gpui::test]
 #[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
 async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
@@ -967,19 +985,37 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
     let fold_marker = '残';
     let read_marker = '読';
 
-    // (preview, running, whether the first answer's calls are listed while
-    // its receipt line is closed).
-    let cases = [
-        (agent::RECEIPT_FIRST, true, false),
-        (agent::HEADER_STRIP, true, false),
-        (agent::FLUSH, true, false),
-        (agent::CALLS_LISTED, true, true),
-        (agent::RECEIPT_FIRST_IDLE, false, false),
-        (agent::HEADER_STRIP_IDLE, false, false),
-        (agent::FLUSH_IDLE, false, false),
-        (agent::CALLS_LISTED_IDLE, false, true),
+    // The receipt lines `agent-8` paints and the ones `agent-13` paints in
+    // their place, per turn; the running turn's pair is last.
+    let summaries = [
+        "ファイル 6件を読み取り · 検索 2件",
+        "ファイル 3件を編集 · コマンド 2件を実行",
+        "コマンド 1件を実行",
     ];
-    for (name, running, calls_listed) in cases {
+    let named = [
+        "読み取り spec.rs, thread.rs, list.rs, 他 3件 · 検索 font_size, px\\(",
+        "編集 font.rs, spec.rs, commands.rs · 実行 cargo clippy, cargo nextest",
+        "実行 cargo clippy · 書き込み config.toml",
+    ];
+
+    // Each baseline comes before the variations of the same state, which
+    // are checked against what it painted.
+    let cases = [
+        (agent::RECEIPT_FIRST, true, AgentVariant::Baseline),
+        (agent::NAMED_TARGETS, true, AgentVariant::NamedTargets),
+        (agent::PLAIN_NOTICES, true, AgentVariant::PlainNotices),
+        (agent::INLINE_RUNNING, true, AgentVariant::InlineRunning),
+        (agent::RECEIPT_FIRST_IDLE, false, AgentVariant::Baseline),
+        (agent::NAMED_TARGETS_IDLE, false, AgentVariant::NamedTargets),
+        (agent::PLAIN_NOTICES_IDLE, false, AgentVariant::PlainNotices),
+        (
+            agent::INLINE_RUNNING_IDLE,
+            false,
+            AgentVariant::InlineRunning,
+        ),
+    ];
+    let mut baseline: Option<BTreeMap<char, usize>> = None;
+    for (name, running, variant) in cases {
         let loaded = load(&live, name, cx).expect("the agent preview instantiates");
         let surface = cx.new(Surface::new);
         if running {
@@ -995,32 +1031,23 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             painted(&painted_now, agent::LAST_MESSAGE),
             "{name}: the owner's last message is not painted: {painted_now:?}"
         );
-        assert_eq!(
-            count_of(&painted_now, first_marker),
-            0,
-            "{name}: the conversation did not open at its tail: {painted_now:?}"
-        );
-        assert_eq!(
-            count_of(&painted_now, changes_marker),
-            0,
-            "{name}: a changes overview is painted: {painted_now:?}"
-        );
-        assert_eq!(
-            count_of(&painted_now, agent_marker),
-            0,
-            "{name}: an agent label is painted: {painted_now:?}"
-        );
-        assert_eq!(
-            count_of(&painted_now, you_marker),
-            0,
-            "{name}: an owner label is painted: {painted_now:?}"
-        );
-        assert_eq!(
-            count_of(&painted_now, fold_marker),
-            0,
-            "{name}: a folded turn is painted: {painted_now:?}"
-        );
+        for (marker, what) in [
+            (first_marker, "the conversation did not open at its tail"),
+            (changes_marker, "a changes overview is painted"),
+            (agent_marker, "an agent label is painted"),
+            (you_marker, "an owner label is painted"),
+            (fold_marker, "a folded turn is painted"),
+        ] {
+            assert_eq!(
+                count_of(&painted_now, marker),
+                0,
+                "{name}: {what}: {painted_now:?}"
+            );
+        }
         if running {
+            // For agent-15 this holds 「停止」's presence only: the display
+            // list carries no geometry, so that it sits on the receipt line
+            // rather than a row of its own is not asserted.
             assert!(
                 painted(&painted_now, "停止"),
                 "{name}: no stop control is painted: {painted_now:?}"
@@ -1034,54 +1061,76 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
                 "{name}: the pending approval's reason is not painted: {painted_now:?}"
             );
         } else {
-            assert_eq!(
-                count_of(&painted_now, approval_marker),
-                0,
-                "{name}: an idle session painted an approval: {painted_now:?}"
-            );
-            assert_eq!(
-                count_of(&painted_now, reason_marker),
-                0,
-                "{name}: an idle session painted an approval's reason: {painted_now:?}"
-            );
-            assert_eq!(
-                count_of(&painted_now, stop_marker),
-                0,
-                "{name}: an idle session painted a stop control: {painted_now:?}"
-            );
+            for (marker, what) in [
+                (approval_marker, "an approval"),
+                (reason_marker, "an approval's reason"),
+                (stop_marker, "a stop control"),
+            ] {
+                assert_eq!(
+                    count_of(&painted_now, marker),
+                    0,
+                    "{name}: an idle session painted {what}: {painted_now:?}"
+                );
+            }
         }
         // The rest is checked with the whole column in the slot, so what
         // is painted no longer depends on where the slot cuts it.
         redraw_at(&surface, AGENT_TALL_SLOT, running, cx);
         let painted_whole = glyph_counts(&summary(&surface, cx));
-        assert!(
-            painted(&painted_whole, "システム"),
-            "{name}: no notice card is painted: {painted_whole:?}"
-        );
         assert_eq!(
             count_of(&painted_whole, fold_marker),
             0,
             "{name}: a folded turn is painted: {painted_whole:?}"
         );
-        // The display list carries no order or position, so this holds the
-        // receipt lines' presence only: neither agent-10's strip nor
-        // agent-11's flush user blocks are asserted.
-        assert!(
-            painted(&painted_whole, "ファイル 6件を読み取り · 検索 2件"),
-            "{name}: the first answer's receipt line is not painted: {painted_whole:?}"
-        );
-        assert!(
-            painted(&painted_whole, "ファイル 3件を編集 · コマンド 2件を実行"),
-            "{name}: the second answer's receipt line is not painted: {painted_whole:?}"
-        );
+        if variant == AgentVariant::PlainNotices {
+            assert!(
+                !painted(&painted_whole, "システム"),
+                "{name}: a notice card's label is painted: {painted_whole:?}"
+            );
+        } else {
+            assert!(
+                painted(&painted_whole, "システム"),
+                "{name}: no notice card is painted: {painted_whole:?}"
+            );
+        }
         // `読` is painted a fixed number of times outside the first answer's
-        // read calls, and once more per read call row on screen.
-        let listed_rows = if calls_listed { agent::READ_CALLS } else { 0 };
+        // read calls, which stay folded. agent-13 trades the one in the
+        // first summary for the one verb leading its named line.
         assert_eq!(
             count_of(&painted_whole, read_marker),
-            agent::READ_ELSEWHERE + listed_rows,
-            "{name}: the first answer's read calls are not listed as expected: {painted_whole:?}"
+            agent::READ_ELSEWHERE,
+            "{name}: the first answer's read calls are not folded: {painted_whole:?}"
         );
+        if variant == AgentVariant::Baseline {
+            // The display list carries no order or position, so this holds
+            // the receipt lines' presence only.
+            assert!(
+                painted(&painted_whole, summaries[0]),
+                "{name}: the first answer's receipt line is not painted: {painted_whole:?}"
+            );
+            assert!(
+                painted(&painted_whole, summaries[1]),
+                "{name}: the second answer's receipt line is not painted: {painted_whole:?}"
+            );
+            baseline = Some(painted_whole);
+        } else {
+            // Against agent-8 in the same state, each variation paints
+            // exactly what it changes and nothing else.
+            let turns = if running { 3 } else { 2 };
+            let expected = match variant {
+                AgentVariant::NamedTargets => {
+                    text_delta(&summaries[..turns].concat(), &named[..turns].concat())
+                }
+                AgentVariant::PlainNotices => text_delta("システム", ""),
+                _ => BTreeMap::new(),
+            };
+            let base = baseline.as_ref().expect("agent-8 is checked first");
+            assert_eq!(
+                without_whitespace(delta(base, &painted_whole)),
+                without_whitespace(expected),
+                "{name}: paints something other than agent-8 and its one change"
+            );
+        }
         cx.update(|_| drop(loaded));
         settle(cx);
     }

@@ -15,12 +15,12 @@
 //! drawn ([`units`]):
 //!
 //! - [`Layout::ReceiptFirst`]: one card per turn, the receipt line first.
-//! - [`Layout::HeaderStrip`]: [`Layout::ReceiptFirst`] with the receipt
-//!   line as a tinted strip across the card's top.
-//! - [`Layout::Flush`]: [`Layout::ReceiptFirst`] with messages sent into
-//!   the session not indented.
-//! - [`Layout::CallsListed`]: [`Layout::ReceiptFirst`] with every call row
-//!   always listed under the receipt line.
+//! - [`Layout::NamedTargets`]: [`Layout::ReceiptFirst`] with the receipt
+//!   line naming what the calls touched instead of counting them.
+//! - [`Layout::PlainNotices`]: [`Layout::ReceiptFirst`] with notices as
+//!   plain lines rather than cards.
+//! - [`Layout::InlineRunning`]: [`Layout::ReceiptFirst`] with the running
+//!   turn's state and 「停止」 on its receipt line rather than a row above.
 
 pub(crate) mod display;
 pub(crate) mod previews;
@@ -43,9 +43,9 @@ use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Layout {
     ReceiptFirst,
-    HeaderStrip,
-    Flush,
-    CallsListed,
+    NamedTargets,
+    PlainNotices,
+    InlineRunning,
 }
 
 /// What the view asks of whatever holds it.
@@ -189,20 +189,19 @@ impl AgentNextView {
     fn units(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mono = cx.theme().mono_font_family.clone();
         let status = self.transcript.status;
+        let plain_notices = self.layout == Layout::PlainNotices;
         let mut children = Vec::new();
         for (index, unit) in self.transcript.units.iter().enumerate() {
             children.push(match unit {
-                Unit::User(message) => {
-                    units::user(index, message, self.layout != Layout::Flush).into_any_element()
-                }
-                Unit::Notice(notice) => units::notice(notice).into_any_element(),
+                Unit::User(message) => units::user(index, message).into_any_element(),
+                Unit::Notice(notice) => units::notice(notice, plain_notices).into_any_element(),
                 Unit::Turn(turn) => {
                     units::turn(index, turn, status, self.layout, &self.ui, &mono, cx)
                 }
             });
         }
         if let Some(end) = units::session_end(status) {
-            children.push(units::notice(&end).into_any_element());
+            children.push(units::notice(&end, plain_notices).into_any_element());
         }
         children
             .extend(units::task_lines(&self.transcript.tasks).map(IntoElement::into_any_element));

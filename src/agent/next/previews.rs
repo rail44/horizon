@@ -12,13 +12,13 @@ use super::display::{
 use super::{AgentNextView, Layout};
 
 pub(crate) const RECEIPT_FIRST: &str = "agent-8";
-pub(crate) const HEADER_STRIP: &str = "agent-10";
-pub(crate) const FLUSH: &str = "agent-11";
-pub(crate) const CALLS_LISTED: &str = "agent-12";
+pub(crate) const NAMED_TARGETS: &str = "agent-13";
+pub(crate) const PLAIN_NOTICES: &str = "agent-14";
+pub(crate) const INLINE_RUNNING: &str = "agent-15";
 pub(crate) const RECEIPT_FIRST_IDLE: &str = "agent-8-idle";
-pub(crate) const HEADER_STRIP_IDLE: &str = "agent-10-idle";
-pub(crate) const FLUSH_IDLE: &str = "agent-11-idle";
-pub(crate) const CALLS_LISTED_IDLE: &str = "agent-12-idle";
+pub(crate) const NAMED_TARGETS_IDLE: &str = "agent-13-idle";
+pub(crate) const PLAIN_NOTICES_IDLE: &str = "agent-14-idle";
+pub(crate) const INLINE_RUNNING_IDLE: &str = "agent-15-idle";
 
 // ---------------------------------------------------------------------------
 // Probes
@@ -67,32 +67,32 @@ pub(crate) fn build_receipt_first(window: &mut Window, cx: &mut App) -> AnyView 
     build(Layout::ReceiptFirst, true, window, cx)
 }
 
-pub(crate) fn build_header_strip(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::HeaderStrip, true, window, cx)
+pub(crate) fn build_named_targets(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::NamedTargets, true, window, cx)
 }
 
-pub(crate) fn build_flush(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::Flush, true, window, cx)
+pub(crate) fn build_plain_notices(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::PlainNotices, true, window, cx)
 }
 
-pub(crate) fn build_calls_listed(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::CallsListed, true, window, cx)
+pub(crate) fn build_inline_running(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::InlineRunning, true, window, cx)
 }
 
 pub(crate) fn build_receipt_first_idle(window: &mut Window, cx: &mut App) -> AnyView {
     build(Layout::ReceiptFirst, false, window, cx)
 }
 
-pub(crate) fn build_header_strip_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::HeaderStrip, false, window, cx)
+pub(crate) fn build_named_targets_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::NamedTargets, false, window, cx)
 }
 
-pub(crate) fn build_flush_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::Flush, false, window, cx)
+pub(crate) fn build_plain_notices_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::PlainNotices, false, window, cx)
 }
 
-pub(crate) fn build_calls_listed_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::CallsListed, false, window, cx)
+pub(crate) fn build_inline_running_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::InlineRunning, false, window, cx)
 }
 
 // ---------------------------------------------------------------------------
@@ -106,9 +106,10 @@ fn you(text: &str) -> Unit {
     })
 }
 
-fn call(title: &str, status: CallStatus, body: Option<CallBody>) -> Call {
+fn call(verb: &str, target: &str, status: CallStatus, body: Option<CallBody>) -> Call {
     Call {
-        title: title.to_string(),
+        verb: verb.to_string(),
+        target: target.to_string(),
         status,
         body,
         approval: None,
@@ -181,15 +182,17 @@ fn investigation_turn() -> Turn {
     ];
     let mut calls: Vec<Call> = reads
         .iter()
-        .map(|path| call(&format!("{READ_VERB} {path}"), CallStatus::Done, None))
+        .map(|path| call(READ_VERB, path, CallStatus::Done, None))
         .collect();
     calls.push(call(
-        "検索 font_size",
+        "検索",
+        "font_size",
         CallStatus::Done,
         text("12 件: src/terminal/font.rs, src/workspace/commands.rs ほか"),
     ));
     calls.push(call(
-        "検索 px\\(",
+        "検索",
+        "px\\(",
         CallStatus::Done,
         text("src/board/spec.rs に 31 件、src/board/thread.rs に 4 件"),
     ));
@@ -215,7 +218,7 @@ fn fix_turn() -> Turn {
     use DiffKind::{Added, Context, Removed};
     let calls = vec![
         call(
-            "編集 src/ui/font.rs",
+            "編集", "src/ui/font.rs",
             CallStatus::Done,
             diff(&[
                 (Context, "pub(crate) fn font_size() -> f32 {"),
@@ -229,7 +232,7 @@ fn fix_turn() -> Turn {
             ]),
         ),
         call(
-            "編集 src/board/spec.rs",
+            "編集", "src/board/spec.rs",
             CallStatus::Done,
             diff(&[
                 (Removed, "pub(crate) const ROW_HEIGHT: f32 = 48.0;"),
@@ -239,7 +242,7 @@ fn fix_turn() -> Turn {
             ]),
         ),
         call(
-            "編集 src/workspace/commands.rs",
+            "編集", "src/workspace/commands.rs",
             CallStatus::Done,
             diff(&[
                 (Context, "CommandId::IncreaseFontSize => {"),
@@ -248,7 +251,7 @@ fn fix_turn() -> Turn {
             ]),
         ),
         call(
-            "実行 cargo clippy --workspace --all-targets",
+            "実行", "cargo clippy --workspace --all-targets",
             CallStatus::Done,
             output(
                 &[
@@ -260,7 +263,7 @@ fn fix_turn() -> Turn {
             ),
         ),
         call(
-            "実行 cargo nextest run --workspace",
+            "実行", "cargo nextest run --workspace",
             CallStatus::Failed,
             output(
                 &[
@@ -301,7 +304,8 @@ const APPROVAL_ID: &str = "approval-1";
 
 fn running_turn() -> Turn {
     let mut write = call(
-        "書き込み ~/.config/horizon/config.toml",
+        "書き込み",
+        "~/.config/horizon/config.toml",
         CallStatus::Running,
         None,
     );
@@ -319,7 +323,8 @@ fn running_turn() -> Turn {
                 failed: false,
                 calls: vec![
                     call(
-                        "実行 cargo clippy --workspace --all-targets",
+                        "実行",
+                        "cargo clippy --workspace --all-targets",
                         CallStatus::Running,
                         None,
                     ),
@@ -402,10 +407,11 @@ mod tests {
         "メッセージを書く",
         "このセッションは終了しています",
         "承認",
+        "他 件",
     ];
 
     fn call_strings(call: &Call) -> Vec<String> {
-        let mut strings = vec![call.title.clone()];
+        let mut strings = vec![call.title()];
         match &call.body {
             Some(CallBody::Diff(lines)) => strings.extend(lines.iter().map(|l| l.text.clone())),
             Some(CallBody::Output { lines, .. }) => strings.extend(lines.iter().cloned()),

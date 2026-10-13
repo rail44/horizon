@@ -162,9 +162,8 @@ pub(super) fn session_end(status: Status) -> Option<Notice> {
 // The conversation's units
 // ---------------------------------------------------------------------------
 
-/// A message sent into the session: the board's owner reply, indented
-/// when `indented`.
-pub(super) fn user(index: usize, message: &Message, indented: bool) -> impl IntoElement {
+/// A message sent into the session: the board's owner reply, indented.
+pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
     let color = match message.label {
         Label::You => theme::text_primary(),
         Label::Task | Label::Continue => theme::text_muted(),
@@ -172,7 +171,7 @@ pub(super) fn user(index: usize, message: &Message, indented: bool) -> impl Into
     v_flex()
         .w_full()
         .flex_none()
-        .when(indented, |block| block.ml(user_indent()))
+        .ml(user_indent())
         .px(pad_x())
         .py(pad_y())
         .rounded(RADIUS)
@@ -189,17 +188,14 @@ pub(super) fn user(index: usize, message: &Message, indented: bool) -> impl Into
 
 /// The bordered frame a turn and a notice sit in.
 fn card() -> Div {
-    frame().px(pad_x()).py(pad_y())
-}
-
-/// [`card`] without its padding.
-fn frame() -> Div {
     v_flex()
         .w_full()
         .flex_none()
         .border_1()
         .border_color(theme::border())
         .rounded(RADIUS)
+        .px(pad_x())
+        .py(pad_y())
 }
 
 /// The bar down a running turn's left edge.
@@ -229,9 +225,16 @@ fn tone(tone: Tone) -> Hsla {
     }
 }
 
-/// A line from the system, as a card under 「システム」.
-pub(super) fn notice(notice: &Notice) -> impl IntoElement {
+/// A line from the system: a card under 「システム」, or when `plain` one
+/// line in the notice's tone.
+pub(super) fn notice(notice: &Notice, plain: bool) -> Div {
     let tone = tone(notice.tone);
+    if plain {
+        return text_at(meta(), tone, notice.text.clone())
+            .w_full()
+            .flex_none()
+            .px(pad_x());
+    }
     card().child(anchor(tone, "システム")).child(
         text_at(body(), theme::text_muted(), notice.text.clone())
             .w_full()
@@ -263,8 +266,8 @@ pub(super) fn thinking(id: usize) -> Div {
 /// One whole turn without an author label: its receipts merged into one
 /// line, its text, and its thinking state. While the turn runs it carries
 /// the session's state and 「停止」; otherwise the receipt line ends with
-/// the turn's elapsed time and model. `layout` decides where the receipt
-/// line sits and whether its calls fold.
+/// the turn's elapsed time and model. `layout` decides how the receipt line
+/// is worded and where the running state sits.
 pub(super) fn turn(
     index: usize,
     turn: &Turn,
@@ -274,12 +277,16 @@ pub(super) fn turn(
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
 ) -> AnyElement {
-    if layout == Layout::HeaderStrip {
-        return strip_turn(index, turn, status, ui, mono, cx).into_any_element();
-    }
     let carried = carried(turn, status);
+    let inline = carried.filter(|_| layout == Layout::InlineRunning);
     let receipts = receipts(turn);
-    let end = (turn.state != TurnState::Running).then(|| finished_end(turn).into_any_element());
+    let end = if turn.state != TurnState::Running {
+        Some(finished_end(turn).into_any_element())
+    } else if inline.is_some() && !receipts.is_empty() {
+        Some(stop_button("agent-next-card-stop", cx).into_any_element())
+    } else {
+        None
+    };
     let receipt_line = if receipts.is_empty() {
         end.map(|end| {
             h_flex()
@@ -289,22 +296,26 @@ pub(super) fn turn(
                 .into_any_element()
         })
     } else {
-        let collapsible = layout != Layout::CallsListed;
-        Some(
-            receipt_block(
-                ReceiptLine::merged(&receipts),
-                end,
-                collapsible,
-                ui,
-                mono,
-                cx,
+        let line = ReceiptLine::merged(&receipts);
+        let label = if layout == Layout::NamedTargets {
+            text_at(
+                meta(),
+                theme::text_muted(),
+                name_targets(line.calls.iter().map(|(_, _, call)| *call)),
             )
-            .into_any_element(),
-        )
+            .min_w_0()
+            .overflow_hidden()
+            .text_ellipsis()
+            .whitespace_nowrap()
+        } else {
+            text_at(meta(), theme::text_muted(), line.summary.clone()).min_w_0()
+        };
+        let lead = inline.map(|status| session_state_chip(status).into_any_element());
+        Some(receipt_block(line, lead, label, end, ui, mono, cx).into_any_element())
     };
 
     let mut parts: Vec<AnyElement> = Vec::new();
-    if let Some(status) = carried {
+    if let Some(status) = carried.filter(|_| inline.is_none()) {
         parts.push(
             h_flex()
                 .w_full()
@@ -316,90 +327,25 @@ pub(super) fn turn(
     }
     parts.extend(receipt_line);
     parts.extend(texts(index, turn));
-    if turn.parts.contains(&TurnPart::Thinking) {
-        parts.push(thinking(index).into_any_element());
+    let thinks = turn.parts.contains(&TurnPart::Thinking);
+    match inline.filter(|_| receipts.is_empty()) {
+        Some(status) => parts.push(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap(gap_tight())
+                .child(session_state_chip(status))
+                .when(thinks, |row| row.child(thinking(index)))
+                .child(div().flex_1().min_w_0())
+                .child(stop_button("agent-next-card-stop", cx))
+                .into_any_element(),
+        ),
+        None if thinks => parts.push(thinking(index).into_any_element()),
+        None => {}
     }
     with_accent_bar(card(), turn.state == TurnState::Running)
         .children(spaced(parts))
         .into_any_element()
-}
-
-/// [`turn`] with the receipt line as a tinted strip across the card's
-/// top: the state chip, the merged summary, and 「停止」 or the turn's
-/// elapsed time and model. A click on the strip opens the calls at the top
-/// of the body.
-fn strip_turn(
-    index: usize,
-    turn: &Turn,
-    status: Status,
-    ui: &UiState,
-    mono: &SharedString,
-    cx: &mut Context<AgentNextView>,
-) -> impl IntoElement {
-    let carried = carried(turn, status);
-    let receipts = receipts(turn);
-    let line = (!receipts.is_empty()).then(|| ReceiptLine::merged(&receipts));
-    let end = (turn.state != TurnState::Running)
-        .then(|| (turn_chip(turn.state), done_meta(turn)))
-        .filter(|(chip, meta)| chip.is_some() || meta.is_some());
-
-    let strip = (line.is_some() || carried.is_some() || end.is_some()).then(|| {
-        let key = line.as_ref().map(|line| line.key);
-        h_flex()
-            .id(("agent-next-strip", index))
-            .w_full()
-            .items_center()
-            .gap(gap_tight())
-            .px(pad_x())
-            .py(gap_tight())
-            .bg(theme::tint_over_background(
-                theme::text_primary(),
-                BAND_TINT,
-            ))
-            .border_b_1()
-            .border_color(theme::border())
-            .rounded_t(RADIUS)
-            .children(carried.map(session_state_chip))
-            .when_some(line.as_ref(), |row, line| {
-                row.child(text_at(meta(), theme::text_muted(), line.summary.clone()).min_w_0())
-                    .when(line.failed > 0, |row| {
-                        row.child(chip(format!("失敗 {}件", line.failed), theme::danger()))
-                    })
-                    .when(line.running, |row| {
-                        row.child(chip("実行中", theme::accent()))
-                    })
-            })
-            .child(div().flex_1().min_w_0())
-            .when(carried.is_some(), |row| {
-                row.child(stop_button("agent-next-card-stop", cx))
-            })
-            .when_some(end, |row, (chip, meta)| row.children(chip).children(meta))
-            .when_some(key, |row, key| {
-                row.cursor_pointer()
-                    .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx)))
-            })
-    });
-
-    let mut parts: Vec<AnyElement> = Vec::new();
-    if let Some(line) = line.filter(|line| line.running || ui.expanded_receipts.contains(&line.key))
-    {
-        parts.push(call_list(&line, ui, mono, cx).into_any_element());
-    }
-    parts.extend(texts(index, turn));
-    if turn.parts.contains(&TurnPart::Thinking) {
-        parts.push(thinking(index).into_any_element());
-    }
-    let body = (!parts.is_empty()).then(|| {
-        v_flex()
-            .w_full()
-            .px(pad_x())
-            .py(pad_y())
-            .children(spaced(parts))
-    });
-    with_accent_bar(
-        frame().children(strip).children(body),
-        turn.state == TurnState::Running,
-    )
 }
 
 /// Every receipt of `turn`, in order.
@@ -503,18 +449,64 @@ impl<'a> ReceiptLine<'a> {
     }
 }
 
-/// An activity line and, when expanded, its calls. `end` sits at the
-/// line's right end. When `collapsible`, a click on the line opens and
-/// closes its calls; otherwise they are always listed.
+/// How many targets one verb's group names before 「他 n件」.
+const NAMED_PER_VERB: usize = 3;
+
+/// 「{verb} {target}, {target}, {target}, 他 {n}件」 per verb, in order of
+/// first appearance, joined with 「 · 」.
+pub(super) fn name_targets<'a>(calls: impl IntoIterator<Item = &'a Call>) -> String {
+    let mut groups: Vec<(&str, Vec<String>)> = Vec::new();
+    for call in calls {
+        let target = short_target(&call.target);
+        match groups.iter_mut().find(|(verb, _)| *verb == call.verb) {
+            Some((_, targets)) => targets.push(target),
+            None => groups.push((&call.verb, vec![target])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(verb, targets)| {
+            let mut named = targets
+                .iter()
+                .take(NAMED_PER_VERB)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            if targets.len() > NAMED_PER_VERB {
+                named.push_str(&format!(", 他 {}件", targets.len() - NAMED_PER_VERB));
+            }
+            format!("{verb} {named}")
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// A command's first two words, a path's file name, or anything else as is.
+fn short_target(target: &str) -> String {
+    let target = target.trim();
+    if target.contains(char::is_whitespace) {
+        return target
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ");
+    }
+    target.rsplit('/').next().unwrap_or(target).to_string()
+}
+
+/// An activity line and, when expanded, its calls. `lead` sits before
+/// `label`, `end` at the line's right end. A click on the line opens and
+/// closes its calls.
 fn receipt_block(
     line: ReceiptLine<'_>,
+    lead: Option<AnyElement>,
+    label: Div,
     end: Option<AnyElement>,
-    collapsible: bool,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
 ) -> impl IntoElement {
-    let expanded = !collapsible || line.running || ui.expanded_receipts.contains(&line.key);
+    let expanded = line.running || ui.expanded_receipts.contains(&line.key);
     let key = line.key;
     let has_end = end.is_some();
     v_flex()
@@ -532,7 +524,8 @@ fn receipt_block(
                         row.items_baseline()
                     }
                 })
-                .child(text_at(meta(), theme::text_muted(), line.summary.clone()).min_w_0())
+                .children(lead)
+                .child(label)
                 .when(line.failed > 0, |row| {
                     row.child(chip(format!("失敗 {}件", line.failed), theme::danger()))
                 })
@@ -542,10 +535,8 @@ fn receipt_block(
                 .when_some(end, |row, end| {
                     row.child(div().flex_1().min_w_0()).child(end)
                 })
-                .when(collapsible, |row| {
-                    row.cursor_pointer()
-                        .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx)))
-                }),
+                .cursor_pointer()
+                .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx))),
         )
         .when(expanded, |block| {
             block.child(call_list(&line, ui, mono, cx).mt(gap_label()))
@@ -596,7 +587,7 @@ fn call_row(
                 .gap(gap_tight())
                 .child(call_chip(call.status))
                 .child(
-                    text_at(meta(), theme::text_primary(), call.title.clone())
+                    text_at(meta(), theme::text_primary(), call.title())
                         .flex_1()
                         .min_w_0()
                         .overflow_hidden()
@@ -724,5 +715,48 @@ fn call_body(
         CallBody::Text(text) => text_at(meta(), theme::text_muted(), text.clone())
             .w_full()
             .into_any_element(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::display::{Call, CallStatus};
+    use super::name_targets;
+
+    fn call(verb: &str, target: &str) -> Call {
+        Call {
+            verb: verb.to_string(),
+            target: target.to_string(),
+            status: CallStatus::Done,
+            body: None,
+            approval: None,
+        }
+    }
+
+    #[test]
+    fn targets_are_grouped_by_verb_and_shortened() {
+        let calls = [
+            call("読み取り", "src/board/spec.rs"),
+            call("検索", "font_size"),
+            call("読み取り", "src/board/thread.rs"),
+            call("読み取り", "src/board/list.rs"),
+            call("読み取り", "config.example.toml"),
+            call("読み取り", "src/terminal/font.rs"),
+            call("実行", "cargo clippy --workspace --all-targets"),
+        ];
+        assert_eq!(
+            name_targets(&calls),
+            "読み取り spec.rs, thread.rs, list.rs, 他 2件 · 検索 font_size · 実行 cargo clippy"
+        );
+    }
+
+    #[test]
+    fn three_targets_name_no_remainder() {
+        let calls = [
+            call("編集", "a/b.rs"),
+            call("編集", "c.rs"),
+            call("編集", "d/e/f.rs"),
+        ];
+        assert_eq!(name_targets(&calls), "編集 b.rs, c.rs, f.rs");
     }
 }

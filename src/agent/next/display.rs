@@ -79,10 +79,20 @@ pub(crate) struct Receipt {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Call {
-    pub(crate) title: String,
+    /// What the call does, worded as a noun: 「読み取り」, 「実行」.
+    pub(crate) verb: String,
+    /// What it does it to: a path, a command line, a pattern.
+    pub(crate) target: String,
     pub(crate) status: CallStatus,
     pub(crate) body: Option<CallBody>,
     pub(crate) approval: Option<Approval>,
+}
+
+impl Call {
+    /// 「{verb} {target}」.
+    pub(crate) fn title(&self) -> String {
+        format!("{} {}", self.verb, self.target)
+    }
 }
 
 #[allow(dead_code)]

@@ -52,28 +52,28 @@ const PREVIEWS: &[Preview] = &[
         build: agent::build_receipt_first_idle,
     },
     Preview {
-        name: agent::HEADER_STRIP,
-        build: agent::build_header_strip,
+        name: agent::NAMED_TARGETS,
+        build: agent::build_named_targets,
     },
     Preview {
-        name: agent::HEADER_STRIP_IDLE,
-        build: agent::build_header_strip_idle,
+        name: agent::NAMED_TARGETS_IDLE,
+        build: agent::build_named_targets_idle,
     },
     Preview {
-        name: agent::FLUSH,
-        build: agent::build_flush,
+        name: agent::PLAIN_NOTICES,
+        build: agent::build_plain_notices,
     },
     Preview {
-        name: agent::FLUSH_IDLE,
-        build: agent::build_flush_idle,
+        name: agent::PLAIN_NOTICES_IDLE,
+        build: agent::build_plain_notices_idle,
     },
     Preview {
-        name: agent::CALLS_LISTED,
-        build: agent::build_calls_listed,
+        name: agent::INLINE_RUNNING,
+        build: agent::build_inline_running,
     },
     Preview {
-        name: agent::CALLS_LISTED_IDLE,
-        build: agent::build_calls_listed_idle,
+        name: agent::INLINE_RUNNING_IDLE,
+        build: agent::build_inline_running_idle,
     },
     Preview {
         name: animation::NAME,
