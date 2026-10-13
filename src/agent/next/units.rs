@@ -63,10 +63,6 @@ fn text_at(step: Step, color: Hsla, text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
-fn anchor(color: Hsla, text: impl Into<SharedString>) -> Div {
-    text_at(body(), color, text).flex_none().font_weight(ANCHOR)
-}
-
 // ---------------------------------------------------------------------------
 // Controls
 // ---------------------------------------------------------------------------
@@ -93,30 +89,19 @@ fn stop_button(id: &'static str, cx: &mut Context<AgentNextView>) -> Button {
         }))
 }
 
-/// The session's state chip, a spacer, and 「停止」 at the row's right end.
-fn running_controls(
-    status: Status,
-    id: &'static str,
-    cx: &mut Context<AgentNextView>,
-) -> [AnyElement; 3] {
-    [
-        session_state_chip(status).into_any_element(),
-        div().flex_1().min_w_0().into_any_element(),
-        stop_button(id, cx).into_any_element(),
-    ]
-}
-
 /// The session's state, when `turn` is the running one that carries it.
 fn carried(turn: &Turn, status: Status) -> Option<Status> {
     (turn.state == TurnState::Running && status.running()).then_some(status)
 }
 
-/// 「{elapsed} · {model}」 for a finished turn.
-fn done_meta(turn: &Turn) -> Option<Div> {
+/// 「{elapsed} · {model}」 for a finished turn, or 「{elapsed}」 alone under
+/// [`Layout::ElapsedOnly`].
+fn done_meta(turn: &Turn, layout: Layout) -> Option<Div> {
     if turn.state != TurnState::Done {
         return None;
     }
-    let text = [turn.elapsed.clone(), turn.model.clone()]
+    let model = turn.model.clone().filter(|_| layout != Layout::ElapsedOnly);
+    let text = [turn.elapsed.clone(), model]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
@@ -225,21 +210,12 @@ fn tone(tone: Tone) -> Hsla {
     }
 }
 
-/// A line from the system: a card under 「システム」, or when `plain` one
-/// line in the notice's tone.
-pub(super) fn notice(notice: &Notice, plain: bool) -> Div {
-    let tone = tone(notice.tone);
-    if plain {
-        return text_at(meta(), tone, notice.text.clone())
-            .w_full()
-            .flex_none()
-            .px(pad_x());
-    }
-    card().child(anchor(tone, "システム")).child(
-        text_at(body(), theme::text_muted(), notice.text.clone())
-            .w_full()
-            .mt(gap_tight()),
-    )
+/// A line from the system, in the notice's tone.
+pub(super) fn notice(notice: &Notice) -> Div {
+    text_at(meta(), tone(notice.tone), notice.text.clone())
+        .w_full()
+        .flex_none()
+        .px(pad_x())
 }
 
 /// 「考え中」 and three dots whose opacity cycles.
@@ -264,10 +240,10 @@ pub(super) fn thinking(id: usize) -> Div {
 }
 
 /// One whole turn without an author label: its receipts merged into one
-/// line, its text, and its thinking state. While the turn runs it carries
-/// the session's state and 「停止」; otherwise the receipt line ends with
-/// the turn's elapsed time and model. `layout` decides how the receipt line
-/// is worded and where the running state sits.
+/// line, its text, and its thinking state. While the turn runs, the
+/// session's state opens the receipt line and 「停止」 ends it (or, with no
+/// receipt yet, the thinking line); otherwise the receipt line ends with
+/// the turn's elapsed time and model.
 pub(super) fn turn(
     index: usize,
     turn: &Turn,
@@ -278,11 +254,10 @@ pub(super) fn turn(
     cx: &mut Context<AgentNextView>,
 ) -> AnyElement {
     let carried = carried(turn, status);
-    let inline = carried.filter(|_| layout == Layout::InlineRunning);
     let receipts = receipts(turn);
     let end = if turn.state != TurnState::Running {
-        Some(finished_end(turn).into_any_element())
-    } else if inline.is_some() && !receipts.is_empty() {
+        Some(finished_end(turn, layout).into_any_element())
+    } else if carried.is_some() && !receipts.is_empty() {
         Some(stop_button("agent-next-card-stop", cx).into_any_element())
     } else {
         None
@@ -297,38 +272,15 @@ pub(super) fn turn(
         })
     } else {
         let line = ReceiptLine::merged(&receipts);
-        let label = if layout == Layout::NamedTargets {
-            text_at(
-                meta(),
-                theme::text_muted(),
-                name_targets(line.calls.iter().map(|(_, _, call)| *call)),
-            )
-            .min_w_0()
-            .overflow_hidden()
-            .text_ellipsis()
-            .whitespace_nowrap()
-        } else {
-            text_at(meta(), theme::text_muted(), line.summary.clone()).min_w_0()
-        };
-        let lead = inline.map(|status| session_state_chip(status).into_any_element());
-        Some(receipt_block(line, lead, label, end, ui, mono, cx).into_any_element())
+        let lead = carried.map(|status| session_state_chip(status).into_any_element());
+        Some(receipt_block(line, lead, end, layout, ui, mono, cx).into_any_element())
     };
 
     let mut parts: Vec<AnyElement> = Vec::new();
-    if let Some(status) = carried.filter(|_| inline.is_none()) {
-        parts.push(
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap(gap_tight())
-                .children(running_controls(status, "agent-next-card-stop", cx))
-                .into_any_element(),
-        );
-    }
     parts.extend(receipt_line);
     parts.extend(texts(index, turn));
     let thinks = turn.parts.contains(&TurnPart::Thinking);
-    match inline.filter(|_| receipts.is_empty()) {
+    match carried.filter(|_| receipts.is_empty()) {
         Some(status) => parts.push(
             h_flex()
                 .w_full()
@@ -359,15 +311,15 @@ fn receipts(turn: &Turn) -> Vec<&Receipt> {
         .collect()
 }
 
-/// A finished turn's chip and 「{elapsed} · {model}」, for the receipt
-/// line's right end.
-fn finished_end(turn: &Turn) -> impl IntoElement {
+/// A finished turn's chip and its [`done_meta`], for the receipt line's
+/// right end.
+fn finished_end(turn: &Turn, layout: Layout) -> impl IntoElement {
     h_flex()
         .flex_none()
         .items_baseline()
         .gap(gap_tight())
         .children(turn_chip(turn.state))
-        .children(done_meta(turn))
+        .children(done_meta(turn, layout))
 }
 
 /// Each piece of `turn`'s text, in order.
@@ -449,59 +401,14 @@ impl<'a> ReceiptLine<'a> {
     }
 }
 
-/// How many targets one verb's group names before 「他 n件」.
-const NAMED_PER_VERB: usize = 3;
-
-/// 「{verb} {target}, {target}, {target}, 他 {n}件」 per verb, in order of
-/// first appearance, joined with 「 · 」.
-pub(super) fn name_targets<'a>(calls: impl IntoIterator<Item = &'a Call>) -> String {
-    let mut groups: Vec<(&str, Vec<String>)> = Vec::new();
-    for call in calls {
-        let target = short_target(&call.target);
-        match groups.iter_mut().find(|(verb, _)| *verb == call.verb) {
-            Some((_, targets)) => targets.push(target),
-            None => groups.push((&call.verb, vec![target])),
-        }
-    }
-    groups
-        .into_iter()
-        .map(|(verb, targets)| {
-            let mut named = targets
-                .iter()
-                .take(NAMED_PER_VERB)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ");
-            if targets.len() > NAMED_PER_VERB {
-                named.push_str(&format!(", 他 {}件", targets.len() - NAMED_PER_VERB));
-            }
-            format!("{verb} {named}")
-        })
-        .collect::<Vec<_>>()
-        .join(" · ")
-}
-
-/// A command's first two words, a path's file name, or anything else as is.
-fn short_target(target: &str) -> String {
-    let target = target.trim();
-    if target.contains(char::is_whitespace) {
-        return target
-            .split_whitespace()
-            .take(2)
-            .collect::<Vec<_>>()
-            .join(" ");
-    }
-    target.rsplit('/').next().unwrap_or(target).to_string()
-}
-
 /// An activity line and, when expanded, its calls. `lead` sits before
-/// `label`, `end` at the line's right end. A click on the line opens and
+/// the summary, `end` at the line's right end. A click on the line opens and
 /// closes its calls.
 fn receipt_block(
     line: ReceiptLine<'_>,
     lead: Option<AnyElement>,
-    label: Div,
     end: Option<AnyElement>,
+    layout: Layout,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
@@ -525,7 +432,7 @@ fn receipt_block(
                     }
                 })
                 .children(lead)
-                .child(label)
+                .child(text_at(meta(), theme::text_muted(), line.summary.clone()).min_w_0())
                 .when(line.failed > 0, |row| {
                     row.child(chip(format!("失敗 {}件", line.failed), theme::danger()))
                 })
@@ -539,30 +446,39 @@ fn receipt_block(
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx))),
         )
         .when(expanded, |block| {
-            block.child(call_list(&line, ui, mono, cx).mt(gap_label()))
+            block.child(call_list(&line, layout, ui, mono, cx).mt(gap_label()))
         })
 }
 
-/// The bordered list of a receipt line's calls.
+/// A receipt line's calls: in a bordered box, or under a left rule with
+/// [`Layout::BorderlessCalls`].
 fn call_list(
     line: &ReceiptLine<'_>,
+    layout: Layout,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
 ) -> Div {
-    v_flex()
-        .w_full()
-        .border_1()
-        .border_color(theme::border())
-        .rounded(RADIUS)
-        .px(pad_x())
-        .py(gap_tight())
-        .gap(gap_label())
-        .children(
-            line.calls
-                .iter()
-                .map(|(receipt, index, call)| call_row(*receipt, *index, call, ui, mono, cx)),
-        )
+    let list = if layout == Layout::BorderlessCalls {
+        v_flex()
+            .ml(gap_tight())
+            .pl(pad_x())
+            .border_l_1()
+            .border_color(theme::border())
+    } else {
+        v_flex()
+            .w_full()
+            .border_1()
+            .border_color(theme::border())
+            .rounded(RADIUS)
+            .px(pad_x())
+            .py(gap_tight())
+    };
+    list.gap(gap_label()).children(
+        line.calls
+            .iter()
+            .map(|(receipt, index, call)| call_row(*receipt, *index, call, ui, mono, cx)),
+    )
 }
 
 fn call_row(
@@ -715,48 +631,5 @@ fn call_body(
         CallBody::Text(text) => text_at(meta(), theme::text_muted(), text.clone())
             .w_full()
             .into_any_element(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::display::{Call, CallStatus};
-    use super::name_targets;
-
-    fn call(verb: &str, target: &str) -> Call {
-        Call {
-            verb: verb.to_string(),
-            target: target.to_string(),
-            status: CallStatus::Done,
-            body: None,
-            approval: None,
-        }
-    }
-
-    #[test]
-    fn targets_are_grouped_by_verb_and_shortened() {
-        let calls = [
-            call("読み取り", "src/board/spec.rs"),
-            call("検索", "font_size"),
-            call("読み取り", "src/board/thread.rs"),
-            call("読み取り", "src/board/list.rs"),
-            call("読み取り", "config.example.toml"),
-            call("読み取り", "src/terminal/font.rs"),
-            call("実行", "cargo clippy --workspace --all-targets"),
-        ];
-        assert_eq!(
-            name_targets(&calls),
-            "読み取り spec.rs, thread.rs, list.rs, 他 2件 · 検索 font_size · 実行 cargo clippy"
-        );
-    }
-
-    #[test]
-    fn three_targets_name_no_remainder() {
-        let calls = [
-            call("編集", "a/b.rs"),
-            call("編集", "c.rs"),
-            call("編集", "d/e/f.rs"),
-        ];
-        assert_eq!(name_targets(&calls), "編集 b.rs, c.rs, f.rs");
     }
 }

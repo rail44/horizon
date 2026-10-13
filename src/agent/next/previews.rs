@@ -1,7 +1,8 @@
 //! The pane's named previews: one sample transcript drawn in each of the
 //! layouts, once with a turn running and an approval pending at its
 //! tail and once with the session idle. What differs between two previews
-//! of the same state is the layout, not the data.
+//! of the same state is the layout, not the data. An idle preview opens
+//! with the last turn's receipt and its first diff open.
 
 use gpui::{AnyView, App, AppContext as _, Window};
 
@@ -9,16 +10,16 @@ use super::display::{
     Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Label, Message, Notice,
     Receipt, Status, Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };
-use super::{AgentNextView, Layout};
+use super::{AgentNextView, Layout, UiState};
 
-pub(crate) const RECEIPT_FIRST: &str = "agent-8";
-pub(crate) const NAMED_TARGETS: &str = "agent-13";
-pub(crate) const PLAIN_NOTICES: &str = "agent-14";
-pub(crate) const INLINE_RUNNING: &str = "agent-15";
-pub(crate) const RECEIPT_FIRST_IDLE: &str = "agent-8-idle";
-pub(crate) const NAMED_TARGETS_IDLE: &str = "agent-13-idle";
-pub(crate) const PLAIN_NOTICES_IDLE: &str = "agent-14-idle";
-pub(crate) const INLINE_RUNNING_IDLE: &str = "agent-15-idle";
+pub(crate) const BASELINE: &str = "agent-16";
+pub(crate) const BOXED_COMPOSER: &str = "agent-17";
+pub(crate) const BORDERLESS_CALLS: &str = "agent-18";
+pub(crate) const ELAPSED_ONLY: &str = "agent-19";
+pub(crate) const BASELINE_IDLE: &str = "agent-16-idle";
+pub(crate) const BOXED_COMPOSER_IDLE: &str = "agent-17-idle";
+pub(crate) const BORDERLESS_CALLS_IDLE: &str = "agent-18-idle";
+pub(crate) const ELAPSED_ONLY_IDLE: &str = "agent-19-idle";
 
 // ---------------------------------------------------------------------------
 // Probes
@@ -54,45 +55,91 @@ pub(crate) const READ_CALLS: usize = 6;
 #[cfg(test)]
 pub(crate) const READ_ELSEWHERE: usize = 3;
 
+/// A character only the diff an idle preview opens contains, and how many
+/// times: once in its removed line and four times in the lines around it.
+#[cfg(test)]
+pub(crate) const OPENED_DIFF_MARKER: char = 'Z';
+#[cfg(test)]
+pub(crate) const OPENED_DIFF_MARKERS: usize = 5;
+
 // ---------------------------------------------------------------------------
 // The previews
 // ---------------------------------------------------------------------------
 
 fn build(layout: Layout, running: bool, window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| AgentNextView::new(sample(running), layout, window, cx))
+    let transcript = sample(running);
+    let ui = if running {
+        UiState::default()
+    } else {
+        last_turn_opened(&transcript)
+    };
+    cx.new(|cx| AgentNextView::new(transcript, layout, ui, window, cx))
         .into()
 }
 
-pub(crate) fn build_receipt_first(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::ReceiptFirst, true, window, cx)
+/// The last turn's receipt line open, and in it the body of the first call
+/// whose body is a diff.
+fn last_turn_opened(transcript: &Transcript) -> UiState {
+    let mut ui = UiState::default();
+    let Some(turn) = transcript.units.iter().rev().find_map(|unit| match unit {
+        Unit::Turn(turn) => Some(turn),
+        _ => None,
+    }) else {
+        return ui;
+    };
+    let receipts: Vec<&Receipt> = turn
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            TurnPart::Receipt(receipt) => Some(receipt),
+            _ => None,
+        })
+        .collect();
+    let Some(first) = receipts.first() else {
+        return ui;
+    };
+    ui.expanded_receipts.insert(first.key);
+    let first_diff = receipts.iter().find_map(|receipt| {
+        receipt
+            .calls
+            .iter()
+            .position(|call| matches!(call.body, Some(CallBody::Diff(_))))
+            .map(|index| (receipt.key, index))
+    });
+    ui.open_bodies.extend(first_diff);
+    ui
 }
 
-pub(crate) fn build_named_targets(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::NamedTargets, true, window, cx)
+pub(crate) fn build_baseline(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::Baseline, true, window, cx)
 }
 
-pub(crate) fn build_plain_notices(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::PlainNotices, true, window, cx)
+pub(crate) fn build_boxed_composer(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::BoxedComposer, true, window, cx)
 }
 
-pub(crate) fn build_inline_running(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::InlineRunning, true, window, cx)
+pub(crate) fn build_borderless_calls(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::BorderlessCalls, true, window, cx)
 }
 
-pub(crate) fn build_receipt_first_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::ReceiptFirst, false, window, cx)
+pub(crate) fn build_elapsed_only(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::ElapsedOnly, true, window, cx)
 }
 
-pub(crate) fn build_named_targets_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::NamedTargets, false, window, cx)
+pub(crate) fn build_baseline_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::Baseline, false, window, cx)
 }
 
-pub(crate) fn build_plain_notices_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::PlainNotices, false, window, cx)
+pub(crate) fn build_boxed_composer_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::BoxedComposer, false, window, cx)
 }
 
-pub(crate) fn build_inline_running_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::InlineRunning, false, window, cx)
+pub(crate) fn build_borderless_calls_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::BorderlessCalls, false, window, cx)
+}
+
+pub(crate) fn build_elapsed_only_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::ElapsedOnly, false, window, cx)
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +385,8 @@ fn running_turn() -> Turn {
     }
 }
 
-const MODEL: &str = "syn:large:text";
+/// The model every turn ran on; the composer's chip names it too.
+pub(crate) const MODEL: &str = "syn:large:text";
 
 /// The sample: two finished exchanges, a compaction notice, and the owner's
 /// next request, answered by a running turn when `running`.
@@ -396,7 +444,6 @@ mod tests {
         "中断",
         "バックグラウンド · · ·",
         "停止",
-        "システム",
         "セッションは終了しました",
         "ランタイムに到達できません",
         "考え中・",
@@ -407,7 +454,6 @@ mod tests {
         "メッセージを書く",
         "このセッションは終了しています",
         "承認",
-        "他 件",
     ];
 
     fn call_strings(call: &Call) -> Vec<String> {
@@ -487,20 +533,55 @@ mod tests {
         }
     }
 
-    /// So a painted `シ` can only be the notice label: the other two are
-    /// drawn only for a session that has ended, which the sample is not.
+    /// So a painted 「システム」 can only be a notice label, which the pane
+    /// no longer draws: the only strings holding `シ` are drawn for a
+    /// session that has ended, which the sample is not.
     #[test]
-    fn only_the_notice_label_and_an_ended_session_paint_its_first_character() {
+    fn only_an_ended_session_paints_the_notice_labels_first_character() {
         let all = strings(&sample(true));
         let owners: Vec<&String> = all.iter().filter(|s| s.contains('シ')).collect();
         assert_eq!(
             owners,
-            vec![
-                "システム",
-                "セッションは終了しました",
-                "このセッションは終了しています"
-            ]
+            vec!["セッションは終了しました", "このセッションは終了しています"]
         );
+    }
+
+    /// So a count of [`OPENED_DIFF_MARKER`] says the idle previews' opened
+    /// diff, its removed line included, is painted.
+    #[test]
+    fn the_opened_diff_owns_its_marker() {
+        let idle = sample(false);
+        let ui = last_turn_opened(&idle);
+        let all = strings(&sample(true));
+        let total: usize = all
+            .iter()
+            .map(|s| s.matches(OPENED_DIFF_MARKER).count())
+            .sum();
+        assert_eq!(total, OPENED_DIFF_MARKERS);
+        let Some(Unit::Turn(last)) = idle.units.iter().rev().find(|u| matches!(u, Unit::Turn(_)))
+        else {
+            panic!("the idle sample has a turn");
+        };
+        let Some(TurnPart::Receipt(receipt)) = last
+            .parts
+            .iter()
+            .find(|p| matches!(p, TurnPart::Receipt(_)))
+        else {
+            panic!("the last turn has a receipt");
+        };
+        assert_eq!(ui.expanded_receipts, [receipt.key].into());
+        assert_eq!(ui.open_bodies, [(receipt.key, 0)].into());
+        let Some(CallBody::Diff(lines)) = &receipt.calls[0].body else {
+            panic!("the first call's body is a diff");
+        };
+        let in_diff: usize = lines
+            .iter()
+            .map(|line| line.text.matches(OPENED_DIFF_MARKER).count())
+            .sum();
+        assert_eq!(in_diff, OPENED_DIFF_MARKERS);
+        assert!(lines
+            .iter()
+            .any(|line| line.kind == DiffKind::Removed && line.text.contains(OPENED_DIFF_MARKER)));
     }
 
     /// So a painted `承` can only be the pending approval.

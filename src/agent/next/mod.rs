@@ -10,17 +10,18 @@
 //! holds the input, the model chip and the send hint only; the session's
 //! state and 「停止」 ride on the running turn; an approval sits under the
 //! call that asks for it; background tasks and a session that can no
-//! longer run end the column. Neither speaker is labeled, and a turn's
-//! receipts merge into one line. The layouts differ in how a turn is
-//! drawn ([`units`]):
+//! longer run end the column. Neither speaker is labeled, a turn's
+//! receipts merge into one line, and notices are plain lines. The layouts
+//! differ in one area each ([`units`]):
 //!
-//! - [`Layout::ReceiptFirst`]: one card per turn, the receipt line first.
-//! - [`Layout::NamedTargets`]: [`Layout::ReceiptFirst`] with the receipt
-//!   line naming what the calls touched instead of counting them.
-//! - [`Layout::PlainNotices`]: [`Layout::ReceiptFirst`] with notices as
-//!   plain lines rather than cards.
-//! - [`Layout::InlineRunning`]: [`Layout::ReceiptFirst`] with the running
-//!   turn's state and 「停止」 on its receipt line rather than a row above.
+//! - [`Layout::Baseline`]: one card per turn, the receipt line first; while
+//!   the turn runs, the session's state opens that line and 「停止」 ends it.
+//! - [`Layout::BoxedComposer`]: [`Layout::Baseline`] with the composer's
+//!   field and hint row in one bordered box instead of a bordered strip.
+//! - [`Layout::BorderlessCalls`]: [`Layout::Baseline`] with the expanded
+//!   call rows under a left rule rather than in a bordered box.
+//! - [`Layout::ElapsedOnly`]: [`Layout::Baseline`] with a finished turn's
+//!   right end showing its elapsed time without the model.
 
 pub(crate) mod display;
 pub(crate) mod previews;
@@ -42,10 +43,10 @@ use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
 /// Which arrangement of the units the view draws.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Layout {
-    ReceiptFirst,
-    NamedTargets,
-    PlainNotices,
-    InlineRunning,
+    Baseline,
+    BoxedComposer,
+    BorderlessCalls,
+    ElapsedOnly,
 }
 
 /// What the view asks of whatever holds it.
@@ -90,6 +91,7 @@ impl AgentNextView {
     pub(crate) fn new(
         transcript: Transcript,
         layout: Layout,
+        ui: UiState,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -113,7 +115,7 @@ impl AgentNextView {
         Self {
             transcript,
             layout,
-            ui: UiState::default(),
+            ui,
             composer,
             scroll: ScrollHandle::new(),
             follow_tail: true,
@@ -189,19 +191,18 @@ impl AgentNextView {
     fn units(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mono = cx.theme().mono_font_family.clone();
         let status = self.transcript.status;
-        let plain_notices = self.layout == Layout::PlainNotices;
         let mut children = Vec::new();
         for (index, unit) in self.transcript.units.iter().enumerate() {
             children.push(match unit {
                 Unit::User(message) => units::user(index, message).into_any_element(),
-                Unit::Notice(notice) => units::notice(notice, plain_notices).into_any_element(),
+                Unit::Notice(notice) => units::notice(notice).into_any_element(),
                 Unit::Turn(turn) => {
                     units::turn(index, turn, status, self.layout, &self.ui, &mono, cx)
                 }
             });
         }
         if let Some(end) = units::session_end(status) {
-            children.push(units::notice(&end, plain_notices).into_any_element());
+            children.push(units::notice(&end).into_any_element());
         }
         children
             .extend(units::task_lines(&self.transcript.tasks).map(IntoElement::into_any_element));
@@ -210,35 +211,50 @@ impl AgentNextView {
 
     /// The composer: the field, the model chip, and the send hint.
     fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
+        let field = div()
             .w_full()
-            .flex_none()
-            .px(thread_gutter())
+            .text_size(body().size)
+            .child(Textarea::new(&self.composer).appearance(false));
+        let hints = self.render_composer_hints(cx);
+        let strip = v_flex().w_full().flex_none().px(thread_gutter());
+        if self.layout == Layout::BoxedComposer {
+            return strip.pb(pad_y()).child(
+                v_flex()
+                    .w_full()
+                    .border_1()
+                    .border_color(theme::border())
+                    .rounded(RADIUS)
+                    .px(pad_x())
+                    .py(gap_tight())
+                    .gap(gap_label())
+                    .child(field)
+                    .child(hints),
+            );
+        }
+        strip
             .py(pad_y())
             .gap(gap_label())
             .border_t_1()
             .border_color(theme::border())
+            .child(field)
+            .child(hints)
+    }
+
+    /// The model chip at the left and the send hint at the right.
+    fn render_composer_hints(&self, cx: &mut Context<Self>) -> Div {
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap(gap_label())
+            .child(units::model_chip(&self.transcript.model, cx))
+            .child(div().flex_1().min_w_0())
+            .child(key_chip("Enter"))
             .child(
                 div()
-                    .w_full()
-                    .text_size(body().size)
-                    .child(Textarea::new(&self.composer).appearance(false)),
-            )
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap(gap_label())
-                    .child(units::model_chip(&self.transcript.model, cx))
-                    .child(div().flex_1().min_w_0())
-                    .child(key_chip("Enter"))
-                    .child(
-                        div()
-                            .text_size(micro().size)
-                            .line_height(micro().line_height)
-                            .text_color(theme::text_muted())
-                            .child("で送信"),
-                    ),
+                    .text_size(micro().size)
+                    .line_height(micro().line_height)
+                    .text_color(theme::text_muted())
+                    .child("で送信"),
             )
     }
 

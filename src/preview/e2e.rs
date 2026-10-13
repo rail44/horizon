@@ -948,13 +948,13 @@ fn mount_animated(
     }
 }
 
-/// How a preview's layout departs from `agent-8`'s.
+/// How a preview's layout departs from `agent-16`'s.
 #[derive(Clone, Copy, PartialEq)]
 enum AgentVariant {
     Baseline,
-    NamedTargets,
-    PlainNotices,
-    InlineRunning,
+    BoxedComposer,
+    BorderlessCalls,
+    ElapsedOnly,
 }
 
 /// `counts` without whitespace, which a line may or may not paint as glyphs.
@@ -985,34 +985,31 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
     let fold_marker = '残';
     let read_marker = '読';
 
-    // The receipt lines `agent-8` paints and the ones `agent-13` paints in
-    // their place, per turn; the running turn's pair is last.
+    // The receipt lines every layout paints for the two finished turns.
     let summaries = [
         "ファイル 6件を読み取り · 検索 2件",
         "ファイル 3件を編集 · コマンド 2件を実行",
-        "コマンド 1件を実行",
-    ];
-    let named = [
-        "読み取り spec.rs, thread.rs, list.rs, 他 3件 · 検索 font_size, px\\(",
-        "編集 font.rs, spec.rs, commands.rs · 実行 cargo clippy, cargo nextest",
-        "実行 cargo clippy · 書き込み config.toml",
     ];
 
     // Each baseline comes before the variations of the same state, which
     // are checked against what it painted.
     let cases = [
-        (agent::RECEIPT_FIRST, true, AgentVariant::Baseline),
-        (agent::NAMED_TARGETS, true, AgentVariant::NamedTargets),
-        (agent::PLAIN_NOTICES, true, AgentVariant::PlainNotices),
-        (agent::INLINE_RUNNING, true, AgentVariant::InlineRunning),
-        (agent::RECEIPT_FIRST_IDLE, false, AgentVariant::Baseline),
-        (agent::NAMED_TARGETS_IDLE, false, AgentVariant::NamedTargets),
-        (agent::PLAIN_NOTICES_IDLE, false, AgentVariant::PlainNotices),
+        (agent::BASELINE, true, AgentVariant::Baseline),
+        (agent::BOXED_COMPOSER, true, AgentVariant::BoxedComposer),
+        (agent::BORDERLESS_CALLS, true, AgentVariant::BorderlessCalls),
+        (agent::ELAPSED_ONLY, true, AgentVariant::ElapsedOnly),
+        (agent::BASELINE_IDLE, false, AgentVariant::Baseline),
         (
-            agent::INLINE_RUNNING_IDLE,
+            agent::BOXED_COMPOSER_IDLE,
             false,
-            AgentVariant::InlineRunning,
+            AgentVariant::BoxedComposer,
         ),
+        (
+            agent::BORDERLESS_CALLS_IDLE,
+            false,
+            AgentVariant::BorderlessCalls,
+        ),
+        (agent::ELAPSED_ONLY_IDLE, false, AgentVariant::ElapsedOnly),
     ];
     let mut baseline: Option<BTreeMap<char, usize>> = None;
     for (name, running, variant) in cases {
@@ -1045,9 +1042,9 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             );
         }
         if running {
-            // For agent-15 this holds 「停止」's presence only: the display
-            // list carries no geometry, so that it sits on the receipt line
-            // rather than a row of its own is not asserted.
+            // This holds 「停止」's presence only: the display list carries
+            // no geometry, so that it sits on the receipt line rather than a
+            // row of its own is not asserted.
             assert!(
                 painted(&painted_now, "停止"),
                 "{name}: no stop control is painted: {painted_now:?}"
@@ -1082,20 +1079,23 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             0,
             "{name}: a folded turn is painted: {painted_whole:?}"
         );
-        if variant == AgentVariant::PlainNotices {
-            assert!(
-                !painted(&painted_whole, "システム"),
-                "{name}: a notice card's label is painted: {painted_whole:?}"
-            );
-        } else {
-            assert!(
-                painted(&painted_whole, "システム"),
-                "{name}: no notice card is painted: {painted_whole:?}"
-            );
-        }
+        assert!(
+            !painted(&painted_whole, "システム"),
+            "{name}: a notice card's label is painted: {painted_whole:?}"
+        );
+        // An idle preview opens the last turn's first diff; a running one
+        // leaves that turn folded.
+        assert_eq!(
+            count_of(&painted_whole, agent::OPENED_DIFF_MARKER),
+            if running {
+                0
+            } else {
+                agent::OPENED_DIFF_MARKERS
+            },
+            "{name}: the last turn's first diff is not as opened: {painted_whole:?}"
+        );
         // `読` is painted a fixed number of times outside the first answer's
-        // read calls, which stay folded. agent-13 trades the one in the
-        // first summary for the one verb leading its named line.
+        // read calls, which stay folded.
         assert_eq!(
             count_of(&painted_whole, read_marker),
             agent::READ_ELSEWHERE,
@@ -1114,21 +1114,24 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             );
             baseline = Some(painted_whole);
         } else {
-            // Against agent-8 in the same state, each variation paints
-            // exactly what it changes and nothing else.
-            let turns = if running { 3 } else { 2 };
+            // Against agent-16 in the same state, each variation paints
+            // exactly what it changes and nothing else. agent-17 and agent-18
+            // change geometry only, which the display list does not carry,
+            // so for them this holds that they paint the same glyphs.
             let expected = match variant {
-                AgentVariant::NamedTargets => {
-                    text_delta(&summaries[..turns].concat(), &named[..turns].concat())
+                AgentVariant::ElapsedOnly => {
+                    // Both finished turns drop 「 · {model}」 from their
+                    // right end; the running turn has none.
+                    let dropped = format!(" · {}", agent::MODEL);
+                    text_delta(&dropped.repeat(2), "")
                 }
-                AgentVariant::PlainNotices => text_delta("システム", ""),
                 _ => BTreeMap::new(),
             };
-            let base = baseline.as_ref().expect("agent-8 is checked first");
+            let base = baseline.as_ref().expect("agent-16 is checked first");
             assert_eq!(
                 without_whitespace(delta(base, &painted_whole)),
                 without_whitespace(expected),
-                "{name}: paints something other than agent-8 and its one change"
+                "{name}: paints something other than agent-16 and its one change"
             );
         }
         cx.update(|_| drop(loaded));

@@ -44,36 +44,36 @@ const PREVIEWS: &[Preview] = &[
         build: board::build_thread_long,
     },
     Preview {
-        name: agent::RECEIPT_FIRST,
-        build: agent::build_receipt_first,
+        name: agent::BASELINE,
+        build: agent::build_baseline,
     },
     Preview {
-        name: agent::RECEIPT_FIRST_IDLE,
-        build: agent::build_receipt_first_idle,
+        name: agent::BASELINE_IDLE,
+        build: agent::build_baseline_idle,
     },
     Preview {
-        name: agent::NAMED_TARGETS,
-        build: agent::build_named_targets,
+        name: agent::BOXED_COMPOSER,
+        build: agent::build_boxed_composer,
     },
     Preview {
-        name: agent::NAMED_TARGETS_IDLE,
-        build: agent::build_named_targets_idle,
+        name: agent::BOXED_COMPOSER_IDLE,
+        build: agent::build_boxed_composer_idle,
     },
     Preview {
-        name: agent::PLAIN_NOTICES,
-        build: agent::build_plain_notices,
+        name: agent::BORDERLESS_CALLS,
+        build: agent::build_borderless_calls,
     },
     Preview {
-        name: agent::PLAIN_NOTICES_IDLE,
-        build: agent::build_plain_notices_idle,
+        name: agent::BORDERLESS_CALLS_IDLE,
+        build: agent::build_borderless_calls_idle,
     },
     Preview {
-        name: agent::INLINE_RUNNING,
-        build: agent::build_inline_running,
+        name: agent::ELAPSED_ONLY,
+        build: agent::build_elapsed_only,
     },
     Preview {
-        name: agent::INLINE_RUNNING_IDLE,
-        build: agent::build_inline_running_idle,
+        name: agent::ELAPSED_ONLY_IDLE,
+        build: agent::build_elapsed_only_idle,
     },
     Preview {
         name: animation::NAME,
