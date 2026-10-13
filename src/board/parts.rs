@@ -9,6 +9,7 @@ use gpui::{Hsla, SharedString};
 use horizon_board::{Item, StoreError};
 
 use super::activity::BoardSessionActivity;
+use super::chrome;
 use super::model;
 use super::spec::{MEASURE_CELLS, OWNER_MEASURE_CELLS};
 use crate::theme;
@@ -31,31 +32,31 @@ pub(super) fn status_tone(item: &Item) -> Hsla {
     }
 }
 
-/// A bound session's activity, in the chrome language.
+/// A bound session's activity.
 pub(super) fn activity_label(activity: BoardSessionActivity) -> &'static str {
     match activity {
-        BoardSessionActivity::Loading => "読み込み中",
-        BoardSessionActivity::Unavailable => "到達不能",
-        BoardSessionActivity::Starting => "開始中",
-        BoardSessionActivity::Running => "実行中",
-        BoardSessionActivity::ToolRunning => "ツール実行中",
-        BoardSessionActivity::WaitingForInput => "入力待ち",
-        BoardSessionActivity::WaitingForApproval => "承認待ち",
-        BoardSessionActivity::Cancelled => "中断",
-        BoardSessionActivity::Completed => "完了",
-        BoardSessionActivity::Failed => "失敗",
-        BoardSessionActivity::Paused => "一時停止",
-        BoardSessionActivity::Terminated => "終了",
+        BoardSessionActivity::Loading => chrome::LOADING,
+        BoardSessionActivity::Unavailable => chrome::UNREACHABLE,
+        BoardSessionActivity::Starting => chrome::STARTING,
+        BoardSessionActivity::Running => chrome::RUNNING,
+        BoardSessionActivity::ToolRunning => chrome::TOOL_RUNNING,
+        BoardSessionActivity::WaitingForInput => chrome::WAITING_FOR_INPUT,
+        BoardSessionActivity::WaitingForApproval => chrome::WAITING_FOR_APPROVAL,
+        BoardSessionActivity::Cancelled => chrome::CANCELLED,
+        BoardSessionActivity::Completed => chrome::COMPLETED,
+        BoardSessionActivity::Failed => chrome::FAILED,
+        BoardSessionActivity::Paused => chrome::PAUSED,
+        BoardSessionActivity::Terminated => chrome::TERMINATED,
     }
 }
 
-/// Who wrote a post, in the chrome language. An author the board does not
+/// Who wrote a post. An author the board does not
 /// know one of the three roles for keeps its own name.
 pub(super) fn author_label(author: &str) -> SharedString {
     match model::voice(author) {
-        model::Voice::Owner => "オーナー".into(),
-        model::Voice::System => "システム".into(),
-        model::Voice::Agent if author == "agent" => "エージェント".into(),
+        model::Voice::Owner => chrome::OWNER.into(),
+        model::Voice::System => chrome::SYSTEM.into(),
+        model::Voice::Agent if author == "agent" => chrome::AGENT.into(),
         model::Voice::Agent => author.to_string().into(),
     }
 }
@@ -75,9 +76,7 @@ pub(super) fn post_cells(voice: model::Voice) -> f32 {
 /// store is a preview's normal state, not a fault, so it reads as one.
 pub(super) fn write_refusal(error: &StoreError) -> String {
     match error {
-        StoreError::ReadOnly => {
-            "このボードは読み取り専用です。書き込みは記録されませんでした。".to_string()
-        }
+        StoreError::ReadOnly => chrome::READ_ONLY_REFUSAL.to_string(),
         other => other.to_string(),
     }
 }
@@ -91,16 +90,16 @@ mod tests {
 
     #[test]
     fn a_read_only_store_reads_as_a_state_not_a_failure() {
-        assert!(write_refusal(&StoreError::ReadOnly).contains("読み取り専用"));
+        assert!(write_refusal(&StoreError::ReadOnly).contains("read-only"));
         let other = StoreError::ItemNotFound(7);
         assert_eq!(write_refusal(&other), other.to_string());
     }
 
     #[test]
-    fn the_three_roles_read_in_the_chrome_language_and_other_authors_keep_their_name() {
-        assert_eq!(author_label("owner"), "オーナー");
-        assert_eq!(author_label("system"), "システム");
-        assert_eq!(author_label("agent"), "エージェント");
+    fn the_three_roles_read_as_roles_and_other_authors_keep_their_name() {
+        assert_eq!(author_label("owner"), "Owner");
+        assert_eq!(author_label("system"), "System");
+        assert_eq!(author_label("agent"), "Agent");
         assert_eq!(author_label("reviewer"), "reviewer");
     }
 

@@ -16,6 +16,7 @@ use horizon_board::{Comment, Item, Store};
 use horizon_workspace::SessionId;
 
 use super::activity::{task_session_state, BoardSessionActivity};
+use super::chrome;
 use super::events::{BoardSessionsRefreshed, OpenTaskSession};
 use super::execute::{run_store_job, BoardStoreSource, StoreJob};
 use super::model::{self, ThreadCommand};
@@ -70,7 +71,7 @@ impl BoardThreadView {
     ) -> Self {
         let status = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("状態を変更")
+                .placeholder(chrome::CHANGE_STATUS)
                 .submit_on_enter(true)
         });
         let _status_subscription =
@@ -81,7 +82,7 @@ impl BoardThreadView {
             });
         let reply = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("返信を書く")
+                .placeholder(chrome::WRITE_REPLY)
                 .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MAX_ROWS)
                 .submit_on_enter(true)
         });
@@ -387,7 +388,7 @@ impl BoardThreadView {
         // A preview has no shell above it to attach the session, so the
         // guest build states the request on the notice line instead.
         #[cfg(target_family = "wasm")]
-        self.set_notice("セッションを開くのはシェルの仕事です。".into(), cx);
+        self.set_notice(chrome::SESSION_IS_THE_SHELLS.into(), cx);
         cx.emit(OpenTaskSession(session));
     }
 
@@ -572,9 +573,14 @@ impl BoardThreadView {
         let now = model::now_ms();
         let stacked = self.header_stacked;
 
-        let mut labels: Vec<&'static str> = vec!["返信", if closed { "再開" } else { "閉じる" }];
+        let closed_label = if closed {
+            chrome::REOPEN
+        } else {
+            chrome::CLOSE
+        };
+        let mut labels: Vec<&'static str> = vec![chrome::REPLY, closed_label];
         if has_session {
-            labels.push("セッション");
+            labels.push(chrome::SESSION);
         }
         let actions = h_flex()
             .flex_none()
@@ -585,7 +591,7 @@ impl BoardThreadView {
                     .primary()
                     .small()
                     .h(primary_height())
-                    .label("返信")
+                    .label(chrome::REPLY)
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.execute(ThreadCommand::FocusComposer, window, cx);
                     })),
@@ -595,7 +601,7 @@ impl BoardThreadView {
                     .ghost()
                     .small()
                     .h(primary_height())
-                    .label(if closed { "再開" } else { "閉じる" })
+                    .label(closed_label)
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.execute(ThreadCommand::ToggleClosed, window, cx);
                     })),
@@ -606,7 +612,7 @@ impl BoardThreadView {
                         .ghost()
                         .small()
                         .h(primary_height())
-                        .label("セッション")
+                        .label(chrome::SESSION)
                         .on_click(cx.listener(|view, _, window, cx| {
                             view.execute(ThreadCommand::OpenTaskSession, window, cx);
                         })),
@@ -665,7 +671,7 @@ impl BoardThreadView {
                         line.child(chip(activity_label(activity), activity.color()))
                     })
                     .when(unread > 0, |line| {
-                        line.child(chip(format!("未読 {unread}件"), theme::accent()))
+                        line.child(chip(chrome::unread_count(unread), theme::accent()))
                     })
                     .when_some(updated, |line, at| {
                         line.child(
@@ -673,7 +679,7 @@ impl BoardThreadView {
                                 .text_size(meta().size)
                                 .line_height(meta().line_height)
                                 .text_color(theme::text_muted())
-                                .child(format!("更新 {}", model::relative_time(at, now))),
+                                .child(chrome::updated(&chrome::relative_time(at, now))),
                         )
                     })
                     .child(div().flex_1().min_w_0())
@@ -814,7 +820,7 @@ impl BoardThreadView {
                         .text_size(meta().size)
                         .line_height(meta().line_height)
                         .text_color(theme::accent())
-                        .child(format!("残り{}行", fold.hidden_lines))
+                        .child(chrome::more_lines(fold.hidden_lines))
                         .on_click(cx.listener(move |view, _, window, cx| {
                             view.execute(ThreadCommand::TogglePost(id.clone()), window, cx);
                         })),
@@ -887,7 +893,7 @@ impl BoardThreadView {
                         .text_size(meta().size)
                         .line_height(meta().line_height)
                         .text_color(theme::text_muted())
-                        .child(model::relative_time(at, now)),
+                        .child(chrome::relative_time(at, now)),
                 )
             })
             .child(div().flex_1().min_w_0())
@@ -910,7 +916,7 @@ impl BoardThreadView {
                             .text_size(meta().size)
                             .line_height(meta().line_height)
                             .text_color(theme::text_muted())
-                            .child("返信")
+                            .child(chrome::REPLY)
                             .on_click(cx.listener(|view, _, window, cx| {
                                 view.execute(ThreadCommand::FocusComposer, window, cx);
                             })),
@@ -926,7 +932,7 @@ impl BoardThreadView {
                                 .text_size(meta().size)
                                 .line_height(meta().line_height)
                                 .text_color(theme::text_muted())
-                                .child("畳む")
+                                .child(chrome::COLLAPSE)
                                 .on_click(cx.listener(move |view, _, window, cx| {
                                     view.execute(
                                         ThreadCommand::TogglePost(fold_id.clone()),
@@ -937,7 +943,9 @@ impl BoardThreadView {
                         )
                     }),
             )
-            .when(unread, |line| line.child(chip("未読", theme::accent())))
+            .when(unread, |line| {
+                line.child(chip(chrome::UNREAD, theme::accent()))
+            })
     }
 
     /// The composer, pinned under the thread at the same measure as it.
@@ -968,7 +976,7 @@ impl BoardThreadView {
                             .text_size(micro().size)
                             .line_height(micro().line_height)
                             .text_color(theme::text_muted())
-                            .child("で送信"),
+                            .child(chrome::TO_SEND),
                     ),
             )
     }
@@ -1000,7 +1008,7 @@ impl Render for BoardThreadView {
                     .text_size(meta().size)
                     .line_height(meta().line_height)
                     .text_color(theme::text_muted())
-                    .child("このタスクは見つかりません"),
+                    .child(chrome::TASK_NOT_FOUND),
             );
         };
         let now = model::now_ms();

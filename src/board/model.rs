@@ -13,6 +13,7 @@ use gpui::{
 };
 use horizon_board::{tree_order, Item, Position};
 
+use super::chrome;
 use super::spec::{action_pad, CELL_EM, HEADER_TITLE_MIN_CELLS};
 use crate::theme;
 pub(crate) use crate::ui::measure::{display_width, rendered_lines};
@@ -553,18 +554,6 @@ pub(crate) fn voice(author: &str) -> Voice {
     }
 }
 
-/// `at` as an age. Both arguments are unix milliseconds.
-pub(crate) fn relative_time(at_ms: u64, now_ms: u64) -> String {
-    let seconds = now_ms.saturating_sub(at_ms) / 1_000;
-    match seconds {
-        0..=59 => "たった今".to_string(),
-        60..=3_599 => format!("{}分前", seconds / 60),
-        3_600..=86_399 => format!("{}時間前", seconds / 3_600),
-        86_400..=604_799 => format!("{}日前", seconds / 86_400),
-        _ => format!("{}週間前", seconds / 604_800),
-    }
-}
-
 /// Wall-clock now in unix milliseconds, `0` when the clock is unreadable.
 pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -576,29 +565,11 @@ pub(crate) fn now_ms() -> u64 {
 /// The status line a row and the thread header show.
 pub(crate) fn status_text(item: &Item) -> String {
     match (item.is_closed, item.status.trim().is_empty()) {
-        (true, true) => "closed".to_string(),
-        (true, false) => format!("{} · closed", item.status.trim()),
+        (true, true) => chrome::CLOSED.to_string(),
+        (true, false) => format!("{} · {}", item.status.trim(), chrome::CLOSED),
         (false, true) => String::new(),
         (false, false) => item.status.trim().to_string(),
     }
-}
-
-/// The list view's one header line: how much there is, and how much of it
-/// is unread.
-pub(crate) fn list_header_text(tasks: usize, unread: usize) -> String {
-    if unread == 0 {
-        format!("タスク {tasks}件")
-    } else {
-        format!("タスク {tasks}件 · 未読 {unread}件")
-    }
-}
-
-/// What the list reports when a task is opened, in a build with no shell
-/// above it to open anything. The guest build paints it; the native one
-/// emits the request as an event instead.
-#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
-pub(crate) fn open_notice(title: &str) -> String {
-    format!("スレッドを開く: {title}")
 }
 
 /// The title the add-task input takes, or `None` when it holds nothing but
@@ -617,11 +588,11 @@ mod tests {
     use super::{
         bound_sessions, command_for_key, drop_half_for_row, drop_position_from_half,
         finished_summary, fold_preview, header_one_row_width, header_stacks, is_finished,
-        list_command_for_key, list_header_text, message_visible, open_notice, parse_new_task,
-        relative_time, rendered_lines, sibling_move, status_text, step_post, step_selection,
-        task_session_id, tree_rows, unread_count, visible_rows, DropHalf, ListCommand,
-        ThreadCommand, Voice, FOLD_RENDERED_LINES,
+        list_command_for_key, message_visible, parse_new_task, rendered_lines, sibling_move,
+        status_text, step_post, step_selection, task_session_id, tree_rows, unread_count,
+        visible_rows, DropHalf, ListCommand, ThreadCommand, Voice, FOLD_RENDERED_LINES,
     };
+    use crate::board::chrome;
     use gpui::px;
     use horizon_board::{Comment, Item, Position};
     use std::collections::{HashMap, HashSet};
@@ -720,32 +691,18 @@ mod tests {
 
     #[test]
     fn the_header_stacks_once_the_title_would_lose_its_floor() {
-        let actions = ["返信", "閉じる", "セッション"];
+        let actions = [chrome::REPLY, chrome::CLOSE, chrome::SESSION];
         let needed = header_one_row_width(&actions);
         assert!(!header_stacks(needed, &actions));
         assert!(!header_stacks(needed + px(200.0), &actions));
         assert!(header_stacks(needed - px(1.0), &actions));
         // Fewer actions need less room, so the same pane stacks later.
-        let fewer = ["返信", "閉じる"];
+        let fewer = [chrome::REPLY, chrome::CLOSE];
         assert!(header_one_row_width(&fewer) < needed);
         assert!(!header_stacks(needed, &fewer));
         // A pane the width of a narrow split stacks; a wide one does not.
         assert!(header_stacks(px(360.0), &actions));
         assert!(!header_stacks(px(900.0), &actions));
-    }
-
-    #[test]
-    fn the_list_header_names_the_unread_only_when_there_is_some() {
-        assert_eq!(list_header_text(25, 3), "タスク 25件 · 未読 3件");
-        assert_eq!(list_header_text(0, 0), "タスク 0件");
-    }
-
-    #[test]
-    fn opening_a_task_is_reported_with_its_title() {
-        assert_eq!(
-            open_notice("貼り付け時に末尾の改行が落ちる"),
-            "スレッドを開く: 貼り付け時に末尾の改行が落ちる"
-        );
     }
 
     #[test]
@@ -796,18 +753,6 @@ mod tests {
             .collect();
         assert!(fold_preview(&text, 200).is_none());
         assert!(fold_preview(&text, 8).is_some());
-    }
-
-    #[test]
-    fn ages_read_in_the_largest_unit_that_fits() {
-        let now = 10_000_000_000u64;
-        assert_eq!(relative_time(now, now), "たった今");
-        assert_eq!(relative_time(now - 120_000, now), "2分前");
-        assert_eq!(relative_time(now - 3 * 3_600_000, now), "3時間前");
-        assert_eq!(relative_time(now - 2 * 86_400_000, now), "2日前");
-        assert_eq!(relative_time(now - 21 * 86_400_000, now), "3週間前");
-        // A clock behind the message reads as now rather than underflowing.
-        assert_eq!(relative_time(now + 1_000, now), "たった今");
     }
 
     #[test]

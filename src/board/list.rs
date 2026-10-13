@@ -17,6 +17,7 @@ use horizon_board::{Position, Store};
 use horizon_workspace::SessionId;
 
 use super::activity::{task_session_state, BoardSessionActivity};
+use super::chrome;
 use super::events::{BoardSessionsRefreshed, OpenTaskThread};
 use super::execute::{run_store_job, BoardStoreSource, StoreJob};
 use super::model::{self, BoardDragValue, DropHalf, ListCommand, Row};
@@ -76,7 +77,7 @@ impl BoardListView {
     ) -> Self {
         let new_task = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("タスクを追加")
+                .placeholder(chrome::ADD_TASK)
                 .submit_on_enter(true)
         });
         let _new_task_subscription =
@@ -332,7 +333,7 @@ impl BoardListView {
                 // the guest build states it on the notice line instead.
                 #[cfg(target_family = "wasm")]
                 {
-                    self.notice = Some(model::open_notice(&row.item.title));
+                    self.notice = Some(chrome::open_notice(&row.item.title));
                 }
                 cx.emit(OpenTaskThread(id));
                 cx.notify();
@@ -668,7 +669,7 @@ impl BoardListView {
                     .items_center()
                     .when(hidden_unread > 0, |line| {
                         line.child(chip(
-                            format!("未読 {}件", row.subtree_unread),
+                            chrome::unread_count(row.subtree_unread),
                             theme::accent(),
                         ))
                     })
@@ -748,9 +749,9 @@ impl BoardListView {
             .text_color(theme::text_muted())
             .hover(|line| line.bg(theme::tint_over_background(theme::text_subtle(), 0.05)))
             .child(if self.finished_expanded { "▾" } else { "▸" })
-            .child(format!("完了 ({count})"))
+            .child(chrome::done_band(count))
             .when(unread > 0, |line| {
-                line.child(chip(format!("未読 {unread}件"), theme::accent()))
+                line.child(chip(chrome::unread_count(unread), theme::accent()))
             })
             .on_click(cx.listener(|view, _, window, cx| {
                 view.execute(ListCommand::ToggleFinished, window, cx);
@@ -816,10 +817,8 @@ fn drop_line(above: bool) -> impl IntoElement {
 
 /// A row's second line: when the thread last moved, and how long it is.
 fn row_meta(last: Option<u64>, messages: usize, now: u64) -> String {
-    match last {
-        Some(at) => format!("{} · {}件", model::relative_time(at, now), messages),
-        None => format!("{messages}件"),
-    }
+    let age = last.map(|at| chrome::relative_time(at, now));
+    chrome::row_meta(age.as_deref(), messages)
 }
 
 impl Focusable for BoardListView {
@@ -854,7 +853,7 @@ impl Render for BoardListView {
                     .text_size(meta().size)
                     .line_height(meta().line_height)
                     .text_color(theme::text_muted())
-                    .child(model::list_header_text(self.rows.len(), unread_total)),
+                    .child(chrome::list_header_text(self.rows.len(), unread_total)),
             )
             .child(
                 v_flex()
@@ -896,7 +895,10 @@ mod tests {
     #[test]
     fn a_row_meta_line_is_an_age_and_a_count() {
         let now = 10_000_000_000u64;
-        assert_eq!(row_meta(Some(now - 3 * 3_600_000), 4, now), "3時間前 · 4件");
-        assert_eq!(row_meta(None, 0, now), "0件");
+        assert_eq!(
+            row_meta(Some(now - 3 * 3_600_000), 4, now),
+            "3h ago · 4 posts"
+        );
+        assert_eq!(row_meta(None, 0, now), "0 posts");
     }
 }

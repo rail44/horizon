@@ -9,6 +9,7 @@
 //! drag placement, both key maps), [`spec`] (the board-only measurements,
 //! scaled from the app-wide font size like `crate::ui::spec`), [`parts`]
 //! (the tones and labels they draw with, beside `crate::ui::parts`),
+//! [`chrome`] (every fixed label either view draws),
 //! [`activity`] (what
 //! a bound session reports), and the store hand-off: both read a
 //! [`Store`](horizon_board::Store) through the same
@@ -37,7 +38,7 @@
 //! | Event | Emitted by | What the shell does with it |
 //! | --- | --- | --- |
 //! | [`events::OpenTaskThread`] | the list, on `Enter` | runs `CommandId::OpenBoardRelatedItem`, which opens that task's thread in a pane |
-//! | [`events::OpenTaskSession`] | the thread, on 「セッション」 | runs `CommandId::OpenBoardTaskSession`, which resolves and attaches the bound agent session |
+//! | [`events::OpenTaskSession`] | the thread, on `Session` | runs `CommandId::OpenBoardTaskSession`, which resolves and attaches the bound agent session |
 //! | [`events::BoardSessionsRefreshed`] | both, after a load found new bindings | resolves the ids in its inventory, then calls `finish_inventory_refresh` and `observe_sessions` |
 //!
 //! # The list's keys
@@ -50,6 +51,7 @@
 //! composer, and `Esc` back out of it.
 
 pub(crate) mod activity;
+pub(crate) mod chrome;
 pub(crate) mod events;
 pub(crate) mod execute;
 mod list;
