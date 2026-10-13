@@ -986,13 +986,13 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
     // are checked against what it painted.
     let cases = [
         (agent::BASELINE, true),
-        (agent::CALL_DOTS, true),
-        (agent::DIFF_GUTTER, true),
-        (agent::TWO_LINE_APPROVAL, true),
+        (agent::ACCENT_USER, true),
+        (agent::DOTS_ONLY_THINKING, true),
+        (agent::ONE_ROW_COMPOSER, true),
         (agent::BASELINE_IDLE, false),
-        (agent::CALL_DOTS_IDLE, false),
-        (agent::DIFF_GUTTER_IDLE, false),
-        (agent::TWO_LINE_APPROVAL_IDLE, false),
+        (agent::ACCENT_USER_IDLE, false),
+        (agent::DOTS_ONLY_THINKING_IDLE, false),
+        (agent::ONE_ROW_COMPOSER_IDLE, false),
     ];
     let mut baseline: Option<BTreeMap<char, usize>> = None;
     for (name, running) in cases {
@@ -1086,6 +1086,17 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             },
             "{name}: the failed command's output is not as opened: {painted_whole:?}"
         );
+        // The opened diff's gutter marks, which nothing else paints.
+        for (mark, lines) in [
+            ('+', agent::OPENED_DIFF_ADDED),
+            ('−', agent::OPENED_DIFF_REMOVED),
+        ] {
+            assert_eq!(
+                count_of(&painted_whole, mark),
+                if running { 0 } else { lines },
+                "{name}: the opened diff's `{mark}` gutter marks: {painted_whole:?}"
+            );
+        }
         // `読` is painted a fixed number of times outside the first answer's
         // read calls, which stay folded.
         assert_eq!(
@@ -1106,32 +1117,20 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             );
             baseline = Some(painted_whole);
         } else {
-            // Against agent-24 in the same state: agent-25 drops the opened
-            // call rows' status words, agent-26 adds the opened diff's
-            // gutter marks, and agent-27 changes only geometry, which the
-            // glyph counts do not carry.
-            let base = baseline.as_ref().expect("agent-24 is checked first");
+            // Against agent-28 in the same state: agent-30 running drops the
+            // thinking line's word; agent-29 changes only a color and agent-31
+            // only a height, neither of which the glyph counts carry.
+            let base = baseline.as_ref().expect("agent-28 is checked first");
             let mut expected: BTreeMap<char, i64> = BTreeMap::new();
-            if name == agent::CALL_DOTS || name == agent::CALL_DOTS_IDLE {
-                let statuses = if running {
-                    agent::RUNNING_ROW_STATUSES
-                } else {
-                    agent::IDLE_ROW_STATUSES
-                };
-                for status in statuses {
-                    for ch in status.chars() {
-                        *expected.entry(ch).or_insert(0) -= 1;
-                    }
+            if name == agent::DOTS_ONLY_THINKING {
+                for ch in agent::THINKING_WORD.chars() {
+                    *expected.entry(ch).or_insert(0) -= 1;
                 }
-            }
-            if name == agent::DIFF_GUTTER_IDLE {
-                expected.insert('+', agent::OPENED_DIFF_ADDED as i64);
-                expected.insert('−', agent::OPENED_DIFF_REMOVED as i64);
             }
             assert_eq!(
                 without_whitespace(delta(base, &painted_whole)),
                 expected,
-                "{name}: does not differ from agent-24 as designed"
+                "{name}: does not differ from agent-28 as designed"
             );
         }
         cx.update(|_| drop(loaded));

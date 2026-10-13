@@ -13,14 +13,14 @@ use super::display::{
 };
 use super::{AgentNextView, Layout, UiState};
 
-pub(crate) const BASELINE: &str = "agent-24";
-pub(crate) const CALL_DOTS: &str = "agent-25";
-pub(crate) const DIFF_GUTTER: &str = "agent-26";
-pub(crate) const TWO_LINE_APPROVAL: &str = "agent-27";
-pub(crate) const BASELINE_IDLE: &str = "agent-24-idle";
-pub(crate) const CALL_DOTS_IDLE: &str = "agent-25-idle";
-pub(crate) const DIFF_GUTTER_IDLE: &str = "agent-26-idle";
-pub(crate) const TWO_LINE_APPROVAL_IDLE: &str = "agent-27-idle";
+pub(crate) const BASELINE: &str = "agent-28";
+pub(crate) const ACCENT_USER: &str = "agent-29";
+pub(crate) const DOTS_ONLY_THINKING: &str = "agent-30";
+pub(crate) const ONE_ROW_COMPOSER: &str = "agent-31";
+pub(crate) const BASELINE_IDLE: &str = "agent-28-idle";
+pub(crate) const ACCENT_USER_IDLE: &str = "agent-29-idle";
+pub(crate) const DOTS_ONLY_THINKING_IDLE: &str = "agent-30-idle";
+pub(crate) const ONE_ROW_COMPOSER_IDLE: &str = "agent-31-idle";
 
 // ---------------------------------------------------------------------------
 // Probes
@@ -71,13 +71,10 @@ pub(crate) const OPENED_OUTPUT_MARKER: char = '9';
 #[cfg(test)]
 pub(crate) const OPENED_OUTPUT_MARKERS: usize = 2;
 
-/// The status words of the call rows each state opens: the running turn's
-/// two running calls, or the last finished turn's four done calls and one
-/// failed one.
+/// The word the thinking line carries, which [`Layout::DotsOnlyThinking`]
+/// drops.
 #[cfg(test)]
-pub(crate) const RUNNING_ROW_STATUSES: &[&str] = &["実行中", "実行中"];
-#[cfg(test)]
-pub(crate) const IDLE_ROW_STATUSES: &[&str] = &["完了", "完了", "完了", "完了", "失敗"];
+pub(crate) const THINKING_WORD: &str = "考え中";
 
 /// How many added and removed lines the diff an idle preview opens has.
 #[cfg(test)]
@@ -153,28 +150,28 @@ pub(crate) fn build_baseline_idle(window: &mut Window, cx: &mut App) -> AnyView 
     build(Layout::Baseline, false, window, cx)
 }
 
-pub(crate) fn build_call_dots(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::CallDots, true, window, cx)
+pub(crate) fn build_accent_user(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::AccentUser, true, window, cx)
 }
 
-pub(crate) fn build_call_dots_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::CallDots, false, window, cx)
+pub(crate) fn build_accent_user_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::AccentUser, false, window, cx)
 }
 
-pub(crate) fn build_diff_gutter(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::DiffGutter, true, window, cx)
+pub(crate) fn build_dots_only_thinking(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::DotsOnlyThinking, true, window, cx)
 }
 
-pub(crate) fn build_diff_gutter_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::DiffGutter, false, window, cx)
+pub(crate) fn build_dots_only_thinking_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::DotsOnlyThinking, false, window, cx)
 }
 
-pub(crate) fn build_two_line_approval(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::TwoLineApproval, true, window, cx)
+pub(crate) fn build_one_row_composer(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::OneRowComposer, true, window, cx)
 }
 
-pub(crate) fn build_two_line_approval_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::TwoLineApproval, false, window, cx)
+pub(crate) fn build_one_row_composer_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::OneRowComposer, false, window, cx)
 }
 
 // ---------------------------------------------------------------------------
@@ -469,7 +466,6 @@ mod tests {
     const CHROME: &[&str] = &[
         "実行中",
         "承認待ち",
-        "完了",
         "失敗",
         "失敗 件",
         "拒否",
@@ -604,18 +600,6 @@ mod tests {
         };
         assert_eq!(ui.expanded_receipts, [receipt.key].into());
         assert_eq!(ui.open_bodies, [(receipt.key, 0), (receipt.key, 4)].into());
-        assert_eq!(
-            receipt
-                .calls
-                .iter()
-                .map(|call| match call.status {
-                    CallStatus::Done => "完了",
-                    CallStatus::Failed => "失敗",
-                    _ => "other",
-                })
-                .collect::<Vec<_>>(),
-            IDLE_ROW_STATUSES
-        );
         let Some(CallBody::Diff(lines)) = &receipt.calls[0].body else {
             panic!("the first call's body is a diff");
         };
@@ -669,24 +653,25 @@ mod tests {
         assert_eq!(in_output, OPENED_OUTPUT_MARKERS);
     }
 
-    /// So the running previews' opened rows carry [`RUNNING_ROW_STATUSES`].
+    /// So the running previews paint [`THINKING_WORD`] once, on the running
+    /// turn's thinking line, and the idle ones not at all.
     #[test]
-    fn the_running_turn_opens_two_running_calls() {
-        let running = sample(true);
-        let Some(Unit::Turn(last)) = running.units.last() else {
-            panic!("the running sample ends with a turn");
+    fn only_the_running_turn_thinks() {
+        let thinking = |transcript: &Transcript| {
+            transcript
+                .units
+                .iter()
+                .filter_map(|unit| match unit {
+                    Unit::Turn(turn) => Some(turn),
+                    _ => None,
+                })
+                .flat_map(|turn| &turn.parts)
+                .filter(|part| **part == TurnPart::Thinking)
+                .count()
         };
-        let calls: Vec<CallStatus> = last
-            .parts
-            .iter()
-            .filter_map(|part| match part {
-                TurnPart::Receipt(receipt) => Some(receipt),
-                _ => None,
-            })
-            .flat_map(|receipt| receipt.calls.iter().map(|call| call.status))
-            .collect();
-        assert_eq!(calls.len(), RUNNING_ROW_STATUSES.len());
-        assert!(calls.iter().all(|status| *status == CallStatus::Running));
+        assert_eq!(thinking(&sample(true)), 1);
+        assert_eq!(thinking(&sample(false)), 0);
+        assert!(CHROME.contains(&format!("{THINKING_WORD}・").as_str()));
     }
 
     /// So a painted `承` can only be the pending approval.

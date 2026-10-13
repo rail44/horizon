@@ -18,16 +18,18 @@
 //!   first; while the turn runs, the session's state opens that line,
 //!   「停止」 ends it and an accent bar runs down the card's left edge; once
 //!   done, the line ends with the turn's elapsed time. Expanded call rows
-//!   sit under a left rule, each opening with a status chip, and the
-//!   composer is one bordered box.
-//! - [`Layout::CallDots`]: [`Layout::Baseline`] with each call row's status
-//!   a colored dot and its title in two tones, the verb muted and the
-//!   target in the monospace family.
-//! - [`Layout::DiffGutter`]: [`Layout::Baseline`] with a diff line's `+` or
-//!   `−` in a gutter before it, and a command's output drawn without a box.
-//! - [`Layout::TwoLineApproval`]: [`Layout::Baseline`] with a pending
-//!   approval on two lines: its reason, wrapping, then its keys and
-//!   buttons.
+//!   sit under a left rule, each opening with a colored status dot and its
+//!   title in two tones, the verb muted and the target in the monospace
+//!   family; a diff line's `+` or `−` sits in a gutter before it, and a
+//!   command's output is drawn without a box. A pending approval is one
+//!   line, a message sent into the session sits on a grey tint, and the
+//!   composer is one bordered box whose field starts at two rows.
+//! - [`Layout::AccentUser`]: [`Layout::Baseline`] with a message sent into
+//!   the session on an accent tint.
+//! - [`Layout::DotsOnlyThinking`]: [`Layout::Baseline`] with the thinking
+//!   line's word dropped, leaving its three dots.
+//! - [`Layout::OneRowComposer`]: [`Layout::Baseline`] with the composer's
+//!   field starting at one row.
 
 pub(crate) mod display;
 pub(crate) mod previews;
@@ -44,15 +46,15 @@ use crate::theme;
 use crate::ui::parts::key_chip;
 use crate::ui::spec::*;
 use display::{ComposerMode, Status, Transcript, Unit};
-use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
+use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS, COMPOSER_ONE_ROW};
 
 /// Which arrangement of the units the view draws.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Layout {
     Baseline,
-    CallDots,
-    DiffGutter,
-    TwoLineApproval,
+    AccentUser,
+    DotsOnlyThinking,
+    OneRowComposer,
 }
 
 /// What the view asks of whatever holds it.
@@ -101,10 +103,15 @@ impl AgentNextView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let min_rows = if layout == Layout::OneRowComposer {
+            COMPOSER_ONE_ROW
+        } else {
+            COMPOSER_MIN_ROWS
+        };
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder(placeholder(transcript.status))
-                .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MAX_ROWS)
+                .auto_grow(min_rows, COMPOSER_MAX_ROWS)
                 .submit_on_enter(true)
         });
         let _composer_subscription = cx.subscribe_in(
@@ -200,7 +207,7 @@ impl AgentNextView {
         let mut children = Vec::new();
         for (index, unit) in self.transcript.units.iter().enumerate() {
             children.push(match unit {
-                Unit::User(message) => units::user(index, message).into_any_element(),
+                Unit::User(message) => units::user(index, message, self.layout).into_any_element(),
                 Unit::Notice(notice) => units::notice(notice).into_any_element(),
                 Unit::Turn(turn) => {
                     units::turn(index, turn, status, self.layout, &self.ui, &mono, cx)

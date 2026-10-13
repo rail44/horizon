@@ -35,6 +35,8 @@ pub(crate) fn lead_cell() -> Pixels {
 /// The composer's row bounds.
 pub(crate) const COMPOSER_MIN_ROWS: usize = 2;
 pub(crate) const COMPOSER_MAX_ROWS: usize = 8;
+/// The composer's lower row bound under [`super::Layout::OneRowComposer`].
+pub(crate) const COMPOSER_ONE_ROW: usize = 1;
 
 /// One cycle of the thinking dots.
 pub(crate) const THINKING_CYCLE_MS: u64 = 1200;

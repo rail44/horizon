@@ -89,6 +89,7 @@ pub(crate) struct Call {
 
 impl Call {
     /// 「{verb} {target}」.
+    #[cfg(test)]
     pub(crate) fn title(&self) -> String {
         format!("{} {}", self.verb, self.target)
     }

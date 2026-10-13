@@ -52,28 +52,28 @@ const PREVIEWS: &[Preview] = &[
         build: agent::build_baseline_idle,
     },
     Preview {
-        name: agent::CALL_DOTS,
-        build: agent::build_call_dots,
+        name: agent::ACCENT_USER,
+        build: agent::build_accent_user,
     },
     Preview {
-        name: agent::CALL_DOTS_IDLE,
-        build: agent::build_call_dots_idle,
+        name: agent::ACCENT_USER_IDLE,
+        build: agent::build_accent_user_idle,
     },
     Preview {
-        name: agent::DIFF_GUTTER,
-        build: agent::build_diff_gutter,
+        name: agent::DOTS_ONLY_THINKING,
+        build: agent::build_dots_only_thinking,
     },
     Preview {
-        name: agent::DIFF_GUTTER_IDLE,
-        build: agent::build_diff_gutter_idle,
+        name: agent::DOTS_ONLY_THINKING_IDLE,
+        build: agent::build_dots_only_thinking_idle,
     },
     Preview {
-        name: agent::TWO_LINE_APPROVAL,
-        build: agent::build_two_line_approval,
+        name: agent::ONE_ROW_COMPOSER,
+        build: agent::build_one_row_composer,
     },
     Preview {
-        name: agent::TWO_LINE_APPROVAL_IDLE,
-        build: agent::build_two_line_approval_idle,
+        name: agent::ONE_ROW_COMPOSER_IDLE,
+        build: agent::build_one_row_composer_idle,
     },
     Preview {
         name: animation::NAME,

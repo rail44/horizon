@@ -35,24 +35,18 @@ fn session_state_chip(status: Status) -> impl IntoElement {
     }
 }
 
-fn call_status(status: CallStatus) -> (&'static str, Hsla) {
+fn call_tone(status: CallStatus) -> Hsla {
     match status {
-        CallStatus::Done => ("完了", theme::text_muted()),
-        CallStatus::Failed => ("失敗", theme::danger()),
-        CallStatus::Running => ("実行中", theme::accent()),
-        CallStatus::Denied => ("拒否", theme::warning()),
-        CallStatus::Cancelled => ("中断", theme::text_muted()),
+        CallStatus::Done | CallStatus::Cancelled => theme::text_muted(),
+        CallStatus::Failed => theme::danger(),
+        CallStatus::Running => theme::accent(),
+        CallStatus::Denied => theme::warning(),
     }
-}
-
-fn call_chip(status: CallStatus) -> impl IntoElement {
-    let (label, tone) = call_status(status);
-    chip(label, tone)
 }
 
 /// A call's status as a dot in its tone, centered in the lead cell.
 fn call_dot_cell(status: CallStatus) -> impl IntoElement {
-    let (_, tone) = call_status(status);
+    let tone = call_tone(status);
     div()
         .flex_none()
         .w(lead_cell())
@@ -158,11 +152,17 @@ pub(super) fn session_end(status: Status) -> Option<Notice> {
 // The conversation's units
 // ---------------------------------------------------------------------------
 
-/// A message sent into the session: the board's owner reply, indented.
-pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
+/// A message sent into the session: the board's owner reply, indented, on
+/// a grey tint, or with [`Layout::AccentUser`] on an accent tint.
+pub(super) fn user(index: usize, message: &Message, layout: Layout) -> impl IntoElement {
     let color = match message.label {
         Label::You => theme::text_primary(),
         Label::Task | Label::Continue => theme::text_muted(),
+    };
+    let surface = if layout == Layout::AccentUser {
+        theme::tint_over_background(theme::accent(), SELECTION_TINT)
+    } else {
+        theme::tint_over_background(theme::text_primary(), BAND_TINT)
     };
     v_flex()
         .w_full()
@@ -171,10 +171,7 @@ pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
         .px(pad_x())
         .py(gap_tight())
         .rounded(RADIUS)
-        .bg(theme::tint_over_background(
-            theme::text_primary(),
-            BAND_TINT,
-        ))
+        .bg(surface)
         .child(div().w_full().child(markdown_body(
             SharedString::from(format!("agent-next-user-{index}")),
             escape_markdown(&message.text),
@@ -229,15 +226,18 @@ pub(super) fn notice(notice: &Notice) -> Div {
         .px(pad_x())
 }
 
-/// 「考え中」 and three dots whose opacity cycles.
-pub(super) fn thinking(id: usize) -> Div {
+/// 「考え中」 and three dots whose opacity cycles; with
+/// [`Layout::DotsOnlyThinking`] the dots alone.
+pub(super) fn thinking(id: usize, layout: Layout) -> Div {
     let micro = micro();
     h_flex()
         .items_baseline()
         .text_size(micro.size)
         .line_height(micro.line_height)
         .text_color(theme::text_muted())
-        .child("考え中")
+        .when(layout != Layout::DotsOnlyThinking, |line| {
+            line.child("考え中")
+        })
         .children((0..3).map(move |dot| {
             div().child("・").with_animation(
                 ("agent-next-thinking", id * 3 + dot),
@@ -284,7 +284,7 @@ pub(super) fn turn(
     } else {
         let line = ReceiptLine::merged(&receipts);
         let lead = carried.map(|status| session_state_chip(status).into_any_element());
-        Some(receipt_block(line, lead, end, layout, ui, mono, cx).into_any_element())
+        Some(receipt_block(line, lead, end, ui, mono, cx).into_any_element())
     };
 
     let mut parts: Vec<AnyElement> = Vec::new();
@@ -298,12 +298,12 @@ pub(super) fn turn(
                 .items_center()
                 .gap(gap_tight())
                 .child(session_state_chip(status))
-                .when(thinks, |row| row.child(thinking(index)))
+                .when(thinks, |row| row.child(thinking(index, layout)))
                 .child(div().flex_1().min_w_0())
                 .child(stop_button("agent-next-card-stop", cx))
                 .into_any_element(),
         ),
-        None if thinks => parts.push(thinking(index).into_any_element()),
+        None if thinks => parts.push(thinking(index, layout).into_any_element()),
         None => {}
     }
     let running = turn.state == TurnState::Running;
@@ -420,7 +420,6 @@ fn receipt_block(
     line: ReceiptLine<'_>,
     lead: Option<AnyElement>,
     end: Option<AnyElement>,
-    layout: Layout,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
@@ -458,14 +457,13 @@ fn receipt_block(
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx))),
         )
         .when(expanded, |block| {
-            block.child(call_list(&line, layout, ui, mono, cx).mt(gap_label()))
+            block.child(call_list(&line, ui, mono, cx).mt(gap_label()))
         })
 }
 
 /// A receipt line's calls, under a left rule.
 fn call_list(
     line: &ReceiptLine<'_>,
-    layout: Layout,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
@@ -477,9 +475,9 @@ fn call_list(
         .border_color(theme::border())
         .gap(gap_label())
         .children(
-            line.calls.iter().map(|(receipt, index, call)| {
-                call_row(*receipt, *index, call, layout, ui, mono, cx)
-            }),
+            line.calls
+                .iter()
+                .map(|(receipt, index, call)| call_row(*receipt, *index, call, ui, mono, cx)),
         )
 }
 
@@ -487,7 +485,6 @@ fn call_row(
     receipt: usize,
     index: usize,
     call: &Call,
-    layout: Layout,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
@@ -501,28 +498,18 @@ fn call_row(
         .w_full()
         .items_center()
         .gap(gap_tight());
-    let row = if layout == Layout::CallDots {
-        row.child(call_dot_cell(call.status))
-            .child(text_at(meta(), theme::text_muted(), call.verb.clone()).flex_none())
-            .child(
-                text_at(meta(), theme::text_primary(), call.target.clone())
-                    .font_family(mono.clone())
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap(),
-            )
-    } else {
-        row.child(call_chip(call.status)).child(
-            text_at(meta(), theme::text_primary(), call.title())
+    let row = row
+        .child(call_dot_cell(call.status))
+        .child(text_at(meta(), theme::text_muted(), call.verb.clone()).flex_none())
+        .child(
+            text_at(meta(), theme::text_primary(), call.target.clone())
+                .font_family(mono.clone())
                 .flex_1()
                 .min_w_0()
                 .overflow_hidden()
                 .text_ellipsis()
                 .whitespace_nowrap(),
-        )
-    };
+        );
     v_flex()
         .w_full()
         .child(row.when(has_body, |row| {
@@ -534,22 +521,19 @@ fn call_row(
                 div()
                     .w_full()
                     .mt(gap_label())
-                    .child(call_body(receipt, index, body, layout, mono)),
+                    .child(call_body(receipt, index, body, mono)),
             )
         })
         .when_some(call.approval.as_ref(), |row, approval| {
-            row.child(approval_block(receipt, index, approval, layout, cx).mt(gap_label()))
+            row.child(approval_block(receipt, index, approval, cx).mt(gap_label()))
         })
 }
 
-/// A pending approval under its call row: on one line, or with
-/// [`Layout::TwoLineApproval`] the reason first and the keys and buttons
-/// under it.
+/// A pending approval under its call row, on one line.
 fn approval_block(
     receipt: usize,
     index: usize,
     approval: &Approval,
-    layout: Layout,
     cx: &mut Context<AgentNextView>,
 ) -> Div {
     let approve = approval.id.clone();
@@ -579,33 +563,13 @@ fn approval_block(
     let reason = text_at(meta(), theme::text_primary(), approval.reason.clone())
         .flex_1()
         .min_w_0();
-    if layout == Layout::TwoLineApproval {
-        v_flex()
-            .w_full()
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_start()
-                    .gap(gap_tight())
-                    .child(chip("承認待ち", theme::accent()))
-                    .child(reason.font_weight(ANCHOR)),
-            )
-            .child(
-                h_flex()
-                    .mt(gap_label())
-                    .items_center()
-                    .gap(gap_tight())
-                    .children(controls),
-            )
-    } else {
-        h_flex()
-            .w_full()
-            .items_center()
-            .gap(gap_tight())
-            .child(chip("承認待ち", theme::accent()))
-            .child(reason)
-            .children(controls)
-    }
+    h_flex()
+        .w_full()
+        .items_center()
+        .gap(gap_tight())
+        .child(chip("承認待ち", theme::accent()))
+        .child(reason)
+        .children(controls)
 }
 
 fn mono_line(mono: &SharedString, text: &str) -> Div {
@@ -617,9 +581,9 @@ fn mono_line(mono: &SharedString, text: &str) -> Div {
         .child(text.to_string())
 }
 
-/// A diff line in its tone, on its surface; with [`Layout::DiffGutter`]
-/// its `+` or `−` in a cell before the text.
-fn diff_line(line: &DiffLine, layout: Layout, mono: &SharedString) -> Div {
+/// A diff line in its tone, on its surface, its `+` or `−` in a cell
+/// before the text.
+fn diff_line(line: &DiffLine, mono: &SharedString) -> Div {
     let (surface, color, mark) = match line.kind {
         DiffKind::Added => (
             Some(theme::diff_added_surface()),
@@ -633,15 +597,10 @@ fn diff_line(line: &DiffLine, layout: Layout, mono: &SharedString) -> Div {
         ),
         DiffKind::Context => (None, theme::text_muted(), ""),
     };
-    let text = mono_line(mono, &line.text);
-    let line = if layout == Layout::DiffGutter {
-        h_flex()
-            .child(mono_line(mono, mark).flex_none().w(lead_cell()))
-            .child(text.flex_1().min_w_0())
-    } else {
-        text
-    };
-    line.w_full()
+    h_flex()
+        .child(mono_line(mono, mark).flex_none().w(lead_cell()))
+        .child(mono_line(mono, &line.text).flex_1().min_w_0())
+        .w_full()
         .text_color(color)
         .when_some(surface, |line, surface| line.bg(surface))
 }
@@ -650,13 +609,12 @@ fn call_body(
     receipt: usize,
     index: usize,
     body: &CallBody,
-    layout: Layout,
     mono: &SharedString,
 ) -> impl IntoElement {
     match body {
         CallBody::Diff(lines) => v_flex()
             .w_full()
-            .children(lines.iter().map(|line| diff_line(line, layout, mono)))
+            .children(lines.iter().map(|line| diff_line(line, mono)))
             .into_any_element(),
         CallBody::Output { lines, omitted } => {
             let output = v_flex()
@@ -665,17 +623,8 @@ fn call_body(
                 )))
                 .w_full()
                 .overflow_x_scroll()
+                .text_color(theme::text_muted())
                 .children(lines.iter().map(|line| mono_line(mono, line)));
-            let output = if layout == Layout::DiffGutter {
-                output.text_color(theme::text_muted())
-            } else {
-                output
-                    .bg(theme::surface_panel())
-                    .rounded(RADIUS)
-                    .px(gap_tight())
-                    .py(gap_label())
-                    .text_color(theme::text_primary())
-            };
             v_flex()
                 .w_full()
                 .child(output)
