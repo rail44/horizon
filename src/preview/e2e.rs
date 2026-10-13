@@ -806,7 +806,7 @@ async fn preview_plugin_paints_the_board_list(cx: &mut TestAppContext) {
     press(&surface, "j", cx);
     press(&surface, "enter", cx);
     let opened = glyph_counts(&summary(&surface, cx));
-    let notice = format!("スレッドを開く: {}", board::SECOND_TASK_TITLE);
+    let notice = crate::board::chrome::open_notice(board::SECOND_TASK_TITLE);
     assert!(
         painted(&opened, &notice),
         "Enter painted no open notice: {opened:?}"
@@ -833,7 +833,7 @@ async fn preview_plugin_paints_the_board_list(cx: &mut TestAppContext) {
     // The add-task input is pinned under the rows, so an empty board still
     // offers the one way to put work on it.
     assert!(
-        painted(&blank, "タスクを追加"),
+        painted(&blank, crate::board::chrome::ADD_TASK),
         "the empty list painted no add-task input: {blank:?}"
     );
 
