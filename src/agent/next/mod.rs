@@ -18,14 +18,16 @@
 //!   first; while the turn runs, the session's state opens that line,
 //!   「停止」 ends it and an accent bar runs down the card's left edge; once
 //!   done, the line ends with the turn's elapsed time. Expanded call rows
-//!   sit under a left rule, and the composer is one bordered box.
-//! - [`Layout::SurfaceCards`]: [`Layout::Baseline`] with each turn's card a
-//!   tinted surface instead of a bordered frame.
-//! - [`Layout::AccentBorder`]: [`Layout::Baseline`] with a running turn's
-//!   card bordered in the accent color instead of carrying the accent bar.
-//! - [`Layout::Tight`]: [`Layout::Baseline`] with the vertical rhythm one
-//!   step tighter: between units, inside cards and user blocks, and between
-//!   a card's lines.
+//!   sit under a left rule, each opening with a status chip, and the
+//!   composer is one bordered box.
+//! - [`Layout::CallDots`]: [`Layout::Baseline`] with each call row's status
+//!   a colored dot and its title in two tones, the verb muted and the
+//!   target in the monospace family.
+//! - [`Layout::DiffGutter`]: [`Layout::Baseline`] with a diff line's `+` or
+//!   `−` in a gutter before it, and a command's output drawn without a box.
+//! - [`Layout::TwoLineApproval`]: [`Layout::Baseline`] with a pending
+//!   approval on two lines: its reason, wrapping, then its keys and
+//!   buttons.
 
 pub(crate) mod display;
 pub(crate) mod previews;
@@ -48,39 +50,9 @@ use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Layout {
     Baseline,
-    SurfaceCards,
-    AccentBorder,
-    Tight,
-}
-
-impl Layout {
-    /// The gap between units of the column.
-    fn unit_gap(self) -> Pixels {
-        if self == Self::Tight {
-            gap_tight()
-        } else {
-            gap_unit()
-        }
-    }
-
-    /// The vertical padding inside a turn's card and a user block.
-    pub(super) fn block_pad_y(self) -> Pixels {
-        if self == Self::Tight {
-            gap_tight()
-        } else {
-            pad_y()
-        }
-    }
-
-    /// The gap between a card's receipt line, its text and its thinking
-    /// line.
-    pub(super) fn line_gap(self) -> Pixels {
-        if self == Self::Tight {
-            gap_label()
-        } else {
-            gap_tight()
-        }
-    }
+    CallDots,
+    DiffGutter,
+    TwoLineApproval,
 }
 
 /// What the view asks of whatever holds it.
@@ -228,7 +200,7 @@ impl AgentNextView {
         let mut children = Vec::new();
         for (index, unit) in self.transcript.units.iter().enumerate() {
             children.push(match unit {
-                Unit::User(message) => units::user(index, message, self.layout).into_any_element(),
+                Unit::User(message) => units::user(index, message).into_any_element(),
                 Unit::Notice(notice) => units::notice(notice).into_any_element(),
                 Unit::Turn(turn) => {
                     units::turn(index, turn, status, self.layout, &self.ui, &mono, cx)
@@ -341,7 +313,7 @@ impl Render for AgentNextView {
                     .px(thread_gutter())
                     .pt(gap_section())
                     .pb(gap_composer())
-                    .gap(self.layout.unit_gap())
+                    .gap(gap_tight())
                     .children(column),
             )
             .child(self.render_composer(cx))

@@ -2,7 +2,8 @@
 //! layouts, once with a turn running and an approval pending at its
 //! tail and once with the session idle. What differs between two previews
 //! of the same state is the layout, not the data. An idle preview opens
-//! with the last turn's receipt and its first diff open.
+//! with the last turn's receipt, its first diff and its failed command's
+//! output open.
 
 use gpui::{AnyView, App, AppContext as _, Window};
 
@@ -12,14 +13,14 @@ use super::display::{
 };
 use super::{AgentNextView, Layout, UiState};
 
-pub(crate) const BASELINE: &str = "agent-20";
-pub(crate) const SURFACE_CARDS: &str = "agent-21";
-pub(crate) const ACCENT_BORDER: &str = "agent-22";
-pub(crate) const TIGHT: &str = "agent-23";
-pub(crate) const BASELINE_IDLE: &str = "agent-20-idle";
-pub(crate) const SURFACE_CARDS_IDLE: &str = "agent-21-idle";
-pub(crate) const ACCENT_BORDER_IDLE: &str = "agent-22-idle";
-pub(crate) const TIGHT_IDLE: &str = "agent-23-idle";
+pub(crate) const BASELINE: &str = "agent-24";
+pub(crate) const CALL_DOTS: &str = "agent-25";
+pub(crate) const DIFF_GUTTER: &str = "agent-26";
+pub(crate) const TWO_LINE_APPROVAL: &str = "agent-27";
+pub(crate) const BASELINE_IDLE: &str = "agent-24-idle";
+pub(crate) const CALL_DOTS_IDLE: &str = "agent-25-idle";
+pub(crate) const DIFF_GUTTER_IDLE: &str = "agent-26-idle";
+pub(crate) const TWO_LINE_APPROVAL_IDLE: &str = "agent-27-idle";
 
 // ---------------------------------------------------------------------------
 // Probes
@@ -62,6 +63,28 @@ pub(crate) const OPENED_DIFF_MARKER: char = 'Z';
 #[cfg(test)]
 pub(crate) const OPENED_DIFF_MARKERS: usize = 5;
 
+/// A character only the failed command's output an idle preview opens
+/// contains, and how many times: in its failing test's duration and in the
+/// panic's location.
+#[cfg(test)]
+pub(crate) const OPENED_OUTPUT_MARKER: char = '9';
+#[cfg(test)]
+pub(crate) const OPENED_OUTPUT_MARKERS: usize = 2;
+
+/// The status words of the call rows each state opens: the running turn's
+/// two running calls, or the last finished turn's four done calls and one
+/// failed one.
+#[cfg(test)]
+pub(crate) const RUNNING_ROW_STATUSES: &[&str] = &["実行中", "実行中"];
+#[cfg(test)]
+pub(crate) const IDLE_ROW_STATUSES: &[&str] = &["完了", "完了", "完了", "完了", "失敗"];
+
+/// How many added and removed lines the diff an idle preview opens has.
+#[cfg(test)]
+pub(crate) const OPENED_DIFF_ADDED: usize = 2;
+#[cfg(test)]
+pub(crate) const OPENED_DIFF_REMOVED: usize = 1;
+
 // ---------------------------------------------------------------------------
 // The previews
 // ---------------------------------------------------------------------------
@@ -78,7 +101,8 @@ fn build(layout: Layout, running: bool, window: &mut Window, cx: &mut App) -> An
 }
 
 /// The last turn's receipt line open, and in it the body of the first call
-/// whose body is a diff.
+/// whose body is a diff and that of the first failed call whose body is a
+/// command's output.
 fn last_turn_opened(transcript: &Transcript) -> UiState {
     let mut ui = UiState::default();
     let Some(turn) = transcript.units.iter().rev().find_map(|unit| match unit {
@@ -107,6 +131,17 @@ fn last_turn_opened(transcript: &Transcript) -> UiState {
             .map(|index| (receipt.key, index))
     });
     ui.open_bodies.extend(first_diff);
+    let failed_output = receipts.iter().find_map(|receipt| {
+        receipt
+            .calls
+            .iter()
+            .position(|call| {
+                call.status == CallStatus::Failed
+                    && matches!(call.body, Some(CallBody::Output { .. }))
+            })
+            .map(|index| (receipt.key, index))
+    });
+    ui.open_bodies.extend(failed_output);
     ui
 }
 
@@ -114,32 +149,32 @@ pub(crate) fn build_baseline(window: &mut Window, cx: &mut App) -> AnyView {
     build(Layout::Baseline, true, window, cx)
 }
 
-pub(crate) fn build_surface_cards(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::SurfaceCards, true, window, cx)
-}
-
-pub(crate) fn build_accent_border(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::AccentBorder, true, window, cx)
-}
-
-pub(crate) fn build_tight(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::Tight, true, window, cx)
-}
-
 pub(crate) fn build_baseline_idle(window: &mut Window, cx: &mut App) -> AnyView {
     build(Layout::Baseline, false, window, cx)
 }
 
-pub(crate) fn build_surface_cards_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::SurfaceCards, false, window, cx)
+pub(crate) fn build_call_dots(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::CallDots, true, window, cx)
 }
 
-pub(crate) fn build_accent_border_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::AccentBorder, false, window, cx)
+pub(crate) fn build_call_dots_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::CallDots, false, window, cx)
 }
 
-pub(crate) fn build_tight_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::Tight, false, window, cx)
+pub(crate) fn build_diff_gutter(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::DiffGutter, true, window, cx)
+}
+
+pub(crate) fn build_diff_gutter_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::DiffGutter, false, window, cx)
+}
+
+pub(crate) fn build_two_line_approval(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::TwoLineApproval, true, window, cx)
+}
+
+pub(crate) fn build_two_line_approval_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::TwoLineApproval, false, window, cx)
 }
 
 // ---------------------------------------------------------------------------
@@ -451,6 +486,8 @@ mod tests {
         "メッセージを書く",
         "このセッションは終了しています",
         "承認",
+        "+",
+        "−",
     ];
 
     fn call_strings(call: &Call) -> Vec<String> {
@@ -566,7 +603,19 @@ mod tests {
             panic!("the last turn has a receipt");
         };
         assert_eq!(ui.expanded_receipts, [receipt.key].into());
-        assert_eq!(ui.open_bodies, [(receipt.key, 0)].into());
+        assert_eq!(ui.open_bodies, [(receipt.key, 0), (receipt.key, 4)].into());
+        assert_eq!(
+            receipt
+                .calls
+                .iter()
+                .map(|call| match call.status {
+                    CallStatus::Done => "完了",
+                    CallStatus::Failed => "失敗",
+                    _ => "other",
+                })
+                .collect::<Vec<_>>(),
+            IDLE_ROW_STATUSES
+        );
         let Some(CallBody::Diff(lines)) = &receipt.calls[0].body else {
             panic!("the first call's body is a diff");
         };
@@ -575,9 +624,69 @@ mod tests {
             .map(|line| line.text.matches(OPENED_DIFF_MARKER).count())
             .sum();
         assert_eq!(in_diff, OPENED_DIFF_MARKERS);
+        let count = |kind| lines.iter().filter(|line| line.kind == kind).count();
+        assert_eq!(count(DiffKind::Added), OPENED_DIFF_ADDED);
+        assert_eq!(count(DiffKind::Removed), OPENED_DIFF_REMOVED);
         assert!(lines
             .iter()
             .any(|line| line.kind == DiffKind::Removed && line.text.contains(OPENED_DIFF_MARKER)));
+    }
+
+    /// So a count of [`OPENED_OUTPUT_MARKER`] says the idle previews' opened
+    /// output is painted.
+    #[test]
+    fn the_opened_output_owns_its_marker() {
+        let idle = sample(false);
+        let ui = last_turn_opened(&idle);
+        let all = strings(&sample(true));
+        let total: usize = all
+            .iter()
+            .map(|s| s.matches(OPENED_OUTPUT_MARKER).count())
+            .sum();
+        assert_eq!(total, OPENED_OUTPUT_MARKERS, "{all:?}");
+        let Some(Unit::Turn(last)) = idle.units.iter().rev().find(|u| matches!(u, Unit::Turn(_)))
+        else {
+            panic!("the idle sample has a turn");
+        };
+        let Some(TurnPart::Receipt(receipt)) = last
+            .parts
+            .iter()
+            .find(|p| matches!(p, TurnPart::Receipt(_)))
+        else {
+            panic!("the last turn has a receipt");
+        };
+        let call = &receipt.calls[4];
+        assert!(ui.open_bodies.contains(&(receipt.key, 4)));
+        assert_eq!(call.title(), "実行 cargo nextest run --workspace");
+        assert_eq!(call.status, CallStatus::Failed);
+        let Some(CallBody::Output { lines, .. }) = &call.body else {
+            panic!("the failed call's body is an output");
+        };
+        let in_output: usize = lines
+            .iter()
+            .map(|line| line.matches(OPENED_OUTPUT_MARKER).count())
+            .sum();
+        assert_eq!(in_output, OPENED_OUTPUT_MARKERS);
+    }
+
+    /// So the running previews' opened rows carry [`RUNNING_ROW_STATUSES`].
+    #[test]
+    fn the_running_turn_opens_two_running_calls() {
+        let running = sample(true);
+        let Some(Unit::Turn(last)) = running.units.last() else {
+            panic!("the running sample ends with a turn");
+        };
+        let calls: Vec<CallStatus> = last
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                TurnPart::Receipt(receipt) => Some(receipt),
+                _ => None,
+            })
+            .flat_map(|receipt| receipt.calls.iter().map(|call| call.status))
+            .collect();
+        assert_eq!(calls.len(), RUNNING_ROW_STATUSES.len());
+        assert!(calls.iter().all(|status| *status == CallStatus::Running));
     }
 
     /// So a painted `承` can only be the pending approval.

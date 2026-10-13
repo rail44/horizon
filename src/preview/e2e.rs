@@ -986,13 +986,13 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
     // are checked against what it painted.
     let cases = [
         (agent::BASELINE, true),
-        (agent::SURFACE_CARDS, true),
-        (agent::ACCENT_BORDER, true),
-        (agent::TIGHT, true),
+        (agent::CALL_DOTS, true),
+        (agent::DIFF_GUTTER, true),
+        (agent::TWO_LINE_APPROVAL, true),
         (agent::BASELINE_IDLE, false),
-        (agent::SURFACE_CARDS_IDLE, false),
-        (agent::ACCENT_BORDER_IDLE, false),
-        (agent::TIGHT_IDLE, false),
+        (agent::CALL_DOTS_IDLE, false),
+        (agent::DIFF_GUTTER_IDLE, false),
+        (agent::TWO_LINE_APPROVAL_IDLE, false),
     ];
     let mut baseline: Option<BTreeMap<char, usize>> = None;
     for (name, running) in cases {
@@ -1066,8 +1066,8 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             !painted(&painted_whole, "システム"),
             "{name}: a notice card's label is painted: {painted_whole:?}"
         );
-        // An idle preview opens the last turn's first diff; a running one
-        // leaves that turn folded.
+        // An idle preview opens the last turn's first diff and its failed
+        // command's output; a running one leaves that turn folded.
         assert_eq!(
             count_of(&painted_whole, agent::OPENED_DIFF_MARKER),
             if running {
@@ -1076,6 +1076,15 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
                 agent::OPENED_DIFF_MARKERS
             },
             "{name}: the last turn's first diff is not as opened: {painted_whole:?}"
+        );
+        assert_eq!(
+            count_of(&painted_whole, agent::OPENED_OUTPUT_MARKER),
+            if running {
+                0
+            } else {
+                agent::OPENED_OUTPUT_MARKERS
+            },
+            "{name}: the failed command's output is not as opened: {painted_whole:?}"
         );
         // `読` is painted a fixed number of times outside the first answer's
         // read calls, which stay folded.
@@ -1097,14 +1106,32 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             );
             baseline = Some(painted_whole);
         } else {
-            // agent-21, agent-22 and agent-23 change only geometry or color,
-            // which the glyph counts do not carry, so against agent-20 in the
-            // same state this holds that they paint the same glyphs.
-            let base = baseline.as_ref().expect("agent-20 is checked first");
+            // Against agent-24 in the same state: agent-25 drops the opened
+            // call rows' status words, agent-26 adds the opened diff's
+            // gutter marks, and agent-27 changes only geometry, which the
+            // glyph counts do not carry.
+            let base = baseline.as_ref().expect("agent-24 is checked first");
+            let mut expected: BTreeMap<char, i64> = BTreeMap::new();
+            if name == agent::CALL_DOTS || name == agent::CALL_DOTS_IDLE {
+                let statuses = if running {
+                    agent::RUNNING_ROW_STATUSES
+                } else {
+                    agent::IDLE_ROW_STATUSES
+                };
+                for status in statuses {
+                    for ch in status.chars() {
+                        *expected.entry(ch).or_insert(0) -= 1;
+                    }
+                }
+            }
+            if name == agent::DIFF_GUTTER_IDLE {
+                expected.insert('+', agent::OPENED_DIFF_ADDED as i64);
+                expected.insert('−', agent::OPENED_DIFF_REMOVED as i64);
+            }
             assert_eq!(
                 without_whitespace(delta(base, &painted_whole)),
-                BTreeMap::new(),
-                "{name}: paints glyphs other than agent-20's"
+                expected,
+                "{name}: does not differ from agent-24 as designed"
             );
         }
         cx.update(|_| drop(loaded));

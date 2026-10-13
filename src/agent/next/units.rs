@@ -13,10 +13,10 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::{h_flex, v_flex, Sizable as _};
 
 use super::display::{
-    Call, CallBody, CallStatus, DiffKind, Label, Message, Notice, Receipt, Status, Task, Tone,
-    Turn, TurnPart, TurnState,
+    Approval, Call, CallBody, CallStatus, DiffKind, DiffLine, Label, Message, Notice, Receipt,
+    Status, Task, Tone, Turn, TurnPart, TurnState,
 };
-use super::spec::{button_height, user_indent, THINKING_CYCLE_MS};
+use super::spec::{button_height, call_dot, lead_cell, user_indent, THINKING_CYCLE_MS};
 use super::{AgentNextEvent, AgentNextView, Layout, UiState};
 use crate::theme;
 use crate::ui::parts::{chip, escape_markdown, key_chip, markdown_body};
@@ -35,15 +35,31 @@ fn session_state_chip(status: Status) -> impl IntoElement {
     }
 }
 
-fn call_chip(status: CallStatus) -> impl IntoElement {
-    let (label, tone) = match status {
+fn call_status(status: CallStatus) -> (&'static str, Hsla) {
+    match status {
         CallStatus::Done => ("完了", theme::text_muted()),
         CallStatus::Failed => ("失敗", theme::danger()),
         CallStatus::Running => ("実行中", theme::accent()),
         CallStatus::Denied => ("拒否", theme::warning()),
         CallStatus::Cancelled => ("中断", theme::text_muted()),
-    };
+    }
+}
+
+fn call_chip(status: CallStatus) -> impl IntoElement {
+    let (label, tone) = call_status(status);
     chip(label, tone)
+}
+
+/// A call's status as a dot in its tone, centered in the lead cell.
+fn call_dot_cell(status: CallStatus) -> impl IntoElement {
+    let (_, tone) = call_status(status);
+    div()
+        .flex_none()
+        .w(lead_cell())
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(div().size(call_dot()).rounded_full().bg(tone))
 }
 
 fn turn_chip(state: TurnState) -> Option<impl IntoElement> {
@@ -143,7 +159,7 @@ pub(super) fn session_end(status: Status) -> Option<Notice> {
 // ---------------------------------------------------------------------------
 
 /// A message sent into the session: the board's owner reply, indented.
-pub(super) fn user(index: usize, message: &Message, layout: Layout) -> impl IntoElement {
+pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
     let color = match message.label {
         Label::You => theme::text_primary(),
         Label::Task | Label::Continue => theme::text_muted(),
@@ -153,7 +169,7 @@ pub(super) fn user(index: usize, message: &Message, layout: Layout) -> impl Into
         .flex_none()
         .ml(user_indent())
         .px(pad_x())
-        .py(layout.block_pad_y())
+        .py(gap_tight())
         .rounded(RADIUS)
         .bg(theme::tint_over_background(
             theme::text_primary(),
@@ -166,27 +182,20 @@ pub(super) fn user(index: usize, message: &Message, layout: Layout) -> impl Into
         )))
 }
 
-/// The frame a turn sits in: bordered, or a tinted surface with
-/// [`Layout::SurfaceCards`]. With [`Layout::AccentBorder`] a running turn's
-/// border is the accent color.
-fn card(layout: Layout, running: bool) -> Div {
-    let card = v_flex()
+/// The bordered frame a turn sits in.
+fn card() -> Div {
+    v_flex()
         .w_full()
         .flex_none()
         .rounded(RADIUS)
         .px(pad_x())
-        .py(layout.block_pad_y());
-    match layout {
-        Layout::SurfaceCards => card.bg(theme::surface_panel()),
-        Layout::AccentBorder if running => card.border_1().border_color(theme::accent()),
-        _ => card.border_1().border_color(theme::border()),
-    }
+        .py(gap_tight())
+        .border_1()
+        .border_color(theme::border())
 }
 
-/// The bar down a running turn's left edge; [`Layout::AccentBorder`] has
-/// none.
-fn with_accent_bar(card: Div, running: bool, layout: Layout) -> Div {
-    let running = running && layout != Layout::AccentBorder;
+/// The bar down a running turn's left edge.
+fn with_accent_bar(card: Div, running: bool) -> Div {
     card.relative().when(running, |card| {
         card.child(
             div()
@@ -275,7 +284,7 @@ pub(super) fn turn(
     } else {
         let line = ReceiptLine::merged(&receipts);
         let lead = carried.map(|status| session_state_chip(status).into_any_element());
-        Some(receipt_block(line, lead, end, ui, mono, cx).into_any_element())
+        Some(receipt_block(line, lead, end, layout, ui, mono, cx).into_any_element())
     };
 
     let mut parts: Vec<AnyElement> = Vec::new();
@@ -298,8 +307,8 @@ pub(super) fn turn(
         None => {}
     }
     let running = turn.state == TurnState::Running;
-    with_accent_bar(card(layout, running), running, layout)
-        .children(spaced(parts, layout.line_gap()))
+    with_accent_bar(card(), running)
+        .children(spaced(parts, gap_label()))
         .into_any_element()
 }
 
@@ -411,6 +420,7 @@ fn receipt_block(
     line: ReceiptLine<'_>,
     lead: Option<AnyElement>,
     end: Option<AnyElement>,
+    layout: Layout,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
@@ -448,13 +458,14 @@ fn receipt_block(
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx))),
         )
         .when(expanded, |block| {
-            block.child(call_list(&line, ui, mono, cx).mt(gap_label()))
+            block.child(call_list(&line, layout, ui, mono, cx).mt(gap_label()))
         })
 }
 
 /// A receipt line's calls, under a left rule.
 fn call_list(
     line: &ReceiptLine<'_>,
+    layout: Layout,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
@@ -466,9 +477,9 @@ fn call_list(
         .border_color(theme::border())
         .gap(gap_label())
         .children(
-            line.calls
-                .iter()
-                .map(|(receipt, index, call)| call_row(*receipt, *index, call, ui, mono, cx)),
+            line.calls.iter().map(|(receipt, index, call)| {
+                call_row(*receipt, *index, call, layout, ui, mono, cx)
+            }),
         )
 }
 
@@ -476,88 +487,125 @@ fn call_row(
     receipt: usize,
     index: usize,
     call: &Call,
+    layout: Layout,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
 ) -> impl IntoElement {
     let open = ui.open_bodies.contains(&(receipt, index));
     let has_body = call.body.is_some();
+    let row = h_flex()
+        .id(SharedString::from(format!(
+            "agent-next-call-{receipt}-{index}"
+        )))
+        .w_full()
+        .items_center()
+        .gap(gap_tight());
+    let row = if layout == Layout::CallDots {
+        row.child(call_dot_cell(call.status))
+            .child(text_at(meta(), theme::text_muted(), call.verb.clone()).flex_none())
+            .child(
+                text_at(meta(), theme::text_primary(), call.target.clone())
+                    .font_family(mono.clone())
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap(),
+            )
+    } else {
+        row.child(call_chip(call.status)).child(
+            text_at(meta(), theme::text_primary(), call.title())
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap(),
+        )
+    };
     v_flex()
         .w_full()
-        .child(
-            h_flex()
-                .id(SharedString::from(format!(
-                    "agent-next-call-{receipt}-{index}"
-                )))
-                .w_full()
-                .items_center()
-                .gap(gap_tight())
-                .child(call_chip(call.status))
-                .child(
-                    text_at(meta(), theme::text_primary(), call.title())
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap(),
-                )
-                .when(has_body, |row| {
-                    row.cursor_pointer().on_click(
-                        cx.listener(move |view, _, _, cx| view.toggle_body(receipt, index, cx)),
-                    )
-                }),
-        )
+        .child(row.when(has_body, |row| {
+            row.cursor_pointer()
+                .on_click(cx.listener(move |view, _, _, cx| view.toggle_body(receipt, index, cx)))
+        }))
         .when_some(call.body.as_ref().filter(|_| open), |row, body| {
             row.child(
                 div()
                     .w_full()
                     .mt(gap_label())
-                    .child(call_body(receipt, index, body, mono)),
+                    .child(call_body(receipt, index, body, layout, mono)),
             )
         })
         .when_some(call.approval.as_ref(), |row, approval| {
-            let approve = approval.id.clone();
-            let deny = approval.id.clone();
-            row.child(
+            row.child(approval_block(receipt, index, approval, layout, cx).mt(gap_label()))
+        })
+}
+
+/// A pending approval under its call row: on one line, or with
+/// [`Layout::TwoLineApproval`] the reason first and the keys and buttons
+/// under it.
+fn approval_block(
+    receipt: usize,
+    index: usize,
+    approval: &Approval,
+    layout: Layout,
+    cx: &mut Context<AgentNextView>,
+) -> Div {
+    let approve = approval.id.clone();
+    let deny = approval.id.clone();
+    let controls = [
+        key_chip("Enter").into_any_element(),
+        Button::new(SharedString::from(format!(
+            "agent-next-approve-{receipt}-{index}"
+        )))
+        .primary()
+        .small()
+        .h(button_height())
+        .label("承認")
+        .on_click(cx.listener(move |_, _, _, cx| cx.emit(AgentNextEvent::Approve(approve.clone()))))
+        .into_any_element(),
+        key_chip("Esc").into_any_element(),
+        Button::new(SharedString::from(format!(
+            "agent-next-deny-{receipt}-{index}"
+        )))
+        .ghost()
+        .small()
+        .h(button_height())
+        .label("拒否")
+        .on_click(cx.listener(move |_, _, _, cx| cx.emit(AgentNextEvent::Deny(deny.clone()))))
+        .into_any_element(),
+    ];
+    let reason = text_at(meta(), theme::text_primary(), approval.reason.clone())
+        .flex_1()
+        .min_w_0();
+    if layout == Layout::TwoLineApproval {
+        v_flex()
+            .w_full()
+            .child(
                 h_flex()
                     .w_full()
+                    .items_start()
+                    .gap(gap_tight())
+                    .child(chip("承認待ち", theme::accent()))
+                    .child(reason.font_weight(ANCHOR)),
+            )
+            .child(
+                h_flex()
                     .mt(gap_label())
                     .items_center()
                     .gap(gap_tight())
-                    .child(chip("承認待ち", theme::accent()))
-                    .child(
-                        text_at(meta(), theme::text_primary(), approval.reason.clone())
-                            .flex_1()
-                            .min_w_0(),
-                    )
-                    .child(key_chip("Enter"))
-                    .child(
-                        Button::new(SharedString::from(format!(
-                            "agent-next-approve-{receipt}-{index}"
-                        )))
-                        .primary()
-                        .small()
-                        .h(button_height())
-                        .label("承認")
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(AgentNextEvent::Approve(approve.clone()))
-                        })),
-                    )
-                    .child(key_chip("Esc"))
-                    .child(
-                        Button::new(SharedString::from(format!(
-                            "agent-next-deny-{receipt}-{index}"
-                        )))
-                        .ghost()
-                        .small()
-                        .h(button_height())
-                        .label("拒否")
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(AgentNextEvent::Deny(deny.clone()))
-                        })),
-                    ),
+                    .children(controls),
             )
-        })
+    } else {
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap(gap_tight())
+            .child(chip("承認待ち", theme::accent()))
+            .child(reason)
+            .children(controls)
+    }
 }
 
 fn mono_line(mono: &SharedString, text: &str) -> Div {
@@ -569,56 +617,77 @@ fn mono_line(mono: &SharedString, text: &str) -> Div {
         .child(text.to_string())
 }
 
+/// A diff line in its tone, on its surface; with [`Layout::DiffGutter`]
+/// its `+` or `−` in a cell before the text.
+fn diff_line(line: &DiffLine, layout: Layout, mono: &SharedString) -> Div {
+    let (surface, color, mark) = match line.kind {
+        DiffKind::Added => (
+            Some(theme::diff_added_surface()),
+            theme::diff_added_text(),
+            "+",
+        ),
+        DiffKind::Removed => (
+            Some(theme::diff_removed_surface()),
+            theme::diff_removed_text(),
+            "−",
+        ),
+        DiffKind::Context => (None, theme::text_muted(), ""),
+    };
+    let text = mono_line(mono, &line.text);
+    let line = if layout == Layout::DiffGutter {
+        h_flex()
+            .child(mono_line(mono, mark).flex_none().w(lead_cell()))
+            .child(text.flex_1().min_w_0())
+    } else {
+        text
+    };
+    line.w_full()
+        .text_color(color)
+        .when_some(surface, |line, surface| line.bg(surface))
+}
+
 fn call_body(
     receipt: usize,
     index: usize,
     body: &CallBody,
+    layout: Layout,
     mono: &SharedString,
 ) -> impl IntoElement {
     match body {
         CallBody::Diff(lines) => v_flex()
             .w_full()
-            .children(lines.iter().map(|line| {
-                let (surface, color) = match line.kind {
-                    DiffKind::Added => {
-                        (Some(theme::diff_added_surface()), theme::diff_added_text())
-                    }
-                    DiffKind::Removed => (
-                        Some(theme::diff_removed_surface()),
-                        theme::diff_removed_text(),
-                    ),
-                    DiffKind::Context => (None, theme::text_muted()),
-                };
-                mono_line(mono, &line.text)
-                    .w_full()
-                    .text_color(color)
-                    .when_some(surface, |line, surface| line.bg(surface))
-            }))
+            .children(lines.iter().map(|line| diff_line(line, layout, mono)))
             .into_any_element(),
-        CallBody::Output { lines, omitted } => v_flex()
-            .w_full()
-            .child(
-                v_flex()
-                    .id(SharedString::from(format!(
-                        "agent-next-output-{receipt}-{index}"
-                    )))
-                    .w_full()
-                    .overflow_x_scroll()
+        CallBody::Output { lines, omitted } => {
+            let output = v_flex()
+                .id(SharedString::from(format!(
+                    "agent-next-output-{receipt}-{index}"
+                )))
+                .w_full()
+                .overflow_x_scroll()
+                .children(lines.iter().map(|line| mono_line(mono, line)));
+            let output = if layout == Layout::DiffGutter {
+                output.text_color(theme::text_muted())
+            } else {
+                output
                     .bg(theme::surface_panel())
                     .rounded(RADIUS)
                     .px(gap_tight())
                     .py(gap_label())
                     .text_color(theme::text_primary())
-                    .children(lines.iter().map(|line| mono_line(mono, line))),
-            )
-            .when(*omitted > 0, |output| {
-                output.child(text_at(
-                    micro(),
-                    theme::text_muted(),
-                    format!("…他 {omitted} 行"),
-                ))
-            })
-            .into_any_element(),
+            };
+            v_flex()
+                .w_full()
+                .child(output)
+                .when(*omitted > 0, |output| {
+                    output.child(text_at(
+                        micro(),
+                        theme::text_muted(),
+                        format!("…他 {omitted} 行"),
+                    ))
+                })
+                .into_any_element()
+        }
         CallBody::Text(text) => text_at(meta(), theme::text_muted(), text.clone())
             .w_full()
             .into_any_element(),
