@@ -768,7 +768,6 @@ impl BoardThreadView {
             )))
             .group(group.clone())
             .relative()
-            .w_full()
             .flex_none()
             .when(owner, |post| {
                 post.ml(owner_indent())

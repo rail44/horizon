@@ -153,7 +153,6 @@ pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
     };
     let surface = theme::tint_over_background(theme::text_primary(), BAND_TINT);
     v_flex()
-        .w_full()
         .flex_none()
         .ml(user_indent())
         .px(pad_x())
