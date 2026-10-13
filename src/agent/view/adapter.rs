@@ -127,9 +127,12 @@ fn task_line(task: &TaskProgressNotification, now_ms: u64) -> Task {
 // Units
 // ---------------------------------------------------------------------------
 
-/// Every unit of the frame, in order. Within one turn span, a message or a
-/// notice that arrives before the turn's first output precedes its card;
-/// one that arrives after follows it.
+/// Every unit of the frame, in order. Within one turn span, a notice that
+/// arrives before the turn's first output precedes its card and one that
+/// arrives after follows it. A message sent into the session after the
+/// first output closes the card so far (done, without elapsed time) and
+/// starts the next one; the span's end state and elapsed time go to the
+/// last card.
 fn units(items: &[AgentFrameItem], in_flight: bool, pending: &[ToolCallIdentity]) -> Vec<Unit> {
     let mut units = Vec::new();
     for span in group_into_turns(items) {
@@ -151,7 +154,6 @@ fn units(items: &[AgentFrameItem], in_flight: bool, pending: &[ToolCallIdentity]
                     started = true;
                 }
             }
-            let side = if started { &mut after } else { &mut before };
             match item {
                 AgentFrameItem::Message(message) => match message.role {
                     MessageRole::Assistant => {
@@ -160,13 +162,28 @@ fn units(items: &[AgentFrameItem], in_flight: bool, pending: &[ToolCallIdentity]
                             started = true;
                         }
                     }
-                    role => side.push(Unit::User(Message {
-                        label: label(role),
-                        text: message.text.clone(),
-                    })),
+                    role => {
+                        if started {
+                            units.append(&mut before);
+                            units.push(Unit::Turn(Turn {
+                                state: TurnState::Done,
+                                parts: std::mem::take(&mut parts),
+                                elapsed: None,
+                            }));
+                            units.append(&mut after);
+                            started = false;
+                        }
+                        before.push(Unit::User(Message {
+                            label: label(role),
+                            text: message.text.clone(),
+                        }));
+                    }
                 },
                 AgentFrameItem::Thought(_) => started = true,
-                item => side.extend(notice(item).map(Unit::Notice)),
+                item => {
+                    let side = if started { &mut after } else { &mut before };
+                    side.extend(notice(item).map(Unit::Notice));
+                }
             }
         }
         let has_text = parts.iter().any(|part| matches!(part, TurnPart::Text(_)));
@@ -534,6 +551,42 @@ mod tests {
         assert_eq!(transcript.status, Status::Idle);
         assert_eq!(transcript.composer, ComposerMode::Idle);
         assert!(adapted.approvals.is_empty());
+    }
+
+    #[test]
+    fn a_message_after_the_first_output_starts_a_new_card() {
+        let adapted = adapt(
+            &model(
+                SessionPhase::Idle,
+                vec![
+                    assistant_delta("initialized"),
+                    user_message("q"),
+                    assistant_delta("a"),
+                    turn_end(TurnEndReason::Completed),
+                ],
+            ),
+            false,
+            0,
+        );
+        assert_eq!(
+            adapted.transcript.units,
+            vec![
+                Unit::Turn(Turn {
+                    state: TurnState::Done,
+                    parts: vec![TurnPart::Text("initialized".to_string())],
+                    elapsed: None,
+                }),
+                Unit::User(Message {
+                    label: Label::You,
+                    text: "q".to_string(),
+                }),
+                Unit::Turn(Turn {
+                    state: TurnState::Done,
+                    parts: vec![TurnPart::Text("a".to_string())],
+                    elapsed: Some("48s".to_string()),
+                }),
+            ]
+        );
     }
 
     #[test]
