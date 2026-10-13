@@ -25,8 +25,12 @@
 //! input field, which starts at one row, the model chip, and the send hint.
 //! Every fixed label comes from [`chrome`].
 
+#[cfg(not(target_family = "wasm"))]
+mod adapter;
 pub(crate) mod chrome;
 pub(crate) mod display;
+#[cfg(not(target_family = "wasm"))]
+mod pane;
 pub(crate) mod previews;
 mod spec;
 mod units;
@@ -34,7 +38,7 @@ mod units;
 use std::collections::HashSet;
 
 use gpui::*;
-use gpui_component::input::{InputEvent, Textarea, TextareaState};
+use gpui_component::input::{Escape, InputEvent, Textarea, TextareaState};
 use gpui_component::{h_flex, v_flex, ActiveTheme as _};
 
 use crate::theme;
@@ -44,8 +48,6 @@ use display::{ComposerMode, Status, Transcript, Unit};
 use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
 
 /// What the view asks of whatever holds it.
-// Only a shell subscriber would read the payloads, and none is wired yet.
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum AgentNextEvent {
     Send(String),
@@ -103,7 +105,7 @@ impl AgentNextView {
             },
         );
         let focus_handle = cx.focus_handle();
-        window.focus(&focus_handle, cx);
+        window.focus(&composer.read(cx).focus_handle(cx), cx);
         Self {
             transcript,
             ui,
@@ -117,7 +119,6 @@ impl AgentNextView {
 
     /// Replaces what the view shows. The UI state is kept: a receipt that
     /// was open stays open across an update of the same session.
-    #[allow(dead_code)]
     pub(crate) fn set_transcript(
         &mut self,
         transcript: Transcript,
@@ -164,16 +165,29 @@ impl AgentNextView {
 
     /// Escape while waiting on an approval with nothing typed denies it.
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        if event.keystroke.key != "escape" {
-            return;
-        }
-        let ComposerMode::Approval { id } = &self.transcript.composer else {
-            return;
-        };
-        if self.composer.read(cx).value().trim().is_empty() {
-            cx.emit(AgentNextEvent::Deny(id.clone()));
+        if event.keystroke.key == "escape" && self.deny_pending(cx) {
             cx.stop_propagation();
         }
+    }
+
+    /// The composer field's own Escape, which the field passes on when it
+    /// has nothing to do with it.
+    fn on_escape(&mut self, _: &Escape, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.deny_pending(cx) {
+            cx.propagate();
+        }
+    }
+
+    /// Denies the pending approval when nothing is typed; whether it did.
+    fn deny_pending(&mut self, cx: &mut Context<Self>) -> bool {
+        let ComposerMode::Approval { id } = &self.transcript.composer else {
+            return false;
+        };
+        if !self.composer.read(cx).value().trim().is_empty() {
+            return false;
+        }
+        cx.emit(AgentNextEvent::Deny(id.clone()));
+        true
     }
 
     // -- composition --------------------------------------------------------
@@ -264,8 +278,9 @@ fn placeholder(status: Status) -> &'static str {
 }
 
 impl Focusable for AgentNextView {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    /// The composer's field, so focusing the pane types into it.
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.composer.read(cx).focus_handle(cx)
     }
 }
 
@@ -279,6 +294,7 @@ impl Render for AgentNextView {
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                 view.on_key(event, window, cx);
             }))
+            .on_action(cx.listener(Self::on_escape))
             .size_full()
             .min_w(VIEW_MIN_WIDTH)
             .bg(rgb(theme::background()))
