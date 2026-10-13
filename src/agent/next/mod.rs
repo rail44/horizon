@@ -14,14 +14,18 @@
 //! receipts merge into one line, and notices are plain lines. The layouts
 //! differ in one area each ([`units`]):
 //!
-//! - [`Layout::Baseline`]: one card per turn, the receipt line first; while
-//!   the turn runs, the session's state opens that line and 「停止」 ends it.
-//! - [`Layout::BoxedComposer`]: [`Layout::Baseline`] with the composer's
-//!   field and hint row in one bordered box instead of a bordered strip.
-//! - [`Layout::BorderlessCalls`]: [`Layout::Baseline`] with the expanded
-//!   call rows under a left rule rather than in a bordered box.
-//! - [`Layout::ElapsedOnly`]: [`Layout::Baseline`] with a finished turn's
-//!   right end showing its elapsed time without the model.
+//! - [`Layout::Baseline`]: one bordered card per turn, the receipt line
+//!   first; while the turn runs, the session's state opens that line,
+//!   「停止」 ends it and an accent bar runs down the card's left edge; once
+//!   done, the line ends with the turn's elapsed time. Expanded call rows
+//!   sit under a left rule, and the composer is one bordered box.
+//! - [`Layout::SurfaceCards`]: [`Layout::Baseline`] with each turn's card a
+//!   tinted surface instead of a bordered frame.
+//! - [`Layout::AccentBorder`]: [`Layout::Baseline`] with a running turn's
+//!   card bordered in the accent color instead of carrying the accent bar.
+//! - [`Layout::Tight`]: [`Layout::Baseline`] with the vertical rhythm one
+//!   step tighter: between units, inside cards and user blocks, and between
+//!   a card's lines.
 
 pub(crate) mod display;
 pub(crate) mod previews;
@@ -44,9 +48,39 @@ use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Layout {
     Baseline,
-    BoxedComposer,
-    BorderlessCalls,
-    ElapsedOnly,
+    SurfaceCards,
+    AccentBorder,
+    Tight,
+}
+
+impl Layout {
+    /// The gap between units of the column.
+    fn unit_gap(self) -> Pixels {
+        if self == Self::Tight {
+            gap_tight()
+        } else {
+            gap_unit()
+        }
+    }
+
+    /// The vertical padding inside a turn's card and a user block.
+    pub(super) fn block_pad_y(self) -> Pixels {
+        if self == Self::Tight {
+            gap_tight()
+        } else {
+            pad_y()
+        }
+    }
+
+    /// The gap between a card's receipt line, its text and its thinking
+    /// line.
+    pub(super) fn line_gap(self) -> Pixels {
+        if self == Self::Tight {
+            gap_label()
+        } else {
+            gap_tight()
+        }
+    }
 }
 
 /// What the view asks of whatever holds it.
@@ -194,7 +228,7 @@ impl AgentNextView {
         let mut children = Vec::new();
         for (index, unit) in self.transcript.units.iter().enumerate() {
             children.push(match unit {
-                Unit::User(message) => units::user(index, message).into_any_element(),
+                Unit::User(message) => units::user(index, message, self.layout).into_any_element(),
                 Unit::Notice(notice) => units::notice(notice).into_any_element(),
                 Unit::Turn(turn) => {
                     units::turn(index, turn, status, self.layout, &self.ui, &mono, cx)
@@ -216,9 +250,12 @@ impl AgentNextView {
             .text_size(body().size)
             .child(Textarea::new(&self.composer).appearance(false));
         let hints = self.render_composer_hints(cx);
-        let strip = v_flex().w_full().flex_none().px(thread_gutter());
-        if self.layout == Layout::BoxedComposer {
-            return strip.pb(pad_y()).child(
+        v_flex()
+            .w_full()
+            .flex_none()
+            .px(thread_gutter())
+            .pb(pad_y())
+            .child(
                 v_flex()
                     .w_full()
                     .border_1()
@@ -229,15 +266,7 @@ impl AgentNextView {
                     .gap(gap_label())
                     .child(field)
                     .child(hints),
-            );
-        }
-        strip
-            .py(pad_y())
-            .gap(gap_label())
-            .border_t_1()
-            .border_color(theme::border())
-            .child(field)
-            .child(hints)
+            )
     }
 
     /// The model chip at the left and the send hint at the right.
@@ -312,7 +341,7 @@ impl Render for AgentNextView {
                     .px(thread_gutter())
                     .pt(gap_section())
                     .pb(gap_composer())
-                    .gap(gap_unit())
+                    .gap(self.layout.unit_gap())
                     .children(column),
             )
             .child(self.render_composer(cx))

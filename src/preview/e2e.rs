@@ -948,15 +948,6 @@ fn mount_animated(
     }
 }
 
-/// How a preview's layout departs from `agent-16`'s.
-#[derive(Clone, Copy, PartialEq)]
-enum AgentVariant {
-    Baseline,
-    BoxedComposer,
-    BorderlessCalls,
-    ElapsedOnly,
-}
-
 /// `counts` without whitespace, which a line may or may not paint as glyphs.
 fn without_whitespace(counts: BTreeMap<char, i64>) -> BTreeMap<char, i64> {
     counts
@@ -994,25 +985,17 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
     // Each baseline comes before the variations of the same state, which
     // are checked against what it painted.
     let cases = [
-        (agent::BASELINE, true, AgentVariant::Baseline),
-        (agent::BOXED_COMPOSER, true, AgentVariant::BoxedComposer),
-        (agent::BORDERLESS_CALLS, true, AgentVariant::BorderlessCalls),
-        (agent::ELAPSED_ONLY, true, AgentVariant::ElapsedOnly),
-        (agent::BASELINE_IDLE, false, AgentVariant::Baseline),
-        (
-            agent::BOXED_COMPOSER_IDLE,
-            false,
-            AgentVariant::BoxedComposer,
-        ),
-        (
-            agent::BORDERLESS_CALLS_IDLE,
-            false,
-            AgentVariant::BorderlessCalls,
-        ),
-        (agent::ELAPSED_ONLY_IDLE, false, AgentVariant::ElapsedOnly),
+        (agent::BASELINE, true),
+        (agent::SURFACE_CARDS, true),
+        (agent::ACCENT_BORDER, true),
+        (agent::TIGHT, true),
+        (agent::BASELINE_IDLE, false),
+        (agent::SURFACE_CARDS_IDLE, false),
+        (agent::ACCENT_BORDER_IDLE, false),
+        (agent::TIGHT_IDLE, false),
     ];
     let mut baseline: Option<BTreeMap<char, usize>> = None;
-    for (name, running, variant) in cases {
+    for (name, running) in cases {
         let loaded = load(&live, name, cx).expect("the agent preview instantiates");
         let surface = cx.new(Surface::new);
         if running {
@@ -1101,7 +1084,7 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             agent::READ_ELSEWHERE,
             "{name}: the first answer's read calls are not folded: {painted_whole:?}"
         );
-        if variant == AgentVariant::Baseline {
+        if name == agent::BASELINE || name == agent::BASELINE_IDLE {
             // The display list carries no order or position, so this holds
             // the receipt lines' presence only.
             assert!(
@@ -1114,24 +1097,14 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             );
             baseline = Some(painted_whole);
         } else {
-            // Against agent-16 in the same state, each variation paints
-            // exactly what it changes and nothing else. agent-17 and agent-18
-            // change geometry only, which the display list does not carry,
-            // so for them this holds that they paint the same glyphs.
-            let expected = match variant {
-                AgentVariant::ElapsedOnly => {
-                    // Both finished turns drop 「 · {model}」 from their
-                    // right end; the running turn has none.
-                    let dropped = format!(" · {}", agent::MODEL);
-                    text_delta(&dropped.repeat(2), "")
-                }
-                _ => BTreeMap::new(),
-            };
-            let base = baseline.as_ref().expect("agent-16 is checked first");
+            // agent-21, agent-22 and agent-23 change only geometry or color,
+            // which the glyph counts do not carry, so against agent-20 in the
+            // same state this holds that they paint the same glyphs.
+            let base = baseline.as_ref().expect("agent-20 is checked first");
             assert_eq!(
                 without_whitespace(delta(base, &painted_whole)),
-                without_whitespace(expected),
-                "{name}: paints something other than agent-16 and its one change"
+                BTreeMap::new(),
+                "{name}: paints glyphs other than agent-20's"
             );
         }
         cx.update(|_| drop(loaded));

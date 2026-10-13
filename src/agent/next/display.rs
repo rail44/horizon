@@ -46,7 +46,6 @@ pub(crate) struct Turn {
     pub(crate) state: TurnState,
     pub(crate) parts: Vec<TurnPart>,
     pub(crate) elapsed: Option<String>,
-    pub(crate) model: Option<String>,
 }
 
 #[allow(dead_code)]

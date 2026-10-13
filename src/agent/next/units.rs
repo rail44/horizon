@@ -94,19 +94,14 @@ fn carried(turn: &Turn, status: Status) -> Option<Status> {
     (turn.state == TurnState::Running && status.running()).then_some(status)
 }
 
-/// 「{elapsed} · {model}」 for a finished turn, or 「{elapsed}」 alone under
-/// [`Layout::ElapsedOnly`].
-fn done_meta(turn: &Turn, layout: Layout) -> Option<Div> {
+/// 「{elapsed}」 for a finished turn.
+fn done_meta(turn: &Turn) -> Option<Div> {
     if turn.state != TurnState::Done {
         return None;
     }
-    let model = turn.model.clone().filter(|_| layout != Layout::ElapsedOnly);
-    let text = [turn.elapsed.clone(), model]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ");
-    (!text.is_empty()).then(|| text_at(meta(), theme::text_muted(), text).flex_none())
+    turn.elapsed
+        .clone()
+        .map(|elapsed| text_at(meta(), theme::text_muted(), elapsed).flex_none())
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +143,7 @@ pub(super) fn session_end(status: Status) -> Option<Notice> {
 // ---------------------------------------------------------------------------
 
 /// A message sent into the session: the board's owner reply, indented.
-pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
+pub(super) fn user(index: usize, message: &Message, layout: Layout) -> impl IntoElement {
     let color = match message.label {
         Label::You => theme::text_primary(),
         Label::Task | Label::Continue => theme::text_muted(),
@@ -158,7 +153,7 @@ pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
         .flex_none()
         .ml(user_indent())
         .px(pad_x())
-        .py(pad_y())
+        .py(layout.block_pad_y())
         .rounded(RADIUS)
         .bg(theme::tint_over_background(
             theme::text_primary(),
@@ -171,20 +166,27 @@ pub(super) fn user(index: usize, message: &Message) -> impl IntoElement {
         )))
 }
 
-/// The bordered frame a turn and a notice sit in.
-fn card() -> Div {
-    v_flex()
+/// The frame a turn sits in: bordered, or a tinted surface with
+/// [`Layout::SurfaceCards`]. With [`Layout::AccentBorder`] a running turn's
+/// border is the accent color.
+fn card(layout: Layout, running: bool) -> Div {
+    let card = v_flex()
         .w_full()
         .flex_none()
-        .border_1()
-        .border_color(theme::border())
         .rounded(RADIUS)
         .px(pad_x())
-        .py(pad_y())
+        .py(layout.block_pad_y());
+    match layout {
+        Layout::SurfaceCards => card.bg(theme::surface_panel()),
+        Layout::AccentBorder if running => card.border_1().border_color(theme::accent()),
+        _ => card.border_1().border_color(theme::border()),
+    }
 }
 
-/// The bar down a running turn's left edge.
-fn with_accent_bar(card: Div, running: bool) -> Div {
+/// The bar down a running turn's left edge; [`Layout::AccentBorder`] has
+/// none.
+fn with_accent_bar(card: Div, running: bool, layout: Layout) -> Div {
+    let running = running && layout != Layout::AccentBorder;
     card.relative().when(running, |card| {
         card.child(
             div()
@@ -243,7 +245,7 @@ pub(super) fn thinking(id: usize) -> Div {
 /// line, its text, and its thinking state. While the turn runs, the
 /// session's state opens the receipt line and 「停止」 ends it (or, with no
 /// receipt yet, the thinking line); otherwise the receipt line ends with
-/// the turn's elapsed time and model.
+/// the turn's elapsed time.
 pub(super) fn turn(
     index: usize,
     turn: &Turn,
@@ -256,7 +258,7 @@ pub(super) fn turn(
     let carried = carried(turn, status);
     let receipts = receipts(turn);
     let end = if turn.state != TurnState::Running {
-        Some(finished_end(turn, layout).into_any_element())
+        Some(finished_end(turn).into_any_element())
     } else if carried.is_some() && !receipts.is_empty() {
         Some(stop_button("agent-next-card-stop", cx).into_any_element())
     } else {
@@ -273,7 +275,7 @@ pub(super) fn turn(
     } else {
         let line = ReceiptLine::merged(&receipts);
         let lead = carried.map(|status| session_state_chip(status).into_any_element());
-        Some(receipt_block(line, lead, end, layout, ui, mono, cx).into_any_element())
+        Some(receipt_block(line, lead, end, ui, mono, cx).into_any_element())
     };
 
     let mut parts: Vec<AnyElement> = Vec::new();
@@ -295,8 +297,9 @@ pub(super) fn turn(
         None if thinks => parts.push(thinking(index).into_any_element()),
         None => {}
     }
-    with_accent_bar(card(), turn.state == TurnState::Running)
-        .children(spaced(parts))
+    let running = turn.state == TurnState::Running;
+    with_accent_bar(card(layout, running), running, layout)
+        .children(spaced(parts, layout.line_gap()))
         .into_any_element()
 }
 
@@ -313,13 +316,13 @@ fn receipts(turn: &Turn) -> Vec<&Receipt> {
 
 /// A finished turn's chip and its [`done_meta`], for the receipt line's
 /// right end.
-fn finished_end(turn: &Turn, layout: Layout) -> impl IntoElement {
+fn finished_end(turn: &Turn) -> impl IntoElement {
     h_flex()
         .flex_none()
         .items_baseline()
         .gap(gap_tight())
         .children(turn_chip(turn.state))
-        .children(done_meta(turn, layout))
+        .children(done_meta(turn))
 }
 
 /// Each piece of `turn`'s text, in order.
@@ -338,12 +341,12 @@ fn texts(index: usize, turn: &Turn) -> impl Iterator<Item = AnyElement> + '_ {
         })
 }
 
-/// `parts` stacked with the tight gap between them.
-fn spaced(parts: Vec<AnyElement>) -> impl Iterator<Item = Div> {
-    parts.into_iter().enumerate().map(|(position, part)| {
+/// `parts` stacked with `gap` between them.
+fn spaced(parts: Vec<AnyElement>, gap: Pixels) -> impl Iterator<Item = Div> {
+    parts.into_iter().enumerate().map(move |(position, part)| {
         div()
             .w_full()
-            .when(position > 0, |part| part.mt(gap_tight()))
+            .when(position > 0, |part| part.mt(gap))
             .child(part)
     })
 }
@@ -408,7 +411,6 @@ fn receipt_block(
     line: ReceiptLine<'_>,
     lead: Option<AnyElement>,
     end: Option<AnyElement>,
-    layout: Layout,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
@@ -446,39 +448,28 @@ fn receipt_block(
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx))),
         )
         .when(expanded, |block| {
-            block.child(call_list(&line, layout, ui, mono, cx).mt(gap_label()))
+            block.child(call_list(&line, ui, mono, cx).mt(gap_label()))
         })
 }
 
-/// A receipt line's calls: in a bordered box, or under a left rule with
-/// [`Layout::BorderlessCalls`].
+/// A receipt line's calls, under a left rule.
 fn call_list(
     line: &ReceiptLine<'_>,
-    layout: Layout,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentNextView>,
 ) -> Div {
-    let list = if layout == Layout::BorderlessCalls {
-        v_flex()
-            .ml(gap_tight())
-            .pl(pad_x())
-            .border_l_1()
-            .border_color(theme::border())
-    } else {
-        v_flex()
-            .w_full()
-            .border_1()
-            .border_color(theme::border())
-            .rounded(RADIUS)
-            .px(pad_x())
-            .py(gap_tight())
-    };
-    list.gap(gap_label()).children(
-        line.calls
-            .iter()
-            .map(|(receipt, index, call)| call_row(*receipt, *index, call, ui, mono, cx)),
-    )
+    v_flex()
+        .ml(gap_tight())
+        .pl(pad_x())
+        .border_l_1()
+        .border_color(theme::border())
+        .gap(gap_label())
+        .children(
+            line.calls
+                .iter()
+                .map(|(receipt, index, call)| call_row(*receipt, *index, call, ui, mono, cx)),
+        )
 }
 
 fn call_row(

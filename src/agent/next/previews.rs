@@ -12,14 +12,14 @@ use super::display::{
 };
 use super::{AgentNextView, Layout, UiState};
 
-pub(crate) const BASELINE: &str = "agent-16";
-pub(crate) const BOXED_COMPOSER: &str = "agent-17";
-pub(crate) const BORDERLESS_CALLS: &str = "agent-18";
-pub(crate) const ELAPSED_ONLY: &str = "agent-19";
-pub(crate) const BASELINE_IDLE: &str = "agent-16-idle";
-pub(crate) const BOXED_COMPOSER_IDLE: &str = "agent-17-idle";
-pub(crate) const BORDERLESS_CALLS_IDLE: &str = "agent-18-idle";
-pub(crate) const ELAPSED_ONLY_IDLE: &str = "agent-19-idle";
+pub(crate) const BASELINE: &str = "agent-20";
+pub(crate) const SURFACE_CARDS: &str = "agent-21";
+pub(crate) const ACCENT_BORDER: &str = "agent-22";
+pub(crate) const TIGHT: &str = "agent-23";
+pub(crate) const BASELINE_IDLE: &str = "agent-20-idle";
+pub(crate) const SURFACE_CARDS_IDLE: &str = "agent-21-idle";
+pub(crate) const ACCENT_BORDER_IDLE: &str = "agent-22-idle";
+pub(crate) const TIGHT_IDLE: &str = "agent-23-idle";
 
 // ---------------------------------------------------------------------------
 // Probes
@@ -114,32 +114,32 @@ pub(crate) fn build_baseline(window: &mut Window, cx: &mut App) -> AnyView {
     build(Layout::Baseline, true, window, cx)
 }
 
-pub(crate) fn build_boxed_composer(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::BoxedComposer, true, window, cx)
+pub(crate) fn build_surface_cards(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::SurfaceCards, true, window, cx)
 }
 
-pub(crate) fn build_borderless_calls(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::BorderlessCalls, true, window, cx)
+pub(crate) fn build_accent_border(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::AccentBorder, true, window, cx)
 }
 
-pub(crate) fn build_elapsed_only(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::ElapsedOnly, true, window, cx)
+pub(crate) fn build_tight(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::Tight, true, window, cx)
 }
 
 pub(crate) fn build_baseline_idle(window: &mut Window, cx: &mut App) -> AnyView {
     build(Layout::Baseline, false, window, cx)
 }
 
-pub(crate) fn build_boxed_composer_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::BoxedComposer, false, window, cx)
+pub(crate) fn build_surface_cards_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::SurfaceCards, false, window, cx)
 }
 
-pub(crate) fn build_borderless_calls_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::BorderlessCalls, false, window, cx)
+pub(crate) fn build_accent_border_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::AccentBorder, false, window, cx)
 }
 
-pub(crate) fn build_elapsed_only_idle(window: &mut Window, cx: &mut App) -> AnyView {
-    build(Layout::ElapsedOnly, false, window, cx)
+pub(crate) fn build_tight_idle(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Layout::Tight, false, window, cx)
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +257,6 @@ fn investigation_turn() -> Turn {
             TurnPart::Text(SCALING.to_string()),
         ],
         elapsed: Some("48秒".to_string()),
-        model: Some(MODEL.to_string()),
     }
 }
 
@@ -342,7 +341,6 @@ fn fix_turn() -> Turn {
             TurnPart::Text(FAILURE.to_string()),
         ],
         elapsed: Some("2分10秒".to_string()),
-        model: Some(MODEL.to_string()),
     }
 }
 
@@ -381,12 +379,11 @@ fn running_turn() -> Turn {
             TurnPart::Thinking,
         ],
         elapsed: Some("12秒".to_string()),
-        model: Some(MODEL.to_string()),
     }
 }
 
-/// The model every turn ran on; the composer's chip names it too.
-pub(crate) const MODEL: &str = "syn:large:text";
+/// The model the composer's chip names.
+const MODEL: &str = "syn:large:text";
 
 /// The sample: two finished exchanges, a compaction notice, and the owner's
 /// next request, answered by a running turn when `running`.
@@ -478,7 +475,6 @@ mod tests {
                 Unit::Notice(notice) => strings.push(notice.text.clone()),
                 Unit::Turn(turn) => {
                     strings.extend(turn.elapsed.clone());
-                    strings.extend(turn.model.clone());
                     for part in &turn.parts {
                         match part {
                             TurnPart::Text(text) => strings.push(text.clone()),

@@ -52,28 +52,28 @@ const PREVIEWS: &[Preview] = &[
         build: agent::build_baseline_idle,
     },
     Preview {
-        name: agent::BOXED_COMPOSER,
-        build: agent::build_boxed_composer,
+        name: agent::SURFACE_CARDS,
+        build: agent::build_surface_cards,
     },
     Preview {
-        name: agent::BOXED_COMPOSER_IDLE,
-        build: agent::build_boxed_composer_idle,
+        name: agent::SURFACE_CARDS_IDLE,
+        build: agent::build_surface_cards_idle,
     },
     Preview {
-        name: agent::BORDERLESS_CALLS,
-        build: agent::build_borderless_calls,
+        name: agent::ACCENT_BORDER,
+        build: agent::build_accent_border,
     },
     Preview {
-        name: agent::BORDERLESS_CALLS_IDLE,
-        build: agent::build_borderless_calls_idle,
+        name: agent::ACCENT_BORDER_IDLE,
+        build: agent::build_accent_border_idle,
     },
     Preview {
-        name: agent::ELAPSED_ONLY,
-        build: agent::build_elapsed_only,
+        name: agent::TIGHT,
+        build: agent::build_tight,
     },
     Preview {
-        name: agent::ELAPSED_ONLY_IDLE,
-        build: agent::build_elapsed_only_idle,
+        name: agent::TIGHT_IDLE,
+        build: agent::build_tight_idle,
     },
     Preview {
         name: animation::NAME,
