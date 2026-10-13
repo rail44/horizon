@@ -81,10 +81,28 @@ pub(crate) struct AgentView {
     /// scroll away from the tail drops it; scrolling back to it restores it.
     follow_tail: bool,
     focus_handle: FocusHandle,
-    _composer_subscription: Subscription,
+    column: Entity<Column>,
+    _subscriptions: [Subscription; 2],
 }
 
 impl EventEmitter<AgentViewEvent> for AgentView {}
+
+/// The scroll column, drawn by [`AgentView`] and cached as a view of its
+/// own. A cached view lays its content out as a layout root, under the text
+/// style set around it; `TextView` measures a paragraph holding inline code
+/// with the text style in effect when layout runs, not the one set around
+/// the paragraph, so the body size is set around this view.
+struct Column {
+    view: WeakEntity<AgentView>,
+}
+
+impl Render for Column {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.view
+            .update(cx, |view, cx| view.render_column(window, cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
 
 impl AgentView {
     pub(crate) fn new(
@@ -99,7 +117,7 @@ impl AgentView {
                 .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MAX_ROWS)
                 .submit_on_enter(true)
         });
-        let _composer_subscription = cx.subscribe_in(
+        let composer_subscription = cx.subscribe_in(
             &composer,
             window,
             |view, _input, event: &InputEvent, window, cx| {
@@ -110,6 +128,9 @@ impl AgentView {
         );
         let focus_handle = cx.focus_handle();
         window.focus(&composer.read(cx).focus_handle(cx), cx);
+        let view = cx.weak_entity();
+        let column = cx.new(|_| Column { view });
+        let notify_column = cx.observe_self(|view, cx| view.column.update(cx, |_, cx| cx.notify()));
         Self {
             transcript,
             ui,
@@ -117,7 +138,8 @@ impl AgentView {
             scroll: ScrollHandle::new(),
             follow_tail: true,
             focus_handle,
-            _composer_subscription,
+            column,
+            _subscriptions: [composer_subscription, notify_column],
         }
     }
 
@@ -261,6 +283,26 @@ impl AgentView {
             )
     }
 
+    /// The scroll column, drawn into [`Column`].
+    fn render_column(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.track_tail();
+        let column = self.units(cx);
+        v_flex()
+            .id("agent-next-scroll")
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .on_scroll_wheel(cx.listener(|view, _: &ScrollWheelEvent, _, _| {
+                view.follow_tail = false;
+            }))
+            .px(thread_gutter())
+            .pt(gap_section())
+            .pb(gap_composer())
+            .gap(gap_tight())
+            .children(column)
+            .into_any_element()
+    }
+
     /// Keeps the tail in view while following it, and resumes following
     /// once the owner scrolls back down to it.
     fn track_tail(&mut self) {
@@ -291,8 +333,7 @@ impl Focusable for AgentView {
 
 impl Render for AgentView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.track_tail();
-        let column = self.units(cx);
+        let body = body();
         v_flex()
             .id("agent-next")
             .track_focus(&self.focus_handle)
@@ -305,20 +346,16 @@ impl Render for AgentView {
             .bg(rgb(theme::background()))
             .text_color(theme::text_primary())
             .child(
-                v_flex()
-                    .id("agent-next-scroll")
+                div()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .on_scroll_wheel(cx.listener(|view, _: &ScrollWheelEvent, _, _| {
-                        view.follow_tail = false;
-                    }))
-                    .px(thread_gutter())
-                    .pt(gap_section())
-                    .pb(gap_composer())
-                    .gap(gap_tight())
-                    .children(column),
+                    .w_full()
+                    .text_size(body.size)
+                    .line_height(body.line_height)
+                    .child(
+                        AnyView::from(self.column.clone())
+                            .cached(StyleRefinement::default().size_full()),
+                    ),
             )
             .child(self.render_composer(cx))
     }
