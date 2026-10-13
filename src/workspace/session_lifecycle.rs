@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::session_creation::PendingTerminalSpawn;
 use super::{CachedPaneLeaf, PaneView, WorkspaceShell};
-use crate::agent::{AgentSession, AgentView};
+use crate::agent::{AgentPane, AgentSession};
 use crate::board::events::{BoardSessionsRefreshed, OpenTaskSession, OpenTaskThread};
 use crate::board::sessions::BoardShellView;
 use crate::board::{BoardListView, BoardThreadView};
@@ -315,7 +315,7 @@ impl WorkspaceShell {
             {
                 self.panes.insert(
                     pane_id,
-                    PaneView::agent(cx.new(|cx| AgentView::new(session.clone(), window, cx))),
+                    PaneView::agent(cx.new(|cx| AgentPane::new(session.clone(), window, cx))),
                 );
             } else if matches!(
                 self.workspace.pane_kind(pane_id),

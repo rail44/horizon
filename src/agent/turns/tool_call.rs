@@ -285,8 +285,9 @@ mod tests {
     use serde_json::json;
 
     use super::super::test_support::*;
-    use super::super::{build_tool_call_views, ApprovalState, DiffLineKind};
+    use super::super::{build_tool_call_views, DiffLineKind};
     use super::*;
+    use horizon_agent::transcript::ApprovalState;
 
     fn with_occurrence(mut item: AgentFrameItem, occurrence: &str) -> AgentFrameItem {
         match &mut item {

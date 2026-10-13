@@ -1,10 +1,10 @@
-//! The display model the pane draws: plain data, already worded. Whatever
-//! builds it from a live session does the wording; the view only lays it
-//! out.
+//! The display model the pane draws: plain data, already worded. The
+//! adapter from a live session (`adapter`) does the wording; the
+//! view only lays it out.
 //!
-//! The preview sample is the only producer in this build and does not reach
-//! every state; the enums with states only a live session would produce
-//! allow dead code until the adapter from one is written.
+//! In the preview plugin's build the sample is the only producer and does
+//! not reach every state, so the enums with states only a live session
+//! produces allow dead code.
 
 /// One agent session, as the pane shows it.
 #[derive(Clone, Debug, PartialEq)]

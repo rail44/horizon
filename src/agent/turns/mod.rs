@@ -1,46 +1,28 @@
-//! Wording and composer-interaction view-model for the agent transcript
-//! (`docs/agent-output-ui-amendment.md` stage C, decisions 1-2). The
-//! *structural* reading of the frame -- turn/burst grouping, tool-call and
-//! approval derivation, receipt and change aggregation -- lives in
-//! `crate::agent::model`. What's here is display-only: humanized
-//! durations, receipt/changes-overview prose, the composer's placeholder
-//! and mode state machine, the model chip's text composition, and the
-//! per-tool expanded body.
-//!
-//! Split into responsibility-focused submodules -- `receipt` (status/
-//! duration text and the collapsed-receipt prose), `tool_call` (the
-//! expanded per-tool body and its terse summary fallback), `composer`
-//! (composer mode/placeholder/model chip) and `diff` (the
-//! changes-overview summary text) -- each re-exported here, together with
-//! the structural items from `crate::agent::model` and the plain per-tool
-//! JSON readers from `horizon_agent::transcript`, so every `turns::X`
-//! call site reads one namespace.
+//! Display wording over the frame's structural reading: the per-tool call
+//! bodies (`tool_call`) and the receipt summary and elapsed-time text
+//! (`receipt`). The structural reading itself -- turn/burst grouping,
+//! tool-call views, receipt aggregation -- lives in `crate::agent::model`
+//! and is re-exported here with the plain per-tool JSON readers from
+//! `horizon_agent::transcript`, so every `turns::X` call site reads one
+//! namespace.
 
-mod composer;
-mod diff;
 mod receipt;
 mod tool_call;
 
-pub(crate) use composer::*;
-pub(crate) use diff::*;
 pub(crate) use receipt::*;
 pub(crate) use tool_call::*;
 
 pub(crate) use super::model::{
-    aggregate_changes, aggregate_receipt, build_tool_call_views, contains_user_message,
-    group_into_turns, is_approval_still_pending, latest_turn_model, progress,
-    running_row_expandable, segment_bursts, tool_call_source, ReceiptAggregate, ToolCallView,
-    TurnEnd,
+    aggregate_receipt, build_tool_call_views, group_into_turns, segment_bursts, tool_call_source,
+    ToolCallView,
 };
 pub(crate) use horizon_agent::transcript::{
     cap_lines_head, cap_lines_tail, classify, edit_entries, reconstruct_line_diff, str_field,
-    ApprovalState, DiffLine, DiffLineKind, FileChange, ToolCallKind,
+    DiffLine, DiffLineKind,
 };
 
-/// `1 {singular}` / `{count} {plural}`. Shared by `receipt::receipt_prose`
-/// and `diff::changes_summary_text` -- kept here rather than in either
-/// submodule since both are equally "primary" users.
-fn pluralize(count: usize, singular: &str, plural: &str) -> String {
+/// `1 {singular}` / `{count} {plural}`.
+pub(crate) fn pluralize(count: usize, singular: &str, plural: &str) -> String {
     if count == 1 {
         format!("1 {singular}")
     } else {

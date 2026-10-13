@@ -10,12 +10,12 @@ use horizon_workspace::commands::CommandId;
 use super::super::model::ToolCallIdentity;
 use super::super::session::AgentSession;
 use super::adapter::{transcript_from, Adapted};
-use super::{AgentNextEvent, AgentNextView, UiState};
+use super::{AgentView, AgentViewEvent, UiState};
 use crate::workspace::RunCommand;
 
 pub(crate) struct AgentPane {
     session: Entity<AgentSession>,
-    view: Entity<AgentNextView>,
+    view: Entity<AgentView>,
     approvals: HashMap<String, ToolCallIdentity>,
     _subscriptions: [Subscription; 2],
 }
@@ -30,14 +30,14 @@ impl AgentPane {
             transcript,
             approvals,
         } = transcript_from(session.read(cx));
-        let view = cx.new(|cx| AgentNextView::new(transcript, UiState::default(), window, cx));
+        let view = cx.new(|cx| AgentView::new(transcript, UiState::default(), window, cx));
         let observe = cx.observe_in(&session, window, |pane: &mut Self, _, window, cx| {
             pane.refresh(window, cx);
         });
         let events = cx.subscribe_in(
             &view,
             window,
-            |pane: &mut Self, _, event: &AgentNextEvent, window, cx| {
+            |pane: &mut Self, _, event: &AgentViewEvent, window, cx| {
                 pane.on_event(event, window, cx);
             },
         );
@@ -72,21 +72,21 @@ impl AgentPane {
             .update(cx, |view, cx| view.set_transcript(transcript, window, cx));
     }
 
-    fn on_event(&mut self, event: &AgentNextEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_event(&mut self, event: &AgentViewEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
-            AgentNextEvent::Send(text) => self.session.read(cx).send_user_message(text.clone()),
-            AgentNextEvent::Approve(id) => {
+            AgentViewEvent::Send(text) => self.session.read(cx).send_user_message(text.clone()),
+            AgentViewEvent::Approve(id) => {
                 if let Some(identity) = self.approvals.get(id) {
                     self.session.read(cx).approve(identity.clone());
                 }
             }
-            AgentNextEvent::Deny(id) => {
+            AgentViewEvent::Deny(id) => {
                 if let Some(identity) = self.approvals.get(id) {
                     self.session.read(cx).deny(identity.clone(), None);
                 }
             }
-            AgentNextEvent::Stop => run(CommandId::CancelAgentTurn, window, cx),
-            AgentNextEvent::SwitchModel => run(CommandId::SwitchModel, window, cx),
+            AgentViewEvent::Stop => run(CommandId::CancelAgentTurn, window, cx),
+            AgentViewEvent::SwitchModel => run(CommandId::SwitchModel, window, cx),
         }
     }
 }

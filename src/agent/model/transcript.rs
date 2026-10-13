@@ -1,17 +1,16 @@
 //! The structural reading of a folded frame: turn spans, tool-activity
 //! bursts, per-call views with their approval lifecycle, and the receipt
-//! and file-change aggregations. The per-tool JSON readers
+//! aggregation. The per-tool JSON readers
 //! (`classify`, `edit_entries`, `reconstruct_line_diff`) are
 //! `horizon_agent::transcript`'s, which take plain tool ids and JSON.
 
 use std::collections::HashSet;
-use std::path::Path;
 use std::time::Duration;
 
 use horizon_acp::{HumanDecision, ToolOutcome};
 use horizon_agent::transcript::{
-    classify, edit_entries, reconstruct_line_diff, ApprovalState, DiffLineKind, FileChange,
-    FileEffect, ToolCallClassification, ToolCallKind,
+    classify, edit_entries, reconstruct_line_diff, ApprovalState, DiffLineKind, FileEffect,
+    ToolCallClassification, ToolCallKind,
 };
 use serde_json::Value;
 
@@ -75,29 +74,6 @@ pub(crate) fn group_into_turns(items: &[AgentFrameItem]) -> Vec<TurnSpan> {
         });
     }
     spans
-}
-
-/// Whether `items` holds a user-authored message.
-pub(crate) fn contains_user_message(items: &[AgentFrameItem]) -> bool {
-    items.iter().any(|item| {
-        matches!(
-            item,
-            AgentFrameItem::Message(Message {
-                role: MessageRole::User,
-                ..
-            })
-        )
-    })
-}
-
-/// The model of the latest ended turn that recorded one.
-pub(crate) fn latest_turn_model(items: &[AgentFrameItem]) -> Option<&str> {
-    items.iter().rev().find_map(|item| match item {
-        AgentFrameItem::TurnEnded {
-            model: Some(model), ..
-        } => Some(model.as_str()),
-        _ => None,
-    })
 }
 
 fn is_tool_related(item: &AgentFrameItem) -> bool {
@@ -194,13 +170,6 @@ impl ToolCallView {
 
     pub(crate) fn finished(&self) -> bool {
         self.outcome.is_some()
-    }
-
-    pub(crate) fn is_error(&self) -> bool {
-        matches!(
-            self.outcome,
-            Some(ToolOutcome::Failed | ToolOutcome::Denied)
-        )
     }
 
     pub(crate) fn is_success(&self) -> bool {
@@ -315,26 +284,6 @@ fn derive_approval_state(
     }
 }
 
-/// Whether `identity`'s permission request is still unanswered within
-/// `turn_items`.
-pub(crate) fn is_approval_still_pending(
-    turn_items: &[AgentFrameItem],
-    identity: &ToolCallIdentity,
-) -> bool {
-    super::queries::pending_approval_identities_in(turn_items).contains(identity)
-}
-
-/// `(finished, total)` tool-call counts for the running card's header.
-pub(crate) fn progress(tool_calls: &[ToolCallView]) -> (usize, usize) {
-    let finished = tool_calls.iter().filter(|call| call.finished()).count();
-    (finished, tool_calls.len())
-}
-
-/// Any finished call expands to its body; an unfinished one has none yet.
-pub(crate) fn running_row_expandable(call: &ToolCallView) -> bool {
-    call.finished()
-}
-
 fn affected_files(tool_id: &str, input: &Value, output: Option<&Value>) -> Vec<FileEffect> {
     use horizon_agent::contract::tool_output::{decode, EditOutcome, FileEdits, FileWritten};
     let Some(output) = output else {
@@ -401,14 +350,6 @@ fn classify_call(tool_id: &str) -> CallClass {
     }
 }
 
-fn file_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(path)
-        .to_string()
-}
-
 /// The collapsed receipt line's counts. Failed or unfinished calls stay
 /// individual; superseded attempts are left out.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -452,39 +393,6 @@ pub(crate) fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate
     aggregate.read_file_count = read_paths.len();
     aggregate.edited_file_count = edited_paths.len();
     aggregate
-}
-
-/// Sums recorded file effects of finished edit-class calls per path, in
-/// first-touch order.
-pub(crate) fn aggregate_changes(tool_calls: &[ToolCallView]) -> Vec<FileChange> {
-    let mut changes: Vec<FileChange> = Vec::new();
-    for call in tool_calls {
-        if classify_call(&call.tool_id) != CallClass::Edit {
-            continue;
-        }
-        for file in &call.affected_files {
-            let entry = match changes
-                .iter_mut()
-                .position(|change| change.path == file.path)
-            {
-                Some(index) => &mut changes[index],
-                None => {
-                    changes.push(FileChange {
-                        path: file.path.clone(),
-                        file_name: file_name(&file.path),
-                        added: 0,
-                        removed: 0,
-                        created: false,
-                    });
-                    changes.last_mut().expect("just pushed")
-                }
-            };
-            entry.added += file.added;
-            entry.removed += file.removed;
-            entry.created |= file.created;
-        }
-    }
-    changes
 }
 
 /// The item a view's `request_index` points at, with its output when the

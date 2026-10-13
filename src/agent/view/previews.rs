@@ -9,7 +9,7 @@ use super::display::{
     Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Label, Message, Notice,
     Receipt, Status, Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };
-use super::{AgentNextView, UiState};
+use super::{AgentView, UiState};
 
 pub(crate) const RUNNING: &str = "agent";
 pub(crate) const IDLE: &str = "agent-idle";
@@ -83,7 +83,7 @@ fn build(running: bool, window: &mut Window, cx: &mut App) -> AnyView {
     } else {
         last_turn_opened(&transcript)
     };
-    cx.new(|cx| AgentNextView::new(transcript, ui, window, cx))
+    cx.new(|cx| AgentView::new(transcript, ui, window, cx))
         .into()
 }
 

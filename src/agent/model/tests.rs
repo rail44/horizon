@@ -414,7 +414,6 @@ fn a_turn_end_records_the_model_of_its_last_provider_request() {
     let end = turns[0].ended.as_ref().unwrap();
     assert_eq!(end.reason, TurnEndReason::Completed);
     assert_eq!(end.model.as_deref(), Some("gpt-5"));
-    assert_eq!(latest_turn_model(&model.frame.items), Some("gpt-5"));
 }
 
 #[test]

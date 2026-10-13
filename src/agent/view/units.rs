@@ -17,7 +17,7 @@ use super::display::{
     Status, Task, Tone, Turn, TurnPart, TurnState,
 };
 use super::spec::{button_height, call_dot, lead_cell, user_indent, THINKING_CYCLE_MS};
-use super::{AgentNextEvent, AgentNextView, UiState};
+use super::{AgentView, AgentViewEvent, UiState};
 use crate::theme;
 use crate::ui::parts::{chip, escape_markdown, key_chip, markdown_body};
 use crate::ui::spec::*;
@@ -78,24 +78,24 @@ fn text_at(step: Step, color: Hsla, text: impl Into<SharedString>) -> Div {
 // ---------------------------------------------------------------------------
 
 /// The model chip; a click asks to switch the model.
-pub(super) fn model_chip(model: &str, cx: &mut Context<AgentNextView>) -> impl IntoElement {
+pub(super) fn model_chip(model: &str, cx: &mut Context<AgentView>) -> impl IntoElement {
     div()
         .id("agent-next-model")
         .flex_none()
         .cursor_pointer()
         .child(chip(model.to_string(), theme::text_muted()))
-        .on_click(cx.listener(|_, _, _, cx| cx.emit(AgentNextEvent::SwitchModel)))
+        .on_click(cx.listener(|_, _, _, cx| cx.emit(AgentViewEvent::SwitchModel)))
 }
 
 /// `Stop`, offered while a turn runs.
-fn stop_button(id: &'static str, cx: &mut Context<AgentNextView>) -> Button {
+fn stop_button(id: &'static str, cx: &mut Context<AgentView>) -> Button {
     Button::new(id)
         .ghost()
         .xsmall()
         .label(chrome::STOP)
         .on_click(cx.listener(|_, _, _, cx| {
             cx.stop_propagation();
-            cx.emit(AgentNextEvent::Stop);
+            cx.emit(AgentViewEvent::Stop);
         }))
 }
 
@@ -246,7 +246,7 @@ pub(super) fn turn(
     status: Status,
     ui: &UiState,
     mono: &SharedString,
-    cx: &mut Context<AgentNextView>,
+    cx: &mut Context<AgentView>,
 ) -> AnyElement {
     let carried = carried(turn, status);
     let receipts = receipts(turn);
@@ -407,7 +407,7 @@ fn receipt_block(
     end: Option<AnyElement>,
     ui: &UiState,
     mono: &SharedString,
-    cx: &mut Context<AgentNextView>,
+    cx: &mut Context<AgentView>,
 ) -> impl IntoElement {
     let expanded = line.running || ui.expanded_receipts.contains(&line.key);
     let key = line.key;
@@ -451,7 +451,7 @@ fn call_list(
     line: &ReceiptLine<'_>,
     ui: &UiState,
     mono: &SharedString,
-    cx: &mut Context<AgentNextView>,
+    cx: &mut Context<AgentView>,
 ) -> Div {
     v_flex()
         .ml(gap_tight())
@@ -472,7 +472,7 @@ fn call_row(
     call: &Call,
     ui: &UiState,
     mono: &SharedString,
-    cx: &mut Context<AgentNextView>,
+    cx: &mut Context<AgentView>,
 ) -> impl IntoElement {
     let open = ui.open_bodies.contains(&(receipt, index));
     let has_body = call.body.is_some();
@@ -519,7 +519,7 @@ fn approval_block(
     receipt: usize,
     index: usize,
     approval: &Approval,
-    cx: &mut Context<AgentNextView>,
+    cx: &mut Context<AgentView>,
 ) -> Div {
     let approve = approval.id.clone();
     let deny = approval.id.clone();
@@ -532,7 +532,7 @@ fn approval_block(
         .small()
         .h(button_height())
         .label(chrome::APPROVE)
-        .on_click(cx.listener(move |_, _, _, cx| cx.emit(AgentNextEvent::Approve(approve.clone()))))
+        .on_click(cx.listener(move |_, _, _, cx| cx.emit(AgentViewEvent::Approve(approve.clone()))))
         .into_any_element(),
         key_chip("Esc").into_any_element(),
         Button::new(SharedString::from(format!(
@@ -542,7 +542,7 @@ fn approval_block(
         .small()
         .h(button_height())
         .label(chrome::DENY)
-        .on_click(cx.listener(move |_, _, _, cx| cx.emit(AgentNextEvent::Deny(deny.clone()))))
+        .on_click(cx.listener(move |_, _, _, cx| cx.emit(AgentViewEvent::Deny(deny.clone()))))
         .into_any_element(),
     ];
     let reason = text_at(meta(), theme::text_primary(), approval.reason.clone())

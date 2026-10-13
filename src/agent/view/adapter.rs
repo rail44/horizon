@@ -16,8 +16,8 @@ use super::super::model::{
 };
 use super::super::session::AgentSession;
 use super::super::turns::{
-    aggregate_receipt, build_tool_call_views, group_into_turns, humanize_duration, segment_bursts,
-    str_field, tool_call_body, DiffLineKind, ToolCallBody, ToolCallView,
+    build_tool_call_views, group_into_turns, humanize_duration, pluralize, receipt_summary,
+    segment_bursts, str_field, tool_call_body, DiffLineKind, ToolCallBody, ToolCallView,
 };
 use super::chrome;
 use super::display::{
@@ -230,7 +230,7 @@ fn notice(item: &AgentFrameItem) -> Option<Notice> {
             Tone::Muted,
             format!(
                 "History compacted: {} ({} chars) reclaimed",
-                plural(
+                pluralize(
                     cleared.cleared_occurrence_ids.len(),
                     "tool output",
                     "tool outputs"
@@ -277,21 +277,12 @@ fn memory_field(field: MemoryField) -> &'static str {
     }
 }
 
-/// `1 {singular}` or `{count} {plural}`.
-fn plural(count: usize, singular: &str, plural: &str) -> String {
-    if count == 1 {
-        format!("1 {singular}")
-    } else {
-        format!("{count} {plural}")
-    }
-}
-
 /// `31204` as `31,204`.
 fn grouped(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push(',');
         }
         out.push(digit);
@@ -323,50 +314,11 @@ fn receipt(
         .collect();
     Some(Receipt {
         key,
-        summary: summary(&views),
+        summary: receipt_summary(&views),
         running: calls.iter().any(|call| call.status == CallStatus::Running),
         failed: calls.iter().any(|call| call.status == CallStatus::Failed),
         calls,
     })
-}
-
-/// `Read {n} files · Edited {n} files · Ran {n} commands · {n} searches`,
-/// only the non-zero parts. The aggregate counts finished calls; a call
-/// still running or failed is counted by its tool as well.
-fn summary(views: &[ToolCallView]) -> String {
-    let aggregate = aggregate_receipt(views);
-    let mut reads = aggregate.read_file_count;
-    let mut edits = aggregate.edited_file_count;
-    let mut runs = aggregate.bash_count;
-    let mut searches = aggregate.query_count;
-    for call in &aggregate.individual_calls {
-        if !matches!(call.outcome, None | Some(ToolOutcome::Failed)) {
-            continue;
-        }
-        match call.tool_id.as_str() {
-            "fs.read" => reads += 1,
-            "fs.edit" | "fs.write" => edits += call.affected_files.len().max(1),
-            "bash" => runs += 1,
-            _ => searches += 1,
-        }
-    }
-    let mut parts = Vec::new();
-    if reads > 0 {
-        parts.push(format!("Read {}", plural(reads, "file", "files")));
-    }
-    if edits > 0 {
-        parts.push(format!("Edited {}", plural(edits, "file", "files")));
-    }
-    if runs > 0 {
-        parts.push(format!("Ran {}", plural(runs, "command", "commands")));
-    }
-    if searches > 0 {
-        parts.push(plural(searches, "search", "searches"));
-    }
-    if parts.is_empty() {
-        return plural(views.len(), "call", "calls");
-    }
-    parts.join(" · ")
 }
 
 fn call(

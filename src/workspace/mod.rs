@@ -21,7 +21,7 @@ use horizon_terminal_core::TerminalNotification;
 use horizon_workspace::commands::CommandId;
 use horizon_workspace::{PaneId, SessionId, Workspace, WORKSPACE_STATE_VERSION};
 
-use crate::agent::{AgentSession, AgentView};
+use crate::agent::{AgentPane, AgentSession};
 use crate::board::{BoardListView, BoardThreadView};
 use crate::model_picker::ModelPickerDelegate;
 use crate::palette::PaletteDelegate;
@@ -216,7 +216,7 @@ enum CachedPaneLeaf {
 /// disable descendant reuse whenever that ancestor misses.
 #[derive(Clone)]
 enum CompositePane {
-    Agent(Entity<AgentView>),
+    Agent(Entity<AgentPane>),
 }
 
 impl CachedPaneLeaf {
@@ -261,7 +261,7 @@ impl PaneView {
         Self::Cached(CachedPaneLeaf::Terminal(view))
     }
 
-    fn agent(view: Entity<AgentView>) -> Self {
+    fn agent(view: Entity<AgentPane>) -> Self {
         Self::Composite(CompositePane::Agent(view))
     }
 

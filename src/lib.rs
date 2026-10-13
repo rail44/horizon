@@ -18,7 +18,7 @@
 #![recursion_limit = "256"]
 
 // The agent pane. Its runtime-facing halves are gated inside it; the
-// redrawn view in `agent::next` builds for the plugin target too.
+// view in `agent::view` builds for the plugin target too.
 mod agent;
 // The board's two views. Their shell-facing halves — the commands, the
 // session observation, the events the workspace subscribes to — have no

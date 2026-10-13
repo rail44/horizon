@@ -99,7 +99,7 @@ impl TerminalView {
     }
 
     /// Status text shown at the bottom of the pane when the session is
-    /// unreachable or the shell has exited, parity with `AgentView::status_line`.
+    /// unreachable or the shell has exited, parity with the agent pane's unreachable notice.
     fn status_line(&self, cx: &App) -> (String, Hsla) {
         let session = self.session.read(cx);
         if session.exited() {
@@ -196,7 +196,7 @@ impl Render for TerminalView {
                     .size_full(),
                 ),
             )
-            // Status row (backlog #35 parity with `AgentView::status_line`):
+            // Status row (backlog #35 parity with the agent pane's unreachable notice):
             // rendered only when there's something to say, so an ordinary,
             // reachable pane looks exactly as before.
             .when(!status.is_empty(), |this| {

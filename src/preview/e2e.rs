@@ -48,7 +48,7 @@ use gpui::{
 };
 use horizon_config::{RawConfig, RawThemeConfig};
 
-use crate::agent::next::previews as agent;
+use crate::agent::view::previews as agent;
 use crate::board::previews as board;
 use crate::preview::host::{PreviewHostRoot, PreviewThemeSource};
 use crate::preview::schema::{PreviewPlugin, PreviewPluginCaller as _};
@@ -951,7 +951,7 @@ fn mount_animated(
 #[gpui::test]
 #[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
 async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
-    use crate::agent::next::chrome;
+    use crate::agent::view::chrome;
 
     let built = built_artifact();
     let live = live_artifact("agent");

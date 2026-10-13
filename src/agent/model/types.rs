@@ -25,17 +25,6 @@ pub(crate) enum MessageRole {
     AutoContinue,
 }
 
-impl MessageRole {
-    pub(crate) fn display_label(self) -> &'static str {
-        match self {
-            Self::User => "you",
-            Self::TaskNotification => "task",
-            Self::AutoContinue => "continue",
-            Self::Assistant => "agent",
-        }
-    }
-}
-
 /// A `user_message`/`agent_message` and its chunks, folded by `messageId`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Message {

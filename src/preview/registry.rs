@@ -10,7 +10,7 @@ use gpui::{
     div, rgb, AnyView, App, Context, IntoElement, ParentElement as _, Render, Styled as _, Window,
 };
 
-use crate::agent::next::previews as agent;
+use crate::agent::view::previews as agent;
 use crate::board::previews as board;
 use crate::preview::{animation, sample};
 
