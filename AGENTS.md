@@ -290,7 +290,7 @@ The shell is GPUI-based (the Floem shell retired at tag
   horizon-terminal-core print_compliance_matrix -- --nocapture`.
 - `agent/` — the agent pane: per-session model entities, the fold from
   ACP session updates and `_horizon/*` notifications to the pane's frame,
-  and the view (Markdown transcript, composer, approvals).
+  and the view (what it draws and how it is fed: `docs/agent-pane-rendering.md`).
   Contract/providers/tools/persistence live in
   `crates/horizon-agent`, hosted by `crates/horizon-agentd`; the
   `_horizon/*` and `_meta.horizon` vocabulary shared by the shell and the
