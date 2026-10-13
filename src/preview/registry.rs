@@ -44,36 +44,12 @@ const PREVIEWS: &[Preview] = &[
         build: board::build_thread_long,
     },
     Preview {
-        name: agent::BASELINE,
-        build: agent::build_baseline,
+        name: agent::RUNNING,
+        build: agent::build_running,
     },
     Preview {
-        name: agent::BASELINE_IDLE,
-        build: agent::build_baseline_idle,
-    },
-    Preview {
-        name: agent::ENGLISH_CHROME,
-        build: agent::build_english_chrome,
-    },
-    Preview {
-        name: agent::ENGLISH_CHROME_IDLE,
-        build: agent::build_english_chrome_idle,
-    },
-    Preview {
-        name: agent::TURN_TIME,
-        build: agent::build_turn_time,
-    },
-    Preview {
-        name: agent::TURN_TIME_IDLE,
-        build: agent::build_turn_time_idle,
-    },
-    Preview {
-        name: agent::FOLDED_THOUGHT,
-        build: agent::build_folded_thought,
-    },
-    Preview {
-        name: agent::FOLDED_THOUGHT_IDLE,
-        build: agent::build_folded_thought_idle,
+        name: agent::IDLE,
+        build: agent::build_idle,
     },
     Preview {
         name: animation::NAME,

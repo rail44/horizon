@@ -2,36 +2,28 @@
 //! own ([`display`]) so it builds for the preview plugin's target as well.
 //!
 //! [`AgentNextView`] holds a [`Transcript`](display::Transcript) handed in
-//! from outside, a [`Layout`], and its own UI state (which receipts and
-//! call bodies are open). It never reaches the shell, a runtime, or a
-//! session: everything the owner asks for leaves as an [`AgentNextEvent`].
+//! from outside and its own UI state (which receipts and call bodies are
+//! open). It never reaches the shell, a runtime, or a session: everything
+//! the owner asks for leaves as an [`AgentNextEvent`].
 //!
-//! Every layout puts the same things in the same places: the composer
-//! holds the input, the model chip and the send hint only; the session's
-//! state and 「停止」 ride on the running turn; an approval sits under the
-//! call that asks for it; background tasks and a session that can no
-//! longer run end the column. Neither speaker is labeled, a turn's
-//! receipts merge into one line, and notices are plain lines. The layouts
-//! differ in one area each ([`units`]):
+//! The column is a run of units ([`units`]), with no speaker labels:
 //!
-//! - [`Layout::Baseline`]: one bordered card per turn, the receipt line
-//!   first; while the turn runs, the session's state opens that line,
-//!   「停止」 ends it and an accent bar runs down the card's left edge; once
-//!   done, the line ends with the turn's elapsed time. Expanded call rows
-//!   sit under a left rule, each opening with a colored status dot and its
-//!   title in two tones, the verb muted and the target in the monospace
-//!   family; a diff line's `+` or `−` sits in a gutter before it, and a
-//!   command's output is drawn without a box. A pending approval is one
-//!   line, a message sent into the session sits on a grey tint, and the
-//!   composer is one bordered box whose field starts at one row. The
-//!   model's thoughts are not drawn.
-//! - [`Layout::EnglishChrome`]: [`Layout::Baseline`] with every fixed label
-//!   in English ([`chrome`]).
-//! - [`Layout::TurnTime`]: [`Layout::Baseline`] with a finished turn's
-//!   receipt line ending in its start time before its elapsed time.
-//! - [`Layout::FoldedThought`]: [`Layout::Baseline`] with each of the
-//!   model's thoughts drawn as a line counting its characters, which a
-//!   click opens to the thought's text.
+//! - A message sent into the session sits indented on a grey tint.
+//! - An agent turn is one bordered card. Its receipts merge into one line
+//!   at its head, followed by its text. While the turn runs, the session's
+//!   state opens that line, `Stop` ends it and an accent bar runs down the
+//!   card's left edge; once done, the line ends with the turn's elapsed
+//!   time. A click on the line opens its calls under a left rule, each row
+//!   a status dot and its title, the verb muted and the target in the
+//!   monospace family; a click on a row opens its body: a diff with its
+//!   `+`/`−` in a gutter cell, or a command's output drawn without a box.
+//!   A pending approval is one line under the call that asks for it.
+//! - A notice is a plain line.
+//!
+//! Background tasks and the notice of a session that can no longer run end
+//! the column. Below it, the composer is one bordered box holding only the
+//! input field, which starts at one row, the model chip, and the send hint.
+//! Every fixed label comes from [`chrome`].
 
 pub(crate) mod chrome;
 pub(crate) mod display;
@@ -48,28 +40,8 @@ use gpui_component::{h_flex, v_flex, ActiveTheme as _};
 use crate::theme;
 use crate::ui::parts::key_chip;
 use crate::ui::spec::*;
-use chrome::Chrome;
 use display::{ComposerMode, Status, Transcript, Unit};
 use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
-
-/// Which arrangement of the units the view draws.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Layout {
-    Baseline,
-    EnglishChrome,
-    TurnTime,
-    FoldedThought,
-}
-
-impl Layout {
-    /// The language the layout's fixed labels are drawn in.
-    pub(crate) fn chrome(self) -> Chrome {
-        match self {
-            Self::EnglishChrome => Chrome::English,
-            Self::Baseline | Self::TurnTime | Self::FoldedThought => Chrome::Japanese,
-        }
-    }
-}
 
 /// What the view asks of whatever holds it.
 // Only a shell subscriber would read the payloads, and none is wired yet.
@@ -91,14 +63,11 @@ pub(crate) struct UiState {
     pub(crate) expanded_receipts: HashSet<usize>,
     /// Call bodies opened by a click, by receipt key and call index.
     pub(crate) open_bodies: HashSet<(usize, usize)>,
-    /// Thoughts opened by a click, by unit index and part index.
-    pub(crate) open_thoughts: HashSet<(usize, usize)>,
 }
 
 /// The agent pane over a display model.
 pub(crate) struct AgentNextView {
     transcript: Transcript,
-    layout: Layout,
     ui: UiState,
     composer: Entity<TextareaState>,
     scroll: ScrollHandle,
@@ -114,14 +83,13 @@ impl EventEmitter<AgentNextEvent> for AgentNextView {}
 impl AgentNextView {
     pub(crate) fn new(
         transcript: Transcript,
-        layout: Layout,
         ui: UiState,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder(placeholder(transcript.status, layout.chrome()))
+                .placeholder(placeholder(transcript.status))
                 .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MAX_ROWS)
                 .submit_on_enter(true)
         });
@@ -138,7 +106,6 @@ impl AgentNextView {
         window.focus(&focus_handle, cx);
         Self {
             transcript,
-            layout,
             ui,
             composer,
             scroll: ScrollHandle::new(),
@@ -157,9 +124,8 @@ impl AgentNextView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let chrome = self.layout.chrome();
-        if placeholder(transcript.status, chrome) != placeholder(self.transcript.status, chrome) {
-            let text = placeholder(transcript.status, chrome);
+        let text = placeholder(transcript.status);
+        if text != placeholder(self.transcript.status) {
             self.composer
                 .update(cx, |input, cx| input.set_placeholder(text, window, cx));
         }
@@ -177,13 +143,6 @@ impl AgentNextView {
     pub(super) fn toggle_body(&mut self, receipt: usize, call: usize, cx: &mut Context<Self>) {
         if !self.ui.open_bodies.remove(&(receipt, call)) {
             self.ui.open_bodies.insert((receipt, call));
-        }
-        cx.notify();
-    }
-
-    pub(super) fn toggle_thought(&mut self, unit: usize, part: usize, cx: &mut Context<Self>) {
-        if !self.ui.open_thoughts.remove(&(unit, part)) {
-            self.ui.open_thoughts.insert((unit, part));
         }
         cx.notify();
     }
@@ -219,27 +178,23 @@ impl AgentNextView {
 
     // -- composition --------------------------------------------------------
 
-    /// The scroll column's children for the current layout.
+    /// The scroll column's children.
     fn units(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mono = cx.theme().mono_font_family.clone();
         let status = self.transcript.status;
-        let chrome = self.layout.chrome();
         let mut children = Vec::new();
         for (index, unit) in self.transcript.units.iter().enumerate() {
             children.push(match unit {
                 Unit::User(message) => units::user(index, message).into_any_element(),
                 Unit::Notice(notice) => units::notice(notice).into_any_element(),
-                Unit::Turn(turn) => {
-                    units::turn(index, turn, status, self.layout, &self.ui, &mono, cx)
-                }
+                Unit::Turn(turn) => units::turn(index, turn, status, &self.ui, &mono, cx),
             });
         }
-        if let Some(end) = units::session_end(status, chrome) {
+        if let Some(end) = units::session_end(status) {
             children.push(units::notice(&end).into_any_element());
         }
-        children.extend(
-            units::task_lines(&self.transcript.tasks, chrome).map(IntoElement::into_any_element),
-        );
+        children
+            .extend(units::task_lines(&self.transcript.tasks).map(IntoElement::into_any_element));
         children
     }
 
@@ -283,7 +238,7 @@ impl AgentNextView {
                     .text_size(micro().size)
                     .line_height(micro().line_height)
                     .text_color(theme::text_muted())
-                    .child(self.layout.chrome().labels().send_hint),
+                    .child(chrome::SEND_HINT),
             )
     }
 
@@ -300,12 +255,11 @@ impl AgentNextView {
     }
 }
 
-fn placeholder(status: Status, chrome: Chrome) -> &'static str {
-    let labels = chrome.labels();
+fn placeholder(status: Status) -> &'static str {
     match status {
-        Status::Terminated => labels.placeholder_ended,
-        Status::Unreachable => labels.placeholder_unreachable,
-        _ => labels.placeholder,
+        Status::Terminated => chrome::PLACEHOLDER_ENDED,
+        Status::Unreachable => chrome::PLACEHOLDER_UNREACHABLE,
+        _ => chrome::PLACEHOLDER,
     }
 }
 

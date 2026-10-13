@@ -1,6 +1,6 @@
-//! The display model the pane draws: plain data, already worded in the
-//! chrome language. Whatever builds it from a live session does the wording;
-//! the view only lays it out.
+//! The display model the pane draws: plain data, already worded. Whatever
+//! builds it from a live session does the wording; the view only lays it
+//! out.
 //!
 //! The preview sample is the only producer in this build and does not reach
 //! every state; the enums with states only a live session would produce
@@ -46,8 +46,6 @@ pub(crate) struct Turn {
     pub(crate) state: TurnState,
     pub(crate) parts: Vec<TurnPart>,
     pub(crate) elapsed: Option<String>,
-    /// The clock time the turn started at, already worded: `14:32`.
-    pub(crate) started_at: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -65,8 +63,6 @@ pub(crate) enum TurnPart {
     Text(String),
     Receipt(Receipt),
     Thinking,
-    /// The model's reasoning for the turn, as plain text.
-    Thought(String),
 }
 
 /// A run of tool calls between two pieces of text, summarized on one line.
@@ -82,7 +78,7 @@ pub(crate) struct Receipt {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Call {
-    /// What the call does, worded as a noun: 「読み取り」, `Run`.
+    /// What the call does, worded as a noun: `Read`, `Run`.
     pub(crate) verb: String,
     /// What it does it to: a path, a command line, a pattern.
     pub(crate) target: String,
@@ -92,7 +88,7 @@ pub(crate) struct Call {
 }
 
 impl Call {
-    /// 「{verb} {target}」.
+    /// `{verb} {target}`.
     #[cfg(test)]
     pub(crate) fn title(&self) -> String {
         format!("{} {}", self.verb, self.target)
@@ -163,7 +159,7 @@ pub(crate) enum Status {
 }
 
 impl Status {
-    /// Whether a turn is in flight, which is when 「停止」 is offered.
+    /// Whether a turn is in flight, which is when `Stop` is offered.
     pub(crate) fn running(self) -> bool {
         matches!(
             self,
