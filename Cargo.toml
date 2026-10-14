@@ -136,7 +136,7 @@ log = "0.4"
 # The preview pane watches its `.wasm` artifact for changes. cargo unlinks
 # and relinks the file rather than rewriting it in place, so the watch is on
 # the containing directory and the events are debounced (`preview::watch`).
-notify = "7"
+notify = "8"
 remoc = { workspace = true }
 termwiz = "0.23.3"
 tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"] }
