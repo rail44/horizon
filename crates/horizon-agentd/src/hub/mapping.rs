@@ -9,6 +9,13 @@
 //! `ToolCallRequested`: `msg-{n}` names the user or assistant message being
 //! committed (and the assistant chunks streaming ahead of it), `thought-{n}`
 //! the reasoning streamed alongside it.
+//!
+//! Assistant chunks keep the id their stream opened with until the
+//! assistant message is committed, across any tool call in between, so the
+//! commit lands on the streamed message. A user or task-notification
+//! message, a new provider request, a turn end, an error, or an exit closes
+//! a stream that was never committed. This mirrors how
+//! `horizon_agent::frame` promotes streamed deltas into the commit.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -58,6 +65,8 @@ pub(super) struct Mapper {
     model: Option<String>,
     selection: Option<ModelSelection>,
     message_seq: u64,
+    /// The id of the assistant text stream not yet committed.
+    open_stream: Option<v2::MessageId>,
     tool_ids: HashMap<String, String>,
     decisions: HashMap<String, acp::HumanDecision>,
     stop_reason: Option<v2::StopReason>,
@@ -123,6 +132,7 @@ impl Mapper {
             model: None,
             selection: None,
             message_seq: 0,
+            open_stream: None,
             tool_ids: HashMap::new(),
             decisions: HashMap::new(),
             stop_reason: None,
@@ -230,12 +240,37 @@ impl Mapper {
         v2::MessageId::new(format!("msg-{}", self.message_seq))
     }
 
+    /// Drops the open assistant stream without a commit, moving the counter
+    /// past its id so no later message reuses it.
+    fn close_stream(&mut self) {
+        if let Some(id) = self.open_stream.take() {
+            if id == self.next_message_id() {
+                self.message_seq += 1;
+            }
+        }
+    }
+
     fn map_event(&mut self, event: &Event) -> Vec<Outgoing> {
         let session_id = self.session_id;
         let session_event = |event| vec![Outgoing::SessionEvent(event)];
         match event {
             Event::MessageCommitted(message) => {
-                let id = self.next_message_id();
+                let id = match message.role {
+                    MessageRole::Assistant => self
+                        .open_stream
+                        .take()
+                        .unwrap_or_else(|| self.next_message_id()),
+                    MessageRole::User | MessageRole::TaskNotification => {
+                        self.close_stream();
+                        self.next_message_id()
+                    }
+                    MessageRole::AutoContinue => {
+                        if self.open_stream == Some(self.next_message_id()) {
+                            self.message_seq += 1;
+                        }
+                        self.next_message_id()
+                    }
+                };
                 self.message_seq += 1;
                 let content = vec![v2::ContentBlock::from(message.text.clone())];
                 let update = match message.role {
@@ -261,8 +296,12 @@ impl Mapper {
                 vec![Outgoing::Update(update)]
             }
             Event::AssistantTextDelta(delta) => {
+                let id = self
+                    .open_stream
+                    .get_or_insert_with(|| v2::MessageId::new(format!("msg-{}", self.message_seq)))
+                    .clone();
                 vec![Outgoing::Update(v2::SessionUpdate::AgentMessageChunk(
-                    v2::ContentChunk::new(delta.text.clone().into(), self.next_message_id()),
+                    v2::ContentChunk::new(delta.text.clone().into(), id),
                 ))]
             }
             Event::ReasoningDelta(delta) => {
@@ -364,18 +403,25 @@ impl Mapper {
                 out
             }
             Event::TurnEnded(reason) => {
+                self.close_stream();
                 self.stop_reason = Some(stop_reason(*reason));
                 Vec::new()
             }
             Event::StateChanged(state) => self.map_state(*state),
-            Event::Error(error) => session_event(acp::SessionEventNotification::Error {
-                session_id,
-                message: error.message.clone(),
-            }),
-            Event::Exited(exit) => session_event(acp::SessionEventNotification::Exited {
-                session_id,
-                reason: exit.reason.clone(),
-            }),
+            Event::Error(error) => {
+                self.close_stream();
+                session_event(acp::SessionEventNotification::Error {
+                    session_id,
+                    message: error.message.clone(),
+                })
+            }
+            Event::Exited(exit) => {
+                self.close_stream();
+                session_event(acp::SessionEventNotification::Exited {
+                    session_id,
+                    reason: exit.reason.clone(),
+                })
+            }
             Event::SessionResumed => {
                 session_event(acp::SessionEventNotification::SessionResumed { session_id })
             }
@@ -406,12 +452,15 @@ impl Mapper {
                 session_id,
                 event: acp::MemoryEvent::CheckpointMissed,
             })],
-            Event::ProviderRequestSent(sent) => provider_request(
-                session_id,
-                acp::ProviderRequestEvent::Sent {
-                    model: sent.model.clone(),
-                },
-            ),
+            Event::ProviderRequestSent(sent) => {
+                self.close_stream();
+                provider_request(
+                    session_id,
+                    acp::ProviderRequestEvent::Sent {
+                        model: sent.model.clone(),
+                    },
+                )
+            }
             Event::ProviderRequestFirstToken => {
                 provider_request(session_id, acp::ProviderRequestEvent::FirstToken)
             }

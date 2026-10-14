@@ -332,3 +332,130 @@ fn a_human_decision_patches_the_call_and_stays_on_its_result() {
     });
     assert_eq!(decisions, vec![None, denied.clone(), denied]);
 }
+
+fn message_ids(updates: &[v2::SessionUpdate]) -> Vec<(String, String)> {
+    updates
+        .iter()
+        .filter_map(|update| {
+            let kind = match update {
+                v2::SessionUpdate::UserMessage(_) => "user",
+                v2::SessionUpdate::AgentMessage(_) => "message",
+                v2::SessionUpdate::AgentMessageChunk(_) => "chunk",
+                _ => return None,
+            };
+            Some((kind.to_string(), message_id(update)?))
+        })
+        .collect()
+}
+
+fn pairs(expected: &[(&str, &str)]) -> Vec<(String, String)> {
+    expected
+        .iter()
+        .map(|(kind, id)| (kind.to_string(), id.to_string()))
+        .collect()
+}
+
+#[test]
+fn a_commit_after_a_tool_call_keeps_its_chunks_id() {
+    let mut mapper = mapper();
+    let updates = updates(
+        &mut mapper,
+        &[
+            committed(MessageRole::User, "hello"),
+            delta("Let me "),
+            delta("look."),
+            Event::ToolCallRequested(tool_request("call-1", "occ-1", "bash")),
+            Event::ToolCallRequested(tool_request("call-2", "occ-2", "bash")),
+            committed(MessageRole::Assistant, "Let me look."),
+        ],
+    );
+    assert_eq!(
+        message_ids(&updates),
+        pairs(&[
+            ("user", "msg-0"),
+            ("chunk", "msg-1"),
+            ("chunk", "msg-1"),
+            ("message", "msg-1"),
+        ])
+    );
+}
+
+#[test]
+fn a_commit_without_chunks_takes_a_fresh_id() {
+    let mut mapper = mapper();
+    let updates = updates(
+        &mut mapper,
+        &[
+            committed(MessageRole::Assistant, "init"),
+            committed(MessageRole::User, "hello"),
+            Event::ToolCallRequested(tool_request("call-1", "occ-1", "bash")),
+            committed(MessageRole::Assistant, "Mock response"),
+        ],
+    );
+    assert_eq!(
+        message_ids(&updates),
+        pairs(&[
+            ("message", "msg-0"),
+            ("user", "msg-1"),
+            ("message", "msg-3")
+        ])
+    );
+}
+
+#[test]
+fn texts_separated_by_a_tool_call_match_their_own_chunks() {
+    let mut mapper = mapper();
+    let updates = updates(
+        &mut mapper,
+        &[
+            committed(MessageRole::User, "hello"),
+            delta("first"),
+            Event::ToolCallRequested(tool_request("call-1", "occ-1", "bash")),
+            committed(MessageRole::Assistant, "first"),
+            Event::ToolCallStarted(identity("call-1", "occ-1")),
+            delta("second"),
+            Event::ToolCallRequested(tool_request("call-2", "occ-2", "bash")),
+            committed(MessageRole::Assistant, "second"),
+        ],
+    );
+    assert_eq!(
+        message_ids(&updates),
+        pairs(&[
+            ("user", "msg-0"),
+            ("chunk", "msg-1"),
+            ("message", "msg-1"),
+            ("chunk", "msg-3"),
+            ("message", "msg-3"),
+        ])
+    );
+}
+
+#[test]
+fn an_uncommitted_stream_closes_at_the_next_provider_request() {
+    let mut mapper = mapper();
+    let updates = updates(
+        &mut mapper,
+        &[
+            committed(MessageRole::User, "hello"),
+            delta("failed prefix"),
+            Event::ProviderRequestSent(horizon_agent::contract::ProviderRequestSent {
+                model: "model".into(),
+            }),
+            delta("retry"),
+            committed(MessageRole::Assistant, "retry"),
+            delta("orphan"),
+            committed(MessageRole::User, "again"),
+        ],
+    );
+    assert_eq!(
+        message_ids(&updates),
+        pairs(&[
+            ("user", "msg-0"),
+            ("chunk", "msg-1"),
+            ("chunk", "msg-2"),
+            ("message", "msg-2"),
+            ("chunk", "msg-3"),
+            ("user", "msg-4"),
+        ])
+    );
+}
