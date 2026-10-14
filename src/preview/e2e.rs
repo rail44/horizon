@@ -1006,6 +1006,16 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
                 "{name}: no stop control is painted: {painted_now:?}"
             );
             assert!(
+                painted(&painted_now, agent::IN_FLIGHT),
+                "{name}: the running line does not name its call: {painted_now:?}"
+            );
+            // The running receipt is collapsed, so its approval is drawn
+            // under the line.
+            assert!(
+                painted(&painted_now, chrome::APPROVAL_NEEDED),
+                "{name}: no pending approval is painted: {painted_now:?}"
+            );
+            assert!(
                 painted(&painted_now, chrome::APPROVE),
                 "{name}: no approval control is painted: {painted_now:?}"
             );
@@ -1034,6 +1044,12 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
         assert!(
             !painted(&painted_whole, "システム"),
             "{name}: a notice card's label is painted: {painted_whole:?}"
+        );
+        // The two consecutive bursts draw as one line.
+        assert_eq!(
+            count_of(&painted_whole, agent::MERGED_MARKER),
+            1,
+            "{name}: the merged bursts are not one line: {painted_whole:?}"
         );
         // The idle preview opens the last turn's first diff and its failed
         // command's output; the running one leaves that turn folded.
@@ -1085,9 +1101,12 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
             chrome::SEND_HINT.to_string(),
             chrome::PLACEHOLDER.to_string(),
             "Background · cargo build --workspace · 1m 03s · running".to_string(),
-            "Read 6 files · 2 searches · 48s".to_string(),
-            "Edited 3 files · Ran 2 commands · 2m 10s".to_string(),
-            "History compacted: 12 tool outputs (31,204 chars) reclaimed".to_string(),
+            "Ran 2 commands".to_string(),
+            agent::MERGED_SUMMARY.to_string(),
+            "Edited 1 file · Ran 1 command".to_string(),
+            chrome::failed_calls(1),
+            "6m 12s".to_string(),
+            "History compacted: 12 tool outputs (31,206 chars) reclaimed".to_string(),
         ];
         if running {
             words.extend(
@@ -1096,8 +1115,8 @@ async fn preview_plugin_paints_the_agent_layouts(cx: &mut TestAppContext) {
                     chrome::WAITING_FOR_APPROVAL,
                     chrome::APPROVAL_NEEDED,
                     chrome::DENY,
-                    chrome::RUNNING,
-                    "Ran 1 command",
+                    chrome::APPROVE,
+                    agent::IN_FLIGHT,
                 ]
                 .map(str::to_string),
             );
