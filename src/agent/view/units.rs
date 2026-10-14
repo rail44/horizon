@@ -350,15 +350,28 @@ fn part_id(unit: usize, part: usize) -> SharedString {
 // ---------------------------------------------------------------------------
 
 /// What a receipt's line reads: while a call in it is in flight, the last
-/// such call that is not waiting on an approval; otherwise its summary.
+/// such call that is not waiting on an approval; while the only thing left
+/// is a call waiting on an approval, that call's name; otherwise its summary.
 pub(super) fn receipt_line_text(receipt: &Receipt) -> String {
-    receipt
+    if !receipt.running {
+        return receipt.summary.clone();
+    }
+    let in_flight = receipt
         .calls
         .iter()
         .rev()
-        .filter(|_| receipt.running)
         .find(|call| call.status == CallStatus::Running && call.approval.is_none())
-        .map(|call| chrome::in_flight(&call.verb, &call.target))
+        .map(|call| chrome::in_flight(&call.verb, &call.target));
+    let awaiting = || {
+        receipt
+            .calls
+            .iter()
+            .rev()
+            .find(|call| call.approval.is_some())
+            .map(|call| format!("{} {}", call.verb, call.target))
+    };
+    in_flight
+        .or_else(awaiting)
         .unwrap_or_else(|| receipt.summary.clone())
 }
 
@@ -662,7 +675,7 @@ mod tests {
             call("Run", "ls", CallStatus::Done, false),
             call("Write", "x.toml", CallStatus::Running, true),
         ]);
-        assert_eq!(receipt_line_text(&waiting), "Ran 3 commands");
+        assert_eq!(receipt_line_text(&waiting), "Write x.toml");
         let done = receipt(vec![call("Run", "ls", CallStatus::Done, false)]);
         assert_eq!(receipt_line_text(&done), "Ran 3 commands");
         let other = receipt(vec![call("Fetch", "x", CallStatus::Running, false)]);
