@@ -143,14 +143,25 @@ fn units(items: &[AgentFrameItem], in_flight: bool, pending: &[ToolCallIdentity]
         let mut before = Vec::new();
         let mut after = Vec::new();
         let mut parts = Vec::new();
+        // The call views behind the last receipt in `parts`.
+        let mut receipt_views = Vec::new();
         let mut started = false;
         for (index, item) in turn_items.iter().enumerate() {
             if let Some(burst) = bursts.iter().find(|burst| burst.start == index) {
                 let key = span.start + burst.start;
-                if let Some(receipt) =
+                if let Some((receipt, views)) =
                     receipt(key, &turn_items[burst.start..burst.end], ended, pending)
                 {
-                    parts.push(TurnPart::Receipt(receipt));
+                    match parts.last_mut() {
+                        Some(TurnPart::Receipt(previous)) => {
+                            receipt_views.extend(views);
+                            merge_receipt(previous, receipt, &receipt_views);
+                        }
+                        _ => {
+                            receipt_views = views;
+                            parts.push(TurnPart::Receipt(receipt));
+                        }
+                    }
                     started = true;
                 }
             }
@@ -311,13 +322,14 @@ fn grouped(value: u64) -> String {
 // Receipts and calls
 // ---------------------------------------------------------------------------
 
-/// One burst as a receipt; `None` when it holds no call to show.
+/// One burst as a receipt, with the call views it was built from; `None`
+/// when it holds no call to show.
 fn receipt(
     key: usize,
     items: &[AgentFrameItem],
     turn_ended: bool,
     pending: &[ToolCallIdentity],
-) -> Option<Receipt> {
+) -> Option<(Receipt, Vec<ToolCallView>)> {
     let views: Vec<ToolCallView> = build_tool_call_views(items)
         .into_iter()
         .filter(|view| !view.superseded())
@@ -329,13 +341,23 @@ fn receipt(
         .iter()
         .map(|view| call(items, view, turn_ended, pending))
         .collect();
-    Some(Receipt {
+    let receipt = Receipt {
         key,
         summary: receipt_summary(&views),
         running: calls.iter().any(|call| call.status == CallStatus::Running),
         failed: calls.iter().any(|call| call.status == CallStatus::Failed),
         calls,
-    })
+    };
+    Some((receipt, views))
+}
+
+/// Appends `next`'s calls to `receipt`, which keeps its key, and
+/// summarizes `views`, every call view behind both.
+fn merge_receipt(receipt: &mut Receipt, next: Receipt, views: &[ToolCallView]) {
+    receipt.calls.extend(next.calls);
+    receipt.summary = receipt_summary(views);
+    receipt.running |= next.running;
+    receipt.failed |= next.failed;
 }
 
 fn call(
@@ -658,6 +680,58 @@ mod tests {
             Some(CallBody::Output { lines, omitted: 0 }) if lines == &["ok".to_string()]
         ));
         assert!(matches!(&receipt.calls[4].body, Some(CallBody::Text(_))));
+    }
+
+    #[test]
+    fn consecutive_receipts_merge_into_the_first() {
+        let run = |id: &str, command: &str| {
+            tool_finished(
+                id,
+                "bash",
+                json!({ "command": command }),
+                bash_output("ok", 0),
+            )
+        };
+        let items = vec![
+            user_message("go"),
+            run("b1", "ls"),
+            run("b2", "pwd"),
+            assistant_delta(""),
+            tool_finished(
+                "g1",
+                "fs.grep",
+                json!({"base_path": ".", "pattern": "x"}),
+                json!({"returned_count": 1, "matches": [], "truncated": false}),
+            ),
+            AgentFrameItem::HistoryCleared(HistoryCleared {
+                cleared_occurrence_ids: vec![],
+                recovered_chars: 0,
+            }),
+            run("b3", "make"),
+            assistant_delta("between"),
+            run("b4", "date"),
+            assistant_delta("after"),
+            turn_end(TurnEndReason::Completed),
+        ];
+        let adapted = adapt(&model(SessionPhase::Idle, items), false, 0);
+        let turn = turns(&adapted.transcript)[0];
+        let receipts = receipts(turn);
+        assert_eq!(receipts.len(), 2);
+        let merged = receipts[0];
+        assert_eq!(merged.key, 1);
+        assert_eq!(merged.summary, "Ran 3 commands · 1 search");
+        let titles: Vec<String> = merged.calls.iter().map(Call::title).collect();
+        assert_eq!(
+            titles,
+            ["Run ls", "Run pwd", "Search x", "Run make"].map(str::to_string)
+        );
+        assert!(!merged.running && !merged.failed);
+        assert_eq!(receipts[1].key, 8);
+        assert_eq!(receipts[1].summary, "Ran 1 command");
+        assert!(matches!(turn.parts[0], TurnPart::Receipt(_)));
+        assert_eq!(turn.parts[1], TurnPart::Text("between".to_string()));
+        assert!(matches!(turn.parts[2], TurnPart::Receipt(_)));
+        assert_eq!(turn.parts[3], TurnPart::Text("after".to_string()));
     }
 
     #[test]

@@ -234,11 +234,11 @@ pub(super) fn thinking(id: usize) -> Div {
         }))
 }
 
-/// One whole turn without an author label: its receipts merged into one
-/// line, its text, and its thinking state. While the turn runs, the
-/// session's state opens the receipt line and `Stop` ends it (or, with no
-/// receipt yet, the thinking line); otherwise the receipt line ends with
-/// the turn's elapsed time.
+/// One whole turn without an author label: its text and its receipt lines
+/// in order, its thinking state last. While the turn runs, the session's
+/// state opens the running receipt line and `Stop` ends it (or, with no
+/// running receipt, the thinking line); a finished turn ends with a line
+/// holding its elapsed time at the right.
 pub(super) fn turn(
     index: usize,
     turn: &Turn,
@@ -248,33 +248,33 @@ pub(super) fn turn(
     cx: &mut Context<AgentView>,
 ) -> AnyElement {
     let carried = carried(turn, status);
-    let receipts = receipts(turn);
-    let end = if turn.state != TurnState::Running {
-        Some(finished_end(turn).into_any_element())
-    } else if carried.is_some() && !receipts.is_empty() {
-        Some(stop_button("agent-next-card-stop", cx).into_any_element())
-    } else {
-        None
-    };
-    let receipt_line = if receipts.is_empty() {
-        end.map(|end| {
-            h_flex()
-                .w_full()
-                .child(div().flex_1().min_w_0())
-                .child(end)
-                .into_any_element()
-        })
-    } else {
-        let line = ReceiptLine::merged(&receipts);
-        let lead = carried.map(|status| session_state_chip(status).into_any_element());
-        Some(receipt_block(line, lead, end, ui, mono, cx).into_any_element())
-    };
-
+    let carrier = carried
+        .and(running_receipt(turn))
+        .map(|receipt| receipt.key);
     let mut parts: Vec<AnyElement> = Vec::new();
-    parts.extend(receipt_line);
-    parts.extend(texts(index, turn));
+    for (part_index, part) in turn.parts.iter().enumerate() {
+        match part {
+            TurnPart::Text(text) => parts.push(
+                div()
+                    .w_full()
+                    .child(text_body(part_id(index, part_index), text))
+                    .into_any_element(),
+            ),
+            TurnPart::Receipt(receipt) => {
+                let (lead, end) = match carried.filter(|_| carrier == Some(receipt.key)) {
+                    Some(status) => (
+                        Some(session_state_chip(status).into_any_element()),
+                        Some(stop_button("agent-next-card-stop", cx).into_any_element()),
+                    ),
+                    None => (None, None),
+                };
+                parts.push(receipt_block(receipt, lead, end, ui, mono, cx).into_any_element());
+            }
+            TurnPart::Thinking => {}
+        }
+    }
     let thinks = turn.parts.contains(&TurnPart::Thinking);
-    match carried.filter(|_| receipts.is_empty()) {
+    match carried.filter(|_| carrier.is_none()) {
         Some(status) => parts.push(
             h_flex()
                 .w_full()
@@ -289,49 +289,45 @@ pub(super) fn turn(
         None if thinks => parts.push(thinking(index).into_any_element()),
         None => {}
     }
+    parts.extend(finished_meta(turn).map(IntoElement::into_any_element));
     let running = turn.state == TurnState::Running;
     with_accent_bar(card(), running)
         .children(spaced(parts, gap_label()))
         .into_any_element()
 }
 
-/// Every receipt of `turn`, in order.
-fn receipts(turn: &Turn) -> Vec<&Receipt> {
+/// The last receipt of `turn`, when a call in it is in flight.
+fn running_receipt(turn: &Turn) -> Option<&Receipt> {
     turn.parts
         .iter()
-        .filter_map(|part| match part {
+        .rev()
+        .find_map(|part| match part {
             TurnPart::Receipt(receipt) => Some(receipt),
             _ => None,
         })
-        .collect()
+        .filter(|receipt| receipt.running)
 }
 
-/// A finished turn's chip and its [`done_meta`], for the receipt line's
-/// right end.
-fn finished_end(turn: &Turn) -> impl IntoElement {
-    h_flex()
-        .flex_none()
-        .items_baseline()
-        .gap(gap_tight())
-        .children(turn_chip(turn.state))
-        .children(done_meta(turn))
-}
-
-/// Each piece of `turn`'s text, in order.
-fn texts(index: usize, turn: &Turn) -> Vec<AnyElement> {
-    turn.parts
-        .iter()
-        .enumerate()
-        .filter_map(|(part_index, part)| match part {
-            TurnPart::Text(text) => Some(
-                div()
-                    .w_full()
-                    .child(text_body(part_id(index, part_index), text))
-                    .into_any_element(),
-            ),
-            _ => None,
-        })
-        .collect()
+/// A finished turn's chip and its [`done_meta`], at the right of a line of
+/// their own.
+fn finished_meta(turn: &Turn) -> Option<Div> {
+    if turn.state == TurnState::Running {
+        return None;
+    }
+    let chip = turn_chip(turn.state);
+    let elapsed = done_meta(turn);
+    if chip.is_none() && elapsed.is_none() {
+        return None;
+    }
+    Some(
+        h_flex()
+            .w_full()
+            .justify_end()
+            .items_baseline()
+            .gap(gap_tight())
+            .children(chip)
+            .children(elapsed),
+    )
 }
 
 /// `parts` stacked with `gap` between them.
@@ -353,64 +349,57 @@ fn part_id(unit: usize, part: usize) -> SharedString {
 // Receipts
 // ---------------------------------------------------------------------------
 
-/// What one activity line summarizes: every receipt of a turn, merged.
-pub(super) struct ReceiptLine<'a> {
-    /// The key the line's expansion is held under.
-    key: usize,
-    summary: String,
-    failed: usize,
-    /// Whether a call is in flight, which keeps the line open.
-    running: bool,
-    /// Each call with the key of its receipt and its index there, which
-    /// its body's open state is held under.
-    calls: Vec<(usize, usize, &'a Call)>,
+/// What a receipt's line reads: while a call in it is in flight, the last
+/// such call that is not waiting on an approval; otherwise its summary.
+pub(super) fn receipt_line_text(receipt: &Receipt) -> String {
+    receipt
+        .calls
+        .iter()
+        .rev()
+        .filter(|_| receipt.running)
+        .find(|call| call.status == CallStatus::Running && call.approval.is_none())
+        .map(|call| chrome::in_flight(&call.verb, &call.target))
+        .unwrap_or_else(|| receipt.summary.clone())
 }
 
-impl<'a> ReceiptLine<'a> {
-    /// `receipts` must not be empty.
-    pub(super) fn merged(receipts: &[&'a Receipt]) -> Self {
-        let calls: Vec<(usize, usize, &Call)> = receipts
-            .iter()
-            .flat_map(|receipt| {
-                receipt
-                    .calls
-                    .iter()
-                    .enumerate()
-                    .map(|(index, call)| (receipt.key, index, call))
-            })
-            .collect();
-        let running = receipts.iter().any(|receipt| receipt.running);
-        Self {
-            key: receipts[0].key,
-            summary: receipts
-                .iter()
-                .map(|receipt| receipt.summary.as_str())
-                .collect::<Vec<_>>()
-                .join(" · "),
-            failed: calls
-                .iter()
-                .filter(|(_, _, call)| call.status == CallStatus::Failed)
-                .count(),
-            running,
-            calls,
-        }
+/// The pending approvals drawn under a receipt's line, by call index: every
+/// one while the line is collapsed, none while it is open, when each sits
+/// under its call instead.
+pub(super) fn approvals_under_line(receipt: &Receipt, expanded: bool) -> Vec<(usize, &Approval)> {
+    if expanded {
+        return Vec::new();
     }
+    receipt
+        .calls
+        .iter()
+        .enumerate()
+        .filter_map(|(index, call)| call.approval.as_ref().map(|approval| (index, approval)))
+        .collect()
 }
 
-/// An activity line and, when expanded, its calls. `lead` sits before
-/// the summary, `end` at the line's right end. A click on the line opens and
+/// A receipt's line and, when expanded, its calls. `lead` sits before the
+/// line's text, `end` at its right end. A click on the line opens and
 /// closes its calls.
 fn receipt_block(
-    line: ReceiptLine<'_>,
+    receipt: &Receipt,
     lead: Option<AnyElement>,
     end: Option<AnyElement>,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentView>,
 ) -> impl IntoElement {
-    let expanded = line.running || ui.expanded_receipts.contains(&line.key);
-    let key = line.key;
+    let key = receipt.key;
+    let expanded = ui.expanded_receipts.contains(&key);
+    let failed = receipt
+        .calls
+        .iter()
+        .filter(|call| call.status == CallStatus::Failed)
+        .count();
     let has_end = end.is_some();
+    let approvals: Vec<Div> = approvals_under_line(receipt, expanded)
+        .into_iter()
+        .map(|(index, approval)| approval_block(key, index, approval, cx).mt(gap_label()))
+        .collect();
     v_flex()
         .w_full()
         .flex_none()
@@ -427,12 +416,9 @@ fn receipt_block(
                     }
                 })
                 .children(lead)
-                .child(text_at(meta(), theme::text_muted(), line.summary.clone()).min_w_0())
-                .when(line.failed > 0, |row| {
-                    row.child(chip(chrome::failed_calls(line.failed), theme::danger()))
-                })
-                .when(line.running, |row| {
-                    row.child(chip(chrome::RUNNING, theme::accent()))
+                .child(text_at(meta(), theme::text_muted(), receipt_line_text(receipt)).min_w_0())
+                .when(failed > 0, |row| {
+                    row.child(chip(chrome::failed_calls(failed), theme::danger()))
                 })
                 .when_some(end, |row, end| {
                     row.child(div().flex_1().min_w_0()).child(end)
@@ -440,14 +426,15 @@ fn receipt_block(
                 .cursor_pointer()
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle_receipt(key, cx))),
         )
+        .children(approvals)
         .when(expanded, |block| {
-            block.child(call_list(&line, ui, mono, cx).mt(gap_label()))
+            block.child(call_list(receipt, ui, mono, cx).mt(gap_label()))
         })
 }
 
 /// A receipt line's calls, under a left rule.
 fn call_list(
-    line: &ReceiptLine<'_>,
+    receipt: &Receipt,
     ui: &UiState,
     mono: &SharedString,
     cx: &mut Context<AgentView>,
@@ -459,9 +446,11 @@ fn call_list(
         .border_color(theme::border())
         .gap(gap_label())
         .children(
-            line.calls
+            receipt
+                .calls
                 .iter()
-                .map(|(receipt, index, call)| call_row(*receipt, *index, call, ui, mono, cx)),
+                .enumerate()
+                .map(|(index, call)| call_row(receipt.key, index, call, ui, mono, cx)),
         )
 }
 
@@ -624,5 +613,73 @@ fn call_body(
         CallBody::Text(text) => text_at(meta(), theme::text_muted(), text.clone())
             .w_full()
             .into_any_element(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::display::{Approval, Call, CallStatus, Receipt};
+    use super::{approvals_under_line, receipt_line_text};
+
+    fn call(verb: &str, target: &str, status: CallStatus, approval: bool) -> Call {
+        Call {
+            verb: verb.to_string(),
+            target: target.to_string(),
+            status,
+            body: None,
+            approval: approval.then(|| Approval {
+                id: target.to_string(),
+                reason: "why".to_string(),
+            }),
+        }
+    }
+
+    fn receipt(calls: Vec<Call>) -> Receipt {
+        Receipt {
+            key: 3,
+            summary: "Ran 3 commands".to_string(),
+            running: calls.iter().any(|call| call.status == CallStatus::Running),
+            failed: false,
+            calls,
+        }
+    }
+
+    #[test]
+    fn a_running_line_names_the_last_call_in_flight() {
+        let running = receipt(vec![
+            call("Run", "ls", CallStatus::Done, false),
+            call("Read", "a.rs", CallStatus::Running, false),
+            call("Run", "cargo test", CallStatus::Running, false),
+            call("Write", "x.toml", CallStatus::Running, true),
+        ]);
+        assert_eq!(receipt_line_text(&running), "Running cargo test");
+        let reading = receipt(vec![
+            call("Run", "cargo test", CallStatus::Running, false),
+            call("Read", "a.rs", CallStatus::Running, false),
+        ]);
+        assert_eq!(receipt_line_text(&reading), "Reading a.rs");
+        let waiting = receipt(vec![
+            call("Run", "ls", CallStatus::Done, false),
+            call("Write", "x.toml", CallStatus::Running, true),
+        ]);
+        assert_eq!(receipt_line_text(&waiting), "Ran 3 commands");
+        let done = receipt(vec![call("Run", "ls", CallStatus::Done, false)]);
+        assert_eq!(receipt_line_text(&done), "Ran 3 commands");
+        let other = receipt(vec![call("Fetch", "x", CallStatus::Running, false)]);
+        assert_eq!(receipt_line_text(&other), "Running Fetch x");
+    }
+
+    #[test]
+    fn a_pending_approval_sits_under_a_collapsed_line() {
+        let waiting = receipt(vec![
+            call("Run", "ls", CallStatus::Done, false),
+            call("Write", "x.toml", CallStatus::Running, true),
+        ]);
+        let under: Vec<(usize, &str)> = approvals_under_line(&waiting, false)
+            .into_iter()
+            .map(|(index, approval)| (index, approval.id.as_str()))
+            .collect();
+        assert_eq!(under, [(1, "x.toml")]);
+        assert!(approvals_under_line(&waiting, true).is_empty());
     }
 }
