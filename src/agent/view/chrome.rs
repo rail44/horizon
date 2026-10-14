@@ -3,7 +3,7 @@
 
 use super::display::Task;
 
-/// The running session's state chip, and a running receipt's chip.
+/// The running session's state chip.
 pub(crate) const RUNNING: &str = "Running";
 /// The state chip while an approval is pending.
 pub(crate) const WAITING_FOR_APPROVAL: &str = "Waiting for approval";
@@ -23,9 +23,24 @@ pub(crate) const SEND_HINT: &str = "to send";
 pub(crate) const SESSION_ENDED: &str = "Session ended";
 pub(crate) const RUNTIME_UNREACHABLE: &str = "Runtime unreachable";
 
-/// A merged receipt line's count of failed calls.
+/// A receipt line's count of failed calls.
 pub(crate) fn failed_calls(count: usize) -> String {
     format!("{count} failed")
+}
+
+/// A running receipt's line, naming the call in flight: `Running cargo
+/// test`, `Reading src/a.rs`.
+pub(crate) fn in_flight(verb: &str, target: &str) -> String {
+    let doing = match verb {
+        "Read" => "Reading",
+        "Edit" => "Editing",
+        "Write" => "Writing",
+        "Run" => "Running",
+        "Search" => "Searching",
+        "Call" => "Calling",
+        _ => return format!("{RUNNING} {verb} {target}"),
+    };
+    format!("{doing} {target}")
 }
 
 /// The line under an output whose tail was cut.

@@ -11,15 +11,18 @@
 //! The column is a run of units ([`units`]), with no speaker labels:
 //!
 //! - A message sent into the session sits indented on a grey tint.
-//! - An agent turn is one bordered card. Its receipts merge into one line
-//!   at its head, followed by its text. While the turn runs, the session's
-//!   state opens that line, `Stop` ends it and an accent bar runs down the
-//!   card's left edge; once done, the line ends with the turn's elapsed
-//!   time. A click on the line opens its calls under a left rule, each row
-//!   a status dot and its title, the verb muted and the target in the
-//!   monospace family; a click on a row opens its body: a diff with its
-//!   `+`/`−` in a gutter cell, or a command's output drawn without a box.
-//!   A pending approval is one line under the call that asks for it.
+//! - An agent turn is one bordered card: its text and its receipt lines in
+//!   the order they happened, one line per run of tool calls. A line reads
+//!   its calls' aggregate, or, while a call in it runs, that call. While
+//!   the turn runs, the session's state opens the running line, `Stop`
+//!   ends it and an accent bar runs down the card's left edge; once done,
+//!   the card ends with the turn's elapsed time at the right. Only a click
+//!   on a line opens its calls under a left rule, each row a status dot and
+//!   its title, the verb muted and the target in the monospace family; a
+//!   click on a row opens its body: a diff with its `+`/`−` in a gutter
+//!   cell, or a command's output drawn without a box. A pending approval is
+//!   one line under the call that asks for it, or under the receipt's line
+//!   while that is collapsed.
 //! - A notice is a plain line.
 //!
 //! Background tasks and the notice of a session that can no longer run end
@@ -64,8 +67,7 @@ pub(crate) enum AgentViewEvent {
 /// The view's own state: nothing here comes from the session.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct UiState {
-    /// Receipts opened by a click, by [`display::Receipt::key`]. A running
-    /// receipt is open regardless.
+    /// Receipts opened by a click, by [`display::Receipt::key`].
     pub(crate) expanded_receipts: HashSet<usize>,
     /// Call bodies opened by a click, by receipt key and call index.
     pub(crate) open_bodies: HashSet<(usize, usize)>,

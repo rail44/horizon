@@ -1,7 +1,7 @@
 //! The pane's named previews: one sample transcript, once with a turn
 //! running and an approval pending at its tail and once with the session
-//! idle. The idle preview opens with the last turn's receipt, its first diff
-//! and its failed command's output open.
+//! idle. The idle preview opens with the receipt holding the last turn's
+//! first diff open, and that diff and its failed command's output open.
 
 use gpui::{AnyView, App, AppContext as _, Window};
 
@@ -35,11 +35,19 @@ pub(crate) const LAST_MESSAGE: &str = "clippy の警告も直してください"
 /// occurs nowhere else.
 pub(crate) const APPROVAL_REASON: &str = "リポジトリの外のファイルを書き換えます";
 
-/// How many of the first answer's calls are reads.
-const READ_CALLS: usize = 6;
+/// The line two consecutive bursts of the long turn read as, merged. Its
+/// [`MERGED_MARKER`] occurs nowhere else, so one painted marker says the
+/// two bursts drew as this one line.
+pub(crate) const MERGED_SUMMARY: &str = "Ran 4 commands · 1 search";
+#[cfg(test)]
+pub(crate) const MERGED_MARKER: char = '4';
+
+/// The running receipt's line, naming its call in flight.
+#[cfg(test)]
+pub(crate) const IN_FLIGHT: &str = "Running cargo nextest run --workspace";
 
 /// How many times `読` occurs in everything the pane paints: twice in the
-/// first answer's text.
+/// long turn's first text.
 #[cfg(test)]
 pub(crate) const READ_IN_TEXT: usize = 2;
 
@@ -87,9 +95,9 @@ fn build(running: bool, window: &mut Window, cx: &mut App) -> AnyView {
         .into()
 }
 
-/// The last turn's receipt line open, and in it the body of the first call
-/// whose body is a diff and that of the first failed call whose body is a
-/// command's output.
+/// In the last turn, the body of the first call whose body is a diff and
+/// that of the first failed call whose body is a command's output open,
+/// and the receipts holding them.
 fn last_turn_opened(transcript: &Transcript) -> UiState {
     let mut ui = UiState::default();
     let Some(turn) = transcript.units.iter().rev().find_map(|unit| match unit {
@@ -106,10 +114,6 @@ fn last_turn_opened(transcript: &Transcript) -> UiState {
             _ => None,
         })
         .collect();
-    let Some(first) = receipts.first() else {
-        return ui;
-    };
-    ui.expanded_receipts.insert(first.key);
     let first_diff = receipts.iter().find_map(|receipt| {
         receipt
             .calls
@@ -129,6 +133,7 @@ fn last_turn_opened(transcript: &Transcript) -> UiState {
             .map(|index| (receipt.key, index))
     });
     ui.open_bodies.extend(failed_output);
+    ui.expanded_receipts = ui.open_bodies.iter().map(|(key, _)| *key).collect();
     ui
 }
 
@@ -184,17 +189,14 @@ fn text(text: &str) -> Option<CallBody> {
     Some(CallBody::Text(text.to_string()))
 }
 
-const INVESTIGATION: &str = "\
-ボードの文字サイズは `src/board/spec.rs` の定数に直書きされていて、アプリのフォント設定を一度も読んでいません。端末側は `src/terminal/font.rs` が現在のサイズを持っていて、設定の再読み込みとサイズを変えるコマンドはそこだけを書き直しています。
+const LOOKING: &str = "\
+まずボードの寸法がどこで決まっているかを確かめます。`src/board/spec.rs` の定数は固定値で、アプリのフォント設定を一度も読んでいません。端末側は `src/terminal/font.rs` が現在のサイズを持っていて、設定の再読み込みのたびにそこだけを書き直しています。";
 
-なので、端末が持っている現在サイズをアプリ全体で共有する形に寄せるのが素直です。
-
-- `src/terminal/font.rs` の現在サイズを、端末に依存しない場所へ移す
-- `src/board/spec.rs` の寸法を、基準サイズからの倍率で計算する関数にする
-- サイズを変えるコマンドが、ボードのペインにも再描画を知らせるようにする";
+const SURVEY: &str = "\
+サイズを変えるコマンドがどこから呼ばれているかと、ボードの寸法を使っている箇所を洗い出します。";
 
 const SCALING: &str = "\
-倍率は本文サイズを基準に取り、丸めてから使います。こうしておけば、14 のときは今と同じ見た目のまま、設定を変えたときだけ全体が比例して動きます。
+寸法は 31 箇所すべてが固定値でした。本文サイズを基準にした倍率で計算する関数に寄せれば、設定を変えたときに全体が比例して動きます。
 
 ```rust
 pub(crate) fn scaled(px_at_reference: f32) -> Pixels {
@@ -206,144 +208,97 @@ pub(crate) fn scaled(px_at_reference: f32) -> Pixels {
 const FAILURE: &str = "\
 修正は通りましたが、テストが 1 件落ちています。
 
-- `header_stacks_below_the_title_floor` は、帯のタイトルが折り返すかどうかを固定の 14px で見積もっています
+- `header_stacks_below_the_title_floor` は、帯のタイトルが折り返すかどうかを固定のサイズで見積もっています
 - 見積もりに使う幅も今回から倍率で動くので、テスト側の想定幅が古いままです
-- 判定そのものは正しく、テストの前提を現在のサイズから計算するように直せば通ります
+- 判定そのものは正しく、テストの前提を現在のサイズから計算するように直せば通ります";
 
-テストの前提を直す手順は次のとおりです。
-
-1. 想定幅を `header_one_row_width` から計算するように書き直す
-2. 基準サイズと 2 倍のサイズの両方で、帯が折り返すかどうかを確かめる
-3. 同じ見積もりを使っている他のテストがないかを検索で確かめる";
-
-fn investigation_turn() -> Turn {
-    let reads: [&str; READ_CALLS] = [
-        "src/board/spec.rs",
-        "src/board/thread.rs",
-        "src/board/list.rs",
-        "src/terminal/font.rs",
-        "src/workspace/commands.rs",
-        "config.example.toml",
-    ];
-    let mut calls: Vec<Call> = reads
-        .iter()
-        .map(|path| call("Read", path, CallStatus::Done, None))
-        .collect();
-    calls.push(call(
-        "Search",
-        "font_size",
-        CallStatus::Done,
-        text("12 件: src/terminal/font.rs, src/workspace/commands.rs ほか"),
-    ));
-    calls.push(call(
-        "Search",
-        "px\\(",
-        CallStatus::Done,
-        text("src/board/spec.rs に 31 件、src/board/thread.rs に 4 件"),
-    ));
-    Turn {
-        state: TurnState::Done,
-        parts: vec![
-            TurnPart::Text(INVESTIGATION.to_string()),
-            TurnPart::Receipt(Receipt {
-                key: 0,
-                summary: "Read 6 files · 2 searches".to_string(),
-                running: false,
-                failed: false,
-                calls,
-            }),
-            TurnPart::Text(SCALING.to_string()),
-        ],
-        elapsed: Some("48s".to_string()),
-    }
+fn run(command: &str) -> Call {
+    call("Run", command, CallStatus::Done, None)
 }
 
-fn fix_turn() -> Turn {
+/// One long turn, its text and its tool calls interleaved: two runs, three
+/// runs and a search, then one run with no text before it (the adapter
+/// merges that burst into the previous one's receipt), an edit and a
+/// failed run.
+fn long_turn() -> Turn {
     use DiffKind::{Added, Context, Removed};
-    let calls = vec![
-        call(
-            "Edit",
-            "src/ui/font.rs",
-            CallStatus::Done,
-            diff(&[
-                (Context, "pub(crate) fn font_size() -> f32 {"),
-                (Removed, "    FONT_SIZE.load()"),
-                (Added, "    let size = FONT_SIZE.load();"),
-                (Added, "    size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE)"),
-                (Context, "}"),
-                (Context, ""),
-                (Context, "pub(crate) fn set_font_size(size: f32) {"),
-                (Context, "    FONT_SIZE.store(size);"),
-            ]),
+    let failed = call(
+        "Run",
+        "cargo nextest run --workspace",
+        CallStatus::Failed,
+        output(
+            &[
+                "    Starting 1832 tests across 31 binaries",
+                "        PASS [   0.012s] horizon ui::spec::tests::at_the_reference_body_the_steps_are_the_designed_table",
+                "        FAIL [   0.019s] horizon board::model::tests::header_stacks_below_the_title_floor",
+                "thread 'board::model::tests::header_stacks_below_the_title_floor' panicked at src/board/model.rs:792:5:",
+                "assertion `left == right` failed",
+                "  left: false",
+                " right: true",
+                "     Summary [  31.207s] 1832 tests run: 1831 passed, 1 failed, 0 skipped",
+            ],
+            212,
         ),
-        call(
-            "Edit",
-            "src/board/spec.rs",
-            CallStatus::Done,
-            diff(&[
-                (Removed, "pub(crate) const ROW_HEIGHT: f32 = 48.0;"),
-                (Added, "pub(crate) fn row_height() -> Pixels {"),
-                (Added, "    scaled(48.0)"),
-                (Added, "}"),
-            ]),
-        ),
-        call(
-            "Edit",
-            "src/workspace/commands.rs",
-            CallStatus::Done,
-            diff(&[
-                (Context, "CommandId::IncreaseFontSize => {"),
-                (Added, "    crate::preview::publish_font_size(cx);"),
-                (Context, "}"),
-            ]),
-        ),
-        call(
-            "Run",
-            "cargo clippy --workspace --all-targets",
-            CallStatus::Done,
-            output(
-                &[
-                    "    Checking horizon v0.1.0",
-                    "warning: unused import: `gpui::px`",
-                    "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 38.52s",
-                ],
-                0,
-            ),
-        ),
-        call(
-            "Run",
-            "cargo nextest run --workspace",
-            CallStatus::Failed,
-            output(
-                &[
-                    "    Starting 1834 tests across 41 binaries",
-                    "        PASS [   0.012s] horizon ui::spec::tests::at_the_reference_body_the_steps_are_the_designed_table",
-                    "        PASS [   0.011s] horizon ui::spec::tests::at_twice_the_reference_every_value_doubles",
-                    "        FAIL [   0.019s] horizon board::model::tests::header_stacks_below_the_title_floor",
-                    "--- STDOUT:              horizon board::model::tests::header_stacks_below_the_title_floor ---",
-                    "thread 'board::model::tests::header_stacks_below_the_title_floor' panicked at src/board/model.rs:742:9:",
-                    "assertion `left == right` failed",
-                    "  left: false",
-                    " right: true",
-                    "     Summary [  41.207s] 1834 tests run: 1833 passed, 1 failed, 0 skipped",
-                ],
-                212,
-            ),
-        ),
-    ];
+    );
+    let edit = call(
+        "Edit",
+        "src/ui/font.rs",
+        CallStatus::Done,
+        diff(&[
+            (Context, "pub(crate) fn font_size() -> f32 {"),
+            (Removed, "    FONT_SIZE.load()"),
+            (Added, "    let size = FONT_SIZE.load();"),
+            (Added, "    size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE)"),
+            (Context, "}"),
+            (Context, ""),
+            (Context, "pub(crate) fn set_font_size(size: f32) {"),
+            (Context, "    FONT_SIZE.store(size);"),
+        ]),
+    );
     Turn {
         state: TurnState::Done,
         parts: vec![
+            TurnPart::Text(LOOKING.to_string()),
             TurnPart::Receipt(Receipt {
                 key: 1,
-                summary: "Edited 3 files · Ran 2 commands".to_string(),
+                summary: "Ran 2 commands".to_string(),
+                running: false,
+                failed: false,
+                calls: vec![
+                    run("git log --oneline -5 -- src/board"),
+                    run("rg -n font_size src"),
+                ],
+            }),
+            TurnPart::Text(SURVEY.to_string()),
+            TurnPart::Receipt(Receipt {
+                key: 3,
+                summary: MERGED_SUMMARY.to_string(),
+                running: false,
+                failed: false,
+                calls: vec![
+                    run("rg -n IncreaseFontSize src"),
+                    run("wc -l src/board/spec.rs src/board/thread.rs"),
+                    run("git grep -n REFERENCE_BODY"),
+                    call(
+                        "Search",
+                        "font_size",
+                        CallStatus::Done,
+                        text("12 件: src/terminal/font.rs, src/workspace/commands.rs ほか"),
+                    ),
+                    run("cargo check -p horizon"),
+                ],
+            }),
+            TurnPart::Text(SCALING.to_string()),
+            TurnPart::Receipt(Receipt {
+                key: 7,
+                summary: "Edited 1 file · Ran 1 command".to_string(),
                 running: false,
                 failed: true,
-                calls,
+                calls: vec![edit, failed],
             }),
             TurnPart::Text(FAILURE.to_string()),
         ],
-        elapsed: Some("2m 10s".to_string()),
+        elapsed: Some("6m 12s".to_string()),
     }
 }
 
@@ -364,15 +319,17 @@ fn running_turn() -> Turn {
     Turn {
         state: TurnState::Running,
         parts: vec![
+            TurnPart::Text("clippy の指摘を直してから、テストをもう一度流します。".to_string()),
             TurnPart::Receipt(Receipt {
-                key: 2,
-                summary: "Ran 1 command".to_string(),
+                key: 12,
+                summary: "Edited 1 file · Ran 2 commands".to_string(),
                 running: true,
                 failed: false,
                 calls: vec![
+                    run("cargo clippy --workspace --all-targets"),
                     call(
                         "Run",
-                        "cargo clippy --workspace --all-targets",
+                        "cargo nextest run --workspace",
                         CallStatus::Running,
                         None,
                     ),
@@ -381,24 +338,22 @@ fn running_turn() -> Turn {
             }),
             TurnPart::Thinking,
         ],
-        elapsed: Some("12s".to_string()),
+        elapsed: None,
     }
 }
 
 /// The model the composer's chip names.
 const MODEL: &str = "syn:large:text";
 
-/// The sample: two finished exchanges, a compaction notice, and the owner's
-/// next request, answered by a running turn when `running`.
+/// The sample: one long finished exchange, a compaction notice, and the
+/// owner's next request, answered by a running turn when `running`.
 pub(crate) fn sample(running: bool) -> Transcript {
     let mut units = vec![
         you(FIRST_MESSAGE),
-        Unit::Turn(investigation_turn()),
-        you("ではその方針で直してください"),
-        Unit::Turn(fix_turn()),
+        Unit::Turn(long_turn()),
         Unit::Notice(Notice {
             tone: Tone::Muted,
-            text: "History compacted: 12 tool outputs (31,204 chars) reclaimed".to_string(),
+            text: "History compacted: 12 tool outputs (31,206 chars) reclaimed".to_string(),
         }),
         you(LAST_MESSAGE),
     ];
@@ -433,6 +388,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::super::chrome;
+    use super::super::units::receipt_line_text;
     use super::*;
 
     fn call_strings(call: &Call) -> Vec<String> {
@@ -464,6 +420,7 @@ mod tests {
                             TurnPart::Text(text) => strings.push(text.clone()),
                             TurnPart::Receipt(receipt) => {
                                 strings.push(receipt.summary.clone());
+                                strings.push(receipt_line_text(receipt));
                                 strings.extend(receipt.calls.iter().flat_map(call_strings));
                             }
                             TurnPart::Thinking => {}
@@ -475,6 +432,19 @@ mod tests {
         strings.extend(chrome::all(0, &transcript.tasks[0]));
         strings.extend(["Enter", "Esc", "+", "−"].map(str::to_string));
         strings
+    }
+
+    /// The receipt of `turn` that holds an edit.
+    fn edit_receipt(turn: &Turn) -> &Receipt {
+        turn.parts
+            .iter()
+            .find_map(|part| match part {
+                TurnPart::Receipt(receipt) if receipt.calls.iter().any(|c| c.verb == "Edit") => {
+                    Some(receipt)
+                }
+                _ => None,
+            })
+            .expect("the turn has a receipt with an edit")
     }
 
     fn owners(all: &[String], marker: char) -> BTreeSet<&str> {
@@ -527,15 +497,9 @@ mod tests {
         let Some(last) = turns(&idle).last() else {
             panic!("the idle sample has a turn");
         };
-        let Some(TurnPart::Receipt(receipt)) = last
-            .parts
-            .iter()
-            .find(|p| matches!(p, TurnPart::Receipt(_)))
-        else {
-            panic!("the last turn has a receipt");
-        };
+        let receipt = edit_receipt(last);
         assert_eq!(ui.expanded_receipts, [receipt.key].into());
-        assert_eq!(ui.open_bodies, [(receipt.key, 0), (receipt.key, 4)].into());
+        assert_eq!(ui.open_bodies, [(receipt.key, 0), (receipt.key, 1)].into());
         let Some(CallBody::Diff(lines)) = &receipt.calls[0].body else {
             panic!("the first call's body is a diff");
         };
@@ -567,15 +531,9 @@ mod tests {
         let Some(last) = turns(&idle).last() else {
             panic!("the idle sample has a turn");
         };
-        let Some(TurnPart::Receipt(receipt)) = last
-            .parts
-            .iter()
-            .find(|p| matches!(p, TurnPart::Receipt(_)))
-        else {
-            panic!("the last turn has a receipt");
-        };
-        let call = &receipt.calls[4];
-        assert!(ui.open_bodies.contains(&(receipt.key, 4)));
+        let receipt = edit_receipt(last);
+        let call = &receipt.calls[1];
+        assert!(ui.open_bodies.contains(&(receipt.key, 1)));
         assert_eq!(call.title(), "Run cargo nextest run --workspace");
         assert_eq!(call.status, CallStatus::Failed);
         let Some(CallBody::Output { lines, .. }) = &call.body else {
@@ -630,6 +588,37 @@ mod tests {
             .collect();
         let unique: std::collections::HashSet<_> = keys.iter().collect();
         assert_eq!(unique.len(), keys.len());
+    }
+
+    /// So one painted [`MERGED_MARKER`] says the two consecutive bursts
+    /// drew as one line reading [`MERGED_SUMMARY`].
+    #[test]
+    fn the_merged_summary_owns_its_marker() {
+        let sample = sample(true);
+        let all = strings(&sample);
+        assert_eq!(MERGED_SUMMARY.matches(MERGED_MARKER).count(), 1);
+        let owners: Vec<&String> = all.iter().filter(|s| s.contains(MERGED_MARKER)).collect();
+        assert_eq!(owners, [MERGED_SUMMARY, MERGED_SUMMARY], "{all:?}");
+        let receipts: Vec<&Receipt> = turns(&sample)
+            .flat_map(|turn| &turn.parts)
+            .filter_map(|part| match part {
+                TurnPart::Receipt(receipt) => Some(receipt),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            receipts
+                .iter()
+                .filter(|receipt| receipt.summary == MERGED_SUMMARY)
+                .count(),
+            1
+        );
+        let running: Vec<String> = receipts
+            .iter()
+            .filter(|receipt| receipt.running)
+            .map(|receipt| receipt_line_text(receipt))
+            .collect();
+        assert_eq!(running, [IN_FLIGHT]);
     }
 
     /// So a count of `読` other than [`READ_IN_TEXT`] says the first
