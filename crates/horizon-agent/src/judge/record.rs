@@ -37,7 +37,7 @@ pub(super) fn write_verdict(
     session_id: SessionId,
     input: &JudgeInput,
     model: &str,
-    verdict: JudgeVerdict,
+    verdict: &JudgeVerdict,
     latency_ms: u64,
 ) {
     let payload = serde_json::json!({
@@ -50,6 +50,7 @@ pub(super) fn write_verdict(
         "judge_stage": verdict.stage,
         "judge_confidence": verdict.confidence,
         "fallback_reason": verdict.fallback_reason.map(fallback_reason_label),
+        "fallback_error": verdict.fallback_error,
         "latency_ms": latency_ms,
         "requested_filesystem_grants": input.requested_filesystem_grants,
         "requested_domains": input.requested_domains,
@@ -180,11 +181,12 @@ mod tests {
             session_id,
             &input,
             "syn:small:text",
-            JudgeVerdict {
+            &JudgeVerdict {
                 decision: JudgeDecision::Escalate,
                 stage: 2,
                 confidence: None,
                 fallback_reason: None,
+                fallback_error: None,
             },
             512,
         );
@@ -204,7 +206,46 @@ mod tests {
         assert_eq!(payload["latency_ms"], 512);
         assert_eq!(payload["mode"], "enforcing");
         assert_eq!(payload["fallback_reason"], serde_json::Value::Null);
+        assert_eq!(payload["fallback_error"], serde_json::Value::Null);
         assert_eq!(payload["approval_scope"], "bounded");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn client_error_verdict_records_the_error_text() {
+        let path = temp_log_path("client-error");
+        let (writer, _init_rx) = WriterHandle::open(&path);
+        let session_id = SessionId::new();
+        let input = judge_input("call-err");
+
+        write_verdict(
+            &writer,
+            session_id,
+            &input,
+            "syn:small:text",
+            &JudgeVerdict {
+                decision: JudgeDecision::Escalate,
+                stage: 1,
+                confidence: None,
+                fallback_reason: Some(JudgeFallbackReason::ClientError),
+                fallback_error: Some("judge request failed: 404 model not found".to_string()),
+            },
+            30,
+        );
+        writer.flush().expect("flush");
+
+        let report = event_log::read(&path).expect("read");
+        assert_eq!(report.records.len(), 1);
+        let payload = report.records[0]
+            .provider_payload
+            .as_ref()
+            .expect("payload");
+        assert_eq!(payload["fallback_reason"], "client_error");
+        assert_eq!(
+            payload["fallback_error"],
+            "judge request failed: 404 model not found"
+        );
 
         let _ = std::fs::remove_file(path);
     }
@@ -222,11 +263,12 @@ mod tests {
             session_id,
             &input,
             "syn:small:text",
-            JudgeVerdict {
+            &JudgeVerdict {
                 decision: JudgeDecision::AutoApprove,
                 stage: 1,
                 confidence: Some(1.0),
                 fallback_reason: None,
+                fallback_error: None,
             },
             12,
         );

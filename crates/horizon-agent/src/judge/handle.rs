@@ -143,17 +143,26 @@ impl JudgeHandle {
             };
             let verdict = match result {
                 Ok(Ok(verdict)) => verdict,
-                Ok(Err(_)) => super::JudgeVerdict {
+                Ok(Err(panic)) => super::JudgeVerdict {
                     decision: JudgeDecision::Escalate,
                     stage: 0,
                     confidence: None,
                     fallback_reason: Some(JudgeFallbackReason::ClientError),
+                    fallback_error: Some(super::bounded_fallback_error(&format!(
+                        "judge panicked: {}",
+                        panic
+                            .downcast_ref::<&str>()
+                            .copied()
+                            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                            .unwrap_or("non-string panic payload")
+                    ))),
                 },
                 Err(_) => super::JudgeVerdict {
                     decision: JudgeDecision::Escalate,
                     stage: 0,
                     confidence: None,
                     fallback_reason: Some(JudgeFallbackReason::Timeout),
+                    fallback_error: None,
                 },
             };
             if !registration.finish() {
@@ -165,7 +174,7 @@ impl JudgeHandle {
                 session_id,
                 &input,
                 &handle.model,
-                verdict,
+                &verdict,
                 latency_ms,
             );
             let _ = result_tx.send(crate::tools::ToolCompletion::ApprovalJudged(

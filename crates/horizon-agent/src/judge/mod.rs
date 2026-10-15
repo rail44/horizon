@@ -54,13 +54,30 @@ use client::{ModelClient, RawCompletionRequest};
 /// derived from stage 1's top-token logprob (`exp(logprob)`) when the
 /// endpoint returns one; always `None` when a stage-2 re-evaluation decided
 /// the final verdict (the design only defines a confidence signal for
-/// stage 1's single-token response).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// stage 1's single-token response). `fallback_error` carries the failure
+/// text when the fallback came from an error, bounded by
+/// [`FALLBACK_ERROR_MAX_CHARS`].
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct JudgeVerdict {
     pub decision: JudgeDecision,
     pub stage: u8,
     pub confidence: Option<f32>,
     pub fallback_reason: Option<JudgeFallbackReason>,
+    pub fallback_error: Option<String>,
+}
+
+/// Upper bound, in chars, on [`JudgeVerdict::fallback_error`]; an error
+/// carrying a whole HTML response body would otherwise land in the event
+/// log verbatim.
+pub(crate) const FALLBACK_ERROR_MAX_CHARS: usize = 2000;
+
+/// Truncates `text` to at most [`FALLBACK_ERROR_MAX_CHARS`] chars, cutting
+/// only on a char boundary.
+pub(crate) fn bounded_fallback_error(text: &str) -> String {
+    match text.char_indices().nth(FALLBACK_ERROR_MAX_CHARS) {
+        Some((byte_index, _)) => text[..byte_index].to_string(),
+        None => text.to_string(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,6 +185,7 @@ async fn run_judge(model: &str, client: &dyn ModelClient, input: &JudgeInput) ->
                     stage: 1,
                     confidence: None,
                     fallback_reason: Some(JudgeFallbackReason::Unparseable),
+                    fallback_error: None,
                 };
             };
             (
@@ -178,12 +196,13 @@ async fn run_judge(model: &str, client: &dyn ModelClient, input: &JudgeInput) ->
                     .and_then(parse::confidence_from_logprobs),
             )
         }
-        Err(_) => {
+        Err(error) => {
             return JudgeVerdict {
                 decision: JudgeDecision::Escalate,
                 stage: 1,
                 confidence: None,
                 fallback_reason: Some(JudgeFallbackReason::ClientError),
+                fallback_error: Some(bounded_fallback_error(&format!("{error:#}"))),
             };
         }
     };
@@ -194,6 +213,7 @@ async fn run_judge(model: &str, client: &dyn ModelClient, input: &JudgeInput) ->
             stage: 1,
             confidence,
             fallback_reason: None,
+            fallback_error: None,
         };
     }
 
@@ -203,25 +223,29 @@ async fn run_judge(model: &str, client: &dyn ModelClient, input: &JudgeInput) ->
         max_tokens: STAGE2_MAX_TOKENS,
         additional_params: client::stage2_additional_params(),
     };
-    let (stage2_decision, fallback_reason) = match client.complete(model, stage2_request).await {
-        Ok(response) => match parse::parse_stage2_result(&response.text) {
-            Some(decision) => (decision, None),
-            None => (
+    let (stage2_decision, fallback_reason, fallback_error) =
+        match client.complete(model, stage2_request).await {
+            Ok(response) => match parse::parse_stage2_result(&response.text) {
+                Some(decision) => (decision, None, None),
+                None => (
+                    JudgeDecision::Escalate,
+                    Some(JudgeFallbackReason::Unparseable),
+                    None,
+                ),
+            },
+            Err(error) => (
                 JudgeDecision::Escalate,
-                Some(JudgeFallbackReason::Unparseable),
+                Some(JudgeFallbackReason::ClientError),
+                Some(bounded_fallback_error(&format!("{error:#}"))),
             ),
-        },
-        Err(_) => (
-            JudgeDecision::Escalate,
-            Some(JudgeFallbackReason::ClientError),
-        ),
-    };
+        };
 
     JudgeVerdict {
         decision: stage2_decision,
         stage: 2,
         confidence: None,
         fallback_reason,
+        fallback_error,
     }
 }
 
@@ -575,13 +599,19 @@ mod tests {
 
     #[tokio::test]
     async fn a_client_error_at_either_stage_resolves_to_escalate_never_auto_approve() {
-        let client = ScriptedClient::new(vec![Err(anyhow::anyhow!("connection refused"))]);
+        let client = ScriptedClient::new(vec![Err(
+            anyhow::anyhow!("connection refused").context("judge request failed")
+        )]);
         let verdict = run_judge("syn:small:text", &client, &input("call-4")).await;
         assert_eq!(verdict.decision, JudgeDecision::Escalate);
         assert_eq!(verdict.stage, 1);
         assert_eq!(
             verdict.fallback_reason,
             Some(JudgeFallbackReason::ClientError)
+        );
+        assert_eq!(
+            verdict.fallback_error.as_deref(),
+            Some("judge request failed: connection refused")
         );
 
         let client = ScriptedClient::new(vec![
@@ -594,6 +624,18 @@ mod tests {
             verdict.fallback_reason,
             Some(JudgeFallbackReason::ClientError)
         );
+        assert_eq!(verdict.fallback_error.as_deref(), Some("timeout"));
+    }
+
+    #[test]
+    fn fallback_error_is_truncated_on_a_char_boundary() {
+        let long = "接続拒否".repeat(FALLBACK_ERROR_MAX_CHARS);
+        let bounded = bounded_fallback_error(&long);
+        assert_eq!(bounded.chars().count(), FALLBACK_ERROR_MAX_CHARS);
+        assert!(long.starts_with(&bounded));
+
+        let exact = "誤".repeat(FALLBACK_ERROR_MAX_CHARS);
+        assert_eq!(bounded_fallback_error(&exact), exact);
     }
 
     #[tokio::test]
