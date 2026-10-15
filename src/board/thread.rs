@@ -57,8 +57,27 @@ pub(crate) struct BoardThreadView {
     _live_updates: Option<super::live::LiveUpdates>,
     scroll: ScrollHandle,
     focus_handle: FocusHandle,
+    column: Entity<Column>,
     _status_subscription: Subscription,
     _reply_subscription: Subscription,
+    _column_subscription: Subscription,
+}
+
+/// The scroll column, drawn by [`BoardThreadView`] and cached as a view of
+/// its own. A cached view lays its content out as a layout root, under the
+/// text style set around it; `TextView` measures a paragraph holding inline
+/// code with the text style in effect when layout runs, not the one set
+/// around the paragraph, so the body size is set around this view.
+struct Column {
+    view: WeakEntity<BoardThreadView>,
+}
+
+impl Render for Column {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.view
+            .update(cx, |view, cx| view.render_column(window, cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
 }
 
 impl BoardThreadView {
@@ -97,6 +116,10 @@ impl BoardThreadView {
         );
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
+        let weak = cx.weak_entity();
+        let column = cx.new(|_| Column { view: weak });
+        let _column_subscription =
+            cx.observe_self(|view, cx| view.column.update(cx, |_, cx| cx.notify()));
         #[allow(unused_mut)]
         let mut view = Self {
             store,
@@ -117,8 +140,10 @@ impl BoardThreadView {
             _live_updates: None,
             scroll: ScrollHandle::new(),
             focus_handle,
+            column,
             _status_subscription,
             _reply_subscription,
+            _column_subscription,
         };
         // A store that resolved from a project directory has a log behind
         // it, so anything else writing to this task pokes the view.
@@ -947,6 +972,51 @@ impl BoardThreadView {
             })
     }
 
+    /// The scroll column, drawn into [`Column`]: the task body and the
+    /// posts.
+    fn render_column(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(item) = self.item.clone() else {
+            return div().into_any_element();
+        };
+        let now = model::now_ms();
+        let read = model::read_through(&item, &self.positions);
+        v_flex()
+            .id(("board-next-thread-scroll", item.id))
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .px(thread_gutter())
+            .pt(gap_section())
+            .pb(gap_composer())
+            .gap(gap_unit())
+            .when(self.has_body(), |column| {
+                // The container's own 16 plus this 8 puts the first
+                // post 24 under the body.
+                column.child(
+                    div()
+                        .w_full()
+                        .flex_none()
+                        .mb(gap_tight())
+                        .child(markdown_body(
+                            ("board-next-task-body", item.id),
+                            item.body.clone(),
+                            theme::text_primary(),
+                        )),
+                )
+            })
+            .children(
+                item.comments
+                    .iter()
+                    .enumerate()
+                    .map(|(index, comment)| {
+                        self.render_post(index, comment, index >= read, now, cx)
+                            .into_any_element()
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .into_any_element()
+    }
+
     /// The composer, pinned under the thread at the same measure as it.
     fn render_composer(&self) -> impl IntoElement {
         v_flex()
@@ -1010,8 +1080,6 @@ impl Render for BoardThreadView {
                     .child(chrome::TASK_NOT_FOUND),
             );
         };
-        let now = model::now_ms();
-        let read = model::read_through(&item, &self.positions);
         shell
             .child(self.render_band(&item, cx))
             .when_some(self.notice.clone(), |column, notice| {
@@ -1027,36 +1095,15 @@ impl Render for BoardThreadView {
                 )
             })
             .child(
-                v_flex()
-                    .id(("board-next-thread-scroll", item.id))
+                div()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .px(thread_gutter())
-                    .pt(gap_section())
-                    .pb(gap_composer())
-                    .gap(gap_unit())
-                    .when(self.has_body(), |column| {
-                        // The container's own 16 plus this 8 puts the first
-                        // post 24 under the body.
-                        column.child(div().w_full().flex_none().mb(gap_tight()).child(
-                            markdown_body(
-                                ("board-next-task-body", item.id),
-                                item.body.clone(),
-                                theme::text_primary(),
-                            ),
-                        ))
-                    })
-                    .children(
-                        item.comments
-                            .iter()
-                            .enumerate()
-                            .map(|(index, comment)| {
-                                self.render_post(index, comment, index >= read, now, cx)
-                                    .into_any_element()
-                            })
-                            .collect::<Vec<_>>(),
+                    .w_full()
+                    .text_size(body().size)
+                    .line_height(body().line_height)
+                    .child(
+                        AnyView::from(self.column.clone())
+                            .cached(StyleRefinement::default().size_full()),
                     ),
             )
             .child(self.render_composer())
