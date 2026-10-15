@@ -345,13 +345,18 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
 
 /// Projects the resolved `[theme]` scheme onto gpui-component's global
 /// `Theme`, via [`gpui_component_theme_config`] and gpui-component's own
-/// `ThemeColor::apply_config` fallback chain. Call once at startup, right
-/// after `gpui_component::init` (`src/entry.rs`), and again after
-/// [`super::scheme::reload_from`] on `Reload Config` so an overridden
+/// `ThemeColor::apply_config` fallback chain, and sets the monospace family
+/// (inline code, receipt targets) to the `[ui] font_family` primary on both
+/// gpui-component's theme and the base theme `TextView` reads. Call once at
+/// startup, right after `gpui_component::init` (`src/entry.rs`), and again
+/// after [`super::scheme::reload_from`] on `Reload Config` so an overridden
 /// `[theme]` scheme keeps applying live.
 pub fn apply_gpui_component_theme(cx: &mut gpui::App) {
     let config = gpui_component_theme_config(&scheme());
     gpui_component::Theme::global_mut(cx).apply_config(&std::rc::Rc::new(config));
+    let mono = crate::ui::font::resolved_font().family;
+    gpui_component::Theme::global_mut(cx).mono_font_family = mono.clone();
+    gpui_base::Theme::global_mut(cx).tokens.typography.mono = mono;
 }
 
 #[cfg(test)]
