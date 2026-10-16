@@ -1422,6 +1422,17 @@ fn provider_registry_starts_builtin_provider() {
         first.clone().into_event().expect("conversation event"),
         agent::Event::StateChanged(agent::SessionState::Created)
     );
+    // No `default_model` pair: the session still starts, in the fallback,
+    // and its init message names the missing key instead of a model.
+    let init = handle.events().recv().expect("init message");
+    match init.into_event().expect("conversation event") {
+        agent::Event::MessageCommitted(message) => {
+            assert!(message.text.contains("without a model"), "{}", message.text);
+            assert!(message.text.contains("`default_model`"), "{}", message.text);
+        }
+        other => panic!("expected the init message, got {other:?}"),
+    }
+    assert_eq!(registry.resolved_model(&provider_id, None), None);
 }
 
 // ---------------------------------------------------------------------------

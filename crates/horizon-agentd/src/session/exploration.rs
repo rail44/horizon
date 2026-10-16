@@ -171,9 +171,11 @@ mod tests {
                     base_url: None,
                     api_key_env: "HORIZON_TEST_KEY_NEVER_SET".to_string(),
                     api_key_present: false,
-                    default_model: Some("m-solo".to_string()),
                 }],
-                default_name: "solo".to_string(),
+                default_model: Some(horizon_agent::config::ModelPair {
+                    provider: "solo".to_string(),
+                    model: "m-solo".to_string(),
+                }),
             },
             moa: horizon_agent::config::MoaTable::default(),
             persistence: AgentPersistenceConfig {

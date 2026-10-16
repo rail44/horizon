@@ -8,9 +8,10 @@
 //! relevant to them and apply their own env-var precedence and built-in
 //! defaults on top (env var > this file > built-in default).
 //!
-//! Named `[[providers]]` entries are the only file-based provider surface.
-//! `default_provider` selects conversation sessions; `auxiliary_provider`
-//! selects one OpenAI-compatible entry for titles and approval judgments.
+//! Named `[[providers]]` entries describe endpoints and credentials only.
+//! Models are chosen by two top-level `{ provider, model }` pairs:
+//! `default_model` for conversation sessions and `small_model` (which must
+//! name an OpenAI-compatible entry) for titles and approval judgments.
 //! No provider entries means the built-in OpenAI-compatible `default` entry.
 //! Environment values override file values; secrets remain environment-only.
 //! A missing file uses defaults. Invalid files warn at startup; reload errors
@@ -51,14 +52,16 @@ const HOME_VAR: &str = "HOME";
 pub struct RawConfig {
     /// Named provider entries in file order.
     pub providers: Vec<RawNamedProviderConfig>,
-    /// Which `[[providers]]` `name` runs when nothing else selected it.
-    /// `None` means the first effective entry's name
-    /// ([`RawConfig::resolved_providers`] owns that rule). A stale name that
-    /// matches no entry is warned about and falls back to the first entry.
-    pub default_provider: Option<String>,
-    /// OpenAI-compatible provider used by titles and automatic approval. Required
-    /// when named providers are configured; no-file defaults use `default`.
-    pub auxiliary_provider: Option<String>,
+    /// `default_model = { provider, model }`: what a conversation session
+    /// runs when nothing else selected a model. `None` (or a pair that does
+    /// not resolve) means no model at all: sessions start without one.
+    #[serde(deserialize_with = "deserialize_lenient_model_pair")]
+    pub default_model: Option<RawModelPair>,
+    /// `small_model = { provider, model }`: the model titles and approval
+    /// judgments run on. The provider must be an openai-compatible entry;
+    /// `None` (or an invalid pair) disables both.
+    #[serde(deserialize_with = "deserialize_lenient_model_pair")]
+    pub small_model: Option<RawModelPair>,
     pub terminal: RawTerminalConfig,
     pub ui: RawUiConfig,
     /// Key chord string (e.g. `"ctrl+shift+t"`) to `CommandId` string (e.g.
@@ -122,10 +125,11 @@ impl RawProviderKind {
     }
 }
 
-/// One `[[providers]]` entry as the file writes it. There is no model list:
-/// the picker's candidates come from the provider's own `/models` listing.
-/// `default_model` only names the model a session runs when nothing has
-/// selected one.
+/// One `[[providers]]` entry as the file writes it: an endpoint and the
+/// name of its credential variable. There is no model here: the picker's
+/// candidates come from the provider's own `/models` listing, and the
+/// top-level `default_model`/`small_model` pairs name the models that run
+/// when nothing else selected one.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawNamedProviderConfig {
@@ -136,44 +140,63 @@ pub struct RawNamedProviderConfig {
     /// is read from. `None` means the kind's own default
     /// ([`RawProviderKind::default_api_key_env`]).
     pub api_key_env: Option<String>,
-    /// The model this entry runs when nothing else selected one. `None`
-    /// leaves the kind's own built-in default in place (openai-compatible's
-    /// `gpt-4o-mini`; an anthropic entry with neither has no Horizon-side
-    /// default at all).
-    pub default_model: Option<String>,
+}
+
+/// A top-level `{ provider, model }` pair as the file writes it
+/// (`default_model`, `small_model`): a `[[providers]]` entry name plus a
+/// model id.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RawModelPair {
+    pub provider: String,
+    pub model: String,
+}
+
+/// A `{ provider, model }` pair whose provider names a resolved entry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedModelPair {
+    pub provider: String,
+    pub model: String,
+}
+
+/// [`RawConfig::resolved_small_model`]'s output: the openai-compatible entry
+/// the `small_model` pair names, plus the model id to run on it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedSmallModel {
+    pub provider: ResolvedProviderConfig,
+    pub model: String,
 }
 
 /// One resolved provider entry — [`RawConfig::resolved_providers`]'s output:
 /// entry defaults applied and
 /// nameless entries dropped. This is the shape `horizon-agentd` hands to
 /// `horizon_agent::config`, which owns the env-var precedence on top
-/// (`HORIZON_RIG_MODEL`/`OPENAI_API_KEY`/`OPENAI_BASE_URL`/`ANTHROPIC_API_KEY`
-/// /`ANTHROPIC_BASE_URL` keep winning over whatever is set here).
+/// (`OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` keep winning over the file's
+/// `base_url`; keys are read from the named variable).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedProviderConfig {
     pub name: String,
     pub kind: RawProviderKind,
     pub base_url: Option<String>,
     pub api_key_env: String,
-    /// The model this entry runs when nothing else selected one
-    /// ([`RawNamedProviderConfig::default_model`]). `None` means the kind's own built-in default.
-    pub default_model: Option<String>,
 }
 
 /// [`RawConfig::resolved_providers`]'s whole output: the effective entry
-/// list (file order) and which name is the default.
+/// list (file order) and the conversation default model, when the
+/// `default_model` pair resolves against that list.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProvidersResolution {
     pub providers: Vec<ResolvedProviderConfig>,
-    pub default_name: String,
+    pub default_model: Option<ResolvedModelPair>,
 }
 
 /// The implicit entry used when no providers are configured.
 pub const DEFAULT_PROVIDER_NAME: &str = "default";
 
 impl RawConfig {
-    /// Apply entry defaults, drop nameless entries, and select the conversation
-    /// default. An empty file surface yields the built-in OpenAI-compatible entry.
+    /// Apply entry defaults, drop nameless entries, and resolve the conversation
+    /// default model. An empty file surface yields the built-in
+    /// OpenAI-compatible entry.
     pub fn resolved_providers(&self) -> ProvidersResolution {
         let mut providers: Vec<ResolvedProviderConfig> = Vec::new();
         if self.providers.is_empty() {
@@ -184,7 +207,6 @@ impl RawConfig {
                 api_key_env: RawProviderKind::OpenAiCompatible
                     .default_api_key_env()
                     .to_string(),
-                default_model: None,
             });
         } else {
             for entry in &self.providers {
@@ -200,64 +222,120 @@ impl RawConfig {
                         .api_key_env
                         .clone()
                         .unwrap_or_else(|| kind.default_api_key_env().to_string()),
-                    default_model: entry.default_model.clone(),
                 });
             }
         }
-        let default_name = match &self.default_provider {
-            Some(name) if providers.iter().any(|p| &p.name == name) => name.clone(),
-            _ => providers
-                .first()
-                .map(|p| p.name.clone())
-                .unwrap_or_else(|| DEFAULT_PROVIDER_NAME.to_string()),
-        };
+        let default_model =
+            resolve_pair(DEFAULT_MODEL_KEY, self.default_model.as_ref(), &providers)
+                .ok()
+                .map(|(_, pair)| pair);
         ProvidersResolution {
             providers,
-            default_name,
+            default_model,
         }
     }
 
-    /// Select auxiliary AI explicitly, independent of conversation selection.
-    /// An invalid selection never redirects an OpenAI request to another entry.
-    pub fn resolved_auxiliary_provider(&self) -> Result<ResolvedProviderConfig, String> {
-        let name = self.auxiliary_provider.as_deref().or_else(|| {
-            self.providers.is_empty().then_some(DEFAULT_PROVIDER_NAME)
-        }).ok_or("auxiliary_provider: select an OpenAI-compatible [[providers]] entry for titles and approval judgments")?;
-        let entry = self
-            .resolved_providers()
-            .providers
-            .into_iter()
-            .find(|entry| entry.name == name)
-            .ok_or_else(|| format!("auxiliary_provider: {name:?} names no provider"))?;
+    /// The `default_model` pair resolved against the provider entries, or
+    /// why it does not (absent, no model id, unknown entry).
+    pub fn resolved_default_model(&self) -> Result<ResolvedModelPair, String> {
+        let providers = self.resolved_providers().providers;
+        resolve_pair(DEFAULT_MODEL_KEY, self.default_model.as_ref(), &providers)
+            .map(|(_, pair)| pair)
+    }
+
+    /// The `small_model` pair resolved against the provider entries. Its
+    /// provider must be openai-compatible; an invalid pair never redirects a
+    /// request to another entry.
+    pub fn resolved_small_model(&self) -> Result<ResolvedSmallModel, String> {
+        let providers = self.resolved_providers().providers;
+        let (entry, pair) = resolve_pair(SMALL_MODEL_KEY, self.small_model.as_ref(), &providers)?;
         if entry.kind != RawProviderKind::OpenAiCompatible {
             return Err(format!(
-                "auxiliary_provider: {name:?} must be openai-compatible"
+                "{SMALL_MODEL_KEY}: provider {:?} must be openai-compatible — titles and \
+                 approval judgments are disabled",
+                pair.provider
             ));
         }
-        Ok(entry)
+        Ok(ResolvedSmallModel {
+            provider: entry,
+            model: pair.model,
+        })
     }
+}
+
+/// The top-level key naming the conversation sessions' default model.
+pub const DEFAULT_MODEL_KEY: &str = "default_model";
+/// The top-level key naming the model titles and approval judgments use.
+pub const SMALL_MODEL_KEY: &str = "small_model";
+
+/// Resolves one top-level `{ provider, model }` pair against `providers`.
+/// The error names `key` and what runs instead.
+fn resolve_pair(
+    key: &str,
+    pair: Option<&RawModelPair>,
+    providers: &[ResolvedProviderConfig],
+) -> Result<(ResolvedProviderConfig, ResolvedModelPair), String> {
+    let consequence = if key == DEFAULT_MODEL_KEY {
+        "sessions start without a model"
+    } else {
+        "titles and approval judgments are disabled"
+    };
+    let pair = pair.ok_or_else(|| {
+        format!(
+            "{key}: not set — {consequence} (set {key} = {{ provider = \"...\", model = \"...\" }})"
+        )
+    })?;
+    if pair.model.is_empty() {
+        return Err(format!("{key}: has no model id — {consequence}"));
+    }
+    let entry = providers
+        .iter()
+        .find(|entry| entry.name == pair.provider)
+        .ok_or_else(|| {
+            format!(
+                "{key}: provider {:?} names no [[providers]] entry — {consequence}",
+                pair.provider
+            )
+        })?;
+    Ok((
+        entry.clone(),
+        ResolvedModelPair {
+            provider: pair.provider.clone(),
+            model: pair.model.clone(),
+        },
+    ))
+}
+
+/// Deserializes a top-level `{ provider, model }` pair leniently: a value
+/// that is not such a table becomes `None` instead of failing the whole
+/// file's parse (the per-value policy [`deserialize_lenient_f64`] applies
+/// too). `warnings` names the wrong shape.
+fn deserialize_lenient_model_pair<'de, D>(deserializer: D) -> Result<Option<RawModelPair>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<toml::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| match value {
+        toml::Value::Table(_) => value.try_into().ok(),
+        _ => None,
+    }))
 }
 
 /// Value-level warnings for the provider sections, beside the name-walking
 /// [`warnings::warn`] (same warn-and-continue policy, never fail startup).
 /// Collected once per parse alongside key-name warnings.
 pub fn provider_config_warnings(config: &RawConfig) -> Vec<String> {
-    let resolution = config.resolved_providers();
     let mut warnings = Vec::new();
-    if let Err(error) = config.resolved_auxiliary_provider() {
+    if let Err(error) = config.resolved_default_model() {
         warnings.push(error);
     }
-    if let Some(name) = &config.default_provider {
-        if !resolution.providers.iter().any(|p| &p.name == name) {
-            warnings.push(format!(
-                "default_provider: {name:?} names no [[providers]] entry — falling back to the first entry"
-            ));
-        }
+    if let Err(error) = config.resolved_small_model() {
+        warnings.push(error);
     }
     for (index, entry) in config.providers.iter().enumerate() {
         if entry.name.is_empty() {
             warnings.push(format!(
-                "[[providers]]: entry {index} has no name, dropping it (name it so default_provider can select it)"
+                "[[providers]]: entry {index} has no name, dropping it (name it so a model pair can select it)"
             ));
         }
     }

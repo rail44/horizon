@@ -52,16 +52,24 @@ impl Connection {
     pub(crate) fn list_providers(&self) -> Vec<ProviderSummary> {
         let config = lock_unpoisoned(&self.state.agent_config);
         let table = &config.providers;
+        let default = table.default_model.as_ref();
         let mut summaries: Vec<ProviderSummary> = table
             .entries
             .iter()
-            .map(|entry| ProviderSummary {
-                name: entry.name.clone(),
-                base_url: entry.base_url.clone(),
-                api_key_env: entry.api_key_env.clone(),
-                default_model: entry.default_model.clone(),
-                available: entry.api_key_present,
-                default: entry.name == table.default_name,
+            .map(|entry| {
+                // Only the entry the top-level `default_model` pair names
+                // carries a default model.
+                let default_model = default
+                    .filter(|pair| pair.provider == entry.name)
+                    .map(|pair| pair.model.clone());
+                ProviderSummary {
+                    name: entry.name.clone(),
+                    base_url: entry.base_url.clone(),
+                    api_key_env: entry.api_key_env.clone(),
+                    default: default_model.is_some(),
+                    default_model,
+                    available: entry.api_key_present,
+                }
             })
             .collect();
         // The `[[moa]]` entries ride the same shape as one more group, so
@@ -509,7 +517,6 @@ mod tests {
                 base_url: None,
                 api_key_env: "OPENAI_API_KEY".to_string(),
                 api_key_present: true,
-                default_model: Some("m-fast".to_string()),
             },
             NamedProviderConfig {
                 name: "claude".to_string(),
@@ -517,7 +524,6 @@ mod tests {
                 base_url: None,
                 api_key_env: "ANTHROPIC_API_KEY".to_string(),
                 api_key_present: false,
-                default_model: Some("m-opus".to_string()),
             },
         ];
         let agent_config = horizon_agent::config::AgentConfig {
@@ -529,7 +535,10 @@ mod tests {
             },
             providers: ProvidersTable {
                 entries: entries.clone(),
-                default_name: "openai".to_string(),
+                default_model: Some(horizon_agent::config::ModelPair {
+                    provider: "openai".to_string(),
+                    model: "m-fast".to_string(),
+                }),
             },
             moa,
             persistence: horizon_agent::config::AgentPersistenceConfig {
@@ -571,6 +580,7 @@ mod tests {
         assert_eq!(summaries[1].name, "claude");
         assert!(!summaries[1].available);
         assert!(!summaries[1].default);
+        assert_eq!(summaries[1].default_model, None);
         // The key variable's NAME is reported (never a value), so a picker
         // can explain unavailability.
         assert_eq!(summaries[1].api_key_env, "ANTHROPIC_API_KEY");

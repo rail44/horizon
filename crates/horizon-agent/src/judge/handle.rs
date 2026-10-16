@@ -9,7 +9,6 @@ use futures_util::FutureExt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::config;
 use crate::contract::SessionId;
 use crate::persistence::event_log::WriterHandle;
 
@@ -31,8 +30,10 @@ pub struct JudgeHandle {
 }
 
 impl JudgeHandle {
-    /// A session retains the explicitly selected auxiliary connection. Missing
-    /// credentials or persistence leave the existing human approval path active.
+    /// A session retains the `small_model` connection accepted when it
+    /// started, and judges with that pair's model. No connection (the pair
+    /// is absent or invalid), missing credentials, or missing persistence
+    /// leave the human approval path active.
     pub fn new(
         connection: Option<&crate::auxiliary::AuxiliaryConfig>,
         writer: Option<WriterHandle>,
@@ -41,7 +42,7 @@ impl JudgeHandle {
         let connection = connection?;
         std::env::var_os(&connection.api_key_env)?;
         Some(Arc::new(Self {
-            model: config::resolve_judge_model(std::env::var(config::JUDGE_MODEL_VAR).ok()),
+            model: connection.model.clone(),
             client: Arc::new(RigModelClient::new(connection.clone())),
             limiter: RateLimiter::judge_default(),
             writer,
@@ -185,5 +186,39 @@ impl JudgeHandle {
             ));
         });
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn writer() -> (WriterHandle, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "horizon-agent-judge-handle-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        (WriterHandle::open(&path).0, path)
+    }
+
+    #[test]
+    fn no_small_model_connection_leaves_human_approval_active() {
+        let (writer, path) = writer();
+        assert!(JudgeHandle::new(None, Some(writer)).is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn the_judge_runs_the_small_model_pairs_model() {
+        let (writer, path) = writer();
+        // `PATH` is always set, standing in for a present key variable.
+        let connection = crate::auxiliary::AuxiliaryConfig {
+            base_url: None,
+            api_key_env: "PATH".into(),
+            model: "small-test".into(),
+        };
+        let judge = JudgeHandle::new(Some(&connection), Some(writer)).expect("judge");
+        assert_eq!(judge.model, "small-test");
+        let _ = std::fs::remove_file(path);
     }
 }

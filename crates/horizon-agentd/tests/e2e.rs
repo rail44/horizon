@@ -588,11 +588,10 @@ async fn reload_then_switch_updates_an_existing_session_and_reattach() {
 
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.toml");
-    let initial = r#"default_provider = "initial"
+    let initial = r#"default_model = { provider = "initial", model = "before-model" }
 [[providers]]
 name = "initial"
 api_key_env = "HORIZON_SWITCH_TEST_KEY"
-default_model = "before-model"
 "#;
     std::fs::write(&config_path, initial).unwrap();
     let agentd = agentd_spawn(AgentdPaths::scratch("agentd-switch"))
@@ -620,7 +619,7 @@ default_model = "before-model"
         &config_path,
         format!(
             "{initial}\n[[providers]]\nname = \"added\"\nkind = \"anthropic\"\n\
-             api_key_env = \"HORIZON_SWITCH_TEST_KEY\"\ndefault_model = \"after-model\"\n"
+             api_key_env = \"HORIZON_SWITCH_TEST_KEY\"\n"
         ),
     )
     .unwrap();
@@ -2284,11 +2283,11 @@ fn write_smoke_config() -> PathBuf {
         .map(|model| format!("  {{ provider = \"{SMOKE_PROVIDER}\", model = \"{model}\" }},"))
         .collect::<Vec<_>>()
         .join("\n");
-    // `default_provider` is a top-level key, so it has to precede the first
+    // `default_model` is a top-level key, so it has to precede the first
     // array-of-tables header; after one, TOML reads it as a key of that
     // table instead.
     let contents = format!(
-        "default_provider = \"{SMOKE_PROVIDER}\"\n\
+        "default_model = {{ provider = \"{SMOKE_PROVIDER}\", model = \"{SMOKE_AGGREGATOR_MODEL}\" }}\n\
          \n\
          [[providers]]\n\
          name = \"{SMOKE_PROVIDER}\"\n\

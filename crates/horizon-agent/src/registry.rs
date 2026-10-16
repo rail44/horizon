@@ -80,7 +80,7 @@ impl ProviderRegistry {
         Self::builtin_with_config(
             AgentConfig::from_env_and_providers(
                 vec![crate::config::NamedProviderConfig::default()],
-                "default".into(),
+                None,
                 Vec::new(),
             ),
             crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
@@ -116,9 +116,11 @@ impl ProviderRegistry {
         registry.insert(Arc::new(crate::providers::mock::MockProvider::new()));
         let table = config.providers.clone();
         let moa = config.moa.clone();
+        let default_name = table.default_provider_name().map(str::to_string);
         for entry in &table.entries {
             let id = named_rig_provider_id(&entry.name);
-            let provider_config = if entry.name == table.default_name {
+            let is_default = default_name.as_deref() == Some(entry.name.as_str());
+            let provider_config = if is_default {
                 config.rig.clone()
             } else {
                 entry.resolved()
@@ -129,9 +131,23 @@ impl ProviderRegistry {
                 duckdb_cell.clone(),
             ));
             registry.insert_under(id, provider.clone());
-            if entry.name == table.default_name {
+            if is_default {
                 registry.insert_under(ProviderId("builtin.agent.rig".to_string()), provider);
             }
+        }
+        // No resolvable `default_model`: the shell-facing id still answers,
+        // with `config.rig`'s empty model, so a session spawn that names no
+        // provider starts in the deterministic fallback instead of failing.
+        if default_name.is_none() && !table.entries.is_empty() {
+            let id = ProviderId("builtin.agent.rig".to_string());
+            registry.insert_under(
+                id.clone(),
+                Arc::new(crate::providers::rig::Provider::for_entry(
+                    id,
+                    config.rig.clone(),
+                    duckdb_cell.clone(),
+                )),
+            );
         }
         // One rig provider per `[[moa]]` entry, under its own id namespace:
         // the session runs the aggregator's entry and model and carries the
@@ -249,7 +265,6 @@ mod tests {
         kind: ProviderKind,
         api_key_env: &str,
         api_key_present: bool,
-        default_model: Option<&str>,
     ) -> NamedProviderConfig {
         NamedProviderConfig {
             name: name.to_string(),
@@ -257,7 +272,6 @@ mod tests {
             base_url: None,
             api_key_env: api_key_env.to_string(),
             api_key_present,
-            default_model: default_model.map(str::to_string),
         }
     }
 
@@ -265,7 +279,8 @@ mod tests {
     /// variable unset must not break the registry build — both entries
     /// register (the unavailable one stays registered, "grayed out, not
     /// hidden"), the default entry answers under the standing shell-facing
-    /// id, and each entry resolves its own model.
+    /// id with the default model, and an entry nothing selected a model
+    /// for resolves none.
     #[test]
     fn two_entries_register_independently_of_each_others_key_presence() {
         let agent_config = crate::config::AgentConfig {
@@ -282,17 +297,18 @@ mod tests {
                         ProviderKind::OpenAiCompatible,
                         "OPENAI_API_KEY",
                         true,
-                        Some("m-fast"),
                     ),
                     named_entry(
                         "claude",
                         ProviderKind::Anthropic,
                         "ANTHROPIC_API_KEY",
                         false,
-                        Some("m-opus"),
                     ),
                 ],
-                default_name: "openai".to_string(),
+                default_model: Some(crate::config::ModelPair {
+                    provider: "openai".to_string(),
+                    model: "test-model".to_string(),
+                }),
             },
             moa: crate::config::MoaTable::default(),
             persistence: AgentPersistenceConfig {
@@ -325,11 +341,11 @@ mod tests {
             registry.resolved_model(&registry.default_provider_id(), None),
             Some("test-model".to_string())
         );
-        // The named id resolves the same entry — self-consistent against
-        // whatever env precedence did to its base URL/model.
+        // The named id of the entry `default_model` names runs the same
+        // config.
         assert_eq!(
             registry.resolved_model(&openai_id, None),
-            Some(registry.resolved_model(&openai_id, None).unwrap())
+            Some("test-model".to_string())
         );
 
         // The key-less entry registered but resolves nothing: unavailable

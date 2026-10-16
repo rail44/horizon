@@ -367,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn config_role_uses_the_provider_default_model() {
+    fn config_role_uses_the_session_default_model() {
         assert_eq!(CONFIG_ROLE.model, None);
         assert_eq!(CONFIG_ROLE.iteration_cap, None);
     }

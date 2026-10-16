@@ -53,15 +53,14 @@ trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; echo "artifacts: $out" >&2; exit 1; }
 
 cat >"$config_file" <<EOF
-default_provider = "mock"
-auxiliary_provider = "mock"
+default_model = { provider = "mock", model = "mock-model" }
+small_model = { provider = "mock", model = "mock-model" }
 
 [[providers]]
 name = "mock"
 kind = "openai-compatible"
 base_url = "http://127.0.0.1:$mock_port/v1"
 api_key_env = "HORIZON_ACP_CHECK_MOCK_KEY"
-default_model = "mock-model"
 EOF
 
 python3 "$mock_server" "$mock_port" "$out/mock.log" &
@@ -79,7 +78,7 @@ start_app() {
   if [[ -n "$host_runtime_dir" && -n "$wayland_display" ]]; then
     ln -sf "$host_runtime_dir/$wayland_display" "$runtime_dir/$wayland_display"
   fi
-  env -u OPENAI_BASE_URL -u HORIZON_RIG_MODEL -u OPENAI_API_KEY \
+  env -u OPENAI_BASE_URL -u OPENAI_API_KEY \
     HORIZON_CONFIG="$config_file" \
     HORIZON_ACP_CHECK_MOCK_KEY="mock" \
     HORIZON_AGENTD_SOCKET="$agentd_socket" \

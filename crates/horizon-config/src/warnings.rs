@@ -1,5 +1,5 @@
-//! Unrecognized-key (probable-typo) warnings for every top-level section
-//! except `[theme]`/`[theme.ansi]` (validated app-side, in the shell
+//! Unrecognized-key (probable-typo) warnings for the top-level keys and
+//! every top-level section except `[theme]`/`[theme.ansi]` (validated app-side, in the shell
 //! crate's `theme::warnings` -- see that module's doc comment; unaffected
 //! by this one) and `[keybindings]` (a chord-to-command-id map validated
 //! by the shell crate's `keymap`, not schema-shaped here). This project
@@ -44,10 +44,31 @@ const SECTIONS: &[Section] = &[
 /// can't see inside an array of tables.
 const PROJECT_GRANT_KEYS: &[&str] = &["root", "trees", "network", "mach_services"];
 
+/// Every top-level key [`super::RawConfig`] reads. Anything else at the top
+/// level (including a removed key such as `default_provider` or
+/// `auxiliary_provider`) is a probable typo.
+const TOP_LEVEL_KEYS: &[&str] = &[
+    "providers",
+    "default_model",
+    "small_model",
+    "terminal",
+    "ui",
+    "keybindings",
+    "theme",
+    "grants",
+    "trusted_projects",
+    "moa",
+];
+
+/// The top-level `{ provider, model }` pair keys, and the keys of their
+/// inline tables.
+const MODEL_PAIR_TOP_LEVEL_KEYS: &[&str] = &[super::DEFAULT_MODEL_KEY, super::SMALL_MODEL_KEY];
+const MODEL_PAIR_KEYS: &[&str] = &["provider", "model"];
+
 /// Keys a single `[[providers]]` entry recognizes — checked the same way
 /// [`PROJECT_GRANT_KEYS`] is: `SECTIONS` can't see inside an array of
 /// tables.
-const PROVIDER_ENTRY_KEYS: &[&str] = &["name", "kind", "base_url", "api_key_env", "default_model"];
+const PROVIDER_ENTRY_KEYS: &[&str] = &["name", "kind", "base_url", "api_key_env"];
 
 /// Keys a single `[[moa]]` entry recognizes, and the keys of the inline
 /// member tables under `aggregator`/`proposers`. Checked the same way
@@ -66,6 +87,14 @@ fn collect_warnings(contents: &str) -> Vec<String> {
         return Vec::new();
     };
     let mut warnings = Vec::new();
+    for key in root.keys() {
+        if !TOP_LEVEL_KEYS.contains(&key.as_str()) {
+            warnings.push(format!(
+                "unrecognized top-level key {key:?}, ignoring (see config.example.toml for the recognized names)"
+            ));
+        }
+    }
+    warnings.extend(model_pair_warnings(&root));
     for section in SECTIONS {
         let Some(toml::Value::Table(table)) = root.get(section.name) else {
             continue;
@@ -83,6 +112,33 @@ fn collect_warnings(contents: &str) -> Vec<String> {
     warnings.extend(provider_entry_warnings(&root));
     warnings.extend(moa_entry_warnings(&root));
     warnings.sort();
+    warnings
+}
+
+/// Shape warnings for `default_model`/`small_model`: the value must be an
+/// inline table with exactly `provider` and `model`. A non-table value is
+/// dropped by the lenient deserializer, so it is named here.
+fn model_pair_warnings(root: &toml::Table) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for key in MODEL_PAIR_TOP_LEVEL_KEYS {
+        match root.get(*key) {
+            None => {}
+            Some(toml::Value::Table(table)) => {
+                for inner in table.keys() {
+                    if !MODEL_PAIR_KEYS.contains(&inner.as_str()) {
+                        warnings.push(format!(
+                            "{key}: unrecognized key {inner:?}, ignoring (expected only \
+                             provider and model)"
+                        ));
+                    }
+                }
+            }
+            Some(_) => warnings.push(format!(
+                "{key}: expected an inline table {{ provider = \"...\", model = \"...\" }}, \
+                 ignoring this value"
+            )),
+        }
+    }
     warnings
 }
 
@@ -243,8 +299,8 @@ mod tests {
     #[test]
     fn warning_allowlists_match_deserialized_fields() {
         use crate::{
-            RawGrantsConfig, RawMoaConfig, RawMoaMember, RawNamedProviderConfig, RawProjectGrant,
-            RawTerminalConfig, RawUiConfig,
+            RawConfig, RawGrantsConfig, RawMoaConfig, RawMoaMember, RawModelPair,
+            RawNamedProviderConfig, RawProjectGrant, RawTerminalConfig, RawUiConfig,
         };
         for (section, accepted) in [
             ("terminal", accepted_fields::<RawTerminalConfig>()),
@@ -255,6 +311,12 @@ mod tests {
             assert_same_keys(section, warning.known_keys, accepted);
         }
         for (section, warning, accepted) in [
+            ("top level", TOP_LEVEL_KEYS, accepted_fields::<RawConfig>()),
+            (
+                "model pair",
+                MODEL_PAIR_KEYS,
+                accepted_fields::<RawModelPair>(),
+            ),
             (
                 "grants.project",
                 PROJECT_GRANT_KEYS,
@@ -288,9 +350,42 @@ mod tests {
     #[test]
     fn provider_known_keys_warn_about_nothing() {
         let warnings = collect_warnings(
-            "[[providers]]\nname = \"default\"\ndefault_model = \"gpt-test\"\nbase_url = \"https://example.invalid\"\n",
+            "default_model = { provider = \"default\", model = \"m\" }\n\
+             small_model = { provider = \"default\", model = \"s\" }\n\
+             [[providers]]\nname = \"default\"\napi_key_env = \"KEY\"\nbase_url = \"https://example.invalid\"\n",
         );
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
+    }
+
+    #[test]
+    fn removed_model_selection_keys_warn_as_probable_typos() {
+        let warnings = collect_warnings(
+            "default_provider = \"x\"\nauxiliary_provider = \"x\"\n\
+             [[providers]]\nname = \"x\"\ndefault_model = \"m\"\n",
+        );
+        assert_eq!(warnings.len(), 3, "warnings = {warnings:?}");
+        for key in ["default_provider", "auxiliary_provider", "default_model"] {
+            assert!(
+                warnings
+                    .iter()
+                    .any(|w| w.contains("unrecognized") && w.contains(&format!("{key:?}"))),
+                "{key} must warn: {warnings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_model_pair_with_an_extra_key_or_a_non_table_value_warns() {
+        let warnings = collect_warnings(
+            "default_model = \"m\"\nsmall_model = { provider = \"p\", model = \"s\", effort = 1 }\n",
+        );
+        assert_eq!(warnings.len(), 2, "warnings = {warnings:?}");
+        assert!(warnings
+            .iter()
+            .any(|w| w.starts_with("default_model:") && w.contains("inline table")));
+        assert!(warnings
+            .iter()
+            .any(|w| w.starts_with("small_model:") && w.contains("\"effort\"")));
     }
 
     #[test]
@@ -304,24 +399,11 @@ mod tests {
     }
 
     #[test]
-    fn providers_entry_default_model_is_known_but_models_is_not() {
-        // The v22 rename: `default_model` is the real field, so a config using
-        // it warns about nothing; a stale `models` key now warns as a probable
-        // typo instead of being silently dropped.
-        let known = collect_warnings("[[providers]]\nname = \"x\"\ndefault_model = \"m\"\n");
-        assert!(known.is_empty(), "warnings = {known:?}");
-        let stale = collect_warnings("[[providers]]\nname = \"x\"\nmodels = [\"m\"]\n");
-        assert!(stale
-            .iter()
-            .any(|warning| warning.contains("unrecognized key \"models\"")));
-    }
-
-    #[test]
     fn provider_unrecognized_key_warns_as_a_probable_typo() {
         let warnings =
-            collect_warnings("[[providers]]\nname = \"default\"\ndefault_modle = \"typo\"\n");
+            collect_warnings("[[providers]]\nname = \"default\"\napi_key_evn = \"typo\"\n");
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("modle"));
+        assert!(warnings[0].contains("api_key_evn"));
         assert!(warnings[0].contains("unrecognized"));
     }
 

@@ -1,17 +1,15 @@
 //! One-off LLM calls that distill an agent session's first user message
 //! into a short tab title.
 //!
-//! Titles and approval judgments share the explicitly selected auxiliary
-//! provider. The shell retains a pooled client until configuration reload;
+//! Titles and approval judgments share the `small_model` connection.
+//! The shell retains a pooled client until configuration reload;
 //! each in-flight title call captures its own handle. Any failure leaves the
 //! raw first-message title showing.
 //!
-//! The default model id is [`crate::config::DEFAULT_JUDGE_MODEL`]
-//! (`syn:small:text`, the provider-maintained small-model alias) for the
-//! same reason the judge uses it: a tab title is a cheap auxiliary task
-//! that must never require the acting model. It is overridable through
-//! [`TITLE_MODEL_VAR`], its own env var -- not the judge's, so tuning the
-//! approval gate's model never silently retitles tabs.
+//! The model id is the `small_model` pair's, carried on the connection
+//! the caller captured: a tab title is a cheap auxiliary task that must
+//! never require the acting model. No `small_model` means no connection,
+//! and the raw first-message title stays.
 //!
 //! Sync by design: [`summarize_session_title`] blocks its calling thread
 //! for at most [`TITLE_TIMEOUT`] and is meant to be invoked from a
@@ -24,15 +22,6 @@ use std::time::Duration;
 
 use rig_core::client::CompletionClient;
 use rig_core::completion::{AssistantContent, CompletionModel, Message};
-
-use crate::config;
-
-/// Overrides the title summarizer's model id. Env-only (mirroring
-/// `HORIZON_AGENT_JUDGE_MODEL`'s treatment -- the config-file surface is
-/// frozen), falling back to [`crate::config::DEFAULT_JUDGE_MODEL`].
-/// Deliberately *not* the judge's override var: the two features tune
-/// independently.
-pub const TITLE_MODEL_VAR: &str = "HORIZON_AGENT_TITLE_MODEL";
 
 /// How long one summarizer call may take before it gives up and the raw
 /// first-message title stays. A tab title is never worth more than a few
@@ -58,12 +47,6 @@ language as the message, no quotes, no trailing punctuation, no explanation.";
 #[cfg(test)]
 pub(crate) fn system_prompt() -> &'static str {
     SYSTEM_PROMPT
-}
-
-/// Pure precedence for the summarizer's model id: [`TITLE_MODEL_VAR`]
-/// wins, else the sanctioned small-model alias.
-fn resolve_title_model(env_value: Option<String>) -> String {
-    env_value.unwrap_or_else(|| config::DEFAULT_JUDGE_MODEL.to_string())
 }
 
 /// The user-side prompt: the first message, char-truncated (not
@@ -117,7 +100,7 @@ pub fn summarize_session_title(
     connection: &crate::auxiliary::AuxiliaryClient,
     first_message: &str,
 ) -> Option<String> {
-    let model = resolve_title_model(std::env::var(TITLE_MODEL_VAR).ok());
+    let model = connection.model().to_string();
     let user_content = prompt_input(first_message);
     runtime().block_on(async move {
         let client = connection.completion_client().ok()?;
@@ -157,12 +140,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_resolution_prefers_the_env_override() {
-        assert_eq!(resolve_title_model(Some("m:test".into())), "m:test");
-        assert_eq!(
-            resolve_title_model(None),
-            config::DEFAULT_JUDGE_MODEL.to_string()
-        );
+    fn the_title_model_is_the_connections_small_model() {
+        let connection =
+            crate::auxiliary::AuxiliaryClient::new(crate::auxiliary::AuxiliaryConfig {
+                base_url: None,
+                api_key_env: "HORIZON_TEST_KEY_NEVER_SET".into(),
+                model: "small-test".into(),
+            });
+        assert_eq!(connection.model(), "small-test");
+        // No key: the call gives up before any request, leaving the raw title.
+        assert_eq!(summarize_session_title(&connection, "hello"), None);
     }
 
     #[test]

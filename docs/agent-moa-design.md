@@ -217,9 +217,9 @@ names with no per-item availability).
   bump. A shell process started before the rebuild cannot decode
   `MoaPassStarted` (skipped per item); restarting the app avoids the
   noise.
-- **An entry with no `default_model` has no default model** and falls back
-  to rig's built-in `gpt-4o-mini` for the construction-time window lookup
-  (one wasted `/models` request per key, cached).
+- **A `[[providers]]` entry carries no model.** A session on an entry that
+  neither `default_model` nor a selection gave a model has none: it makes no
+  `/models` window lookup and answers from the deterministic fallback.
 - **Echo trimming keys on `User:` at line start.** A legitimate answer
   containing that string on its own line is cut there.
 

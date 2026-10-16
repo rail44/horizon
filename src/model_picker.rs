@@ -9,9 +9,10 @@
 //! provider in the daemon's `list_providers` order (the `[[providers]]` file
 //! order), and confirming an available provider drills into `Models`. The
 //! model stage lists the ids the provider's own `/models` listing answers
-//! (`list_provider_models`) — the `[[providers]]` file declares no model
-//! list, only an optional `default_model` for what runs when nothing has
-//! been selected. Discovery is lazy per provider, so a key-unavailable
+//! (`list_provider_models`) — the config file declares no model list, only
+//! the top-level `default_model` pair for what runs when nothing has been
+//! selected; the daemon reports that pair's model on the one entry it names,
+//! which is the model row marked "default". Discovery is lazy per provider, so a key-unavailable
 //! provider never has its endpoint asked at all. Esc walks back a stage
 //! before it closes the modal. Key-unavailable providers stay visible but
 //! grayed with the reason (they are listed, never hidden), and confirming

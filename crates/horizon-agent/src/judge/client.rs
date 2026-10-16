@@ -228,11 +228,15 @@ mod tests {
         let first = AuxiliaryConfig::from_env(
             Some("https://unused.invalid".into()),
             "HORIZON_TEST_AUX_FIRST_KEY".into(),
+            "small-test".into(),
         );
         assert_eq!(first.base_url.as_deref(), Some(first_url.as_str()));
         std::env::remove_var("OPENAI_BASE_URL");
-        let second =
-            AuxiliaryConfig::from_env(Some(second_url), "HORIZON_TEST_AUX_SECOND_KEY".into());
+        let second = AuxiliaryConfig::from_env(
+            Some(second_url),
+            "HORIZON_TEST_AUX_SECOND_KEY".into(),
+            "small-test".into(),
+        );
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let first_title = AuxiliaryClient::new(first.clone());
         assert_eq!(

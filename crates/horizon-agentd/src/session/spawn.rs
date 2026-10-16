@@ -80,9 +80,11 @@ fn selection_for_provider_id(
     let id = provider_id.0.as_str();
     let config = lock_unpoisoned(&state.agent_config);
     if id == "builtin.agent.rig" {
-        return Some(horizon_agent::hosting::ModelSelection {
-            provider: config.providers.default_name.clone(),
-            model: model.to_string(),
+        return config.providers.default_provider_name().map(|provider| {
+            horizon_agent::hosting::ModelSelection {
+                provider: provider.to_string(),
+                model: model.to_string(),
+            }
         });
     }
     if let Some(name) = id.strip_prefix("builtin.agent.rig.") {

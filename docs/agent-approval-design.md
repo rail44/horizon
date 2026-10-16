@@ -440,22 +440,17 @@ product-owned API. Decisions:
   `.model()` override on the existing OpenAI-completions client covers
   the whole need — squarely within the recorded "thin adapter, agent
   loop bypassed" stance (`docs/trust-boundaries.md`).
-- **Judge model** (owner decision): a second model id on the *current*
-  provider (same `base_url`) — a deliberate, named exception to the
-  2026-07-18 config-narrowing wave. **Chosen 2026-07-19: `syn:small:text`**
-  — a synthetic.new provider-maintained small-model alias (concretely
-  backed by GLM-4.7-Flash today, updated by the provider as better small
-  models ship), preferred over a raw vendor id (`hf:zai-org/GLM-4.7-Flash`)
-  so Horizon tracks the provider's small-model choice rather than committing
-  to one vendor's model/governance direction. It satisfies the
-  different-family caution (the acting agent is `moonshotai/Kimi-K2.7-Code`)
-  and was empirically the cleanest cheap single-token responder on the
-  endpoint (see the judge-prompt research's provider-probe appendix). Keep
-  it config-selectable, not hardcoded. Future: per-model provider selection,
-  merging with the model-routing roadmap item. The standing caution from
-  `docs/agent-feedback-design.md`'s non-goals transfers: prefer a different
-  model family from the acting agent, and calibrate against a human-labeled
-  set before trusting the FNR.
+- **Judge model**: the config file's top-level `small_model` pair
+  (`{ provider, model }`), shared with title generation (board #64). Its
+  provider must be an openai-compatible `[[providers]]` entry. There is no
+  built-in judge model: without a valid `small_model` no judge is built and
+  every candidate goes to the human. On synthetic.new, the judge-prompt
+  research's provider-probe appendix found `syn:small:text` (a
+  provider-maintained small-model alias, backed by GLM-4.7-Flash at the
+  time) the cleanest cheap single-token responder. The caution from
+  `docs/agent-feedback-design.md`'s non-goals applies to whatever model the
+  pair names: prefer a different model family from the acting agent, and
+  calibrate against a human-labeled set before trusting the FNR.
 - **Audit**: every verdict and fail-closed skip is a standalone durable
   JSONL/DuckDB record using the already fold-neutral
   `ProviderRequestFinished` carrier and event kind `judge_verdict`.
@@ -654,15 +649,14 @@ refactoring wave folds into this item.
      and creates no candidate. `mock.boundary_crossing` remains a
      transport-free fixture; non-isolated fs/bash calls are `AlwaysAsk` but
      now enter the same enforcing gate.
-   - **Judge model config**: `syn:small:text` (this section's pin) is a
-     Rust constant (`config::DEFAULT_JUDGE_MODEL`), overridable via
-     `HORIZON_AGENT_JUDGE_MODEL` -- env-only, mirroring
-     `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`'s no-file-key
-     treatment. The session captures the explicitly selected
-     `auxiliary_provider` entry's base URL and key-variable name, shared with
-     title generation and independent of the conversation provider. Reload
-     affects new sessions; existing judges retain their captured connection.
-     See [provider configuration](provider-configuration.md).
+   - **Judge model config**: the `small_model` pair. The session captures
+     that pair's model id plus its entry's base URL and key-variable name
+     (`auxiliary::AuxiliaryConfig`), shared with title generation and
+     independent of the conversation provider. An absent or invalid pair, or
+     an unset key variable, leaves `JudgeHandle::new` returning `None`, so
+     the human approval path stays active. Reload affects new sessions;
+     existing judges retain their captured connection. See
+     [provider configuration](provider-configuration.md).
    - **Stage 2 also stays Plan B.** The judge-prompt research doc's own
      "native structured output vs. loose JSON mode" fork wasn't resolved
      in this provider's favor either way (the appendix's probe never

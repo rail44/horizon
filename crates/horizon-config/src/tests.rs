@@ -99,10 +99,10 @@ fn load_from_path_parses_a_well_formed_file() {
     std::fs::write(
         &path,
         r##"
-            auxiliary_provider = "default"
+            default_model = { provider = "default", model = "gpt-test" }
+            small_model = { provider = "default", model = "small-test" }
             [[providers]]
             name = "default"
-            default_model = "gpt-test"
             base_url = "https://example.invalid/v1"
 
             [terminal]
@@ -121,9 +121,13 @@ fn load_from_path_parses_a_well_formed_file() {
 
     assert_eq!(loaded.terminal.font_size, Some(14.0));
     assert_eq!(
-        loaded.providers[0].default_model.as_deref(),
-        Some("gpt-test")
+        loaded.default_model,
+        Some(RawModelPair {
+            provider: "default".into(),
+            model: "gpt-test".into(),
+        })
     );
+    assert_eq!(loaded.resolved_small_model().unwrap().model, "small-test");
     assert_eq!(
         loaded.providers[0].base_url.as_deref(),
         Some("https://example.invalid/v1")
@@ -507,14 +511,13 @@ fn text_contrast_wrong_type_falls_back_to_none_without_failing_the_whole_file() 
 #[test]
 fn named_providers_resolve_in_file_order_with_defaults_collapsed() {
     let config = parse(
-        "[[providers]]\n\
+        "default_model = { provider = \"claude\", model = \"claude-opus-4-6\" }\n\
+         [[providers]]\n\
          name = \"synthetic\"\n\
-         default_model = \"gpt-5.2\"\n\
          [[providers]]\n\
          name = \"claude\"\n\
          kind = \"anthropic\"\n\
-         api_key_env = \"CLAUDE_KEY\"\n\
-         default_model = \"claude-opus-4-6\"\n",
+         api_key_env = \"CLAUDE_KEY\"\n",
     )
     .unwrap();
     let resolution = config.resolved_providers();
@@ -527,59 +530,57 @@ fn named_providers_resolve_in_file_order_with_defaults_collapsed() {
         vec!["synthetic", "claude"]
     );
     // Defaults: kind -> openai-compatible, api_key_env -> the kind's own
-    // variable name, overridden api_key_env kept as-is, default_model kept.
+    // variable name, overridden api_key_env kept as-is.
     assert_eq!(
         resolution.providers[0].kind,
         RawProviderKind::OpenAiCompatible
     );
     assert_eq!(resolution.providers[0].api_key_env, "OPENAI_API_KEY");
-    assert_eq!(
-        resolution.providers[0].default_model.as_deref(),
-        Some("gpt-5.2")
-    );
     assert_eq!(resolution.providers[1].kind, RawProviderKind::Anthropic);
     assert_eq!(resolution.providers[1].api_key_env, "CLAUDE_KEY");
     assert_eq!(
-        resolution.providers[1].default_model.as_deref(),
-        Some("claude-opus-4-6")
+        resolution.default_model,
+        Some(ResolvedModelPair {
+            provider: "claude".into(),
+            model: "claude-opus-4-6".into(),
+        })
     );
-    // default_provider absent -> the first entry's name.
-    assert_eq!(resolution.default_name, "synthetic");
 }
 
 #[test]
-fn an_entry_without_a_default_model_carries_none() {
-    // There is no model list; only the optional default rides the entry.
-    let config = parse("[[providers]]\nname = \"synthetic\"\n").unwrap();
-    assert!(config.resolved_providers().providers[0]
-        .default_model
-        .is_none());
-}
-
-#[test]
-fn default_provider_selects_a_named_entry_and_a_stale_name_falls_back() {
-    // `default_provider` is a top-level key: written after an
-    // `[[providers]]` header it would belong to that entry (and be silently
-    // dropped by serde) — this test catches exactly that mistake too.
+fn a_default_model_naming_an_unknown_entry_warns_and_is_treated_as_absent() {
+    // A top-level key: written after an `[[providers]]` header it would
+    // belong to that entry instead — the order here is the one that works.
     let config = parse(
-        "default_provider = \"claude\"\n\
-         [[providers]]\nname = \"synthetic\"\n\
-         [[providers]]\nname = \"claude\"\nkind = \"anthropic\"\n",
-    )
-    .unwrap();
-    assert_eq!(config.resolved_providers().default_name, "claude");
-
-    let stale = parse(
-        "default_provider = \"renamed-away\"\n\
+        "default_model = { provider = \"renamed-away\", model = \"m\" }\n\
          [[providers]]\nname = \"synthetic\"\n",
     )
     .unwrap();
-    // The typo must not break startup: first entry, plus the probable-typo
-    // warning naming the stale value.
-    assert_eq!(stale.resolved_providers().default_name, "synthetic");
-    assert!(provider_config_warnings(&stale)
+    assert_eq!(config.resolved_providers().default_model, None);
+    assert!(provider_config_warnings(&config)
         .iter()
-        .any(|warning| warning.contains("renamed-away")));
+        .any(|warning| warning.starts_with("default_model:") && warning.contains("renamed-away")));
+}
+
+#[test]
+fn a_missing_default_model_warns_naming_the_key_and_resolves_no_model() {
+    let config = parse("[[providers]]\nname = \"synthetic\"\n").unwrap();
+    assert_eq!(config.resolved_providers().default_model, None);
+    assert!(provider_config_warnings(&config)
+        .iter()
+        .any(|warning| warning.starts_with("default_model: not set")));
+}
+
+#[test]
+fn a_non_table_model_pair_is_dropped_without_failing_the_parse() {
+    let config = parse(
+        "default_model = \"m\"\n\
+         small_model = { provider = \"synthetic\", model = \"s\" }\n\
+         [[providers]]\nname = \"synthetic\"\n",
+    )
+    .unwrap();
+    assert_eq!(config.default_model, None);
+    assert_eq!(config.resolved_small_model().unwrap().model, "s");
 }
 
 #[test]
@@ -590,16 +591,16 @@ fn retired_provider_table_requires_explicit_conversion() {
 
 #[test]
 fn no_provider_config_at_all_resolves_one_implicit_default_entry() {
-    // The zero-config case keeps pre-`[[providers]]` behavior byte-for-byte:
-    // one openai-compatible entry, no model, no base URL (env precedence in
-    // horizon-agent decides the rest).
+    // The zero-config case: one openai-compatible endpoint entry, no base
+    // URL (env precedence in horizon-agent decides the rest), and no model
+    // at all — neither pair has a built-in value.
     let config = RawConfig::default();
     let resolution = config.resolved_providers();
     assert_eq!(resolution.providers.len(), 1);
     assert_eq!(resolution.providers[0].name, DEFAULT_PROVIDER_NAME);
-    assert!(resolution.providers[0].default_model.is_none());
     assert_eq!(resolution.providers[0].api_key_env, "OPENAI_API_KEY");
-    assert!(provider_config_warnings(&config).is_empty());
+    assert_eq!(resolution.default_model, None);
+    assert!(config.resolved_small_model().is_err());
 }
 
 #[test]
@@ -608,11 +609,11 @@ fn mixed_old_and_new_provider_tables_are_rejected_without_partial_application() 
 }
 
 #[test]
-fn auxiliary_provider_selection_is_independent_and_never_uses_anthropic() {
+fn small_model_is_independent_of_default_model_and_never_uses_anthropic() {
     let config = parse(
         r#"
-        default_provider = "chat"
-        auxiliary_provider = "helper"
+        default_model = { provider = "chat", model = "big" }
+        small_model = { provider = "helper", model = "small" }
         [[providers]]
         name = "chat"
         kind = "anthropic"
@@ -623,32 +624,47 @@ fn auxiliary_provider_selection_is_independent_and_never_uses_anthropic() {
     "#,
     )
     .unwrap();
-    let auxiliary = config.resolved_auxiliary_provider().unwrap();
-    assert_eq!(config.resolved_providers().default_name, "chat");
-    assert_eq!(auxiliary.name, "helper");
-    assert_eq!(auxiliary.api_key_env, "HELPER_KEY");
-    for invalid in [Some("chat"), Some("missing"), None] {
+    let small = config.resolved_small_model().unwrap();
+    assert_eq!(
+        config.resolved_providers().default_model.unwrap().provider,
+        "chat"
+    );
+    assert_eq!(small.provider.name, "helper");
+    assert_eq!(small.provider.api_key_env, "HELPER_KEY");
+    assert_eq!(small.model, "small");
+    assert!(provider_config_warnings(&config).is_empty());
+    for invalid in [
+        Some(("chat", "small")),
+        Some(("missing", "small")),
+        Some(("helper", "")),
+        None,
+    ] {
         let mut invalid_config = config.clone();
-        invalid_config.auxiliary_provider = invalid.map(str::to_owned);
-        assert!(invalid_config.resolved_auxiliary_provider().is_err());
+        invalid_config.small_model = invalid.map(|(provider, model)| RawModelPair {
+            provider: provider.into(),
+            model: model.into(),
+        });
+        assert!(invalid_config.resolved_small_model().is_err());
         assert!(provider_config_warnings(&invalid_config)
             .iter()
-            .any(|w| w.contains("auxiliary_provider")));
+            .any(|w| w.starts_with("small_model:")));
     }
-    assert_eq!(
-        RawConfig::default()
-            .resolved_auxiliary_provider()
-            .unwrap()
-            .name,
-        DEFAULT_PROVIDER_NAME
-    );
+    let mut anthropic = config.clone();
+    anthropic.small_model = Some(RawModelPair {
+        provider: "chat".into(),
+        model: "small".into(),
+    });
+    assert!(anthropic
+        .resolved_small_model()
+        .unwrap_err()
+        .contains("openai-compatible"));
 }
 
 #[test]
 fn nameless_entries_are_dropped_and_warned() {
     let config = parse(
         "[[providers]]\nname = \"synthetic\"\n\
-         [[providers]]\ndefault_model = \"m\"\n",
+         [[providers]]\nbase_url = \"https://example.invalid\"\n",
     )
     .unwrap();
     let resolution = config.resolved_providers();

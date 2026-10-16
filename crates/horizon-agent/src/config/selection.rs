@@ -100,9 +100,8 @@ mod tests {
                 base_url: Some("https://selected.invalid".into()),
                 api_key_env: "HORIZON_SELECTION_TEST_KEY".into(),
                 api_key_present: false,
-                default_model: None,
             }],
-            default_name: "selected".into(),
+            default_model: None,
         }
     }
 

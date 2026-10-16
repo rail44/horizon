@@ -236,7 +236,7 @@ async fn discover_clearing_state(config: &RigAgentConfig) -> ClearingState {
 /// `model_limits` caches per key, so a re-discovery of an already-seen
 /// combination costs no request.
 async fn discover_effective_window(config: &RigAgentConfig) -> Option<u64> {
-    if !config.api_key_present {
+    if !config.model_in_play() {
         return None;
     }
     let window = model_limits(config)

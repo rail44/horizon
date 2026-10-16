@@ -132,8 +132,8 @@ pub struct ProviderSummary {
     /// recorded so a picker can explain unavailability ("ANTHROPIC_API_KEY
     /// is not set"). Never a value (the secrets-stay-out rule).
     pub api_key_env: String,
-    /// The model this entry runs when nothing has selected one, if the file
-    /// names it. `None` leaves the kind's own built-in default in place. The
+    /// The model id of the config file's top-level `default_model` pair,
+    /// on the one entry that pair names; `None` on every other entry. The
     /// picker's candidate ids come from the provider's own `/models`
     /// listing (`_horizon/list_provider_models`), not from here.
     pub default_model: Option<String>,
@@ -142,8 +142,8 @@ pub struct ProviderSummary {
     /// (grayed out, not hidden). A mid-session environment change is
     /// honored by a switch, not by this listing.
     pub available: bool,
-    /// Whether this is the surface's default entry (`default_provider`, or
-    /// the first entry when unset / the legacy fold-in).
+    /// Whether this is the entry the `default_model` pair names. No entry is
+    /// the default when that pair is absent or names no entry.
     pub default: bool,
 }
 

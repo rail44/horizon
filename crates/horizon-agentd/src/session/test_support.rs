@@ -27,9 +27,8 @@ pub(crate) fn test_config() -> AgentConfig {
                 base_url: rig.base_url.clone(),
                 api_key_env: rig.api_key_env.clone(),
                 api_key_present: rig.api_key_present,
-                default_model: Some(rig.model.clone()),
             }],
-            default_name: "default".into(),
+            default_model: None,
         },
         rig,
         moa: Default::default(),
@@ -91,7 +90,10 @@ pub(crate) fn state_with_rig_config(api_key_present: bool, model: &str) -> Arc<A
     config.rig.api_key_present = api_key_present;
     config.rig.model = model.to_string();
     config.providers.entries[0].api_key_present = api_key_present;
-    config.providers.entries[0].default_model = Some(model.to_string());
+    config.providers.default_model = Some(horizon_agent::config::ModelPair {
+        provider: "default".into(),
+        model: model.to_string(),
+    });
     state_from_config(config, Vec::new())
 }
 
@@ -103,7 +105,6 @@ pub(crate) fn state_with_trusted_projects(trusted: Vec<std::path::PathBuf>) -> A
 fn session_fixtures_do_not_read_host_provider_or_persistence_settings() {
     std::env::set_var("OPENAI_API_KEY", "fixture-only");
     std::env::set_var("OPENAI_BASE_URL", "https://fixture.invalid");
-    std::env::set_var("HORIZON_RIG_MODEL", "host-model");
     std::env::set_var("HORIZON_AGENT_CLEARING_THRESHOLD_PCT", "1");
     std::env::set_var("HORIZON_AGENT_EVENT_LOG", "host-events.jsonl");
     std::env::set_var("HORIZON_AGENT_STATE_DB", "host-state.duckdb");
@@ -115,7 +116,6 @@ fn session_fixtures_do_not_read_host_provider_or_persistence_settings() {
         let config = state.agent_config.lock().unwrap();
         assert!(!config.rig.api_key_present);
         assert_eq!(config.rig.base_url, None);
-        assert_ne!(config.rig.model, "host-model");
         assert_eq!(
             config.rig.clearing_threshold_pct,
             horizon_agent::config::RigAgentConfig::default().clearing_threshold_pct

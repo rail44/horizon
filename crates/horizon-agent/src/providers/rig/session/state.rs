@@ -319,7 +319,6 @@ mod tests {
                     base_url: Some("https://openai.example.invalid".to_string()),
                     api_key_env: "OPENAI_API_KEY".to_string(),
                     api_key_present: true,
-                    default_model: Some("m-fast".to_string()),
                 },
                 NamedProviderConfig {
                     name: "claude".to_string(),
@@ -327,10 +326,9 @@ mod tests {
                     base_url: None,
                     api_key_env: "ANTHROPIC_API_KEY".to_string(),
                     api_key_present: false,
-                    default_model: Some("m-opus".to_string()),
                 },
             ],
-            default_name: "openai".to_string(),
+            default_model: None,
         }
     }
 

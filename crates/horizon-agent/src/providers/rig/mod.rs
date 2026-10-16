@@ -92,12 +92,11 @@ impl AgentProvider for Provider {
     /// reporting a model here would claim a model is in play when none
     /// actually is.
     fn resolved_model(&self, role_id: Option<&RoleId>) -> Option<String> {
-        // No key, or a kind with no Horizon-side default model at all
-        // (an anthropic entry that lists nothing — see
-        // `NamedProviderConfig::default_model`): a fallback turn never
+        // No key, or no model configured (no `default_model` pair, or an
+        // entry nothing selected a model for): a fallback turn never
         // calls a provider, so reporting a model would claim one is in
         // play when none is.
-        if !self.config.api_key_present || self.config.model.is_empty() {
+        if !self.config.model_in_play() {
             return None;
         }
         let role = role_id.and_then(crate::roles::resolve);
@@ -148,7 +147,14 @@ pub(super) fn rig_initialization_message(
         ProviderKind::OpenAiCompatible => "openai-compatible",
         ProviderKind::Anthropic => "anthropic",
     };
-    if config.api_key_present {
+    if config.model.is_empty() {
+        format!(
+            "Rig provider `{}` initialized without a model: the config file's `default_model` \
+             selects none for it (default_model = {{ provider = \"...\", model = \"...\" }}). \
+             Replies come from the deterministic fallback.{}",
+            provider_id.0, memory
+        )
+    } else if config.api_key_present {
         format!(
             "Rig provider `{}` initialized with {kind} model `{}`.{}",
             provider_id.0, config.model, memory

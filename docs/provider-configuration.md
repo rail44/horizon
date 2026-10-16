@@ -1,13 +1,15 @@
-# Named provider configuration
+# Provider and model configuration
 
-`[[providers]]` is the only provider file format. `default_provider` selects
-conversation sessions; `auxiliary_provider` selects one OpenAI-compatible entry
-for both session titles and automatic tool-approval judgments.
+`[[providers]]` entries describe endpoints and credentials only. Two top-level
+`{ provider, model }` pairs choose the models: `default_model` for
+conversation sessions, and `small_model` for both session titles and automatic
+tool-approval judgments. Each pair has the same form as a `[[moa]]` member: a
+`[[providers]]` entry name plus a model id, written out.
 
 ```toml
-# Selectors must precede table headers.
-default_provider = "chat"
-auxiliary_provider = "helpers"
+# Top-level keys must precede table headers.
+default_model = { provider = "chat", model = "claude-opus-4-6" }
+small_model   = { provider = "helpers", model = "small-model-id" }
 
 [[providers]]
 name = "chat"
@@ -22,17 +24,37 @@ api_key_env = "HELPER_API_KEY"
 ```
 
 Only environment-variable names go in TOML; credentials stay in the environment.
-`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` override file URLs as before.
-`HORIZON_RIG_MODEL` overrides the conversation default model.
-`HORIZON_AGENT_TITLE_MODEL` and `HORIZON_AGENT_JUDGE_MODEL` select auxiliary model
-IDs; they must exist on the selected auxiliary endpoint. The entry's
-`default_model` remains its conversation default, not an auxiliary model setting.
+`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` override file URLs. No environment
+variable selects a model.
 
-With no provider entries, a built-in OpenAI-compatible entry named `default`
-serves both purposes. With named entries, auxiliary selection is explicit.
-A missing/invalid auxiliary selection warns and leaves raw titles and human
-approval active. It never borrows credentials or an endpoint from the chat
-provider. Missing credentials preserve those same fallback behaviors.
+## `default_model`
+
+The model a new conversation session runs until it is explicitly switched. Its
+provider is the session's default provider. There is no built-in model: when
+the pair is absent, has no model id, or names no `[[providers]]` entry, startup
+warns naming the key and sessions start in the deterministic fallback. No
+provider is called, no model is reported for the session, and its first message
+says that `default_model` selects no model. The model picker marks no entry as
+the default in that case.
+
+## `small_model`
+
+The model titles and approval judgments run on. Its provider must be an
+`openai-compatible` entry; that entry's `base_url` and `api_key_env` serve both
+features. When the pair is absent, invalid, or names a non-openai-compatible
+entry, startup warns naming the key, tabs keep their raw first-message titles,
+and approvals stay with the human. The same happens when the entry's key
+variable is unset. It never borrows credentials or an endpoint from another
+entry.
+
+## No provider entries
+
+With no `[[providers]]` entries, a built-in OpenAI-compatible endpoint entry
+named `default` exists (key variable `OPENAI_API_KEY`). It carries no model:
+both pairs still have to name it, for example
+`default_model = { provider = "default", model = "..." }`.
+
+## Reload
 
 Reload Config updates future title calls and new sessions. Each running session
 retains its judge connection; its conversation model can be explicitly switched
@@ -40,36 +62,18 @@ using the latest accepted catalog. Title clients are pooled per accepted shell
 configuration, judge clients per session. In-flight calls keep their captured
 connection when configuration changes.
 
-## One-time conversion
+## Removed forms
 
-The old `[provider]` table is rejected, with a conversion message. Startup retains
-the existing warn-and-default policy for invalid configuration; reload refuses
-the file and retains the previously accepted settings. Convert before restarting
-with an old file:
+The old `[provider]` table is rejected; startup keeps the warn-and-default
+policy for invalid configuration, and reload refuses the file and keeps the
+previously accepted settings. Rewrite it as a `[[providers]]` entry plus a
+`default_model` pair.
 
-```sh
-cargo run --locked -p horizon-config --example migrate-provider-config -- \
-  /path/to/config.toml /path/to/new-config-bundle
-```
-
-The destination must not exist. The converter writes `original.toml` byte for
-byte and a validated `config.toml`, without changing or installing the source.
-The rewritten file preserves unrelated settings; comments and formatting remain
-in the original copy. Legacy `model` becomes `default_model`; endpoint and key
-conventions are preserved. The previous implementation's `open-ai-compatible`
-spelling is converted to the documented `openai-compatible` spelling.
-
-Mixed old/new configurations previously allowed different title/judge routes.
-They require an explicit auxiliary provider name as a third argument. The old
-table is retained as a new named entry, normally `migrated-provider`; the error
-message identifies its name if a collision requires a suffix. Multiple existing
-OpenAI-compatible entries also require a selection unless one is already set.
-No destination is written until the choice validates.
-
-Review the two files before installing the converted one. The old
-`reload-session-runtime` keybinding is converted to `reload-agent-runtime`.
-`new-config-agent` has no equivalent single command ID: remove that binding and
-use `horizon new-agent --role config`; the converter refuses to change its meaning.
+The top-level `default_provider` and `auxiliary_provider` keys and the entry-level
+`default_model` key are no longer read. Like any other unrecognized key they
+are warned about as a probable typo and ignored. The environment variables
+`HORIZON_RIG_MODEL`, `HORIZON_AGENT_JUDGE_MODEL`, and `HORIZON_AGENT_TITLE_MODEL`
+are no longer read either.
 
 Real user configuration is not modified by repository integration. Agent history
 also needs the separate [history conversion](agent-history-format.md) before

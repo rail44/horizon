@@ -136,11 +136,10 @@ async fn an_ext_version_mismatch_initializes_but_refuses_everything_else() {
 #[tokio::test]
 async fn reload_provider_config_rebuilds_the_registry_from_the_config_file() {
     std::env::set_var("OPENAI_API_KEY", "test-only");
-    std::env::remove_var("HORIZON_RIG_MODEL");
 
     let dir = tempfile::tempdir().expect("tempdir");
     let config = dir.path().join("config.toml");
-    std::fs::write(&config, "auxiliary_provider = \"default\"\n[[providers]]\nname = \"default\"\ndefault_model = \"before-model\"\n").unwrap();
+    std::fs::write(&config, "default_model = { provider = \"default\", model = \"before-model\" }\n[[providers]]\nname = \"default\"\n").unwrap();
 
     let agent_config =
         crate::providers::agent_config(&horizon_config::reload_from_path(Some(&config)).unwrap());
@@ -174,7 +173,7 @@ async fn reload_provider_config_rebuilds_the_registry_from_the_config_file() {
         Some("before-model".to_string()),
     );
 
-    std::fs::write(&config, "auxiliary_provider = \"default\"\n[[providers]]\nname = \"default\"\ndefault_model = \"after-model\"\n").unwrap();
+    std::fs::write(&config, "default_model = { provider = \"default\", model = \"after-model\" }\n[[providers]]\nname = \"default\"\n").unwrap();
     cx.send_request(acp::ReloadProviderConfigRequest {})
         .block_task()
         .await

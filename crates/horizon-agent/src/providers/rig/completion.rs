@@ -188,7 +188,7 @@ pub(super) async fn complete_rig_turn(
             ..Default::default()
         };
     };
-    if config.api_key_present {
+    if config.model_in_play() {
         match rig_provider_turn_with_retry(
             config,
             environment,

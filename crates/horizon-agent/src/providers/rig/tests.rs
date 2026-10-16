@@ -3117,7 +3117,7 @@ fn resolved_model_reports_the_base_model_for_a_role_less_session() {
 
 #[test]
 fn resolved_model_reports_the_base_model_for_the_config_role_since_it_has_no_override() {
-    // `roles::CONFIG_ROLE::model` is `None` (`config_role_uses_the_provider_
+    // `roles::CONFIG_ROLE::model` is `None` (`config_role_uses_the_session_
     // default_model` in `roles.rs`'s own tests) -- resolving a role that
     // doesn't override the model must fall back to the base config, not
     // report no model at all.
