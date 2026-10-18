@@ -123,7 +123,9 @@ class Provider(http.server.BaseHTTPRequestHandler):
                     value = json.loads(outputs[call["id"]])
                 except json.JSONDecodeError:
                     continue
-                if isinstance(value, dict) and (value.get("is_error") or "error" in value or value.get("exit_code", 0) != 0):
+                output = value.get("output") if isinstance(value, dict) else None
+                if isinstance(value, dict) and (value.get("outcome") != "Succeeded" or (isinstance(output, dict) and (
+                        output.get("is_error") or "error" in output or output.get("exit_code", 0) != 0))):
                     raise AssertionError(f"Tool failed: {call['function']}: {value}")
 
         def called(name, arguments):
@@ -136,7 +138,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
         def tip(command):
             call = called("bash", {"command": command})
             value = json.loads(outputs[call["id"]])
-            return re.findall(r"(?m)^[0-9a-f]{40}$", value["output"])[-1]
+            return re.findall(r"(?m)^[0-9a-f]{40}$", value["output"]["output"])[-1]
 
         if "board.read" not in available:
             if "memory.update" in available:
@@ -184,7 +186,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
             tool = once("bash", {"command": command})
             if tool:
                 return tool, None
-            output = json.loads(outputs[called("bash", {"command": command})["id"]])["output"]
+            output = json.loads(outputs[called("bash", {"command": command})["id"]])["output"]["output"]
             lines = output.splitlines()
             assert len(lines) == 5 and int(lines[0]) >= 2, output
             assert lines[2] == target, output
