@@ -31,6 +31,21 @@ pub(crate) fn call_escapes_root(
     safety::escapes_root(tool_state, path_arg)
 }
 
+/// The first `fs.write`/`fs.edit` target that resolves inside the workspace
+/// root's own `.git` entry (a plain checkout's gitdir, or a linked
+/// worktree's pointer file). Such a write is not contained: the same entry
+/// is excluded from the bash sandbox's writable range
+/// (`docs/sandbox-perimeter-design.md`). `None` for every other call.
+pub(crate) fn call_writes_git_metadata<'a>(
+    tool_state: &ToolSessionState,
+    input: &'a crate::tools::input::ToolInput,
+) -> Option<&'a str> {
+    input
+        .write_paths()
+        .into_iter()
+        .find(|path| safety::is_in_git_metadata(tool_state, path))
+}
+
 /// The message an out-of-root read is refused with when no human can
 /// approve it: which root this session may read, plus the equivalent
 /// in-workspace path when the request named the same relative path in

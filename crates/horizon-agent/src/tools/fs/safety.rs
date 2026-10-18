@@ -202,6 +202,26 @@ pub(super) fn escapes_root(tool_state: &ToolSessionState, requested: &str) -> bo
     !within(tool_state, &resolved, Confinement::ReadableRoots)
 }
 
+/// Whether `requested` resolves to the workspace root's `.git` entry or a
+/// path beneath it. Uses the same canonicalization as [`resolve_path`], so
+/// a symlink inside the root that points into `.git` is caught too. `false`
+/// for any input validation error; those reach the tool itself and are
+/// returned to the model.
+pub(super) fn is_in_git_metadata(tool_state: &ToolSessionState, requested: &str) -> bool {
+    let Some(workspace_root) = tool_state.workspace_root() else {
+        return false;
+    };
+    let dot_git = workspace_root.join(".git");
+    if std::fs::symlink_metadata(&dot_git).is_err() {
+        return false;
+    }
+    let Ok(resolved) = canonicalize(requested) else {
+        return false;
+    };
+    let dot_git = dot_git.canonicalize().unwrap_or(dot_git);
+    resolved.starts_with(&dot_git)
+}
+
 /// The same relative path inside this session's own workspace, when
 /// `requested` names a file in another working tree of the same repository
 /// (the main worktree or a sibling linked worktree) and that file exists

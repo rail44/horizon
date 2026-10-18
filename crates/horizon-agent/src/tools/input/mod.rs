@@ -112,6 +112,16 @@ impl ToolInput {
         Ok(())
     }
 
+    /// The target paths of an `fs.write`/`fs.edit` call; empty for every
+    /// other tool.
+    pub(crate) fn write_paths(&self) -> Vec<&str> {
+        match self {
+            Self::WriteFile(input) => vec![input.path.as_str()],
+            Self::EditFiles(input) => input.edits.iter().map(|edit| edit.path.as_str()).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     pub(crate) fn read_path(&self) -> Option<&str> {
         match self {
             Self::ReadFile(input) => Some(&input.path),

@@ -192,6 +192,9 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # endpoint, key-variable, and reload behavior for both titles and judgments.
 # Provider HTTP/SSE lifecycle tests (provider_wire_ prefix) bind loopback listeners
 # for both adapters, including disconnect, timeout, retry and parallel calls.
+# `approved_git_commit_in_a_plain_checkout` spawns a real sandboxed helper
+# for an approved Git metadata write, like `approved_git_commit_writes_linked_
+# metadata`; a sandbox cannot nest another one under itself.
 [profile.sandboxed]
 default-filter = '''
     not (
@@ -205,6 +208,7 @@ default-filter = '''
         + test(/^tools::tests::tier1_sandboxed_bash/)
         + test(/^tools::tests::a_configured_grant_makes_an_out_of_workspace_write/)
         + test(/^tools::tests::approved_git_commit_writes_linked_metadata/)
+        + test(/^tools::tests::approved_git_commit_in_a_plain_checkout/)
         + test(/^tools::tests::judge_approved_filesystem_retry_reruns_sandboxed/)
         + test(/^tools::tests::an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded/)
         + test(/^session::setup::tests::isolation_announcement::/)

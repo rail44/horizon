@@ -313,6 +313,32 @@ fn respond_to_user_message(
         );
         return ControlFlow::Continue(());
     }
+    if lower_text.contains("git operation") {
+        // Test hook for a `bash` call that still needs approval in every
+        // session: a Git subcommand outside the read-only list is a
+        // metadata write (`GitOperation` with an engaged sandbox, the
+        // host-execution approval without one). `stash list` itself only
+        // reads, so approving it changes nothing in the repository.
+        let call_id = ToolCallId("mock-bash-1".to_string());
+        let occurrence_id = OccurrenceId::new();
+        *pending_tool_call = Some(ToolCallIdentity {
+            call_id: call_id.clone(),
+            occurrence_id: occurrence_id.clone(),
+        });
+        let _ = events_tx.send(
+            Event::ToolCallRequested(ToolCallRequest {
+                call_id,
+                tool_id: "bash".to_string(),
+                input: serde_json::json!({
+                    "command": "git stash list && echo agentd-bash-ok"
+                })
+                .into(),
+                occurrence_id,
+            })
+            .into(),
+        );
+        return ControlFlow::Continue(());
+    }
     if lower_text.contains("bash") {
         // Manual test hook for exercising the *real*
         // `bash` approval/execution path (not just the

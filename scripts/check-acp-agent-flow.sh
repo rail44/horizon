@@ -10,6 +10,7 @@
 set -uo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 binary="${1:-$repo_root/target/debug/horizon}"
+case "$binary" in /*) ;; *) binary="$PWD/$binary" ;; esac
 agentd_binary="$(dirname "$binary")/horizon-agentd"
 terminald_binary="$(dirname "$binary")/horizon-terminald"
 mock_server="$repo_root/scripts/mock-openai-provider.py"
@@ -63,6 +64,14 @@ base_url = "http://127.0.0.1:$mock_port/v1"
 api_key_env = "HORIZON_ACP_CHECK_MOCK_KEY"
 EOF
 
+# Horizon (and the agentd it spawns) start in a throwaway repository, so the
+# approval round trip's Git command (`mock-openai-provider.py`'s
+# APPROVAL_COMMAND) resolves its metadata grant there, never in a real
+# checkout.
+fixture_repo="$out/repo"
+mkdir -p "$fixture_repo"
+git -C "$fixture_repo" init --quiet --initial-branch=main . || fail "git init of the fixture repository failed"
+
 python3 "$mock_server" "$mock_port" "$out/mock.log" &
 mock_pid=$!
 for _ in $(seq 1 50); do
@@ -78,7 +87,7 @@ start_app() {
   if [[ -n "$host_runtime_dir" && -n "$wayland_display" ]]; then
     ln -sf "$host_runtime_dir/$wayland_display" "$runtime_dir/$wayland_display"
   fi
-  env -u OPENAI_BASE_URL -u OPENAI_API_KEY \
+  (cd "$fixture_repo" && exec env -u OPENAI_BASE_URL -u OPENAI_API_KEY \
     HORIZON_CONFIG="$config_file" \
     HORIZON_ACP_CHECK_MOCK_KEY="mock" \
     HORIZON_AGENTD_SOCKET="$agentd_socket" \
@@ -87,7 +96,7 @@ start_app() {
     HORIZON_WORKSPACE_STATE="$state_file" \
     HORIZON_AGENT_EVENT_LOG="$events" \
     HORIZON_AGENT_STATE_DB="$out/state.duckdb" \
-    "$binary" >"$log" 2>&1 &
+    "$binary") >"$log" 2>&1 &
   app_pid=$!
   for _ in $(seq 1 100); do
     [[ -S "$control_socket" ]] && return 0
@@ -139,10 +148,13 @@ wait_turn_end "$sid" 0 60
 wait_state has_turn_in_flight false 10
 echo "OK: plain turn streamed and ended (session $sid)"
 
-# 2. an approval round trip through the shell
-cli send "$sid" 'Use the bash tool to run: echo acp-approval-check' >/dev/null
+# 2. an approval round trip through the shell. A sandboxed bash call runs
+# without approval; a Git metadata write is a boundary crossing that asks
+# (GitOperation), in shared and isolated sessions alike.
+cli send "$sid" 'Use the bash tool to run: git stash list && echo acp-approval-check' >/dev/null
 wait_event "$sid" approval_requested 60
 approval="$(ev "$sid" approval_requested | tail -1)"
+jq -e '.event.ApprovalRequested.kind | objects | has("GitOperation")' <<<"$approval" >/dev/null || fail "expected a GitOperation approval: $approval"
 call_id="$(jq -r '.event.ApprovalRequested.call_id' <<<"$approval")"
 occ_id="$(jq -r '.event.ApprovalRequested.occurrence_id' <<<"$approval")"
 wait_state has_pending_approval true 10

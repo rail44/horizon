@@ -33,7 +33,7 @@ pub(crate) use bash::{
 };
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
 pub use completion::{should_fold_completion, BashCompletion, ToolCompletion};
-pub(crate) use fs::{call_escapes_root, out_of_root_refusal};
+pub(crate) use fs::{call_escapes_root, call_writes_git_metadata, out_of_root_refusal};
 // The `task` daemon seam (`docs/agent-explore-design.md`): `pub`
 // because `horizon-agentd` implements it and installs it on every
 // session's `ToolSessionState`, the same way it constructs the network

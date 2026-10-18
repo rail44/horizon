@@ -825,7 +825,17 @@ async fn approve_and_finish(
     text: &str,
 ) -> (SessionId, acp::ApprovalMeta, Vec<Inbound>) {
     let session_id = SessionId::new();
-    open_session(client, session_new(session_id)).await;
+    approve_and_finish_in(client, session_id, session_new(session_id), text).await
+}
+
+/// [`approve_and_finish`] for a session opened with `request`.
+async fn approve_and_finish_in(
+    client: &mut AcpClient,
+    session_id: SessionId,
+    request: v2::NewSessionRequest,
+    text: &str,
+) -> (SessionId, acp::ApprovalMeta, Vec<Inbound>) {
+    open_session(client, request).await;
     prompt(client, session_id, text).await;
 
     let mut collected =
@@ -880,14 +890,30 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
     assert_eq!(replayed.human_decision, Some(acp::HumanDecision::Approved));
 }
 
-/// `bash` runs agentd-side: approving a real `bash` tool call spawns an
-/// actual subprocess in agentd, and the result arrives back as the call's
-/// final update.
+/// A shared (non-isolated) session in a plain checkout, the shape whose
+/// `bash` calls run sandboxed without approval and whose Git metadata
+/// writes still ask.
+fn shared_session_in(session_id: SessionId, cwd: PathBuf) -> v2::NewSessionRequest {
+    new_session_request(session_id, &mock_provider_id().0, None, cwd, false)
+}
+
+/// `bash` runs agentd-side: approving a real `bash` tool call (a Git
+/// metadata write, which asks in every session) spawns an actual
+/// subprocess in agentd, and the result arrives back as the call's final
+/// update.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     let agentd = spawn_agentd();
     let mut client = connect(&agentd.socket_path).await;
-    let (_, approval, collected) = approve_and_finish(&mut client, "please run bash").await;
+    let repo = isolated_session_fixture();
+    let session_id = SessionId::new();
+    let (_, approval, collected) = approve_and_finish_in(
+        &mut client,
+        session_id,
+        shared_session_in(session_id, repo.path().to_path_buf()),
+        "please run a git operation",
+    )
+    .await;
     let (call, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
     assert_eq!(meta.call_id, approval.call_id);
     assert_eq!(meta.tool_id, "bash");
@@ -906,9 +932,14 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     let agentd = spawn_agentd();
     let mut client = connect(&agentd.socket_path).await;
 
+    let repo = isolated_session_fixture();
     let session_id = SessionId::new();
-    open_session(&client, session_new(session_id)).await;
-    prompt(&client, session_id, "please run bash").await;
+    open_session(
+        &client,
+        shared_session_in(session_id, repo.path().to_path_buf()),
+    )
+    .await;
+    prompt(&client, session_id, "please run a git operation").await;
     let mut collected = collect_until(&mut client, |inbound| {
         matches!(inbound, Inbound::Permission(..))
     })

@@ -84,10 +84,10 @@ impl SessionEnvironment<'_> {
         // shared daemon-wide instance -- see `tools::network::
         // SessionNetworkProxy`'s doc comment for the per-session-attribution
         // reasoning) and only when this session could ever actually reach tier
-        // 1 -- the exact same `isolated && sandbox_available` precondition
-        // `policy::classify_call` gates `bash`'s `Contained` classification on,
-        // so a session that could never engage the sandbox never pays for a
-        // proxy it will never use. A bind failure is non-fatal: this session
+        // 1 -- the same `sandbox_available` precondition `policy::classify_input`
+        // gates `bash`'s `Contained` classification on, so a session that could
+        // never engage the sandbox never pays for a proxy it will never use.
+        // A bind failure is non-fatal: this session
         // just falls back to `NetworkPolicy::Disabled` for tier-1 sandboxed
         // `bash`, exactly the pre-leg-4a behavior.
         //
@@ -101,7 +101,7 @@ impl SessionEnvironment<'_> {
         // on top for anything not listed here.
         let domains =
             SessionDomainPolicy::with_allowed(configured_domains(state, workspace_root.as_deref()));
-        let network = if isolated && horizon_sandbox::is_available() {
+        let network = if horizon_sandbox::is_available() {
             match horizon_agent::tools::SessionNetworkProxy::start_with_policy(&domains) {
                 Ok(proxy) => Some(Arc::new(proxy)),
                 Err(error) => {

@@ -381,7 +381,7 @@ fn resolve_git_operation(
         return unstarted_error(
             runtime,
             &request.call_id,
-            "Git operation approval has no isolated workspace root",
+            "Git operation approval has no workspace root",
         );
     };
     match bash::metadata_writable_roots(workspace_root) {

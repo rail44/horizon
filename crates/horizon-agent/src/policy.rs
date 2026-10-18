@@ -16,9 +16,10 @@ use crate::tools::ToolSessionState;
 /// tiers".
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Classification {
-    /// Auto by construction (tier 1): runs without asking. Reversibility
-    /// (an isolated worktree's git diff) and/or containment (the OS
-    /// sandbox) stand in for consent.
+    /// Auto by construction (tier 1): runs without asking. Containment
+    /// stands in for consent: the OS sandbox for `bash`, the tool's own
+    /// workspace-root path check for `fs.write`/`fs.edit`
+    /// (`docs/sandbox-perimeter-design.md`).
     Contained,
     /// Crosses the containment boundary (tier 2 --
     /// `docs/agent-approval-design.md`'s "Judge at the boundary"): the
@@ -29,9 +30,8 @@ pub(crate) enum Classification {
     /// fixture that exercises this classification until a real
     /// boundary-crossing tool exists.
     BoundaryCrossing,
-    /// Always human (tier 3): irreversible/destructive by policy, or a
-    /// contained-eligible tool call whose session isn't isolated / has no
-    /// engaged sandbox available.
+    /// Always human (tier 3): irreversible/destructive by policy, a Git
+    /// metadata write, or a `bash` call on a host with no engaged sandbox.
     AlwaysAsk,
 }
 
@@ -48,43 +48,27 @@ pub(crate) enum BoundaryDisposition {
 /// and `input` are the call being classified. Bash input is inspected only
 /// to identify direct Git commands that may write repository metadata;
 /// anything the small recognizer misses remains subject to the sandbox's
-/// normal denial path. `session_isolated` is whether this call's session runs in a
-/// daemon-created isolated worktree; `sandbox_available` is whether this
-/// host can actually engage `horizon-sandbox`'s containment (checked, not
-/// assumed -- see `horizon_sandbox::is_available`).
+/// normal denial path. `sandbox_available` is whether this host can
+/// actually engage `horizon-sandbox`'s containment (checked, not assumed --
+/// see `horizon_sandbox::is_available`).
 ///
-/// `config.write` always asks, regardless of isolation -- it edits
-/// Horizon's own config file, not anything inside a session's workspace, so
-/// worktree isolation buys it nothing.
-fn classify_input(
-    tool_id: &str,
-    input: &ToolInput,
-    session_isolated: bool,
-    sandbox_available: bool,
-) -> Classification {
+/// `fs.write`/`fs.edit` do not run in the OS sandbox; their confinement is
+/// the tool's own workspace-root path check, so sandbox availability does
+/// not affect them. A target inside the repository's gitdir is decided
+/// before this classification (`plan_prepared_call`).
+///
+/// `config.write` always asks -- it edits Horizon's own config file, not
+/// anything inside a session's workspace.
+fn classify_input(tool_id: &str, input: &ToolInput, sandbox_available: bool) -> Classification {
     match tool_id {
-        "fs.write" | "fs.edit" => {
-            if session_isolated {
-                Classification::Contained
-            } else {
-                Classification::AlwaysAsk
-            }
+        "fs.write" | "fs.edit" => Classification::Contained,
+        "bash" if sandbox_available && !input.requires_metadata_write() => {
+            Classification::Contained
         }
-        "bash" => {
-            if session_isolated && sandbox_available {
-                if input.requires_metadata_write() {
-                    Classification::AlwaysAsk
-                } else {
-                    Classification::Contained
-                }
-            } else {
-                Classification::AlwaysAsk
-            }
-        }
+        "bash" => Classification::AlwaysAsk,
         // Test-only fixture -- see `Classification::BoundaryCrossing`'s doc
-        // comment. Not sensitive to `session_isolated`/`sandbox_available`:
-        // a boundary crossing is defined by running outside the containment
-        // perimeter regardless of this session's own isolation.
+        // comment. Not sensitive to `sandbox_available`: a boundary crossing
+        // is defined by running outside the containment perimeter.
         "web_search" | "web_fetch" | "mock.boundary_crossing" => Classification::BoundaryCrossing,
         // `config.write`, `mock.approval_required`, and anything else this
         // crate ever catalogs as `RequireApproval` in the future: always
@@ -156,10 +140,19 @@ pub(crate) fn plan_prepared_call(
             }
         }
         Some(ToolPermission::RequireApproval) => {
+            if let Some(path) = crate::tools::call_writes_git_metadata(tool_state, &request.input) {
+                return approval(
+                    format!(
+                        "`{}` requested to write `{path}`, which is inside the repository's Git \
+                         metadata directory. Allow this?",
+                        request.tool_id
+                    ),
+                    ApprovalKind::Standard,
+                );
+            }
             match classify_input(
                 &request.tool_id,
                 &request.input,
-                tool_state.is_isolated_worktree(),
                 horizon_sandbox::is_available(),
             ) {
                 Classification::Contained => ToolPlan::Automatic(if request.tool_id == "bash" {
@@ -241,7 +234,6 @@ fn git_operation_approval(
     request: &PreparedCall<'_>,
 ) -> Option<(String, ApprovalKind)> {
     if request.tool_id != "bash"
-        || !tool_state.is_isolated_worktree()
         || !horizon_sandbox::is_available()
         || !request.input.requires_metadata_write()
     {
@@ -287,11 +279,10 @@ pub(crate) fn plan_tool_call(state: &ToolSessionState, request: &ToolCallRequest
 }
 
 #[cfg(test)]
-fn classify_call(id: &str, input: &Value, isolated: bool, sandbox: bool) -> Classification {
+fn classify_call(id: &str, input: &Value, sandbox: bool) -> Classification {
     classify_input(
         id,
         &ToolInput::parse(id, input).unwrap_or(ToolInput::External),
-        isolated,
         sandbox,
     )
 }
@@ -314,28 +305,16 @@ mod tests {
     // --- classify_call: the trust predicate's classification table --------
 
     #[test]
-    fn fs_mutations_are_contained_only_when_isolated() {
+    fn fs_mutations_are_contained_regardless_of_sandbox_availability() {
         let input = serde_json::json!({});
         for tool_id in ["fs.write", "fs.edit"] {
-            assert_eq!(
-                classify_call(tool_id, &input, true, false),
-                Classification::Contained,
-                "{tool_id} should be contained when isolated, regardless of sandbox availability"
-            );
-            assert_eq!(
-                classify_call(tool_id, &input, true, true),
-                Classification::Contained
-            );
-            assert_eq!(
-                classify_call(tool_id, &input, false, false),
-                Classification::AlwaysAsk,
-                "{tool_id} must always-ask when the session isn't isolated"
-            );
-            assert_eq!(
-                classify_call(tool_id, &input, false, true),
-                Classification::AlwaysAsk,
-                "{tool_id} isolation, not sandbox availability, is what fs tier 1 needs"
-            );
+            for sandbox in [false, true] {
+                assert_eq!(
+                    classify_call(tool_id, &input, sandbox),
+                    Classification::Contained,
+                    "{tool_id} is confined by its own root check, not the OS sandbox"
+                );
+            }
         }
     }
 
@@ -358,25 +337,16 @@ mod tests {
     }
 
     #[test]
-    fn bash_is_contained_only_when_isolated_and_sandboxed() {
+    fn bash_is_contained_exactly_when_the_sandbox_is_available() {
         let input = serde_json::json!({ "command": "echo hi" });
         assert_eq!(
-            classify_call("bash", &input, true, true),
+            classify_call("bash", &input, true),
             Classification::Contained
         );
         assert_eq!(
-            classify_call("bash", &input, true, false),
+            classify_call("bash", &input, false),
             Classification::AlwaysAsk,
-            "isolated but no engaged sandbox must never silently degrade to auto-approve"
-        );
-        assert_eq!(
-            classify_call("bash", &input, false, true),
-            Classification::AlwaysAsk,
-            "a sandbox alone (non-isolated session) is not enough for tier 1"
-        );
-        assert_eq!(
-            classify_call("bash", &input, false, false),
-            Classification::AlwaysAsk
+            "no engaged sandbox must never silently degrade to auto-approve"
         );
     }
 
@@ -387,7 +357,6 @@ mod tests {
                 "bash",
                 &serde_json::json!({ "command": "git add src/lib.rs && git commit -m change" }),
                 true,
-                true,
             ),
             Classification::AlwaysAsk
         );
@@ -396,22 +365,19 @@ mod tests {
                 "bash",
                 &serde_json::json!({ "command": "git status --short && git diff --stat" }),
                 true,
-                true,
             ),
             Classification::Contained
         );
     }
 
     #[test]
-    fn config_write_always_asks_regardless_of_isolation_or_sandbox() {
+    fn config_write_always_asks_regardless_of_sandbox() {
         let input = serde_json::json!({ "content": "" });
-        for session_isolated in [false, true] {
-            for sandbox_available in [false, true] {
-                assert_eq!(
-                    classify_call("config.write", &input, session_isolated, sandbox_available),
-                    Classification::AlwaysAsk
-                );
-            }
+        for sandbox_available in [false, true] {
+            assert_eq!(
+                classify_call("config.write", &input, sandbox_available),
+                Classification::AlwaysAsk
+            );
         }
     }
 
@@ -419,11 +385,11 @@ mod tests {
     fn unknown_and_test_tool_ids_default_to_always_ask() {
         let input = serde_json::json!({});
         assert_eq!(
-            classify_call("mock.approval_required", &input, true, true),
+            classify_call("mock.approval_required", &input, true),
             Classification::AlwaysAsk
         );
         assert_eq!(
-            classify_call("some.future.tool", &input, true, true),
+            classify_call("some.future.tool", &input, true),
             Classification::AlwaysAsk
         );
     }
@@ -431,18 +397,11 @@ mod tests {
     #[test]
     fn mock_boundary_crossing_is_always_a_boundary_crossing() {
         let input = serde_json::json!({});
-        for session_isolated in [false, true] {
-            for sandbox_available in [false, true] {
-                assert_eq!(
-                    classify_call(
-                        "mock.boundary_crossing",
-                        &input,
-                        session_isolated,
-                        sandbox_available
-                    ),
-                    Classification::BoundaryCrossing
-                );
-            }
+        for sandbox_available in [false, true] {
+            assert_eq!(
+                classify_call("mock.boundary_crossing", &input, sandbox_available),
+                Classification::BoundaryCrossing
+            );
         }
     }
 
@@ -450,7 +409,7 @@ mod tests {
     fn web_tools_are_boundary_crossings_with_per_call_dispositions() {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
         assert_eq!(
-            classify_call("web_search", &serde_json::json!({}), false, false),
+            classify_call("web_search", &serde_json::json!({}), false),
             Classification::BoundaryCrossing
         );
         assert_eq!(
@@ -551,10 +510,8 @@ mod tests {
     }
 
     #[test]
-    fn contained_fs_write_in_an_isolated_session_gets_no_approval_prompt() {
-        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
-            .with_isolated_worktree(true)
-            .build();
+    fn fs_write_in_a_non_isolated_session_gets_no_approval_prompt() {
+        let tool_state = ToolSessionState::new(std::env::temp_dir());
         let events = policy_events(
             &requested_with_input(
                 "fs.write",
@@ -569,29 +526,91 @@ mod tests {
             1,
             "only the original event, no approval prompt: {events:?}"
         );
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, Event::ApprovalRequested(_))));
     }
 
     #[test]
-    fn non_isolated_fs_write_still_gets_the_ordinary_approval_prompt() {
-        let tool_state = ToolSessionState::new(std::env::temp_dir());
-        let events = policy_events(
-            &requested_with_input(
-                "fs.write",
-                serde_json::json!({"path": "/tmp/example", "content": "hello"}),
-            ),
-            &tool_state,
-            SessionId::new(),
-        );
+    fn fs_mutations_inside_the_plain_checkouts_gitdir_are_not_automatic() {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root_path.join(".git").join("hooks")).unwrap();
+        std::fs::write(root_path.join("tracked.txt"), "before").unwrap();
+        let tool_state = ToolSessionState::new(root_path.clone());
+        let hook = root_path.join(".git/hooks/pre-commit");
+        let tracked = root_path.join("tracked.txt");
 
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, Event::ApprovalRequested(_))));
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, Event::StateChanged(SessionState::WaitingForApproval))));
+        for (tool_id, input) in [
+            (
+                "fs.write",
+                serde_json::json!({"path": hook, "content": "#!/bin/sh"}),
+            ),
+            (
+                "fs.edit",
+                serde_json::json!({"edits": [
+                    {"path": tracked, "old_string": "before", "new_string": "after"},
+                    {"path": root_path.join(".git/config"), "old_string": "a", "new_string": "b"},
+                ]}),
+            ),
+        ] {
+            let plan = plan_tool_call(
+                &tool_state,
+                &ToolCallRequest {
+                    call_id: crate::contract::ToolCallId("call-gitdir".into()),
+                    tool_id: tool_id.into(),
+                    input: input.into(),
+                    occurrence_id: crate::contract::OccurrenceId("call-gitdir".into()),
+                },
+            );
+            let ToolPlan::Approval(approval) = plan else {
+                panic!("{tool_id} into the gitdir must ask, got {plan:?}");
+            };
+            assert_eq!(approval.kind, ApprovalKind::Standard);
+            assert!(
+                approval.reason.contains("Git metadata directory"),
+                "{}",
+                approval.reason
+            );
+        }
+
+        let plan = plan_tool_call(
+            &tool_state,
+            &ToolCallRequest {
+                call_id: crate::contract::ToolCallId("call-tracked".into()),
+                tool_id: "fs.write".into(),
+                input: serde_json::json!({"path": tracked, "content": "after"}).into(),
+                occurrence_id: crate::contract::OccurrenceId("call-tracked".into()),
+            },
+        );
+        assert_eq!(
+            plan,
+            ToolPlan::Automatic(AutomaticTool::ContainedFilesystem)
+        );
+    }
+
+    #[test]
+    fn bash_without_an_engaged_sandbox_falls_to_the_host_execution_approval() {
+        if horizon_sandbox::is_available() {
+            // `plan_prepared_call` reads the live host's sandbox; the pure
+            // half of this fallback is `bash_is_contained_exactly_when_the_
+            // sandbox_is_available`.
+            return;
+        }
+        let tool_state = ToolSessionState::new(std::env::temp_dir());
+        let plan = plan_tool_call(
+            &tool_state,
+            &ToolCallRequest {
+                call_id: crate::contract::ToolCallId("call-host".into()),
+                tool_id: "bash".into(),
+                input: serde_json::json!({"command": "echo hi"}).into(),
+                occurrence_id: crate::contract::OccurrenceId("call-host".into()),
+            },
+        );
+        let ToolPlan::Approval(approval) = plan else {
+            panic!("bash without a sandbox must ask, got {plan:?}");
+        };
+        assert_eq!(approval.kind, ApprovalKind::Standard);
+        assert!(approval
+            .reason
+            .contains("host process's ordinary authority"));
     }
 
     #[test]

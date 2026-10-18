@@ -94,7 +94,7 @@ fn execute_automatic(
         AutomaticTool::Synchronous => execute_synchronous(host, tool_state, session_id, request),
         AutomaticTool::ContainedFilesystem => {
             let mut output = crate::tools::execute_approved(tool_state, &request.input);
-            annotate_auto_approval(&mut output, "contained", "isolated worktree session");
+            annotate_auto_approval(&mut output, "contained", "confined to the workspace root");
             output.into()
         }
         AutomaticTool::Web | AutomaticTool::SandboxedBash => {
@@ -131,7 +131,11 @@ fn execute_automatic(
                 let command = &input.command;
                 if let Some(prior) = bash::find_reusable_output(&live.frame(), command) {
                     let mut output = bash::guidance_output(command, &prior);
-                    annotate_auto_approval(&mut output, "contained", "isolated worktree session");
+                    annotate_auto_approval(
+                        &mut output,
+                        "contained",
+                        "engaged sandbox confined to the workspace root",
+                    );
                     return started.complete(live, request.identity().finish(output), Vec::new());
                 }
             }

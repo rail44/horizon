@@ -163,7 +163,7 @@ impl SandboxedApprovalOrigin {
             SandboxedApprovalOrigin::Tier1Auto => annotate_auto_approval(
                 output,
                 "contained",
-                "isolated worktree session with an engaged sandbox",
+                "engaged sandbox confined to the workspace root",
             ),
             SandboxedApprovalOrigin::ManualDomainRetry { domains } => {
                 annotate_domain_approval(output, domains)

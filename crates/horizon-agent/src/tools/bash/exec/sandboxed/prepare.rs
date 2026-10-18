@@ -75,6 +75,7 @@ pub(super) fn prepare(
     }
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![workspace_root.to_path_buf()],
+        writable_root_exclusions: git_metadata_exclusions(workspace_root),
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: network_policy,
     };
@@ -94,6 +95,21 @@ pub(super) fn prepare(
         command: cmd,
         policy,
         grants: effective_grants,
+    }
+}
+
+/// The workspace's own `.git` entry, which stays read-only inside the
+/// sandbox: a plain checkout's gitdir, or a linked worktree's pointer file
+/// (whose gitdir is already outside the root). An approved Git metadata
+/// grant on the gitdir lifts the exclusion for that run and carries its own
+/// `hooks`/`config` exclusions (`tools::bash::git`). Empty when the root has
+/// no `.git`.
+fn git_metadata_exclusions(workspace_root: &Path) -> Vec<PathBuf> {
+    let dot_git = workspace_root.join(".git");
+    if std::fs::symlink_metadata(&dot_git).is_ok() {
+        vec![dot_git]
+    } else {
+        Vec::new()
     }
 }
 

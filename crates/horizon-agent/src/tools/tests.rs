@@ -2364,7 +2364,7 @@ fn fs_edit_auto_executes_in_an_isolated_session() {
 }
 
 #[test]
-fn fs_write_still_requires_approval_when_the_session_is_not_isolated() {
+fn fs_write_auto_executes_in_a_non_isolated_session() {
     let root = temp_workspace("tier1-fs-write-not-isolated");
     let tool_state = ToolSessionState::new(root.clone()); // isolation defaults to false
     let target = root.join("new.txt");
@@ -2372,6 +2372,60 @@ fn fs_write_still_requires_approval_when_the_session_is_not_isolated() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "hi" }).into(),
+        occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
+    };
+
+    let output = tool_output(execute_agent_tool(
+        &StubHostTools,
+        &tool_state,
+        SessionId::new(),
+        &request,
+    ));
+    assert!(!is_error(&output), "{output:?}");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "hi");
+    assert_eq!(output["auto_approved"], true);
+    assert_eq!(output["policy_tier"], "contained");
+}
+
+#[test]
+fn fs_edit_auto_executes_in_a_non_isolated_session() {
+    let root = temp_workspace("tier1-fs-edit-not-isolated");
+    let target = root.join("file.txt");
+    fs::write(&target, "before").unwrap();
+    let tool_state = ToolSessionState::new(root); // isolation defaults to false
+    sync_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": target.display().to_string() }),
+    )
+    .expect("fs.read is auto-executed");
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "fs.edit".to_string(),
+        input: one_edit(&target, "before", "after").into(),
+        occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
+    };
+
+    let output = tool_output(execute_agent_tool(
+        &StubHostTools,
+        &tool_state,
+        SessionId::new(),
+        &request,
+    ));
+    assert!(!is_error(&output), "{output:?}");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "after");
+}
+
+#[test]
+fn fs_write_into_the_gitdir_waits_for_approval_and_writes_nothing() {
+    let root = temp_workspace("fs-write-gitdir");
+    fs::create_dir_all(root.join(".git").join("hooks")).unwrap();
+    let tool_state = ToolSessionState::new(root.clone());
+    let target = root.join(".git").join("hooks").join("pre-commit");
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-1".to_string()),
+        tool_id: "fs.write".to_string(),
+        input: json!({ "path": target.display().to_string(), "content": "#!/bin/sh" }).into(),
         occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
@@ -2665,26 +2719,228 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
 // test. `execute_agent_tool`/`Execution` are re-exported `pub` narrowly so
 // that test can exercise the production boundary.
 
-/// Never-silently-degrade: even on a host where the sandbox genuinely
-/// engages, a *non-isolated* session's `bash` call still goes through the
-/// ordinary approval gate -- isolation is load-bearing, not cosmetic. The
-/// complementary "isolated but no engaged sandbox" case is
-/// `policy::tests::bash_is_contained_only_when_isolated_and_sandboxed`,
-/// exercised directly against the pure predicate since an engaged sandbox
-/// cannot also model an unavailable backend in the same integration test.
+/// A session spawned in a shared directory (not an isolated worktree)
+/// runs `bash` sandboxed and without approval, the same as an isolated one
+/// (`docs/sandbox-perimeter-design.md`).
 #[test]
-fn bash_requires_approval_when_the_session_is_not_isolated() {
+fn bash_auto_executes_sandboxed_in_a_non_isolated_session() {
     let root = temp_workspace("tier1-bash-not-isolated");
     let tool_state = ToolSessionState::new(root); // isolation defaults to false
+    let session_id = SessionId::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(
+        session_id,
+        tool_state.clone(),
+        LiveState::new(),
+        bash_results_tx,
+    );
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo hi" }).into(),
-        occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
+        occurrence_id: crate::contract::OccurrenceId::new(),
     };
 
-    let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
-    assert!(matches!(execution, Execution::AwaitApproval(_)));
+    let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
+    assert!(
+        matches!(
+            execution,
+            Execution::Applied(crate::tools::ToolUpdate::Started { .. })
+        ),
+        "expected an automatic start, got {execution:?}"
+    );
+    let result = expect_finished(
+        bash_results_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the sandboxed bash call should finish"),
+    );
+    assert_eq!(result.output["output"], "hi\n");
+    assert_eq!(result.output["sandboxed"], true, "{:?}", result.output);
+    assert_eq!(result.output["auto_approved"], true);
+
+    unregister_session_runtime(session_id);
+}
+
+/// A plain checkout keeps `.git/` inside the workspace root. A tier-1
+/// sandboxed command can still write the working tree, but every write
+/// under `.git/` is refused by the sandbox.
+#[cfg(target_os = "linux")]
+#[test]
+fn tier1_sandboxed_bash_cannot_write_the_plain_checkouts_gitdir() {
+    assert!(
+        horizon_sandbox::is_available(),
+        "the Linux gitdir containment test requires an engaged sandbox"
+    );
+    let root = temp_workspace("tier1-bash-plain-gitdir");
+    run_fixture_git(&root, &["init", "--initial-branch=main", "."]);
+    let git_dir = root.join(".git");
+    let config = git_dir.join("config");
+    let original_config = fs::read_to_string(&config).unwrap();
+    let hook = git_dir.join("hooks").join("pre-commit");
+    let object = git_dir.join("objects").join("planted");
+    let source = root.join("source.txt");
+
+    let tool_state = ToolSessionState::new(root.clone());
+    let session_id = SessionId::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(
+        session_id,
+        tool_state.clone(),
+        LiveState::new(),
+        bash_results_tx,
+    );
+    let command = format!(
+        "printf ok > {}; printf evil >> {}; printf '#!/bin/sh' > {}; printf x > {}; true",
+        source.display(),
+        config.display(),
+        hook.display(),
+        object.display()
+    );
+    let request = ToolCallRequest {
+        call_id: ToolCallId("call-gitdir".to_string()),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": command }).into(),
+        occurrence_id: crate::contract::OccurrenceId::new(),
+    };
+
+    assert!(matches!(
+        execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
+        Execution::Applied(crate::tools::ToolUpdate::Started { .. })
+    ));
+    let completion = bash_results_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the sandboxed bash call should finish");
+    let result = match completion {
+        BashCompletion::Finished(result) | BashCompletion::FilesystemDenied { result, .. } => {
+            result
+        }
+        other => panic!("expected Finished or FilesystemDenied, got {other:?}"),
+    };
+    assert_eq!(result.output["sandboxed"], true, "{:?}", result.output);
+    assert_eq!(fs::read_to_string(&source).unwrap(), "ok");
+    assert_eq!(fs::read_to_string(&config).unwrap(), original_config);
+    assert!(
+        !hook.exists(),
+        "a hook must never be planted from the sandbox"
+    );
+    assert!(!object.exists(), "no write under .git/ is contained");
+
+    unregister_session_runtime(session_id);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// `git commit` in a plain checkout of a non-isolated session asks for the
+/// `GitOperation` grant on `.git/`, and the approved run writes objects and
+/// refs while `hooks/` and `config` stay excluded (board #38).
+#[cfg(target_os = "linux")]
+#[test]
+fn approved_git_commit_in_a_plain_checkout_grants_the_gitdir_without_hooks_or_config() {
+    assert!(
+        horizon_sandbox::is_available(),
+        "the Linux Git containment test requires an engaged sandbox"
+    );
+    let root = temp_workspace("git-operation-plain-checkout");
+    run_fixture_git(&root, &["init", "--initial-branch=main", "."]);
+    run_fixture_git(&root, &["config", "user.name", "Horizon Test"]);
+    run_fixture_git(
+        &root,
+        &["config", "user.email", "horizon-test@example.invalid"],
+    );
+    run_fixture_git(&root, &["config", "core.hooksPath", "/dev/null"]);
+    fs::write(root.join("change.txt"), "plain checkout change\n").unwrap();
+    let git_dir = root.join(".git").canonicalize().unwrap();
+    let config_path = git_dir.join("config");
+    let original_config = fs::read_to_string(&config_path).unwrap();
+    let hook_path = git_dir.join("hooks").join("pre-commit");
+
+    let tool_state = ToolSessionState::new(root.clone()); // isolation defaults to false
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(
+        session_id,
+        tool_state.clone(),
+        live_state.clone(),
+        bash_results_tx,
+    );
+    let command = format!(
+        "echo evil >> {}; echo '#!/bin/sh' > {}; git add change.txt; \
+         git commit -m horizon-plain-checkout",
+        config_path.display(),
+        hook_path.display()
+    );
+    let call_id = ToolCallId("plain-checkout-commit".to_string());
+    let request = ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": command }).into(),
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
+    };
+
+    assert!(matches!(
+        execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
+        Execution::AwaitApproval(_)
+    ));
+    let events = crate::tools::test_support::policy_events(
+        &Event::ToolCallRequested(request.clone()),
+        &tool_state,
+        session_id,
+    );
+    let approval = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ApprovalRequested(approval) => Some(approval.clone()),
+            _ => None,
+        })
+        .expect("metadata-writing Git must request its command-scoped grant");
+    let ApprovalKind::GitOperation { writable_roots } = &approval.kind else {
+        panic!(
+            "a plain checkout's git commit must derive a GitOperation candidate, got {:?}",
+            approval.kind
+        );
+    };
+    assert_eq!(writable_roots, &vec![git_dir.clone()]);
+    assert!(
+        approval.reason.contains(&git_dir.display().to_string()),
+        "{}",
+        approval.reason
+    );
+    let grants = crate::tools::bash::validated_metadata_grants(&root, writable_roots)
+        .expect("the displayed roots revalidate");
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0].path, git_dir);
+    assert_eq!(
+        grants[0].excluded_subpaths,
+        vec![PathBuf::from("hooks"), PathBuf::from("config")]
+    );
+
+    let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
+    let outcome =
+        resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
+    assert!(matches!(
+        outcome,
+        ApprovalOutcome::Applied(ToolUpdate::Started { .. })
+    ));
+    let result = match bash_results_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("sandboxed Git completion")
+    {
+        BashCompletion::Finished(result) | BashCompletion::FilesystemDenied { result, .. } => {
+            result
+        }
+        other => panic!("expected Finished or FilesystemDenied, got {other:?}"),
+    };
+    assert_eq!(result.output["sandboxed"], true, "{:?}", result.output);
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), original_config);
+    assert!(!hook_path.exists());
+    let log = run_fixture_git(&root, &["log", "-1", "--format=%s"]);
+    assert_eq!(
+        String::from_utf8_lossy(&log.stdout).trim(),
+        "horizon-plain-checkout"
+    );
+
+    unregister_session_runtime(session_id);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[cfg(target_os = "linux")]

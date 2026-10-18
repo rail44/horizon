@@ -5,7 +5,7 @@ Usage: mock-openai-provider.py <port> [<log path>]
 
 Replies are keyed on the request's messages:
   * the last message has role "tool"            -> text echoing the tool output
-  * the last user message mentions "bash tool"  -> one tool call: bash {"command": "echo acp-approval-check"}
+  * the last user message mentions "bash tool"  -> one tool call: bash {"command": APPROVAL_COMMAND}
   * otherwise                                   -> the text "ACP-OK"
 
 Streams SSE chunks when the request sets "stream": true, plain JSON otherwise.
@@ -21,6 +21,9 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18081
 MODEL = "mock-model"
 REPLY_DELAY = float(os.environ.get("HORIZON_ACP_CHECK_REPLY_DELAY", "1.5"))
 LOG = open(sys.argv[2], "a") if len(sys.argv) > 2 else sys.stderr
+# A Git subcommand outside the read-only list is a metadata write, so this
+# call needs a GitOperation approval even though `stash list` only reads.
+APPROVAL_COMMAND = "git stash list && echo acp-approval-check"
 
 
 def log(msg):
@@ -88,7 +91,7 @@ class Handler(BaseHTTPRequestHandler):
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
 
         if kind == "tool":
-            function = {"name": "bash", "arguments": json.dumps({"command": "echo acp-approval-check"})}
+            function = {"name": "bash", "arguments": json.dumps({"command": APPROVAL_COMMAND})}
             tool_call = {"index": 0, "id": "call_mock_1", "type": "function", "function": function}
             chunks = [
                 {"choices": [{"index": 0, "delta": {"role": "assistant", "content": None, "tool_calls": [tool_call]}, "finish_reason": None}]},

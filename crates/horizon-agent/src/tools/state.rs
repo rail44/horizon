@@ -137,15 +137,12 @@ struct Inner {
     config_path: Option<PathBuf>,
     /// Whether `workspace_root` is an isolated worktree the daemon itself
     /// created for this session (`docs/session-relationship-design.md`),
-    /// as opposed to a plain shared directory -- the per-call trust
-    /// predicate's isolation input (`docs/agent-approval-design.md`'s tier
-    /// 1: `policy::classify_call`). Deliberately *not* inferred from
-    /// `workspace_root`'s path shape here (e.g. "lives under
-    /// `.horizon/worktrees/`") -- the daemon already knows the real
-    /// outcome of its own worktree creation (see `horizon-agentd`'s
-    /// `resolve_and_create_isolated_worktree`), so this is threaded in
-    /// after construction through [`ToolSessionBuilder`], rather than re-derived. `false` everywhere
-    /// except the one production call site.
+    /// as opposed to a plain shared directory. Recorded for the daemon's
+    /// persisted session context; the per-call trust predicate
+    /// (`policy::classify_input`) does not read it
+    /// (`docs/sandbox-perimeter-design.md`). Threaded in after construction
+    /// through [`ToolSessionBuilder`]; `false` everywhere except the one
+    /// production call site.
     isolated_worktree: bool,
     /// Whether this session has no client that could answer an approval
     /// prompt: the explore role's sessions (`task` children and
@@ -162,7 +159,7 @@ struct Inner {
     /// design.md`'s "Staging" leg 4b -- `tools::network::
     /// SessionNetworkProxy`), if one was started for it. `None` means
     /// either this session isn't eligible for tier-1 sandboxed `bash` at
-    /// all (not isolated, or no engaged sandbox), the proxy failed to bind,
+    /// all (no engaged sandbox), the proxy failed to bind,
     /// or this `ToolSessionState` is one of this crate's own test
     /// constructions -- either way, `tools::execution::execute_automatic`
     /// falls back to `NetworkPolicy::Disabled`, exactly the pre-leg-4a
@@ -172,8 +169,7 @@ struct Inner {
     /// drain denied hosts) the same way `bash_cwd` already crosses that
     /// boundary. Installed through [`ToolSessionBuilder`]: the one production
     /// call site (`horizon-agentd`'s `session::run_session`) is the only
-    /// place that knows whether this session is isolated with an engaged
-    /// sandbox, the precondition for starting one at all.
+    /// place that starts one, and only when the sandbox is engaged.
     network: Option<Arc<SessionNetworkProxy>>,
     /// Loopback TCP endpoints this session's sandbox may connect to
     /// directly (e.g. sccache on `127.0.0.1:4226`), from the project's
@@ -268,14 +264,6 @@ impl ToolSessionState {
     #[cfg(test)]
     pub(crate) fn without_root() -> Self {
         Self::with_root(None, AgentToolsConfig::default(), RecallContext::default())
-    }
-
-    /// Whether this session's `workspace_root` is a daemon-created isolated
-    /// worktree -- see [`Inner::isolated_worktree`]'s doc comment. `false`
-    /// for every session that isn't (including one with no workspace root
-    /// at all).
-    pub(crate) fn is_isolated_worktree(&self) -> bool {
-        self.inner.isolated_worktree
     }
 
     /// Whether an approval prompt raised for this session would reach
