@@ -36,21 +36,20 @@ research doc).
 
 ## The three tiers
 
-1. **Auto by construction.** Inside a session's isolated worktree
-   (`docs/session-relationship-design.md` — origin-defaulted isolation
-   at spawn), `fs.write`/`fs.edit` run without approval: every change
-   is a git diff, reviewable and revertible, and the receipt transcript
-   shows what happened. (`fs.write`/`fs.edit` are already confined to
-   `workspace_root` by `tools/state.rs`; isolation makes that root a
-   disposable copy.) `bash` runs without approval when the OS sandbox
-   below contains it. Reversibility + containment + visibility replace
-   consent. The isolation predicate and authoritative root are persisted in
-   each event-log record; a daemon restart validates and re-adopts the same
-   linked worktree before restoring tier-1 eligibility, and refuses an
-   inconsistent isolated session rather than resuming it uncontained.
+1. **Auto by construction.** In every session, `bash` runs without
+   approval inside the OS sandbox below, and `fs.write`/`fs.edit` run
+   without approval within `workspace_root` (their confinement is the
+   tools' own path check in `tools/state.rs`). The sandbox's writable
+   range is the workspace root minus its `.git` entry: a plain checkout's
+   gitdir stays read-only, and a linked worktree's gitdir is already
+   outside the root. Containment + visibility (the receipt transcript)
+   replace consent. Whether the session was spawned in an isolated
+   worktree does not enter the classification; see
+   `docs/sandbox-perimeter-design.md`.
 2. **Judge at the boundary.** Actions that cross the containment
-   boundary — network egress beyond the allowlist, future MCP/external
-   tools, outside-worktree operations — go to a two-stage model
+   boundary — Git metadata writes (`GitOperation`), `fs` reads outside
+   the root, `fs` writes inside its `.git`, network egress beyond the
+   allowlist, future MCP/external tools — go to a two-stage model
    classifier that either auto-approves or escalates to the human. The
    judge narrows what reaches the human; it never widens what the
    rules and sandbox would deny (the field-consensus asymmetry).
@@ -60,8 +59,10 @@ research doc).
    2026-07-19 consultation; see the Judge design section for why the
    judge subsumes it and what replaces the concerns it bundled.)
 
-Non-isolated sessions (explicit opt-out of worktree isolation, running
-in the user's real cwd) keep today's per-action gate unchanged.
+On a host where `horizon_sandbox::is_available()` is false, `bash` is
+`AlwaysAsk` and an approved call runs once with the host process's
+authority (`approval_scope: host_execution_once`); this is the only path
+to host execution.
 
 ## Sandbox architecture
 
@@ -466,9 +467,11 @@ product-owned API. Decisions:
   This predicate is shared infrastructure with the sandbox layer
   (which defines what "contained" means).
 - **Classification is a structural predicate, not a tool allowlist**
-  (2026-07-19 consultation): `classify_call` returns Contained only when
-  the call runs *inside* the containment perimeter (an isolated
-  session's sandboxed `bash`, an in-worktree `fs` op). Every tool that
+  (2026-07-19 consultation): `classify_input` returns Contained only when
+  the call runs *inside* the containment perimeter (sandboxed `bash` that
+  writes no Git metadata, an `fs.write`/`fs.edit` inside the workspace
+  root and outside its `.git`), independent of session isolation
+  (`docs/sandbox-perimeter-design.md`). Every tool that
   runs in the host agent/daemon process outside that perimeter — MCP
   tools and any future non-sandboxed tool — is a boundary crossing *by
   construction* and is the judge's canonical case, not an afterthought;

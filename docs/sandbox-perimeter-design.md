@@ -1,41 +1,43 @@
 # Containment Perimeter and the Worktree Tool — Design
 
-Status: decided on board #65 (2026-10-18), not yet implemented. This
-document describes the current design, the target design, and the code
-the change touches. The decisions themselves and the measurements that
-motivated them are recorded on board #65; this page does not restate
-them as policy.
+Status: decided on board #65 (2026-10-18); slice 1 implemented (see
+"Staging"). This document describes the current design, the target
+design, and the code the change touches. The decisions themselves and
+the measurements that motivated them are recorded on board #65; this
+page does not restate them as policy.
 
 ## Summary
 
-Today a `bash` or `fs.write`/`fs.edit` call is auto-approved only inside
-a session that was *spawned* isolated (its own worktree) and only when
-the OS sandbox is available. Every other session asks a human for each
-call, and an approved `bash` call then runs **outside** the sandbox with
-the host process's authority.
+With slice 1 in place, the sandbox is the perimeter and isolation is no
+longer a policy input: `bash` runs sandboxed and automatic in every
+session when the OS sandbox is available, `fs.write`/`fs.edit` are
+automatic inside the workspace root, and approvals exist only for
+crossings of the containment boundary (git metadata, paths outside the
+root, network). Host execution remains only as the fallback on a host
+without a working sandbox.
 
-The target design makes the sandbox the perimeter and drops isolation
-from the policy inputs: there is one session kind, `bash` always runs
-sandboxed, and approvals exist only for crossings of the containment
-boundary (git metadata, paths outside the root, network). A session that
-wants a disposable copy of the repository asks for one with a tool,
+The remaining target is one session kind: a session that wants a
+disposable copy of the repository asks for one with a tool,
 `worktree.enter`, instead of being spawned as a different kind of
 session.
 
-## Current design (as of 2026-10-18)
+## Current design
 
 - **Classification** (`crates/horizon-agent/src/policy.rs`,
-  `classify_input`): `bash` is `Contained` only when
-  `session_isolated && sandbox_available` and the command writes no git
-  metadata; `fs.write`/`fs.edit` are `Contained` only when
-  `session_isolated`. Everything else is `AlwaysAsk`.
-- **The `AlwaysAsk` outcome for `bash`** is a `Standard` approval whose
-  effect is one host-authority run: the result records
-  `sandboxed: false`, `approval_scope: host_execution_once`.
+  `classify_input`): the table under "One session kind, sandbox as the
+  perimeter" below. An `fs.write`/`fs.edit` target inside the workspace
+  root's `.git` is not automatic: `plan_prepared_call` raises a
+  `Standard` approval for it before classification.
+- **The `AlwaysAsk` outcome for `bash` without a sandbox** is a
+  `Standard` approval whose effect is one host-authority run: the result
+  records `sandboxed: false`, `approval_scope: host_execution_once`.
 - **Sandbox policy** (`tools/bash/exec/sandboxed/prepare.rs`):
-  `writable_roots = [workspace_root]`, `ReadableScope::Full`, network
-  through the session proxy or disabled, plus the session's filesystem
-  grants (`[grants.project]` trees, judge/human-approved grants).
+  `writable_roots = [workspace_root]` with
+  `writable_root_exclusions = [workspace_root/.git]` when that entry
+  exists, `ReadableScope::Full`, network through the session proxy
+  (started for every session when the sandbox is available) or disabled,
+  plus the session's filesystem grants (`[grants.project]` trees,
+  judge/human-approved grants).
 - **Isolation is a spawn-time attribute**
   (`docs/session-relationship-design.md`, decision 3): palette origin
   defaults to shared, CLI origin defaults to isolated, with an explicit
@@ -45,13 +47,20 @@ session.
   `session_context.isolated_worktree`; restore re-adopts the worktree
   (`session/resume.rs`, `session/resume/environment.rs`) before tier-1
   eligibility returns.
-- **Why the gitdir boundary holds today only for isolated sessions**: a
-  linked worktree's gitdir lives under the main checkout's
-  `.git/worktrees/<id>`, outside the worktree's writable root, so
-  `git commit` and friends need the `GitOperation` approval
-  (`docs/containment-denial-narrow-grants-design.md`). A plain checkout
-  has `.git/` *inside* its root; under the current policy a sandboxed
-  command there could write hooks and config.
+- **The gitdir boundary**: a linked worktree's gitdir lives under the
+  main checkout's `.git/worktrees/<id>`, outside the worktree's writable
+  root; a plain checkout's `.git/` is inside its root and excluded through
+  `writable_root_exclusions`. Either way `git commit` and friends need the
+  `GitOperation` approval
+  (`docs/containment-denial-narrow-grants-design.md`), whose grant on the
+  gitdir lifts the exclusion for that run and keeps `hooks/` and `config`
+  excluded.
+- **Enforcement of the exclusion** is the same as for a grant's
+  `excluded_subpaths`: on Linux the seccomp supervisor denies write opens
+  (`openat`/`openat2`) beneath the excluded path; Landlock still allows
+  the root as a whole, so calls the supervisor does not mediate (`rename`,
+  `unlink`, `mkdir`, `link`, `symlink`) are not refused there. On macOS
+  the exclusion is advisory.
 
 ## Target design
 
@@ -81,15 +90,12 @@ repository's gitdir. For a linked worktree this is already the layout
 (the gitdir is outside the root). For a plain checkout the policy must
 exclude `.git/` explicitly.
 
-Mechanism: `horizon_sandbox::FilesystemGrant` already carries
-`excluded_subpaths` (enforced by the seccomp supervisor on Linux —
-`crates/horizon-sandbox/src/linux/mod.rs`; advisory on macOS, see
-`policy.rs`). `SandboxPolicy.writable_roots` has no exclusion list. Two
-implementation shapes fit: express the root itself as a `DirectoryTree`
-grant with `excluded_subpaths: [".git"]`, or add an exclusion list to
-`SandboxPolicy`'s roots. The second keeps "root" and "grant" distinct in
-evidence and denial reports and is the lean here; the choice is an
-implementation decision.
+Mechanism: `SandboxPolicy.writable_root_exclusions`, a list of absolute
+paths inside the writable roots, enforced like
+`FilesystemGrant.excluded_subpaths` (the seccomp supervisor on Linux —
+`crates/horizon-sandbox/src/linux/mod.rs`; advisory on macOS). A
+`ReadWrite` `DirectoryTree` grant at or above an excluded path lifts that
+exclusion for the run; the grant's own `excluded_subpaths` stay absolute.
 
 Git metadata writes keep the existing `GitOperation` path.
 `tools/bash/git.rs::metadata_writable_roots` already handles a plain
@@ -183,6 +189,8 @@ Three slices, each landing on its own:
 3. **Spawn surface removal.** `isolate` leaves the ACP meta, CLI,
    control plane, shell, and chooser; the wire version bumps; docs and
    the dogfood skill are updated.
+
+Status: slice 1 landed 2026-10-18.
 
 Slice 1 is independent and smallest. Slice 3 is last because it bumps
 the wire and retires the spawn-time isolation that delegation still uses

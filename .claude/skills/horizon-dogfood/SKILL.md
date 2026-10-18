@@ -22,9 +22,10 @@ happens, and report friction/bugs with evidence.
 **Spawn.** `horizon new-agent --prompt "<prompt>"` creates an agent
 session and sends the prompt. CLI-origin spawns default to an
 **isolated git worktree** (`.horizon/worktrees/<slug>`, branch
-`horizon/<slug>`) — this is exactly what exercises tier-1
-auto-approval. Add `--share` for the non-isolated control case
-(per-action approval, unchanged behavior), `--split [<session-id>]`
+`horizon/<slug>`). Add `--share` to run in the shared checkout instead;
+tier-1 auto-approval applies the same way there (sandboxed `bash`,
+in-root `fs.write`/`fs.edit`), with `.git/` read-only to the sandbox
+(`docs/sandbox-perimeter-design.md`). `--split [<session-id>]`
 to place it in a split (bare `--split` splits off the pane you're
 running in; pass a session-id to split off a different pane) /
 `--active` to activate the new pane, `new-config-agent` for the
@@ -66,16 +67,21 @@ aborts. **Read the pending call's
 machine.** Never approve an outside-worktree write or a network-shaped
 command unless the owner asked for exactly that test.
 
-**Verify tier 1** (isolated session): `fs.write`/`fs.edit` and
-worktree-only `bash` must produce **no** `approval_requested` at all,
-and their `tool_call_finished.output` must carry
-`auto_approved: true`, `policy_tier: "contained"` (bash also
-`sandboxed: true`). A boundary-crossing bash (outside-worktree write,
-network) must first fail inside the sandbox and resurface as a fresh
-`tool_call_requested` + `approval_requested` pair — the retry-without-
-sandbox ask. (Known cosmetic artifact: the transcript shows two rows
-for that retry — backlog 55.) In a `--share` session, every
-write/edit/bash must still ask.
+**Verify tier 1** (isolated or `--share` session): `fs.write`/`fs.edit`
+inside the workspace root and in-root `bash` must produce **no**
+`approval_requested` at all, and their `tool_call_finished.output` must
+carry `auto_approved: true`, `policy_tier: "contained"` (bash also
+`sandboxed: true`). What still asks: a Git metadata write (`git
+commit`, `git add`, ... — a `GitOperation` approval naming the gitdir
+roots, run sandboxed with `hooks/` and `config` still excluded), an
+`fs.write`/`fs.edit` into `.git/`, an `fs` read outside the root, and
+network (a `web_fetch` domain, or a sandboxed bash call whose proxy
+request was denied). A sandboxed bash call refused a path outside the
+root resurfaces as an `approval_requested` for a narrow filesystem
+grant, and the approved retry stays sandboxed. (Known cosmetic
+artifact: the transcript shows two rows for that retry — backlog 55.)
+On a host without a working sandbox, every `bash` call asks and an
+approved one runs once on the host.
 
 **Inspect the work.** `horizon open-terminal-in-session-directory`
 opens a terminal in the *active* session's directory; or `cd` to the
