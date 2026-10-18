@@ -97,6 +97,15 @@ pub struct SandboxPolicy {
     /// Paths the sandboxed command may create, modify, or delete inside.
     /// Implicitly readable and executable too.
     pub writable_roots: Vec<PathBuf>,
+    /// Absolute paths inside `writable_roots` that stay read-only (the
+    /// repository's gitdir of a plain checkout, for the bash tool). Enforced
+    /// the same way as [`FilesystemGrant::excluded_subpaths`]: on Linux the
+    /// seccomp supervisor denies write opens beneath them; on macOS the field
+    /// is advisory. A `ReadWrite` `DirectoryTree` grant whose path is the
+    /// excluded path or one of its ancestors lifts that exclusion for the
+    /// run, and the grant's own `excluded_subpaths` then apply in its place.
+    #[serde(default)]
+    pub writable_root_exclusions: Vec<PathBuf>,
     pub readable_scope: ReadableScope,
     pub network: NetworkPolicy,
 }

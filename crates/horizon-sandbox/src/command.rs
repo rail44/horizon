@@ -43,6 +43,7 @@ mod tests {
         let root = root.canonicalize().unwrap();
         let policy = SandboxPolicy {
             writable_roots: vec![root.clone()],
+            writable_root_exclusions: Vec::new(),
             readable_scope: ReadableScope::Full,
             network: NetworkPolicy::Disabled,
         };

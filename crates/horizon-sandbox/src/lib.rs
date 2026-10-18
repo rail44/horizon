@@ -8,6 +8,7 @@
 //!
 //! let policy = SandboxPolicy {
 //!     writable_roots: vec!["/tmp/some-session-worktree".into()],
+//!     writable_root_exclusions: Vec::new(),
 //!     readable_scope: ReadableScope::Full,
 //!     network: NetworkPolicy::Disabled,
 //! };

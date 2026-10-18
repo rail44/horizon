@@ -41,26 +41,7 @@ pub fn execute_supervised_helper(
 ) -> Result<i32, SandboxError> {
     let caps =
         crate::caps::build_with_grants(&helper_policy.sandbox, &helper_policy.filesystem_grants)?;
-    // Resolve excluded subpaths from the grants into absolute paths, keyed by
-    // the grant's canonical path so the supervisor can attach them to the
-    // matching InitialCapability (board #38).
-    let excluded_by_path: Vec<(PathBuf, Vec<PathBuf>)> = helper_policy
-        .filesystem_grants
-        .iter()
-        .filter(|g| g.scope == crate::policy::FilesystemGrantScope::DirectoryTree)
-        .filter_map(|g| {
-            if g.excluded_subpaths.is_empty() {
-                return None;
-            }
-            let resolved = g.path.canonicalize().ok()?;
-            let excluded = g
-                .excluded_subpaths
-                .iter()
-                .map(|sub| resolved.join(sub))
-                .collect();
-            Some((resolved, excluded))
-        })
-        .collect();
+    let excluded_by_path = excluded_paths_by_capability(helper_policy);
     let mut command = Command::new(program);
     command.args(args);
 
@@ -90,6 +71,67 @@ pub fn execute_supervised_helper(
         .write(outcome)
         .map_err(SandboxError::SupervisorReport)?;
     Ok(exit_code)
+}
+
+/// Write-denied paths keyed by the canonical path of the capability they
+/// belong to, for the seccomp supervisor (board #38).
+///
+/// A grant's `excluded_subpaths` resolve against the grant path. A writable
+/// root's `writable_root_exclusions` attach to that root, except an
+/// exclusion lifted by a `ReadWrite` `DirectoryTree` grant at or above it;
+/// such a grant carries its own exclusions instead.
+fn excluded_paths_by_capability(
+    helper_policy: &crate::HelperPolicy,
+) -> Vec<(PathBuf, Vec<PathBuf>)> {
+    use crate::policy::{FilesystemGrantAccess, FilesystemGrantScope};
+
+    let mut entries: Vec<(PathBuf, Vec<PathBuf>)> = Vec::new();
+    let mut push = |base: PathBuf, excluded: Vec<PathBuf>| {
+        if excluded.is_empty() {
+            return;
+        }
+        match entries.iter_mut().find(|(existing, _)| *existing == base) {
+            Some((_, paths)) => paths.extend(excluded),
+            None => entries.push((base, excluded)),
+        }
+    };
+
+    let tree_grants: Vec<(PathBuf, &crate::FilesystemGrant)> = helper_policy
+        .filesystem_grants
+        .iter()
+        .filter(|grant| grant.scope == FilesystemGrantScope::DirectoryTree)
+        .filter_map(|grant| Some((grant.path.canonicalize().ok()?, grant)))
+        .collect();
+    for (resolved, grant) in &tree_grants {
+        push(
+            resolved.clone(),
+            grant
+                .excluded_subpaths
+                .iter()
+                .map(|sub| resolved.join(sub))
+                .collect(),
+        );
+    }
+
+    for root in &helper_policy.sandbox.writable_roots {
+        let Ok(root) = root.canonicalize() else {
+            continue;
+        };
+        let excluded = helper_policy
+            .sandbox
+            .writable_root_exclusions
+            .iter()
+            .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
+            .filter(|path| path.starts_with(&root))
+            .filter(|path| {
+                !tree_grants.iter().any(|(resolved, grant)| {
+                    grant.access == FilesystemGrantAccess::ReadWrite && path.starts_with(resolved)
+                })
+            })
+            .collect();
+        push(root, excluded);
+    }
+    entries
 }
 
 /// Authenticated structured result from the dedicated Linux helper.

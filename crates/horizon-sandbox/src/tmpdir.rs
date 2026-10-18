@@ -100,6 +100,7 @@ mod tests {
     fn policy_with_root(root: &str) -> SandboxPolicy {
         SandboxPolicy {
             writable_roots: vec![PathBuf::from(root)],
+            writable_root_exclusions: Vec::new(),
             readable_scope: ReadableScope::Full,
             network: NetworkPolicy::Disabled,
         }

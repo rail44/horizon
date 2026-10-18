@@ -15,6 +15,7 @@ fn helper_preserves_exit_status_and_publishes_an_authenticated_report() {
     let root = test_dir("exit-report");
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![root.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: horizon_sandbox::NetworkPolicy::Disabled,
     };
@@ -44,6 +45,7 @@ fn missing_create_denial_is_structured_even_when_shell_exits_zero() {
     let target = outside.join("must-not-exist");
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![writable.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: horizon_sandbox::NetworkPolicy::Disabled,
     };
@@ -96,6 +98,7 @@ fn exact_file_grant_allows_that_file_but_not_its_sibling() {
     };
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![writable.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: horizon_sandbox::NetworkPolicy::Disabled,
     };
@@ -141,6 +144,7 @@ fn directory_tree_grant_allows_creating_a_missing_suffix() {
     };
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![writable.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: horizon_sandbox::NetworkPolicy::Disabled,
     };
@@ -174,6 +178,7 @@ fn standard_dev_null_is_read_write_but_other_devices_are_not() {
     let marker = root.join("dev-null-worked");
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![root.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: horizon_sandbox::NetworkPolicy::Disabled,
     };
@@ -215,6 +220,7 @@ fn git_status_can_open_its_standard_dev_null_endpoint() {
 
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![root.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: horizon_sandbox::NetworkPolicy::Disabled,
     };
@@ -409,6 +415,7 @@ fn one_report_contains_filesystem_and_network_denials() {
     let decoy_addr = decoy.local_addr().unwrap();
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![writable.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: horizon_sandbox::NetworkPolicy::Proxied {
             proxy_addr,
@@ -515,6 +522,7 @@ fn run_network_probe_with_loopback(
 ) {
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![root.to_path_buf()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: horizon_sandbox::NetworkPolicy::Proxied {
             proxy_addr,
@@ -538,6 +546,105 @@ fn run_network_probe_with_loopback(
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let outcome = report.read().expect("read network report");
     (output.status.code(), stderr, outcome)
+}
+
+#[test]
+fn writable_root_exclusion_denies_writes_beneath_it_and_keeps_the_rest_writable() {
+    let root = test_dir("root-exclusion").canonicalize().unwrap();
+    let git_dir = root.join(".git");
+    std::fs::create_dir_all(git_dir.join("hooks")).unwrap();
+    let hook = git_dir.join("hooks").join("pre-commit");
+    let config = git_dir.join("config");
+    let source = root.join("source.txt");
+    let policy = horizon_sandbox::SandboxPolicy {
+        writable_roots: vec![root.clone()],
+        writable_root_exclusions: vec![git_dir.clone()],
+        readable_scope: horizon_sandbox::ReadableScope::Full,
+        network: horizon_sandbox::NetworkPolicy::Disabled,
+    };
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg(format!(
+        "printf ok > {}; printf hook > {} || true; printf cfg > {} || true",
+        shell_quote(&source),
+        shell_quote(&hook),
+        shell_quote(&config)
+    ));
+    let sandboxed =
+        horizon_sandbox::spawn(command, &policy, horizon_sandbox::SandboxStdio::inherit())
+            .expect("spawn supervised sandbox");
+    let report = sandboxed.supervisor_report.expect("supervisor report");
+    let mut child = sandboxed.child;
+
+    assert_eq!(child.wait().expect("wait").code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), "ok");
+    assert!(
+        !hook.exists(),
+        "a write under the excluded gitdir must be denied"
+    );
+    assert!(
+        !config.exists(),
+        "a write under the excluded gitdir must be denied"
+    );
+    let outcome = report.read().expect("read report");
+    for denied in [&hook, &config] {
+        assert!(
+            outcome.approvals.iter().any(|approval| matches!(
+                &approval.request,
+                nono::ApprovalRequest::Capability { path, .. } if path == denied
+            )),
+            "{} must be reported as a denial",
+            denied.display()
+        );
+    }
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn a_tree_grant_on_the_excluded_path_lifts_it_but_keeps_its_own_exclusions() {
+    let root = test_dir("root-exclusion-grant").canonicalize().unwrap();
+    let git_dir = root.join(".git");
+    std::fs::create_dir_all(git_dir.join("hooks")).unwrap();
+    std::fs::create_dir_all(git_dir.join("objects")).unwrap();
+    let object = git_dir.join("objects").join("new-object");
+    let hook = git_dir.join("hooks").join("pre-commit");
+    let config = git_dir.join("config");
+    let grant = FilesystemGrant {
+        path: git_dir.clone(),
+        access: FilesystemGrantAccess::ReadWrite,
+        scope: FilesystemGrantScope::DirectoryTree,
+        excluded_subpaths: vec!["hooks".into(), "config".into()],
+    };
+    let policy = horizon_sandbox::SandboxPolicy {
+        writable_roots: vec![root.clone()],
+        writable_root_exclusions: vec![git_dir.clone()],
+        readable_scope: horizon_sandbox::ReadableScope::Full,
+        network: horizon_sandbox::NetworkPolicy::Disabled,
+    };
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg(format!(
+        "printf obj > {}; printf hook > {} || true; printf cfg > {} || true",
+        shell_quote(&object),
+        shell_quote(&hook),
+        shell_quote(&config)
+    ));
+    let sandboxed = horizon_sandbox::spawn_with_filesystem_grants(
+        command,
+        &policy,
+        &[grant],
+        horizon_sandbox::SandboxStdio::inherit(),
+    )
+    .expect("spawn with metadata grant");
+    let report = sandboxed.supervisor_report.expect("supervisor report");
+    let mut child = sandboxed.child;
+
+    assert_eq!(child.wait().expect("wait").code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&object).unwrap(), "obj");
+    assert!(!hook.exists());
+    assert!(!config.exists());
+    report.read().expect("read report");
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
 }
 
 fn test_dir(label: &str) -> std::path::PathBuf {

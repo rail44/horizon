@@ -96,6 +96,7 @@ fn writes_inside_writable_root_succeed() {
 
     let policy = SandboxPolicy {
         writable_roots: vec![dir.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: ReadableScope::Full,
         network: NetworkPolicy::Disabled,
     };
@@ -127,6 +128,7 @@ fn writes_outside_writable_root_are_denied() {
 
     let policy = SandboxPolicy {
         writable_roots: vec![writable.clone()],
+        writable_root_exclusions: Vec::new(),
         // `Full` scope means `outside` is visible (nono's `/` Read grant)
         // but not writable -- the interesting negative case. A `Roots`
         // scope that never mentions `outside` would instead fail with
@@ -185,6 +187,7 @@ fn literal_tmp_write_is_denied_without_a_matching_writable_root() {
     let policy = SandboxPolicy {
         // Deliberately not `/tmp` or anything under it.
         writable_roots: vec![workspace.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: ReadableScope::Full,
         network: NetworkPolicy::Disabled,
     };
@@ -225,6 +228,7 @@ fn tmpdir_is_provisioned_when_the_caller_hasnt_set_one_and_mktemp_respects_it() 
 
     let policy = SandboxPolicy {
         writable_roots: vec![workspace.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: ReadableScope::Full,
         network: NetworkPolicy::Disabled,
     };
@@ -271,6 +275,7 @@ fn network_off_fails_a_tcp_connect() {
     let log = dir.join("stderr.log");
     let policy = SandboxPolicy {
         writable_roots: vec![dir.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: ReadableScope::Full,
         network: NetworkPolicy::Disabled,
     };
@@ -325,6 +330,7 @@ fn external_signal_is_denied_and_the_decoy_survives() {
 
     let policy = SandboxPolicy {
         writable_roots: vec![dir.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: ReadableScope::Full,
         network: NetworkPolicy::Disabled,
     };
@@ -366,6 +372,7 @@ fn sandboxed_process_can_still_signal_its_own_child() {
 
     let policy = SandboxPolicy {
         writable_roots: vec![dir.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: ReadableScope::Full,
         network: NetworkPolicy::Disabled,
     };
@@ -399,6 +406,7 @@ fn spawn_preserves_piped_stdout() {
     let dir = tempdir("piped-stdout");
     let policy = SandboxPolicy {
         writable_roots: vec![dir.clone()],
+        writable_root_exclusions: Vec::new(),
         readable_scope: ReadableScope::Full,
         network: NetworkPolicy::Disabled,
     };

@@ -258,6 +258,7 @@ mod tests {
     fn policy(writable_roots: Vec<std::path::PathBuf>, network: NetworkPolicy) -> SandboxPolicy {
         SandboxPolicy {
             writable_roots,
+            writable_root_exclusions: Vec::new(),
             readable_scope: ReadableScope::Full,
             network,
         }
