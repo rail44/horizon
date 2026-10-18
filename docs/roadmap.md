@@ -23,6 +23,13 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
+The containment perimeter moves from "spawned isolated" to the sandbox
+itself: one session kind, `bash` always sandboxed with the gitdir excluded
+from the writable root, host execution only as the no-sandbox fallback,
+and a `worktree.enter` tool in place of the spawn-time isolation knob.
+Decided on board #65; design and staging in
+[the perimeter design](sandbox-perimeter-design.md).
+
 Refactoring discovery uses repository-local RCA, jscpd, and scoped ast-grep
 checks, followed by responsibility/contract review. History and dependency
 graphs are optional supporting evidence, not automatic refactoring decisions.
