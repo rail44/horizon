@@ -55,10 +55,19 @@ gets a worktree only by entering one.
   excluded.
 - **Enforcement of the exclusion** is the same as for a grant's
   `excluded_subpaths`: on Linux the seccomp supervisor denies write opens
-  (`openat`/`openat2`) beneath the excluded path; Landlock still allows
-  the root as a whole, so calls the supervisor does not mediate (`rename`,
-  `unlink`, `mkdir`, `link`, `symlink`) are not refused there. On macOS
-  the exclusion is advisory.
+  (`openat`/`openat2`, legacy `open`/`creat`) beneath the excluded path.
+  Landlock allows the root as a whole, so whenever an exclusion exists the
+  supervisor also mediates the path-mutating syscalls (`rename*`, `link*`,
+  `symlink*`, `unlink*`, `rmdir`, `mkdir*`, `mknod*`, `truncate`) and
+  refuses `io_uring_setup` (board #68): a call whose mutated operand is at,
+  beneath, or an ancestor of an excluded path is denied and reported like
+  an excluded open; every other call continues to Landlock. Operands are
+  resolved as the sandboxed process sees them (its own `/proc/self`, no
+  following of a final symlink the syscall does not follow). The check
+  and the kernel's re-resolution after `continue` are not atomic: a
+  concurrent process that swaps a checked path component for a symlink
+  in between can still redirect the call. On macOS the exclusion is
+  advisory.
 
 ## Target design
 
