@@ -124,14 +124,7 @@ impl WorkspaceShell {
                     let placement = shell.view_chooser.take().map(|modal| modal.target);
                     shell.close_view_chooser(window, cx);
                     if let (Some(choice), Some(placement)) = (choice, placement) {
-                        shell.create_session(
-                            choice.kind,
-                            choice.role_id,
-                            choice.isolate,
-                            placement,
-                            window,
-                            cx,
-                        );
+                        shell.create_session(choice.kind, choice.role_id, placement, window, cx);
                     }
                 }
                 ListEvent::Cancel => {
@@ -436,7 +429,6 @@ impl WorkspaceShell {
         self.create_session(
             PaneKind::View(ViewKind::BoardList),
             None,
-            false,
             Placement::NewTab,
             window,
             cx,

@@ -1069,7 +1069,7 @@ impl Render for WorkspaceShell {
                 shell.execute(CommandId::NewTab, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &NewAgentTab, window, cx| {
-                shell.create_session(PaneKind::Agent, None, false, Placement::NewTab, window, cx);
+                shell.create_session(PaneKind::Agent, None, Placement::NewTab, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &SplitPane, window, cx| {
                 shell.execute(CommandId::SplitRight, window, cx);

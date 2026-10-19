@@ -78,11 +78,10 @@ fn register_daemon_agent_summary(
     }
     workspace.register_detached_session(SessionKind::Agent, adoption.session_id);
     // The daemon's own `SessionEntry` is authoritative for `workspace_root`
-    // -- for an isolated session this is the worktree path agentd actually
-    // created, which nothing on the shell side could have known at spawn
-    // time (worktree creation finishes asynchronously, after `start_session`
-    // already returned -- see `SessionInfoMeta::workspace_root`'s doc
-    // comment). Overwrites whatever the model already had, if anything.
+    // -- for a session that entered a worktree this is the worktree path
+    // agentd created, which nothing on the shell side could have known at
+    // spawn time (see `SessionInfoMeta::workspace_root`'s doc comment).
+    // Overwrites whatever the model already had, if anything.
     if let Some(root) = &adoption.workspace_root {
         workspace.set_session_workspace_root(adoption.session_id, root.clone());
     }
@@ -256,10 +255,9 @@ impl WorkspaceShell {
                     // it back later, mirroring exactly what used to be
                     // computed inside `AgentdHandle::start_session` itself
                     // (see `wire::SessionNew::workspace_root`'s doc
-                    // comment). For an isolated spawn this is only the
-                    // *pre-isolation* value -- agentd overrides it with the
-                    // worktree path it creates and reports the
-                    // authoritative root back via
+                    // comment). Once the session enters a worktree, agentd
+                    // reports the authoritative root back via
+                    // `WorkspaceRootResolved` and
                     // `SessionInfoMeta::workspace_root`, which the
                     // resume/restore sweeps re-apply through the same
                     // adoption path.
@@ -281,7 +279,6 @@ impl WorkspaceShell {
                                 role_id,
                                 workspace_root,
                                 spawn.source_session_id.map(agent_session_id),
-                                spawn.isolate,
                             )
                         },
                         cx,

@@ -18,7 +18,6 @@ pub(super) struct CommandOptions {
     pub(super) preview_name: Option<String>,
     pub(super) split: Option<SplitFlag>,
     pub(super) active: bool,
-    pub(super) share: bool,
     pub(super) reason: Option<String>,
 }
 
@@ -74,7 +73,6 @@ pub(super) fn scan(args: &[String]) -> Result<Arguments, UsageError> {
             "--json" if inline.is_none() => parsed.global.json = true,
             "--yes" if inline.is_none() => parsed.global.yes = true,
             "--active" if inline.is_none() => parsed.options.active = true,
-            "--share" if inline.is_none() => parsed.options.share = true,
             "--reason" => parsed.options.reason = Some(required_value(flag, inline, &mut iter)?),
             "--prompt" => parsed.options.prompt = Some(required_value(flag, inline, &mut iter)?),
             "--name" => {

@@ -62,8 +62,8 @@ pub struct WorkspaceSession {
     /// `None` until recreated.
     pub workspace_root: Option<PathBuf>,
     /// Mirrors `wire::SessionSummary.parent_session_id` -- the derivation
-    /// edge (`docs/session-relationship-design.md` decisions 1-3), recorded
-    /// only when an isolated spawn's worktree creation actually succeeded.
+    /// edge (`docs/session-relationship-design.md` decisions 1-2), as the
+    /// daemon reports it (a fresh spawn records none).
     /// `None` for a lineage root or a session nothing has reported an edge
     /// for yet. Populated the same way as `workspace_root` above: the
     /// daemon's `SessionSummary` is authoritative, so this is only ever set

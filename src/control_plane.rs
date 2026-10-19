@@ -157,10 +157,9 @@ fn dispatch_invoke(
             issuer,
             activate,
             prompt,
-            isolate,
         } => {
             let session_id = shell.control_plane_new_session(
-                kind, role_id, split, issuer, activate, prompt, isolate, window, cx,
+                kind, role_id, split, issuer, activate, prompt, window, cx,
             )?;
             return Ok(Some(EnvelopeBody::Ok {
                 session_id: Some(session_id),

@@ -276,18 +276,11 @@ impl AgentdHandle {
     /// `workspace_root` is computed shell-side (`WorkspaceShell::reconcile`)
     /// and recorded on the workspace model before this is called, so the
     /// model and the daemon spawn can never disagree; it travels as
-    /// `session/new`'s `cwd`. `spawn_source_session_id`/
-    /// `isolate` are `docs/session-relationship-design.md` decision 3's
-    /// per-spawn knobs: the pane this spawn was invoked "from"
-    /// (kind-agnostic -- may be a terminal or an agent session id) and
-    /// whether `horizon-agentd` should give this session its own git
-    /// worktree derived from it. Both are resolved by the caller
-    /// (origin-based default plus any explicit override -- see
-    /// `workspace::session_lifecycle::PendingAgentSpawn`); this method just
-    /// forwards whatever concrete choice it's given. Note that for an
-    /// isolated spawn, `workspace_root` here is only the *pre-isolation*
-    /// value -- the daemon overrides it with the worktree path it creates,
-    /// reported back via `SessionInfoMeta::workspace_root` (see
+    /// `session/new`'s `cwd`. `spawn_source_session_id` is the pane this
+    /// spawn was invoked "from" (kind-agnostic -- may be a terminal or an
+    /// agent session id; `docs/session-relationship-design.md` decision 3).
+    /// Once the session enters a worktree, the daemon reports the worktree
+    /// path back via `SessionInfoMeta::workspace_root` (see
     /// `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore`).
     pub(crate) fn start_session(
         &self,
@@ -296,7 +289,6 @@ impl AgentdHandle {
         role_id: Option<horizon_agent::roles::RoleId>,
         workspace_root: Option<std::path::PathBuf>,
         spawn_source_session_id: Option<SessionId>,
-        isolate: bool,
     ) -> AgentSessionHandle {
         let (handle, commands) = self.register_agent(session_id);
         let _ = self.ops.send(agent::Op::NewAgent {
@@ -306,7 +298,6 @@ impl AgentdHandle {
                     session_id,
                     provider_id: provider_id.0,
                     role_id: role_id.map(|role| role.0),
-                    isolate,
                     spawn_source_session_id,
                 },
                 workspace_root,

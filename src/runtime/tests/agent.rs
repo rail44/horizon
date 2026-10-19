@@ -452,7 +452,6 @@ fn start_mock_session(agentd: &AgentdHandle, session_id: SessionId) -> AgentSess
         None,
         Some(PathBuf::from("/work/project")),
         None,
-        false,
     )
 }
 

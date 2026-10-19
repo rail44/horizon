@@ -79,13 +79,12 @@ pub fn to_request(
     match subcommand {
         Subcommand::NewTerminal { activate, .. } => invoke(
             command_name,
-            create_session_args(resolved_split, *activate, None, None, None, issuer),
+            create_session_args(resolved_split, *activate, None, None, issuer),
         ),
         Subcommand::NewAgent {
             prompt,
             role,
             activate,
-            share,
             ..
         } => invoke(
             command_name,
@@ -94,7 +93,6 @@ pub fn to_request(
                 *activate,
                 prompt.as_deref(),
                 role.as_deref(),
-                share.then_some(false),
                 issuer,
             ),
         ),
@@ -232,15 +230,10 @@ fn invoke(command: &str, args: serde_json::Value) -> Request {
 
 /// `new-terminal`/`new-agent`'s wire args -- the mirror image of
 /// the server side's `dispatch_invoke` parsing. `split`/`prompt`/`role`/
-/// `isolate`/`issuer` are only included when
+/// `issuer` are only included when
 /// present, so an unadorned `new-terminal`/`new-agent` sends the same
 /// `{\"activate\":false}` shape v1 already sent (plus the always-present
-/// `activate` field the Second revision adds). `isolate` is
-/// `new-agent`'s `--share` override (`Some(false)`) turned into the
-/// wire's `docs/session-relationship-design.md` decision 3 knob; `None`
-/// (the common case) omits the key entirely, letting the server apply its
-/// own CLI-origin default (isolated) -- `new-terminal` always passes `None`
-/// here, since isolation isn't offered for terminal spawns. `issuer` is
+/// `activate` field the Second revision adds). `issuer` is
 /// the dispatching pane's session id (issue 013), omitted when the CLI
 /// runs outside any pane.
 fn create_session_args(
@@ -248,7 +241,6 @@ fn create_session_args(
     activate: bool,
     prompt: Option<&str>,
     role: Option<&str>,
-    isolate: Option<bool>,
     issuer: Option<&str>,
 ) -> serde_json::Value {
     let mut args = serde_json::Map::new();
@@ -270,9 +262,6 @@ fn create_session_args(
             "role".to_string(),
             serde_json::Value::String(role.to_string()),
         );
-    }
-    if let Some(isolate) = isolate {
-        args.insert("isolate".to_string(), serde_json::Value::Bool(isolate));
     }
     if let Some(issuer) = issuer {
         args.insert(
@@ -345,7 +334,6 @@ mod tests {
             role: None,
             split,
             activate,
-            share: false,
         }
     }
 
@@ -491,31 +479,6 @@ mod tests {
         };
         assert_eq!(invoke.command, "new-agent");
         assert_eq!(invoke.args, serde_json::json!({ "activate": false }));
-    }
-
-    /// `--share` (decision 3's CLI-origin opt-out override) becomes an
-    /// explicit `"isolate": false` in the wire args; omitted (the default)
-    /// sends no `isolate` key at all, letting the server apply its own
-    /// CLI-origin default.
-    #[test]
-    fn new_agent_with_share_sends_an_explicit_isolate_false() {
-        let Request::Invoke(invoke) = to_request(
-            &Subcommand::NewAgent {
-                prompt: None,
-                role: None,
-                split: None,
-                activate: false,
-                share: true,
-            },
-            None,
-            None,
-        ) else {
-            panic!("expected an Invoke request");
-        };
-        assert_eq!(
-            invoke.args,
-            serde_json::json!({ "activate": false, "isolate": false })
-        );
     }
 
     #[test]
@@ -772,7 +735,6 @@ mod tests {
                 role: Some("keeper".to_string()),
                 split: None,
                 activate: false,
-                share: false,
             },
             None,
             None,

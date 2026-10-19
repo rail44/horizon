@@ -26,14 +26,6 @@ pub(crate) struct ViewChoice {
     pub(crate) title: &'static str,
     pub(crate) kind: PaneKind,
     pub(crate) role_id: Option<horizon_agent::roles::RoleId>,
-    /// Whether confirming this choice spawns an isolated worktree
-    /// (`docs/session-relationship-design.md` decisions 3-4): `false` for
-    /// every plain choice (palette origin defaults to shared), `true` only
-    /// for the dedicated isolated-worktree agent choice below -- the
-    /// palette's minimal opt-in surface, riding this same placement flow
-    /// rather than a redesigned one. Ignored for a session-less
-    /// `PaneKind::View` choice.
-    pub(crate) isolate: bool,
 }
 
 fn view_choices() -> Vec<ViewChoice> {
@@ -42,19 +34,11 @@ fn view_choices() -> Vec<ViewChoice> {
             title: "Terminal",
             kind: PaneKind::Terminal,
             role_id: None,
-            isolate: false,
         },
         ViewChoice {
             title: "Agent",
             kind: PaneKind::Agent,
             role_id: None,
-            isolate: false,
-        },
-        ViewChoice {
-            title: "Agent (Isolated Worktree)…",
-            kind: PaneKind::Agent,
-            role_id: None,
-            isolate: true,
         },
     ];
     // One entry per user-launchable role, enumerated from the role registry
@@ -66,7 +50,6 @@ fn view_choices() -> Vec<ViewChoice> {
             title: role.title,
             kind: PaneKind::Agent,
             role_id: Some(horizon_agent::roles::RoleId(role.id.to_string())),
-            isolate: false,
         });
     }
     choices.extend([
@@ -74,7 +57,6 @@ fn view_choices() -> Vec<ViewChoice> {
             title: "Theme Settings",
             kind: PaneKind::View(ViewKind::ThemeSettings),
             role_id: None,
-            isolate: false,
         },
         // Only the list: a thread needs a task, which the chooser has no
         // way to name. The list opens one (`CommandId::
@@ -83,7 +65,6 @@ fn view_choices() -> Vec<ViewChoice> {
             title: "Board",
             kind: PaneKind::View(ViewKind::BoardList),
             role_id: None,
-            isolate: false,
         },
     ]);
     choices
@@ -194,34 +175,7 @@ mod tests {
     use super::view_choices;
 
     #[test]
-    fn only_the_dedicated_isolated_worktree_choice_opts_in_to_isolation() {
-        // `docs/session-relationship-design.md` decision 3: palette origin
-        // defaults to shared; the isolated-worktree choice is the minimal
-        // explicit opt-in surface (decision 4), so every other choice must
-        // still carry `isolate: false`.
-        let choices = view_choices();
-
-        let isolated = choices
-            .iter()
-            .find(|choice| choice.title == "Agent (Isolated Worktree)…")
-            .expect("isolated-worktree agent choice");
-        assert_eq!(isolated.kind, PaneKind::Agent);
-        assert!(isolated.isolate);
-
-        for choice in choices
-            .iter()
-            .filter(|choice| choice.title != isolated.title)
-        {
-            assert!(
-                !choice.isolate,
-                "{} should default to a shared spawn, not isolated",
-                choice.title
-            );
-        }
-    }
-
-    #[test]
-    fn every_role_choice_carries_a_role_id_and_is_not_isolated() {
+    fn every_role_choice_carries_a_role_id_and_is_an_agent() {
         let choices = view_choices();
         let role_choices: Vec<_> = choices.iter().filter(|c| c.role_id.is_some()).collect();
         assert!(
@@ -235,7 +189,6 @@ mod tests {
                 "{} is a role choice and must be an Agent",
                 choice.title
             );
-            assert!(!choice.isolate, "role choices default to shared");
         }
     }
 
@@ -271,13 +224,7 @@ mod tests {
     #[test]
     fn role_less_entries_stay_role_less() {
         let choices = view_choices();
-        for title in [
-            "Terminal",
-            "Agent",
-            "Agent (Isolated Worktree)…",
-            "Theme Settings",
-            "Board",
-        ] {
+        for title in ["Terminal", "Agent", "Theme Settings", "Board"] {
             let c = choices.iter().find(|c| c.title == title).expect(title);
             assert!(c.role_id.is_none(), "{title} must remain role-less");
         }

@@ -44,11 +44,7 @@ pub enum SplitFlag {
 /// `activate` (the CLI's `--active`, wired to `docs/cli-control-plane-
 /// design.md`'s "activate rides on creating/attaching operations" decision)
 /// and (for the first two) `split` (the CLI's `--split`, "Placement
-/// vocabulary"). `NewAgent` also carries `share` (`--share`):
-/// `docs/session-relationship-design.md` decision 3's CLI-origin default is
-/// an *isolated* worktree, so `--share` is the opt-out override (there is no
-/// `--isolate` counterpart -- it would be a no-op given the default), and
-/// `role` (`--role <id>`): the role id to spawn the agent session with
+/// vocabulary"). `NewAgent` also carries `role` (`--role <id>`): the role id to spawn the agent session with
 /// (validated server-side by the shell's control-plane dispatch, which knows
 /// the set of user-launchable roles).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,7 +58,6 @@ pub enum Subcommand {
         role: Option<String>,
         split: Option<SplitFlag>,
         activate: bool,
-        share: bool,
     },
     /// Shows a `wasm32-wasip2` preview plugin in a pane, or reloads the
     /// pane that already shows that artifact. `name` selects one of the
@@ -163,7 +158,7 @@ const USAGE: &str = "Usage: horizon [--socket <path>] [--json] [--yes] <subcomma
 Running `horizon` with no subcommand launches the GUI application.\n\
 Subcommands:\n  \
   new-terminal [--split [<session-id>]] [--active]\n  \
-  new-agent [--prompt <text>] [--role <id>] [--split [<session-id>]] [--active] [--share]\n  \
+  new-agent [--prompt <text>] [--role <id>] [--split [<session-id>]] [--active]\n  \
   preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \
@@ -182,7 +177,7 @@ Subcommands:\n  \
   state";
 
 /// Parses `argv` (already stripped of `argv[0]`). Global flags
-/// (`--socket`/`--json`/`--yes`/`--prompt`/`--role`/`--split`/`--active`/`--share`)
+/// (`--socket`/`--json`/`--yes`/`--prompt`/`--role`/`--split`/`--active`)
 /// are recognized anywhere in the argument list, not just before the
 /// subcommand name -- simpler than enforcing a strict positional grammar, and
 /// unambiguous because every subcommand's own positional arguments
@@ -221,7 +216,6 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
                 role: options.role.take(),
                 split: options.split.take(),
                 activate: std::mem::take(&mut options.active),
-                share: std::mem::take(&mut options.share),
             }
         }
         "preview" => {
@@ -503,8 +497,8 @@ mod tests {
     }
 
     #[test]
-    fn unused_share_and_reason_keep_their_existing_acceptance() {
-        let parsed = parse(&args(&["state", "--share", "--reason=note"])).unwrap();
+    fn unused_reason_keeps_its_existing_acceptance() {
+        let parsed = parse(&args(&["state", "--reason=note"])).unwrap();
         assert_eq!(parsed.subcommand, Subcommand::State);
     }
 
@@ -620,7 +614,6 @@ mod tests {
                 role: None,
                 split: None,
                 activate: false,
-                share: false,
             }
         );
     }
@@ -635,22 +628,6 @@ mod tests {
                 role: None,
                 split: None,
                 activate: false,
-                share: false,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_new_agent_with_share() {
-        let parsed = parse(&args(&["new-agent", "--share"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewAgent {
-                prompt: None,
-                role: None,
-                split: None,
-                activate: false,
-                share: true,
             }
         );
     }
@@ -675,7 +652,6 @@ mod tests {
                 role: Some("config".to_string()),
                 split: Some(SplitFlag::Explicit("s-1".to_string())),
                 activate: true,
-                share: false,
             }
         );
     }
@@ -690,7 +666,6 @@ mod tests {
                 role: None,
                 split: None,
                 activate: false,
-                share: false,
             }
         );
     }
@@ -753,7 +728,6 @@ mod tests {
                 role: None,
                 split: Some(SplitFlag::Explicit("s-1".to_string())),
                 activate: false,
-                share: false,
             }
         );
     }
@@ -962,7 +936,6 @@ mod tests {
                 role: Some("keeper".to_string()),
                 split: None,
                 activate: false,
-                share: false,
             }
         );
     }
@@ -977,7 +950,6 @@ mod tests {
                 role: Some("keeper".to_string()),
                 split: None,
                 activate: false,
-                share: false,
             }
         );
     }
@@ -1060,7 +1032,6 @@ mod tests {
             role: None,
             split: Some(SplitFlag::Here),
             activate: false,
-            share: false,
         };
         assert_eq!(
             resolved_split_for(&new_agent, Some("s-2".to_string())),

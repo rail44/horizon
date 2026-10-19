@@ -14,15 +14,13 @@ pub(super) struct PendingTerminalSpawn {
 
 /// Staged the same way as [`PendingTerminalSpawn`] (before a
 /// session-creating workspace mutation, consumed by `reconcile`), but for
-/// agent spawns' own two knobs (`docs/session-relationship-design.md`
-/// decision 3): the pane this spawn derives from, and whether agentd
-/// should give it an isolated worktree. `Default` is "no source, not
-/// isolated" -- `reconcile`'s fallback when nothing staged anything (e.g. a
+/// agent spawns: the pane this spawn was invoked from
+/// (`docs/session-relationship-design.md` decision 3). `Default` is "no
+/// source" -- `reconcile`'s fallback when nothing staged anything (e.g. a
 /// resumed/attached session, never a fresh spawn).
 #[derive(Clone, Default)]
 pub(super) struct PendingAgentSpawn {
     pub(super) source_session_id: Option<SessionId>,
-    pub(super) isolate: bool,
 }
 
 /// Kind-agnostic spawn-source resolution: an explicit target (e.g. the
@@ -30,8 +28,7 @@ pub(super) struct PendingAgentSpawn {
 /// The palette passes the active session as the fallback (a "child of the
 /// current pane" gesture); the control plane passes the issuer instead (see
 /// [`control_plane_spawn_source`]). Shared by terminal cwd inheritance and
-/// agent lineage/isolation -- both need exactly the same "spawned from"
-/// pane.
+/// agent spawns -- both need exactly the same "spawned from" pane.
 fn resolve_spawn_source(
     explicit_source: Option<SessionId>,
     fallback: Option<SessionId>,
@@ -80,20 +77,9 @@ impl WorkspaceShell {
         }
     }
 
-    /// Stages an agent spawn's source pane and isolation choice for
-    /// `reconcile` to consume -- `isolate` here is already the fully
-    /// resolved per-spawn choice (origin default folded with any explicit
-    /// override; see `create_session`/`control_plane_new_session`), not a
-    /// further default to apply.
-    fn pending_agent_spawn(
-        &self,
-        source_session_id: Option<SessionId>,
-        isolate: bool,
-    ) -> PendingAgentSpawn {
-        PendingAgentSpawn {
-            source_session_id,
-            isolate,
-        }
+    /// Stages an agent spawn's source pane for `reconcile` to consume.
+    fn pending_agent_spawn(&self, source_session_id: Option<SessionId>) -> PendingAgentSpawn {
+        PendingAgentSpawn { source_session_id }
     }
 
     pub(super) fn default_terminal_cwd() -> std::path::PathBuf {
@@ -125,16 +111,12 @@ impl WorkspaceShell {
 
     /// The one interactive session-creation path: what the view chooser
     /// confirms with. Terminal cwd and agent role ride the same staging
-    /// maps `reconcile` consumes. `isolate` is the view chooser's own
-    /// per-choice override of decision 3's palette-origin default (shared);
-    /// `false` for every choice except the dedicated "Agent (Isolated
-    /// Worktree)…" one (`ViewChoice::isolate`) -- ignored for a
-    /// session-less `PaneKind::View` choice, same as `role_id`.
+    /// maps `reconcile` consumes. `role_id` is ignored for a session-less
+    /// `PaneKind::View` choice.
     pub(super) fn create_session(
         &mut self,
         kind: PaneKind,
         role_id: Option<horizon_agent::roles::RoleId>,
-        isolate: bool,
         placement: Placement,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -177,12 +159,8 @@ impl WorkspaceShell {
         let active = self.workspace.active_session_id();
         let terminal_spawn =
             matches!(kind, SessionKind::Terminal).then(|| self.pending_terminal_spawn(active));
-        // Palette origin defaults to shared, not isolated (`docs/session-
-        // relationship-design.md` decision 3); `isolate` is the caller's
-        // explicit opt-in (the view chooser's dedicated "Agent (Isolated
-        // Worktree)…" choice), not a further default to apply here.
         let agent_spawn =
-            matches!(kind, SessionKind::Agent).then(|| self.pending_agent_spawn(active, isolate));
+            matches!(kind, SessionKind::Agent).then(|| self.pending_agent_spawn(active));
         let session_id = match placement {
             Placement::NewTab => Some(
                 self.workspace
@@ -253,13 +231,7 @@ impl WorkspaceShell {
     /// the first user message right after the session starts — the
     /// create-with-prompt composite from the CLI design. `role_id` is
     /// fixed by the caller (e.g. `new-agent --role config`), never client-supplied
-    /// — see `pending_roles`. `isolate` is agent sessions' own per-spawn
-    /// override of `docs/session-relationship-design.md` decision 3's
-    /// origin default (CLI/control-plane origin defaults to isolated,
-    /// mirroring `activate`'s opposite default): `None` applies that
-    /// default, `Some` is an explicit override (the CLI's `--share`) --
-    /// `control_plane::dispatch_invoke` already rejects a non-`None` value
-    /// for a terminal spawn, so this never has to.
+    /// — see `pending_roles`.
     ///
     /// `issuer` is the session that dispatched this request (the CLI's
     /// `HORIZON_SESSION_ID`, carried in the request's `"issuer"` arg).
@@ -267,18 +239,6 @@ impl WorkspaceShell {
     /// explicit `--split` target wins, else `issuer`, else `None` (root)
     /// -- the focused pane is never consulted, unlike
     /// [`WorkspaceShell::create_session`]'s palette path (issue 013).
-    /// When `issuer` is a *terminal* session (the common CLI case: a
-    /// command-line tool running in a terminal pane dispatches
-    /// `new-agent`), `horizon-agentd` does not host it, so
-    /// `session_directory` returns `None` for its id and the
-    /// isolated-worktree base falls back to the root-spawn behavior
-    /// (`resolve_and_create_isolated_worktree`'s `fallback_dir`). That
-    /// degradation is acceptable: the terminal's cwd would be the honest
-    /// base, but carrying it on the wire is a separate task; this change
-    /// does not touch the wire. The lineage edge (parent = the terminal)
-    /// is still recorded correctly on worktree-creation success, since
-    /// the parent is `spawn_source_session_id` itself, not the
-    /// worktree-derivation result.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn control_plane_new_session(
         &mut self,
@@ -288,7 +248,6 @@ impl WorkspaceShell {
         issuer: Option<SessionId>,
         activate: bool,
         prompt: Option<String>,
-        isolate: Option<bool>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<String, String> {
@@ -298,8 +257,8 @@ impl WorkspaceShell {
         let source = control_plane_spawn_source(split.map(|(target, _)| target), issuer);
         let terminal_spawn =
             matches!(kind, SessionKind::Terminal).then(|| self.pending_terminal_spawn(source));
-        let agent_spawn = matches!(kind, SessionKind::Agent)
-            .then(|| self.pending_agent_spawn(source, isolate.unwrap_or(true)));
+        let agent_spawn =
+            matches!(kind, SessionKind::Agent).then(|| self.pending_agent_spawn(source));
         let session_id = match split {
             Some((target, axis)) => self
                 .workspace

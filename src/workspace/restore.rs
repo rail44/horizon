@@ -39,8 +39,8 @@ impl RestoreCandidates {
             .collect();
         // Captured before `agent_summaries` is consumed below --
         // the daemon's own report of each session's
-        // `workspace_root` (the authoritative post-isolation
-        // worktree path for an isolated session; see
+        // `workspace_root` (the worktree path for a session
+        // that entered one; see
         // `SessionInfoMeta::workspace_root`'s doc comment),
         // applied to the surviving candidates further down.
         let agent_workspace_roots: HashMap<Uuid, std::path::PathBuf> = agent_summaries
@@ -279,9 +279,8 @@ impl WorkspaceShell {
             if self.workspace.session_pane_kind(session_id) == Some(PaneKind::Agent) {
                 // See `spawn_agent_resume`'s matching comment:
                 // the daemon's report is authoritative,
-                // especially for an isolated session whose real
-                // (worktree) root was only known after
-                // `SessionNew` returned.
+                // especially for a session whose real (worktree)
+                // root was only known after it entered one.
                 if let Some(root) = agent_workspace_roots.get(&id) {
                     self.workspace
                         .set_session_workspace_root(session_id, root.clone());

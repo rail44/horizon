@@ -16,7 +16,6 @@ pub(super) enum Command {
         issuer: Option<SessionId>,
         activate: bool,
         prompt: Option<String>,
-        isolate: Option<bool>,
     },
     Preview {
         path: PathBuf,
@@ -124,10 +123,6 @@ fn new_session(args: &serde_json::Value, kind: SessionKind) -> Result<Command, S
         }
         Some(_) => return Err("`prompt` must be a string".into()),
     };
-    let isolate = isolate_arg(args)?;
-    if isolate.is_some() && kind != SessionKind::Agent {
-        return Err("`isolate` is only accepted for agent sessions".into());
-    }
     Ok(Command::NewSession {
         kind,
         role_id,
@@ -135,7 +130,6 @@ fn new_session(args: &serde_json::Value, kind: SessionKind) -> Result<Command, S
         issuer,
         activate,
         prompt,
-        isolate,
     })
 }
 
@@ -193,26 +187,12 @@ fn activate_arg(args: &serde_json::Value) -> Result<bool, String> {
 
 /// Parses an optional plain-string argument -- `deny`'s `reason`, when the
 /// CLI supplied `--reason`. `None` (the key omitted, or explicit `null`) means
-/// "no reason supplied"; a string is taken verbatim. Mirrors [`isolate_arg`]'s
-/// omitted-means-default shape.
+/// "no reason supplied"; a string is taken verbatim.
 fn optional_string_arg(args: &serde_json::Value, key: &str) -> Result<Option<String>, String> {
     match args.get(key) {
         None | Some(serde_json::Value::Null) => Ok(None),
         Some(serde_json::Value::String(raw)) => Ok(Some(raw.clone())),
         Some(_) => Err(format!("`{key}` must be a string")),
-    }
-}
-
-/// `docs/session-relationship-design.md` decision 3's per-spawn isolation
-/// override: `None` (the key omitted, or explicit `null`) means "apply the
-/// origin default" (control-plane origin: isolated -- see
-/// `WorkspaceShell::control_plane_new_session`), mirroring `activate_arg`'s own
-/// omitted-means-apply-the-surface-default shape.
-fn isolate_arg(args: &serde_json::Value) -> Result<Option<bool>, String> {
-    match args.get("isolate") {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::Bool(isolate)) => Ok(Some(*isolate)),
-        Some(_) => Err("`isolate` must be a boolean".to_string()),
     }
 }
 
@@ -255,7 +235,7 @@ mod tests {
     fn session_defaults_and_optional_nulls_match_the_external_contract() {
         for args in [
             serde_json::json!({}),
-            serde_json::json!({"split": null, "issuer": null, "activate": null, "prompt": null, "isolate": null}),
+            serde_json::json!({"split": null, "issuer": null, "activate": null, "prompt": null}),
         ] {
             let command = parse(&Invoke {
                 command: "new-agent".into(),
@@ -271,7 +251,6 @@ mod tests {
                     issuer: None,
                     activate: false,
                     prompt: None,
-                    isolate: None,
                 }
             ));
         }
@@ -288,13 +267,8 @@ mod tests {
             ),
             (
                 "new-terminal",
-                serde_json::json!({"prompt": "go", "isolate": true}),
+                serde_json::json!({"prompt": "go"}),
                 "`prompt` is only accepted for agent sessions",
-            ),
-            (
-                "new-terminal",
-                serde_json::json!({"isolate": false}),
-                "`isolate` is only accepted for agent sessions",
             ),
             (
                 "send",

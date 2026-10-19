@@ -137,9 +137,9 @@ assistant_text() {
   jq -r --arg sid "$1" 'select(.session_id == $sid and .event_kind == "message_committed") | .event.MessageCommitted | select(.role == "Assistant") | .text' "$events" | tail -1
 }
 
-# 1. a plain turn, shared (non-isolated) session in the active pane
+# 1. a plain turn, in a session started in the active pane
 start_app "$out/first.log"
-spawn="$(cli --json new-agent --share --active --prompt 'Reply with exactly the word ACP-OK and nothing else.')"
+spawn="$(cli --json new-agent --active --prompt 'Reply with exactly the word ACP-OK and nothing else.')"
 sid="$(jq -r '.payload.session_id' <<<"$spawn")"
 [[ -n "$sid" && "$sid" != "null" ]] || fail "new-agent returned no session id: $spawn"
 wait_state has_turn_in_flight true 10
@@ -150,7 +150,7 @@ echo "OK: plain turn streamed and ended (session $sid)"
 
 # 2. an approval round trip through the shell. A sandboxed bash call runs
 # without approval; a Git metadata write is a boundary crossing that asks
-# (GitOperation), in shared and isolated sessions alike.
+# (GitOperation), whether or not the session has entered a worktree.
 cli send "$sid" 'Use the bash tool to run: git stash list && echo acp-approval-check' >/dev/null
 wait_event "$sid" approval_requested 60
 approval="$(ev "$sid" approval_requested | tail -1)"

@@ -38,7 +38,7 @@ impl WorkspaceShell {
         .detach();
     }
 
-    /// Wires the live push of a freshly isolated session's authoritative
+    /// Wires the live push of a session's authoritative
     /// `workspace_root`/`parent_session_id` (`SessionInfoMeta` on
     /// `session/new`'s response or a `session_info_update`, routed onto its
     /// own process-wide channel by `runtime::routing::AgentRoutes`) straight into the model the moment it arrives, closing the
