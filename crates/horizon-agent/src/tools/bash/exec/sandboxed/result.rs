@@ -1,6 +1,6 @@
 //! Preserve completion precedence independently of process management.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,6 +19,7 @@ pub(super) fn complete(
     identity: &ToolCallIdentity,
     captured: Captured,
     denied_domains: Vec<String>,
+    git_metadata: &[PathBuf],
     timeout: Duration,
     cwd_handle: &Arc<Mutex<PathBuf>>,
     config: &BashToolConfig,
@@ -31,12 +32,13 @@ pub(super) fn complete(
         drained,
         raw_stdout,
         raw_stderr,
-        denials,
+        mut denials,
         ..
     } = captured;
+    let git_metadata_denied = divert_git_metadata_denials(&mut denials, git_metadata);
     if killed {
         let mut value = timeout_output(timeout, raw_stdout, config);
-        annotate_common(&mut value, &denials);
+        annotate_common(&mut value, &denials, git_metadata_denied);
         if !drained {
             note_undrained(&mut value, Duration::from_secs(config.drain_grace_secs));
         }
@@ -48,13 +50,13 @@ pub(super) fn complete(
             Some(raw_stdout),
             config,
         );
-        annotate_common(&mut value, &denials);
+        annotate_common(&mut value, &denials, git_metadata_denied);
         // Wait failures historically carry no drain note or filesystem retry.
         return finish_or_domain_denied(identity, value, denied_domains);
     };
 
     let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
-    annotate_common(&mut value, &denials);
+    annotate_common(&mut value, &denials, git_metadata_denied);
     #[cfg(target_os = "macos")]
     if let Some(error) = &denial_collection_error {
         crate::tools::output::annotate_denial_collection_unavailable(&mut value, error);
@@ -88,10 +90,76 @@ pub(super) fn complete(
     finish_or_domain_denied(identity, value, denied_domains)
 }
 
-fn annotate_common(value: &mut Response, denials: &horizon_sandbox::ContainmentDenials) {
+fn annotate_common(
+    value: &mut Response,
+    denials: &horizon_sandbox::ContainmentDenials,
+    git_metadata_denied: bool,
+) {
     annotate_sandboxed(value, true);
     crate::tools::output::annotate_network_denials(value, &denials.network);
     crate::tools::output::annotate_ungrantable_denials(value, &denials.ungrantable);
+    if git_metadata_denied {
+        value.mark_failed();
+    }
+}
+
+const GIT_METADATA_GUIDANCE: &str = "inside the repository's Git metadata, which is not grantable \
+     as a filesystem retry; Git metadata is written only through a Git operation approval";
+
+/// Moves filesystem denials under the workspace's Git metadata into the
+/// ungrantable set, so they never feed a `FilesystemDenialRetry` grant
+/// (board #65, decision 1). Returns whether any denial moved.
+fn divert_git_metadata_denials(
+    denials: &mut horizon_sandbox::ContainmentDenials,
+    git_metadata: &[PathBuf],
+) -> bool {
+    if git_metadata.is_empty() {
+        return false;
+    }
+    let roots: Vec<PathBuf> = git_metadata
+        .iter()
+        .flat_map(|path| [Some(path.clone()), path.canonicalize().ok()])
+        .flatten()
+        .collect();
+    let (git, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut denials.filesystem)
+        .into_iter()
+        .partition(|denial| is_under_any(&denial.attempted_path, &roots));
+    denials.filesystem = rest;
+    let moved = !git.is_empty();
+    for denial in git {
+        let entry = horizon_sandbox::UngrantableDenial {
+            attempted_path: denial.attempted_path,
+            guidance: GIT_METADATA_GUIDANCE.into(),
+        };
+        if !denials.ungrantable.contains(&entry) {
+            denials.ungrantable.push(entry);
+        }
+    }
+    moved
+}
+
+/// Whether `path` (or, when its leaf does not exist yet, its nearest
+/// existing ancestor once canonicalized) lies under one of `roots`.
+fn is_under_any(path: &Path, roots: &[PathBuf]) -> bool {
+    if roots.iter().any(|root| path.starts_with(root)) {
+        return true;
+    }
+    let mut existing = path;
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(canonical) = existing.canonicalize() {
+            let resolved = rest
+                .iter()
+                .rev()
+                .fold(canonical, |acc: PathBuf, part| acc.join(part));
+            return roots.iter().any(|root| resolved.starts_with(root));
+        }
+        let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else {
+            return false;
+        };
+        rest.push(name);
+        existing = parent;
+    }
 }
 
 fn finish_or_domain_denied(
@@ -152,6 +220,14 @@ mod tests {
     }
 
     fn finish(captured: Captured, domains: Vec<String>) -> (BashCompletion, PathBuf) {
+        finish_with(captured, domains, &[])
+    }
+
+    fn finish_with(
+        captured: Captured,
+        domains: Vec<String>,
+        git_metadata: &[PathBuf],
+    ) -> (BashCompletion, PathBuf) {
         let cwd = Arc::new(Mutex::new(PathBuf::from("/workspace")));
         let identity = crate::test_support::tool_identity(&crate::contract::ToolCallId(
             "result-precedence".into(),
@@ -160,6 +236,7 @@ mod tests {
             &identity,
             captured,
             domains,
+            git_metadata,
             Duration::from_secs(1),
             &cwd,
             &crate::config::AgentToolsConfig::default().bash,
@@ -269,5 +346,140 @@ mod tests {
                 assert_eq!(cwd, PathBuf::from("/workspace/next"));
             }
         }
+    }
+
+    fn write_denial(path: &Path) -> FilesystemDenial {
+        FilesystemDenial {
+            attempted_path: path.to_path_buf(),
+            grant: FilesystemGrant {
+                path: path.to_path_buf(),
+                access: FilesystemGrantAccess::ReadWrite,
+                scope: FilesystemGrantScope::File,
+                excluded_subpaths: Vec::new(),
+            },
+        }
+    }
+
+    fn with_filesystem_denials(paths: &[&Path]) -> Captured {
+        let mut capture = captured(Some(1 << 8), false);
+        capture.denials = ContainmentDenials {
+            filesystem: paths.iter().map(|path| write_denial(path)).collect(),
+            ..Default::default()
+        };
+        capture
+    }
+
+    fn plain_checkout(root: &Path) -> PathBuf {
+        let workspace = root.join("repo");
+        let git = workspace.join(".git");
+        std::fs::create_dir_all(git.join("objects")).unwrap();
+        std::fs::create_dir_all(git.join("refs")).unwrap();
+        std::fs::create_dir_all(git.join("hooks")).unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        workspace.canonicalize().unwrap()
+    }
+
+    fn assert_git_metadata_denial(completion: BashCompletion, path: &Path) {
+        let BashCompletion::Finished(result) = completion else {
+            panic!("a Git metadata denial must not request a filesystem retry: {completion:?}");
+        };
+        assert!(result.is_error());
+        assert!(result.output.get("denied_filesystem_paths").is_none());
+        let ungrantable = &result.output["ungrantable_filesystem_paths"][0];
+        assert_eq!(ungrantable["path"], path.display().to_string());
+        assert_eq!(ungrantable["guidance"], GIT_METADATA_GUIDANCE);
+        assert!(GIT_METADATA_GUIDANCE.contains("Git metadata"));
+    }
+
+    #[test]
+    fn plain_checkout_git_metadata_denial_requests_no_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = plain_checkout(dir.path());
+        let attempted = workspace.join(".git/hooks/x");
+        let (completion, _) = finish_with(
+            with_filesystem_denials(&[&attempted]),
+            Vec::new(),
+            &super::super::git_metadata_paths(&workspace),
+        );
+        assert_git_metadata_denial(completion, &attempted);
+    }
+
+    #[test]
+    fn linked_worktree_gitdir_denial_requests_no_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = plain_checkout(dir.path());
+        let worktree_git_dir = main.join(".git/worktrees/agent");
+        std::fs::create_dir_all(&worktree_git_dir).unwrap();
+        let workspace = dir.path().join("worktree");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace = workspace.canonicalize().unwrap();
+        std::fs::write(
+            workspace.join(".git"),
+            format!("gitdir: {}\n", worktree_git_dir.display()),
+        )
+        .unwrap();
+        std::fs::write(
+            worktree_git_dir.join("gitdir"),
+            workspace.join(".git").display().to_string(),
+        )
+        .unwrap();
+        std::fs::write(worktree_git_dir.join("commondir"), "../..\n").unwrap();
+        let git_metadata = super::super::git_metadata_paths(&workspace);
+        for attempted in [
+            worktree_git_dir.join("index.lock"),
+            main.join(".git/refs/x"),
+        ] {
+            let (completion, _) = finish_with(
+                with_filesystem_denials(&[&attempted]),
+                Vec::new(),
+                &git_metadata,
+            );
+            assert_git_metadata_denial(completion, &attempted);
+        }
+    }
+
+    #[test]
+    fn denials_outside_git_metadata_still_request_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = plain_checkout(dir.path());
+        let git_metadata = super::super::git_metadata_paths(&workspace);
+        let cargo = dir.path().join("home/.cargo/registry/x");
+        let in_tree = workspace.join("src/.gitignore");
+        for attempted in [cargo, in_tree] {
+            let capture = with_filesystem_denials(&[&attempted]);
+            let expected = capture.denials.filesystem.clone();
+            let (completion, _) = finish_with(capture, Vec::new(), &git_metadata);
+            let BashCompletion::FilesystemDenied { denials, result } = completion else {
+                panic!("an ordinary denial must still request a filesystem retry");
+            };
+            assert_eq!(denials, expected);
+            assert!(result.output.get("ungrantable_filesystem_paths").is_none());
+        }
+    }
+
+    #[test]
+    fn mixed_denials_retry_only_the_ordinary_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = plain_checkout(dir.path());
+        let git_attempt = workspace.join(".git/config");
+        let ordinary = dir.path().join("outside/cache/lock");
+        std::fs::create_dir_all(ordinary.parent().unwrap()).unwrap();
+        let (completion, _) = finish_with(
+            with_filesystem_denials(&[&git_attempt, &ordinary]),
+            Vec::new(),
+            &super::super::git_metadata_paths(&workspace),
+        );
+        let BashCompletion::FilesystemDenied { denials, result } = completion else {
+            panic!("the ordinary denial must still request a filesystem retry");
+        };
+        assert_eq!(denials, vec![write_denial(&ordinary)]);
+        assert_eq!(
+            result.output["ungrantable_filesystem_paths"][0]["path"],
+            git_attempt.display().to_string()
+        );
+        let grants = horizon_sandbox::suggest_grants(&denials, Some(&workspace), None);
+        assert_eq!(grants.len(), 1);
+        assert!(!grants[0].path.starts_with(workspace.join(".git")));
+        assert!(ordinary.starts_with(&grants[0].path));
     }
 }

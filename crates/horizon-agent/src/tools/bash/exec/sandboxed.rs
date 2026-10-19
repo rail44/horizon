@@ -137,8 +137,22 @@ pub(in crate::tools::bash) fn run_sandboxed(
         identity,
         captured,
         denied_domains,
+        &git_metadata_paths(workspace_root),
         timeout,
         cwd_handle,
         config,
     )
+}
+
+/// The workspace's Git metadata: its `.git` entry plus the gitdirs
+/// `metadata_writable_roots` resolves (a linked worktree's own gitdir and
+/// its common gitdir). A denial under any of these never becomes a
+/// filesystem retry grant; that metadata is written only through the
+/// `GitOperation` approval (board #65, decision 1).
+fn git_metadata_paths(workspace_root: &Path) -> Vec<PathBuf> {
+    let mut paths = prepare::git_metadata_exclusions(workspace_root);
+    paths.extend(
+        crate::tools::bash::git::metadata_writable_roots(workspace_root).unwrap_or_default(),
+    );
+    paths
 }

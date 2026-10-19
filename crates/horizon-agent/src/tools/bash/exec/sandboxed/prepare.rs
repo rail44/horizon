@@ -104,7 +104,7 @@ pub(super) fn prepare(
 /// grant on the gitdir lifts the exclusion for that run and carries its own
 /// `hooks`/`config` exclusions (`tools::bash::git`). Empty when the root has
 /// no `.git`.
-fn git_metadata_exclusions(workspace_root: &Path) -> Vec<PathBuf> {
+pub(super) fn git_metadata_exclusions(workspace_root: &Path) -> Vec<PathBuf> {
     let dot_git = workspace_root.join(".git");
     if std::fs::symlink_metadata(&dot_git).is_ok() {
         vec![dot_git]
