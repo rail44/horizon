@@ -25,7 +25,10 @@ session and sends the prompt. CLI-origin spawns default to an
 `horizon/<slug>`). Add `--share` to run in the shared checkout instead;
 tier-1 auto-approval applies the same way there (sandboxed `bash`,
 in-root `fs.write`/`fs.edit`), with `.git/` read-only to the sandbox
-(`docs/sandbox-perimeter-design.md`). `--split [<session-id>]`
+(`docs/sandbox-perimeter-design.md`). A running session gets its own
+worktree by calling the automatic `worktree.enter` tool: the worktree
+branches from the session root's `HEAD`, and the session's root moves
+there at the next turn boundary (the pane's directory follows live). `--split [<session-id>]`
 to place it in a split (bare `--split` splits off the pane you're
 running in; pass a session-id to split off a different pane) /
 `--active` to activate the new pane, `new-config-agent` for the

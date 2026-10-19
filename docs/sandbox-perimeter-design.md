@@ -1,7 +1,7 @@
 # Containment Perimeter and the Worktree Tool — Design
 
-Status: decided on board #65 (2026-10-18); slice 1 implemented (see
-"Staging"). This document describes the current design, the target
+Status: decided on board #65 (2026-10-18); slices 1 and 2 implemented
+(see "Staging"). This document describes the current design, the target
 design, and the code the change touches. The decisions themselves and
 the measurements that motivated them are recorded on board #65; this
 page does not restate them as policy.
@@ -16,10 +16,9 @@ crossings of the containment boundary (git metadata, paths outside the
 root, network). Host execution remains only as the fallback on a host
 without a working sandbox.
 
-The remaining target is one session kind: a session that wants a
-disposable copy of the repository asks for one with a tool,
-`worktree.enter`, instead of being spawned as a different kind of
-session.
+With slice 2, a session that wants a disposable copy of the repository
+asks for one with a tool, `worktree.enter`. The remaining target is one
+session kind: the spawn-time isolation choice goes away.
 
 ## Current design
 
@@ -109,42 +108,55 @@ A built-in tool, `worktree.enter`, in the `<domain>.<verb>` vocabulary
 of `fs.read`, `board.update`, `workspace.snapshot`. The domain is git's
 own term; `workspace.*` is taken by the shell's tab/pane structure.
 
-- **Input**: none in v1.
-- **Effect**: create a worktree branched from the session's current
-  `HEAD` at `<repo>/.horizon/worktrees/<session id>` (today's
-  `create_isolated_worktree` in `crates/horizon-agentd/src/worktree.rs`)
-  and move the session's workspace root to it.
-- **Approval**: automatic, like `workspace.snapshot` and `board.read` —
-  a fixed, validated operation performed by the daemon, not an arbitrary
-  command.
-- **Result**: the new root, branch name, and base commit, so the receipt
-  shows where the session now works.
+- **Input**: none (`tools/input`, the `Empty` input type).
+- **Approval**: automatic (`AutoAllowRead`), like `workspace.snapshot` and
+  `board.read`: a fixed, validated operation performed by the daemon, not
+  an arbitrary command.
+- **Execution**: the `HostTools::enter_worktree` boundary
+  (`tools/execution.rs`), implemented by `horizon-agentd`'s
+  `session/host_tools.rs`. It refuses a session whose entry already owns a
+  worktree, resolves the session root's `HEAD` to a commit, and sends
+  `Command::ActivateWorktree { base }` to the calling session: the same
+  command the board's `implement` action sends, without the task
+  ownership check.
+- **Result**: `{requested: true, base, message}`. The worktree does not
+  exist yet when the call returns.
+- **Activation**: the existing environment activation path. The provider
+  queues the command and, at its next turn boundary, emits
+  `EnvironmentReady { base }`; `SessionEnvironment::activate`
+  (`session/environment.rs`) waits for tool work to settle, creates
+  `<repo>/.horizon/worktrees/<slug>` on branch `horizon/<slug>` at `base`
+  (`create_isolated_worktree_at`), prepares a replacement tool environment
+  with `isolated: true`, persists `EnvironmentActivated`, re-registers the
+  session runtime, and answers `EnvironmentPrepared { workspace_root,
+  branch, trusted_project }` or `EnvironmentActivationFailed`.
+- **What the model sees**: on `EnvironmentPrepared` the provider rebuilds
+  its environment prompt sections and queues a note naming the new root,
+  branch, and base; on failure it queues the failure message. Either note
+  reaches the model on its next turn.
 - **Not in v1**: entering an existing worktree by path, and the inverse
   (`worktree.leave`). They are added when a flow needs them.
 
-Moving the root mid-session is a new path. What follows the root today
-and what must be made to follow it:
+What follows the root on activation:
 
-| state | today | target |
-|---|---|---|
-| `ToolSessionState` root (`tools/state.rs`, `Inner.workspace_root`) | fixed at build | replaced through the environment activation path (`session/environment.rs`, "activate a replacement durably") |
-| sandbox `writable_roots` | derived per call from the root | follows automatically |
-| `bash` tracked cwd | persisted across calls | reset to the new root on enter |
-| system prompt environment section | built once at spawn (`providers::rig::session::session_extra_sections`) | re-announced through the existing `Event::EnvironmentActivated` handshake |
-| shell-facing root (`WorkspaceRootResolved`) | sent once at setup / attachment replay | re-sent on enter (pane title abbreviation, "open its directory") |
-| persisted `session_context.workspace_root` | written per record | updated from the enter onward |
-| lineage edge, terminate cleanup (`git worktree remove`, decision 5) | recorded at isolated spawn | recorded when the tool creates the worktree; cleanup unchanged |
+| state | mechanism |
+|---|---|
+| `ToolSessionState` root (`tools/state.rs`) | replaced by the prepared environment |
+| sandbox `writable_roots` | derived per call from the root |
+| `bash` tracked cwd | starts at the new root in the replacement tool state |
+| system prompt environment section | rebuilt by the provider on `EnvironmentPrepared` |
+| shell-facing root (`WorkspaceRootResolved`) | sent on activation, as at setup and attachment replay; the shell maps it to `session_info_update` |
+| persisted `session_context` | `workspace_root` is the worktree and `isolated_worktree` is true from `EnvironmentActivated` onward |
+| session entry `worktree`, terminate cleanup (`git worktree remove`) | recorded on activation; cleanup unchanged |
 
-### Restore without the isolation predicate
+### Restore
 
-`session_context.isolated_worktree` is retired. Restore keys on the
-persisted root: a root under `.horizon/worktrees/` is re-adopted with
-`adopt_isolated_worktree` (which already validates that the worktree
-belongs to this session and refuses an ordinary checkout); any other root
-is restored as is. The `EnvironmentActivated` identity path
-(`restore_worktree`) is unchanged. Dropping a field from the persisted
-context is an event-log record change; existing records keep the field
-and readers ignore it.
+Restore is unchanged by slice 2. Activation persists the isolation
+predicate (`session_context.isolated_worktree`) and the worktree identity
+(`EnvironmentActivated`), so a restarted daemon re-adopts the worktree
+through the existing path (`session/resume.rs`,
+`session/resume/environment.rs`, `restore_worktree`). Whether the
+predicate is retired is part of slice 3.
 
 ### Spawn surface
 
@@ -183,14 +195,17 @@ Three slices, each landing on its own:
    host execution becomes the sandbox-unavailable fallback. This alone
    removes the failure mode measured on board #65 for sessions started in
    the main checkout. No wire change.
-2. **`worktree.enter`.** The tool, the mid-session root change, and
-   restore by persisted root. The spawn-time isolation still exists in
-   this slice, so both ways of getting a worktree coexist briefly.
+2. **`worktree.enter`.** The tool and the mid-session root change over
+   the existing environment activation path; restore needs no change.
+   The spawn-time isolation still exists in this slice, so both ways of
+   getting a worktree coexist briefly.
 3. **Spawn surface removal.** `isolate` leaves the ACP meta, CLI,
    control plane, shell, and chooser; the wire version bumps; docs and
    the dogfood skill are updated.
 
 Status: slice 1 landed 2026-10-18.
+
+Status: slice 2 landed 2026-10-19.
 
 Slice 1 is independent and smallest. Slice 3 is last because it bumps
 the wire and retires the spawn-time isolation that delegation still uses

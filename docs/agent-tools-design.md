@@ -29,16 +29,27 @@ plugin-provided tools, running agent commands inside terminal sessions.
 | bash  | require approval | Fresh process per command (below)                  |
 | web_search | boundary: auto | Fixed Exa endpoint; shadow-judged             |
 | web_fetch | boundary: exact-host grant | Bounded SSRF-safe fetch           |
+| worktree.enter | auto-allow | No input; moves the session into a fresh worktree (below) |
 
 All tools require **absolute paths**; relative paths are rejected with an
 actionable error (models measurably mishandle relative paths — SWE-bench-era
 finding restated in Anthropic's agent guidance).
 
+`worktree.enter` (`tools/worktree.rs`) takes no arguments. Through the
+`HostTools::enter_worktree` boundary, `horizon-agentd` resolves the session
+root's `HEAD` to a commit, refuses a session that already owns a worktree,
+and queues `Command::ActivateWorktree` at that commit for the calling
+session: the activation `board.session implement` also requests. The
+result is `{requested, base, message}`; the root moves at the provider's
+next turn boundary, and the model's next turn receives a note naming the
+new root, branch, and base (or the activation failure). See
+`docs/sandbox-perimeter-design.md`.
+
 ## Read and Search Semantics
 
 ### Input contract (2026-09-26)
 
-The 18 non-board built-ins use the Rust definitions in
+The 19 non-board built-ins use the Rust definitions in
 `crates/horizon-agent/src/tools/input/`. Serde checks argument types and
 unknown fields; Schemars generates the model-visible schemas from those same
 definitions. Numeric bounds, text lengths, and defaults belong to the input
@@ -65,7 +76,7 @@ type error rather than the default window. Removed fields such as
 
 ### Result contract (2026-09-26)
 
-The same 18 non-board tools construct bodies from `contract::tool_output` and
+The same 19 non-board tools construct bodies from `contract::tool_output` and
 return `tools::output::Response`. Success/failure is chosen explicitly; approval
 and containment evidence is added before the result is serialized. `is_error`
 inside failed output is a derived provider-visible marker, never the authority
