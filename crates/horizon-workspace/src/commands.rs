@@ -965,9 +965,9 @@ mod tests {
     fn open_terminal_in_session_directory_requires_a_known_workspace_root() {
         // `docs/session-relationship-design.md` decision 4a: disabled with
         // no active session, and disabled just the same when there is one
-        // but its `workspace_root` isn't known (today: every terminal
-        // session, plus a resumed agent session) -- only enabled once both
-        // an active session and a known `workspace_root` line up.
+        // but its `workspace_root` isn't known (a terminal whose cwd has not
+        // been published yet, or a resumed agent session) -- only enabled
+        // once both an active session and a known `workspace_root` line up.
         assert!(!command_enabled(
             CommandId::OpenTerminalInSessionDirectory,
             CommandState {

@@ -440,9 +440,9 @@ impl WorkspaceShell {
     /// currently *selected* row's directory -- generalizing decision 4a's
     /// active-session-only v1 (`CommandId::OpenTerminalInSessionDirectory`)
     /// to an arbitrary row. A no-op if nothing is selected or the selected
-    /// row's `workspace_root` isn't known (every terminal session today,
-    /// plus a resumed agent session -- same enablement rule as the active-
-    /// session command).
+    /// row's `workspace_root` isn't known (a terminal whose cwd has not
+    /// been published yet, or a resumed agent session -- same enablement
+    /// rule as the active-session command).
     pub(super) fn open_selected_session_directory(
         &mut self,
         window: &mut Window,

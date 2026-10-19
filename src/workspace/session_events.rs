@@ -132,6 +132,30 @@ impl WorkspaceShell {
         .detach();
     }
 
+    /// Wires the receiving end of every `TerminalSession`'s `cwd_tx`: the
+    /// working directory `horizon-terminald` publishes for a terminal
+    /// (`TerminalUpdate::WorkingDirectory`) becomes that session's
+    /// `workspace_root`, the slot agent spawns, "Open Terminal in Session
+    /// Directory", and the session manager read. Not persisted: a
+    /// reattaching terminal is sent its current cwd again.
+    pub(super) fn wire_terminal_cwd_updates(
+        &self,
+        mut cwd_rx: futures::channel::mpsc::UnboundedReceiver<(SessionId, std::path::PathBuf)>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            while let Some((session_id, cwd)) = cwd_rx.next().await {
+                let _ = this.update(cx, |shell, cx| {
+                    if record_terminal_cwd(&mut shell.workspace, session_id, cwd) {
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
     /// Wires the receiving end of every session's `notify_tx`: OSC 9/777
     /// desktop-notification requests (`TerminalUpdate::Notification`).
     /// Surfacing is decided per request against live focus state
@@ -257,5 +281,57 @@ impl WorkspaceShell {
         }
         self.reconcile(window, cx);
         self.focus_active(window, cx);
+    }
+}
+
+/// Records a terminal's published cwd as its `workspace_root`; returns
+/// whether the model changed.
+fn record_terminal_cwd(
+    workspace: &mut horizon_workspace::Workspace,
+    session_id: SessionId,
+    cwd: std::path::PathBuf,
+) -> bool {
+    if workspace.session_workspace_root(session_id) == Some(cwd.as_path()) {
+        return false;
+    }
+    workspace.set_session_workspace_root(session_id, cwd);
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::record_terminal_cwd;
+    use horizon_workspace::{SessionKind, Workspace};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_published_terminal_cwd_becomes_the_sessions_directory() {
+        let mut workspace = Workspace::mvp();
+        let terminal = workspace.open_tab_with_new_session_activated(SessionKind::Terminal, true);
+        assert_eq!(workspace.session_workspace_root(terminal), None);
+
+        assert!(record_terminal_cwd(
+            &mut workspace,
+            terminal,
+            PathBuf::from("/work/a")
+        ));
+        assert_eq!(
+            workspace.session_workspace_root(terminal),
+            Some(Path::new("/work/a"))
+        );
+        assert!(!record_terminal_cwd(
+            &mut workspace,
+            terminal,
+            PathBuf::from("/work/a")
+        ));
+        assert!(record_terminal_cwd(
+            &mut workspace,
+            terminal,
+            PathBuf::from("/work/b")
+        ));
+        assert_eq!(
+            workspace.session_workspace_root(terminal),
+            Some(Path::new("/work/b"))
+        );
     }
 }

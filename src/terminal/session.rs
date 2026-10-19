@@ -180,6 +180,11 @@ pub(crate) struct TerminalSession {
     /// the workspace model (`Workspace::set_session_derived_title` via
     /// `wire_session_title_updates`) -- the title side of `exit_tx`.
     title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
+    /// Reports the daemon-published working directory
+    /// (`TerminalUpdate::WorkingDirectory`, already deduped daemon-side) to
+    /// the shell, which records it as this session's `workspace_root`
+    /// (`wire_terminal_cwd_updates`).
+    cwd_tx: futures::channel::mpsc::UnboundedSender<(SessionId, std::path::PathBuf)>,
     /// Scrollback windowing state (`docs/terminal-scrollback-design.md` §3.3):
     /// `Live` while following the tail, or a held window scrolled within
     /// locally. Interior-mutable because both the sync scroll handler
@@ -204,6 +209,7 @@ impl TerminalSession {
         exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
         title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
         notify_tx: futures::channel::mpsc::UnboundedSender<(SessionId, TerminalNotification)>,
+        cwd_tx: futures::channel::mpsc::UnboundedSender<(SessionId, std::path::PathBuf)>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut frames_rx = handle.frames();
@@ -296,6 +302,7 @@ impl TerminalSession {
             scrollback_generation: 0,
             derived_title: None,
             title_tx,
+            cwd_tx,
             _attachment: handle,
         }
     }
@@ -360,6 +367,10 @@ impl TerminalSession {
                 true
             }
             Incoming::Event(TerminalUpdate::Bell) => true,
+            Incoming::Event(TerminalUpdate::WorkingDirectory(cwd)) => {
+                let _ = self.cwd_tx.unbounded_send((self.session_id, cwd));
+                false
+            }
             Incoming::Event(TerminalUpdate::Notification(notification)) => {
                 // The shell decides whether this deserves an OS-level
                 // interruption (focused-window/focused-pane gate) — the

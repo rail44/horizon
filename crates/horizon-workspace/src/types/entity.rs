@@ -54,12 +54,14 @@ pub struct WorkspaceSession {
     /// The directory this session is confined to / was spawned in, when
     /// known (`docs/session-relationship-design.md` decision 4a: "Horizon
     /// knows every session's `workspace_root`"). `None` until something
-    /// records one -- today only agent sessions get one, set right before
-    /// `SessionNew` is sent (`WorkspaceShell::reconcile` in
-    /// `src/workspace/session_lifecycle.rs`) via
-    /// [`Workspace::set_session_workspace_root`]. Not persisted across a
-    /// restart/reload; a resumed session's `workspace_root` goes back to
-    /// `None` until recreated.
+    /// records one via [`Workspace::set_session_workspace_root`]: an agent
+    /// session gets one right before `SessionNew` is sent
+    /// (`WorkspaceShell::reconcile` in `src/workspace/session_lifecycle.rs`)
+    /// and again whenever agentd reports a resolved root; a terminal session
+    /// gets the cwd `horizon-terminald` publishes for it, updated as it
+    /// changes. Not persisted across a restart/reload: a resumed agent
+    /// session's `workspace_root` goes back to `None` until recreated, and a
+    /// reattached terminal is sent its current cwd again.
     pub workspace_root: Option<PathBuf>,
     /// Mirrors `wire::SessionSummary.parent_session_id` -- the derivation
     /// edge (`docs/session-relationship-design.md` decisions 1-2), as the

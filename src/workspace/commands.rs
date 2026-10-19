@@ -1085,13 +1085,19 @@ impl WorkspaceShell {
             has_pending_approval,
             has_turn_in_flight,
             has_paused_turn,
-            has_active_session_workspace_root: self
-                .workspace
-                .active_session_id()
-                .and_then(|id| self.workspace.session_workspace_root(id))
-                .is_some(),
+            has_active_session_workspace_root: active_session_has_workspace_root(&self.workspace),
         }
     }
+}
+
+/// `CommandState::has_active_session_workspace_root`: whether the active
+/// session, of either kind, has a recorded directory (an agent's resolved
+/// root, a terminal's published cwd).
+fn active_session_has_workspace_root(workspace: &Workspace) -> bool {
+    workspace
+        .active_session_id()
+        .and_then(|id| workspace.session_workspace_root(id))
+        .is_some()
 }
 
 #[cfg(test)]
@@ -1100,8 +1106,21 @@ mod tests {
 
     use super::ThreadPlacement::{Retarget, SplitTheList};
     use super::{
-        list_pane_in_tab, prepare_workspace_for_terminal_runtime_reload, thread_placement,
+        active_session_has_workspace_root, list_pane_in_tab,
+        prepare_workspace_for_terminal_runtime_reload, thread_placement,
     };
+
+    /// "Open Terminal in Session Directory" is enabled for an active
+    /// terminal once its cwd has been recorded, and disabled before.
+    #[test]
+    fn an_active_terminal_enables_the_open_directory_command_once_its_cwd_is_known() {
+        let mut workspace = Workspace::mvp();
+        let terminal = workspace.open_tab_with_new_session_activated(SessionKind::Terminal, true);
+        assert!(!active_session_has_workspace_root(&workspace));
+
+        workspace.set_session_workspace_root(terminal, std::path::PathBuf::from("/work/repo"));
+        assert!(active_session_has_workspace_root(&workspace));
+    }
 
     /// Opening a task reuses the tab's thread pane when it has one, so a
     /// tab never collects one pane per task read.

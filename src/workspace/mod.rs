@@ -396,6 +396,10 @@ pub(crate) struct WorkspaceShell {
     // `should_surface_notification`) before the OS hop
     // (`crate::desktop_notify`).
     terminal_notify_tx: futures::channel::mpsc::UnboundedSender<(SessionId, TerminalNotification)>,
+    // Handed to every `TerminalSession::spawn` (cloned per session) so the
+    // cwd `horizon-terminald` publishes for a terminal reaches the model's
+    // `workspace_root` slot (`wire_terminal_cwd_updates`).
+    terminal_cwd_tx: futures::channel::mpsc::UnboundedSender<(SessionId, std::path::PathBuf)>,
 }
 
 impl WorkspaceShell {
@@ -417,6 +421,7 @@ impl WorkspaceShell {
         let (terminal_exit_tx, terminal_exit_rx) = futures::channel::mpsc::unbounded();
         let (session_title_tx, session_title_rx) = futures::channel::mpsc::unbounded();
         let (terminal_notify_tx, terminal_notify_rx) = futures::channel::mpsc::unbounded();
+        let (terminal_cwd_tx, terminal_cwd_rx) = futures::channel::mpsc::unbounded();
         let mut shell = Self {
             workspace,
             workspace_state,
@@ -445,6 +450,7 @@ impl WorkspaceShell {
             terminal_exit_tx,
             session_title_tx,
             terminal_notify_tx,
+            terminal_cwd_tx,
         };
         // Window activation/deactivation doesn't otherwise touch the
         // model, so it needs its own observer alongside `focus_active`'s
@@ -459,6 +465,7 @@ impl WorkspaceShell {
         shell.wire_terminal_exit(terminal_exit_rx, cx);
         shell.wire_session_title_updates(session_title_rx, cx);
         shell.wire_terminal_notifications(terminal_notify_rx, cx);
+        shell.wire_terminal_cwd_updates(terminal_cwd_rx, cx);
         shell.wire_notification_responses(cx);
         if shell.workspace_phase.blocks_mutation() {
             shell.spawn_workspace_restore(agentd, terminald, cx);

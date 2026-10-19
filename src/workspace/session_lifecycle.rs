@@ -118,9 +118,10 @@ fn default_agent_workspace_root() -> Option<std::path::PathBuf> {
 /// The directory a brand-new agent session starts in
 /// (`docs/session-relationship-design.md` decision 3, *workspace_root
 /// source*): the spawn-source session's recorded `workspace_root` when the
-/// model has one, else `fallback`. Agent sources carry one; terminal
-/// sessions have none in the model, so a terminal source (and no source at
-/// all) falls back.
+/// model has one, else `fallback`. An agent source carries its resolved
+/// root; a terminal source carries the cwd `horizon-terminald` last
+/// published for it, and has none until the first one arrives. No source,
+/// or a source with no recorded directory, falls back.
 fn agent_spawn_workspace_root(
     workspace: &horizon_workspace::Workspace,
     source_session_id: Option<SessionId>,
@@ -552,9 +553,12 @@ impl WorkspaceShell {
         let exit_tx = self.terminal_exit_tx.clone();
         let title_tx = self.session_title_tx.clone();
         let notify_tx = self.terminal_notify_tx.clone();
+        let cwd_tx = self.terminal_cwd_tx.clone();
         self.sessions.insert(
             session_id,
-            cx.new(|cx| TerminalSession::spawn(wire, session_id, exit_tx, title_tx, notify_tx, cx)),
+            cx.new(|cx| {
+                TerminalSession::spawn(wire, session_id, exit_tx, title_tx, notify_tx, cwd_tx, cx)
+            }),
         );
     }
 
@@ -669,12 +673,19 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_spawned_from_a_terminal_falls_back() {
+    fn an_agent_spawned_from_a_terminal_starts_in_its_cwd_when_known_and_falls_back_otherwise() {
         let mut workspace = Workspace::mvp();
         let source = workspace.open_tab_with_new_session_activated(SessionKind::Terminal, true);
         assert_eq!(
             agent_spawn_workspace_root(&workspace, Some(source), fallback),
             fallback()
+        );
+
+        let cwd = std::path::PathBuf::from("/work/repo/src");
+        workspace.set_session_workspace_root(source, cwd.clone());
+        assert_eq!(
+            agent_spawn_workspace_root(&workspace, Some(source), fallback),
+            Some(cwd)
         );
     }
 
