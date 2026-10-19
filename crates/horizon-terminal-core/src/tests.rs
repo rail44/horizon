@@ -2628,6 +2628,7 @@ fn terminal_updates_and_external_value_types_round_trip_through_serde() {
             above: 8,
             below: 3,
         }),
+        TerminalUpdate::WorkingDirectory("/work/repo".into()),
     ];
     for update in updates {
         assert_serde_round_trip(update);

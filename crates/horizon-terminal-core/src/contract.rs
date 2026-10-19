@@ -178,6 +178,11 @@ pub enum TerminalUpdate {
     /// the postbag positional discipline. Phase 1 produces it daemon-side,
     /// the client does not consume it yet (§7 phase 2).
     ScrollWindow(TerminalScrollWindow),
+    /// Daemon → client: the session's current working directory, read from
+    /// its shell process (board #69). Sent when the value changes and once to
+    /// every newly installed subscriber, so a reattaching client learns the
+    /// current value without a request (`docs/terminald-split-design.md`).
+    WorkingDirectory(PathBuf),
 }
 
 /// Which OS clipboard buffer a [`TerminalUpdate::Clipboard`] targets.

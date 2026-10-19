@@ -23,6 +23,12 @@ use uuid::Uuid;
 /// against.
 const TERMINAL_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a session's frame stream must stay quiet after a frame before
+/// [`TerminalHost::forward_updates`] re-reads the shell's cwd. A `cd` redraws
+/// the prompt, so the read lands once that redraw has settled; a session that
+/// produces no frames is never sampled.
+const CWD_SETTLE: Duration = Duration::from_millis(200);
+
 #[derive(Clone)]
 pub(crate) struct TerminalHost {
     sessions: Arc<Mutex<HashMap<Uuid, HostedTerminal>>>,
@@ -42,6 +48,10 @@ struct HostedTerminal {
     latest_frame: Arc<Mutex<Option<TerminalFrame>>>,
     pid: Option<u32>,
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    /// The last cwd published as [`TerminalUpdate::WorkingDirectory`], if
+    /// any -- the change filter for [`TerminalHost::publish_cwd`] and the
+    /// value a newly installed subscriber is sent first.
+    cwd: Option<PathBuf>,
 }
 
 /// The local (sync-sendable, unbounded) halves of one attachment's two
@@ -135,14 +145,20 @@ impl TerminalHost {
         let (frame_tx, frame_rx) = unbounded_channel();
         let (event_tx, event_rx) = unbounded_channel();
         let mut subscribers = self.subscribers.lock().unwrap();
-        let latest = {
+        let (latest, cwd) = {
             let sessions = self.sessions.lock().unwrap();
             match sessions.get(&session_id) {
-                Some(session) => session.latest_frame.lock().unwrap().clone(),
+                Some(session) => (
+                    session.latest_frame.lock().unwrap().clone(),
+                    session.cwd.clone(),
+                ),
                 None if require_existing => return None,
-                None => None,
+                None => (None, None),
             }
         };
+        if let Some(cwd) = cwd {
+            let _ = event_tx.send(TerminalUpdate::WorkingDirectory(cwd));
+        }
         let registration = Uuid::new_v4();
         subscribers.insert(
             session_id,
@@ -274,8 +290,13 @@ impl TerminalHost {
             thread::spawn(move || {
                 match spawn_terminal(session_id, &spec_for_thread, &cwd_for_thread) {
                     Ok((session, frame_rx, update_rx)) => {
+                        let pid = session.pid;
                         if host.install_if_vacant(session_id, session) {
                             let _ = result_tx.send(Ok(()));
+                            host.publish_cwd(
+                                session_id,
+                                pid.and_then(sample_cwd).unwrap_or(cwd_for_thread),
+                            );
                             host.forward_updates(session_id, frame_rx, update_rx);
                         }
                         // Occupied: a different attempt (an earlier one that
@@ -359,6 +380,36 @@ impl TerminalHost {
             .unwrap_or_else(|| spec.fallback_cwd.clone())
     }
 
+    /// Records `cwd` as `session_id`'s working directory and sends it as
+    /// [`TerminalUpdate::WorkingDirectory`] when it differs from the last
+    /// published value. A no-op for an unknown session.
+    fn publish_cwd(&self, session_id: Uuid, cwd: PathBuf) {
+        {
+            let mut sessions = self.sessions.lock().unwrap();
+            let Some(session) = sessions.get_mut(&session_id) else {
+                return;
+            };
+            if session.cwd.as_ref() == Some(&cwd) {
+                return;
+            }
+            session.cwd = Some(cwd.clone());
+        }
+        self.send_event(session_id, TerminalUpdate::WorkingDirectory(cwd));
+    }
+
+    /// Reads `session_id`'s shell process cwd and publishes it if it changed.
+    fn refresh_cwd(&self, session_id: Uuid) {
+        let pid = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&session_id)
+            .and_then(|session| session.pid);
+        if let Some(cwd) = pid.and_then(sample_cwd) {
+            self.publish_cwd(session_id, cwd);
+        }
+    }
+
     /// Pushes one non-frame event to `session_id`'s subscriber, if any,
     /// dropping the subscriber entry when its bridge is gone.
     fn send_event(&self, session_id: Uuid, event: TerminalUpdate) {
@@ -391,6 +442,11 @@ impl TerminalHost {
     /// latest frame), non-frame events onto its `events` bridge. Since wire
     /// v11 there is no per-attachment diffing — the frame path is a watch,
     /// so a full frame goes straight through.
+    ///
+    /// Each frame also arms a [`CWD_SETTLE`] deadline; when it passes with no
+    /// further frame, the shell's cwd is re-read ([`Self::refresh_cwd`]).
+    /// With no frame since the last read the deadline is disarmed, so an
+    /// idle session costs no wakeups.
     fn forward_updates(
         &self,
         session_id: Uuid,
@@ -403,10 +459,16 @@ impl TerminalHost {
             // select keeps servicing the other; the forwarder ends when the
             // events channel closes or delivers `Exited`.
             let mut frame_rx = frame_rx;
+            let mut cwd_settle = crossbeam_channel::never();
             loop {
                 crossbeam_channel::select! {
+                    recv(cwd_settle) -> _ => {
+                        cwd_settle = crossbeam_channel::never();
+                        host.refresh_cwd(session_id);
+                    }
                     recv(frame_rx) -> frame => match frame {
                         Ok(frame) => {
+                            cwd_settle = crossbeam_channel::after(CWD_SETTLE);
                             if let Some(session) = host.sessions.lock().unwrap().get(&session_id) {
                                 *session.latest_frame.lock().unwrap() = Some(frame.clone());
                             }
@@ -525,6 +587,7 @@ fn spawn_terminal(
             latest_frame: Arc::new(Mutex::new(None)),
             pid,
             killer,
+            cwd: None,
         },
         frame_rx,
         update_rx,
@@ -722,6 +785,7 @@ mod tests {
             latest_frame: Arc::new(Mutex::new(None)),
             pid: None,
             killer: Arc::new(Mutex::new(Box::new(killer))),
+            cwd: None,
         };
         (session, command_rx, killed)
     }
@@ -749,6 +813,51 @@ mod tests {
         assert!(
             matches!(creating.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "spawn diagnostic")
         );
+    }
+
+    #[test]
+    fn a_cwd_is_published_on_change_and_not_on_repeat() {
+        let host = TerminalHost::new();
+        let id = Uuid::new_v4();
+        let (session, _command_rx, _killed) = fake_session();
+        assert!(host.install_if_vacant(id, session));
+        let mut channels = host.attach_subscribe(id).expect("live session");
+
+        host.publish_cwd(id, PathBuf::from("/work/a"));
+        host.publish_cwd(id, PathBuf::from("/work/a"));
+        host.publish_cwd(id, PathBuf::from("/work/b"));
+
+        assert_eq!(
+            channels.events.try_recv(),
+            Ok(TerminalUpdate::WorkingDirectory("/work/a".into()))
+        );
+        assert_eq!(
+            channels.events.try_recv(),
+            Ok(TerminalUpdate::WorkingDirectory("/work/b".into()))
+        );
+        assert!(channels.events.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_fresh_subscriber_first_receives_the_current_cwd() {
+        let host = TerminalHost::new();
+        let id = Uuid::new_v4();
+        let (session, _command_rx, _killed) = fake_session();
+        assert!(host.install_if_vacant(id, session));
+
+        let mut before = host.attach_subscribe(id).expect("live session");
+        assert!(
+            before.events.try_recv().is_err(),
+            "no cwd is known yet, so nothing is sent on attach"
+        );
+
+        host.publish_cwd(id, PathBuf::from("/work/repo"));
+        let mut reattached = host.attach_subscribe(id).expect("live session");
+        assert_eq!(
+            reattached.events.try_recv(),
+            Ok(TerminalUpdate::WorkingDirectory("/work/repo".into()))
+        );
+        assert!(reattached.events.try_recv().is_err());
     }
 
     #[test]

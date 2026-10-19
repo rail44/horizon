@@ -1172,6 +1172,19 @@
             "ScrollWindow"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Daemon → client: the session's current working directory, read from\nits shell process (board #69). Sent when the value changes and once to\nevery newly installed subscriber, so a reattaching client learns the\ncurrent value without a request (`docs/terminald-split-design.md`).",
+          "properties": {
+            "WorkingDirectory": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "WorkingDirectory"
+          ],
+          "type": "object"
         }
       ]
     },
