@@ -79,7 +79,6 @@ pub struct SessionNewMeta {
     pub session_id: SessionId,
     pub provider_id: String,
     pub role_id: Option<String>,
-    pub isolate: bool,
     pub spawn_source_session_id: Option<SessionId>,
 }
 
@@ -240,7 +239,6 @@ mod tests {
             session_id: SessionId::new(),
             provider_id: "default".into(),
             role_id: Some("reviewer".into()),
-            isolate: true,
             spawn_source_session_id: Some(SessionId::new()),
         });
         round_trip(&SessionInfoMeta {

@@ -22,15 +22,14 @@ use super::approval::{dispatch_inbound_command, gate_processing_approval};
 use super::completion::fold_tool_completion;
 use super::environment::{EnvironmentLocation, PreparedEnvironment, SessionEnvironment};
 use super::events::{
-    apply_and_send_session_events, persist_and_send_session_event, report_persistence_failure,
-    send_session_event,
+    persist_and_send_session_event, report_persistence_failure, send_session_event,
 };
 use super::host_tools::AgentdHostTools;
 use super::panic::{
     catch_session_panic, record_session_loop_panic, record_unexpected_provider_exit,
     SessionLoopPhase,
 };
-use super::setup::{project_is_trusted, resolve_and_create_isolated_worktree};
+use super::setup::project_is_trusted;
 use super::state::{lock_unpoisoned, AgentdState};
 use crate::worktree::WorktreeInfo;
 
@@ -51,7 +50,6 @@ pub(super) fn run_session(
     role_id: Option<RoleId>,
     workspace_root: Option<PathBuf>,
     spawn_source_session_id: Option<SessionId>,
-    isolate: bool,
     restored_worktree: Option<WorktreeInfo>,
     state: &Arc<AgentdState>,
     inbound_rx: Receiver<Command>,
@@ -60,43 +58,19 @@ pub(super) fn run_session(
     phase: &Cell<SessionLoopPhase>,
     retained_grants: Vec<horizon_sandbox::FilesystemGrant>,
 ) {
-    // Resolved *before* starting the provider session (below) so the real,
-    // post-isolation root -- an isolated worktree, when this session is
-    // isolated, not merely the pre-isolation `workspace_root` this function
-    // was called with -- can be threaded straight into `start_session`'s new
-    // `workspace_root` argument (`contract::StartSession::workspace_root`'s
-    // doc comment): the rig provider builds its system prompt's environment
-    // (and the prompt's skills listing, `providers::rig::session::
-    // session_extra_sections`) from exactly that value, once, at session
-    // spawn time. Later activation uses the explicit environment handshake. This was
-    // the 2026-07-19 dogfooding bug: an isolated session's prompt claimed the
-    // daemon's own cwd as its working directory, so the model tried to write
-    // files into the root checkout instead of its own worktree. Doing this
-    // ahead of the provider/role validation just below means a (rare --
-    // effectively never in production, see that check's own doc comment)
-    // unknown provider or role pays for an isolated worktree's creation and
-    // immediate teardown; `spawn_session_thread`'s post-`run_session`
-    // cleanup removes it regardless of how this function returns, so
-    // nothing is leaked.
-    let (workspace_root, isolated, startup_warning) = if let Some(worktree) = restored_worktree {
-        (Some(worktree.path), true, None)
-    } else if isolate {
-        match resolve_and_create_isolated_worktree(
-            state,
-            session_id,
-            spawn_source_session_id,
-            workspace_root.clone(),
-        ) {
-            Ok(root) => (Some(root), true, None),
-            Err(warning) => (workspace_root, false, Some(warning)),
-        }
-    } else {
-        (workspace_root, false, None)
+    // A restored session's root is the worktree it owns, resolved before the
+    // provider starts so `start_session`'s `workspace_root` (the system
+    // prompt's environment section and skills listing) names that worktree.
+    // A session that enters a worktree later goes through
+    // `SessionEnvironment::activate` instead.
+    let (workspace_root, isolated) = match restored_worktree {
+        Some(worktree) => (Some(worktree.path), true),
+        None => (workspace_root, false),
     };
 
     // Repository-trust gate: resolved from the
-    // same post-isolation `workspace_root` as `[grants]` (so an isolated
-    // worktree session inherits its parent project's trust), using the same
+    // same `workspace_root` as `[grants]` (so a worktree session inherits
+    // its parent project's trust), using the same
     // `worktree::project_root` resolution. Threaded into the provider so
     // `session_extra_sections` can gate skills/instructions, and used below
     // to gate the tool-side skill registry.
@@ -166,14 +140,6 @@ pub(super) fn run_session(
         ),
         None => LiveState::with_disabled_persistence(),
     };
-    if let Some(message) = startup_warning {
-        apply_and_send_session_events(
-            state,
-            &live_state,
-            session_id,
-            vec![Event::Error(AgentError { message }).into()],
-        );
-    }
     if isolated
         && !live_state
             .events()

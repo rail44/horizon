@@ -20,7 +20,7 @@ pub(super) fn restore(
 ) -> Result<RestoredEnvironment, String> {
     let Some(context) = context else {
         // Records predating session_context retain the process-cwd,
-        // non-isolated behavior; the next record stores explicit context.
+        // no-worktree behavior; the next record stores explicit context.
         return Ok(RestoredEnvironment {
             workspace_root: None,
             parent_session_id: None,
@@ -36,6 +36,10 @@ pub(super) fn restore(
             "retained filesystem authority is unavailable for {session_id:?}"
         ));
     }
+    // `isolated_worktree` marks a session that owns its worktree. A retained
+    // `EnvironmentActivated` identity restores it; records from sessions
+    // spawned into a worktree before board #65 carry none and are adopted
+    // from the persisted root instead.
     if !context.isolated_worktree {
         return Ok(RestoredEnvironment {
             workspace_root: context.workspace_root.clone(),

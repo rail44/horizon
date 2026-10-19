@@ -13,4 +13,4 @@ pub use horizon_wire::SessionId;
 
 /// The extension version both ends compare in `initialize`'s
 /// `_meta.horizon.ext_version` ([`InitializeMeta::ext_version`]).
-pub const HORIZON_ACP_EXT_VERSION: u32 = 1;
+pub const HORIZON_ACP_EXT_VERSION: u32 = 2;

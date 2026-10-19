@@ -208,7 +208,6 @@ impl Connection {
             new.role_id,
             new.workspace_root,
             new.spawn_source_session_id,
-            new.isolate,
             None,
             Vec::new(),
         );
@@ -391,7 +390,6 @@ mod tests {
             Some(RoleId(horizon_agent::roles::EXPLORE_ROLE_ID.to_string())),
             None,
             None,
-            false,
             None,
             Vec::new(),
         );
@@ -402,7 +400,6 @@ mod tests {
             None,
             None,
             None,
-            false,
             None,
             Vec::new(),
         );
@@ -456,7 +453,7 @@ mod tests {
     }
 
     /// [`Connection::session_list`] must report the authoritative,
-    /// post-isolation `workspace_root` from the session's own `SessionEntry`
+    /// resolved `workspace_root` from the session's own `SessionEntry`
     /// -- the wire-level counterpart of the state-level assertion above,
     /// and the coordinator's requested regression guard: the workspace
     /// model on the Horizon side reads exactly this field to correct its

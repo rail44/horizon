@@ -1,16 +1,13 @@
 //! Per-session construction, resolved once on the session's own thread
 //! before its provider starts: the confinement root, the configured
-//! `[grants]` trees, the skill-discovery root, and the isolated worktree.
+//! `[grants]` trees, the skill-discovery root, and project trust.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use horizon_agent::config::AgentToolsConfig;
-use horizon_agent::contract::SessionId;
-use horizon_agent::hosting::{AgentWireEvent, WorkspaceRootResolved};
 use horizon_agent::tools::{RecallContext, ToolSessionBuilder};
 
-use super::events::send_session_event;
 use super::state::AgentdState;
 use crate::worktree;
 
@@ -171,55 +168,10 @@ pub(super) fn skill_discovery_root(workspace_root: Option<&Path>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// Resolve and create the real isolated root, recording its lineage only on
-/// success. The caller keeps the original root on failure and commits the
-/// returned warning after constructing LiveState, before attachment bootstrap.
-pub(super) fn resolve_and_create_isolated_worktree(
-    state: &Arc<AgentdState>,
-    session_id: SessionId,
-    spawn_source_session_id: Option<SessionId>,
-    workspace_root: Option<PathBuf>,
-) -> Result<PathBuf, String> {
-    let fallback_dir = workspace_root
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
-    let parent_info =
-        spawn_source_session_id.and_then(|source_id| state.session_directory(source_id));
-    let source_dir = worktree::resolve_isolation_source(parent_info, fallback_dir);
-
-    match worktree::create_isolated_worktree(&source_dir, session_id.as_uuid()) {
-        Ok(info) => {
-            let root = info.path.clone();
-            state.record_isolated_worktree(session_id, spawn_source_session_id, info);
-            send_session_event(
-                state,
-                session_id,
-                AgentWireEvent::WorkspaceRootResolved(WorkspaceRootResolved {
-                    workspace_root: root.clone(),
-                    parent_session_id: spawn_source_session_id,
-                }),
-            );
-            Ok(root)
-        }
-        Err(error) => {
-            eprintln!(
-                "horizon-agentd: failed to create isolated worktree for {session_id:?}: {error}"
-            );
-            Err(format!(
-                "failed to create an isolated worktree ({error}); continuing without isolation"
-            ))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::state::SessionEntry;
-    use crate::session::test_support::{state_with_rig_config, state_with_trusted_projects};
-    use crate::session::Connection;
-    use crossbeam_channel::{unbounded, Sender};
-    use horizon_agent::contract::{Command, ProviderId};
+    use crate::session::test_support::state_with_trusted_projects;
 
     /// A `SessionNew.workspace_root` of `Some(dir)` must confine the
     /// session's file tools to `dir`, not this process's cwd.
@@ -372,16 +324,13 @@ mod tests {
         assert!(!policy.is_allowed("other.example"));
     }
 
-    // --- Live workspace-root announcement (real git, in temp repositories) --
+    // --- Real-git tests (in temp repositories) --
     //
-    // `resolve_and_create_isolated_worktree` shells out to real `git` via
-    // `worktree::create_isolated_worktree`, so exercising its announcement
-    // needs a real scratch repo -- mirrors `worktree.rs`'s own real-git test
-    // convention, including its `EnclosingRepoGuard` hermeticity canary and
-    // `GIT_*` env scrubbing (see that module's doc comment / backlog 53) to
-    // guard against a leaked `GIT_DIR` operating on the enclosing repository
-    // instead of the temp one.
-    mod isolation_announcement {
+    // Mirrors `worktree.rs`'s own real-git test convention, including its
+    // `EnclosingRepoGuard` hermeticity canary and `GIT_*` env scrubbing (see
+    // that module's doc comment / backlog 53) to guard against a leaked
+    // `GIT_DIR` operating on the enclosing repository instead of the temp one.
+    mod real_git {
         use std::path::{Path, PathBuf};
 
         use super::*;
@@ -531,108 +480,6 @@ mod tests {
                     self.root.display()
                 );
             }
-        }
-
-        fn entry_with_root(
-            inbound: Sender<Command>,
-            replay: Sender<crate::session::attachment::AttachRequest>,
-            root: PathBuf,
-        ) -> SessionEntry {
-            SessionEntry {
-                provider_id: ProviderId("builtin.agent.rig".to_string()),
-                role_id: None,
-                model: None,
-                selection: None,
-                inbound,
-                replay,
-                parent_session_id: None,
-                workspace_root: Some(root),
-                worktree: None,
-            }
-        }
-
-        /// The regression guard this whole announcement exists for: a
-        /// successful isolated-worktree resolution must push a session-scoped
-        /// `Control::WorkspaceRootResolved` carrying the *same* root/parent
-        /// [`AgentdState::record_isolated_worktree`] just recorded on the
-        /// entry -- so a UI connected for this session's whole lifetime sees
-        /// the authoritative worktree path live, without waiting for a
-        /// `session_list`/resume sweep.
-        #[test]
-        fn resolve_and_create_isolated_worktree_announces_the_resolved_root_live() {
-            let _canary = EnclosingRepoGuard::capture();
-            let state = state_with_rig_config(true, "test-model");
-            let repo = scratch_repo();
-            let session_id = SessionId::new();
-            let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);
-            let parent_id = SessionId::new();
-            let (inbound_tx, _inbound_rx) = unbounded::<Command>();
-            let (replay_tx, _replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
-            state.sessions.lock().unwrap().insert(
-                session_id,
-                entry_with_root(inbound_tx, replay_tx, repo.path().to_path_buf()),
-            );
-
-            let resolved = resolve_and_create_isolated_worktree(
-                &state,
-                session_id,
-                Some(parent_id),
-                Some(repo.path().to_path_buf()),
-            );
-
-            let root = resolved.expect("isolation against a real git repo should succeed");
-            assert!(
-                root.starts_with(repo.path().join(".horizon").join("worktrees")),
-                "resolved root {} should be under .horizon/worktrees",
-                root.display()
-            );
-
-            let sent = outgoing_rx
-                .try_recv()
-                .expect("a WorkspaceRootResolved event should have been sent");
-            match sent {
-                AgentWireEvent::WorkspaceRootResolved(payload) => {
-                    assert_eq!(payload.workspace_root, root);
-                    assert_eq!(payload.parent_session_id, Some(parent_id));
-                }
-                other => panic!("expected a WorkspaceRootResolved event, got: {other:?}"),
-            }
-        }
-
-        /// The failure path degrades to a shared spawn and records no
-        /// lineage edge (existing behavior) -- nothing to announce either,
-        /// mirroring `Control::SkippedLines`'s "just don't send it"
-        /// convention. A non-existent source directory is not a git repo at
-        /// all, so worktree creation fails deterministically without needing
-        /// a real corrupt-repo fixture.
-        #[test]
-        fn resolve_and_create_isolated_worktree_sends_nothing_when_isolation_fails() {
-            let _canary = EnclosingRepoGuard::capture();
-            let state = state_with_rig_config(true, "test-model");
-            let not_a_repo = tempfile::tempdir().expect("create temp dir");
-            let session_id = SessionId::new();
-            let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);
-            let (inbound_tx, _inbound_rx) = unbounded::<Command>();
-            let (replay_tx, _replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
-            state.sessions.lock().unwrap().insert(
-                session_id,
-                entry_with_root(inbound_tx, replay_tx, not_a_repo.path().to_path_buf()),
-            );
-
-            let resolved = resolve_and_create_isolated_worktree(
-                &state,
-                session_id,
-                None,
-                Some(not_a_repo.path().to_path_buf()),
-            );
-
-            assert!(resolved
-                .unwrap_err()
-                .contains("continuing without isolation"));
-            assert!(
-                outgoing_rx.try_recv().is_err(),
-                "nothing should be announced when isolation never actually happened"
-            );
         }
 
         // --- project_is_trusted: repository-trust gate (owner decision 2026-08-05) --

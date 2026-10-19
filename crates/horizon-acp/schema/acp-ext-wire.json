@@ -872,9 +872,6 @@
     "SessionNewMeta": {
       "description": "Mirrors `hosting::SessionNew` minus `workspace_root` (crates/horizon-agent/src/hosting.rs).",
       "properties": {
-        "isolate": {
-          "type": "boolean"
-        },
         "provider_id": {
           "type": "string"
         },
@@ -900,8 +897,7 @@
       },
       "required": [
         "session_id",
-        "provider_id",
-        "isolate"
+        "provider_id"
       ],
       "type": "object"
     },
@@ -1285,5 +1281,5 @@
     "_horizon/doom_loop"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 1
+  "x-session-protocol-version": 2
 }

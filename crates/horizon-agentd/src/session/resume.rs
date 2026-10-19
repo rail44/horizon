@@ -280,7 +280,6 @@ fn resume_one_session(
         role_id,
         restored.workspace_root,
         restored.parent_session_id,
-        false,
         restored.worktree,
         events,
         persisted_context,
@@ -466,6 +465,9 @@ pub(crate) fn resume_session(
         Event::EnvironmentActivated(identity) => Some(identity),
         _ => None,
     });
+    // Same rule as `resume::environment::restore`: an owned worktree is
+    // restored from its activation identity, or adopted from the persisted
+    // root for records that predate activation.
     let worktree = if context.isolated_worktree {
         Some(match identity {
             Some(identity) => worktree::restore_worktree(identity, session_id.as_uuid())?,
@@ -511,7 +513,6 @@ pub(crate) fn resume_session(
         role_id,
         context.workspace_root.clone(),
         context.parent_session_id,
-        false,
         worktree,
         events,
         Some(context),

@@ -43,13 +43,10 @@ pub enum AgentWireEvent {
     /// (see `docs/agent-output-ui-amendment.md`'s dated model-chip
     /// addendum). Ephemeral like `ToolCallProgress`.
     SessionModel(String),
-    /// Live correction of a freshly isolated session's authoritative
-    /// `workspace_root` (and derivation edge) — sent once, right after
-    /// `horizon-agentd` resolves the session's isolated worktree, which
-    /// only finishes *after* `session/new` already returned. Not sent at all
-    /// when isolation fails and degrades to a shared spawn (nothing to
-    /// correct then, mirroring [`SessionSummary::parent_session_id`]'s
-    /// "the edge exists only via isolation").
+    /// Live correction of a session's authoritative `workspace_root` (and
+    /// derivation edge) — sent when the session enters a worktree through
+    /// environment activation, and re-sent on attachment replay. Not sent
+    /// when activation fails (nothing to correct then).
     WorkspaceRootResolved(WorkspaceRootResolved),
     /// Live progress of one of this session's background `task` children —
     /// the daemon-side task watcher mirroring what the child was last
@@ -110,9 +107,9 @@ pub struct ModelSelection {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceRootResolved {
     pub workspace_root: PathBuf,
-    /// Additive, like [`SessionSummary::parent_session_id`] -- `None` for an
-    /// isolated-but-sourceless spawn (still a valid lineage root, see that
-    /// field's own doc comment).
+    /// Additive, like [`SessionSummary::parent_session_id`] -- `None` when
+    /// the session has no recorded derivation edge (see that field's own doc
+    /// comment).
     #[serde(default)]
     pub parent_session_id: Option<SessionId>,
 }
@@ -156,25 +153,23 @@ pub struct SessionSummary {
     /// role without a separate round trip -- mirrors `provider_id` above.
     pub role_id: Option<RoleId>,
     /// The session this one derives from, per
-    /// `docs/session-relationship-design.md` decisions 1-3: set only when
-    /// this session was actually spawned isolated (its own git worktree
-    /// branched from the source session's directory) -- a shared-directory
-    /// spawn creates no edge, so this stays `None` even if a spawn source
-    /// was given. New event-log records persist this edge with the
-    /// authoritative root/isolation context, so a resumed isolated session
-    /// reports it again after its linked worktree has been revalidated.
+    /// `docs/session-relationship-design.md` decisions 1-2: set for a board
+    /// review session (its caller) and for a restored session whose
+    /// persisted context carries the edge. A fresh spawn records none, even
+    /// when a spawn source was given. Event-log records persist this edge
+    /// with the authoritative root/worktree context, so a resumed session
+    /// that owns a worktree reports it again after the worktree has been
+    /// revalidated.
     pub parent_session_id: Option<SessionId>,
     /// This session's *actual* confinement directory, as `horizon-agentd`
     /// itself resolved it -- the authoritative counterpart to `SessionNew.
     /// workspace_root` (that field is only ever the caller's pre-spawn
-    /// value; for an isolated session, `horizon-agentd` overrides it with
-    /// the worktree path it creates, which the caller cannot know in
-    /// advance since worktree creation finishes asynchronously, after
-    /// `session/new` already returned -- see
-    /// `session::resolve_and_create_isolated_worktree`). Populated from the
-    /// same `SessionEntry.workspace_root` a resumed session's summary reads
-    /// too. New event-log records persist this authoritative value, and
-    /// isolated roots are revalidated against Git before resume. Read by
+    /// value; once a session enters a worktree through environment
+    /// activation, `horizon-agentd` reports the worktree path instead).
+    /// Populated from the same `SessionEntry.workspace_root` a resumed
+    /// session's summary reads too. Event-log records persist this
+    /// authoritative value, and worktree roots are revalidated against Git
+    /// before resume. Read by
     /// `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore` to
     /// correct the workspace model's stored root for a session it adopts.
     pub workspace_root: Option<PathBuf>,
@@ -204,23 +199,11 @@ pub struct SessionNew {
     /// launched).
     pub workspace_root: Option<PathBuf>,
     /// The pane/session this spawn was invoked "from" -- e.g. the split
-    /// target, or whatever pane was active/named at spawn time. Independent
-    /// of `isolate` (decision 3's two knobs): carried even for a
-    /// shared-directory spawn, but only turns into a recorded
-    /// `SessionSummary.parent_session_id` lineage edge when `isolate` is
-    /// also true (decision 2: "the edge exists only via isolation"). `None`
-    /// for a spawn with no source pane at all (e.g. a fresh tab with
-    /// nothing active).
+    /// target, or whatever pane was active/named at spawn time. `None` for a
+    /// spawn with no source pane at all (e.g. a fresh tab with nothing
+    /// active). A fresh spawn records no `SessionSummary.parent_session_id`
+    /// edge from it; spawns do not create worktrees (board #65).
     pub spawn_source_session_id: Option<SessionId>,
-    /// Whether `horizon-agentd` should give this session its own git
-    /// worktree, branched from `spawn_source_session_id`'s directory,
-    /// instead of confining it to `workspace_root` directly -- decision 3's
-    /// per-spawn isolation knob. The origin-based default (palette: shared;
-    /// CLI/control-plane: isolated) plus any explicit per-spawn override are
-    /// both resolved client-side before this ever reaches the daemon;
-    /// `horizon-agentd` just executes whatever concrete choice arrives
-    /// here (see `docs/session-relationship-design.md` decision 3).
-    pub isolate: bool,
 }
 
 /// The agent (child) asking the client to run a host-coupled tool (e.g.

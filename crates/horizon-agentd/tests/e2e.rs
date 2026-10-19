@@ -205,7 +205,6 @@ fn new_session_request(
     provider_id: &str,
     role_id: Option<&str>,
     cwd: PathBuf,
-    isolate: bool,
 ) -> v2::NewSessionRequest {
     let mut meta = None;
     acp::write_horizon_meta(
@@ -214,7 +213,6 @@ fn new_session_request(
             session_id,
             provider_id: provider_id.to_string(),
             role_id: role_id.map(str::to_string),
-            isolate,
             spawn_source_session_id: None,
         },
     )
@@ -224,7 +222,7 @@ fn new_session_request(
 
 /// A mock-provider session in the test's cwd.
 fn session_new(session_id: SessionId) -> v2::NewSessionRequest {
-    new_session_request(session_id, &mock_provider_id().0, None, test_cwd(), false)
+    new_session_request(session_id, &mock_provider_id().0, None, test_cwd())
 }
 
 async fn open_session(
@@ -607,7 +605,6 @@ api_key_env = "HORIZON_SWITCH_TEST_KEY"
             &horizon_agent::registry::named_rig_provider_id("initial").0,
             None,
             test_cwd(),
-            false,
         ),
     )
     .await;
@@ -890,11 +887,11 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
     assert_eq!(replayed.human_decision, Some(acp::HumanDecision::Approved));
 }
 
-/// A shared (non-isolated) session in a plain checkout, the shape whose
+/// A session started in a plain checkout, the shape whose
 /// `bash` calls run sandboxed without approval and whose Git metadata
 /// writes still ask.
 fn shared_session_in(session_id: SessionId, cwd: PathBuf) -> v2::NewSessionRequest {
-    new_session_request(session_id, &mock_provider_id().0, None, cwd, false)
+    new_session_request(session_id, &mock_provider_id().0, None, cwd)
 }
 
 /// `bash` runs agentd-side: approving a real `bash` tool call (a Git
@@ -1343,7 +1340,6 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
             &mock_provider_id().0,
             Some("config"),
             test_cwd(),
-            false,
         ),
     )
     .await;
@@ -1371,54 +1367,42 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     );
 }
 
-/// A daemon restart must preserve an isolated session's authoritative root
-/// and tier-1 eligibility. The regression this pins down downgraded every
-/// resumed session to the daemon cwd with `isolated=false`, so later bash
-/// calls escaped the per-command sandbox and requested manual approval.
+/// A daemon restart must preserve the authoritative root and tier-1
+/// eligibility of a session that entered a worktree. The regression this
+/// pins down downgraded every resumed session to the daemon cwd with
+/// `isolated=false`, so later bash calls escaped the per-command sandbox and
+/// requested manual approval.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     let repo = isolated_session_fixture();
     let agentd = spawn_agentd();
     let socket_path = agentd.socket_path.clone();
     let event_log_path = agentd.event_log_path.clone();
-    let client = connect(&socket_path).await;
+    let mut client = connect(&socket_path).await;
     let session_id = SessionId::new();
     open_session(
         &client,
-        new_session_request(
-            session_id,
-            &mock_provider_id().0,
-            None,
-            repo.path().to_path_buf(),
-            true,
-        ),
+        shared_session_in(session_id, repo.path().to_path_buf()),
     )
     .await;
 
-    let mut isolated_root = None;
-    for _ in 0..200 {
-        if let Some(root) = list_sessions(&client)
-            .await
-            .iter()
-            .find(|info| info.session_id == acp_id(session_id))
-            .and_then(|info| info_meta(info).workspace_root)
-            .filter(|root| root != repo.path())
-        {
-            isolated_root = Some(root);
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let isolated_root = isolated_root.expect("isolated worktree resolution timed out");
+    prompt(&client, session_id, "please enter a worktree").await;
+    let collected = collect_until(&mut client, |inbound| {
+        resolved_root(inbound, session_id).is_some_and(|root| root != repo.path())
+    })
+    .await;
+    let isolated_root = resolved_root(collected.last().unwrap(), session_id).unwrap();
     assert!(
         isolated_root.starts_with(repo.path().join(".horizon/worktrees")),
         "resolved root should be the session-owned worktree: {}",
         isolated_root.display()
     );
 
-    wait_for_persisted_event(&event_log_path, session_id, |event| {
-        matches!(event, Event::StateChanged(SessionState::WaitingForUser))
-    })
+    wait_for_persisted_event(
+        &event_log_path,
+        session_id,
+        |event| matches!(event, Event::EnvironmentActivated(identity) if identity.path == isolated_root),
+    )
     .await;
     let report = horizon_agent::persistence::event_log::read(&event_log_path)
         .expect("the session context should be readable before restart");
@@ -2237,7 +2221,6 @@ async fn moa_pass_runs_against_a_real_provider() {
             &horizon_agent::registry::moa_provider_id("mix").0,
             None,
             fixture.clone(),
-            false,
         ))
         .await
         .expect("the [[moa]] entry must be registered as a provider");
@@ -2711,50 +2694,4 @@ async fn large_history_survives_abandoned_replay_and_daemon_restart() {
     let mut client = connect(&socket).await;
     let restored = resume(&mut client, session).await.unwrap();
     assert_eq!(user_texts(&restored), history);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn startup_isolation_warning_is_visible_and_survives_reattachment() {
-    let agentd = spawn_agentd();
-    let mut client = connect(&agentd.socket_path).await;
-    let session = SessionId::new();
-    let plain_directory = tempfile::tempdir().unwrap();
-    open_session(
-        &client,
-        new_session_request(
-            session,
-            &mock_provider_id().0,
-            None,
-            plain_directory.path().into(),
-            true,
-        ),
-    )
-    .await;
-    let collected = collect_until(&mut client, |inbound| {
-        session_error(inbound)
-            .is_some_and(|message| message.contains("continuing without isolation"))
-    })
-    .await;
-    let warning = session_error(collected.last().unwrap())
-        .unwrap()
-        .to_string();
-    let replay = resume(&mut client, session).await.unwrap();
-    assert_eq!(
-        replay
-            .iter()
-            .filter(|inbound| session_error(inbound) == Some(warning.as_str()))
-            .count(),
-        1
-    );
-    let records = horizon_agent::persistence::event_log::read(&agentd.event_log_path)
-        .unwrap()
-        .records;
-    assert_eq!(
-        records
-            .iter()
-            .filter(|record| record.session_id == session
-                && matches!(&record.event, Event::Error(error) if error.message == warning))
-            .count(),
-        1
-    );
 }

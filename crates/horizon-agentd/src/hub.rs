@@ -330,7 +330,6 @@ impl Shared {
             role_id: meta.role_id.map(RoleId),
             workspace_root: Some(request.cwd.into_inner()),
             spawn_source_session_id: meta.spawn_source_session_id,
-            isolate: meta.isolate,
         };
         let this = self.clone();
         tokio::spawn(async move {

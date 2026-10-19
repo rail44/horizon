@@ -1,8 +1,9 @@
-//! Isolation/worktree creation at spawn -- `docs/session-relationship-design.md`
-//! decisions 3 and 5. Agentd-side (the design's pinned call): a spawn
-//! requesting isolation gets its own `git worktree` under the target
-//! repository's `.horizon/worktrees/<slug>`, branched per decision 3's base-ref
-//! rule, and that worktree is removed (never the branch) on a clean terminate
+//! Session worktrees -- `docs/session-relationship-design.md` decision 5 and
+//! `docs/sandbox-perimeter-design.md`. A session that enters a worktree
+//! (environment activation: `worktree.enter`, the board's `implement`) gets
+//! its own `git worktree` under the target repository's
+//! `.horizon/worktrees/<slug>`, branched at the requested base; restore
+//! re-adopts it, and it is removed (never the branch) on a clean terminate
 //! (decision 5). Everything here shells out to the `git` binary rather than
 //! adding a libgit2/gix dependency -- consistent with there being no existing
 //! git-library dependency anywhere in this workspace, and `git worktree`/
@@ -24,37 +25,6 @@ pub(crate) struct WorktreeInfo {
     pub(crate) path: PathBuf,
     pub(crate) branch: String,
     pub(crate) base: String,
-}
-
-/// Resolves where a new isolated worktree should be created *from*: the one
-/// pure function the design's implementation notes ask for. `source` is
-/// `Some((dir, _))` when the spawn's source session is still live in
-/// `agentd` (see `AgentdState::session_directory`): `dir` is that
-/// session's own worktree path if it owns one, else its plain
-/// `workspace_root`. `source` is `None` for an unknown/foreign source id (a
-/// terminal isn't tracked here yet -- deferred, see the design doc's
-/// "agents-first" note) or no source pane at all, in which case `fallback`
-/// (the spawn's own `workspace_root`, or this process's cwd) stands in and
-/// the spawn is treated as a lineage root.
-///
-/// The base-ref strategy (decision 3 in `docs/session-relationship-design.md`)
-/// is no longer a separate dispatch: every spawn, derived or root, branches
-/// from `source_dir`'s own working-tree HEAD via `git rev-parse HEAD`. For a
-/// derived child the source is the parent's owned worktree (so the child
-/// sees the parent's local commits); for a root spawn the source is the
-/// human launcher's own checkout -- including any local commits that have
-/// not been pushed to `origin/main` (issue 006). The repository's origin
-/// default is not consulted at all here: when the launcher has unpushed
-/// commits, that is the state the child must inspect, not a stale
-/// `origin/HEAD`.
-pub(crate) fn resolve_isolation_source(
-    source: Option<(PathBuf, bool)>,
-    fallback: PathBuf,
-) -> PathBuf {
-    match source {
-        Some((dir, _source_is_owned_worktree)) => dir,
-        None => fallback,
-    }
 }
 
 /// The worktree directory name / branch suffix derived from a session id:
@@ -210,26 +180,14 @@ fn ensure_horizon_ignored(common_dir: &Path) {
     let _ = std::fs::write(&exclude_path, content);
 }
 
-/// Creates a fresh isolated worktree for `session_id`, per decision 3:
-/// discovers `source_dir`'s repository, then `git worktree add -b horizon/
-/// <slug> <repo_root>/.horizon/worktrees/<slug> <source_dir HEAD>`. The base
-/// ref is always `source_dir`'s current working-tree HEAD -- the parent
-/// worktree's HEAD for a derived child (so a multi-level chain includes the
-/// parent's own commits) and the launcher's own checkout HEAD for a root
-/// spawn (so unpushed local commits on the launcher's checkout are honored,
-/// per issue 006; previously this fell back to `origin/<default>` and
-/// silently dropped any local commits past `origin/main`). Branch naming is
-/// stable and session-derived (`horizon/<slug>`); the directory lives at the
-/// repository root regardless of whether `source_dir` is itself a linked
-/// worktree, so chained (multi-level) isolation never nests a worktree
-/// inside another one.
-pub(crate) fn create_isolated_worktree(
-    source_dir: &Path,
-    session_id: Uuid,
-) -> Result<WorktreeInfo, String> {
-    create_isolated_worktree_at(source_dir, session_id, "HEAD")
-}
-
+/// Creates a fresh worktree for `session_id`: discovers `source_dir`'s
+/// repository, then `git worktree add -b horizon/<slug>
+/// <repo_root>/.horizon/worktrees/<slug> <base>`, with `base` resolved in
+/// `source_dir`. Branch naming is stable and session-derived
+/// (`horizon/<slug>`); the directory lives at the repository root regardless
+/// of whether `source_dir` is itself a linked worktree, so a worktree created
+/// from another one is never nested inside it. Environment activation
+/// (`worktree.enter`, the board's `implement`) is the only production caller.
 pub(crate) fn create_isolated_worktree_at(
     source_dir: &Path,
     session_id: Uuid,
@@ -454,34 +412,12 @@ mod tests {
 
     // --- Pure logic ---------------------------------------------------
 
-    #[test]
-    fn resolve_isolation_source_with_no_source_uses_the_fallback_as_a_root() {
-        let fallback = PathBuf::from("/tmp/fallback");
-        assert_eq!(resolve_isolation_source(None, fallback.clone()), fallback);
-    }
-
-    #[test]
-    fn resolve_isolation_source_uses_a_plain_source_dir_as_a_root() {
-        let source_dir = PathBuf::from("/tmp/source");
-        assert_eq!(
-            resolve_isolation_source(
-                Some((source_dir.clone(), false)),
-                PathBuf::from("/tmp/fallback")
-            ),
-            source_dir
-        );
-    }
-
-    #[test]
-    fn resolve_isolation_source_uses_an_owned_source_worktree_dir_as_derived() {
-        let worktree_dir = PathBuf::from("/tmp/source-worktree");
-        assert_eq!(
-            resolve_isolation_source(
-                Some((worktree_dir.clone(), true)),
-                PathBuf::from("/tmp/fallback")
-            ),
-            worktree_dir
-        );
+    /// `create_isolated_worktree_at` at `source_dir`'s working-tree HEAD.
+    fn create_isolated_worktree(
+        source_dir: &Path,
+        session_id: Uuid,
+    ) -> Result<WorktreeInfo, String> {
+        create_isolated_worktree_at(source_dir, session_id, "HEAD")
     }
 
     #[test]

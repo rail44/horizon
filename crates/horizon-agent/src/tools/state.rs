@@ -135,9 +135,10 @@ struct Inner {
     /// `config.read`/`config.write` degrade to an actionable error instead
     /// of guessing a path.
     config_path: Option<PathBuf>,
-    /// Whether `workspace_root` is an isolated worktree the daemon itself
-    /// created for this session (`docs/session-relationship-design.md`),
-    /// as opposed to a plain shared directory. Recorded for the daemon's
+    /// Whether `workspace_root` is a worktree this session owns -- one it
+    /// entered through environment activation (`worktree.enter`, the
+    /// board's `implement`) or had re-adopted on restore -- as opposed to the
+    /// directory it started in. Recorded for the daemon's
     /// persisted session context; the per-call trust predicate
     /// (`policy::classify_input`) does not read it
     /// (`docs/sandbox-perimeter-design.md`). Threaded in after construction

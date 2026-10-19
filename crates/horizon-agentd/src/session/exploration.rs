@@ -19,12 +19,10 @@ use super::state::{lock_unpoisoned, AgentdState};
 /// workspace root so an exploration always runs where its requester does.
 ///
 /// **Peer, not child** (decision 2): the exploration is spawned with no
-/// spawn source and `isolate: false`, so it shares the requester's exact
-/// working tree -- including an isolated requester's worktree, whose
-/// uncommitted state is precisely the view mid-task exploration needs --
-/// and records no derivation edge. The derivation tree stays pure code
-/// genealogy (`docs/session-relationship-design.md`: only isolation creates
-/// an edge).
+/// spawn source in the requester's resolved root, so it shares the
+/// requester's exact working tree -- including a worktree the requester
+/// entered, whose uncommitted state is precisely the view mid-task
+/// exploration needs -- and records no derivation edge.
 pub(super) struct AgentdExplorationHost {
     pub(super) state: Arc<AgentdState>,
     /// The session this host was installed on -- every task it launches is
@@ -33,8 +31,8 @@ pub(super) struct AgentdExplorationHost {
     /// The requesting session's provider, so an exploration is answered by
     /// the same model family the requester is talking to.
     pub(super) provider_id: ProviderId,
-    /// The requesting session's own resolved root -- post-isolation, so an
-    /// isolated requester's exploration reads that worktree and not the
+    /// The requesting session's own resolved root -- a requester that entered
+    /// a worktree has its exploration read that worktree and not the
     /// daemon's cwd.
     pub(super) workspace_root: Option<PathBuf>,
 }
@@ -69,7 +67,6 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
             Some(request.role.clone()),
             self.workspace_root.clone(),
             None,
-            false,
             None,
             Vec::new(),
         );

@@ -230,7 +230,6 @@ fn duplicate_creation_preserves_the_existing_session_command_owner() {
         role_id: None,
         workspace_root: None,
         spawn_source_session_id: None,
-        isolate: false,
     };
     assert!(connection
         .handle_session_new(request)

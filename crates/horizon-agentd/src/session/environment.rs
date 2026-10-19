@@ -38,6 +38,8 @@ pub(super) struct SessionEnvironment<'a> {
 pub(super) struct EnvironmentLocation {
     pub(super) workspace_root: Option<PathBuf>,
     pub(super) parent_session_id: Option<SessionId>,
+    /// Whether `workspace_root` is a worktree the session owns (activated or
+    /// restored); persisted as `session_context.isolated_worktree`.
     pub(super) isolated: bool,
     pub(super) trusted: bool,
 }

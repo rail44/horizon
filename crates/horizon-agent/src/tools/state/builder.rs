@@ -104,7 +104,9 @@ impl ToolSessionBuilder {
         self
     }
 
-    /// Record the outcome of host worktree creation, never infer it from a path.
+    /// Record whether the session owns the worktree it runs in (entered
+    /// through activation or re-adopted on restore), never infer it from a
+    /// path.
     pub fn with_isolated_worktree(mut self, isolated: bool) -> Self {
         self.inner.isolated_worktree = isolated;
         self

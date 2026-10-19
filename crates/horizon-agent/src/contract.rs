@@ -87,8 +87,8 @@ pub(crate) struct StartSession {
     /// start_session`) -- see `roles`'s module doc on never silently
     /// degrading an unresolvable role id to role-less.
     pub role_id: Option<RoleId>,
-    /// This session's real working directory -- for an isolated session,
-    /// the isolated worktree (already resolved by the caller before this
+    /// This session's real working directory -- for a restored session that
+    /// owns a worktree, that worktree (already resolved by the caller before this
     /// reaches a provider), not wherever the daemon process happens to be
     /// running from. `None` when no root is available at all. Consumed by
     /// the rig provider to build [`crate::prompt::SessionEnvironment`]

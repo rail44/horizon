@@ -183,7 +183,6 @@ async fn reviewer_session(
         Some(RoleId(roles::REVIEWER.into())),
         Some(worktree.path.clone()),
         Some(caller),
-        false,
         Some(worktree),
         Vec::new(),
     );
@@ -338,7 +337,6 @@ fn start_locked(
         Some(RoleId(role.into())),
         Some(root.to_path_buf()),
         None,
-        false,
         None,
         Vec::new(),
     );

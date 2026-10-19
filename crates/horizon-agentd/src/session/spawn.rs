@@ -109,10 +109,11 @@ fn selection_for_provider_id(
 /// both a fresh `Control::SessionNew` ([`super::connection::Connection::handle_session_new`])
 /// and a session resumed from the persisted log at startup
 /// ([`super::resume::resume_persisted_sessions`]); `history` is empty for the former,
-/// already-committed events for the latter. A resumed isolated session passes
-/// `restored_worktree` only after [`worktree::adopt_isolated_worktree`]
-/// recomputes and validates its Git/path relationships; it never asks the
-/// fresh-spawn `isolate` path to create a second worktree.
+/// already-committed events for the latter. A resumed session that owns a
+/// worktree passes `restored_worktree` only after
+/// [`worktree::adopt_isolated_worktree`] recomputes and validates its
+/// Git/path relationships. No spawn creates a worktree; a session gets one
+/// through environment activation (`worktree.enter`, board #65).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_session_thread(
     state: Arc<AgentdState>,
@@ -121,7 +122,6 @@ pub(crate) fn spawn_session_thread(
     role_id: Option<RoleId>,
     workspace_root: Option<PathBuf>,
     spawn_source_session_id: Option<SessionId>,
-    isolate: bool,
     restored_worktree: Option<WorktreeInfo>,
     history: Vec<Event>,
 ) {
@@ -132,7 +132,6 @@ pub(crate) fn spawn_session_thread(
         role_id,
         workspace_root,
         spawn_source_session_id,
-        isolate,
         restored_worktree,
         history,
         None,
@@ -147,7 +146,6 @@ pub(super) fn spawn_session_thread_with_context(
     role_id: Option<RoleId>,
     workspace_root: Option<PathBuf>,
     spawn_source_session_id: Option<SessionId>,
-    isolate: bool,
     restored_worktree: Option<WorktreeInfo>,
     history: Vec<Event>,
     retained_context: Option<horizon_agent::persistence::event_log::PersistedSessionContext>,
@@ -196,7 +194,6 @@ pub(super) fn spawn_session_thread_with_context(
                 role_id,
                 workspace_root,
                 spawn_source_session_id,
-                isolate,
                 restored_worktree,
                 &thread_state,
                 inbound_rx,
@@ -246,7 +243,7 @@ pub(super) fn spawn_session_thread_with_context(
                 cleanup_failure.message()
             );
         }
-        // Decision 5: a session that owned an isolated worktree gets it
+        // Decision 5: a session that owned a worktree gets it
         // cleaned up (if clean) exactly when its own thread ends -- which
         // only happens on a genuine `Command::Shutdown`/provider exit (the
         // daemon-side "terminate" signal), never on a mere close/detach

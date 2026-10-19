@@ -57,6 +57,11 @@ impl std::error::Error for UnsupportedEventLogFormat {}
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PersistedSessionContext {
     pub workspace_root: Option<PathBuf>,
+    /// Whether `workspace_root` is a worktree this session owns: one it
+    /// entered through environment activation, or (in records written before
+    /// spawn-time isolation was removed, board #65) one it was spawned into.
+    /// Restore re-adopts that worktree instead of treating the root as a
+    /// plain directory.
     pub isolated_worktree: bool,
     pub parent_session_id: Option<SessionId>,
     /// The filesystem authority this session's sandboxed calls actually

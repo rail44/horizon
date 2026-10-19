@@ -238,42 +238,16 @@ impl AgentdState {
         }
     }
 
-    /// `(directory, source_is_owned_worktree)` for `session_id`'s current
-    /// state, if it's a session this process still hosts live -- the
-    /// spawn-source lookup [`crate::worktree::resolve_isolation_source`] needs.
-    /// `None` for an unknown/foreign id (a terminal isn't tracked in this
-    /// map at all -- deferred, see `worktree`'s module doc -- or the source
-    /// session has already ended), which the caller treats as "no source",
-    /// per that function's own doc comment.
+    /// `(directory, owns_worktree)` for `session_id`'s current state, if it's
+    /// a session this process still hosts live. `None` for an unknown/foreign
+    /// id (a terminal isn't tracked in this map at all, or the session has
+    /// already ended).
     pub(crate) fn session_directory(&self, session_id: SessionId) -> Option<(PathBuf, bool)> {
         let sessions = self.sessions.lock().unwrap();
         let entry = sessions.get(&session_id)?;
         match &entry.worktree {
             Some(worktree) => Some((worktree.path.clone(), true)),
             None => entry.workspace_root.clone().map(|root| (root, false)),
-        }
-    }
-
-    /// Records the outcome of a successful [`crate::worktree::create_isolated_worktree`]
-    /// call on `session_id`'s own `SessionEntry`: decision 2's derivation
-    /// edge (`parent_session_id`, only when there actually was a spawn
-    /// source -- an isolated-but-sourceless spawn is still a valid lineage
-    /// root that merely owns a worktree) plus the resolved directory a
-    /// later child spawned *from this session* would see via
-    /// [`Self::session_directory`]. A no-op if `session_id` somehow isn't
-    /// in `sessions` any more (the session ended before its own worktree
-    /// creation finished) -- nothing left to record onto.
-    pub(crate) fn record_isolated_worktree(
-        &self,
-        session_id: SessionId,
-        parent_session_id: Option<SessionId>,
-        worktree: WorktreeInfo,
-    ) {
-        let mut sessions = self.sessions.lock().unwrap();
-        if let Some(entry) = sessions.get_mut(&session_id) {
-            entry.workspace_root = Some(worktree.path.clone());
-            entry.parent_session_id = parent_session_id;
-            entry.worktree = Some(worktree);
         }
     }
 
@@ -360,22 +334,21 @@ pub(super) struct SessionEntry {
     /// Requests an atomic history/live handoff from the session owner.
     /// The reply owns the subscription, so abandoning it revokes delivery.
     pub(super) replay: Sender<crate::session::attachment::AttachRequest>,
-    /// The session this one derives from -- `Some` only when this session
-    /// was actually spawned isolated (see [`AgentdState::
-    /// record_isolated_worktree`]); `docs/session-relationship-design.md`
-    /// decision 2's "the edge exists only via isolation". Surfaced
+    /// The session this one derives from -- `Some` only for a restored
+    /// session whose persisted context carries the edge, or a board review
+    /// session spawned from its caller (`docs/session-relationship-design.md`
+    /// decision 2). Surfaced
     /// additively as `SessionSummary.parent_session_id` by
     /// [`super::connection::Connection::session_list`].
     pub(super) parent_session_id: Option<SessionId>,
     /// The directory this session's file tools are actually confined to --
     /// its own worktree path if `worktree.is_some()`, else whatever
     /// `SessionNew.workspace_root` carried. Read by [`AgentdState::
-    /// session_directory`] so a *child* spawned from this session knows
-    /// where to branch its own worktree from.
+    /// session_directory`].
     pub(super) workspace_root: Option<PathBuf>,
-    /// This session's own isolated worktree, if [`crate::worktree::
-    /// create_isolated_worktree`] succeeded for it -- `None` for an
-    /// ordinary shared-directory session. Removed (if clean) when the
+    /// This session's own worktree, entered through environment activation
+    /// or re-adopted on restore -- `None` for a session working in the
+    /// directory it started in. Removed (if clean) when the
     /// session ends, see [`super::spawn::spawn_session_thread`]'s thread body.
     pub(super) worktree: Option<WorktreeInfo>,
 }
@@ -387,18 +360,15 @@ mod tests {
     use crossbeam_channel::unbounded;
 
     /// An id agentd has never hosted (or has already ended) reports no
-    /// directory -- the "no source" case [`crate::worktree::resolve_isolation_source`]
-    /// treats as a lineage root, falling back to the spawn's own
-    /// `workspace_root`.
+    /// directory.
     #[test]
     fn session_directory_is_none_for_an_unknown_session() {
         let state = state_with_rig_config(true, "test-model");
         assert_eq!(state.session_directory(SessionId::new()), None);
     }
 
-    /// A plain (non-isolated) session reports its own `workspace_root` and
-    /// `false` (not an owned worktree) -- what a *child* spawned from it
-    /// would branch fresh-from-origin against.
+    /// A session without a worktree reports its own `workspace_root` and
+    /// `false` (not an owned worktree).
     #[test]
     fn session_directory_reports_the_plain_workspace_root_when_not_isolated() {
         let state = state_with_rig_config(true, "test-model");
@@ -424,17 +394,19 @@ mod tests {
         assert_eq!(state.session_directory(session_id), Some((root, false)));
     }
 
-    /// [`AgentdState::record_isolated_worktree`] updates the session's own
-    /// entry so a later [`AgentdState::session_directory`] lookup (from a
-    /// grandchild spawn) reports the worktree path and `true` (owned) --
-    /// the multi-level chaining decision 3 asks for.
+    /// A session that owns a worktree reports the worktree path and `true`.
     #[test]
-    fn record_isolated_worktree_makes_the_session_report_as_an_owned_worktree() {
+    fn session_directory_reports_an_owned_worktree() {
         let state = state_with_rig_config(true, "test-model");
         let session_id = SessionId::new();
-        let parent_id = SessionId::new();
         let (inbound_tx, _inbound_rx) = unbounded::<Command>();
         let (replay_tx, _replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
+        let info = WorktreeInfo {
+            repo_root: std::path::PathBuf::from("/tmp/repo"),
+            path: std::path::PathBuf::from("/tmp/repo/.horizon/worktrees/abcd1234"),
+            branch: "horizon/abcd1234".to_string(),
+            base: "base".to_string(),
+        };
         state.sessions.lock().unwrap().insert(
             session_id,
             SessionEntry {
@@ -445,26 +417,11 @@ mod tests {
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
-                workspace_root: Some(std::path::PathBuf::from("/tmp/pre-isolation")),
-                worktree: None,
+                workspace_root: Some(info.path.clone()),
+                worktree: Some(info.clone()),
             },
         );
 
-        let info = WorktreeInfo {
-            repo_root: std::path::PathBuf::from("/tmp/repo"),
-            path: std::path::PathBuf::from("/tmp/repo/.horizon/worktrees/abcd1234"),
-            branch: "horizon/abcd1234".to_string(),
-            base: "base".to_string(),
-        };
-        state.record_isolated_worktree(session_id, Some(parent_id), info.clone());
-
-        assert_eq!(
-            state.session_directory(session_id),
-            Some((info.path.clone(), true))
-        );
-        let sessions = state.sessions.lock().unwrap();
-        let entry = &sessions[&session_id];
-        assert_eq!(entry.parent_session_id, Some(parent_id));
-        assert_eq!(entry.worktree, Some(info));
+        assert_eq!(state.session_directory(session_id), Some((info.path, true)));
     }
 }
