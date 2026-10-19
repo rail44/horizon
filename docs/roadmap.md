@@ -172,9 +172,9 @@ lands:
 - **Session relationship model — shipped 2026-07-19** (merges
   `e8300d7`, `ca36ea9`, `6167199`; design
   `docs/session-relationship-design.md`): daemon-side lineage tree,
-  isolated worktree spawn under `.horizon/worktrees/` with
-  origin-based defaults (palette shared with the view chooser's
-  "Agent (Isolated Worktree)…" opt-in / CLI isolated with `--share`),
+  isolated worktree spawn under `.horizon/worktrees/` (spawn-time
+  isolation since replaced by `worktree.enter`, board #65 /
+  `docs/sandbox-perimeter-design.md`),
   clean-only worktree cleanup on terminate, the open-directory command
   (palette + CLI + session-manager row action), the session-manager
   derivation-tree view with explicit subtree-terminate, and

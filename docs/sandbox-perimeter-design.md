@@ -1,6 +1,6 @@
 # Containment Perimeter and the Worktree Tool — Design
 
-Status: decided on board #65 (2026-10-18); slices 1 and 2 implemented
+Status: decided on board #65 (2026-10-18); slices 1, 2 and 3 implemented
 (see "Staging"). This document describes the current design, the target
 design, and the code the change touches. The decisions themselves and
 the measurements that motivated them are recorded on board #65; this
@@ -17,8 +17,9 @@ root, network). Host execution remains only as the fallback on a host
 without a working sandbox.
 
 With slice 2, a session that wants a disposable copy of the repository
-asks for one with a tool, `worktree.enter`. The remaining target is one
-session kind: the spawn-time isolation choice goes away.
+asks for one with a tool, `worktree.enter`. With slice 3 there is one
+session kind: the spawn-time isolation choice is gone, and a session
+gets a worktree only by entering one.
 
 ## Current design
 
@@ -37,15 +38,13 @@ session kind: the spawn-time isolation choice goes away.
   (started for every session when the sandbox is available) or disabled,
   plus the session's filesystem grants (`[grants.project]` trees,
   judge/human-approved grants).
-- **Isolation is a spawn-time attribute**
-  (`docs/session-relationship-design.md`, decision 3): palette origin
-  defaults to shared, CLI origin defaults to isolated, with an explicit
-  override (`isolate` in the ACP `_meta.horizon` session request, the
-  CLI's `--share`, the view chooser's "Agent (Isolated Worktree)…"
-  choice). The predicate is persisted in every event-log record's
+- **A worktree is entered, never spawned into**: every spawn starts in a
+  directory (`docs/session-relationship-design.md`, decision 3), and a
+  session gets its own worktree through environment activation
+  (`worktree.enter` below, or the board's `implement`). Whether the
+  session owns its worktree is persisted in every event-log record's
   `session_context.isolated_worktree`; restore re-adopts the worktree
-  (`session/resume.rs`, `session/resume/environment.rs`) before tier-1
-  eligibility returns.
+  (`session/resume.rs`, `session/resume/environment.rs`).
 - **The gitdir boundary**: a linked worktree's gitdir lives under the
   main checkout's `.git/worktrees/<id>`, outside the worktree's writable
   root; a plain checkout's `.git/` is inside its root and excluded through
@@ -151,29 +150,34 @@ What follows the root on activation:
 
 ### Restore
 
-Restore is unchanged by slice 2. Activation persists the isolation
-predicate (`session_context.isolated_worktree`) and the worktree identity
-(`EnvironmentActivated`), so a restarted daemon re-adopts the worktree
-through the existing path (`session/resume.rs`,
-`session/resume/environment.rs`, `restore_worktree`). Whether the
-predicate is retired is part of slice 3.
+Activation persists the ownership predicate
+(`session_context.isolated_worktree`, true from `EnvironmentActivated`
+onward) and the worktree identity (`EnvironmentActivated`), so a
+restarted daemon restores the worktree through `restore_worktree`
+(`session/resume.rs`, `session/resume/environment.rs`). The predicate
+keeps its name and serialization; it means "this session owns the
+worktree it runs in". Records from sessions spawned into a worktree
+before slice 3 carry the predicate without an `EnvironmentActivated`
+identity and are re-adopted from the persisted root
+(`adopt_isolated_worktree`).
 
 ### Spawn surface
 
-The `isolate` knob goes away everywhere it is plumbed: the ACP
-`_meta.horizon` session request (`crates/horizon-acp/src/meta.rs`), the
-CLI (`new-agent --share`), the control-plane dispatcher
-(`src/control_plane.rs`), `PendingAgentSpawn.isolate`
-(`src/workspace/session_creation.rs`), and the view chooser's dedicated
-choice (`src/view_chooser.rs`). The remaining spawn-time knob is the
-directory to start in (decision 3's *workspace_root source*: inherit the
-source pane's cwd). Removing the ACP field is a non-additive change to
-the `_meta.horizon` vocabulary and bumps `HORIZON_ACP_EXT_VERSION`
-(AGENTS.md: full Horizon restart, not a runtime reload).
+There is no `isolate` knob: the ACP `_meta.horizon` session request
+(`SessionNewMeta`, `crates/horizon-acp/src/meta.rs`), the CLI
+(`new-agent`), the control-plane dispatcher (`src/control_plane.rs`),
+`PendingAgentSpawn` (`src/workspace/session_creation.rs`), and the view
+chooser (`src/view_chooser.rs`) carry none, and `horizon-agentd` creates
+no worktree at spawn. The remaining spawn-time knob is the directory to
+start in (decision 3's *workspace_root source*); an agent spawn starts in
+the Horizon process's cwd today. Dropping the ACP field was a
+non-additive change to the `_meta.horizon` vocabulary:
+`HORIZON_ACP_EXT_VERSION` is 2 (AGENTS.md: full Horizon restart, not a
+runtime reload).
 
-Delegation changes shape accordingly: a parent spawns a child in a
-directory, and a child that needs a disposable copy calls
-`worktree.enter` as its first step. Nothing is spawned "isolated".
+Delegation: a parent spawns a child in a directory, and a child that
+needs a disposable copy calls `worktree.enter` as its first step.
+Activation records no derivation edge (`parent_session_id`).
 
 ### Documents and skills this supersedes in part
 
@@ -206,6 +210,8 @@ Three slices, each landing on its own:
 Status: slice 1 landed 2026-10-18.
 
 Status: slice 2 landed 2026-10-19.
+
+Status: slice 3 landed 2026-10-19 (`HORIZON_ACP_EXT_VERSION` 1 → 2).
 
 Slice 1 is independent and smallest. Slice 3 is last because it bumps
 the wire and retires the spawn-time isolation that delegation still uses

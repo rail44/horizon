@@ -43,8 +43,8 @@ research doc).
    range is the workspace root minus its `.git` entry: a plain checkout's
    gitdir stays read-only, and a linked worktree's gitdir is already
    outside the root. Containment + visibility (the receipt transcript)
-   replace consent. Whether the session was spawned in an isolated
-   worktree does not enter the classification; see
+   replace consent. Whether the session runs in a worktree it owns
+   does not enter the classification; see
    `docs/sandbox-perimeter-design.md`.
 2. **Judge at the boundary.** Actions that cross the containment
    boundary — Git metadata writes (`GitOperation`), `fs` reads outside

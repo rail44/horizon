@@ -89,7 +89,7 @@ v2 を agentd に選ぶ理由は、現在の contract との構造のズレを�
 標準メッセージに Horizon 固有の欄を足す。仕様が認める形で、両端が Horizon
 でないときは無視される。
 
-- `session/new` の provider_id、role_id、isolate、spawn_source_session_id、
+- `session/new` の provider_id、role_id、spawn_source_session_id、
   シェルが先に発行する session_id
 - SessionInfo の parent_session_id、role_id、provider_id
 - tool call の occurrence_id、denied、auto_approved、policy_tier

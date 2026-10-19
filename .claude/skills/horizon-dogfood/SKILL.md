@@ -1,6 +1,6 @@
 ---
 name: horizon-dogfood
-description: Drive and observe Horizon's built-in agent sessions from a Claude Code instance running inside a Horizon terminal pane - spawn isolated agents over the CLI control plane, watch their event stream live, exercise and verify tier-1 auto-approval and sandbox behavior, approve boundary crossings, and file dogfooding findings. Trigger words - dogfood horizon, drive a horizon agent, test approval tiers, horizon CLI, spawn an agent session.
+description: Drive and observe Horizon's built-in agent sessions from a Claude Code instance running inside a Horizon terminal pane - spawn agents over the CLI control plane and have them enter worktrees, watch their event stream live, exercise and verify tier-1 auto-approval and sandbox behavior, approve boundary crossings, and file dogfooding findings. Trigger words - dogfood horizon, drive a horizon agent, test approval tiers, horizon CLI, spawn an agent session.
 ---
 
 # Dogfooding Horizon's agent from inside a Horizon pane
@@ -20,15 +20,15 @@ happens, and report friction/bugs with evidence.
 ## The loop
 
 **Spawn.** `horizon new-agent --prompt "<prompt>"` creates an agent
-session and sends the prompt. CLI-origin spawns default to an
-**isolated git worktree** (`.horizon/worktrees/<slug>`, branch
-`horizon/<slug>`). Add `--share` to run in the shared checkout instead;
-tier-1 auto-approval applies the same way there (sandboxed `bash`,
+session and sends the prompt. The session starts in a directory, not in
+a worktree; tier-1 auto-approval applies there (sandboxed `bash`,
 in-root `fs.write`/`fs.edit`), with `.git/` read-only to the sandbox
-(`docs/sandbox-perimeter-design.md`). A running session gets its own
-worktree by calling the automatic `worktree.enter` tool: the worktree
-branches from the session root's `HEAD`, and the session's root moves
-there at the next turn boundary (the pane's directory follows live). `--split [<session-id>]`
+(`docs/sandbox-perimeter-design.md`). When a worktree is wanted, have
+the session call the automatic `worktree.enter` tool (e.g. say so in the
+prompt): the worktree (`.horizon/worktrees/<slug>`, branch
+`horizon/<slug>`) branches from the session root's `HEAD`, and the
+session's root moves there at the next turn boundary (the pane's
+directory follows live). `--split [<session-id>]`
 to place it in a split (bare `--split` splits off the pane you're
 running in; pass a session-id to split off a different pane) /
 `--active` to activate the new pane, `new-config-agent` for the
@@ -70,7 +70,7 @@ aborts. **Read the pending call's
 machine.** Never approve an outside-worktree write or a network-shaped
 command unless the owner asked for exactly that test.
 
-**Verify tier 1** (isolated or `--share` session): `fs.write`/`fs.edit`
+**Verify tier 1** (with or without an entered worktree): `fs.write`/`fs.edit`
 inside the workspace root and in-root `bash` must produce **no**
 `approval_requested` at all, and their `tool_call_finished.output` must
 carry `auto_approved: true`, `policy_tier: "contained"` (bash also

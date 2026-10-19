@@ -54,8 +54,7 @@ manual smoke checks:
 
 - `new tab`: opens the view chooser (`Enter` on `Terminal` opens another
   terminal tab; `Enter` on `Agent` or a role like `Configuration Agent`
-  opens an agent tab; `Agent (Isolated Worktree)…` opens an agent tab in
-  its own git worktree instead of the shared directory).
+  opens an agent tab).
 - `split right`: opens the same view chooser, but the chosen view splits the
   active pane horizontally instead of opening a new tab.
 - `split down`: same as `split right`, but splits vertically.
@@ -72,7 +71,7 @@ manual smoke checks:
 
 Running the `manage sessions` command opens a separate modal listing every
 session the workspace knows about, as a derivation tree rather than a flat
-list (a session an isolated agent was spawned from is its parent; children
+list (a session's recorded derivation parent is its parent; children
 are indented under it, roots first): arrows move the selection, `Enter`
 attaches a detached session as a split (or jumps to an attached session's
 pane), `cmd+Enter` terminates the selected session (the modal stays open),

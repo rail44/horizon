@@ -44,40 +44,34 @@ messaging need, so it is designed once, here.
    (decision 4a), not a lineage edge — so the tree stays pure
    derivation and does not accrete reference links.
 
-3. **Creation model.** Two independent knobs at spawn time:
-   - *workspace_root source* — default: inherit the spawn-source pane's
-     cwd (terminal-cwd inheritance, "start where I'm looking"); repo
-     root / fresh when there is no source. The per-session
-     `workspace_root` plumbing landed 2026-07-07 (`9110c7c`,
-     `SessionNew.workspace_root`).
-   - *isolation* — whether the new session gets its **own worktree**
-     (branched appropriately) or **shares** the source's directory.
-     Isolation is what creates the derivation edge: an isolated child
-     has a child worktree branched from the parent; a non-isolated
-     spawn merely shares a directory and is not a lineage child.
-   - *base ref is derived, not chosen*: every spawn, root or derived,
-     branches from the source session's own working-tree HEAD via
-     `git rev-parse HEAD`. A derived child's source is its parent's
-     owned worktree (so a multi-level chain includes the parent's own
-     commits), and a root spawn's source is the human launcher's own
-     checkout -- including any local commits that have not been pushed
-     to `origin/main` (the "launching session's source commit" rule
-     from issue 006). The repository's `origin/<default>` is *not*
-     consulted at all: when the launcher has unpushed work, that is
-     the state the child must inspect, not a stale `origin/HEAD`.
-     (Prior implementation read `origin/<default>` for the root case
-     and silently dropped any local commits past it -- Agent #67
-     worked from a stale `4b0acac` while its launcher sat at
-     `f32f411`, and reported a retired `fs.read` default as a result.)
-   - *isolation's default is an origin property*, mirroring the
-     `activate` decision (`docs/cli-control-plane-design.md`): **palette
-     origin → default parallel/shared, opt in to isolate; CLI origin →
-     default isolated, opt out to share.** This fits delegation exactly
-     — an agent spawning a delegate over the control plane gets an
-     isolated child worktree by default; a human opening an agent beside
-     their terminal works in the shared directory by default. Isolation
-     is a per-spawn attribute (not a role/global setting) with this
-     origin-based default and an explicit override.
+3. **Creation model.** One knob at spawn time, plus a worktree a
+   session enters on its own (board #65, `docs/sandbox-perimeter-design.md`):
+   - *workspace_root source* — the directory the session starts in.
+     Intended default: inherit the spawn-source pane's cwd
+     (terminal-cwd inheritance, "start where I'm looking"); repo root /
+     fresh when there is no source. The per-session `workspace_root`
+     plumbing landed 2026-07-07 (`9110c7c`, `SessionNew.workspace_root`).
+     Terminals inherit the source pane's cwd today; an agent spawn
+     starts in the Horizon process's cwd (`WorkspaceShell::reconcile`)
+     whatever its origin.
+   - *worktree* — a session gets its **own worktree** only by entering
+     one after it starts: the `worktree.enter` tool, or the board's
+     `implement` action, both through environment activation. Spawning
+     never creates a worktree; there is no per-spawn or per-origin
+     isolation choice.
+   - *base ref is derived, not chosen*: `worktree.enter` branches from
+     the session root's own working-tree `HEAD`
+     (`git rev-parse HEAD`), including local commits that have not been
+     pushed to `origin/main` (the "launching session's source commit"
+     rule from issue 006); `implement` branches from the base the task
+     names. The repository's `origin/<default>` is *not* consulted.
+     (An earlier implementation read `origin/<default>` and silently
+     dropped any local commits past it -- Agent #67 worked from a stale
+     `4b0acac` while its launcher sat at `f32f411`.)
+   - *derivation edge*: environment activation records no
+     `parent_session_id`. The edges that exist are a board review
+     session's (its caller) and those persisted by sessions spawned into
+     a worktree before board #65, which restore keeps reporting.
 
 4. **Control from the workspace.**
    - (a) *The cd-pain fix is a first-class operation.* Horizon knows
@@ -123,9 +117,8 @@ messaging need, so it is designed once, here.
 - **Kind-agnostic, agents-first.** The model treats terminal and agent
   sessions as lineage nodes symmetrically (the daemon design made them
   SessionId-symmetric). Terminals participate as parents / cwd sources
-  from the start; whether a terminal itself can be spawned as an
-  isolated child is deferred (agents are the immediate isolation
-  motive).
+  from the start; whether a terminal itself can own a worktree is
+  deferred (agents are the immediate motive).
 
 ## Delivery
 
@@ -155,45 +148,39 @@ session-runtime restart) is closed by the 2026-07-21 resume hardening below.
 Per-row "open its directory" on an arbitrary session (decision 4b) landed
 alongside the lineage view itself -- see below.
 
-Decisions 1-3 and 5's core landed: the lineage tree lives daemon-side, in
+Decisions 1-2 and 5's core: the lineage tree lives daemon-side, in
 `horizon-agentd`'s in-memory `SessionEntry` (`parent_session_id`/
-`workspace_root`/`worktree`) -- additive over the wire as `SessionSummary.
-parent_session_id`/`workspace_root` and `SessionNew.spawn_source_session_id`/
-`isolate` (no `CONTRACT_VERSION` bump). An isolated spawn gets a real git worktree
+`workspace_root`/`worktree`) -- over the wire as `SessionInfoMeta`'s
+`parent_session_id`/`workspace_root` and `SessionNewMeta.
+spawn_source_session_id`. A session's worktree is a real git worktree
 at `<repo_root>/.horizon/worktrees/<slug>` on branch `horizon/<slug>`
 (`.horizon` ignored via that repo's own `.git/info/exclude`, never its
-tracked `.gitignore`); base ref is fresh from `origin/<default-branch>`
-for a lineage root, or the source session's own worktree `HEAD` for a
-derived child, per decision 3. The edge is recorded only when isolation
-actually succeeds -- a failed worktree creation degrades to an ordinary
-shared spawn with no edge. Decision 5's terminate cleanup runs `git
-worktree remove` (never the branch) when a session's own thread ends,
-which already refuses when the worktree is dirty. The origin-based
-default is wired the same way `activate`'s was: palette spawns default
-shared, with an explicit opt-in (see decision 4b's UI slice below); CLI/
-control-plane spawns default isolated, with an explicit `--share`
-opt-out. Terminal-as-isolated-child stays deferred, per the "agents-first"
-note above.
+tracked `.gitignore`), created by environment activation
+(`create_isolated_worktree_at`; decision 3 above). Decision 5's
+terminate cleanup runs `git worktree remove` (never the branch) when a
+session's own thread ends, which already refuses when the worktree is
+dirty.
 
-This closes a gap decision 4a's landing above had left open: worktree
-creation resolves *after* `Control::SessionNew` already returned (it's
-real IO on the new session's own thread), so the shell's pre-spawn
-`workspace_root` value is only ever the inherited-cwd guess for an
-isolated session, not the real worktree path. `SessionSummary.
+There is no spawn-time isolation (board #65,
+`docs/sandbox-perimeter-design.md`): `SessionNewMeta` has no isolation
+field (`HORIZON_ACP_EXT_VERSION` 2), `new-agent` has no `--share`, and the
+view chooser offers one plain "Agent" choice.
+
+Worktree creation resolves after `session/new` has returned, so the
+shell's pre-spawn `workspace_root` value is the directory the session
+started in, not a later worktree path. `SessionSummary.
 workspace_root` is `horizon-agentd`'s authoritative answer once
 resolved; `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore`
 (the two places the shell already re-lists sessions from the daemon) now
 overwrite the model's stored root with it, so `OpenTerminalInSessionDirectory`
 opens the real worktree once one of those sweeps has run.
 
-2026-07-19 dogfooding fix: the "still eventual, not live" gap above is
-closed. `resolve_and_create_isolated_worktree`
-(`crates/horizon-agentd/src/session.rs`) now pushes a session-scoped
-`wire::Control::WorkspaceRootResolved { workspace_root, parent_session_id }`
-the moment isolation resolves, mirroring `Control::SessionModel`'s own
-live-announce shape and additive-`#[serde(default)]`/no-version-bump
-convention. Not sent at all when isolation fails and degrades to a shared
-spawn -- nothing to correct then. Shell-side, this is a new process-wide
+Live correction: environment activation
+(`SessionEnvironment::activate`, `crates/horizon-agentd/src/session/environment.rs`)
+pushes a session-scoped `WorkspaceRootResolved { workspace_root,
+parent_session_id }` the moment the worktree exists, mirroring
+`SessionModel`'s live-announce shape; attachment replay re-sends it. Not
+sent when activation fails -- nothing to correct then. Shell-side, this is a new process-wide
 channel alongside `host_tools` (not the per-session `agent`/`ProviderEvent`
 map `SessionModel` rides, since a workspace-root correction is a model
 fold, not a transcript event): `runtime::routing::AgentRoutes` gained a
@@ -210,12 +197,14 @@ to push over in the first place.
 
 2026-07-21 restart hardening closes the remaining daemon-restart gap. Every
 new event-log record carries host-authored `session_context` containing the
-authoritative root, whether the session owns an isolated worktree, and its
-isolated parent edge. On resume, a shared session restores its root directly;
-an isolated session is re-adopted only after Git and canonical-path checks
+authoritative root, whether the session owns a worktree
+(`isolated_worktree`), and its parent edge. On resume, a session without a
+worktree restores its root directly; one that owns a worktree is restored
+from its `EnvironmentActivated` identity, or (records from sessions spawned
+into a worktree before board #65) re-adopted, only after Git and canonical-path checks
 prove it is a linked worktree at the exact session-id-derived
 `<repo>/.horizon/worktrees/<slug>` path and its gitdir belongs to that repo's
-common worktree directory. Missing or inconsistent isolated context fails
+common worktree directory. Missing or inconsistent worktree context fails
 closed by leaving the session unresumed, never by silently downgrading it to
 the daemon cwd without containment. Logs predating the additive field retain
 the old non-isolated fallback for compatibility and are upgraded when the
@@ -251,18 +240,10 @@ search input would otherwise consume a bare key) rather than new
 row is currently selected," a piece of modal-local state the workspace-wide
 command model has no notion of.
 
-The palette's own isolation opt-in (decision 3's "no override surface yet"
-gap) also landed: the view chooser (`New Tab…`/`Split Right…`/`Split
-Down…`) gained a dedicated "Agent (Isolated Worktree)…" choice alongside
-plain "Agent" -- `ViewChoice` grew an `isolate: bool` (`true` only for that
-one choice), threaded through `WorkspaceShell::create_session` to the same
-`pending_agent_spawn` staging `control_plane_new_session` (the CLI path) already
-used. No redesign of the placement flow itself.
-
 2026-07-19 dogfooding fix: session manager rows now show the session's
 `workspace_root` itself, not just the small `dir`/`subtree` action-hint
-text that previously stood in for it -- so an isolated child's own
-worktree reads as visibly distinct from a shared session's directory at a
+text that previously stood in for it -- so a session's own worktree reads
+as visibly distinct from a plain checkout directory at a
 glance, per decision 4b's own goal. `abbreviate_workspace_root` (pure,
 unit-tested, `src/session_manager.rs`) renders it relative to the
 enclosing repository root when the path sits strictly inside one (e.g.
@@ -270,16 +251,16 @@ enclosing repository root when the path sits strictly inside one (e.g.
 full path -- a full absolute path is too long for the list. The enclosing
 repo root itself is found by a separate, deliberately `git`-subprocess-free
 walk up the path's ancestors for the nearest directory-shaped `.git` (a
-linked worktree's own `.git` is a *file*, so this walks past an isolated
-session's own worktree to the *main* checkout it branched from, matching
+linked worktree's own `.git` is a *file*, so this walks past a session's
+own worktree to the *main* checkout it branched from, matching
 the example above); cheap enough to run on every visible row's render.
 
 Remaining is a roadmap item under shared-foundation 4: terminal-cwd
 sourcing surfaced to the shell (non-agent sessions still have no
-`workspace_root` at all), and parent/child navigation from the session
+`workspace_root` at all), agent spawns inheriting the source pane's
+directory (decision 3's intended default), and parent/child navigation from the session
 manager (jumping directly to an ancestor/descendant row). Messaging/
 supervision layer onto the same tree in shared-foundation 4's own
 consultation. A separate, owner-deferred design consultation on
-shared-spawn lineage semantics (does a plain, non-isolated spawn deserve
-its own edge kind, distinct from a real derivation edge?) is recorded as
-backlog 54 -- not a request to change decisions 2/3 now.
+spawn lineage semantics (does a plain spawn deserve its own edge kind,
+distinct from a real derivation edge?) is recorded as backlog 54.
