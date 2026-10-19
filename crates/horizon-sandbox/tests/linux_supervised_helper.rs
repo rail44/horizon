@@ -901,6 +901,30 @@ fn io_uring_setup_is_refused_while_exclusions_are_active() {
     std::fs::remove_dir_all(root).expect("remove test directory");
 }
 
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn an_x32_abi_syscall_kills_the_sandboxed_process() {
+    let root = excluded_gitdir_fixture("x32-abi");
+    let hook = root.join(".git/hooks/pre-commit");
+    let policy = root_with_excluded_gitdir(&root);
+    let probe = shell_quote(std::path::Path::new(NETWORK_PROBE));
+    let (code, stderr, _) = run_script_in(
+        &root,
+        &policy,
+        &[],
+        &format!("exec {probe} x32-create .git/hooks/pre-commit"),
+    );
+
+    assert_eq!(
+        code,
+        Some(128 + libc::SIGSYS),
+        "an x32 openat must kill the process; stderr: {stderr}"
+    );
+    assert!(std::fs::symlink_metadata(&hook).is_err());
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
 fn test_dir(label: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "horizon-supervised-helper-{label}-{}-{}",

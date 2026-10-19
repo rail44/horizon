@@ -13,6 +13,10 @@ use std::os::fd::{FromRawFd, OwnedFd};
 
 const BPF_LD_W_ABS: u16 = 0x20;
 const BPF_JMP_JEQ_K: u16 = 0x15;
+#[cfg(target_arch = "x86_64")]
+const BPF_JMP_JGE_K: u16 = 0x35;
+#[cfg(target_arch = "x86_64")]
+const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 const BPF_RET_K: u16 = 0x06;
 
 const SECCOMP_DATA_NR_OFFSET: u32 = 0;
@@ -120,14 +124,23 @@ pub(crate) fn install(policy: SupervisionPolicy) -> nono::Result<OwnedFd> {
 fn build(policy: SupervisionPolicy) -> Vec<SockFilterInsn> {
     let mut pending = vec![
         stmt(BPF_LD_W_ABS, SECCOMP_DATA_ARCH_OFFSET),
-        jump(AUDIT_ARCH_NATIVE, Some("syscall"), None),
-        label("kill"),
-        stmt(BPF_RET_K, SECCOMP_RET_KILL_PROCESS),
-        label("syscall"),
+        jump(AUDIT_ARCH_NATIVE, None, Some("kill")),
         stmt(BPF_LD_W_ABS, SECCOMP_DATA_NR_OFFSET),
+    ];
+    // x32-ABI calls share AUDIT_ARCH_X86_64 but carry __X32_SYSCALL_BIT, so
+    // they would match none of the comparisons below and bypass every
+    // mediation; the helper never needs them (board #68).
+    #[cfg(target_arch = "x86_64")]
+    pending.push(PendingInsn::Jump {
+        code: BPF_JMP_JGE_K,
+        k: X32_SYSCALL_BIT,
+        yes: Some("kill"),
+        no: None,
+    });
+    pending.extend([
         jump(libc::SYS_openat as u32, Some("notify"), None),
         jump(libc::SYS_openat2 as u32, Some("notify"), None),
-    ];
+    ]);
 
     if policy.network_mediation {
         pending.extend([
@@ -157,6 +170,8 @@ fn build(policy: SupervisionPolicy) -> Vec<SockFilterInsn> {
         stmt(BPF_RET_K, SECCOMP_RET_USER_NOTIF),
         label("allow"),
         stmt(BPF_RET_K, SECCOMP_RET_ALLOW),
+        label("kill"),
+        stmt(BPF_RET_K, SECCOMP_RET_KILL_PROCESS),
     ]);
     assemble(&pending)
 }
@@ -263,6 +278,38 @@ mod tests {
     fn open_only_filter_omits_network_syscall_numbers() {
         let filter = build(SupervisionPolicy::default());
         assert!(!notifies(&filter, libc::SYS_connect));
+    }
+
+    #[test]
+    fn x32_syscall_numbers_kill_the_process_on_x86_64_only() {
+        let filter = build(SupervisionPolicy::default());
+        let kill = filter
+            .iter()
+            .position(|instruction| {
+                instruction.code == BPF_RET_K && instruction.k == SECCOMP_RET_KILL_PROCESS
+            })
+            .expect("the filter has a kill action");
+        let x32 = filter
+            .iter()
+            .position(|instruction| instruction.code == 0x35 && instruction.k == 0x4000_0000);
+        #[cfg(target_arch = "x86_64")]
+        {
+            let x32 = x32.expect("x86_64 filter rejects x32 syscall numbers");
+            assert_eq!(x32 + 1 + usize::from(filter[x32].jt), kill);
+            // The check precedes every syscall-number comparison.
+            let first_compare = filter
+                .iter()
+                .position(|instruction| {
+                    instruction.code == BPF_JMP_JEQ_K && instruction.k == libc::SYS_openat as u32
+                })
+                .unwrap();
+            assert!(x32 < first_compare);
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let _ = kill;
+            assert!(x32.is_none());
+        }
     }
 
     #[test]

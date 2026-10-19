@@ -62,7 +62,10 @@ otherwise continued to Landlock. Their operands are resolved by a local
 walker rather than `try_canonicalize`, because the supervisor's own
 `/proc/self` differs from the tracee's and these syscalls do not follow a
 final symlink. `chmod`/`chown`/`utimensat`/`setxattr` stay unmediated: they
-change no name and no content.
+change no name and no content. On x86_64 the combined filter also kills the
+process on any syscall number with `__X32_SYSCALL_BIT` set, whatever the
+mediation flags: x32-ABI calls share `AUDIT_ARCH_X86_64` and would otherwise
+match none of the notify comparisons (board #68).
 Network mediation covers socket creation, connect/bind, destination-bearing
 send syscalls, and `io_uring_setup`; local unnamed Unix stream/seqpacket IPC
 remains available, while remote IP routes and named/abstract Unix sockets are

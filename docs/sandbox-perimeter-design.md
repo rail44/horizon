@@ -66,8 +66,9 @@ gets a worktree only by entering one.
   following of a final symlink the syscall does not follow). The check
   and the kernel's re-resolution after `continue` are not atomic: a
   concurrent process that swaps a checked path component for a symlink
-  in between can still redirect the call. On macOS the exclusion is
-  advisory.
+  in between can still redirect the call. On x86_64 the filter kills a
+  process that issues an x32-ABI syscall, which would otherwise slip past
+  every mediated syscall number. On macOS the exclusion is advisory.
 
 ## Target design
 

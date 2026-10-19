@@ -31,6 +31,8 @@ fn main() {
         "truncate" => truncate_path(&target),
         #[cfg(target_os = "linux")]
         "io_uring" => io_uring_setup(),
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        "x32-create" => x32_create(&target),
         _ => fail("unknown mode"),
     };
 
@@ -62,6 +64,32 @@ fn io_uring_setup() -> std::io::Result<()> {
     let mut params = [0_u8; 120];
     // SAFETY: params is a writable buffer of the kernel's struct size.
     let fd = unsafe { libc::syscall(libc::SYS_io_uring_setup, 1_u32, params.as_mut_ptr()) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fd is a descriptor this process just received.
+    unsafe {
+        libc::close(fd as libc::c_int);
+    }
+    Ok(())
+}
+
+/// `openat(AT_FDCWD, target, O_WRONLY|O_CREAT)` issued through the x32 ABI
+/// (`__X32_SYSCALL_BIT` set on the syscall number).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn x32_create(target: &str) -> std::io::Result<()> {
+    const X32_SYSCALL_BIT: libc::c_long = 0x4000_0000;
+    let path = std::ffi::CString::new(target).map_err(std::io::Error::other)?;
+    // SAFETY: path is NUL-terminated and outlives the call.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat | X32_SYSCALL_BIT,
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT,
+            0o644,
+        )
+    };
     if fd < 0 {
         return Err(std::io::Error::last_os_error());
     }
