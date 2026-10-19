@@ -1,7 +1,8 @@
 # Session Relationship Model — Design Decisions
 
-Status: decided 2026-07-07 (owner consultation in the project session).
-Implementation not started beyond the one landed foundation (below).
+Status: decided 2026-07-07 (owner consultation in the project session);
+decision 3 revised on board #65. Decisions 1-5 are implemented except the
+items under "Remaining" at the end of "Delivery".
 Sibling to `docs/session-daemon-design.md`; both feed shared-foundation
 4 (inter-agent messaging + session daemon) in `docs/roadmap.md`.
 
@@ -46,14 +47,18 @@ messaging need, so it is designed once, here.
 
 3. **Creation model.** One knob at spawn time, plus a worktree a
    session enters on its own (board #65, `docs/sandbox-perimeter-design.md`):
-   - *workspace_root source* — the directory the session starts in.
-     Intended default: inherit the spawn-source pane's cwd
-     (terminal-cwd inheritance, "start where I'm looking"); repo root /
-     fresh when there is no source. The per-session `workspace_root`
-     plumbing landed 2026-07-07 (`9110c7c`, `SessionNew.workspace_root`).
-     Terminals inherit the source pane's cwd today; an agent spawn
-     starts in the Horizon process's cwd (`WorkspaceShell::reconcile`)
-     whatever its origin.
+   - *workspace_root source* — the directory the session starts in:
+     the spawn-source pane's directory ("start where I'm looking"),
+     else the Horizon process's cwd when there is no source. The spawn
+     source is the focused pane for a palette spawn and the issuer (or
+     the explicit `--split` target) for a control-plane spawn. A new
+     terminal samples the source terminal's cwd in `horizon-terminald`.
+     A new agent takes the source session's `workspace_root` as the
+     shell's model records it (`agent_spawn_workspace_root`,
+     `src/workspace/session_lifecycle.rs`) -- an agent source's root,
+     including a worktree it entered; a terminal source has no recorded
+     directory in the shell, so an agent spawned from a terminal starts
+     in the Horizon process's cwd.
    - *worktree* — a session gets its **own worktree** only by entering
      one after it starts: the `worktree.enter` tool, or the board's
      `implement` action, both through environment activation. Spawning
@@ -68,10 +73,16 @@ messaging need, so it is designed once, here.
      (An earlier implementation read `origin/<default>` and silently
      dropped any local commits past it -- Agent #67 worked from a stale
      `4b0acac` while its launcher sat at `f32f411`.)
-   - *derivation edge*: environment activation records no
-     `parent_session_id`. The edges that exist are a board review
-     session's (its caller) and those persisted by sessions spawned into
-     a worktree before board #65, which restore keeps reporting.
+   - *derivation edge*: recorded when a session enters a worktree.
+     agentd keeps each session's spawn source
+     (`SessionNew.spawn_source_session_id`) on its entry, and
+     environment activation makes it the session's `parent_session_id`:
+     persisted in `session_context`, announced live in
+     `WorkspaceRootResolved`, and listed in `session/list`. A session
+     with no spawn source, or one that never enters a worktree, has no
+     edge. Board review sessions take their caller as parent; edges
+     persisted by sessions spawned into a worktree before board #65 are
+     restored as recorded.
 
 4. **Control from the workspace.**
    - (a) *The cd-pain fix is a first-class operation.* Horizon knows
@@ -257,8 +268,10 @@ the example above); cheap enough to run on every visible row's render.
 
 Remaining is a roadmap item under shared-foundation 4: terminal-cwd
 sourcing surfaced to the shell (non-agent sessions still have no
-`workspace_root` at all), agent spawns inheriting the source pane's
-directory (decision 3's intended default), and parent/child navigation from the session
+`workspace_root` at all, so an agent spawned from a terminal does not
+start in that terminal's directory), the spawn source surviving an agentd
+restart before activation (it is persisted only once it becomes an edge),
+and parent/child navigation from the session
 manager (jumping directly to an ancestor/descendant row). Messaging/
 supervision layer onto the same tree in shared-foundation 4's own
 consultation. A separate, owner-deferred design consultation on

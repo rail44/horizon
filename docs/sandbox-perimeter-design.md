@@ -169,15 +169,18 @@ There is no `isolate` knob: the ACP `_meta.horizon` session request
 `PendingAgentSpawn` (`src/workspace/session_creation.rs`), and the view
 chooser (`src/view_chooser.rs`) carry none, and `horizon-agentd` creates
 no worktree at spawn. The remaining spawn-time knob is the directory to
-start in (decision 3's *workspace_root source*); an agent spawn starts in
-the Horizon process's cwd today. Dropping the ACP field was a
+start in (decision 3's *workspace_root source*): the spawn-source
+session's recorded directory, else the Horizon process's cwd. Dropping the ACP field was a
 non-additive change to the `_meta.horizon` vocabulary:
 `HORIZON_ACP_EXT_VERSION` is 2 (AGENTS.md: full Horizon restart, not a
 runtime reload).
 
-Delegation: a parent spawns a child in a directory, and a child that
-needs a disposable copy calls `worktree.enter` as its first step.
-Activation records no derivation edge (`parent_session_id`).
+Delegation: a parent spawns a child over the control plane (the parent
+is the issuer, so the spawn source), and the child starts in the
+parent's directory. A child that needs a disposable copy calls
+`worktree.enter` as its first step; the worktree branches from that
+directory's `HEAD`, and activation records the parent as the child's
+derivation edge (`parent_session_id`).
 
 ### Documents and skills this supersedes in part
 
