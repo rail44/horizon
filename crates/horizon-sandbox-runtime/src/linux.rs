@@ -5,15 +5,58 @@
 //! `00692e8c7846c6ee00ad6239d1be3b9e9b8d5dea`; modified for Horizon by
 //! removing CLI-specific policy, PTY, trust, rollback, and session concerns.
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 mod filter;
+mod mutation;
 mod network;
 mod open;
 
 pub(crate) use filter::install as install_combined_filter;
+pub(crate) use mutation::{
+    handle_path_mutation_notification, is_legacy_open, is_path_mutation, path_mutation_syscalls,
+};
 pub(crate) use network::{handle_network_notification, NetworkEnforcement};
 pub(crate) use open::{handle_open_notification, InitialCapability, OpenNotificationContext};
+
+/// Which syscall families the helper's combined filter routes to the
+/// supervisor. `openat`/`openat2` are always notified.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SupervisionPolicy {
+    /// Mediate socket creation, connect/bind, and destination-bearing sends.
+    pub(crate) network_mediation: bool,
+    /// Mediate the path-mutating syscalls (`renameat2`, `linkat`, `unlinkat`,
+    /// `mkdirat`, `truncate`, legacy `open`, ...). Landlock allows a writable
+    /// root as a whole, so the supervisor is the only enforcement of a write
+    /// exclusion beneath it (board #68).
+    pub(crate) path_mutation_mediation: bool,
+}
+
+impl SupervisionPolicy {
+    /// Path mutation mediation is on exactly when some capability carries a
+    /// write exclusion (a root's `writable_root_exclusions` or a grant's
+    /// `excluded_subpaths`); a sandbox without exclusions keeps the
+    /// open/network-only filter.
+    pub(crate) fn from_exclusions(
+        network_mediation: bool,
+        excluded_by_path: &[(PathBuf, Vec<PathBuf>)],
+    ) -> Self {
+        Self {
+            network_mediation,
+            path_mutation_mediation: excluded_by_path
+                .iter()
+                .any(|(_, excluded)| !excluded.is_empty()),
+        }
+    }
+
+    /// io_uring can submit opens, renames, unlinks, and connects that seccomp
+    /// never sees, so it is refused whenever anything beyond the always-on
+    /// open handler is mediated.
+    pub(crate) const fn notifies_io_uring_setup(self) -> bool {
+        self.network_mediation || self.path_mutation_mediation
+    }
+}
 
 /// Describes which seccomp-notify mechanisms a helper must install.
 ///
@@ -23,6 +66,8 @@ pub(crate) use open::{handle_open_notification, InitialCapability, OpenNotificat
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeccompPolicy {
     /// Route unrecognised `openat`/`openat2` paths to the approval backend.
+    /// (Horizon's helper also mediates path-mutating syscalls whenever a
+    /// write exclusion exists; see `SupervisionPolicy`.)
     pub capability_elevation: bool,
     /// Mediate connect/bind when Landlock alone cannot enforce the proxy edge.
     pub proxy_fallback: bool,

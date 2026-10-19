@@ -317,7 +317,7 @@ fn thread_group_leader(tid: u32) -> nono::Result<u32> {
         .ok_or_else(|| nono::NonoError::SandboxInit(format!("no Tgid line in {path}")))
 }
 
-fn parse_status_tgid(status: &str) -> Option<u32> {
+pub(super) fn parse_status_tgid(status: &str) -> Option<u32> {
     status
         .lines()
         .find_map(|line| line.strip_prefix("Tgid:")?.trim().parse::<u32>().ok())

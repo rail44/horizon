@@ -3,7 +3,8 @@
 /// How a platform can discover denied filesystem operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilesystemDenialMode {
-    /// Linux seccomp-notify can synchronously mediate `openat`/`openat2`.
+    /// Linux seccomp-notify can synchronously mediate `openat`/`openat2`,
+    /// and, while a write exclusion exists, the path-mutating syscalls.
     LiveOpenMediation,
     /// macOS Seatbelt violations can only be recovered from unified logs.
     PostHocBestEffort,

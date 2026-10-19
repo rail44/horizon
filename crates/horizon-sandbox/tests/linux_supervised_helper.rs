@@ -647,6 +647,260 @@ fn a_tree_grant_on_the_excluded_path_lifts_it_but_keeps_its_own_exclusions() {
     std::fs::remove_dir_all(root).expect("remove test directory");
 }
 
+/// A root whose `.git` holds `hooks/` and a `config`, plus two staged files.
+fn excluded_gitdir_fixture(label: &str) -> std::path::PathBuf {
+    let root = test_dir(label).canonicalize().unwrap();
+    std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+    std::fs::write(root.join(".git/config"), "cfg").unwrap();
+    std::fs::write(root.join("staged"), "payload").unwrap();
+    std::fs::write(root.join("plain.txt"), "plain").unwrap();
+    root
+}
+
+fn root_with_excluded_gitdir(root: &std::path::Path) -> horizon_sandbox::SandboxPolicy {
+    horizon_sandbox::SandboxPolicy {
+        writable_roots: vec![root.to_path_buf()],
+        writable_root_exclusions: vec![root.join(".git")],
+        readable_scope: horizon_sandbox::ReadableScope::Full,
+        network: horizon_sandbox::NetworkPolicy::Disabled,
+    }
+}
+
+/// Runs `script` under `sh -c` in `root` and returns its exit code, stderr,
+/// and the supervisor's report.
+fn run_script_in(
+    root: &std::path::Path,
+    policy: &horizon_sandbox::SandboxPolicy,
+    grants: &[FilesystemGrant],
+    script: &str,
+) -> (
+    Option<i32>,
+    String,
+    horizon_sandbox_runtime::SupervisedOutcome,
+) {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg(script).current_dir(root);
+    scrub_git_env(&mut command);
+    let sandboxed = horizon_sandbox::spawn_with_filesystem_grants(
+        command,
+        policy,
+        grants,
+        horizon_sandbox::SandboxStdio::piped_output(),
+    )
+    .expect("spawn supervised sandbox");
+    let report = sandboxed.supervisor_report.expect("supervisor report");
+    let output = sandboxed.child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    (
+        output.status.code(),
+        stderr,
+        report.read().expect("read report"),
+    )
+}
+
+fn reported_paths(outcome: &horizon_sandbox_runtime::SupervisedOutcome) -> Vec<std::path::PathBuf> {
+    outcome
+        .approvals
+        .iter()
+        .filter_map(|approval| match &approval.request {
+            nono::ApprovalRequest::Capability { path, .. } => Some(path.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn path_mutations_into_or_out_of_an_excluded_gitdir_are_denied_and_reported() {
+    let root = excluded_gitdir_fixture("mutation-denied");
+    let git_dir = root.join(".git");
+    let hook = git_dir.join("hooks/pre-commit");
+    let config = git_dir.join("config");
+    let policy = root_with_excluded_gitdir(&root);
+    let probe_truncate = format!(
+        "{} truncate .git/config",
+        shell_quote(std::path::Path::new(NETWORK_PROBE))
+    );
+    let cases = [
+        ("mv staged .git/hooks/pre-commit", hook.clone()),
+        ("ln staged .git/hooks/pre-commit", hook.clone()),
+        ("ln -s /tmp/x .git/hooks/pre-commit", hook.clone()),
+        ("mkdir .git/foo", git_dir.join("foo")),
+        ("rm -f .git/config", config.clone()),
+        ("mv .git/config moved-config", config.clone()),
+        ("truncate -s 0 .git/config", config.clone()),
+        (probe_truncate.as_str(), config.clone()),
+        // Replacing the excluded directory itself.
+        ("mv .git moved-git", git_dir.clone()),
+        // Indirections the supervisor must resolve as the sandboxed process
+        // does: its own `/proc/self` (through `/dev/fd`) and a symlinked
+        // parent directory.
+        (
+            "exec 3<.git/hooks; mv staged /dev/fd/3/pre-commit",
+            hook.clone(),
+        ),
+        (
+            "ln -sfn .git/hooks hooks-link; mv staged hooks-link/pre-commit",
+            hook.clone(),
+        ),
+    ];
+
+    for (script, denied) in cases {
+        let (code, stderr, outcome) = run_script_in(&root, &policy, &[], script);
+        assert_ne!(code, Some(0), "`{script}` must fail; stderr: {stderr}");
+        assert!(
+            reported_paths(&outcome).contains(&denied),
+            "`{script}` must report {}; got {:?}",
+            denied.display(),
+            reported_paths(&outcome)
+        );
+        assert!(
+            std::fs::symlink_metadata(&hook).is_err(),
+            "`{script}` planted a hook"
+        );
+        assert!(!git_dir.join("foo").exists(), "`{script}` created .git/foo");
+        assert_eq!(
+            std::fs::read_to_string(&config).unwrap(),
+            "cfg",
+            "`{script}` changed .git/config"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("staged")).unwrap(),
+            "payload"
+        );
+        assert!(!root.join("moved-config").exists());
+        assert!(!root.join("moved-git").exists());
+    }
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn the_same_path_mutations_outside_the_excluded_gitdir_still_succeed() {
+    let root = excluded_gitdir_fixture("mutation-allowed");
+    let policy = root_with_excluded_gitdir(&root);
+    let probe = shell_quote(std::path::Path::new(NETWORK_PROBE));
+    let script = format!(
+        "set -e; mkdir dir; mv staged dir/moved; ln dir/moved hardlink; \
+         ln -s /tmp/x symlink; truncate -s 0 plain.txt; printf again > plain.txt; \
+         {probe} truncate plain.txt; mv plain.txt dir/plain.txt; rm dir/moved; \
+         mkdir gone; rmdir gone"
+    );
+    let (code, stderr, outcome) = run_script_in(&root, &policy, &[], &script);
+
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert!(
+        outcome.approvals.is_empty(),
+        "{:?}",
+        reported_paths(&outcome)
+    );
+    assert!(root.join("dir").is_dir());
+    assert_eq!(
+        std::fs::read_to_string(root.join("hardlink")).unwrap(),
+        "payload"
+    );
+    assert!(!root.join("dir/moved").exists());
+    assert_eq!(
+        std::fs::read_link(root.join("symlink")).unwrap(),
+        std::path::Path::new("/tmp/x")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("dir/plain.txt")).unwrap(),
+        ""
+    );
+    assert!(!root.join("gone").exists());
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn an_approved_gitdir_grant_commits_but_cannot_move_hooks_or_config() {
+    let root = test_dir("mutation-git-commit").canonicalize().unwrap();
+    for args in [
+        &["init", "--quiet", "--initial-branch=main", "."][..],
+        &["config", "user.name", "Horizon Test"],
+        &["config", "user.email", "horizon-test@example.invalid"],
+    ] {
+        let mut git = Command::new("git");
+        git.args(args).current_dir(&root);
+        scrub_git_env(&mut git);
+        git.env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+        assert!(
+            git.status().expect("run host git").success(),
+            "git {args:?}"
+        );
+    }
+    let git_dir = root.join(".git");
+    std::fs::write(root.join("file.txt"), "content").unwrap();
+    std::fs::write(root.join("staged"), "#!/bin/sh\n").unwrap();
+    let original_config = std::fs::read_to_string(git_dir.join("config")).unwrap();
+    let grant = FilesystemGrant {
+        path: git_dir.clone(),
+        access: FilesystemGrantAccess::ReadWrite,
+        scope: FilesystemGrantScope::DirectoryTree,
+        excluded_subpaths: vec!["hooks".into(), "config".into()],
+    };
+    let policy = root_with_excluded_gitdir(&root);
+
+    let (code, stderr, outcome) = run_script_in(
+        &root,
+        &policy,
+        std::slice::from_ref(&grant),
+        "export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1; \
+         git add file.txt && git commit --quiet -m sandboxed",
+    );
+    assert_eq!(code, Some(0), "git commit failed: {stderr}");
+    assert!(
+        outcome.approvals.is_empty(),
+        "{:?}",
+        reported_paths(&outcome)
+    );
+    let mut log = Command::new("git");
+    log.args(["log", "--format=%s"]).current_dir(&root);
+    scrub_git_env(&mut log);
+    let log = log.output().expect("run host git log");
+    assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "sandboxed");
+
+    for (script, denied) in [
+        (
+            "mv staged .git/hooks/pre-commit",
+            git_dir.join("hooks/pre-commit"),
+        ),
+        ("mv .git/config .git/config.bak", git_dir.join("config")),
+    ] {
+        let (code, stderr, outcome) =
+            run_script_in(&root, &policy, std::slice::from_ref(&grant), script);
+        assert_ne!(code, Some(0), "`{script}` must fail; stderr: {stderr}");
+        assert!(
+            reported_paths(&outcome).contains(&denied),
+            "`{script}` must report {}; got {:?}",
+            denied.display(),
+            reported_paths(&outcome)
+        );
+    }
+    assert!(std::fs::symlink_metadata(git_dir.join("hooks/pre-commit")).is_err());
+    assert!(!git_dir.join("config.bak").exists());
+    assert_eq!(
+        std::fs::read_to_string(git_dir.join("config")).unwrap(),
+        original_config
+    );
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn io_uring_setup_is_refused_while_exclusions_are_active() {
+    let root = excluded_gitdir_fixture("mutation-io-uring");
+    let policy = root_with_excluded_gitdir(&root);
+    let probe = shell_quote(std::path::Path::new(NETWORK_PROBE));
+    let (code, stderr, _) = run_script_in(&root, &policy, &[], &format!("{probe} io_uring unused"));
+
+    assert_eq!(code, Some(23), "io_uring_setup must fail; stderr: {stderr}");
+    assert!(stderr.contains("PROBE-DENIED"), "{stderr}");
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
 fn test_dir(label: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "horizon-supervised-helper-{label}-{}-{}",

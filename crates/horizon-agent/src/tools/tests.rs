@@ -2763,7 +2763,8 @@ fn bash_auto_executes_sandboxed_in_a_non_isolated_session() {
 
 /// A plain checkout keeps `.git/` inside the workspace root. A tier-1
 /// sandboxed command can still write the working tree, but every write
-/// under `.git/` is refused by the sandbox.
+/// under `.git/` is refused by the sandbox, including a rename into it
+/// (board #68).
 #[cfg(target_os = "linux")]
 #[test]
 fn tier1_sandboxed_bash_cannot_write_the_plain_checkouts_gitdir() {
@@ -2779,6 +2780,8 @@ fn tier1_sandboxed_bash_cannot_write_the_plain_checkouts_gitdir() {
     let hook = git_dir.join("hooks").join("pre-commit");
     let object = git_dir.join("objects").join("planted");
     let source = root.join("source.txt");
+    let staged_hook = root.join("staged-hook");
+    fs::write(&staged_hook, "#!/bin/sh\n").unwrap();
 
     let tool_state = ToolSessionState::new(root.clone());
     let session_id = SessionId::new();
@@ -2790,11 +2793,14 @@ fn tier1_sandboxed_bash_cannot_write_the_plain_checkouts_gitdir() {
         bash_results_tx,
     );
     let command = format!(
-        "printf ok > {}; printf evil >> {}; printf '#!/bin/sh' > {}; printf x > {}; true",
+        "printf ok > {}; printf evil >> {}; printf '#!/bin/sh' > {}; printf x > {}; \
+         mv {} {}; true",
         source.display(),
         config.display(),
         hook.display(),
-        object.display()
+        object.display(),
+        staged_hook.display(),
+        hook.display()
     );
     let request = ToolCallRequest {
         call_id: ToolCallId("call-gitdir".to_string()),
@@ -2820,9 +2826,10 @@ fn tier1_sandboxed_bash_cannot_write_the_plain_checkouts_gitdir() {
     assert_eq!(fs::read_to_string(&source).unwrap(), "ok");
     assert_eq!(fs::read_to_string(&config).unwrap(), original_config);
     assert!(
-        !hook.exists(),
-        "a hook must never be planted from the sandbox"
+        fs::symlink_metadata(&hook).is_err(),
+        "a hook must never be planted from the sandbox, not even by rename"
     );
+    assert!(staged_hook.exists(), "the refused rename leaves its source");
     assert!(!object.exists(), "no write under .git/ is contained");
 
     unregister_session_runtime(session_id);

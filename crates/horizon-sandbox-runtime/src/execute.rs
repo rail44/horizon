@@ -6,8 +6,9 @@
 //! parent side of this fork without changing that ownership boundary.
 
 use crate::linux::{
-    handle_network_notification, handle_open_notification, install_combined_filter,
-    InitialCapability, NetworkEnforcement, OpenNotificationContext, RateLimiter,
+    handle_network_notification, handle_open_notification, handle_path_mutation_notification,
+    install_combined_filter, is_legacy_open, is_path_mutation, InitialCapability,
+    NetworkEnforcement, OpenNotificationContext, RateLimiter, SupervisionPolicy,
 };
 use crate::RecordingDenyBackend;
 use crate::SupervisedOutcome;
@@ -65,6 +66,8 @@ pub fn execute(
             loopback_connect,
         }),
     };
+    let supervision =
+        SupervisionPolicy::from_exclusions(network_enforcement.is_some(), excluded_by_path);
 
     // SAFETY: this function rejects a multi-threaded helper before forking.
     // The child owns its copy of `command` and `capabilities`, applies only
@@ -102,7 +105,7 @@ pub fn execute(
         // Install only after Landlock setup. CapabilitySet construction and
         // Landlock application open their rule paths; trapping those setup
         // opens before the parent owns the listener would deadlock the child.
-        let notify_fd = match install_combined_filter(network_enforcement.is_some()) {
+        let notify_fd = match install_combined_filter(supervision) {
             Ok(fd) => fd,
             Err(error) => child_error_and_exit(
                 "failed to install combined seccomp listener",
@@ -333,20 +336,24 @@ fn supervise_process_tree(
             }
         } else if polled > 0 && pollfd.revents & libc::POLLIN != 0 {
             let notification = nono::sandbox::recv_notif(notify_fd)?;
-            match notification.data.nr {
+            let nr = notification.data.nr;
+            let context = OpenNotificationContext {
+                child_pid: direct_child as u32,
+                session_id: "horizon-sandbox-helper",
+                initial_caps,
+                backend: &backend,
+                rate_limiter: &mut limiter,
+                denials: &mut denials,
+            };
+            match nr {
                 nono::sandbox::SYS_OPENAT | nono::sandbox::SYS_OPENAT2 => {
-                    handle_open_notification(
-                        notify_fd,
-                        notification,
-                        OpenNotificationContext {
-                            child_pid: direct_child as u32,
-                            session_id: "horizon-sandbox-helper",
-                            initial_caps,
-                            backend: &backend,
-                            rate_limiter: &mut limiter,
-                            denials: &mut denials,
-                        },
-                    )?;
+                    handle_open_notification(notify_fd, notification, context)?;
+                }
+                _ if is_legacy_open(nr) => {
+                    handle_open_notification(notify_fd, notification, context)?;
+                }
+                _ if is_path_mutation(nr) => {
+                    handle_path_mutation_notification(notify_fd, notification, context)?;
                 }
                 _ => match &network_enforcement {
                     Some(enforcement) => handle_network_notification(

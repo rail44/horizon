@@ -1,11 +1,11 @@
-//! Reduced openat/openat2 recording-deny handler.
+//! Reduced openat/openat2 (and legacy open/creat) recording-deny handler.
 //!
 //! Derived from nono-cli v0.68.0's `exec_strategy/supervisor_linux.rs`.
 //! Horizon removes live fd injection and trust/profile policy: an unmatched
 //! syscall is recorded, denied immediately, and may only succeed in a fresh
 //! sandbox after an external narrow-grant approval.
 
-use super::RateLimiter;
+use super::{is_legacy_open, RateLimiter};
 use crate::RecordingDenyBackend;
 use nono::sandbox::{
     classify_access_from_flags, continue_notif, deny_notif, notif_id_valid, read_notif_path,
@@ -54,10 +54,18 @@ pub(crate) struct OpenNotificationContext<'a> {
 pub(crate) fn handle_open_notification(
     notify_fd: RawFd,
     notification: SeccompNotif,
-    context: OpenNotificationContext<'_>,
+    mut context: OpenNotificationContext<'_>,
 ) -> nono::Result<()> {
-    let path = match read_notif_path(notification.pid, notification.data.args[1])
-        .and_then(|raw| resolve_notif_path(notification.pid, notification.data.args[0], &raw))
+    // Legacy `open(path, flags, mode)` and `creat(path, mode)` resolve
+    // against the cwd like `openat(AT_FDCWD, ...)`; they are notified only
+    // when path mutation mediation is on (board #68).
+    let (dirfd, path_addr) = if is_legacy_open(notification.data.nr) {
+        (AT_FDCWD_ARG, notification.data.args[0])
+    } else {
+        (notification.data.args[0], notification.data.args[1])
+    };
+    let path = match read_notif_path(notification.pid, path_addr)
+        .and_then(|raw| resolve_notif_path(notification.pid, dirfd, &raw))
     {
         Ok(path) => path,
         Err(error) => {
@@ -85,6 +93,10 @@ pub(crate) fn handle_open_notification(
                 }
             }
         }
+        #[cfg(target_arch = "x86_64")]
+        nr if nr == libc::SYS_open as i32 => notification.data.args[1] as i32,
+        #[cfg(target_arch = "x86_64")]
+        nr if nr == libc::SYS_creat as i32 => libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC,
         _ => {
             let _ = deny_notif(notify_fd, notification.id);
             return Ok(());
@@ -124,6 +136,36 @@ pub(crate) fn handle_open_notification(
         return Ok(());
     }
 
+    if !request_denial(
+        canonicalized,
+        access,
+        "sandbox intercepted an openat/openat2 boundary crossing",
+        &mut context,
+    )? {
+        let _ = deny_notif(notify_fd, notification.id);
+        return Ok(());
+    }
+
+    if notif_id_valid(notify_fd, notification.id)? {
+        deny_notif(notify_fd, notification.id)?;
+    }
+    Ok(())
+}
+
+/// `AT_FDCWD` as it appears in a seccomp argument slot.
+pub(super) const AT_FDCWD_ARG: u64 = libc::AT_FDCWD as i64 as u64;
+
+/// Puts a denied attempt through the recording backend so it reaches the
+/// structured report, and records the backend's decision.
+///
+/// Returns `false` when the rate limiter refused the request; the caller
+/// still denies the notification in that case.
+pub(super) fn request_denial(
+    canonicalized: PathBuf,
+    access: AccessMode,
+    reason: &str,
+    context: &mut OpenNotificationContext<'_>,
+) -> nono::Result<bool> {
     if !context.rate_limiter.try_acquire() {
         record_denial(
             context.denials,
@@ -131,8 +173,7 @@ pub(crate) fn handle_open_notification(
             access,
             DenialReason::RateLimited,
         );
-        let _ = deny_notif(notify_fd, notification.id);
-        return Ok(());
+        return Ok(false);
     }
 
     let request = ApprovalRequest::Capability {
@@ -146,7 +187,7 @@ pub(crate) fn handle_open_notification(
         // after approval; it is not an inode identity proof.
         path: canonicalized.clone(),
         access,
-        reason: Some("sandbox intercepted an openat/openat2 boundary crossing".to_string()),
+        reason: Some(reason.to_string()),
         child_pid: context.child_pid,
         session_id: context.session_id.to_string(),
     };
@@ -161,11 +202,7 @@ pub(crate) fn handle_open_notification(
             DenialReason::BackendError
         },
     );
-
-    if notif_id_valid(notify_fd, notification.id)? {
-        deny_notif(notify_fd, notification.id)?;
-    }
-    Ok(())
+    Ok(true)
 }
 
 fn is_missing_read_probe(path: &Path, access: AccessMode, flags: i32) -> bool {
@@ -178,7 +215,7 @@ fn is_missing_read_probe(path: &Path, access: AccessMode, flags: i32) -> bool {
         })
 }
 
-fn record_denial(
+pub(super) fn record_denial(
     denials: &mut Vec<DenialRecord>,
     path: PathBuf,
     access: AccessMode,

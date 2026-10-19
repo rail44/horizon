@@ -1,4 +1,4 @@
-//! Dependency-free syscall probe used by Linux containment integration tests.
+//! Syscall probe used by Linux containment integration tests.
 
 use std::io::Write;
 use std::net::{TcpListener, TcpStream, UdpSocket};
@@ -27,6 +27,10 @@ fn main() {
         "udp" => UdpSocket::bind("127.0.0.1:0")
             .and_then(|socket| socket.send_to(b"HORIZON-UDP-PROBE", &target).map(|_| ())),
         "unix" => UnixStream::connect(&target).map(|_| ()),
+        #[cfg(target_os = "linux")]
+        "truncate" => truncate_path(&target),
+        #[cfg(target_os = "linux")]
+        "io_uring" => io_uring_setup(),
         _ => fail("unknown mode"),
     };
 
@@ -37,6 +41,35 @@ fn main() {
             std::process::exit(23);
         }
     }
+}
+
+/// `truncate(2)` by path; coreutils `truncate` opens the file instead.
+#[cfg(target_os = "linux")]
+fn truncate_path(target: &str) -> std::io::Result<()> {
+    let path = std::ffi::CString::new(target).map_err(std::io::Error::other)?;
+    // SAFETY: path is NUL-terminated and outlives the call.
+    if unsafe { libc::truncate(path.as_ptr(), 0) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// One `io_uring_setup(2)` call with default parameters.
+#[cfg(target_os = "linux")]
+fn io_uring_setup() -> std::io::Result<()> {
+    // `struct io_uring_params` is 120 bytes; all-zero asks for defaults.
+    let mut params = [0_u8; 120];
+    // SAFETY: params is a writable buffer of the kernel's struct size.
+    let fd = unsafe { libc::syscall(libc::SYS_io_uring_setup, 1_u32, params.as_mut_ptr()) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fd is a descriptor this process just received.
+    unsafe {
+        libc::close(fd as libc::c_int);
+    }
+    Ok(())
 }
 
 fn fail(message: &str) -> ! {

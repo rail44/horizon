@@ -3,8 +3,11 @@
 //! Derived from nono v0.68.0 `crates/nono/src/sandbox/linux.rs` proxy/open
 //! filters. Horizon combines the disjoint programs because Linux permits only
 //! one useful NEW_LISTENER ownership boundary for this helper. Socket creation
-//! is notified too, so rejected protocols remain structured evidence.
+//! is notified too, so rejected protocols remain structured evidence. When a
+//! write exclusion exists, the path-mutating syscalls are notified as well so
+//! the supervisor can keep excluded paths intact (board #68).
 
+use super::{path_mutation_syscalls, SupervisionPolicy};
 use std::collections::HashMap;
 use std::os::fd::{FromRawFd, OwnedFd};
 
@@ -66,8 +69,8 @@ enum PendingInsn {
 }
 
 /// Installs the helper's single listener after Landlock is active.
-pub(crate) fn install(network_mediation: bool) -> nono::Result<OwnedFd> {
-    let filter = build(network_mediation);
+pub(crate) fn install(policy: SupervisionPolicy) -> nono::Result<OwnedFd> {
+    let filter = build(policy);
     let program = SockFprog {
         len: u16::try_from(filter.len()).map_err(|_| {
             nono::NonoError::SandboxInit("combined seccomp filter is too large".to_string())
@@ -114,7 +117,7 @@ pub(crate) fn install(network_mediation: bool) -> nono::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
 }
 
-fn build(network_mediation: bool) -> Vec<SockFilterInsn> {
+fn build(policy: SupervisionPolicy) -> Vec<SockFilterInsn> {
     let mut pending = vec![
         stmt(BPF_LD_W_ABS, SECCOMP_DATA_ARCH_OFFSET),
         jump(AUDIT_ARCH_NATIVE, Some("syscall"), None),
@@ -126,7 +129,7 @@ fn build(network_mediation: bool) -> Vec<SockFilterInsn> {
         jump(libc::SYS_openat2 as u32, Some("notify"), None),
     ];
 
-    if network_mediation {
+    if policy.network_mediation {
         pending.extend([
             jump(libc::SYS_socket as u32, Some("notify"), None),
             jump(libc::SYS_socketpair as u32, Some("notify"), None),
@@ -135,8 +138,17 @@ fn build(network_mediation: bool) -> Vec<SockFilterInsn> {
             jump(libc::SYS_sendto as u32, Some("notify"), None),
             jump(libc::SYS_sendmsg as u32, Some("notify"), None),
             jump(libc::SYS_sendmmsg as u32, Some("notify"), None),
-            jump(libc::SYS_io_uring_setup as u32, Some("notify"), None),
         ]);
+    }
+    if policy.path_mutation_mediation {
+        pending.extend(
+            path_mutation_syscalls()
+                .iter()
+                .map(|nr| jump(*nr as u32, Some("notify"), None)),
+        );
+    }
+    if policy.notifies_io_uring_setup() {
+        pending.push(jump(libc::SYS_io_uring_setup as u32, Some("notify"), None));
     }
     pending.push(jump_always("allow"));
 
@@ -225,9 +237,18 @@ fn jump_offset(
 mod tests {
     use super::*;
 
+    fn notifies(filter: &[SockFilterInsn], nr: libc::c_long) -> bool {
+        filter
+            .iter()
+            .any(|instruction| instruction.code == BPF_JMP_JEQ_K && instruction.k == nr as u32)
+    }
+
     #[test]
     fn combined_filter_contains_one_terminal_notification_action() {
-        let filter = build(true);
+        let filter = build(SupervisionPolicy {
+            network_mediation: true,
+            path_mutation_mediation: true,
+        });
         assert_eq!(
             filter
                 .iter()
@@ -240,9 +261,34 @@ mod tests {
 
     #[test]
     fn open_only_filter_omits_network_syscall_numbers() {
-        let filter = build(false);
-        assert!(!filter.iter().any(|instruction| {
-            instruction.code == BPF_JMP_JEQ_K && instruction.k == libc::SYS_connect as u32
-        }));
+        let filter = build(SupervisionPolicy::default());
+        assert!(!notifies(&filter, libc::SYS_connect));
+    }
+
+    #[test]
+    fn a_policy_without_exclusions_installs_no_path_mutation_notifications() {
+        let filter = build(SupervisionPolicy::from_exclusions(true, &[]));
+        for nr in path_mutation_syscalls().iter() {
+            assert!(!notifies(&filter, *nr), "syscall {nr} must not be notified");
+        }
+        // Network mediation alone still refuses io_uring.
+        assert!(notifies(&filter, libc::SYS_io_uring_setup));
+        let open_only = build(SupervisionPolicy::from_exclusions(false, &[]));
+        assert!(!notifies(&open_only, libc::SYS_io_uring_setup));
+        assert!(!notifies(&open_only, libc::SYS_renameat2));
+    }
+
+    #[test]
+    fn any_exclusion_notifies_path_mutations_and_io_uring() {
+        let exclusions = [(
+            std::path::PathBuf::from("/repo"),
+            vec![std::path::PathBuf::from("/repo/.git")],
+        )];
+        let filter = build(SupervisionPolicy::from_exclusions(false, &exclusions));
+        for nr in path_mutation_syscalls().iter() {
+            assert!(notifies(&filter, *nr), "syscall {nr} must be notified");
+        }
+        assert!(notifies(&filter, libc::SYS_io_uring_setup));
+        assert!(!notifies(&filter, libc::SYS_connect));
     }
 }

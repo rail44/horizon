@@ -47,8 +47,22 @@ credential-authenticated report socket is a local addition. Live fd injection,
 PTY, rollback, trust interception, URL opening, profile saving, tool
 sandboxing, resource cgroups, and CLI session management remain excluded.
 
-The Linux filesystem scope matches the selected upstream slice: live mediation
-of `openat` and `openat2`, not every Landlock-controlled filesystem operation.
+The Linux filesystem scope starts from the selected upstream slice: live
+mediation of `openat` and `openat2`, not every Landlock-controlled filesystem
+operation. Horizon adds one local mediation with no upstream counterpart
+(`src/linux/mutation.rs`, board #68): when any write exclusion exists
+(`writable_root_exclusions` or a grant's `excluded_subpaths`), the filter also
+notifies `rename`, `renameat`, `renameat2`, `link`, `linkat`, `symlink`,
+`symlinkat`, `unlink`, `unlinkat`, `rmdir`, `mkdir`, `mkdirat`, `mknod`,
+`mknodat`, `truncate`, legacy `open`, and `creat` (the legacy forms only on
+x86_64, `renameat` not on riscv64), plus `io_uring_setup`. Legacy
+`open`/`creat` go through the `openat` handler; the others are denied when a
+mutated operand is at, beneath, or an ancestor of an excluded path, and
+otherwise continued to Landlock. Their operands are resolved by a local
+walker rather than `try_canonicalize`, because the supervisor's own
+`/proc/self` differs from the tracee's and these syscalls do not follow a
+final symlink. `chmod`/`chown`/`utimensat`/`setxattr` stay unmediated: they
+change no name and no content.
 Network mediation covers socket creation, connect/bind, destination-bearing
 send syscalls, and `io_uring_setup`; local unnamed Unix stream/seqpacket IPC
 remains available, while remote IP routes and named/abstract Unix sockets are
