@@ -1474,6 +1474,173 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     );
 }
 
+/// The workspace root a live `session_info_update` reports, if any.
+fn resolved_root(inbound: &Inbound, session_id: SessionId) -> Option<PathBuf> {
+    let Inbound::Update(notification) = inbound else {
+        return None;
+    };
+    if notification.session_id != acp_id(session_id) {
+        return None;
+    }
+    let v2::SessionUpdate::SessionInfoUpdate(info) = &notification.update else {
+        return None;
+    };
+    acp::read_horizon_meta::<acp::SessionInfoMeta>(info.meta.as_opt_ref().flatten())?
+        .ok()?
+        .workspace_root
+}
+
+fn fixture_git_output(dir: &Path, args: &[&str]) -> String {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(dir).args(args);
+    for (key, _) in std::env::vars() {
+        if key.starts_with("GIT_") {
+            command.env_remove(key);
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// `worktree.enter` end to end: a shared session asks for a worktree, the
+/// activation lands at the turn boundary, the client learns the new root
+/// live, later writes are confined to it, and a daemon restart resumes the
+/// session in the same worktree.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
+    let repo = isolated_session_fixture();
+    let head = fixture_git_output(repo.path(), &["rev-parse", "HEAD"]);
+    let agentd = spawn_agentd();
+    let socket_path = agentd.socket_path.clone();
+    let event_log_path = agentd.event_log_path.clone();
+    let mut client = connect(&socket_path).await;
+    let session_id = SessionId::new();
+    open_session(
+        &client,
+        shared_session_in(session_id, repo.path().to_path_buf()),
+    )
+    .await;
+
+    prompt(&client, session_id, "please enter a worktree").await;
+    let collected = collect_until(&mut client, |inbound| {
+        resolved_root(inbound, session_id).is_some_and(|root| root != repo.path())
+    })
+    .await;
+    let (call, meta) = collected
+        .iter()
+        .find_map(finished_tool)
+        .expect("the worktree.enter call finishes before the switch");
+    assert_eq!(meta.tool_id, "worktree.enter");
+    let output = call.raw_output.as_opt_ref().flatten().unwrap();
+    assert_eq!(output["requested"], true, "{output}");
+    assert_eq!(output["base"], head.as_str(), "{output}");
+    assert!(
+        !collected
+            .iter()
+            .any(|inbound| matches!(inbound, Inbound::Permission(..))),
+        "worktree.enter is automatic: {collected:?}"
+    );
+
+    let root = resolved_root(collected.last().unwrap(), session_id).unwrap();
+    assert_eq!(
+        root.parent(),
+        Some(repo.path().join(".horizon/worktrees").as_path())
+    );
+    assert_eq!(fixture_git_output(&root, &["rev-parse", "HEAD"]), head);
+    let branch = fixture_git_output(&root, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert!(branch.starts_with("horizon/"), "{branch}");
+    let listed = list_sessions(&client)
+        .await
+        .into_iter()
+        .find(|info| info.session_id == acp_id(session_id))
+        .unwrap();
+    assert_eq!(info_meta(&listed).workspace_root.as_ref(), Some(&root));
+
+    if horizon_sandbox::is_available() {
+        prompt(&client, session_id, "please write the marker").await;
+        let collected = collect_until(&mut client, |inbound| {
+            finished_tool(inbound).is_some_and(|(_, meta)| meta.call_id == "mock-bash-marker-1")
+        })
+        .await;
+        assert!(
+            !collected
+                .iter()
+                .any(|inbound| matches!(inbound, Inbound::Permission(..))),
+            "bash in the entered worktree runs sandboxed without approval: {collected:?}"
+        );
+        let (call, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
+        let output = call.raw_output.as_opt_ref().flatten().unwrap();
+        assert_eq!(meta.policy_tier.as_deref(), Some("contained"), "{output}");
+        assert_eq!(output["exit_code"], 0, "{output}");
+        assert_eq!(
+            output["output"].as_str().unwrap().trim(),
+            root.display().to_string(),
+            "bash starts in the new root: {output}"
+        );
+        assert!(root.join("worktree-marker").exists());
+        assert!(!repo.path().join("worktree-marker").exists());
+    }
+
+    let inside = root.join("inside.txt");
+    prompt(
+        &client,
+        session_id,
+        &format!("write file {}", inside.display()),
+    )
+    .await;
+    let collected = collect_until(&mut client, |inbound| {
+        finished_tool(inbound).is_some_and(|(_, meta)| meta.call_id == "mock-write-1")
+    })
+    .await;
+    assert!(
+        !collected
+            .iter()
+            .any(|inbound| matches!(inbound, Inbound::Permission(..))),
+        "fs.write inside the new root is automatic: {collected:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&inside).unwrap(),
+        "written by the mock\n"
+    );
+
+    wait_for_persisted_event(
+        &event_log_path,
+        session_id,
+        |event| matches!(event, Event::EnvironmentActivated(identity) if identity.path == root),
+    )
+    .await;
+    drop(client);
+    agentd.kill_and_wait();
+
+    let respawned = spawn_agentd_at(socket_path, event_log_path);
+    let mut client = connect(&respawned.socket_path).await;
+    let resumed = list_sessions(&client)
+        .await
+        .into_iter()
+        .find(|info| info.session_id == acp_id(session_id))
+        .expect("the session resumes live");
+    assert_eq!(info_meta(&resumed).workspace_root.as_ref(), Some(&root));
+    let _ = resume(&mut client, session_id).await.unwrap();
+
+    // The old root is now outside the session's root: `fs.write` refuses it.
+    let outside = repo.path().join("outside.txt");
+    prompt(
+        &client,
+        session_id,
+        &format!("write file {}", outside.display()),
+    )
+    .await;
+    let collected = collect_until(&mut client, |inbound| {
+        finished_tool(inbound).is_some_and(|(_, meta)| meta.call_id == "mock-write-1")
+    })
+    .await;
+    let (call, _) = collected.iter().rev().find_map(finished_tool).unwrap();
+    let output = call.raw_output.as_opt_ref().flatten().unwrap();
+    assert_eq!(output["is_error"], true, "{output}");
+    assert!(!outside.exists());
+}
+
 /// `session/resume` bootstrap (no crash): a client that disconnects and
 /// reconnects to the same running daemon must receive exactly the updates
 /// it had seen live, message ids included.

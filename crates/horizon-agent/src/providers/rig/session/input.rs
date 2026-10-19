@@ -160,6 +160,20 @@ impl Inputs {
         ));
     }
 
+    pub(super) fn note_environment_ready(
+        &mut self,
+        workspace_root: &std::path::Path,
+        branch: &str,
+        base: &str,
+    ) {
+        self.additions.push(format!(
+            "Environment activated: this session now works in {} on branch {branch}, \
+             created from commit {base}. Edits and shell commands now apply to this worktree; \
+             use absolute paths under it.",
+            workspace_root.display()
+        ));
+    }
+
     pub(super) fn take_additions(&mut self) -> Option<String> {
         (!self.additions.is_empty()).then(|| std::mem::take(&mut self.additions).join("\n\n"))
     }

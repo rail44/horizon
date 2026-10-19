@@ -162,6 +162,12 @@ fn classify_tool(
             )
         }
         "workspace.snapshot" => ("Snapshot".to_string(), None, None, ToolCallKind::Generic),
+        "worktree.enter" => (
+            "Enter Worktree".to_string(),
+            None,
+            None,
+            ToolCallKind::Generic,
+        ),
         "config.read" => ("Config Read".to_string(), None, None, ToolCallKind::Generic),
         "config.write" => (
             "Config Write".to_string(),

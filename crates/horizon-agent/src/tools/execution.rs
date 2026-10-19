@@ -17,6 +17,13 @@ pub trait HostTools {
     /// Executes a host-owned auto-allow tool, returning `None` if `tool_id`
     /// isn't one this implementation handles.
     fn execute_auto(&self, tool_id: &str, input: &serde_json::Value) -> Option<serde_json::Value>;
+
+    /// Requests that `session` move into a fresh worktree branched from its
+    /// current `HEAD` (`worktree.enter`), returning the resolved base commit.
+    /// `Err` carries a message for the model, and nothing is requested.
+    fn enter_worktree(&self, _session: SessionId) -> Result<String, String> {
+        Err("worktree.enter is unavailable for this session".into())
+    }
 }
 
 /// A policy-approved execution or the exact candidate requiring a decision.
@@ -171,6 +178,7 @@ fn execute_synchronous(
         ToolInput::TaskOutput(input) => {
             return crate::tools::explore::output(session_id, request, input)
         }
+        ToolInput::EnterWorktree(_) => return crate::tools::worktree::enter(host, session_id),
         _ => {}
     }
     match request.tool_id.as_str() {

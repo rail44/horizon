@@ -11,7 +11,7 @@ use super::state::{lock_unpoisoned, AgentdState};
 use crossbeam_channel::Sender;
 use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::{Command, Event, ProviderId, SessionId};
-use horizon_agent::hosting::AgentWireEvent;
+use horizon_agent::hosting::{AgentWireEvent, WorkspaceRootResolved};
 use horizon_agent::judge::JudgeHandle;
 use horizon_agent::live::LiveState;
 use horizon_agent::persistence::event_log::PersistedSessionContext;
@@ -258,16 +258,29 @@ impl SessionEnvironment<'_> {
                 );
                 register_exploration_host(session_id, replacement.exploration_host());
                 *tool_state = replacement;
-                if let Some(entry) = lock_unpoisoned(&state.sessions).get_mut(&session_id) {
-                    entry.workspace_root = Some(worktree.path.clone());
-                    entry.worktree = Some(worktree.clone());
-                }
+                let parent_session_id = lock_unpoisoned(&state.sessions)
+                    .get_mut(&session_id)
+                    .and_then(|entry| {
+                        entry.workspace_root = Some(worktree.path.clone());
+                        entry.worktree = Some(worktree.clone());
+                        entry.parent_session_id
+                    });
                 send_session_event(
                     state,
                     session_id,
                     AgentWireEvent::Event(Event::EnvironmentActivated(identity)),
                 );
-                Ok((worktree.path.clone(), trusted))
+                // The same metadata event setup and attachment replay send, so
+                // a live client follows the new root without reattaching.
+                send_session_event(
+                    state,
+                    session_id,
+                    AgentWireEvent::WorkspaceRootResolved(WorkspaceRootResolved {
+                        workspace_root: worktree.path.clone(),
+                        parent_session_id,
+                    }),
+                );
+                Ok((worktree.path.clone(), worktree.branch.clone(), trusted))
             }))
             .unwrap_or_else(|_| Err("Failed to prepare the session environment".into()));
             if outcome.is_err() {
@@ -276,8 +289,9 @@ impl SessionEnvironment<'_> {
             outcome
         })();
         let command = match prepared {
-            Ok((workspace_root, trusted_project)) => Command::EnvironmentPrepared {
+            Ok((workspace_root, branch, trusted_project)) => Command::EnvironmentPrepared {
                 workspace_root,
+                branch,
                 trusted_project,
             },
             Err(message) => Command::EnvironmentActivationFailed { message },

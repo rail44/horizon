@@ -194,6 +194,8 @@ pub enum Command {
     /// Host response to EnvironmentReady. Internal coordination command.
     EnvironmentPrepared {
         workspace_root: std::path::PathBuf,
+        /// The branch the new worktree has checked out.
+        branch: String,
         trusted_project: bool,
     },
     EnvironmentActivationFailed {

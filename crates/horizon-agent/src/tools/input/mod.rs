@@ -61,6 +61,7 @@ inputs! {
     TaskOutput(TaskOutput) => "task_output",
     WebSearch(WebSearch) => "web_search",
     WebFetch(WebFetch) => "web_fetch",
+    EnterWorktree(Empty) => "worktree.enter",
 }
 
 fn schema_for<T: JsonSchema>() -> Value {

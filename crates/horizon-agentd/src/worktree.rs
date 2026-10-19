@@ -102,6 +102,19 @@ fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// `reference` in `dir`'s repository, resolved to a full commit id.
+pub(crate) fn resolve_commit(dir: &Path, reference: &str) -> Result<String, String> {
+    run_git(
+        dir,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{reference}^{{commit}}"),
+        ],
+    )
+}
+
 /// The repository's shared git dir (`<repo_root>/.git` for an ordinary
 /// non-bare repo), resolved from `dir` -- which may itself already be a
 /// linked worktree, in which case `--show-toplevel` would report *that*

@@ -9,11 +9,14 @@ impl SessionLoopState {
             let Some(base) = self.activation.pop_front() else {
                 break;
             };
-            let _ = self.events_tx.send(Event::EnvironmentReady { base }.into());
+            let _ = self
+                .events_tx
+                .send(Event::EnvironmentReady { base: base.clone() }.into());
             while let Some(command) = self.commands.recv().await {
                 match command {
                     Command::EnvironmentPrepared {
                         workspace_root,
+                        branch,
                         trusted_project,
                     } => {
                         let environment = crate::prompt::SessionEnvironment::for_workspace_root(
@@ -30,6 +33,8 @@ impl SessionLoopState {
                         self.environment = environment;
                         self.extra_sections = sections;
                         self.config = config;
+                        self.inputs
+                            .note_environment_ready(&workspace_root, &branch, &base);
                         break;
                     }
                     Command::EnvironmentActivationFailed { message } => {
@@ -91,6 +96,7 @@ mod tests {
         commands
             .send(Command::EnvironmentPrepared {
                 workspace_root: root.clone(),
+                branch: "horizon/selected".into(),
                 trusted_project: false,
             })
             .unwrap();
@@ -111,6 +117,10 @@ mod tests {
                 .as_deref(),
             Some("opaque:task")
         );
+        let note = state.inputs.take_additions().unwrap();
+        assert!(note.contains(&root.display().to_string()), "{note}");
+        assert!(note.contains("horizon/selected"), "{note}");
+        assert!(note.contains("selected-base"), "{note}");
     }
 
     #[tokio::test]

@@ -112,6 +112,7 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
         if persistence_available {
             let Command::EnvironmentPrepared {
                 workspace_root,
+                branch,
                 trusted_project,
             } = response
             else {
@@ -125,6 +126,7 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
                 .clone()
                 .unwrap();
             assert_eq!(worktree.path, workspace_root);
+            assert_eq!(worktree.branch, branch);
             let record = records
                 .iter()
                 .find(|record| matches!(record.event, Event::EnvironmentActivated(_)))
@@ -137,6 +139,10 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
             assert!(
                 matches!(outgoing.try_recv().unwrap(), AgentWireEvent::Event(Event::EnvironmentActivated(identity))
                 if identity == worktree.identity())
+            );
+            assert!(
+                matches!(outgoing.try_recv().unwrap(), AgentWireEvent::WorkspaceRootResolved(resolved)
+                if resolved.workspace_root == workspace_root && resolved.parent_session_id.is_none())
             );
             // A second activation must leave the current environment intact.
             environment.activate("HEAD", &live_state, &mut tool_state, &results, &commands);

@@ -69,6 +69,13 @@ pub(crate) struct RecallRead {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
+/// `worktree.enter`'s receipt: the activation is queued, not yet applied.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct WorktreeRequested {
+    pub requested: bool,
+    pub base: String,
+    pub message: String,
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum MemoryUpdated {

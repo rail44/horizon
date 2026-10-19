@@ -3999,6 +3999,7 @@ fn activation_waits_for_the_complete_tool_batch_and_blocks_the_next_provider_rou
         .is_err());
     tx.send(Command::EnvironmentPrepared {
         workspace_root: std::env::current_dir().unwrap(),
+        branch: "horizon/test".into(),
         trusted_project: false,
     })
     .unwrap();
@@ -4114,6 +4115,7 @@ fn shutdown_during_environment_handoff_never_starts_another_provider_round() {
     tx.send(Command::Shutdown).unwrap();
     tx.send(Command::EnvironmentPrepared {
         workspace_root: std::env::current_dir().unwrap(),
+        branch: "horizon/test".into(),
         trusted_project: false,
     })
     .unwrap();

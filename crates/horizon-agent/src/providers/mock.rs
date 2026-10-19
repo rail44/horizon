@@ -295,6 +295,39 @@ fn respond_to_user_message(
         );
         return ControlFlow::Continue(());
     }
+    // Test hooks for `worktree.enter` and what follows it, so
+    // `horizon-agentd`'s e2e suite can move a session into a worktree and
+    // check where its later writes land without a network provider.
+    if lower_text.contains("enter a worktree") {
+        request_tool(
+            events_tx,
+            pending_tool_call,
+            "mock-worktree-enter-1",
+            "worktree.enter",
+            serde_json::json!({}),
+        );
+        return ControlFlow::Continue(());
+    }
+    if lower_text.contains("write the marker") {
+        request_tool(
+            events_tx,
+            pending_tool_call,
+            "mock-bash-marker-1",
+            "bash",
+            serde_json::json!({ "command": "pwd && touch worktree-marker" }),
+        );
+        return ControlFlow::Continue(());
+    }
+    if let Some(path) = text.strip_prefix("write file ") {
+        request_tool(
+            events_tx,
+            pending_tool_call,
+            "mock-write-1",
+            "fs.write",
+            serde_json::json!({ "path": path.trim(), "content": "written by the mock\n" }),
+        );
+        return ControlFlow::Continue(());
+    }
     if lower_text.contains("snapshot") {
         let call_id = ToolCallId("workspace-snapshot-1".to_string());
         let occurrence_id = OccurrenceId::new();
@@ -445,6 +478,31 @@ fn respond_to_user_message(
     );
     let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
     ControlFlow::Continue(())
+}
+
+/// Requests one tool call as the current turn's single pending call.
+fn request_tool(
+    events_tx: &Sender<ProviderEvent>,
+    pending_tool_call: &mut Option<ToolCallIdentity>,
+    call_id: &str,
+    tool_id: &str,
+    input: serde_json::Value,
+) {
+    let call_id = ToolCallId(call_id.to_string());
+    let occurrence_id = OccurrenceId::new();
+    *pending_tool_call = Some(ToolCallIdentity {
+        call_id: call_id.clone(),
+        occurrence_id: occurrence_id.clone(),
+    });
+    let _ = events_tx.send(
+        Event::ToolCallRequested(ToolCallRequest {
+            call_id,
+            tool_id: tool_id.to_string(),
+            input: input.into(),
+            occurrence_id,
+        })
+        .into(),
+    );
 }
 
 enum MockTurnOutcome {

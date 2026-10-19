@@ -23,6 +23,7 @@ bodies! {
     Knowledge(KnowledgeRead), KnowledgeWritten(KnowledgeWritten),
     RecallSearch(RecallSearch), RecallRead(RecallRead), Memory(MemoryUpdated),
     Bash(BashOutput), Task(TaskOutput), Fetch(WebFetch), Search(WebSearch),
+    Worktree(WorktreeRequested),
 }
 
 #[derive(Clone, Debug, PartialEq)]

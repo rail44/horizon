@@ -35,6 +35,18 @@ fn build_definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::AutoAllowRead,
         },
+        Definition {
+            id: super::worktree::TOOL_ID.to_string(),
+            title: "Enter a Fresh Worktree".to_string(),
+            description: "Create a git worktree branched from the current HEAD under \
+                `.horizon/worktrees/` and move this session's working root into it at the next \
+                turn boundary; this is how a session gets a disposable copy of the repository. \
+                Automatic, no approval. Wait for the environment outcome before editing."
+                .to_string(),
+            input_schema: super::input::schema(super::worktree::TOOL_ID)
+                .expect("registered tool input"),
+            permission: ToolPermission::AutoAllowRead,
+        },
         SynchronousTool::ReadFile.definition(
             "Read File".to_string(),
             "Read a known text file or a relevant line window, with line numbers. \
@@ -384,6 +396,28 @@ mod tests {
             .into_iter()
             .find(|definition| definition.id == id)
             .unwrap_or_else(|| panic!("`{id}` must be in the catalog"))
+    }
+
+    /// `worktree.enter` takes no arguments, needs no approval, and tells
+    /// the model the switch waits for the turn boundary.
+    #[test]
+    fn worktree_enter_is_automatic_and_takes_no_input() {
+        let enter = definition("worktree.enter");
+
+        assert_eq!(enter.permission, ToolPermission::AutoAllowRead);
+        assert_eq!(enter.input_schema["type"], "object");
+        assert_eq!(enter.input_schema["additionalProperties"], json!(false));
+        assert!(enter
+            .input_schema
+            .get("properties")
+            .is_none_or(|properties| properties == &json!({})));
+        assert!(enter.input_schema.get("required").is_none());
+        assert!(
+            enter.description.contains("next turn boundary")
+                && enter.description.contains("before editing"),
+            "{}",
+            enter.description
+        );
     }
 
     /// The 2026-07-27 rename and two-field input shape
