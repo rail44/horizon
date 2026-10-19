@@ -56,9 +56,11 @@ messaging need, so it is designed once, here.
      A new agent takes the source session's `workspace_root` as the
      shell's model records it (`agent_spawn_workspace_root`,
      `src/workspace/session_lifecycle.rs`) -- an agent source's root,
-     including a worktree it entered; a terminal source has no recorded
-     directory in the shell, so an agent spawned from a terminal starts
-     in the Horizon process's cwd.
+     including a worktree it entered, or a terminal source's cwd as
+     `horizon-terminald` last published it (board #69,
+     `docs/terminald-split-design.md`). A source with no recorded
+     directory yet (a terminal whose first cwd has not arrived) falls
+     back to the Horizon process's cwd.
    - *worktree* — a session gets its **own worktree** only by entering
      one after it starts: the `worktree.enter` tool, or the board's
      `implement` action, both through environment activation. Spawning
@@ -116,11 +118,13 @@ messaging need, so it is designed once, here.
 
 ## Implementation notes
 
-- **cwd sourcing is shell-independent.** Capture the PTY child pid
-  (`portable-pty`'s spawned child exposes `process_id()`; not retained
-  today) and sample its cwd on demand via a cross-platform process-info
-  crate (`sysinfo`-style: `/proc/<pid>/cwd` on Linux, libproc on macOS)
-  — Horizon targets Linux *and* macOS, so direct `/proc` is out. Not
+- **cwd sourcing is shell-independent.** `horizon-terminald` keeps the
+  PTY child pid (`portable-pty`'s `process_id()`) and samples its cwd
+  via `sysinfo` (`/proc/<pid>/cwd` on Linux, libproc on macOS) — at a
+  new terminal's spawn for inheritance, and after output settles to
+  publish each terminal's current cwd to the shell
+  (`docs/terminald-split-design.md`). Horizon targets Linux *and* macOS,
+  so direct `/proc` is out. Not
   OSC 7 / shell hooks: OSC 7 is the shell-*dependent* mechanism (would
   tie Horizon to a fixed shell set), which the owner explicitly does not
   want. OSC 7 remains the path only if continuous cwd (e.g. header
@@ -154,8 +158,13 @@ mechanism to read from yet (the pid-sampling cwd inheritance in
 `horizon-agentd::terminal::resolve_cwd` is spawn-time-only and keyed by
 *terminal* session id, not exposed to the shell), so a terminal active
 session simply disables the command rather than fabricating an
-approximate answer. The original second limitation (no persistence across a
-session-runtime restart) is closed by the 2026-07-21 resume hardening below.
+approximate answer. That limitation is closed by board #69: `horizon-terminald`
+publishes each terminal's cwd (`TerminalUpdate::WorkingDirectory`) and the
+shell records it as the terminal's `workspace_root`, so the command, the
+session manager's directory column, and agent spawns from a terminal read
+it the same way they read an agent's root. The original second limitation
+(no persistence across a session-runtime restart) is closed by the
+2026-07-21 resume hardening below.
 Per-row "open its directory" on an arbitrary session (decision 4b) landed
 alongside the lineage view itself -- see below.
 
@@ -266,11 +275,8 @@ linked worktree's own `.git` is a *file*, so this walks past a session's
 own worktree to the *main* checkout it branched from, matching
 the example above); cheap enough to run on every visible row's render.
 
-Remaining is a roadmap item under shared-foundation 4: terminal-cwd
-sourcing surfaced to the shell (non-agent sessions still have no
-`workspace_root` at all, so an agent spawned from a terminal does not
-start in that terminal's directory), the spawn source surviving an agentd
-restart before activation (it is persisted only once it becomes an edge),
+Remaining is a roadmap item under shared-foundation 4: the spawn source
+surviving an agentd restart before activation (it is persisted only once it becomes an edge),
 and parent/child navigation from the session
 manager (jumping directly to an ancestor/descendant row). Messaging/
 supervision layer onto the same tree in shared-foundation 4's own

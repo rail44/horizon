@@ -156,3 +156,33 @@ session-loop input. Zero dimensions previously panicked during construction
 or resize; a one-column screen cannot hold a wide cell safely. Valid sizes
 and supplied pixel dimensions remain unchanged, including zero pixels for
 unknown geometry. This adds no protocol fields or user configuration.
+
+## Working directory publication (board #69)
+
+`horizon-terminald` publishes each terminal session's current working
+directory to the shell as `TerminalUpdate::WorkingDirectory(PathBuf)` on the
+attachment's events channel. The variant was appended to `TerminalUpdate`
+(additive; `TERMINAL_PROTOCOL_VERSION` unchanged).
+
+- **What.** The cwd of the session's PTY child process (the shell), read with
+  `sysinfo` from the pid kept on `HostedTerminal`; a program the shell runs
+  changing its own cwd does not move it.
+- **When.** Once right after spawn (a failed read falls back to the cwd the
+  child was spawned with), then whenever the session's frame stream has been
+  quiet for 200 ms (`CWD_SETTLE`) after a frame: a `cd` redraws the prompt, so
+  the read follows that redraw. Each frame re-arms the deadline in
+  `forward_updates`; with no frame since the last read nothing is armed, so an
+  idle terminal is never sampled.
+- **Dedup and resync.** The last published value is kept per session; a read
+  equal to it sends nothing. Every newly installed subscriber (create or
+  attach) is sent the kept value first, so a restarted shell learns each
+  reattached terminal's cwd without persisting it.
+- **Spawn inheritance unchanged.** `resolve_cwd` still reads the *source*
+  terminal's cwd at the moment a new terminal is spawned from it; it does not
+  use the published value.
+
+The shell records the value in the workspace model's per-session
+`workspace_root` (`wire_terminal_cwd_updates`, `src/workspace/session_events.rs`),
+the slot agent sessions fill with their resolved root, so agent spawns from a
+terminal, "Open Terminal in Session Directory", and the session manager read
+both kinds the same way.

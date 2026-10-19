@@ -177,7 +177,10 @@ runtime reload).
 
 Delegation: a parent spawns a child over the control plane (the parent
 is the issuer, so the spawn source), and the child starts in the
-parent's directory. A child that needs a disposable copy calls
+parent's directory. A terminal issuer counts the same way: an agent
+spawned from a terminal (`horizon new-agent` run in it, or the palette
+with the terminal focused) starts in that terminal's cwd as
+`horizon-terminald` last published it, else the Horizon process's cwd. A child that needs a disposable copy calls
 `worktree.enter` as its first step; the worktree branches from that
 directory's `HEAD`, and activation records the parent as the child's
 derivation edge (`parent_session_id`).

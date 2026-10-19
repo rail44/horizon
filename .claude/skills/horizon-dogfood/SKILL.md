@@ -20,8 +20,10 @@ happens, and report friction/bugs with evidence.
 ## The loop
 
 **Spawn.** `horizon new-agent --prompt "<prompt>"` creates an agent
-session and sends the prompt. The session starts in a directory, not in
-a worktree; tier-1 auto-approval applies there (sandboxed `bash`,
+session and sends the prompt. The session starts in the issuing
+terminal's directory — its shell's cwd as `horizon-terminald` last
+published it, so a `cd` inside a program running in that shell (e.g. a
+Bash tool call) does not move it — not in a worktree; tier-1 auto-approval applies there (sandboxed `bash`,
 in-root `fs.write`/`fs.edit`), with `.git/` read-only to the sandbox
 (`docs/sandbox-perimeter-design.md`). When a worktree is wanted, have
 the session call the automatic `worktree.enter` tool (e.g. say so in the
