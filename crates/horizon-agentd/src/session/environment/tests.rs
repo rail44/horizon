@@ -94,6 +94,7 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
                 inbound: commands.clone(),
                 replay,
                 parent_session_id: None,
+                spawn_source_session_id: None,
                 workspace_root: Some(root.clone()),
                 worktree: None,
             },

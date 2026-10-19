@@ -108,12 +108,28 @@ pub(super) fn daemon_summary_for(
         .find(|summary| summary.session_id.as_uuid() == session_id.as_uuid())
 }
 
-/// The default `workspace_root` for a brand-new agent session: the Horizon
-/// process's own cwd, `None` only if that can't be read -- see
-/// `wire::SessionNew::workspace_root`'s doc comment for why this, not the
-/// spawn-source pane's cwd, is what's used today.
+/// The default `workspace_root` for a brand-new agent session with no
+/// usable spawn source: the Horizon process's own cwd, `None` only if that
+/// can't be read.
 fn default_agent_workspace_root() -> Option<std::path::PathBuf> {
     std::env::current_dir().ok()
+}
+
+/// The directory a brand-new agent session starts in
+/// (`docs/session-relationship-design.md` decision 3, *workspace_root
+/// source*): the spawn-source session's recorded `workspace_root` when the
+/// model has one, else `fallback`. Agent sources carry one; terminal
+/// sessions have none in the model, so a terminal source (and no source at
+/// all) falls back.
+fn agent_spawn_workspace_root(
+    workspace: &horizon_workspace::Workspace,
+    source_session_id: Option<SessionId>,
+    fallback: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    source_session_id
+        .and_then(|source| workspace.session_workspace_root(source))
+        .map(std::path::Path::to_path_buf)
+        .or_else(fallback)
 }
 
 fn terminal_resume_candidates(
@@ -248,7 +264,8 @@ impl WorkspaceShell {
                     // A brand-new agent session (this branch never runs for
                     // one `spawn_agent_resume`/`spawn_workspace_restore`
                     // already adopted -- see their own doc comments) has no
-                    // `workspace_root` recorded yet; default it here and
+                    // `workspace_root` recorded yet; resolve it from the
+                    // spawn source (`agent_spawn_workspace_root`) and
                     // persist it on the model (through the adoption below)
                     // so `docs/session-relationship-design.md` decision 4a's
                     // "Open Terminal in Session Directory" command can read
@@ -261,8 +278,13 @@ impl WorkspaceShell {
                     // `SessionInfoMeta::workspace_root`, which the
                     // resume/restore sweeps re-apply through the same
                     // adoption path.
-                    let workspace_root =
-                        summary.workspace_root.or_else(default_agent_workspace_root);
+                    let workspace_root = summary.workspace_root.or_else(|| {
+                        agent_spawn_workspace_root(
+                            &self.workspace,
+                            spawn.source_session_id,
+                            default_agent_workspace_root,
+                        )
+                    });
                     // `Skip` cannot error, and its entity no-op is
                     // unreachable behind the `contains_key` guard above.
                     let _ = self.adopt_daemon_agent_session(
@@ -626,9 +648,44 @@ mod tests {
     use horizon_workspace::{SessionId, SessionKind, Workspace};
 
     use super::{
-        daemon_summary_for, register_daemon_agent_summary, terminal_resume_candidates,
-        DaemonAgentAdoption,
+        agent_spawn_workspace_root, daemon_summary_for, register_daemon_agent_summary,
+        terminal_resume_candidates, DaemonAgentAdoption,
     };
+
+    fn fallback() -> Option<std::path::PathBuf> {
+        Some(std::path::PathBuf::from("/horizon/cwd"))
+    }
+
+    #[test]
+    fn an_agent_spawned_from_an_agent_starts_in_that_agents_root() {
+        let mut workspace = Workspace::mvp();
+        let source = workspace.open_tab_with_new_session_activated(SessionKind::Agent, true);
+        let root = std::path::PathBuf::from("/work/repo/.horizon/worktrees/abcd");
+        workspace.set_session_workspace_root(source, root.clone());
+        assert_eq!(
+            agent_spawn_workspace_root(&workspace, Some(source), fallback),
+            Some(root)
+        );
+    }
+
+    #[test]
+    fn an_agent_spawned_from_a_terminal_falls_back() {
+        let mut workspace = Workspace::mvp();
+        let source = workspace.open_tab_with_new_session_activated(SessionKind::Terminal, true);
+        assert_eq!(
+            agent_spawn_workspace_root(&workspace, Some(source), fallback),
+            fallback()
+        );
+    }
+
+    #[test]
+    fn an_agent_spawned_with_no_source_falls_back() {
+        let workspace = Workspace::mvp();
+        assert_eq!(
+            agent_spawn_workspace_root(&workspace, None, fallback),
+            fallback()
+        );
+    }
 
     #[test]
     fn terminal_resume_candidates_exclude_known_cross_kind_ids_and_duplicates() {

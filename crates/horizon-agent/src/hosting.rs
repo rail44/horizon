@@ -153,10 +153,11 @@ pub struct SessionSummary {
     /// role without a separate round trip -- mirrors `provider_id` above.
     pub role_id: Option<RoleId>,
     /// The session this one derives from, per
-    /// `docs/session-relationship-design.md` decisions 1-2: set for a board
-    /// review session (its caller) and for a restored session whose
-    /// persisted context carries the edge. A fresh spawn records none, even
-    /// when a spawn source was given. Event-log records persist this edge
+    /// `docs/session-relationship-design.md` decisions 1-2: set when a
+    /// session spawned from another pane enters a worktree (the spawn
+    /// source becomes the parent), for a board review session (its caller),
+    /// and for a restored session whose persisted context carries the edge.
+    /// A session that has not entered a worktree has none. Event-log records persist this edge
     /// with the authoritative root/worktree context, so a resumed session
     /// that owns a worktree reports it again after the worktree has been
     /// revalidated.
@@ -201,8 +202,8 @@ pub struct SessionNew {
     /// The pane/session this spawn was invoked "from" -- e.g. the split
     /// target, or whatever pane was active/named at spawn time. `None` for a
     /// spawn with no source pane at all (e.g. a fresh tab with nothing
-    /// active). A fresh spawn records no `SessionSummary.parent_session_id`
-    /// edge from it; spawns do not create worktrees (board #65).
+    /// active). It becomes `SessionSummary.parent_session_id` when the
+    /// session enters a worktree; spawns do not create worktrees (board #65).
     pub spawn_source_session_id: Option<SessionId>,
 }
 

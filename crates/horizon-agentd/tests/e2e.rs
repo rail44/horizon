@@ -1487,6 +1487,113 @@ fn fixture_git_output(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// The `_meta.horizon` a live `session_info_update` carries, if any.
+fn resolved_info(inbound: &Inbound, session_id: SessionId) -> Option<acp::SessionInfoMeta> {
+    let Inbound::Update(notification) = inbound else {
+        return None;
+    };
+    if notification.session_id != acp_id(session_id) {
+        return None;
+    }
+    let v2::SessionUpdate::SessionInfoUpdate(info) = &notification.update else {
+        return None;
+    };
+    acp::read_horizon_meta::<acp::SessionInfoMeta>(info.meta.as_opt_ref().flatten())?.ok()
+}
+
+/// Delegation: a child spawned from a parent session, in the parent's
+/// directory, records no edge until it enters a worktree; `worktree.enter`
+/// then branches from that directory's HEAD and records the parent as the
+/// derivation edge, live and in the persisted context.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worktree_enter_records_the_spawn_source_as_parent() {
+    let repo = isolated_session_fixture();
+    let head = fixture_git_output(repo.path(), &["rev-parse", "HEAD"]);
+    let agentd = spawn_agentd();
+    let event_log_path = agentd.event_log_path.clone();
+    let mut client = connect(&agentd.socket_path).await;
+    let parent = SessionId::new();
+    open_session(
+        &client,
+        shared_session_in(parent, repo.path().to_path_buf()),
+    )
+    .await;
+
+    // What the shell sends for a control-plane spawn whose issuer is the
+    // parent: the parent's directory as `cwd`, the parent as spawn source.
+    let child = SessionId::new();
+    let mut meta = None;
+    acp::write_horizon_meta(
+        &mut meta,
+        &acp::SessionNewMeta {
+            session_id: child,
+            provider_id: mock_provider_id().0,
+            role_id: None,
+            spawn_source_session_id: Some(parent),
+        },
+    )
+    .unwrap();
+    open_session(
+        &client,
+        v2::NewSessionRequest::new(repo.path().to_path_buf()).meta(meta),
+    )
+    .await;
+    let listed = list_sessions(&client)
+        .await
+        .into_iter()
+        .find(|info| info.session_id == acp_id(child))
+        .unwrap();
+    assert_eq!(
+        info_meta(&listed).workspace_root.as_deref(),
+        Some(repo.path()),
+        "the child starts in the parent's directory"
+    );
+    assert_eq!(
+        info_meta(&listed).parent_session_id,
+        None,
+        "no edge before a worktree exists"
+    );
+
+    prompt(&client, child, "please enter a worktree").await;
+    let collected = collect_until(&mut client, |inbound| {
+        resolved_root(inbound, child).is_some_and(|root| root != repo.path())
+    })
+    .await;
+    let resolved = resolved_info(collected.last().unwrap(), child).unwrap();
+    assert_eq!(resolved.parent_session_id, Some(parent));
+    let root = resolved.workspace_root.unwrap();
+    assert_eq!(
+        root.parent(),
+        Some(repo.path().join(".horizon/worktrees").as_path())
+    );
+    assert_eq!(fixture_git_output(&root, &["rev-parse", "HEAD"]), head);
+
+    let listed = list_sessions(&client)
+        .await
+        .into_iter()
+        .find(|info| info.session_id == acp_id(child))
+        .unwrap();
+    assert_eq!(info_meta(&listed).parent_session_id, Some(parent));
+
+    wait_for_persisted_event(
+        &event_log_path,
+        child,
+        |event| matches!(event, Event::EnvironmentActivated(identity) if identity.path == root),
+    )
+    .await;
+    let report = horizon_agent::persistence::event_log::read(&event_log_path).unwrap();
+    let context = report
+        .records
+        .iter()
+        .rev()
+        .find(|record| record.session_id == child)
+        .and_then(|record| record.session_context.clone())
+        .expect("the child's latest record carries its context");
+    assert_eq!(context.parent_session_id, Some(parent));
+    assert!(context.isolated_worktree);
+    assert_eq!(context.workspace_root.as_ref(), Some(&root));
+}
+
 /// `worktree.enter` end to end: a shared session asks for a worktree, the
 /// activation lands at the turn boundary, the client learns the new root
 /// live, later writes are confined to it, and a daemon restart resumes the

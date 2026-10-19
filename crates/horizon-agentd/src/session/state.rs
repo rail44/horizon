@@ -283,6 +283,7 @@ impl AgentdState {
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
+                spawn_source_session_id: None,
                 workspace_root: None,
                 worktree: None,
             },
@@ -334,13 +335,19 @@ pub(super) struct SessionEntry {
     /// Requests an atomic history/live handoff from the session owner.
     /// The reply owns the subscription, so abandoning it revokes delivery.
     pub(super) replay: Sender<crate::session::attachment::AttachRequest>,
-    /// The session this one derives from -- `Some` only for a restored
+    /// The session this one derives from -- `Some` for a session that
+    /// entered a worktree after being spawned from another pane, a restored
     /// session whose persisted context carries the edge, or a board review
     /// session spawned from its caller (`docs/session-relationship-design.md`
     /// decision 2). Surfaced
     /// additively as `SessionSummary.parent_session_id` by
     /// [`super::connection::Connection::session_list`].
     pub(super) parent_session_id: Option<SessionId>,
+    /// The pane/session this session was spawned from
+    /// (`SessionNew.spawn_source_session_id`; for a restored session, its
+    /// persisted parent). Becomes `parent_session_id` when the session
+    /// enters a worktree through environment activation.
+    pub(super) spawn_source_session_id: Option<SessionId>,
     /// The directory this session's file tools are actually confined to --
     /// its own worktree path if `worktree.is_some()`, else whatever
     /// `SessionNew.workspace_root` carried. Read by [`AgentdState::
@@ -386,6 +393,7 @@ mod tests {
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
+                spawn_source_session_id: None,
                 workspace_root: Some(root.clone()),
                 worktree: None,
             },
@@ -417,6 +425,7 @@ mod tests {
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
+                spawn_source_session_id: None,
                 workspace_root: Some(info.path.clone()),
                 worktree: Some(info.clone()),
             },

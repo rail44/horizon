@@ -177,6 +177,7 @@ pub(super) fn spawn_session_thread_with_context(
             inbound: inbound_tx,
             replay: replay_tx,
             parent_session_id: restored_worktree.as_ref().and(spawn_source_session_id),
+            spawn_source_session_id,
             workspace_root: restored_root,
             worktree: restored_worktree.clone(),
         },

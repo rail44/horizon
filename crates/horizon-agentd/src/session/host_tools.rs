@@ -200,6 +200,7 @@ mod tests {
                 inbound,
                 replay,
                 parent_session_id: None,
+                spawn_source_session_id: None,
                 workspace_root: Some(root.to_path_buf()),
                 worktree,
             },

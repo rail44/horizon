@@ -233,6 +233,9 @@ impl SessionEnvironment<'_> {
             for grant in &retained_grants {
                 horizon_sandbox::revalidate_grant(grant).map_err(|error| error.to_string())?;
             }
+            let spawn_source_session_id = lock_unpoisoned(&state.sessions)
+                .get(&session_id)
+                .and_then(|entry| entry.spawn_source_session_id);
             let worktree =
                 crate::worktree::create_isolated_worktree_at(root, session_id.as_uuid(), base)?;
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -243,7 +246,7 @@ impl SessionEnvironment<'_> {
                 } = self.prepare(
                     EnvironmentLocation {
                         workspace_root: Some(worktree.path.clone()),
-                        parent_session_id: None,
+                        parent_session_id: spawn_source_session_id,
                         isolated: true,
                         trusted,
                     },
@@ -260,11 +263,14 @@ impl SessionEnvironment<'_> {
                 );
                 register_exploration_host(session_id, replacement.exploration_host());
                 *tool_state = replacement;
+                // The derivation edge is recorded when the worktree is
+                // created: the spawn source becomes the parent.
                 let parent_session_id = lock_unpoisoned(&state.sessions)
                     .get_mut(&session_id)
                     .and_then(|entry| {
                         entry.workspace_root = Some(worktree.path.clone());
                         entry.worktree = Some(worktree.clone());
+                        entry.parent_session_id = spawn_source_session_id;
                         entry.parent_session_id
                     });
                 send_session_event(
