@@ -503,6 +503,14 @@ product-owned API. Decisions:
   drift → calibration + observability (log every verdict, measure
   FNR/FPR against a human-labeled set), not a runtime counter.
 
+**2026-10-21: the judge runs on a decision model.** It now asks one
+`noul` question (`ask_human`) of the `decision_model` pair through the
+System One API and auto-approves at or below a probability threshold;
+there is no second stage. See `docs/agent-decision-model-design.md`. The
+"Two-stage cascade", "rig fit", and "Judge model" bullets above, and the
+stage-2 sub-bullets under Staging item 5, describe the previous
+implementation.
+
 ## Web tools: the first real boundary crossers (landed 2026-07-21)
 
 Owner-decided design for the `web_search`/`web_fetch` tools (backlog
