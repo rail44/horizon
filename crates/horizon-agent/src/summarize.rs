@@ -1,7 +1,8 @@
 //! One-off LLM calls that distill an agent session's first user message
 //! into a short tab title.
 //!
-//! Titles run on the `small_model` connection.
+//! Titles run on the `small_model` connection, which also carries approval
+//! judgments when no decision model is available (`judge`).
 //! The shell retains a pooled client until configuration reload;
 //! each in-flight title call captures its own handle. Any failure leaves the
 //! raw first-message title showing.

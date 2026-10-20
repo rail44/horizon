@@ -2,8 +2,10 @@
 
 `[[providers]]` entries describe endpoints and credentials only. Three
 top-level `{ provider, model }` pairs choose the models: `default_model` for
-conversation sessions, `small_model` for session titles, and `decision_model`
-for automatic tool-approval judgments and turn-continuation checks. Each pair has the same form as a `[[moa]]` member: a
+conversation sessions, `small_model` for session titles (and automatic
+tool-approval judgments when no decision model is available), and
+`decision_model` for automatic tool-approval judgments and turn-continuation
+checks. Each pair has the same form as a `[[moa]]` member: a
 `[[providers]]` entry name plus a model id, written out.
 
 ```toml
@@ -65,11 +67,13 @@ the default in that case.
 
 ## `small_model`
 
-The model titles run on. Its provider must be an `openai-compatible` entry;
-that entry's `base_url` and `api_key_env` serve it. When the pair is absent,
-invalid, or names a non-openai-compatible entry, startup warns naming the key
-and tabs keep their raw first-message titles. The same happens when the
-entry's key variable is unset. It never borrows credentials or an endpoint
+The model titles run on, and automatic approval judgments when no decision
+model is available (a two-stage chat judge over `/chat/completions`). Its
+provider must be an `openai-compatible` entry; that entry's `base_url` and
+`api_key_env` serve it. When the pair is absent, invalid, or names a
+non-openai-compatible entry, startup warns naming the key, tabs keep their
+raw first-message titles, and that fallback judge is off. The same happens
+when the entry's key variable is unset. It never borrows credentials or an endpoint
 from another entry.
 
 ## `decision_model`
@@ -83,8 +87,9 @@ Ollama cloud's `https://ollama.com/v1` with model `clef:cloud`; the entry's
 `api_key_env` serves it as a bearer token. OpenAI's default URL has no such
 route, so an entry without a `base_url` cannot serve it. When the pair is
 absent, invalid, or names a non-openai-compatible entry, startup warns naming
-the key, and automatic approval judgments and turn-continuation checks stay
-off: approvals stay with the human. The same happens when the entry's key
+the key: automatic approval judgments fall back to `small_model`'s chat
+judge (and stay with the human when that pair is unavailable too), and
+turn-continuation checks are off. The same happens when the entry's key
 variable is unset. Ollama cloud serves decision models only on a paid plan or
 with credits.
 

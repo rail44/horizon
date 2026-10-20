@@ -509,7 +509,9 @@ System One API and auto-approves at or below a probability threshold;
 there is no second stage. See `docs/agent-decision-model-design.md`. The
 "Two-stage cascade", "rig fit", and "Judge model" bullets above, and the
 stage-2 sub-bullets under Staging item 5, describe the previous
-implementation.
+implementation. That two-stage cascade remains the fallback backend when no
+decision model is available, so the bullets above still describe a live
+path.
 
 ## Web tools: the first real boundary crossers (landed 2026-07-21)
 

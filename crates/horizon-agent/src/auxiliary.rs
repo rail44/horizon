@@ -1,4 +1,5 @@
-//! OpenAI-compatible connections for titles, built from the config file's
+//! OpenAI-compatible connections for titles, and for approval judgments when
+//! no decision model is available, built from the config file's
 //! `small_model` pair.
 //! Clients belong to an accepted configuration, never to the whole process.
 
@@ -10,7 +11,7 @@ use rig_core::providers::openai;
 pub struct AuxiliaryConfig {
     pub base_url: Option<String>,
     pub api_key_env: String,
-    /// The model id titles run on.
+    /// The model id titles, and the fallback approval judge, run on.
     pub model: String,
 }
 

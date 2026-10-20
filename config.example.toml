@@ -17,7 +17,8 @@
 # over whatever is set below.
 #
 # Models are chosen by three top-level { provider, model } pairs:
-# default_model for conversation sessions, small_model for AI titles, and
+# default_model for conversation sessions, small_model for AI titles (and
+# approval judgments when no decision model is available), and
 # decision_model for automatic approval judgments and turn-continuation
 # checks. [[providers]] entries describe endpoints and
 # credentials only. See docs/provider-configuration.md. Without provider
@@ -64,18 +65,21 @@
 #   Unset, or naming no [[providers]] entry: there is no model at all —
 #   startup warns naming the key, and sessions start in the deterministic
 #   fallback (no provider is called) with a first message saying so.
-# - small_model: the model AI titles run on. Its provider must be an
+# - small_model: the model AI titles run on, and automatic approval
+#   judgments when no decision model is available. Its provider must be an
 #   openai-compatible entry, whose base_url and api_key_env serve it. Unset
 #   or invalid (warned at startup), or its key variable unset: tabs keep
-#   their raw titles; it never borrows another entry's credentials.
+#   their raw titles and that fallback judge is off; it never borrows
+#   another entry's credentials.
 # - decision_model: the decision model (System One API, POST
 #   {base_url}/systemone) automatic approval judgments and turn-continuation
 #   checks ask. Its provider must be an openai-compatible entry whose
 #   base_url serves the System One route, e.g. an entry with base_url
 #   "https://ollama.com/v1" and model "clef:cloud"; that entry's
-#   api_key_env serves it. Unset or invalid: startup warns naming the key,
-#   and automatic approval judgments and turn-continuation checks stay off
-#   (approval stays with you). Ollama cloud needs a paid plan or credits.
+#   api_key_env serves it. Unset or invalid, or its key variable unset:
+#   startup warns naming the key, automatic approval judgments fall back to
+#   small_model (approval stays with you when that is unavailable too), and
+#   turn-continuation checks are off. Ollama cloud needs a paid plan or credits.
 #
 # default_model  = { provider = "synthetic", model = "hf:deepseek-ai/DeepSeek-V4.1-Flash" }
 # small_model    = { provider = "synthetic", model = "syn:small:text" }

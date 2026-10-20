@@ -59,12 +59,14 @@ beside `/chat/completions` on the same base URL, so the entry's `base_url`
 (or `OPENAI_BASE_URL`) is what `/systemone` is joined to and its
 `api_key_env` is the credential. The pair absent or invalid, the key
 variable unset, or the entry without a base URL (OpenAI's default URL
-serves no System One route) is warned at startup and leaves both features
-off: every approval candidate goes to the human, and a turn ends where the
-model ended it. Reload Config affects new sessions; a running session
-keeps the connection it captured at start, the same rule the judge's
-`small_model` connection followed before. `small_model` now serves titles
-only.
+serves no System One route) is warned at startup. The judge then falls
+back to the `small_model` two-stage chat judge when that pair is available
+(without it, every approval candidate goes to the human), and the
+turn-continuation check is off: a turn ends where the model ended it.
+Reload Config affects new sessions; a running session keeps the connection
+it captured at start, the same rule the judge's `small_model` connection
+followed before. `small_model` serves titles, and approval judgments when
+no decision model is available.
 
 ## The judge
 
@@ -101,10 +103,18 @@ candidate instead of a two-stage chat cascade.
 - **Audit.** `judge_verdict` records keep their carrier and keys and gain
   `judge_ask_probability` (the raw `noul`) and `judge_threshold`;
   `judge_confidence` is the probability of the verdict taken (`1 - p` for
-  an auto-approval, `p` for an escalation); `judge_stage` is gone. A
+  an auto-approval, `p` for an escalation); `judge_stage` is null. Every
+  record carries `judge_backend` (`"decision"` or `"chat"`); on a chat
+  verdict `judge_ask_probability` and `judge_threshold` are null. A
   verdict row and the human's decision on the same candidate are the
   calibration pair the research doc's §4 protocol needs, and the threshold
   can be moved without a code change (below).
+- **Fallback.** When no decision connection is available at session start
+  (the pair absent or invalid, or its key variable unset), the judge runs
+  the previous two-stage chat cascade on the `small_model` connection
+  (`docs/agent-approval-design.md`'s "Judge design"). The backend is chosen
+  once per session and recorded as `judge_backend`. A decision call that
+  fails at runtime still escalates; it does not switch backends.
 
 ## The turn-continuation check
 

@@ -10,7 +10,8 @@
 //!
 //! Named `[[providers]]` entries describe endpoints and credentials only.
 //! Models are chosen by three top-level `{ provider, model }` pairs:
-//! `default_model` for conversation sessions, `small_model` for titles, and
+//! `default_model` for conversation sessions, `small_model` for titles (and
+//! approval judgments when no decision model is available), and
 //! `decision_model` for approval judgments and turn-continuation checks (the
 //! last two must name an OpenAI-compatible entry).
 //! No provider entries means the built-in OpenAI-compatible `default` entry.
@@ -58,15 +59,18 @@ pub struct RawConfig {
     /// not resolve) means no model at all: sessions start without one.
     #[serde(deserialize_with = "deserialize_lenient_model_pair")]
     pub default_model: Option<RawModelPair>,
-    /// `small_model = { provider, model }`: the model titles run on. The
-    /// provider must be an openai-compatible entry; `None` (or an invalid
-    /// pair) disables titles.
+    /// `small_model = { provider, model }`: the model titles, and approval
+    /// judgments when no decision model is available, run on. The provider
+    /// must be an openai-compatible entry; `None` (or an invalid pair)
+    /// disables titles and that fallback judge.
     #[serde(deserialize_with = "deserialize_lenient_model_pair")]
     pub small_model: Option<RawModelPair>,
     /// `decision_model = { provider, model }`: the System One decision model
     /// approval judgments and turn-continuation checks ask. The provider
     /// must be an openai-compatible entry whose `base_url` serves the
-    /// `/systemone` route; `None` (or an invalid pair) disables both.
+    /// `/systemone` route; `None` (or an invalid pair) disables
+    /// turn-continuation checks, and approval judgments fall back to
+    /// `small_model`'s chat judge.
     #[serde(deserialize_with = "deserialize_lenient_model_pair")]
     pub decision_model: Option<RawModelPair>,
     pub terminal: RawTerminalConfig,
@@ -167,7 +171,8 @@ pub struct ResolvedModelPair {
 }
 
 /// [`RawConfig::resolved_small_model`]'s output: the openai-compatible entry
-/// the `small_model` pair names, plus the model id to run on it.
+/// the `small_model` pair names, plus the model id titles, and approval
+/// judgments when no decision model is available, run on.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedSmallModel {
     pub provider: ResolvedProviderConfig,
@@ -300,7 +305,8 @@ impl RawConfig {
 
 /// The top-level key naming the conversation sessions' default model.
 pub const DEFAULT_MODEL_KEY: &str = "default_model";
-/// The top-level key naming the model titles use.
+/// The top-level key naming the model titles, and approval judgments when
+/// no decision model is available, use.
 pub const SMALL_MODEL_KEY: &str = "small_model";
 /// The top-level key naming the decision model approval judgments and
 /// turn-continuation checks ask.
@@ -310,8 +316,11 @@ pub const DECISION_MODEL_KEY: &str = "decision_model";
 fn pair_consequence(key: &str) -> &'static str {
     match key {
         DEFAULT_MODEL_KEY => "sessions start without a model",
-        DECISION_MODEL_KEY => "approval judgments and turn-continuation checks are disabled",
-        _ => "titles are disabled",
+        DECISION_MODEL_KEY => {
+            "approval judgments fall back to small_model's chat judge and turn-continuation \
+             checks are disabled"
+        }
+        _ => "titles are disabled, and so is the fallback judge",
     }
 }
 

@@ -55,7 +55,8 @@ the user approves a `config.write` -- no restart needed. `[[providers]]`,
 "Reload Config" to new sessions and future title calls. The three model keys
 are top-level `{ provider = "...", model = "..." }` pairs written before any
 table header; `small_model` must name an OpenAI-compatible entry and serves
-titles; `decision_model` must name an OpenAI-compatible entry whose `base_url`
+titles, and approval judgments when no decision model is available;
+`decision_model` must name an OpenAI-compatible entry whose `base_url`
 serves the System One route (e.g. `https://ollama.com/v1`, model
 `clef:cloud`) and serves automatic approval judgments and turn-continuation
 checks. `[[providers]]` entries hold no model. The

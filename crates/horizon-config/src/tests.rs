@@ -666,7 +666,10 @@ fn an_absent_decision_model_warns_naming_the_key_and_the_disabled_checks() {
     let config = parse("[[providers]]\nname = \"ollama\"\n").unwrap();
     let error = config.resolved_decision_model().unwrap_err();
     assert!(error.starts_with("decision_model: not set"));
-    assert!(error.contains("approval judgments and turn-continuation checks are disabled"));
+    assert!(error.contains(
+        "approval judgments fall back to small_model's chat judge and turn-continuation checks \
+         are disabled"
+    ));
     assert!(provider_config_warnings(&config)
         .iter()
         .any(|warning| warning.starts_with("decision_model: not set")));
@@ -736,11 +739,11 @@ fn a_valid_decision_model_resolves_its_entry_and_model() {
 }
 
 #[test]
-fn small_model_errors_name_only_titles_as_the_consequence() {
+fn small_model_errors_name_titles_and_the_fallback_judge_as_the_consequence() {
     let config = parse("[[providers]]\nname = \"ollama\"\n").unwrap();
     let error = config.resolved_small_model().unwrap_err();
-    assert!(error.contains("titles are disabled"));
-    assert!(!error.contains("approval"));
+    assert!(error.contains("titles are disabled, and so is the fallback judge"));
+    assert!(!error.contains("turn-continuation"));
 }
 
 #[test]

@@ -26,19 +26,22 @@ use crate::persistence::event_log::{
     Record, WriterHandle, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION,
 };
 
-use super::{JudgeDecision, JudgeFallbackReason, JudgeInput, JudgeVerdict};
+use super::{JudgeBackendKind, JudgeDecision, JudgeFallbackReason, JudgeInput, JudgeVerdict};
 
 /// Current enforcing-mode event label.
 pub(crate) const JUDGE_VERDICT_EVENT_KIND: &str = "judge_verdict";
 
-/// Writes one real verdict's calibration record.
+/// Writes one real verdict's calibration record. `threshold` is the
+/// decision backend's ask threshold, `None` on the chat backend; it, the
+/// stage, and the ask probability are written as JSON null where they do
+/// not apply.
 pub(super) fn write_verdict(
     writer: &WriterHandle,
     session_id: SessionId,
     input: &JudgeInput,
     model: &str,
     verdict: &JudgeVerdict,
-    threshold: f64,
+    threshold: Option<f64>,
     latency_ms: u64,
 ) {
     let payload = serde_json::json!({
@@ -46,8 +49,10 @@ pub(super) fn write_verdict(
         "occurrence_id": input.identity.occurrence_id.0,
         "tool_id": input.tool_id,
         "judge_model": model,
+        "judge_backend": verdict.backend.label(),
         "mode": "enforcing",
         "judge_decision": decision_label(verdict.decision),
+        "judge_stage": verdict.stage,
         "judge_ask_probability": verdict.ask_probability,
         "judge_threshold": threshold,
         "judge_confidence": verdict.confidence,
@@ -63,12 +68,13 @@ pub(super) fn write_verdict(
 
 /// Writes a record for a call the rate limiter skipped -- never reached the
 /// model at all. It records the enforced fail-closed escalation and why,
-/// with no model probability/confidence/latency.
+/// with no model stage/probability/confidence/latency.
 pub(super) fn write_skipped(
     writer: &WriterHandle,
     session_id: SessionId,
     input: &JudgeInput,
     model: &str,
+    backend: JudgeBackendKind,
     reason: &str,
 ) {
     let payload = serde_json::json!({
@@ -76,6 +82,7 @@ pub(super) fn write_skipped(
         "occurrence_id": input.identity.occurrence_id.0,
         "tool_id": input.tool_id,
         "judge_model": model,
+        "judge_backend": backend.label(),
         "mode": "enforcing",
         "judge_decision": "escalate",
         "fallback_reason": reason,
@@ -185,12 +192,14 @@ mod tests {
             "clef:cloud",
             &JudgeVerdict {
                 decision: JudgeDecision::Escalate,
+                backend: JudgeBackendKind::Decision,
+                stage: None,
                 ask_probability: Some(0.75),
                 confidence: Some(0.75),
                 fallback_reason: None,
                 fallback_error: None,
             },
-            0.2,
+            Some(0.2),
             512,
         );
         writer.flush().expect("flush");
@@ -204,13 +213,11 @@ mod tests {
         assert_eq!(payload["call_id"], "call-1");
         assert_eq!(payload["occurrence_id"], "judge-occ");
         assert_eq!(payload["judge_decision"], "escalate");
+        assert_eq!(payload["judge_backend"], "decision");
         assert_eq!(payload["judge_ask_probability"], 0.75);
         assert_eq!(payload["judge_threshold"], 0.2);
         assert_eq!(payload["judge_confidence"], 0.75);
-        assert!(
-            payload.get("judge_stage").is_none(),
-            "the stage key is gone: {payload}"
-        );
+        assert_eq!(payload["judge_stage"], serde_json::Value::Null);
         assert_eq!(payload["latency_ms"], 512);
         assert_eq!(payload["mode"], "enforcing");
         assert_eq!(payload["fallback_reason"], serde_json::Value::Null);
@@ -234,12 +241,14 @@ mod tests {
             "clef:cloud",
             &JudgeVerdict {
                 decision: JudgeDecision::Escalate,
+                backend: JudgeBackendKind::Decision,
+                stage: None,
                 ask_probability: None,
                 confidence: None,
                 fallback_reason: Some(JudgeFallbackReason::ClientError),
                 fallback_error: Some("judge request failed: 404 model not found".to_string()),
             },
-            0.2,
+            Some(0.2),
             30,
         );
         writer.flush().expect("flush");
@@ -276,12 +285,14 @@ mod tests {
             "clef:cloud",
             &JudgeVerdict {
                 decision: JudgeDecision::AutoApprove,
+                backend: JudgeBackendKind::Decision,
+                stage: None,
                 ask_probability: Some(0.0),
                 confidence: Some(1.0),
                 fallback_reason: None,
                 fallback_error: None,
             },
-            0.2,
+            Some(0.2),
             12,
         );
         writer.flush().expect("flush");
@@ -303,7 +314,14 @@ mod tests {
         let session_id = SessionId::new();
         let input = judge_input("call-2");
 
-        write_skipped(&writer, session_id, &input, "clef:cloud", "rate_limited");
+        write_skipped(
+            &writer,
+            session_id,
+            &input,
+            "clef:cloud",
+            JudgeBackendKind::Decision,
+            "rate_limited",
+        );
         writer.flush().expect("flush");
 
         let report = event_log::read(&path).expect("read");
@@ -313,9 +331,71 @@ mod tests {
             .as_ref()
             .expect("payload");
         assert_eq!(payload["skipped_reason"], "rate_limited");
+        assert_eq!(payload["judge_backend"], "decision");
         assert_eq!(payload["fallback_reason"], "rate_limited");
         assert_eq!(payload["judge_decision"], "escalate");
         assert_eq!(payload["approval_scope"], "bounded");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_chat_verdict_records_its_backend_and_stage_with_nulls_for_the_rest() {
+        let path = temp_log_path("chat");
+        let (writer, _init_rx) = WriterHandle::open(&path);
+        let session_id = SessionId::new();
+        let input = judge_input("call-chat");
+
+        write_verdict(
+            &writer,
+            session_id,
+            &input,
+            "small-chat",
+            &JudgeVerdict {
+                decision: JudgeDecision::AutoApprove,
+                backend: JudgeBackendKind::Chat,
+                stage: Some(1),
+                ask_probability: None,
+                confidence: Some(0.5),
+                fallback_reason: None,
+                fallback_error: None,
+            },
+            None,
+            40,
+        );
+        write_skipped(
+            &writer,
+            session_id,
+            &input,
+            "small-chat",
+            JudgeBackendKind::Chat,
+            "rate_limited",
+        );
+        writer.flush().expect("flush");
+
+        let report = event_log::read(&path).expect("read");
+        assert_eq!(report.records.len(), 2);
+        let payload = report.records[0]
+            .provider_payload
+            .as_ref()
+            .expect("payload");
+        assert_eq!(payload["judge_backend"], "chat");
+        assert_eq!(payload["judge_model"], "small-chat");
+        assert_eq!(payload["judge_decision"], "auto_approve");
+        assert_eq!(payload["judge_stage"], 1);
+        assert_eq!(payload["judge_confidence"], 0.5);
+        for key in ["judge_ask_probability", "judge_threshold"] {
+            assert_eq!(
+                payload.get(key),
+                Some(&serde_json::Value::Null),
+                "{key} is present as null: {payload}"
+            );
+        }
+        let skipped = report.records[1]
+            .provider_payload
+            .as_ref()
+            .expect("payload");
+        assert_eq!(skipped["judge_backend"], "chat");
 
         let _ = std::fs::remove_file(path);
     }
