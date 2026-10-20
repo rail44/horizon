@@ -53,26 +53,26 @@ pub struct WorkspaceSession {
     pub title_source: TitleSource,
     /// The directory this session is confined to / was spawned in, when
     /// known (`docs/session-relationship-design.md` decision 4a: "Horizon
-    /// knows every session's `workspace_root`"). `None` until something
-    /// records one via [`Workspace::set_session_workspace_root`]: an agent
+    /// knows every session's `directory`"). `None` until something
+    /// records one via [`Workspace::set_session_directory`]: an agent
     /// session gets one right before `SessionNew` is sent
     /// (`WorkspaceShell::reconcile` in `src/workspace/session_lifecycle.rs`)
     /// and again whenever agentd reports a resolved root; a terminal session
     /// gets the cwd `horizon-terminald` publishes for it, updated as it
     /// changes. Not persisted across a restart/reload: a resumed agent
-    /// session's `workspace_root` goes back to `None` until recreated, and a
+    /// session's `directory` goes back to `None` until recreated, and a
     /// reattached terminal is sent its current cwd again.
-    pub workspace_root: Option<PathBuf>,
+    pub directory: Option<PathBuf>,
     /// Mirrors `wire::SessionSummary.parent_session_id` -- the derivation
     /// edge (`docs/session-relationship-design.md` decisions 1-2), as the
     /// daemon reports it (a fresh spawn records none).
     /// `None` for a lineage root or a session nothing has reported an edge
-    /// for yet. Populated the same way as `workspace_root` above: the
+    /// for yet. Populated the same way as `directory` above: the
     /// daemon's `SessionSummary` is authoritative, so this is only ever set
     /// from the adoption/resume sweeps (`spawn_agent_resume`/
     /// `spawn_workspace_restore` in `src/workspace/session_lifecycle.rs`),
     /// never guessed at spawn time. Same "not persisted, goes back to
-    /// `None` until re-adopted" caveat as `workspace_root`.
+    /// `None` until re-adopted" caveat as `directory`.
     pub parent_session_id: Option<SessionId>,
 }
 
@@ -91,7 +91,7 @@ impl WorkspaceSession {
             display_number,
             title: session_title(kind, display_number),
             title_source: TitleSource::Auto,
-            workspace_root: None,
+            directory: None,
             parent_session_id: None,
         }
     }

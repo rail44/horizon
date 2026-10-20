@@ -440,7 +440,7 @@ impl WorkspaceShell {
     /// currently *selected* row's directory -- generalizing decision 4a's
     /// active-session-only v1 (`CommandId::OpenTerminalInSessionDirectory`)
     /// to an arbitrary row. A no-op if nothing is selected or the selected
-    /// row's `workspace_root` isn't known (a terminal whose cwd has not
+    /// row's `directory` isn't known (a terminal whose cwd has not
     /// been published yet, or a resumed agent session -- same enablement
     /// rule as the active-session command).
     pub(super) fn open_selected_session_directory(
@@ -455,15 +455,15 @@ impl WorkspaceShell {
         else {
             return;
         };
-        let workspace_root = manager.read(cx).selected_index().and_then(|index| {
+        let directory = manager.read(cx).selected_index().and_then(|index| {
             manager
                 .read(cx)
                 .delegate()
                 .summary_at(index)
-                .and_then(|summary| summary.workspace_root.clone())
+                .and_then(|summary| summary.directory.clone())
         });
-        if let Some(workspace_root) = workspace_root {
-            self.open_terminal_in_directory(workspace_root, window, cx);
+        if let Some(directory) = directory {
+            self.open_terminal_in_directory(directory, window, cx);
         }
     }
 

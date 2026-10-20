@@ -42,7 +42,7 @@ impl WorkspaceShell {
                 shell.agentd = Some(handle.clone());
                 shell.reload_in_progress = false;
                 shell.wire_host_tools(handle.responder(), host_tool_rx, cx);
-                shell.wire_workspace_root_updates(workspace_root_rx, cx);
+                shell.wire_directory_updates(workspace_root_rx, cx);
                 shell.spawn_agent_resume(handle, cx);
             });
         })

@@ -20,8 +20,8 @@ pub struct SessionSummary {
     pub display_number: usize,
     pub title: String,
     pub attached: bool,
-    /// Mirrors `WorkspaceSession::workspace_root` -- see its doc comment.
-    pub workspace_root: Option<PathBuf>,
+    /// Mirrors `WorkspaceSession::directory` -- see its doc comment.
+    pub directory: Option<PathBuf>,
     /// Mirrors `WorkspaceSession::parent_session_id` -- see its doc
     /// comment. The session manager modal's lineage view
     /// (`docs/session-relationship-design.md` decision 4b) derives its

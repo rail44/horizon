@@ -393,11 +393,11 @@ impl WorkspaceState {
                     // prompt, an agent's replay re-surfaces its first
                     // user message).
                     title_source: TitleSource::Auto,
-                    // Not persisted (see `WorkspaceSession::workspace_root`'s
-                    // doc comment) -- a restored session's workspace_root
+                    // Not persisted (see `WorkspaceSession::directory`'s
+                    // doc comment) -- a restored session's directory
                     // starts unknown again.
-                    workspace_root: None,
-                    // Same as `workspace_root` above -- `WorkspaceSession::
+                    directory: None,
+                    // Same as `directory` above -- `WorkspaceSession::
                     // parent_session_id`'s doc comment.
                     parent_session_id: None,
                 })

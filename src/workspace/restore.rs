@@ -16,7 +16,7 @@ use uuid::Uuid;
 pub(super) struct RestoreCandidates {
     pub(super) terminals: Vec<Uuid>,
     pub(super) agents: Vec<Uuid>,
-    pub(super) agent_workspace_roots: HashMap<Uuid, PathBuf>,
+    pub(super) agent_directories: HashMap<Uuid, PathBuf>,
     pub(super) agent_parents: HashMap<Uuid, Uuid>,
 }
 
@@ -39,11 +39,11 @@ impl RestoreCandidates {
             .collect();
         // Captured before `agent_summaries` is consumed below --
         // the daemon's own report of each session's
-        // `workspace_root` (the worktree path for a session
+        // workspace root (the worktree path for a session
         // that entered one; see
         // `SessionInfoMeta::workspace_root`'s doc comment),
         // applied to the surviving candidates further down.
-        let agent_workspace_roots: HashMap<Uuid, std::path::PathBuf> = agent_summaries
+        let agent_directories: HashMap<Uuid, std::path::PathBuf> = agent_summaries
             .iter()
             .filter_map(|summary| {
                 summary
@@ -53,7 +53,7 @@ impl RestoreCandidates {
             })
             .collect();
         // Same capture-before-consume treatment as `agent_
-        // workspace_roots` above, for the lineage edge
+        // directories` above, for the lineage edge
         // (`docs/session-relationship-design.md` decisions
         // 1-3): the daemon's report is authoritative, so this
         // is applied to the surviving candidates further down
@@ -104,7 +104,7 @@ impl RestoreCandidates {
         Self {
             terminals,
             agents,
-            agent_workspace_roots,
+            agent_directories,
             agent_parents,
         }
     }
@@ -150,7 +150,7 @@ impl RestoreRuntimes {
         RestoredSessions {
             terminals,
             agents,
-            agent_workspace_roots: candidates.agent_workspace_roots,
+            agent_directories: candidates.agent_directories,
             agent_parents: candidates.agent_parents,
         }
     }
@@ -162,7 +162,7 @@ impl RestoreRuntimes {
 struct RestoredSessions {
     terminals: Vec<(Uuid, TerminalSessionHandle)>,
     agents: Vec<(Uuid, AgentSessionHandle)>,
-    agent_workspace_roots: HashMap<Uuid, PathBuf>,
+    agent_directories: HashMap<Uuid, PathBuf>,
     agent_parents: HashMap<Uuid, Uuid>,
 }
 
@@ -250,7 +250,7 @@ impl WorkspaceShell {
         let RestoredSessions {
             terminals,
             agents,
-            agent_workspace_roots,
+            agent_directories,
             agent_parents,
         } = restored;
         let inventory = SessionInventory::new(
@@ -281,13 +281,13 @@ impl WorkspaceShell {
                 // the daemon's report is authoritative,
                 // especially for a session whose real (worktree)
                 // root was only known after it entered one.
-                if let Some(root) = agent_workspace_roots.get(&id) {
+                if let Some(root) = agent_directories.get(&id) {
                     self.workspace
-                        .set_session_workspace_root(session_id, root.clone());
+                        .set_session_directory(session_id, root.clone());
                 }
                 // See `spawn_agent_resume`'s matching comment
                 // for the lineage edge -- same authoritative
-                // treatment as `workspace_root` above.
+                // treatment as `directory` above.
                 if let Some(parent) = agent_parents.get(&id) {
                     self.workspace
                         .set_session_parent(session_id, SessionId::from_uuid(*parent));
@@ -379,12 +379,12 @@ mod tests {
         let selected = RestoreCandidates::select(&workspace, vec![], vec![summary]);
         assert_eq!(selected.agents, [id.as_uuid()]);
         assert_eq!(
-            selected.agent_workspace_roots[&id.as_uuid()].to_str(),
+            selected.agent_directories[&id.as_uuid()].to_str(),
             Some("/restored-worktree")
         );
         assert_eq!(selected.agent_parents[&id.as_uuid()], parent);
         let empty = RestoreCandidates::select(&workspace, vec![], vec![]);
         assert!(empty.terminals.is_empty() && empty.agents.is_empty());
-        assert!(empty.agent_workspace_roots.is_empty() && empty.agent_parents.is_empty());
+        assert!(empty.agent_directories.is_empty() && empty.agent_parents.is_empty());
     }
 }

@@ -58,14 +58,14 @@ fn terminal_fallback_cwd(
 }
 
 /// `docs/session-relationship-design.md` decision 4a's "Open Terminal in
-/// Session Directory" spawn request: the cwd is pinned to `workspace_root`
+/// Session Directory" spawn request: the cwd is pinned to `directory`
 /// directly, with no spawn-source pid inheritance (`source_session_id:
 /// None`) -- unlike a plain new terminal, the target directory is already
 /// known exactly, so there is nothing to inherit.
-fn pinned_terminal_spawn(workspace_root: std::path::PathBuf) -> PendingTerminalSpawn {
+fn pinned_terminal_spawn(directory: std::path::PathBuf) -> PendingTerminalSpawn {
     PendingTerminalSpawn {
         source_session_id: None,
-        fallback_cwd: workspace_root,
+        fallback_cwd: directory,
     }
 }
 
@@ -195,17 +195,17 @@ impl WorkspaceShell {
 
     /// `CommandId::OpenTerminalInSessionDirectory`
     /// (`docs/session-relationship-design.md` decision 4a): opens a new
-    /// terminal tab pinned to `workspace_root`'s cwd -- v1's placement is a
+    /// terminal tab pinned to `directory`'s cwd -- v1's placement is a
     /// new tab, matching `create_session`'s own `Placement::NewTab` default
     /// for a plain new terminal. `execute` (`workspace/commands.rs`) is the
     /// only caller, having already resolved the active session's
-    /// `workspace_root`; this stays a plain `PathBuf` parameter (not a
+    /// `directory`; this stays a plain `PathBuf` parameter (not a
     /// `SessionId` re-lookup) since v1 targets only the active session --
     /// per-row "open its directory" on an arbitrary session is a later
     /// slice (see the design doc's decision 4b).
     pub(super) fn open_terminal_in_directory(
         &mut self,
-        workspace_root: std::path::PathBuf,
+        directory: std::path::PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -217,7 +217,7 @@ impl WorkspaceShell {
             .workspace
             .open_tab_with_new_session_activated(SessionKind::Terminal, true);
         self.pending_terminal_spawns
-            .insert(session_id, pinned_terminal_spawn(workspace_root));
+            .insert(session_id, pinned_terminal_spawn(directory));
         self.reconcile(window, cx);
         self.focus_active(window, cx);
     }
@@ -358,14 +358,14 @@ mod tests {
     fn open_terminal_in_directory_pins_the_target_cwd_with_no_source_inheritance() {
         // `docs/session-relationship-design.md` decision 4a: the spawn
         // request's cwd must be exactly the target session's
-        // `workspace_root`, with no spawn-source pid inheritance (unlike a
+        // `directory`, with no spawn-source pid inheritance (unlike a
         // plain new terminal, which sources from the active pane instead --
         // see `resolve_spawn_source`) since the directory is already known.
-        let workspace_root = std::path::PathBuf::from("/some/agent/workspace");
+        let directory = std::path::PathBuf::from("/some/agent/workspace");
 
-        let spawn = pinned_terminal_spawn(workspace_root.clone());
+        let spawn = pinned_terminal_spawn(directory.clone());
 
-        assert_eq!(spawn.fallback_cwd, workspace_root);
+        assert_eq!(spawn.fallback_cwd, directory);
         assert_eq!(spawn.source_session_id, None);
     }
 }

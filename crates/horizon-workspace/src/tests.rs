@@ -585,7 +585,7 @@ fn detached_session_summaries_list_unattached_sessions() {
             display_number: 2,
             title: "Terminal #2".to_string(),
             attached: false,
-            workspace_root: None,
+            directory: None,
             parent_session_id: None,
         }]
     );
@@ -608,7 +608,7 @@ fn session_summaries_include_attached_and_detached_sessions() {
                 display_number: 1,
                 title: "Terminal #1".to_string(),
                 attached: true,
-                workspace_root: None,
+                directory: None,
                 parent_session_id: None,
             },
             SessionSummary {
@@ -617,7 +617,7 @@ fn session_summaries_include_attached_and_detached_sessions() {
                 display_number: 2,
                 title: "Terminal #2".to_string(),
                 attached: false,
-                workspace_root: None,
+                directory: None,
                 parent_session_id: None,
             },
         ]
@@ -629,7 +629,7 @@ fn set_session_parent_is_reflected_in_session_summaries() {
     // `docs/session-relationship-design.md` decision 4b: the session
     // manager's lineage view derives its tree from `SessionSummary.
     // parent_session_id`, so `set_session_parent` (mirroring `set_session_
-    // workspace_root`) must actually reach the summary a caller reads back.
+    // directory`) must actually reach the summary a caller reads back.
     let mut workspace = Workspace::mvp();
     let parent_id = workspace.active_terminal_session_id().expect("session");
     let child_id = SessionId::new();

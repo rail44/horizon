@@ -41,13 +41,14 @@ impl WorkspaceShell {
     /// Wires the live push of a session's authoritative
     /// `workspace_root`/`parent_session_id` (`SessionInfoMeta` on
     /// `session/new`'s response or a `session_info_update`, routed onto its
-    /// own process-wide channel by `runtime::routing::AgentRoutes`) straight into the model the moment it arrives, closing the
+    /// own process-wide channel by `runtime::routing::AgentRoutes`) straight
+    /// into the model's `directory`/parent the moment it arrives, closing the
     /// gap `spawn_agent_resume`/`spawn_workspace_restore` only closed on the
     /// next resume/reload sweep: a session created and used within one
     /// continuous run now sees its corrected root/parent immediately.
     /// Bridged to async the same way `wire_host_tools` bridges its own
     /// crossbeam receiver.
-    pub(super) fn wire_workspace_root_updates(
+    pub(super) fn wire_directory_updates(
         &mut self,
         workspace_root_rx: crossbeam_channel::Receiver<(
             horizon_acp::SessionId,
@@ -63,7 +64,7 @@ impl WorkspaceShell {
                 let _ = this.update(cx, |shell, cx| {
                     shell
                         .workspace
-                        .set_session_workspace_root(session_id, resolved.workspace_root);
+                        .set_session_directory(session_id, resolved.workspace_root);
                     if let Some(parent) = resolved.parent_session_id {
                         shell
                             .workspace
@@ -135,7 +136,7 @@ impl WorkspaceShell {
     /// Wires the receiving end of every `TerminalSession`'s `cwd_tx`: the
     /// working directory `horizon-terminald` publishes for a terminal
     /// (`TerminalUpdate::WorkingDirectory`) becomes that session's
-    /// `workspace_root`, the slot agent spawns, "Open Terminal in Session
+    /// `directory`, the slot agent spawns, "Open Terminal in Session
     /// Directory", and the session manager read. Not persisted: a
     /// reattaching terminal is sent its current cwd again.
     pub(super) fn wire_terminal_cwd_updates(
@@ -284,17 +285,17 @@ impl WorkspaceShell {
     }
 }
 
-/// Records a terminal's published cwd as its `workspace_root`; returns
+/// Records a terminal's published cwd as its `directory`; returns
 /// whether the model changed.
 fn record_terminal_cwd(
     workspace: &mut horizon_workspace::Workspace,
     session_id: SessionId,
     cwd: std::path::PathBuf,
 ) -> bool {
-    if workspace.session_workspace_root(session_id) == Some(cwd.as_path()) {
+    if workspace.session_directory(session_id) == Some(cwd.as_path()) {
         return false;
     }
-    workspace.set_session_workspace_root(session_id, cwd);
+    workspace.set_session_directory(session_id, cwd);
     true
 }
 
@@ -308,7 +309,7 @@ mod tests {
     fn a_published_terminal_cwd_becomes_the_sessions_directory() {
         let mut workspace = Workspace::mvp();
         let terminal = workspace.open_tab_with_new_session_activated(SessionKind::Terminal, true);
-        assert_eq!(workspace.session_workspace_root(terminal), None);
+        assert_eq!(workspace.session_directory(terminal), None);
 
         assert!(record_terminal_cwd(
             &mut workspace,
@@ -316,7 +317,7 @@ mod tests {
             PathBuf::from("/work/a")
         ));
         assert_eq!(
-            workspace.session_workspace_root(terminal),
+            workspace.session_directory(terminal),
             Some(Path::new("/work/a"))
         );
         assert!(!record_terminal_cwd(
@@ -330,7 +331,7 @@ mod tests {
             PathBuf::from("/work/b")
         ));
         assert_eq!(
-            workspace.session_workspace_root(terminal),
+            workspace.session_directory(terminal),
             Some(Path::new("/work/b"))
         );
     }

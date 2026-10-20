@@ -182,7 +182,7 @@ pub(crate) struct TerminalSession {
     title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
     /// Reports the daemon-published working directory
     /// (`TerminalUpdate::WorkingDirectory`, already deduped daemon-side) to
-    /// the shell, which records it as this session's `workspace_root`
+    /// the shell, which records it as this session's `directory`
     /// (`wire_terminal_cwd_updates`).
     cwd_tx: futures::channel::mpsc::UnboundedSender<(SessionId, std::path::PathBuf)>,
     /// Scrollback windowing state (`docs/terminal-scrollback-design.md` §3.3):

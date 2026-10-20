@@ -52,7 +52,7 @@ impl BoardStoreSource {
 }
 
 /// The source a board pane the shell opens reads through: the active
-/// session's `workspace_root` wins, and when that is absent (no active
+/// session's `directory` wins, and when that is absent (no active
 /// session, or a session with no recorded root) the shell process's own cwd
 /// stands in. Both are *starting* directories -- `Store::from_dir` does the
 /// worktree -> main-root collapse. With neither, the view gets an empty

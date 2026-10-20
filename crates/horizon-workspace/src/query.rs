@@ -264,7 +264,7 @@ impl Workspace {
                 display_number: session.display_number,
                 title: session.title.clone(),
                 attached: self.session_is_referenced(session.id),
-                workspace_root: session.workspace_root.clone(),
+                directory: session.directory.clone(),
                 parent_session_id: session.parent_session_id,
             })
             .collect()
@@ -417,12 +417,12 @@ impl Workspace {
     /// The directory `session_id` is known to be confined to / was spawned
     /// in, when known -- `None` for a session nothing has recorded one for
     /// yet (every terminal session today, plus a resumed agent session; see
-    /// `WorkspaceSession::workspace_root`'s doc comment) or an unknown
+    /// `WorkspaceSession::directory`'s doc comment) or an unknown
     /// session id. The read side of `docs/session-relationship-design.md`
     /// decision 4a's "open a terminal in any session's directory" command --
     /// `CommandId::OpenTerminalInSessionDirectory`'s enablement and target
     /// cwd both resolve through this for the active session.
-    pub fn session_workspace_root(&self, session_id: SessionId) -> Option<&std::path::Path> {
-        self.session(session_id)?.workspace_root.as_deref()
+    pub fn session_directory(&self, session_id: SessionId) -> Option<&std::path::Path> {
+        self.session(session_id)?.directory.as_deref()
     }
 }

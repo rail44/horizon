@@ -31,7 +31,7 @@ fn agent_session_id(id: SessionId) -> AgentSessionId {
 /// spawn, which has no daemon report yet).
 pub(super) struct DaemonAgentAdoption {
     session_id: SessionId,
-    workspace_root: Option<std::path::PathBuf>,
+    directory: Option<std::path::PathBuf>,
     parent_session_id: Option<SessionId>,
 }
 
@@ -39,7 +39,7 @@ impl From<&crate::runtime::SessionSummary> for DaemonAgentAdoption {
     fn from(summary: &crate::runtime::SessionSummary) -> Self {
         Self {
             session_id: SessionId::from_uuid(summary.session_id.as_uuid()),
-            workspace_root: summary.workspace_root.clone(),
+            directory: summary.workspace_root.clone(),
             parent_session_id: summary
                 .parent_session_id
                 .map(|parent| SessionId::from_uuid(parent.as_uuid())),
@@ -63,7 +63,7 @@ pub(super) enum ExistingAgentEntity {
 
 /// The model-side half of `adopt_daemon_agent_session`: the kind guard,
 /// idempotent detached registration, and the daemon-authoritative
-/// `workspace_root`/parent refresh. Pure `Workspace` work, so it stays
+/// `directory`/parent refresh. Pure `Workspace` work, so it stays
 /// unit-testable without a GPUI window; the entity half (wire construction
 /// plus `AgentSession` creation) lives in the shell method.
 fn register_daemon_agent_summary(
@@ -77,15 +77,15 @@ fn register_daemon_agent_summary(
         return Err("the session id belongs to a different session kind".into());
     }
     workspace.register_detached_session(SessionKind::Agent, adoption.session_id);
-    // The daemon's own `SessionEntry` is authoritative for `workspace_root`
+    // The daemon's own `SessionEntry` is authoritative for `directory`
     // -- for a session that entered a worktree this is the worktree path
     // agentd created, which nothing on the shell side could have known at
     // spawn time (see `SessionInfoMeta::workspace_root`'s doc comment).
     // Overwrites whatever the model already had, if anything.
-    if let Some(root) = &adoption.workspace_root {
-        workspace.set_session_workspace_root(adoption.session_id, root.clone());
+    if let Some(root) = &adoption.directory {
+        workspace.set_session_directory(adoption.session_id, root.clone());
     }
-    // Same authoritative-daemon-report treatment as `workspace_root` above,
+    // Same authoritative-daemon-report treatment as `directory` above,
     // for the lineage edge (`docs/session-relationship-design.md`
     // decisions 1-3): the shell never guesses this at spawn time (isolation
     // may fail and degrade to a shared, edge-less spawn), so it is only ever
@@ -108,27 +108,27 @@ pub(super) fn daemon_summary_for(
         .find(|summary| summary.session_id.as_uuid() == session_id.as_uuid())
 }
 
-/// The default `workspace_root` for a brand-new agent session with no
+/// The default `directory` for a brand-new agent session with no
 /// usable spawn source: the Horizon process's own cwd, `None` only if that
 /// can't be read.
-fn default_agent_workspace_root() -> Option<std::path::PathBuf> {
+fn default_agent_directory() -> Option<std::path::PathBuf> {
     std::env::current_dir().ok()
 }
 
 /// The directory a brand-new agent session starts in
-/// (`docs/session-relationship-design.md` decision 3, *workspace_root
-/// source*): the spawn-source session's recorded `workspace_root` when the
+/// (`docs/session-relationship-design.md` decision 3, *directory
+/// source*): the spawn-source session's recorded `directory` when the
 /// model has one, else `fallback`. An agent source carries its resolved
 /// root; a terminal source carries the cwd `horizon-terminald` last
 /// published for it, and has none until the first one arrives. No source,
 /// or a source with no recorded directory, falls back.
-fn agent_spawn_workspace_root(
+fn agent_spawn_directory(
     workspace: &horizon_workspace::Workspace,
     source_session_id: Option<SessionId>,
     fallback: impl FnOnce() -> Option<std::path::PathBuf>,
 ) -> Option<std::path::PathBuf> {
     source_session_id
-        .and_then(|source| workspace.session_workspace_root(source))
+        .and_then(|source| workspace.session_directory(source))
         .map(std::path::Path::to_path_buf)
         .or_else(fallback)
 }
@@ -150,7 +150,7 @@ fn terminal_resume_candidates(
 impl WorkspaceShell {
     /// The one path through which a daemon-side agent session enters the
     /// shell: idempotent detached registration, the daemon-authoritative
-    /// `workspace_root`/parent refresh, and the GPUI `AgentSession` entity
+    /// `directory`/parent refresh, and the GPUI `AgentSession` entity
     /// bound to the wire the caller chose (`attach_session` for an existing
     /// daemon session, `start_session` for a brand-new spawn). Every
     /// adopter -- board sessions, the startup/reload resume sweep,
@@ -265,8 +265,8 @@ impl WorkspaceShell {
                     // A brand-new agent session (this branch never runs for
                     // one `spawn_agent_resume`/`spawn_workspace_restore`
                     // already adopted -- see their own doc comments) has no
-                    // `workspace_root` recorded yet; resolve it from the
-                    // spawn source (`agent_spawn_workspace_root`) and
+                    // `directory` recorded yet; resolve it from the
+                    // spawn source (`agent_spawn_directory`) and
                     // persist it on the model (through the adoption below)
                     // so `docs/session-relationship-design.md` decision 4a's
                     // "Open Terminal in Session Directory" command can read
@@ -279,11 +279,11 @@ impl WorkspaceShell {
                     // `SessionInfoMeta::workspace_root`, which the
                     // resume/restore sweeps re-apply through the same
                     // adoption path.
-                    let workspace_root = summary.workspace_root.or_else(|| {
-                        agent_spawn_workspace_root(
+                    let directory = summary.directory.or_else(|| {
+                        agent_spawn_directory(
                             &self.workspace,
                             spawn.source_session_id,
-                            default_agent_workspace_root,
+                            default_agent_directory,
                         )
                     });
                     // `Skip` cannot error, and its entity no-op is
@@ -291,7 +291,7 @@ impl WorkspaceShell {
                     let _ = self.adopt_daemon_agent_session(
                         DaemonAgentAdoption {
                             session_id: summary.id,
-                            workspace_root: workspace_root.clone(),
+                            directory: directory.clone(),
                             parent_session_id: None,
                         },
                         ExistingAgentEntity::Skip,
@@ -300,7 +300,7 @@ impl WorkspaceShell {
                                 agent_session_id(summary.id),
                                 provider_id,
                                 role_id,
-                                workspace_root,
+                                directory,
                                 spawn.source_session_id.map(agent_session_id),
                             )
                         },
@@ -419,12 +419,12 @@ impl WorkspaceShell {
     }
 
     /// The store every board pane this shell opens reads through: the
-    /// active session's `workspace_root`, else the shell process's cwd
+    /// active session's `directory`, else the shell process's cwd
     /// (`board::execute::shell_store_source`).
     fn board_store_source(&self) -> crate::board::execute::BoardStoreSource {
         let session_root = self.workspace.active_session_id().and_then(|id| {
             self.workspace
-                .session_workspace_root(id)
+                .session_directory(id)
                 .map(|path| path.to_path_buf())
         });
         crate::board::execute::shell_store_source(session_root, std::env::current_dir().ok())
@@ -652,7 +652,7 @@ mod tests {
     use horizon_workspace::{SessionId, SessionKind, Workspace};
 
     use super::{
-        agent_spawn_workspace_root, daemon_summary_for, register_daemon_agent_summary,
+        agent_spawn_directory, daemon_summary_for, register_daemon_agent_summary,
         terminal_resume_candidates, DaemonAgentAdoption,
     };
 
@@ -665,9 +665,9 @@ mod tests {
         let mut workspace = Workspace::mvp();
         let source = workspace.open_tab_with_new_session_activated(SessionKind::Agent, true);
         let root = std::path::PathBuf::from("/work/repo/.horizon/worktrees/abcd");
-        workspace.set_session_workspace_root(source, root.clone());
+        workspace.set_session_directory(source, root.clone());
         assert_eq!(
-            agent_spawn_workspace_root(&workspace, Some(source), fallback),
+            agent_spawn_directory(&workspace, Some(source), fallback),
             Some(root)
         );
     }
@@ -677,14 +677,14 @@ mod tests {
         let mut workspace = Workspace::mvp();
         let source = workspace.open_tab_with_new_session_activated(SessionKind::Terminal, true);
         assert_eq!(
-            agent_spawn_workspace_root(&workspace, Some(source), fallback),
+            agent_spawn_directory(&workspace, Some(source), fallback),
             fallback()
         );
 
         let cwd = std::path::PathBuf::from("/work/repo/src");
-        workspace.set_session_workspace_root(source, cwd.clone());
+        workspace.set_session_directory(source, cwd.clone());
         assert_eq!(
-            agent_spawn_workspace_root(&workspace, Some(source), fallback),
+            agent_spawn_directory(&workspace, Some(source), fallback),
             Some(cwd)
         );
     }
@@ -693,7 +693,7 @@ mod tests {
     fn an_agent_spawned_with_no_source_falls_back() {
         let workspace = Workspace::mvp();
         assert_eq!(
-            agent_spawn_workspace_root(&workspace, None, fallback),
+            agent_spawn_directory(&workspace, None, fallback),
             fallback()
         );
     }
@@ -771,15 +771,15 @@ mod tests {
     // `spawn_agent_resume`/`spawn_workspace_restore` are themselves
     // GPUI-entity/async-shaped and not unit-testable without a window and a
     // live agentd connection, same as `handle_terminal_exited` above --
-    // but their model-level step (`Workspace::set_session_workspace_root`,
+    // but their model-level step (`Workspace::set_session_directory`,
     // called with `SessionInfoMeta::workspace_root` once the daemon's
     // own report of it arrives) is the same pure building block, standing
     // in for an end-to-end resume/adopt test.
 
     #[test]
-    fn an_isolated_sessions_reported_workspace_root_wins_over_the_shells_pre_spawn_value() {
+    fn an_isolated_sessions_reported_directory_wins_over_the_shells_pre_spawn_value() {
         // `docs/session-relationship-design.md`: `reconcile`'s Agent branch
-        // records a session's *pre-isolation* `workspace_root` on the model
+        // records a session's *pre-isolation* `directory` on the model
         // right away (the value it sent in `SessionNew`), since agentd's
         // real isolated worktree only resolves asynchronously afterward.
         // `spawn_agent_resume`/`spawn_workspace_restore` must overwrite that
@@ -791,18 +791,18 @@ mod tests {
         workspace.register_detached_session(SessionKind::Agent, session_id);
 
         let pre_spawn_root = std::path::PathBuf::from("/home/user/project");
-        workspace.set_session_workspace_root(session_id, pre_spawn_root.clone());
+        workspace.set_session_directory(session_id, pre_spawn_root.clone());
         assert_eq!(
-            workspace.session_workspace_root(session_id),
+            workspace.session_directory(session_id),
             Some(pre_spawn_root.as_path())
         );
 
         let isolated_root =
             std::path::PathBuf::from("/home/user/project/.horizon/worktrees/abcd1234");
-        workspace.set_session_workspace_root(session_id, isolated_root.clone());
+        workspace.set_session_directory(session_id, isolated_root.clone());
 
         assert_eq!(
-            workspace.session_workspace_root(session_id),
+            workspace.session_directory(session_id),
             Some(isolated_root.as_path()),
             "the daemon-reported root must win over the shell's pre-spawn value"
         );
@@ -820,7 +820,7 @@ mod tests {
         let active = workspace.active_session_id();
         let adoption = DaemonAgentAdoption {
             session_id: SessionId::new(),
-            workspace_root: Some("/task".into()),
+            directory: Some("/task".into()),
             parent_session_id: None,
         };
         let id = register_daemon_agent_summary(&mut workspace, &adoption).unwrap();
@@ -876,7 +876,7 @@ mod tests {
         );
     }
 
-    /// `wire_workspace_root_updates` is, like `spawn_agent_resume`/
+    /// `wire_directory_updates` is, like `spawn_agent_resume`/
     /// `spawn_workspace_restore` above, GPUI-entity/async-shaped and not
     /// unit-testable without a window and a live agentd connection -- but
     /// its whole fold body is exactly these two model setters, called
@@ -894,17 +894,17 @@ mod tests {
         workspace.register_detached_session(SessionKind::Agent, session_id);
 
         let pre_spawn_root = std::path::PathBuf::from("/home/user/project");
-        workspace.set_session_workspace_root(session_id, pre_spawn_root);
+        workspace.set_session_directory(session_id, pre_spawn_root);
 
-        // What `wire_workspace_root_updates` does with an incoming
+        // What `wire_directory_updates` does with an incoming
         // `WorkspaceRootResolved { workspace_root, parent_session_id }`.
         let isolated_root =
             std::path::PathBuf::from("/home/user/project/.horizon/worktrees/abcd1234");
-        workspace.set_session_workspace_root(session_id, isolated_root.clone());
+        workspace.set_session_directory(session_id, isolated_root.clone());
         workspace.set_session_parent(session_id, parent_id);
 
         assert_eq!(
-            workspace.session_workspace_root(session_id),
+            workspace.session_directory(session_id),
             Some(isolated_root.as_path()),
             "the live announcement's root must be visible without any resume/restore sweep"
         );

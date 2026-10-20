@@ -4,19 +4,19 @@ use super::types::{PaneKind, SessionKind, TitleSource, Workspace, WorkspaceSessi
 use crate::SessionId;
 
 impl Workspace {
-    /// Records `workspace_root` on an existing session (a no-op if
-    /// `session_id` is unknown) -- see `WorkspaceSession::workspace_root`'s
+    /// Records `directory` on an existing session (a no-op if
+    /// `session_id` is unknown) -- see `WorkspaceSession::directory`'s
     /// doc comment for who calls this and when.
-    pub fn set_session_workspace_root(&mut self, session_id: SessionId, workspace_root: PathBuf) {
+    pub fn set_session_directory(&mut self, session_id: SessionId, directory: PathBuf) {
         if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
-            session.workspace_root = Some(workspace_root);
+            session.directory = Some(directory);
         }
     }
 
     /// Records `parent_session_id` on an existing session (a no-op if
     /// `session_id` is unknown) -- see `WorkspaceSession::parent_session_id`'s
     /// doc comment for who calls this and when. Mirrors
-    /// `set_session_workspace_root` above exactly.
+    /// `set_session_directory` above exactly.
     pub fn set_session_parent(&mut self, session_id: SessionId, parent_session_id: SessionId) {
         if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
             session.parent_session_id = Some(parent_session_id);

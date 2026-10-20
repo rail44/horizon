@@ -398,7 +398,7 @@ pub(crate) struct WorkspaceShell {
     terminal_notify_tx: futures::channel::mpsc::UnboundedSender<(SessionId, TerminalNotification)>,
     // Handed to every `TerminalSession::spawn` (cloned per session) so the
     // cwd `horizon-terminald` publishes for a terminal reaches the model's
-    // `workspace_root` slot (`wire_terminal_cwd_updates`).
+    // `directory` slot (`wire_terminal_cwd_updates`).
     terminal_cwd_tx: futures::channel::mpsc::UnboundedSender<(SessionId, std::path::PathBuf)>,
 }
 
@@ -461,7 +461,7 @@ impl WorkspaceShell {
         })
         .detach();
         shell.wire_host_tools(agentd.responder(), host_tool_rx, cx);
-        shell.wire_workspace_root_updates(workspace_root_rx, cx);
+        shell.wire_directory_updates(workspace_root_rx, cx);
         shell.wire_terminal_exit(terminal_exit_rx, cx);
         shell.wire_session_title_updates(session_title_rx, cx);
         shell.wire_terminal_notifications(terminal_notify_rx, cx);

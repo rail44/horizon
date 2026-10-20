@@ -141,7 +141,7 @@ pub(crate) fn subtree_session_ids(sessions: &[SessionSummary], root: SessionId) 
 /// equal to `repo_root` itself (a shared session spawned at the repo root,
 /// not a subdirectory) falls through to the `home` branch instead of
 /// rendering an empty relative path.
-pub(crate) fn abbreviate_workspace_root(
+pub(crate) fn abbreviate_directory(
     root: &std::path::Path,
     repo_root: Option<&std::path::Path>,
     home: Option<&std::path::Path>,
@@ -170,7 +170,7 @@ pub(crate) fn abbreviate_workspace_root(
 /// directory, pointing back at the main repo's `.git/worktrees/<name>`), so
 /// an isolated session's own worktree directory (itself a valid, if linked,
 /// repo) still resolves to the *enclosing* project root -- matching
-/// `abbreviate_workspace_root`'s `.horizon/worktrees/<slug>` example rather
+/// `abbreviate_directory`'s `.horizon/worktrees/<slug>` example rather
 /// than collapsing to an empty relative path against itself. No `git`
 /// subprocess, just cheap `stat` calls bounded by directory depth -- cheap
 /// enough to run on every visible row's render pass.
@@ -304,14 +304,14 @@ impl ListDelegate for SessionManagerDelegate {
                             .text_color(status_color)
                             .child(status),
                     )
-                    .when_some(summary.workspace_root.as_deref(), |this, root| {
+                    .when_some(summary.directory.as_deref(), |this, root| {
                         let repo_root = enclosing_repo_root(root);
                         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
                         this.child(
                             div()
                                 .text_size(px(11.0))
                                 .text_color(theme::text_muted())
-                                .child(abbreviate_workspace_root(
+                                .child(abbreviate_directory(
                                     root,
                                     repo_root.as_deref(),
                                     home.as_deref(),
@@ -373,15 +373,13 @@ mod tests {
 
     use std::path::Path;
 
-    use super::{
-        abbreviate_workspace_root, order_as_lineage_tree, subtree_session_ids, SessionSummary,
-    };
+    use super::{abbreviate_directory, order_as_lineage_tree, subtree_session_ids, SessionSummary};
 
     fn summary(
         id: SessionId,
         title: &str,
         parent: Option<SessionId>,
-        workspace_root: Option<&str>,
+        directory: Option<&str>,
     ) -> SessionSummary {
         SessionSummary {
             id,
@@ -389,7 +387,7 @@ mod tests {
             display_number: 1,
             title: title.to_string(),
             attached: false,
-            workspace_root: workspace_root.map(std::path::PathBuf::from),
+            directory: directory.map(std::path::PathBuf::from),
             parent_session_id: parent,
         }
     }
@@ -535,7 +533,7 @@ mod tests {
     #[test]
     fn a_root_strictly_inside_the_repo_renders_relative_to_it() {
         assert_eq!(
-            abbreviate_workspace_root(
+            abbreviate_directory(
                 Path::new("/home/user/project/.horizon/worktrees/calm-otter"),
                 Some(Path::new("/home/user/project")),
                 Some(Path::new("/home/user")),
@@ -546,12 +544,12 @@ mod tests {
 
     #[test]
     fn a_root_equal_to_the_repo_root_falls_through_to_home_abbreviation() {
-        // A shared (non-isolated) session's workspace_root is often the
+        // A shared (non-isolated) session's directory is often the
         // repo root itself, not a subdirectory -- rendering that relative
         // to itself would be an uninformative empty string, so it falls
         // through to the `home` branch instead.
         assert_eq!(
-            abbreviate_workspace_root(
+            abbreviate_directory(
                 Path::new("/home/user/project"),
                 Some(Path::new("/home/user/project")),
                 Some(Path::new("/home/user")),
@@ -563,7 +561,7 @@ mod tests {
     #[test]
     fn a_root_outside_any_repo_renders_home_relative() {
         assert_eq!(
-            abbreviate_workspace_root(
+            abbreviate_directory(
                 Path::new("/home/user/scratch/notes"),
                 None,
                 Some(Path::new("/home/user")),
@@ -575,7 +573,7 @@ mod tests {
     #[test]
     fn a_root_equal_to_home_itself_renders_the_bare_tilde() {
         assert_eq!(
-            abbreviate_workspace_root(Path::new("/home/user"), None, Some(Path::new("/home/user"))),
+            abbreviate_directory(Path::new("/home/user"), None, Some(Path::new("/home/user"))),
             "~"
         );
     }
@@ -583,7 +581,7 @@ mod tests {
     #[test]
     fn a_root_under_neither_repo_nor_home_falls_back_to_the_full_path() {
         assert_eq!(
-            abbreviate_workspace_root(
+            abbreviate_directory(
                 Path::new("/mnt/data/project"),
                 Some(Path::new("/home/user/project")),
                 Some(Path::new("/home/user")),
@@ -593,12 +591,12 @@ mod tests {
     }
 
     #[test]
-    fn a_repo_root_that_doesnt_contain_the_workspace_root_is_ignored() {
+    fn a_repo_root_that_doesnt_contain_the_directory_is_ignored() {
         // `repo_root` came from walking a *different* path's ancestors --
         // defensive coverage for a mismatched pair, even though
         // `render_item` always derives both from the same `root`.
         assert_eq!(
-            abbreviate_workspace_root(
+            abbreviate_directory(
                 Path::new("/home/user/other-project/src"),
                 Some(Path::new("/home/user/project")),
                 Some(Path::new("/home/user")),

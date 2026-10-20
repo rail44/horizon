@@ -638,13 +638,13 @@ impl WorkspaceShell {
                 Err(error) => eprintln!("reload-config failed: {error}"),
             },
             CommandId::OpenTerminalInSessionDirectory => {
-                let workspace_root = self
+                let directory = self
                     .workspace
                     .active_session_id()
-                    .and_then(|id| self.workspace.session_workspace_root(id))
+                    .and_then(|id| self.workspace.session_directory(id))
                     .map(|path| path.to_path_buf());
-                if let Some(workspace_root) = workspace_root {
-                    self.open_terminal_in_directory(workspace_root, window, cx);
+                if let Some(directory) = directory {
+                    self.open_terminal_in_directory(directory, window, cx);
                 }
             }
             // Agent runtime only, since the terminald split: terminal
@@ -1085,18 +1085,18 @@ impl WorkspaceShell {
             has_pending_approval,
             has_turn_in_flight,
             has_paused_turn,
-            has_active_session_workspace_root: active_session_has_workspace_root(&self.workspace),
+            has_active_session_directory: active_session_has_directory(&self.workspace),
         }
     }
 }
 
-/// `CommandState::has_active_session_workspace_root`: whether the active
+/// `CommandState::has_active_session_directory`: whether the active
 /// session, of either kind, has a recorded directory (an agent's resolved
 /// root, a terminal's published cwd).
-fn active_session_has_workspace_root(workspace: &Workspace) -> bool {
+fn active_session_has_directory(workspace: &Workspace) -> bool {
     workspace
         .active_session_id()
-        .and_then(|id| workspace.session_workspace_root(id))
+        .and_then(|id| workspace.session_directory(id))
         .is_some()
 }
 
@@ -1106,7 +1106,7 @@ mod tests {
 
     use super::ThreadPlacement::{Retarget, SplitTheList};
     use super::{
-        active_session_has_workspace_root, list_pane_in_tab,
+        active_session_has_directory, list_pane_in_tab,
         prepare_workspace_for_terminal_runtime_reload, thread_placement,
     };
 
@@ -1116,10 +1116,10 @@ mod tests {
     fn an_active_terminal_enables_the_open_directory_command_once_its_cwd_is_known() {
         let mut workspace = Workspace::mvp();
         let terminal = workspace.open_tab_with_new_session_activated(SessionKind::Terminal, true);
-        assert!(!active_session_has_workspace_root(&workspace));
+        assert!(!active_session_has_directory(&workspace));
 
-        workspace.set_session_workspace_root(terminal, std::path::PathBuf::from("/work/repo"));
-        assert!(active_session_has_workspace_root(&workspace));
+        workspace.set_session_directory(terminal, std::path::PathBuf::from("/work/repo"));
+        assert!(active_session_has_directory(&workspace));
     }
 
     /// Opening a task reuses the tab's thread pane when it has one, so a
