@@ -195,7 +195,7 @@ Horizon reads one optional TOML file: `$XDG_CONFIG_HOME/horizon/config.toml`
 every key, precedence (env var > config file > built-in default), what
 `Reload Config` applies live and what needs a restart, and the
 environment-only path overrides. Provider entries are described in
-`docs/provider-configuration.md`, `[[moa]]` in `docs/agent-moa-design.md`.
+`docs/provider-configuration.md`.
 
 Secrets (`OPENAI_API_KEY`, `EXA_API_KEY`) are environment-only and never
 read from the file. One more setting exists only as an environment variable

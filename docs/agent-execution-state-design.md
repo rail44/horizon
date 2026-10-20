@@ -2,7 +2,7 @@
 
 The session coordinator owns command ordering and provider futures. Retained
 work and input admission have separate owners; configuration, environment,
-compaction, memory, and MoA proposals remain independent state (2026-09-25).
+compaction and memory remain independent state (2026-09-25).
 Board behavior and input reply destinations are unchanged.
 
 ## Input admission and retained work
@@ -25,8 +25,8 @@ an input arriving after that cancellation could execute after a restart.
 A provider future is owned by the coordinator's call stack, so another provider
 round cannot run concurrently. Cancellation of that future uses the same input
 admission operation as cancellation between rounds. Completed, failed,
-cancelled, and guard-halted turns share `end_interaction`: release per-turn MoA
-proposals, settle the input receipt, then publish the turn boundary and state.
+cancelled, and guard-halted turns share `end_interaction`: settle the input
+receipt, then publish the turn boundary and state.
 
 Attempt identity is checked by the daemon. The provider's batch remains keyed
 by provider call ID: declining a retry legitimately returns the prior attempt's

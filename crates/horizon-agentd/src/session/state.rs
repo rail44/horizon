@@ -327,8 +327,8 @@ pub(super) struct SessionEntry {
     /// The last applied selection (provider name + the model the caller
     /// asked for), if any -- the display label `AgentWireEvent::
     /// SessionSelection` re-announces on a (re)attach, so the composer model
-    /// chip keeps reading `moa · mix` instead of the resolved aggregator id
-    /// `model` above carries. `None` until the first switch, or when the
+    /// chip keeps reading the provider name plus the model the caller asked
+    /// for beside the resolved id `model` above carries. `None` until the first switch, or when the
     /// spawn-time provider has no config entry (e.g. the mock provider).
     pub(super) selection: Option<horizon_agent::hosting::ModelSelection>,
     pub(super) inbound: Sender<Command>,

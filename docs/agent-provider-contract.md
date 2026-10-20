@@ -30,7 +30,7 @@ Decisions:
 
 ### Runtime model selection (2026-09-25)
 
-An explicit model switch resolves the daemon's current named-provider/MoA
+An explicit model switch resolves the daemon's current named-provider
 catalog once, when accepted. The daemon queues an owned resolved snapshot on
 the same command channel as user input. A running turn keeps its old config;
 the provider applies the snapshot at a turn boundary, refreshes its context

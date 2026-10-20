@@ -146,8 +146,8 @@ struct Inner {
     /// production call site.
     isolated_worktree: bool,
     /// Whether this session has no client that could answer an approval
-    /// prompt: the explore role's sessions (`task` children and
-    /// Mixture-of-Agents proposers), which are never attached to a pane and
+    /// prompt: the explore role's sessions (`task` children), which are
+    /// never attached to a pane and
     /// whose only consumer is whoever is waiting for their final report. A
     /// call that would otherwise wait for a human resolves as a refused
     /// tool result instead, so the session keeps running
@@ -358,9 +358,7 @@ impl ToolSessionState {
     }
 
     /// This session's exploration host, if one is installed -- what
-    /// `tools::explore::start` spawns and terminates through, and what
-    /// `horizon-agentd` publishes to `tools::moa` for the session loop's
-    /// own thread to reach.
+    /// `tools::explore::start` spawns and terminates through.
     pub fn exploration_host(&self) -> Option<Arc<dyn crate::tools::explore::ExplorationHost>> {
         self.inner.exploration.clone()
     }
@@ -554,9 +552,6 @@ pub(crate) fn live_frame_for_session(session_id: SessionId) -> Option<AgentFrame
 /// find anything to execute against. Safe no-op for unknown ids (e.g.
 /// terminal sessions, which never register).
 pub fn unregister_session_runtime(session_id: SessionId) {
-    // Withdraw launch capability before closing its work group. A pass that
-    // already acquired the capability holds a registration through setup.
-    crate::tools::moa::unregister_exploration_host(session_id);
     super::background::close_session(session_id);
     super::web::clear_session_approvals(session_id);
     crate::tools::explore::cancel_session(session_id);

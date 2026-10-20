@@ -3,8 +3,8 @@
 `[[providers]]` entries describe endpoints and credentials only. Two top-level
 `{ provider, model }` pairs choose the models: `default_model` for
 conversation sessions, and `small_model` for both session titles and automatic
-tool-approval judgments. Each pair has the same form as a `[[moa]]` member: a
-`[[providers]]` entry name plus a model id, written out.
+tool-approval judgments. Each pair is a `[[providers]]` entry name plus a
+model id, written out.
 
 ```toml
 # Top-level keys must precede table headers.

@@ -151,7 +151,6 @@ pub(super) async fn complete_rig_turn(
     events_tx: &Sender<ProviderEvent>,
     clearing: &mut ClearingState,
     memory: Option<&crate::tools::MemoryDocument>,
-    moa: Option<&(usize, Message)>,
     fallback: impl FnOnce() -> Message,
     token: &CancellationToken,
 ) -> TurnCompletion {
@@ -181,7 +180,7 @@ pub(super) async fn complete_rig_turn(
     if let Some(cleared) = clearing.run_pass(rig_history) {
         let _ = events_tx.send(Event::HistoryCleared(cleared).into());
     }
-    let mut projected = history_for_provider_request(rig_history, clearing.cleared(), memory, moa);
+    let mut projected = history_for_provider_request(rig_history, clearing.cleared(), memory);
     let Some(prompt) = projected.pop() else {
         return TurnCompletion {
             stop: CompletionStop::Failed,

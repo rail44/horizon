@@ -429,8 +429,7 @@ mod tests {
         assert!(commands.is_empty());
     }
 
-    /// An unattended session (a `task` child or a Mixture-of-Agents
-    /// proposer) never parks: the prompt is withheld and the call resolves
+    /// An unattended session (a `task` child) never parks: the prompt is withheld and the call resolves
     /// as an error result the model can act on, so the turn continues. The
     /// message names the root the session may read.
     #[test]

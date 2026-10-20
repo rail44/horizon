@@ -364,8 +364,8 @@ mod tests {
         assert_eq!(
             external_name(&Subcommand::SetModel {
                 session_id: "s-1".to_string(),
-                provider: "moa".to_string(),
-                model: "mix".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
             }),
             "set-model"
         );
@@ -375,8 +375,8 @@ mod tests {
     fn set_model_carries_the_session_provider_and_model_and_is_not_destructive() {
         let subcommand = Subcommand::SetModel {
             session_id: "s-1".to_string(),
-            provider: "moa".to_string(),
-            model: "mix".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4o".to_string(),
         };
         assert!(!is_destructive(&subcommand));
         let Request::Invoke(invoke) = to_request(&subcommand, None, None) else {
@@ -385,7 +385,7 @@ mod tests {
         assert_eq!(invoke.command, "set-model");
         assert_eq!(
             invoke.args,
-            serde_json::json!({ "session_id": "s-1", "provider": "moa", "model": "mix" })
+            serde_json::json!({ "session_id": "s-1", "provider": "openai", "model": "gpt-4o" })
         );
     }
 

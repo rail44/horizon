@@ -21,7 +21,7 @@ Status: implemented 2026-09-27（統合ブランチ上。main へのマージは
   が `initialize` の capability の `_meta` で広告したときだけ有効になる。
 
 承認の三層、sandbox、judge、roles、skills、recall、knowledge、standing
-memory、MoA、compaction、worktree 隔離、trusted project gate は agentd の
+memory、compaction、worktree 隔離、trusted project gate は agentd の
 内側で完結し、この線の設計には現れない。外部エージェントが相手のとき、
 承認を求めるかどうかの起点は相手側にあり、Horizon の承認方針は相手が
 求めてきた分にしか効かない。
@@ -104,7 +104,7 @@ v2 を agentd に選ぶ理由は、現在の contract との構造のズレを�
 
 ACP に居場所が無い。線を越える必要があるかどうかの選別は実装時に行う
 （2026-09-27 時点の grep では、Input routing 系 6 種、Environment 系 3 種、
-`MoaPassStarted`、`MemorySeeded` はシェル側で frame に畳まれるだけで表示に
+`MemorySeeded` はシェル側で frame に畳まれるだけで表示に
 使われていない）。
 
 - `ContinueTurn`
@@ -113,7 +113,6 @@ ACP に居場所が無い。線を越える必要があるかどうかの選別�
   `InputQueuePaused`、`InputOutcome`、`DeliveryAcknowledged`、
   `SessionInputSent`
 - `TaskProgress`
-- `MoaPassStarted`
 - `MemoryDigest`、`MemoryCheckpointMissed`、`MemorySeeded`
 - `ActivateWorktree` と `EnvironmentReady`、`EnvironmentActivated`、
   `EnvironmentActivationFailed`

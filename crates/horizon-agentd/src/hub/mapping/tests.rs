@@ -267,18 +267,21 @@ fn model_announcements_become_one_select_option() {
     let mut mapper = mapper();
     assert!(
         mapper
-            .map(&AgentWireEvent::SessionModel("m-aggregate".into()))
+            .map(&AgentWireEvent::SessionModel("gpt-4o".into()))
             .len()
             == 1
     );
     let outgoing = mapper.map(&AgentWireEvent::SessionSelection(ModelSelection {
-        provider: "moa".into(),
-        model: "mix".into(),
+        provider: "openai".into(),
+        model: "gpt-4o".into(),
     }));
     let [Outgoing::Update(v2::SessionUpdate::ConfigOptionUpdate(update))] = &outgoing[..] else {
         panic!("expected one config option update, got {outgoing:?}");
     };
-    assert_eq!(update.config_options, vec![model_option("moa", "mix")]);
+    assert_eq!(
+        update.config_options,
+        vec![model_option("openai", "gpt-4o")]
+    );
     let option = &update.config_options[0];
     assert_eq!(&*option.config_id.0, acp::MODEL_CONFIG_ID);
     assert_eq!(
@@ -288,7 +291,7 @@ fn model_announcements_become_one_select_option() {
     let v2::SessionConfigKind::Select(select) = &option.kind else {
         panic!("expected a select option");
     };
-    assert_eq!(&*select.current_value.0, "moa/mix");
+    assert_eq!(&*select.current_value.0, "openai/gpt-4o");
 }
 
 #[test]

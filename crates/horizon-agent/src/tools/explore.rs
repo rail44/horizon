@@ -85,7 +85,6 @@ use crate::contract::{
     Event, MessageRole, SessionId, SessionState, TaskProgress, TaskProgressState, ToolCallRequest,
     TurnEndReason,
 };
-use crate::roles::RoleId;
 use crate::tools::state::ToolSessionState;
 
 pub(crate) use notify::{register_wake, unregister_wake};
@@ -125,50 +124,6 @@ pub struct StartedExploration {
     pub events: Receiver<Event>,
 }
 
-/// What one `task`-shaped session is started with. A `task` call names only
-/// a prompt and the requester's own provider answers it; a Mixture-of-Agents
-/// proposer (`docs/agent-moa-design.md`) names the other two, because each
-/// member runs on its own `{provider, model}`.
-pub struct ExplorationRequest {
-    pub prompt: String,
-    /// The `[[providers]]` entry name to run this session on. `None` — every
-    /// `task` call — means the requesting session's own provider.
-    pub provider: Option<String>,
-    /// The model id to pin, written out (never an alias). `None` means the
-    /// entry's own default model.
-    pub model: Option<String>,
-    /// The role the spawned session runs with: `roles::EXPLORE_ROLE_ID` for
-    /// a `task` child, `roles::MOA_PROPOSER_ROLE_ID` for a proposer. Both
-    /// satisfy `roles::is_exploration`, so the host treats them identically
-    /// everywhere else; they differ only in the prompt section the session
-    /// is given.
-    pub role: RoleId,
-}
-
-impl ExplorationRequest {
-    /// A prompt answered by the requesting session's own provider, in a
-    /// `task` child.
-    pub fn for_prompt(prompt: String) -> Self {
-        Self {
-            prompt,
-            provider: None,
-            model: None,
-            role: RoleId(crate::roles::EXPLORE_ROLE_ID.to_string()),
-        }
-    }
-
-    /// One Mixture-of-Agents proposer, pinned to its member's entry and
-    /// model (`docs/agent-moa-design.md`).
-    pub fn for_proposer(prompt: String, provider: String, model: String) -> Self {
-        Self {
-            prompt,
-            provider: Some(provider),
-            model: Some(model),
-            role: RoleId(crate::roles::MOA_PROPOSER_ROLE_ID.to_string()),
-        }
-    }
-}
-
 /// The daemon capability `task` is built on: spawn a peer session,
 /// subscribe to its events, terminate it. Implemented by `horizon-agentd`
 /// (`session::AgentdExplorationHost`) and installed on the requester's
@@ -189,11 +144,11 @@ pub trait ExplorationHost: Send + Sync {
         true
     }
 
-    /// Spawns a read-only task session and sends the request's prompt as its
-    /// first user message -- the session's entire history; there is no other
-    /// seeding. `Err` carries a message suitable for the model to read as
-    /// the tool's error result.
-    fn start(&self, request: ExplorationRequest) -> Result<StartedExploration, String>;
+    /// Spawns a read-only task session on the requester's own provider and
+    /// sends `prompt` as its first user message -- the session's entire
+    /// history; there is no other seeding. `Err` carries a message suitable
+    /// for the model to read as the tool's error result.
+    fn start(&self, prompt: String) -> Result<StartedExploration, String>;
 
     /// Terminates a session started by [`Self::start`] and releases its
     /// event subscription. Called exactly once per successful start -- when
@@ -239,7 +194,7 @@ pub(crate) fn start(
     if work.is_cancelled() {
         return synchronous(request, error_output("session is stopping"));
     }
-    let started = match host.start(ExplorationRequest::for_prompt(input.prompt.to_string())) {
+    let started = match host.start(input.prompt.to_string()) {
         Ok(started) => started,
         Err(message) => {
             return synchronous(
@@ -565,8 +520,8 @@ impl Outcome {
     }
 }
 
-/// Turns watcher failures into a terminal outcome so both task and MoA
-/// callers can still retire their child and publish its result. Termination
+/// Turns watcher failures into a terminal outcome so task callers can still
+/// retire their child and publish its result. Termination
 /// and notification policy remain with the caller.
 pub(super) fn watch_until_terminal(
     events: &Receiver<Event>,
@@ -712,7 +667,7 @@ fn fold_until_terminal(
                     // task child (a standing role never spawns task children).
                     | Event::MemoryDigest(_)
                     | Event::MemoryCheckpointMissed
-                    | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::MemorySeeded | Event::MoaPassStarted(_) | Event::ConversationRecorded(_) => {}
+                    | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::MemorySeeded | Event::ConversationRecorded(_) => {}
                 }
                 if emitted.as_ref() != Some(&activity) {
                     on_activity(activity.clone());

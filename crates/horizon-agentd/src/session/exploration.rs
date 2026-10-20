@@ -38,23 +38,7 @@ pub(super) struct AgentdExplorationHost {
 }
 
 impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
-    fn start(
-        &self,
-        request: horizon_agent::tools::ExplorationRequest,
-    ) -> Result<horizon_agent::tools::StartedExploration, String> {
-        // A named provider is validated before anything is spawned: an id
-        // the registry does not know would otherwise fail inside the
-        // session thread, after the caller already got a session id.
-        let provider_id = match &request.provider {
-            Some(name) => {
-                let id = horizon_agent::registry::named_rig_provider_id(name);
-                if !lock_unpoisoned(&self.state.providers).contains(&id) {
-                    return Err(format!("no provider `{name}` is configured"));
-                }
-                id
-            }
-            None => self.provider_id.clone(),
-        };
+    fn start(&self, prompt: String) -> Result<horizon_agent::tools::StartedExploration, String> {
         let session_id = SessionId::new();
         // Subscribe first, spawn second -- the ordering requirement
         // `super::subscription` documents: the subscription has to exist
@@ -63,30 +47,19 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
         spawn_session_thread(
             self.state.clone(),
             session_id,
-            provider_id,
-            Some(request.role.clone()),
+            self.provider_id.clone(),
+            Some(horizon_agent::roles::RoleId(
+                horizon_agent::roles::EXPLORE_ROLE_ID.to_string(),
+            )),
             self.workspace_root.clone(),
             None,
             None,
             Vec::new(),
         );
-        // Ordered ahead of the prompt on the same channel, so the session's
-        // first turn already runs the pinned model.
-        if let (Some(provider), Some(model)) = (&request.provider, &request.model) {
-            self.state.send_command(
-                session_id,
-                Command::SetSessionModel {
-                    provider: provider.clone(),
-                    model: model.clone(),
-                },
-            );
-        }
-        if !self.state.send_command(
-            session_id,
-            Command::UserMessage {
-                text: request.prompt,
-            },
-        ) {
+        if !self
+            .state
+            .send_command(session_id, Command::UserMessage { text: prompt })
+        {
             self.state.unsubscribe_from_session(session_id);
             return Err("the task session ended before it could be asked".to_string());
         }
@@ -143,134 +116,6 @@ mod tests {
     };
     use std::time::Duration;
 
-    /// A daemon whose only provider entry is named `solo` and has no API
-    /// key, so a session started on it answers from the deterministic
-    /// fallback responder instead of calling anything.
-    fn named_provider_state() -> Arc<crate::session::AgentdState> {
-        use horizon_agent::config::{
-            AgentConfig, AgentPersistenceConfig, NamedProviderConfig, ProviderKind, ProvidersTable,
-            RigAgentConfig,
-        };
-        use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
-        use horizon_agent::registry::ProviderRegistry;
-
-        let agent_config = AgentConfig {
-            auxiliary: None,
-            rig: RigAgentConfig {
-                api_key_present: false,
-                model: "m-solo".to_string(),
-                ..Default::default()
-            },
-            providers: ProvidersTable {
-                entries: vec![NamedProviderConfig {
-                    name: "solo".to_string(),
-                    kind: ProviderKind::OpenAiCompatible,
-                    base_url: None,
-                    api_key_env: "HORIZON_TEST_KEY_NEVER_SET".to_string(),
-                    api_key_present: false,
-                }],
-                default_model: Some(horizon_agent::config::ModelPair {
-                    provider: "solo".to_string(),
-                    model: "m-solo".to_string(),
-                }),
-            },
-            moa: horizon_agent::config::MoaTable::default(),
-            persistence: AgentPersistenceConfig {
-                event_log_path: std::path::PathBuf::from("/tmp/horizon-moa-host-test-events.jsonl"),
-                duckdb_path: None,
-            },
-            tools: AgentToolsConfig::default(),
-        };
-        Arc::new(crate::session::AgentdState::new(
-            ProviderRegistry::builtin_with_config(
-                agent_config.clone(),
-                SharedDuckdbStore::unavailable(),
-            ),
-            agent_config,
-            None,
-            SharedDuckdbStore::unavailable(),
-            None,
-            Vec::new(),
-            Vec::new(),
-        ))
-    }
-
-    /// A proposer names the `[[providers]]` entry it runs on. An entry the
-    /// registry does not know fails before any session is spawned, so the
-    /// caller never gets a session id it then has to clean up.
-    #[test]
-    fn starting_on_an_unknown_provider_fails_without_spawning() {
-        let state = test_state();
-        let host = AgentdExplorationHost {
-            state: state.clone(),
-            requester_id: SessionId::new(),
-            provider_id: ProviderId("builtin.agent.mock".to_string()),
-            workspace_root: None,
-        };
-        let started = horizon_agent::tools::ExplorationHost::start(
-            &host,
-            horizon_agent::tools::ExplorationRequest::for_proposer(
-                "anything".to_string(),
-                "not-configured".to_string(),
-                "m".to_string(),
-            ),
-        );
-        let Err(error) = started else {
-            panic!("an unconfigured provider must not start a session");
-        };
-        assert!(error.contains("not-configured"), "{error}");
-        assert!(state.sessions.lock().unwrap().is_empty());
-    }
-
-    /// A named provider routes the spawned session to that entry's
-    /// registry id, and the prompt still reaches it.
-    #[test]
-    fn starting_on_a_named_provider_routes_the_session_to_that_entry() {
-        let state = named_provider_state();
-        let host = AgentdExplorationHost {
-            state: state.clone(),
-            requester_id: SessionId::new(),
-            provider_id: ProviderId("builtin.agent.mock".to_string()),
-            workspace_root: None,
-        };
-        let started = horizon_agent::tools::ExplorationHost::start(
-            &host,
-            horizon_agent::tools::ExplorationRequest::for_proposer(
-                "which provider answered?".to_string(),
-                "solo".to_string(),
-                "m-solo".to_string(),
-            ),
-        )
-        .expect("the configured entry starts");
-
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        let mut initialization = None;
-        let mut answer = None;
-        while std::time::Instant::now() < deadline && answer.is_none() {
-            let Ok(event) = started.events.recv_timeout(Duration::from_millis(500)) else {
-                continue;
-            };
-            if let Event::MessageCommitted(message) = event {
-                match message.role {
-                    horizon_agent::contract::MessageRole::Assistant if initialization.is_none() => {
-                        initialization = Some(message.text)
-                    }
-                    horizon_agent::contract::MessageRole::Assistant => answer = Some(message.text),
-                    _ => {}
-                }
-            }
-        }
-        let initialization = initialization.expect("the session announces its provider");
-        assert!(
-            initialization.contains("builtin.agent.rig.solo"),
-            "{initialization}"
-        );
-        let answer = answer.expect("the prompt reached the session");
-        assert!(answer.contains("which provider answered?"), "{answer}");
-
-        horizon_agent::tools::ExplorationHost::terminate(&host, started.session_id);
-    }
-
     /// A real explore-role session whose read leaves the workspace root.
     /// Nobody is watching it, so the call must resolve as an error result
     /// the model can read rather than an approval prompt: the turn carries
@@ -304,10 +149,7 @@ mod tests {
         };
         let started = horizon_agent::tools::ExplorationHost::start(
             &host,
-            horizon_agent::tools::ExplorationRequest::for_prompt(format!(
-                "fs.read path: {}",
-                outside_file.display()
-            )),
+            format!("fs.read path: {}", outside_file.display()),
         )
         .expect("the explore session starts");
 
@@ -520,7 +362,7 @@ mod tests {
     }
     #[test]
     fn child_retirement_can_reenter_the_session_table_after_its_parent_entry_is_gone() {
-        use horizon_agent::tools::{ExplorationHost, ExplorationRequest, StartedExploration};
+        use horizon_agent::tools::{ExplorationHost, StartedExploration};
         use std::sync::{
             atomic::{AtomicBool, Ordering},
             Mutex,
@@ -531,7 +373,7 @@ mod tests {
             lock_was_free: AtomicBool,
         }
         impl ExplorationHost for ChildHost {
-            fn start(&self, _: ExplorationRequest) -> Result<StartedExploration, String> {
+            fn start(&self, _: String) -> Result<StartedExploration, String> {
                 let (tx, events) = unbounded();
                 *self.events.lock().unwrap() = Some(tx);
                 Ok(StartedExploration {

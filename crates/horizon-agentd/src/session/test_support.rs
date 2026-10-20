@@ -31,7 +31,6 @@ pub(crate) fn test_config() -> AgentConfig {
             default_model: None,
         },
         rig,
-        moa: Default::default(),
         persistence: AgentPersistenceConfig {
             event_log_path: Default::default(),
             duckdb_path: None,

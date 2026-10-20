@@ -67,10 +67,7 @@ mod tests {
         stops: AtomicUsize,
     }
     impl ExplorationHost for DelayedHost {
-        fn start(
-            &self,
-            _: super::super::ExplorationRequest,
-        ) -> Result<super::super::StartedExploration, String> {
+        fn start(&self, _: String) -> Result<super::super::StartedExploration, String> {
             unreachable!()
         }
         fn terminate(&self, _: SessionId) {

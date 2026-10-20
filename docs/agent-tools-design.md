@@ -570,7 +570,7 @@ insufficient. Integration neither migrates live data nor restarts the running ap
 
 Bash, Web, approval judgments and child watchers share registration and actual
 retirement accounting. Cancellation identifies the exact occurrence, and child
-lifetimes distinguish a single MoA pass from the parent session. Session teardown
+lifetimes are tied to the parent session. Session teardown
 waits for retirement before deleting a worktree; see
 [background work ownership](agent-background-work.md) for the stop/finish contract
 and the requirements for adding a worker.

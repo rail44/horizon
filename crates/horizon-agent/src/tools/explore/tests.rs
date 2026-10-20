@@ -88,14 +88,11 @@ impl ScriptedHost {
 }
 
 impl ExplorationHost for ScriptedHost {
-    fn start(
-        &self,
-        request: crate::tools::ExplorationRequest,
-    ) -> Result<StartedExploration, String> {
+    fn start(&self, prompt: String) -> Result<StartedExploration, String> {
         if let Some(error) = &self.start_error {
             return Err(error.clone());
         }
-        self.started.lock().unwrap().push(request.prompt);
+        self.started.lock().unwrap().push(prompt);
         let session_id = SessionId::new();
         let (tx, events) = crossbeam_channel::unbounded();
         self.children.lock().unwrap().push((session_id, tx));

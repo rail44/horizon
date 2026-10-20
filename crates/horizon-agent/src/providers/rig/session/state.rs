@@ -63,9 +63,6 @@ pub(crate) struct SessionLoopState {
     // --- Session identity/configuration and replaceable environment --------
     pub(crate) session_id: SessionId,
     pub(crate) config: RigAgentConfig,
-    /// The proposals the current turn's provider rounds carry, `None`
-    /// outside a MoA turn.
-    pub(crate) moa_turn: Option<super::moa::MoaTurn>,
     pub(crate) environment: SessionEnvironment,
     pub(crate) extra_sections: Vec<String>,
     pub(crate) role: Option<&'static RoleDefinition>,
@@ -90,7 +87,6 @@ impl Default for SessionLoopState {
             memory: None,
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
-            moa_turn: None,
             environment: SessionEnvironment::for_workspace_root(None),
             extra_sections: Vec::new(),
             role: None,
@@ -146,7 +142,6 @@ impl SessionLoopState {
             guard: TurnLoopGuard::new(config.iteration_cap, config.doom_loop_window),
             memory,
             config,
-            moa_turn: None,
             environment,
             extra_sections,
             role,
@@ -302,11 +297,10 @@ mod tests {
     fn apply_set_session_model(
         config: &mut RigAgentConfig,
         table: &ProvidersTable,
-        moa: &crate::config::MoaTable,
         provider: &str,
         model: &str,
     ) -> Result<(), String> {
-        crate::config::resolve_model_selection(table, moa, provider, model)?.apply(config);
+        crate::config::resolve_model_selection(table, provider, model)?.apply(config);
         Ok(())
     }
 
@@ -332,90 +326,6 @@ mod tests {
         }
     }
 
-    /// A member on `provider`, available or not. `openai` in [`table`] has
-    /// its key, `claude` does not.
-    fn moa_member(provider: &str, model: &str, api_key_present: bool) -> crate::config::MoaMember {
-        crate::config::MoaMember {
-            api_key_present,
-            api_key_env: format!("{}_API_KEY", provider.to_uppercase()),
-            ..crate::config::MoaMember::new(provider.to_string(), model.to_string())
-        }
-    }
-
-    /// `mix` aggregates on the available entry; `stranded` aggregates on the
-    /// key-less one.
-    fn moa_table() -> crate::config::MoaTable {
-        crate::config::MoaTable {
-            entries: vec![
-                crate::config::MoaEntry {
-                    name: "mix".to_string(),
-                    aggregator: moa_member("openai", "m-aggregate", true),
-                    proposers: vec![
-                        moa_member("openai", "m-fast", true),
-                        moa_member("claude", "m-opus", false),
-                    ],
-                },
-                crate::config::MoaEntry {
-                    name: "stranded".to_string(),
-                    aggregator: moa_member("claude", "m-opus", false),
-                    proposers: vec![moa_member("openai", "m-fast", true)],
-                },
-            ],
-        }
-    }
-
-    /// A MoA entry whose aggregator's key variable is unset is refused
-    /// rather than installed: a session on it would answer from the
-    /// deterministic fallback responder.
-    #[test]
-    fn selecting_a_moa_entry_with_an_unavailable_aggregator_is_refused() {
-        let mut config = RigAgentConfig::default();
-        let before = config.model.clone();
-        let error = apply_set_session_model(&mut config, &table(), &moa_table(), "moa", "stranded")
-            .unwrap_err();
-        assert!(error.contains("unavailable"), "{error}");
-        assert!(error.contains("CLAUDE_API_KEY"), "{error}");
-        assert_eq!(config.model, before);
-        assert!(config.moa.is_none());
-    }
-
-    /// Selecting the `moa` group points the session at the entry's
-    /// aggregator and installs the pass; selecting an ordinary provider
-    /// afterwards clears it.
-    #[test]
-    fn selecting_a_moa_entry_installs_the_pass_and_switching_away_clears_it() {
-        let mut config = RigAgentConfig::default();
-
-        apply_set_session_model(&mut config, &table(), &moa_table(), "moa", "mix").unwrap();
-        assert_eq!(config.model, "m-aggregate");
-        assert_eq!(config.kind, ProviderKind::OpenAiCompatible);
-        assert_eq!(config.api_key_env, "OPENAI_API_KEY");
-        let pass = config.moa.clone().expect("the pass is installed");
-        assert_eq!(pass.name, "mix");
-        assert_eq!(
-            pass.proposers
-                .iter()
-                .map(|member| member.model.as_str())
-                .collect::<Vec<_>>(),
-            vec!["m-fast", "m-opus"]
-        );
-
-        apply_set_session_model(&mut config, &table(), &moa_table(), "openai", "m-fast").unwrap();
-        assert_eq!(config.model, "m-fast");
-        assert!(config.moa.is_none());
-    }
-
-    #[test]
-    fn selecting_an_unknown_moa_entry_is_an_error_that_changes_nothing() {
-        let mut config = RigAgentConfig::default();
-        let before = config.model.clone();
-        let error = apply_set_session_model(&mut config, &table(), &moa_table(), "moa", "typo")
-            .unwrap_err();
-        assert!(error.contains("Unknown moa entry `typo`"), "{error}");
-        assert_eq!(config.model, before);
-        assert!(config.moa.is_none());
-    }
-
     #[test]
     fn switch_sets_the_model_id_and_swaps_the_provider_bits() {
         // `role.model` (or the config default) is what the session was
@@ -427,7 +337,7 @@ mod tests {
             ..Default::default()
         };
 
-        apply_set_session_model(&mut config, &table(), &moa_table(), "claude", "m-opus").unwrap();
+        apply_set_session_model(&mut config, &table(), "claude", "m-opus").unwrap();
         assert_eq!(config.kind, ProviderKind::Anthropic);
         assert_eq!(config.api_key_env, "ANTHROPIC_API_KEY");
         assert_eq!(config.model, "m-opus");
@@ -450,14 +360,7 @@ mod tests {
     #[test]
     fn switch_passes_a_raw_model_id_through_like_role_model_does() {
         let mut config = RigAgentConfig::default();
-        apply_set_session_model(
-            &mut config,
-            &table(),
-            &moa_table(),
-            "openai",
-            "raw-model-id",
-        )
-        .unwrap();
+        apply_set_session_model(&mut config, &table(), "openai", "raw-model-id").unwrap();
         assert_eq!(config.model, "raw-model-id");
         assert_eq!(config.kind, ProviderKind::OpenAiCompatible);
         assert_eq!(
@@ -481,8 +384,7 @@ mod tests {
         state.config.model = "role-model".to_string();
 
         let selection =
-            crate::config::resolve_model_selection(&table(), &moa_table(), "claude", "m-opus")
-                .unwrap();
+            crate::config::resolve_model_selection(&table(), "claude", "m-opus").unwrap();
         state.handle_set_session_model(&selection).await;
         assert_eq!(state.config.model, "m-opus");
         assert_eq!(state.config.kind, ProviderKind::Anthropic);
@@ -516,8 +418,7 @@ mod tests {
         state.clearing.record_input_tokens(400_000);
 
         let selection =
-            crate::config::resolve_model_selection(&table(), &moa_table(), "claude", "m-opus")
-                .unwrap();
+            crate::config::resolve_model_selection(&table(), "claude", "m-opus").unwrap();
         state.handle_set_session_model(&selection).await;
 
         assert_eq!(
@@ -538,11 +439,9 @@ mod tests {
     #[test]
     fn switch_rejects_an_unknown_provider_and_an_empty_model() {
         let mut config = RigAgentConfig::default();
-        let error =
-            apply_set_session_model(&mut config, &table(), &moa_table(), "typo", "m").unwrap_err();
+        let error = apply_set_session_model(&mut config, &table(), "typo", "m").unwrap_err();
         assert!(error.contains("Unknown provider `typo`"));
-        let error =
-            apply_set_session_model(&mut config, &table(), &moa_table(), "openai", "").unwrap_err();
+        let error = apply_set_session_model(&mut config, &table(), "openai", "").unwrap_err();
         assert!(error.contains("A model id is required"));
         // A failed switch leaves the previous config untouched — the turn
         // in progress and the next one keep the old selection.

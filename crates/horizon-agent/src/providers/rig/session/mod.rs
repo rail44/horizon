@@ -44,7 +44,6 @@ mod environment;
 mod input;
 mod interaction;
 mod memory;
-pub(crate) mod moa;
 mod progress;
 mod settlement;
 mod state;

@@ -143,7 +143,6 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
                     &tx,
                     &mut ClearingState::new(None, 80),
                     None,
-                    None,
                     || panic!("must use the configured provider"),
                     &CancellationToken::new(),
                 ),
@@ -386,7 +385,6 @@ async fn provider_wire_finish_reasons_override_counts_for_both_adapters() {
                 &events,
                 &mut ClearingState::new(None, 80),
                 None,
-                None,
                 || panic!("network required"),
                 &CancellationToken::new(),
             )
@@ -446,7 +444,6 @@ async fn provider_wire_retry_discards_previous_text_and_never_repeats_issued_too
                     Prompt::input(ConversationInputKind::User, "read"),
                     &events,
                     &mut ClearingState::new(None, 80),
-                    None,
                     None,
                     || panic!("network required"),
                     &CancellationToken::new(),
@@ -569,7 +566,6 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
             &events,
             &mut ClearingState::new(None, 80),
             None,
-            None,
             || panic!("network required"),
             &CancellationToken::new(),
         )
@@ -650,7 +646,6 @@ async fn provider_wire_replay_sends_identical_requests_after_signed_tool_respons
             &tx,
             &mut ClearingState::disabled(),
             None,
-            None,
             || panic!("HTTP expected"),
             &CancellationToken::new(),
         )
@@ -684,7 +679,6 @@ async fn provider_wire_replay_sends_identical_requests_after_signed_tool_respons
                     Prompt::input(ConversationInputKind::Notification, "task finished"),
                     &tx,
                     &mut ClearingState::disabled(),
-                    None,
                     None,
                     || panic!("HTTP expected"),
                     &CancellationToken::new(),

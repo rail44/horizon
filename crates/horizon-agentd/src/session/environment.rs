@@ -18,8 +18,7 @@ use horizon_agent::persistence::event_log::PersistedSessionContext;
 use horizon_agent::roles::RoleId;
 use horizon_agent::skills::SkillRegistry;
 use horizon_agent::tools::{
-    register_exploration_host, register_session_runtime, RecallContext, SessionDomainPolicy,
-    ToolCompletion, ToolSessionState,
+    register_session_runtime, RecallContext, SessionDomainPolicy, ToolCompletion, ToolSessionState,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -161,9 +160,8 @@ impl SessionEnvironment<'_> {
         let board = board_host_for(workspace_root.as_deref(), state.clone());
         let tool_state = tool_session_builder_for(workspace_root, agent_config.tools, recall)
             .with_isolated_worktree(isolated)
-            // An explore-role session (`task` children and Mixture-of-Agents
-            // proposers) is never attached to a pane, so an approval prompt
-            // raised for it would reach nobody.
+            // An explore-role session (a `task` child) is never attached to
+            // a pane, so an approval prompt raised for it would reach nobody.
             .with_unattended(role_id.is_some_and(horizon_agent::roles::is_exploration))
             .with_filesystem_grants(filesystem_grants.clone())
             .with_loopback_connect(loopback_connect)
@@ -265,7 +263,6 @@ impl SessionEnvironment<'_> {
                     live_state.clone(),
                     results.clone(),
                 );
-                register_exploration_host(session_id, replacement.exploration_host());
                 *tool_state = replacement;
                 // The derivation edge is recorded when the worktree is
                 // created: the spawn source becomes the parent.
