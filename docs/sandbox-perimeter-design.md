@@ -161,7 +161,7 @@ What follows the root on activation:
 | sandbox `writable_roots` | derived per call from the root |
 | `bash` tracked cwd | starts at the new root in the replacement tool state |
 | system prompt environment section | rebuilt by the provider on `EnvironmentPrepared` |
-| shell-facing root (`WorkspaceRootResolved`) | sent on activation, as at setup and attachment replay; the shell maps it to `session_info_update` |
+| shell-facing root (`WorkspaceRootResolved`) | sent on activation, as at setup and attachment replay; the shell maps it to `session_info_update` and records it as the session's `directory` |
 | persisted `session_context` | `workspace_root` is the worktree and `isolated_worktree` is true from `EnvironmentActivated` onward |
 | session entry `worktree`, terminate cleanup (`git worktree remove`) | recorded on activation; cleanup unchanged |
 
@@ -186,7 +186,7 @@ There is no `isolate` knob: the ACP `_meta.horizon` session request
 `PendingAgentSpawn` (`src/workspace/session_creation.rs`), and the view
 chooser (`src/view_chooser.rs`) carry none, and `horizon-agentd` creates
 no worktree at spawn. The remaining spawn-time knob is the directory to
-start in (decision 3's *workspace_root source*): the spawn-source
+start in (decision 3's *directory source*): the spawn-source
 session's recorded directory, else the Horizon process's cwd. Dropping the ACP field was a
 non-additive change to the `_meta.horizon` vocabulary:
 `HORIZON_ACP_EXT_VERSION` is 2 (AGENTS.md: full Horizon restart, not a

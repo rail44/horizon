@@ -182,7 +182,7 @@ attachment's events channel. The variant was appended to `TerminalUpdate`
   use the published value.
 
 The shell records the value in the workspace model's per-session
-`workspace_root` (`wire_terminal_cwd_updates`, `src/workspace/session_events.rs`),
+`directory` (`wire_terminal_cwd_updates`, `src/workspace/session_events.rs`),
 the slot agent sessions fill with their resolved root, so agent spawns from a
 terminal, "Open Terminal in Session Directory", and the session manager read
 both kinds the same way.

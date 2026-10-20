@@ -47,14 +47,14 @@ messaging need, so it is designed once, here.
 
 3. **Creation model.** One knob at spawn time, plus a worktree a
    session enters on its own (board #65, `docs/sandbox-perimeter-design.md`):
-   - *workspace_root source* — the directory the session starts in:
+   - *directory source* — the directory the session starts in:
      the spawn-source pane's directory ("start where I'm looking"),
      else the Horizon process's cwd when there is no source. The spawn
      source is the focused pane for a palette spawn and the issuer (or
      the explicit `--split` target) for a control-plane spawn. A new
      terminal samples the source terminal's cwd in `horizon-terminald`.
-     A new agent takes the source session's `workspace_root` as the
-     shell's model records it (`agent_spawn_workspace_root`,
+     A new agent takes the source session's `directory` as the
+     shell's model records it (`agent_spawn_directory`,
      `src/workspace/session_lifecycle.rs`) -- an agent source's root,
      including a worktree it entered, or a terminal source's cwd as
      `horizon-terminald` last published it (board #69,
@@ -91,7 +91,7 @@ messaging need, so it is designed once, here.
 
 4. **Control from the workspace.**
    - (a) *The cd-pain fix is a first-class operation.* Horizon knows
-     every session's `workspace_root` (including derived worktree
+     every session's `directory` (including derived worktree
      paths), so "open / start a terminal in any session's directory" is
      a command (command model → palette / CLI / keybinding). This kills
      "hunt down the worktree and cd" regardless of lineage — it is the
@@ -147,23 +147,23 @@ Decision 4a's v1 slice landed (active-session scope only): a
 `CommandId::OpenTerminalInSessionDirectory` command ("Open Terminal in
 Session Directory", palette + `horizon open-terminal-in-session-directory`
 CLI parity) opens a new terminal tab whose cwd is pinned to the active
-session's `workspace_root`, disabled when there is no active session or
-its `workspace_root` is unknown. This required making `workspace_root`
+session's `directory`, disabled when there is no active session or
+its `directory` is unknown. This required making the session's root
 visible on the *shell* side of the model for the first time:
 `WorkspaceSession`/`SessionSummary` now carry an additive
-`workspace_root: Option<PathBuf>`, set once (`Workspace::
-set_session_workspace_root`) right before a brand-new agent session's
-`SessionNew` goes out (`WorkspaceShell::reconcile`), using the same value
-that's sent over the wire -- so the model and the daemon never disagree
+`directory: Option<PathBuf>` (named `workspace_root` until board #73),
+set once (`Workspace::set_session_directory`) right before a brand-new
+agent session's `SessionNew` goes out (`WorkspaceShell::reconcile`), using
+the same value that's sent over the wire -- so the model and the daemon never disagree
 on what a session's root is. Two scope calls worth recording: (1) it's
-agent-only for now -- terminal sessions have no `workspace_root` sourcing
+agent-only for now -- terminal sessions have no `directory` sourcing
 mechanism to read from yet (the pid-sampling cwd inheritance in
 `horizon-agentd::terminal::resolve_cwd` is spawn-time-only and keyed by
 *terminal* session id, not exposed to the shell), so a terminal active
 session simply disables the command rather than fabricating an
 approximate answer. That limitation is closed by board #69: `horizon-terminald`
 publishes each terminal's cwd (`TerminalUpdate::WorkingDirectory`) and the
-shell records it as the terminal's `workspace_root`, so the command, the
+shell records it as the terminal's `directory`, so the command, the
 session manager's directory column, and agent spawns from a terminal read
 it the same way they read an agent's root. The original second limitation
 (no persistence across a session-runtime restart) is closed by the
@@ -190,7 +190,7 @@ field (`HORIZON_ACP_EXT_VERSION` 2), `new-agent` has no `--share`, and the
 view chooser offers one plain "Agent" choice.
 
 Worktree creation resolves after `session/new` has returned, so the
-shell's pre-spawn `workspace_root` value is the directory the session
+shell's pre-spawn `directory` value is the directory the session
 started in, not a later worktree path. `SessionSummary.
 workspace_root` is `horizon-agentd`'s authoritative answer once
 resolved; `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore`
@@ -209,9 +209,9 @@ map `SessionModel` rides, since a workspace-root correction is a model
 fold, not a transcript event): `runtime::routing::AgentRoutes` gained a
 `workspace_roots` sender, `AgentdHandle::start`/`start_on_stream` return
 its receiver as a third tuple element, and `WorkspaceShell::
-wire_workspace_root_updates` (wired at both the same call sites as
+wire_directory_updates` (wired at both the same call sites as
 `wire_host_tools`: `WorkspaceShell::new` and `reload_session_runtime`)
-folds each arrival straight into `Workspace::set_session_workspace_root`/
+folds each arrival straight into `Workspace::set_session_directory`/
 `set_session_parent` and `cx.notify()`s. A session created and used within
 one continuous run now sees its corrected root/parent immediately, not
 just at the next resume/reload sweep -- the sweeps remain the catch-up
@@ -237,7 +237,7 @@ Decision 4b's UI slice landed: the session manager modal
 (`src/session_manager.rs`) renders the derivation tree instead of a flat
 list. `WorkspaceSession`/`SessionSummary` grew an additive
 `parent_session_id: Option<SessionId>` mirror of the wire field
-(`Workspace::set_session_parent`, following `workspace_root`'s own
+(`Workspace::set_session_parent`, following `directory`'s own
 mirror), populated in the same two adoption/resume sweeps
 (`spawn_agent_resume`/`spawn_workspace_restore` in
 `src/workspace/session_lifecycle.rs`). `order_as_lineage_tree` (pure,
@@ -251,7 +251,7 @@ actions ride the modal's existing List, alongside its primary confirm
 (attach/jump) and secondary confirm (plain per-session terminate): `secondary-
 o` opens the selected row's directory (generalizing decision 4a's active-
 session-only v1 off `WorkspaceShell::open_terminal_in_directory`, a no-op
-without a known `workspace_root`), and `secondary-shift-t` terminates the
+without a known `directory`), and `secondary-shift-t` terminates the
 selected row's whole subtree (decision 5's explicit, more-destructive-than-
 plain-terminate opt-in -- `subtree_session_ids`, pure and unit-tested,
 collects the row plus every transitive descendant; a no-op unless the row
@@ -264,10 +264,10 @@ row is currently selected," a piece of modal-local state the workspace-wide
 command model has no notion of.
 
 2026-07-19 dogfooding fix: session manager rows now show the session's
-`workspace_root` itself, not just the small `dir`/`subtree` action-hint
+`directory` itself, not just the small `dir`/`subtree` action-hint
 text that previously stood in for it -- so a session's own worktree reads
 as visibly distinct from a plain checkout directory at a
-glance, per decision 4b's own goal. `abbreviate_workspace_root` (pure,
+glance, per decision 4b's own goal. `abbreviate_directory` (pure,
 unit-tested, `src/session_manager.rs`) renders it relative to the
 enclosing repository root when the path sits strictly inside one (e.g.
 `.horizon/worktrees/calm-otter`), else `~`-relative under `$HOME`, else the
