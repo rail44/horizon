@@ -371,10 +371,6 @@ fn the_check_is_installed_only_with_a_decision_model_outside_exploration_roles()
     assert!(
         ContinuationCheck::for_session(&with_decision, Some(&crate::roles::EXPLORE_ROLE)).is_none()
     );
-    assert!(
-        ContinuationCheck::for_session(&with_decision, Some(&crate::roles::MOA_PROPOSER_ROLE))
-            .is_none()
-    );
     assert!(ContinuationCheck::for_session(&RigAgentConfig::default(), None).is_none());
 }
 

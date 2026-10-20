@@ -1,4 +1,4 @@
-//! Read-only SDK, compaction and proposer views of canonical conversation.
+//! Read-only SDK and compaction views of canonical conversation.
 use super::*;
 
 impl ConversationHistory {
@@ -116,56 +116,6 @@ impl ConversationHistory {
             }
         }
         sites
-    }
-    pub(in crate::providers::rig) fn owner_conversation(
-        &self,
-        include_current: bool,
-    ) -> Vec<(bool, String)> {
-        let mut output = Vec::new();
-        for entry in self
-            .entries
-            .iter()
-            .filter(|entry| include_current || entry.turn < self.turn)
-        {
-            match &entry.content {
-                Content::Input {
-                    kind: ConversationInputKind::User,
-                    text,
-                } => output.push((true, text.clone())),
-                Content::Response(response)
-                    if response.completed
-                        && response.calls.is_empty()
-                        && self.entries.iter().any(|candidate| {
-                            candidate.turn == entry.turn
-                                && matches!(
-                                    candidate.content,
-                                    Content::Input {
-                                        kind: ConversationInputKind::User,
-                                        ..
-                                    }
-                                )
-                        }) =>
-                {
-                    if let Some(Message::Assistant(
-                        rig_core::completion::message::AssistantMessage { content, .. },
-                    )) = &response.message
-                    {
-                        let text: String = content
-                            .iter()
-                            .filter_map(|c| match c {
-                                AssistantContent::Text(t) => Some(t.text.as_str()),
-                                _ => None,
-                            })
-                            .collect();
-                        if !text.trim().is_empty() && !output.is_empty() {
-                            output.push((false, text));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        output
     }
 }
 fn entry_len(entry: &Entry) -> usize {

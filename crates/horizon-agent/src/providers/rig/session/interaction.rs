@@ -36,14 +36,6 @@ impl SessionLoopState {
             })
             .into(),
         );
-        // An owner message opens a Mixture-of-Agents pass; the
-        // aggregator's turn runs once every proposer has
-        // answered. Proposers see earlier interactions and receive this
-        // interaction's already-recorded owner input separately.
-        let pass = self.run_moa_pass(&text).await;
-        if let super::moa::PassOutcome::Cancelled = pass {
-            return;
-        }
         let (prompt, injected) = self.inject_task_notification(Prompt::Current);
         let fallback_text = injected.unwrap_or(text);
         self.run_turn(prompt, move || deterministic_rig_response(&fallback_text))

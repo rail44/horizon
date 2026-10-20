@@ -221,39 +221,12 @@ const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: anoth
      question. Answer with concrete paths, line numbers, and findings, complete enough that the \
      requester need not repeat your reading.";
 
-/// [`MOA_PROPOSER_ROLE`]'s id. Like [`EXPLORE_ROLE_ID`] it is a persistence
-/// and cleanup identity -- written into the event log, matched at daemon
-/// startup -- and nothing the model ever sees. Crate-local, unlike
-/// [`EXPLORE_ROLE_ID`]: the pass that spawns proposers lives in this crate,
-/// and the daemon reaches them through [`is_exploration`] alone.
-pub(crate) const MOA_PROPOSER_ROLE_ID: &str = "moa-proposer";
-
-/// A Mixture-of-Agents proposer session (`docs/agent-moa-design.md`):
-/// structurally an exploration session -- the same read-only allowlist,
-/// iteration cap, forced wrap-up, repository instructions, unattended
-/// handling, and restart cleanup, all of which key on [`is_exploration`],
-/// which matches this id too -- with an empty prompt section. The pass's
-/// own request prompt (`providers::rig::session::moa::proposer_prompt`) is
-/// the only instruction a proposer is given.
-pub(crate) const MOA_PROPOSER_ROLE: RoleDefinition = RoleDefinition {
-    id: MOA_PROPOSER_ROLE_ID,
-    title: "Mixture-of-Agents Proposer",
-    prompt_section: "",
-    allowed_tool_ids: EXPLORE_ROLE.allowed_tool_ids,
-    model: EXPLORE_ROLE.model,
-    iteration_cap: EXPLORE_ROLE.iteration_cap,
-    include_repository_instructions: EXPLORE_ROLE.include_repository_instructions,
-    skill_ids: EXPLORE_ROLE.skill_ids,
-    summarize_on_cap: EXPLORE_ROLE.summarize_on_cap,
-    standing: EXPLORE_ROLE.standing,
-};
-
-/// Whether `role_id` names an exploration session -- [`EXPLORE_ROLE`] (a
-/// `task` child) or [`MOA_PROPOSER_ROLE`]. This is the one predicate
-/// `horizon-agentd` needs to tell them apart from every
-/// other session it hosts, without a wire field of its own
-/// (`docs/agent-explore-design.md` decision 8: the role id alone identifies
-/// them, so nothing additive had to be added to the session wire). It
+/// Whether `role_id` names an exploration session -- [`EXPLORE_ROLE`], a
+/// `task` child. This is the one predicate `horizon-agentd` needs to tell
+/// such sessions apart from every other session it hosts, without a wire
+/// field of its own (`docs/agent-explore-design.md` decision 8: the role id
+/// alone identifies them, so nothing additive had to be added to the
+/// session wire). It
 /// decides four things: no `task` host of its own, `unattended` tool state,
 /// absence from the client-visible session list, and termination rather
 /// than resumption at daemon startup.
@@ -262,13 +235,13 @@ pub fn is_exploration(role_id: &RoleId) -> bool {
 }
 
 fn is_exploration_id(id: &str) -> bool {
-    id == EXPLORE_ROLE_ID || id == MOA_PROPOSER_ROLE_ID
+    id == EXPLORE_ROLE_ID
 }
 
 /// Every role this build knows about. A `Vec`-free static slice since the
 /// set is fixed at compile time -- see the module doc on keeping this
 /// minimal rather than data-driven.
-static ROLES: &[&RoleDefinition] = &[&CONFIG_ROLE, &EXPLORE_ROLE, &MOA_PROPOSER_ROLE];
+static ROLES: &[&RoleDefinition] = &[&CONFIG_ROLE, &EXPLORE_ROLE];
 
 /// Roles registered at runtime by the composition root (`horizon-agentd`)
 /// from external crates (e.g. `horizon-board`'s keeper role) -- see
@@ -291,8 +264,8 @@ pub fn register_external(roles: Vec<RoleDefinition>) {
 
 /// Every role this build knows about that a user can launch directly —
 /// the built-in [`ROLES`] plus any registered via [`register_external`],
-/// minus exploration sessions ([`EXPLORE_ROLE`] and [`MOA_PROPOSER_ROLE`],
-/// both spawned by the harness, never user-creatable). Called by
+/// minus exploration sessions ([`EXPLORE_ROLE`], spawned by the harness,
+/// never user-creatable). Called by
 /// the shell's view chooser (to populate the list of launchable roles) and
 /// its control-plane dispatch (to validate `--role` ids). Each process that
 /// links `horizon-agent` and wants to see externally-provided roles must
@@ -454,33 +427,10 @@ mod tests {
     }
 
     #[test]
-    fn is_exploration_matches_the_explore_and_proposer_roles_only() {
+    fn is_exploration_matches_the_explore_role_only() {
         assert!(is_exploration(&RoleId(EXPLORE_ROLE_ID.to_string())));
-        assert!(is_exploration(&RoleId(MOA_PROPOSER_ROLE_ID.to_string())));
         assert!(!is_exploration(&RoleId("config".to_string())));
         assert!(!is_exploration(&RoleId("exploration".to_string())));
-    }
-
-    /// A proposer differs from a `task` child in exactly one field: it gets
-    /// no prompt section, because the pass's request prompt is its whole
-    /// instruction (`docs/agent-moa-design.md`). Everything the explore role
-    /// restricts it with is shared.
-    #[test]
-    fn the_proposer_role_is_the_explore_role_without_a_prompt_section() {
-        let role = resolve(&RoleId(MOA_PROPOSER_ROLE_ID.to_string()))
-            .expect("the proposer role must resolve");
-        assert!(role.prompt_section.is_empty());
-        assert!(!EXPLORE_ROLE.prompt_section.is_empty());
-        assert_eq!(role.allowed_tool_ids, EXPLORE_ROLE.allowed_tool_ids);
-        assert_eq!(role.iteration_cap, EXPLORE_ROLE.iteration_cap);
-        assert_eq!(role.model, EXPLORE_ROLE.model);
-        assert_eq!(
-            role.include_repository_instructions,
-            EXPLORE_ROLE.include_repository_instructions
-        );
-        assert_eq!(role.summarize_on_cap, EXPLORE_ROLE.summarize_on_cap);
-        assert_eq!(role.skill_ids, EXPLORE_ROLE.skill_ids);
-        assert_eq!(role.standing, EXPLORE_ROLE.standing);
     }
 
     // -- external role registration (docs/board-keeper-design.md §1) ---------
@@ -549,10 +499,6 @@ mod tests {
         assert!(
             !ids.contains(&EXPLORE_ROLE_ID),
             "explore must never be user-launchable"
-        );
-        assert!(
-            !ids.contains(&MOA_PROPOSER_ROLE_ID),
-            "a proposer role must never be user-launchable"
         );
     }
 }

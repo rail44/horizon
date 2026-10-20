@@ -108,7 +108,7 @@ share persistence acknowledgement, and human approvals name an exact occurrence
 through UI, CLI and daemon (agent wire v25). Stale and duplicate decisions cannot
 authorize a retry; see [the execution contract](agent-tools-design.md#execution-planning-and-exact-approval-2026-09-25).
 Background work now shares registration, exact-occurrence cancellation and
-retirement accounting. Call, MoA-pass and session-child lifetimes are explicit;
+retirement accounting. Call and session-child lifetimes are explicit;
 isolated worktrees are retained if workers have not stopped within the cleanup
 wait. See [ownership and shutdown](agent-background-work.md).
 Conversation events and ephemeral notifications now use distinct variants.
@@ -669,15 +669,11 @@ DuckDB re-justification with its exit clause, open v1-slicing items);
 `docs/research/duckdb-ecosystem.md` carry the surveys. Supersedes the
 notification half of the deferred item below when built.
 
-### Mixture-of-Agents as a selectable model (v1 implemented 2026-09-20)
+### Mixture-of-Agents as a selectable model (withdrawn 2026-10-20)
 
-Several models combined behind one entry in model selection: per user
-message, harness-launched `task`-shaped read-only proposer sessions each
-investigate and answer, then the aggregator writes its own answer and can
-inspect the proposers' records through `recall`. Configured as `[[moa]]`
-with `{provider, model}` members (model IDs written directly, providers
-mixable). `docs/agent-moa-design.md` describes the design, the
-implementation constraints, and the reference material.
+Several models combined behind one entry in model selection. v1 was
+implemented 2026-09-20 and removed in full on 2026-10-20 by the owner's
+decision; its design record was deleted with it and remains in git history.
 
 ### Preview pane for views under development (v1 implemented 2026-09-21)
 

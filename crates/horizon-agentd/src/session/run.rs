@@ -14,8 +14,8 @@ use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 use horizon_agent::roles::RoleId;
 use horizon_agent::tools::{
-    process_agent_provider_event, register_exploration_host, register_session_runtime, HostTools,
-    ToolCompletion, ToolSessionState,
+    process_agent_provider_event, register_session_runtime, HostTools, ToolCompletion,
+    ToolSessionState,
 };
 
 use super::approval::{dispatch_inbound_command, gate_processing_approval};
@@ -164,10 +164,6 @@ pub(super) fn run_session(
         live_state.clone(),
         async_results_tx.clone(),
     );
-    // The session-runtime registry is thread-local to this thread; the rig
-    // session loop runs on its own and reaches the spawn capability through
-    // this process-global one instead.
-    register_exploration_host(session_id, tool_state.exploration_host());
 
     let host = AgentdHostTools {
         state: state.clone(),

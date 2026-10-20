@@ -9,20 +9,15 @@ fn call(session: SessionId, name: &str, kind: WorkKind) -> Registration {
     Registration::new(session, Lifetime::Call(identity(name)), kind)
 }
 #[test]
-fn cancelling_a_call_does_not_cancel_session_or_pass_children() {
+fn cancelling_a_call_does_not_cancel_session_children() {
     let session = SessionId::new();
     let tool = call(session, "call", WorkKind::Tool);
     let judge = call(session, "call", WorkKind::Judgment);
     let child = Registration::new(session, Lifetime::Session, WorkKind::Child);
-    let pass_id = Uuid::new_v4();
-    let proposer = Registration::new(session, Lifetime::Pass(pass_id), WorkKind::Child);
     cancel_call(session, &identity("call"));
     assert!(tool.is_cancelled());
     assert!(judge.is_cancelled());
     assert!(!child.is_cancelled());
-    assert!(!proposer.is_cancelled());
-    cancel_pass(session, pass_id);
-    assert!(proposer.is_cancelled());
     assert!(!child.is_cancelled());
     close_session(session);
     assert!(child.is_cancelled());

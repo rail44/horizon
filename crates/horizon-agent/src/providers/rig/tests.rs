@@ -3300,48 +3300,6 @@ fn session_extra_sections_includes_the_delegation_block_only_when_task_is_advert
     let _ = std::fs::remove_dir_all(&cwd);
 }
 
-/// A `task` child is told what an exploration session is; a
-/// Mixture-of-Agents proposer is not -- the pass's own request prompt is
-/// its whole instruction (`docs/agent-moa-design.md`). The two roles are
-/// otherwise the same definition, so everything else the explore role gives
-/// a session a proposer keeps.
-#[test]
-fn a_proposer_system_prompt_omits_the_exploration_section_a_task_child_gets() {
-    let cwd = git_repo_with_agents_md("moa-proposer-section");
-    let environment = test_environment(cwd.clone());
-
-    let prompt_for = |role| {
-        let config = role_adjusted_config(&RigAgentConfig::default(), Some(role));
-        crate::prompt::system_prompt(
-            &environment,
-            &session_extra_sections(&environment, &config, Some(role), true),
-        )
-    };
-
-    let explore_role = resolve(&RoleId(crate::roles::EXPLORE_ROLE_ID.to_string()))
-        .expect("the explore role must resolve");
-    let proposer_role = resolve(&RoleId(crate::roles::MOA_PROPOSER_ROLE_ID.to_string()))
-        .expect("the proposer role must resolve");
-
-    let child = prompt_for(explore_role);
-    let proposer = prompt_for(proposer_role);
-
-    assert!(
-        child.contains("You are an exploration session"),
-        "a task child keeps the exploration section: {child}"
-    );
-    assert!(
-        !proposer.contains("You are an exploration session"),
-        "a proposer receives no role prompt section: {proposer}"
-    );
-    assert!(
-        !proposer.contains("\n\n\n"),
-        "an empty role section must not land as a blank paragraph: {proposer}"
-    );
-
-    let _ = std::fs::remove_dir_all(&cwd);
-}
-
 #[test]
 fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instructions_for_config_role(
 ) {

@@ -1,27 +1,5 @@
 //! Translate the accepted file configuration into runtime configuration.
-use horizon_agent::config::{MoaEntry, MoaMember, ModelPair, NamedProviderConfig, ProviderKind};
-
-/// Translates the resolved `[[moa]]` surface out of the same config file
-/// load (`docs/agent-moa-design.md`). Entries `horizon-config` already
-/// refused (no name, an aggregator naming no `[[providers]]` entry) are gone
-/// by here, having warned on stderr.
-pub(crate) fn moa_configs(config: &horizon_config::RawConfig) -> Vec<MoaEntry> {
-    // Availability and the key variable's name are filled in centrally by
-    // `from_env_and_providers`, from the `[[providers]]` entry each member
-    // names.
-    let member = |member: &horizon_config::ResolvedMoaMember| {
-        MoaMember::new(member.provider.clone(), member.model.clone())
-    };
-    config
-        .resolved_moa()
-        .iter()
-        .map(|entry| MoaEntry {
-            name: entry.name.clone(),
-            aggregator: member(&entry.aggregator),
-            proposers: entry.proposers.iter().map(member).collect(),
-        })
-        .collect()
-}
+use horizon_agent::config::{ModelPair, NamedProviderConfig, ProviderKind};
 
 /// Translates the resolved provider surface out of a config file load.
 /// Returns the entries in file order plus the `default_model` pair, when it
@@ -56,11 +34,8 @@ pub(crate) fn named_provider_configs(
 /// (titles) and `decision_model` connections.
 pub(crate) fn agent_config(raw: &horizon_config::RawConfig) -> horizon_agent::config::AgentConfig {
     let (entries, default_model) = named_provider_configs(raw);
-    let mut config = horizon_agent::config::AgentConfig::from_env_and_providers(
-        entries,
-        default_model,
-        moa_configs(raw),
-    );
+    let mut config =
+        horizon_agent::config::AgentConfig::from_env_and_providers(entries, default_model);
     config.auxiliary = raw.resolved_small_model().ok().map(|small| {
         horizon_agent::auxiliary::AuxiliaryConfig::from_env(
             small.provider.base_url,

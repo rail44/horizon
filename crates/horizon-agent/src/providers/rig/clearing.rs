@@ -120,7 +120,6 @@ pub(super) fn history_for_provider_request(
     history: &ConversationHistory,
     cleared: &ClearedResults,
     memory: Option<&MemoryDocument>,
-    moa: Option<&(usize, Message)>,
 ) -> Vec<Message> {
     let mut messages = history.messages();
     for site in history.result_sites() {
@@ -142,15 +141,7 @@ pub(super) fn history_for_provider_request(
         };
         result.content = vec![ToolResultContent::text(placeholder)];
     }
-    let mut tail_start = history.turn_start();
-    if let Some((index, message)) = moa {
-        let index = (*index).min(messages.len());
-        messages.insert(index, message.clone());
-        // A proposal inserted at the turn boundary belongs to that turn.
-        if index < tail_start {
-            tail_start += 1;
-        }
-    }
+    let tail_start = history.turn_start();
     if let Some(document) = memory.filter(|doc| !doc.is_empty()) {
         messages = std::iter::once(Message::user(document.render()))
             .chain(messages[tail_start..].iter().cloned())

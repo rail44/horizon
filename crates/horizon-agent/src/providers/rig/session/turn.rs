@@ -184,10 +184,6 @@ impl SessionLoopState {
         fallback: impl FnOnce() -> Message,
     ) -> TurnCompletion {
         let token = CancellationToken::new();
-        // Resolved here, against the history as it stands before this round
-        // appends anything, so every round of one turn injects the block at
-        // the same index.
-        let moa = self.moa_injection();
         let memory = self.memory.as_ref().map(|memory| &memory.document);
         let turn = complete_rig_turn(
             config,
@@ -198,7 +194,6 @@ impl SessionLoopState {
             &self.events_tx,
             &mut self.clearing,
             memory,
-            moa.as_ref(),
             fallback,
             &token,
         );
@@ -439,9 +434,8 @@ impl SessionLoopState {
     }
 
     /// Every terminal path settles its input receipt before publishing the
-    /// turn boundary. Per-turn proposals must not leak into the next input.
+    /// turn boundary.
     fn end_interaction(&mut self, reason: TurnEndReason, result: crate::contract::InputResult) {
-        self.moa_turn = None;
         self.finish_input(result);
         let cancelled = reason == TurnEndReason::Cancelled;
         let _ = self.rig_history.apply_event(&Event::TurnEnded(reason));

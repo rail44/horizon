@@ -21,7 +21,6 @@
 //! to new sessions and title calls, alongside theme and keybindings.
 
 pub mod grants;
-mod moa;
 mod warnings;
 
 use std::collections::HashMap;
@@ -31,10 +30,6 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 
 pub use grants::{ProjectGrant, RawGrantsConfig, RawProjectGrant};
-pub use moa::{
-    moa_config_warnings, RawMoaConfig, RawMoaMember, ResolvedMoaConfig, ResolvedMoaMember,
-    MOA_PROVIDER_NAME,
-};
 
 /// Overrides the config file path outright, bypassing the XDG/home lookup
 /// below entirely. Primarily for tests and for running multiple Horizon
@@ -99,13 +94,6 @@ pub struct RawConfig {
     /// each entry is the project's main-repository toplevel, a session in
     /// an isolated worktree resolves back to it, and matching is exact.
     pub trusted_projects: Vec<String>,
-    /// `[[moa]]`: Mixture-of-Agents entries, each a named combination of one
-    /// aggregator and a list of proposers over the `[[providers]]` entries
-    /// above (`docs/agent-moa-design.md`). Empty unless the file sets it.
-    /// Selected like a provider — the model picker shows a `moa` group whose
-    /// items are these names — and reloaded like `[[providers]]`: new
-    /// sessions see the change.
-    pub moa: Vec<RawMoaConfig>,
 }
 
 /// Which rig-backed provider *client* an entry builds: the first-scope kinds
@@ -693,12 +681,6 @@ fn read_config(path: Option<&Path>) -> ConfigRead {
             // duplicate entries) are likewise
             // name-walk-invisible, off the same successful parse.
             for warning in provider_config_warnings(&config) {
-                eprintln!("horizon config: {warning}");
-            }
-            // `[[moa]]`'s value warnings ride the same seam: which entries
-            // resolve at all depends on the provider entries beside them,
-            // which a name walk cannot see either.
-            for warning in moa_config_warnings(&config) {
                 eprintln!("horizon config: {warning}");
             }
             ConfigRead::Parsed(Box::new(config))

@@ -12,7 +12,6 @@ use crate::contract::{SessionId, ToolCallIdentity};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Lifetime {
     Call(ToolCallIdentity),
-    Pass(Uuid),
     Session,
 }
 
@@ -236,9 +235,6 @@ pub(crate) fn cancel_judgment(session: SessionId, call: &ToolCallIdentity) {
     cancel_matching(session, |entry| {
         entry.kind == WorkKind::Judgment && entry.lifetime == Lifetime::Call(call.clone())
     });
-}
-pub(crate) fn cancel_pass(session: SessionId, pass: Uuid) {
-    cancel_matching(session, |entry| entry.lifetime == Lifetime::Pass(pass));
 }
 fn close_group(group: &Group) {
     let entries = {

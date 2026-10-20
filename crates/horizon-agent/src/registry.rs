@@ -59,15 +59,6 @@ pub fn named_rig_provider_id(name: &str) -> ProviderId {
     ProviderId(format!("builtin.agent.rig.{name}"))
 }
 
-/// A `[[moa]]` entry's registry id (`docs/agent-moa-design.md`). The
-/// provider behind it is an ordinary rig provider running the entry's
-/// aggregator; what makes its sessions MoA ones is
-/// [`crate::config::RigAgentConfig::moa`], which the rig session loop acts
-/// on around each owner message.
-pub fn moa_provider_id(name: &str) -> ProviderId {
-    ProviderId(format!("builtin.agent.moa.{name}"))
-}
-
 impl ProviderRegistry {
     /// Test-only convenience: no real event-log writer exists behind this
     /// registry, so the rig provider gets an already-resolved-to-`None`
@@ -81,7 +72,6 @@ impl ProviderRegistry {
             AgentConfig::from_env_and_providers(
                 vec![crate::config::NamedProviderConfig::default()],
                 None,
-                Vec::new(),
             ),
             crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
         )
@@ -115,7 +105,6 @@ impl ProviderRegistry {
         let mut registry = Self::default();
         registry.insert(Arc::new(crate::providers::mock::MockProvider::new()));
         let table = config.providers.clone();
-        let moa = config.moa.clone();
         let default_name = table.default_provider_name().map(str::to_string);
         for entry in &table.entries {
             let id = named_rig_provider_id(&entry.name);
@@ -149,26 +138,6 @@ impl ProviderRegistry {
                         decision: config.decision.clone(),
                         ..config.rig.clone()
                     },
-                    duckdb_cell.clone(),
-                )),
-            );
-        }
-        // One rig provider per `[[moa]]` entry, under its own id namespace:
-        // the session runs the aggregator's entry and model and carries the
-        // pass on its config. `horizon-config` already dropped entries whose
-        // aggregator names no provider, so a `None` here means a table that
-        // changed under this build; it is skipped.
-        for entry in &moa.entries {
-            let Some(mut session_config) = crate::config::moa_session_config(&table, entry) else {
-                continue;
-            };
-            session_config.decision = config.decision.clone();
-            let id = moa_provider_id(&entry.name);
-            registry.insert_under(
-                id.clone(),
-                Arc::new(crate::providers::rig::Provider::for_entry(
-                    id,
-                    session_config,
                     duckdb_cell.clone(),
                 )),
             );
@@ -316,7 +285,6 @@ mod tests {
                     model: "test-model".to_string(),
                 }),
             },
-            moa: crate::config::MoaTable::default(),
             persistence: AgentPersistenceConfig {
                 event_log_path: std::path::PathBuf::from("/tmp/horizon-registry-test-events.jsonl"),
                 duckdb_path: None,

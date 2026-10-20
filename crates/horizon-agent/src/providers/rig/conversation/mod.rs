@@ -72,10 +72,7 @@ struct Entry {
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 enum Content {
-    Input {
-        kind: ConversationInputKind,
-        text: String,
-    },
+    Input { text: String },
     Response(Response),
 }
 #[derive(Clone, Debug)]
@@ -301,12 +298,9 @@ impl ConversationHistory {
         }
         match record {
             ConversationRecord::TurnOpened => self.turn += 1,
-            ConversationRecord::Input { kind, text } => self.entries.push(Entry {
+            ConversationRecord::Input { text, .. } => self.entries.push(Entry {
                 turn: self.turn,
-                content: Content::Input {
-                    kind: *kind,
-                    text: text.clone(),
-                },
+                content: Content::Input { text: text.clone() },
             }),
             ConversationRecord::ToolAnnounced {
                 response_id,

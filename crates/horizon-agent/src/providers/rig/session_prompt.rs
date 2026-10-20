@@ -60,9 +60,8 @@ pub(super) fn session_extra_sections(
     }
     let include_repository_instructions = match role {
         Some(role) => {
-            // A role with no section of its own (`roles::MOA_PROPOSER_ROLE`)
-            // contributes nothing here rather than an empty section, which
-            // would land as a blank paragraph in the prompt.
+            // A role with an empty section contributes nothing rather than
+            // a blank paragraph in the prompt.
             if !role.prompt_section.is_empty() {
                 sections.push(role.prompt_section.to_string());
             }

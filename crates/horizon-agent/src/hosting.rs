@@ -57,12 +57,11 @@ pub enum AgentWireEvent {
     TaskProgress(TaskProgress),
     /// The session's last applied *selection* — the `(provider, model)` pair
     /// a `set_session_model` call named (an echo of
-    /// `contract::Command::SetSessionModel`), where `model` is the value the
-    /// caller asked for: a `[[moa]]` entry name for the reserved `moa` group,
-    /// a model id otherwise. Display-only and ephemeral like
-    /// `ToolCallProgress`: the composer's model chip renders `provider ·
-    /// model` (`moa · mix`) instead of the aggregator's resolved model id
-    /// that [`Self::SessionModel`] carries.
+    /// `contract::Command::SetSessionModel`), where `model` is the model id
+    /// the caller asked for. Display-only and ephemeral like
+    /// `ToolCallProgress`: the composer's model chip renders it as a
+    /// `provider · model` label beside the resolved model id
+    /// [`Self::SessionModel`] carries.
     SessionSelection(ModelSelection),
     /// Close the preview identified by its streaming key.
     ToolCallProgressClosed(String),
@@ -95,11 +94,10 @@ impl AgentWireEvent {
 /// pair a switch named, echoing `contract::Command::SetSessionModel`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ModelSelection {
-    /// The `[[providers]]` / `[[moa]]` entry name the picker or CLI named
-    /// (the legacy `[provider]` fold-in resolves as `default`).
+    /// The `[[providers]]` entry name the picker or CLI named (the legacy
+    /// `[provider]` fold-in resolves as `default`).
     pub provider: String,
-    /// The model the caller asked for: a `[[moa]]` entry name for the
-    /// reserved `moa` provider, a model id otherwise.
+    /// The model id the caller asked for.
     pub model: String,
 }
 
@@ -259,8 +257,8 @@ mod tests {
                 parent_session_id: Some(SessionId::new()),
             }),
             AgentWireEvent::SessionSelection(ModelSelection {
-                provider: "moa".to_string(),
-                model: "mix".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-4o".to_string(),
             }),
         ];
         for event in events {

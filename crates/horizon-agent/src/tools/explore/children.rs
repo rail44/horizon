@@ -125,21 +125,6 @@ pub(super) fn complete(child: SessionId, output: TaskReport) -> Option<SessionId
     Some(requester)
 }
 
-/// Records `child`'s final result without queueing a notification — what a
-/// Mixture-of-Agents proposer uses. A queued notification would be injected
-/// into the aggregator's `rig_history`; a proposal reaches it as the pass's
-/// own provider-view block instead. The registration stays so `task_output`
-/// can still re-read the proposer's full report.
-pub(in crate::tools) fn complete_without_notification(child: SessionId, output: TaskReport) {
-    let mut registry = lock();
-    let Some(entry) = registry.children.get_mut(&child) else {
-        return;
-    };
-    if entry.outcome.is_none() {
-        entry.outcome = Some(output);
-    }
-}
-
 /// Drains every completion queued for `requester`. The queue is the
 /// coalescing point: whatever landed since the last drain leaves together
 /// as one notification block (`docs/agent-async-task-design.md` decision

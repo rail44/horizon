@@ -96,12 +96,6 @@ fn selection_for_provider_id(
         }
         return None;
     }
-    if let Some(name) = id.strip_prefix("builtin.agent.moa.") {
-        return Some(horizon_agent::hosting::ModelSelection {
-            provider: horizon_agent::config::MOA_PROVIDER_NAME.to_string(),
-            model: name.to_string(),
-        });
-    }
     None
 }
 

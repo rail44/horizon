@@ -476,7 +476,6 @@ impl Mapper {
             | Event::EnvironmentReady { .. }
             | Event::EnvironmentActivated(_)
             | Event::EnvironmentActivationFailed(_)
-            | Event::MoaPassStarted(_)
             | Event::MemorySeeded
             | Event::ContinueTurnRequested(_)
             | Event::ContinuationVerdict(_)

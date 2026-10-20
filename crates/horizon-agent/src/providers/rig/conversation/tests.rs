@@ -1,5 +1,5 @@
 use super::*;
-use crate::contract::{ConversationInputKind, MessageRole, ToolCallRequest, TurnEndReason};
+use crate::contract::{ConversationInputKind, MessageRole, ToolCallRequest};
 use rig_core::completion::message::{Reasoning, ToolFunction};
 use serde_json::json;
 
@@ -69,19 +69,10 @@ fn long_conversation_replays_two_clearing_passes_and_explicit_input_boundaries()
         }),
     ] {
         assert_eq!(
-            history_for_provider_request(&live, clearing.cleared(), memory.as_ref(), None),
-            history_for_provider_request(
-                &restored,
-                restored_clearing.cleared(),
-                memory.as_ref(),
-                None
-            )
+            history_for_provider_request(&live, clearing.cleared(), memory.as_ref()),
+            history_for_provider_request(&restored, restored_clearing.cleared(), memory.as_ref(),)
         );
     }
-    assert_eq!(
-        restored.owner_conversation(true),
-        [(true, "question-0".into()), (true, "question-1".into())]
-    );
 }
 
 #[test]
@@ -177,7 +168,7 @@ fn exact_provider_metadata_and_parallel_result_order_survive_early_results() {
 }
 
 #[test]
-fn interrupted_announcements_are_settled_and_failed_answers_do_not_reach_proposers() {
+fn interrupted_announcements_are_settled_by_a_cancelled_result() {
     let request = request(1);
     let events = vec![
         Event::ConversationRecorded(ConversationRecord::TurnOpened),
@@ -199,37 +190,6 @@ fn interrupted_announcements_are_settled_and_failed_answers_do_not_reach_propose
         )))
         .unwrap();
     history.validate_ready().unwrap();
-    let (tx, _) = crossbeam_channel::unbounded();
-    history
-        .record_response(
-            "failed-answer".into(),
-            &Message::assistant("partial answer"),
-            vec![],
-            &tx,
-        )
-        .unwrap();
-    history
-        .apply_event(&Event::TurnEnded(TurnEndReason::Failed))
-        .unwrap();
-    assert_eq!(
-        history.owner_conversation(true),
-        [(true, "question".into())]
-    );
-    history
-        .record_response(
-            "answer".into(),
-            &Message::assistant("final answer"),
-            vec![],
-            &tx,
-        )
-        .unwrap();
-    history
-        .apply_event(&Event::TurnEnded(TurnEndReason::Completed))
-        .unwrap();
-    assert_eq!(
-        history.owner_conversation(true),
-        [(true, "question".into()), (false, "final answer".into())]
-    );
 }
 
 #[test]

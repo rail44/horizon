@@ -118,7 +118,7 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
 | `state_update` idle | `stop_reason` の独自値 `_horizon/failed`、`_horizon/doom_loop` |
 
 線を越えないもの（agentd 内に留まる）: Input routing 系 6 種、Environment 系
-3 種、`MoaPassStarted`、`MemorySeeded`、
+3 種、`MemorySeeded`、
 `ContinueTurnRequested`、`ConversationRecorded`、`ProviderRequestUsage`
 （ペインは token 数を描いていない。`usage_update` は当面送らない）。
 `WorkspaceRootResolved` は `session_info_update` の `_meta.horizon`

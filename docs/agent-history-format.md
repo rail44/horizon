@@ -45,8 +45,6 @@ rename or suppress later results. Clearing and standing memory remain reversible
 projections. Explicit `TurnOpened` boundaries keep owner input, notifications,
 automatic continuation and tool rounds in the same active interaction. `TurnEnded`
 continues to describe execution outcome, including a pause or truncation recovery.
-Mixture-of-Agents derives earlier owner inputs and completed answers from this
-same model; a failed partial response remains provider history, not a final answer.
 
 Before restoring a session, the host durably cancels unfinished calls, including
 an announcement written immediately before a crash prevented dispatch. It retains

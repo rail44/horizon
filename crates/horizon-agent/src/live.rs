@@ -32,9 +32,8 @@ pub(crate) struct State {
     session_model: Option<String>,
     /// The session's last applied selection (provider name + the model the
     /// caller asked for) -- the display label the composer's model chip
-    /// prefers over `session_model` when present, so a MoA session shows
-    /// `moa · mix` rather than the aggregator's resolved model id. Same
-    /// sidecar rules as `session_model`: never replayed from persisted
+    /// prefers over `session_model` when present, shown as a `provider ·
+    /// model` label. Same sidecar rules as `session_model`: never replayed from persisted
     /// history, re-sent fresh at attach time.
     session_selection: Option<crate::hosting::ModelSelection>,
 }

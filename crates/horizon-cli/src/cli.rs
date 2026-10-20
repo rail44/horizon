@@ -112,10 +112,9 @@ pub enum Subcommand {
     /// Switches an already-running agent session's model -- the CLI
     /// counterpart of the model picker's `set_session_model` call.
     /// `provider`/`model` are the same pair the picker sends: a
-    /// `[[providers]]`/`[[moa]]` entry name plus a model id (or, for the
-    /// reserved `moa` group, a `[[moa]]` entry name). Non-destructive, so no
-    /// `--yes`; the daemon's own validation (unknown provider/entry, missing
-    /// key, unknown session) is what the caller sees on failure.
+    /// `[[providers]]` entry name plus a model id. Non-destructive, so no
+    /// `--yes`; the daemon's own validation (unknown provider, missing model
+    /// id, unknown session) is what the caller sees on failure.
     SetModel {
         session_id: String,
         provider: String,

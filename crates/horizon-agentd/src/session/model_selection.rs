@@ -6,7 +6,7 @@ use super::state::{lock_unpoisoned, AgentdState};
 
 pub(super) fn resolve(state: &AgentdState, provider: &str, model: &str) -> Result<Command, String> {
     let config = lock_unpoisoned(&state.agent_config);
-    horizon_agent::config::resolve_model_selection(&config.providers, &config.moa, provider, model)
+    horizon_agent::config::resolve_model_selection(&config.providers, provider, model)
         .map(|selection| Command::ApplySessionModel(Box::new(selection)))
 }
 

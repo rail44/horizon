@@ -51,8 +51,8 @@ this file -- never write one there even if the user asks.
 
 `[theme]` and `[keybindings]` changes take effect automatically as soon as
 the user approves a `config.write` -- no restart needed. `[[providers]]`,
-`default_model`, `small_model`, `decision_model`, and `[[moa]]` apply through
-"Reload Config" to new sessions and future title calls. The three model keys
+`default_model`, `small_model`, and `decision_model` apply through "Reload
+Config" to new sessions and future title calls. The three model keys
 are top-level `{ provider = "...", model = "..." }` pairs written before any
 table header; `small_model` must name an OpenAI-compatible entry and serves
 titles, and approval judgments when no decision model is available;

@@ -134,7 +134,6 @@ fn a_reused_id_keeps_the_original_calls_placeholder_description() {
         &history,
         &ClearedResults::from_occurrences([id("old")]),
         None,
-        None,
     );
     assert!(body(&projected[1]).contains("old.rs"));
     assert!(!body(&projected[1]).contains("new.rs"));
@@ -171,7 +170,7 @@ fn projection_preserves_canonical_messages_and_freezes_exact_results_across_repl
     let mut state = ClearingState::new(Some(1), 1);
     state.record_input_tokens(1);
     let pass = state.run_pass(&history).unwrap();
-    let first = history_for_provider_request(&history, state.cleared(), None, None);
+    let first = history_for_provider_request(&history, state.cleared(), None);
     assert_eq!(before, history.messages());
     assert_eq!(first[0], before[0]);
     let mut resumed = ClearingState::disabled();
@@ -181,11 +180,11 @@ fn projection_preserves_canonical_messages_and_freezes_exact_results_across_repl
     resumed.seed_cleared(pass.cleared_occurrence_ids);
     assert_eq!(
         first,
-        history_for_provider_request(&history, resumed.cleared(), None, None)
+        history_for_provider_request(&history, resumed.cleared(), None)
     );
 }
 #[test]
-fn internal_inputs_and_proposals_do_not_move_the_memory_turn_boundary() {
+fn internal_inputs_do_not_move_the_memory_turn_boundary() {
     let mut history = history();
     history.open_turn(&channel());
     input(
@@ -204,21 +203,15 @@ fn internal_inputs_and_proposals_do_not_move_the_memory_turn_boundary() {
         ConversationInputKind::Continuation,
         "continue after truncation",
     );
-    let proposal = (history.turn_start(), Message::user("proposals"));
-    let projected = history_for_provider_request(
-        &history,
-        &ClearedResults::default(),
-        Some(&memory()),
-        Some(&proposal),
-    );
+    let projected =
+        history_for_provider_request(&history, &ClearedResults::default(), Some(&memory()));
     let text = serde_json::to_string(&projected).unwrap();
     assert!(text.contains("Keep the task"));
     assert!(text.contains("current owner request"));
     assert!(text.contains("child completed"));
     assert!(text.contains("continue after truncation"));
-    assert!(text.contains("proposals"));
     assert!(!text.contains("file-0.rs"));
-    assert_eq!(projected.len(), 7);
+    assert_eq!(projected.len(), 6);
 }
 #[test]
 fn empty_memory_keeps_history_and_unicode_descriptions_remain_bounded() {
@@ -229,7 +222,6 @@ fn empty_memory_keeps_history_and_unicode_descriptions_remain_bounded() {
             &history,
             &ClearedResults::default(),
             Some(&MemoryDocument::default()),
-            None
         )
     );
     let argument = key_argument(&serde_json::json!({"path":"界".repeat(200)})).unwrap();
@@ -260,7 +252,6 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
     let projected = history_for_provider_request(
         &history,
         &ClearedResults::from_occurrences([id("task-occurrence")]),
-        None,
         None,
     );
     assert!(body(&projected[1]).contains("cleared old tool result"));

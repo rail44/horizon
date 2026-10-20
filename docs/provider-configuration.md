@@ -5,8 +5,8 @@ top-level `{ provider, model }` pairs choose the models: `default_model` for
 conversation sessions, `small_model` for session titles (and automatic
 tool-approval judgments when no decision model is available), and
 `decision_model` for automatic tool-approval judgments and turn-continuation
-checks. Each pair has the same form as a `[[moa]]` member: a
-`[[providers]]` entry name plus a model id, written out.
+checks. Each pair is a `[[providers]]` entry name plus a model id, written
+out.
 
 ```toml
 # Top-level keys must precede table headers.

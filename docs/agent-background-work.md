@@ -11,7 +11,6 @@ Environment activation replaces tool state while retaining the same group.
 | Lifetime | Work | Stops when |
 | --- | --- | --- |
 | Call | bash, Web, approval judgment | That exact call occurrence is cancelled, replaced, or its session closes |
-| Pass | Mixture-of-Agents proposers | The pass completes, is cancelled, unwinds, or its waiting future is dropped |
 | Session | `task` children | The parent session closes; cancelling a turn leaves them running |
 
 The kind of work separately controls environment-switch accounting. Only bash
@@ -38,8 +37,6 @@ Judge cancellation produces neither a verdict nor a result. A judge transport
 panic escalates to human approval. Already-saved decisions remain history.
 
 Session shutdown withdraws the child-launch capability before closing the group.
-Acquiring a MoA host also acquires a pass registration under that capability's
-lock: teardown between acquisition and launch cannot recreate a live group.
 Child watchers own termination separately from retained reports. Completed
 reports remain readable through `task_output`; cancelled watchers cannot recreate
 reports after parent teardown. A child is terminated once, and its watcher keeps
