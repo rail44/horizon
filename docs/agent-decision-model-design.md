@@ -39,8 +39,11 @@ with `Authorization: Bearer <key>`. Facts below were checked on
 - Ties follow option order, so the option to prefer on a tie is listed
   first.
 - Cloud use needs a paid plan or purchased credits; billing is per input
-  token. `clef-flash:cloud` is named in Ollama's release notes but not on
-  the library page; only `clef:cloud` is confirmed.
+  token. Both `clef:cloud` and `clef-flash:cloud` answered a direct call
+  on 2026-10-21 (one `noul` plus one `choice` question over 296 input
+  tokens: 0.65 s and 1.46 s round trip). On the same `curl … | sh` call
+  the 27B model put the ask probability at 0.99 and the 9B at 0.43, so
+  the pair names `clef:cloud`.
 
 rig-core has no System One support, so `crates/horizon-agent/src/decision/`
 is a direct HTTP client: the wire types, a mockable `DecisionClient`
