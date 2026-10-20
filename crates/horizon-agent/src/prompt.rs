@@ -9,15 +9,6 @@
 //! The norms are deliberately model-agnostic (Horizon expects to switch
 //! models, so provider-specific prompt lore is out of scope).
 //!
-//! The turn-ending norm was added 2026-10-20 from an observed session
-//! (`docs/agent-tools-design.md`, "System Prompt", addendum of that
-//! date): the model ended its turn with a progress report after every
-//! one to three tool calls and waited for a go-ahead the owner had
-//! already given, nine times in a row. It states when a turn ends, not
-//! how the work is ordered, so it is a communication norm rather than a
-//! workflow prescription; whether it moves the measure is not yet
-//! measured, and the addendum records that.
-//!
 //! **Workflow prescriptions.** This doc used
 //! to say "no step-by-step workflow prescriptions — over-prescription
 //! measurably harms newer models", model-agnostically (2026-07-07). That is
@@ -113,10 +104,6 @@ pub fn system_prompt(environment: &SessionEnvironment, extra_sections: &[String]
          - Be concise; don't restate what the transcript already shows.\n\
          - Report outcomes faithfully: state failures and partial results plainly rather than \
          presenting them as success.\n\
-         - End your turn only when the request is complete or you need something only the user \
-         can give (a decision, access, information). A progress report is not a reason to end \
-         the turn, and work the user already told you to do needs no further go-ahead: keep \
-         going and report when it is done.\n\
          \n\
          Environment:\n\
          - Working directory: {cwd}\n\

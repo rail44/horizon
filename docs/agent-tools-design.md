@@ -436,20 +436,17 @@ the scope record). The model-agnostic constraint above is untouched: the
 shipped wording is the one that worked for both models, with no per-model
 branching. A prescription without that kind of evidence stays out.
 
-**Addendum (2026-10-20).** The communication norms gain one on when a
-turn ends: only when the request is complete or something only the user
-can give is needed; a progress report is not a reason to end the turn,
-and work the user already asked for needs no further go-ahead. It comes
-from the owner's session `765e4862` on 2026-10-19/20: after the owner
-said to proceed until done, the model ended its turn with a status report
-after every one to three tool calls and waited (the owner answered "go
-ahead" nine times in a row; every one of those turns ended `Completed`,
-none was halted by a guard). The base prompt said nothing about when a
-turn ends, so the model fell back on its own habit. This is a norm about
-communication (what a turn-ending message is for), not an ordering of the
-work, so it sits with the other norms rather than under the measured-
-prescription rule above; its effect is not yet measured, and that
-measurement is open.
+**Note (2026-10-20).** A turn-ending norm ("end the turn only when the
+request is complete or something only the user can give is needed") was
+tried for one commit and withdrawn the same day (owner decision): in the
+session that prompted it (`765e4862`, 2026-10-19/20) the owner had
+already said in the conversation to proceed until done, and the model
+still ended its turn with a status report after every one to three tool
+calls, nine times in a row. An instruction the conversation already
+carried is not made effective by repeating it in the system prompt. The
+early hand-back is a turn-boundary problem for the loop to handle
+(continuation decided by the harness, as Gemini CLI's next-speaker check
+or Claude Code's Stop hook do), not a prompt matter.
 
 ## Config
 
