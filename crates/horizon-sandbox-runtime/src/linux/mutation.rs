@@ -233,7 +233,7 @@ pub(crate) fn handle_path_mutation_notification(
     Ok(())
 }
 
-fn respond_errno(notify_fd: RawFd, id: u64, errno: i32) -> nono::Result<()> {
+pub(super) fn respond_errno(notify_fd: RawFd, id: u64, errno: i32) -> nono::Result<()> {
     if notif_id_valid(notify_fd, id)? {
         respond_notif_errno(notify_fd, id, errno)?;
     }
@@ -265,7 +265,7 @@ fn excluded_target(path: &Path, initial_caps: &[InitialCapability]) -> Option<Pa
 /// `nono::sandbox::read_notif_path`, an empty or non-UTF-8 path is returned
 /// as-is: the kernel accepts both, so refusing them would break ordinary
 /// file names rather than protect anything.
-fn read_path_operand(pid: u32, addr: u64) -> Result<Vec<u8>, i32> {
+pub(super) fn read_path_operand(pid: u32, addr: u64) -> Result<Vec<u8>, i32> {
     use std::os::unix::fs::FileExt;
 
     let mem = std::fs::File::open(format!("/proc/{pid}/mem")).map_err(|_| libc::EFAULT)?;

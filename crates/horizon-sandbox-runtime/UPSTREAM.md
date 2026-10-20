@@ -66,6 +66,14 @@ change no name and no content. On x86_64 the combined filter also kills the
 process on any syscall number with `__X32_SYSCALL_BIT` set, whatever the
 mediation flags: x32-ABI calls share `AUDIT_ARCH_X86_64` and would otherwise
 match none of the notify comparisons (board #68).
+The `openat` handler also deviates in failure handling (board #72): upstream
+ends supervision when it cannot read or resolve a notification's path, which
+kills the sandboxed command. Horizon instead answers that open with the errno
+the kernel would return (`EFAULT` for unreadable memory, `ENAMETOOLONG`,
+`ENOENT` for an empty path, `EBADF` for an unreadable dirfd, `EFAULT` for an
+unreadable `open_how`) and keeps supervising. A non-UTF-8 path cannot be
+matched against the policy and is refused with `EPERM`, unreported. The
+resolution of a readable path is unchanged.
 Network mediation covers socket creation, connect/bind, destination-bearing
 send syscalls, and `io_uring_setup`; local unnamed Unix stream/seqpacket IPC
 remains available, while remote IP routes and named/abstract Unix sockets are

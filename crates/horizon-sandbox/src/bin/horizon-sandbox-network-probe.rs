@@ -31,6 +31,8 @@ fn main() {
         "truncate" => truncate_path(&target),
         #[cfg(target_os = "linux")]
         "io_uring" => io_uring_setup(),
+        #[cfg(target_os = "linux")]
+        "non-utf8-create" => non_utf8_create(&target),
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         "x32-create" => x32_create(&target),
         _ => fail("unknown mode"),
@@ -72,6 +74,15 @@ fn io_uring_setup() -> std::io::Result<()> {
         libc::close(fd as libc::c_int);
     }
     Ok(())
+}
+
+/// Creates a file whose name is not valid UTF-8 inside directory `target`.
+#[cfg(target_os = "linux")]
+fn non_utf8_create(target: &str) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let name = std::path::Path::new(target).join(std::ffi::OsStr::from_bytes(b"name-\xff"));
+    std::fs::File::create(name).map(|_| ())
 }
 
 /// `openat(AT_FDCWD, target, O_WRONLY|O_CREAT)` issued through the x32 ABI

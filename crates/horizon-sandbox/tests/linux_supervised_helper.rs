@@ -925,6 +925,43 @@ fn an_x32_abi_syscall_kills_the_sandboxed_process() {
     std::fs::remove_dir_all(root).expect("remove test directory");
 }
 
+#[test]
+fn a_non_utf8_open_fails_and_the_command_keeps_running() {
+    let root = test_dir("non-utf8-open").canonicalize().unwrap();
+    let policy = horizon_sandbox::SandboxPolicy {
+        writable_roots: vec![root.clone()],
+        writable_root_exclusions: Vec::new(),
+        readable_scope: horizon_sandbox::ReadableScope::Full,
+        network: horizon_sandbox::NetworkPolicy::Disabled,
+    };
+    let probe = shell_quote(std::path::Path::new(NETWORK_PROBE));
+    let (code, stderr, outcome) = run_script_in(
+        &root,
+        &policy,
+        &[],
+        &format!("{probe} non-utf8-create .; echo after > after.txt; exit 7"),
+    );
+
+    assert_eq!(
+        code,
+        Some(7),
+        "the command must run to its end; stderr: {stderr}"
+    );
+    assert_eq!(outcome.exit_code, 7);
+    assert!(stderr.contains("PROBE-DENIED"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(root.join("after.txt")).unwrap(),
+        "after\n"
+    );
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let name = root.join(std::ffi::OsStr::from_bytes(b"name-\xff"));
+        assert!(std::fs::symlink_metadata(name).is_err());
+    }
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
 fn test_dir(label: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "horizon-supervised-helper-{label}-{}-{}",

@@ -5,12 +5,12 @@
 //! syscall is recorded, denied immediately, and may only succeed in a fresh
 //! sandbox after an external narrow-grant approval.
 
+use super::mutation::{read_path_operand, respond_errno};
 use super::{is_legacy_open, RateLimiter};
 use crate::RecordingDenyBackend;
 use nono::sandbox::{
-    classify_access_from_flags, continue_notif, deny_notif, notif_id_valid, read_notif_path,
-    read_open_how, resolve_notif_path, validate_openat2_size, SeccompNotif, SYS_OPENAT,
-    SYS_OPENAT2,
+    classify_access_from_flags, continue_notif, deny_notif, notif_id_valid, read_open_how,
+    resolve_notif_path, validate_openat2_size, SeccompNotif, SYS_OPENAT, SYS_OPENAT2,
 };
 use nono::{
     try_canonicalize, AccessMode, ApprovalBackend, ApprovalRequest, DenialReason, DenialRecord,
@@ -64,14 +64,11 @@ pub(crate) fn handle_open_notification(
     } else {
         (notification.data.args[0], notification.data.args[1])
     };
-    let path = match read_notif_path(notification.pid, path_addr)
-        .and_then(|raw| resolve_notif_path(notification.pid, dirfd, &raw))
-    {
+    // An unreadable or unresolvable path is answered with an errno and the
+    // supervisor keeps running, as the path-mutation handler does (board #72).
+    let path = match read_open_path(notification.pid, dirfd, path_addr) {
         Ok(path) => path,
-        Err(error) => {
-            let _ = deny_notif(notify_fd, notification.id);
-            return Err(error);
-        }
+        Err(errno) => return respond_errno(notify_fd, notification.id, errno),
     };
     if !notif_id_valid(notify_fd, notification.id)? {
         return Ok(());
@@ -87,10 +84,7 @@ pub(crate) fn handle_open_notification(
             }
             match read_open_how(notification.pid, notification.data.args[2]) {
                 Ok(how) => how.flags as i32,
-                Err(error) => {
-                    let _ = deny_notif(notify_fd, notification.id);
-                    return Err(error);
-                }
+                Err(_) => return respond_errno(notify_fd, notification.id, libc::EFAULT),
             }
         }
         #[cfg(target_arch = "x86_64")]
@@ -150,6 +144,35 @@ pub(crate) fn handle_open_notification(
         deny_notif(notify_fd, notification.id)?;
     }
     Ok(())
+}
+
+/// Reads an open's path operand from tracee memory and makes it absolute
+/// against `dirfd`, or returns the errno to answer the notification with.
+///
+/// Memory the kernel could not read either yields `EFAULT` (or
+/// `ENAMETOOLONG`), and an empty path `ENOENT`. A non-UTF-8 path cannot be
+/// matched against the policy and is refused with `EPERM`, the errno every
+/// other open denial uses. A dirfd whose `/proc` link cannot be read yields
+/// `EBADF` (`ENOENT` for the cwd, which only fails once the tracee is gone).
+/// The resolution of a readable path is `resolve_notif_path`'s, unchanged.
+fn read_open_path(pid: u32, dirfd: u64, path_addr: u64) -> Result<PathBuf, i32> {
+    let raw = read_path_operand(pid, path_addr)?;
+    if raw.is_empty() {
+        return Err(libc::ENOENT);
+    }
+    let raw = String::from_utf8(raw).map_err(|_| libc::EPERM)?;
+    resolve_notif_path(pid, dirfd, Path::new(&raw)).map_err(|_| {
+        if is_at_fdcwd(dirfd) {
+            libc::ENOENT
+        } else {
+            libc::EBADF
+        }
+    })
+}
+
+/// Both encodings of `AT_FDCWD` that `resolve_notif_path` accepts.
+fn is_at_fdcwd(dirfd: u64) -> bool {
+    dirfd == libc::AT_FDCWD as u32 as u64 || dirfd == AT_FDCWD_ARG
 }
 
 /// `AT_FDCWD` as it appears in a seccomp argument slot.
@@ -293,6 +316,76 @@ fn match_initial_capability<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn addr_of(path: &std::ffi::CStr) -> u64 {
+        path.as_ptr() as u64
+    }
+
+    #[test]
+    fn unreadable_path_memory_answers_efault() {
+        let pid = std::process::id();
+        assert_eq!(read_open_path(pid, AT_FDCWD_ARG, 0), Err(libc::EFAULT));
+    }
+
+    #[test]
+    fn non_utf8_path_answers_the_deny_errno() {
+        let pid = std::process::id();
+        let path = std::ffi::CString::new(b"/tmp/horizon-\xff-name".to_vec()).unwrap();
+        assert_eq!(
+            read_open_path(pid, AT_FDCWD_ARG, addr_of(&path)),
+            Err(libc::EPERM)
+        );
+    }
+
+    #[test]
+    fn empty_path_and_closed_dirfd_answer_the_kernels_errno() {
+        let pid = std::process::id();
+        let empty = std::ffi::CString::new("").unwrap();
+        assert_eq!(
+            read_open_path(pid, AT_FDCWD_ARG, addr_of(&empty)),
+            Err(libc::ENOENT)
+        );
+        let relative = std::ffi::CString::new("relative").unwrap();
+        // A descriptor number far above anything this process holds.
+        assert_eq!(
+            read_open_path(pid, 1_000_000, addr_of(&relative)),
+            Err(libc::EBADF)
+        );
+    }
+
+    #[test]
+    fn missing_path_resolves_and_is_left_to_the_read_probe_logic() {
+        let pid = std::process::id();
+        let missing = std::env::temp_dir().join(format!("horizon-open-missing-{pid}/file"));
+        let raw = std::ffi::CString::new(missing.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(
+            read_open_path(pid, AT_FDCWD_ARG, addr_of(&raw)),
+            Ok(missing.clone())
+        );
+        // A plain read of a missing path is continued (the kernel answers
+        // ENOENT); a create there is denied and reported.
+        assert!(is_missing_read_probe(
+            &missing,
+            AccessMode::Read,
+            libc::O_RDONLY
+        ));
+        assert!(!is_missing_read_probe(
+            &missing,
+            AccessMode::Write,
+            libc::O_WRONLY | libc::O_CREAT
+        ));
+    }
+
+    #[test]
+    fn relative_path_resolves_against_the_cwd() {
+        let pid = std::process::id();
+        let relative = std::ffi::CString::new("some/file").unwrap();
+        let cwd = std::fs::read_link(format!("/proc/{pid}/cwd")).unwrap();
+        assert_eq!(
+            read_open_path(pid, AT_FDCWD_ARG, addr_of(&relative)),
+            Ok(cwd.join("some/file"))
+        );
+    }
 
     #[test]
     fn longest_sufficient_capability_wins() {
