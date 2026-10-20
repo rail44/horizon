@@ -233,6 +233,61 @@ fn interrupted_announcements_are_settled_and_failed_answers_do_not_reach_propose
 }
 
 #[test]
+fn reasoning_is_sent_back_only_for_the_turn_in_progress() {
+    use rig_core::completion::message::AssistantMessage;
+    fn answer(reasoning: &str, text: &str) -> Message {
+        Message::Assistant(AssistantMessage::new(vec![
+            AssistantContent::reasoning(reasoning),
+            AssistantContent::text(text),
+        ]))
+    }
+    fn parts(message: &Message) -> Vec<&'static str> {
+        let Message::Assistant(message) = message else {
+            return Vec::new();
+        };
+        message
+            .content
+            .iter()
+            .map(|part| match part {
+                AssistantContent::Reasoning(_) => "reasoning",
+                AssistantContent::Text(_) => "text",
+                _ => "other",
+            })
+            .collect()
+    }
+
+    let history = super::test_support::fixture(vec![
+        Message::user("first question"),
+        answer("thinking about the first", "first answer"),
+        Message::user("second question"),
+        answer("thinking about the second", "second answer"),
+    ]);
+    let messages = history.messages();
+    assert_eq!(messages.len(), 4);
+    assert_eq!(
+        parts(&messages[1]),
+        ["text"],
+        "an earlier turn's reasoning is not sent back"
+    );
+    assert_eq!(
+        parts(&messages[3]),
+        ["reasoning", "text"],
+        "the turn in progress keeps its reasoning"
+    );
+
+    // A reply that was reasoning alone still stands as a turn.
+    let history = super::test_support::fixture(vec![
+        Message::user("question"),
+        Message::Assistant(AssistantMessage::new(vec![AssistantContent::reasoning(
+            "only thought",
+        )])),
+        Message::user("again"),
+        answer("thought", "answer"),
+    ]);
+    assert_eq!(parts(&history.messages()[1]), ["text"]);
+}
+
+#[test]
 fn unknown_codec_or_identity_conflicts_fail_without_changing_valid_history() {
     let mut history = ConversationHistory::default();
     let request = request(1);

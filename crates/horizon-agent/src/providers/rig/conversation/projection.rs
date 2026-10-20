@@ -8,22 +8,7 @@ impl ConversationHistory {
             match &entry.content {
                 Content::Input { text, .. } => messages.push(Message::user(text.clone())),
                 Content::Response(response) => {
-                    messages.push(response.message.clone().unwrap_or_else(|| {
-                        Message::Assistant(rig_core::completion::message::AssistantMessage::new(
-                            response
-                                .reasoning
-                                .iter()
-                                .cloned()
-                                .map(AssistantContent::Reasoning)
-                                .chain(
-                                    response
-                                        .calls
-                                        .iter()
-                                        .map(|call| AssistantContent::ToolCall(call.tool.clone())),
-                                )
-                                .collect(),
-                        ))
-                    }));
+                    messages.push(assistant_message(response, entry.turn == self.turn));
                     for call in &response.calls {
                         if let Some(result) = &call.result {
                             let mut message = super::super::mapping::rig_tool_result_message(
@@ -49,6 +34,48 @@ impl ConversationHistory {
     pub(in crate::providers::rig) fn len(&self) -> usize {
         self.entries.iter().map(entry_len).sum()
     }
+}
+
+/// The assistant message a response projects to. Its reasoning rides
+/// along only while its turn is the one in progress: a model that reasons
+/// before it answers needs the current tool-call round's reasoning back
+/// (DeepSeek's own API refuses a round without it), and nothing needs an
+/// earlier turn's. Anthropic's API drops earlier turns' thinking on its
+/// side; an OpenAI-compatible endpoint keeps whatever is sent, and on the
+/// owner's 2026-10-20 session that was about a third of a 620k-token
+/// input (`docs/agent-compaction-design.md`, the note of that date).
+fn assistant_message(response: &Response, in_progress: bool) -> Message {
+    let mut message = match &response.message {
+        Some(Message::Assistant(message)) => message.clone(),
+        Some(other) => return other.clone(),
+        None => rig_core::completion::message::AssistantMessage::new(
+            response
+                .reasoning
+                .iter()
+                .cloned()
+                .map(AssistantContent::Reasoning)
+                .chain(
+                    response
+                        .calls
+                        .iter()
+                        .map(|call| AssistantContent::ToolCall(call.tool.clone())),
+                )
+                .collect(),
+        ),
+    };
+    if !in_progress {
+        message
+            .content
+            .retain(|part| !matches!(part, AssistantContent::Reasoning(_)));
+        if message.content.is_empty() {
+            // A reply that was reasoning alone still has to stand as a turn.
+            message.content.push(AssistantContent::text(""));
+        }
+    }
+    Message::Assistant(message)
+}
+
+impl ConversationHistory {
     pub(in crate::providers::rig) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
