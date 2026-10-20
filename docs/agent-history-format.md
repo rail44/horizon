@@ -28,9 +28,14 @@ request. Transcript display events do not reconstruct provider messages.
 
 `ConversationRecorded` carries four changes: opening a conversation turn, adding
 an input with its purpose, announcing a tool before dispatch, and recording the
-selected assistant response. Codec 1 stores Rig 0.42's full assistant message,
-including reasoning signatures, provider call IDs, and additional parameters.
-Changing that representation requires a codec migration. A completed response
+selected assistant response. Codec 2 stores Rig 0.44's full assistant message,
+including its origin, provider items (reasoning signatures) and provider call IDs.
+Changing that representation requires a codec migration.
+
+Codec 1 (Rig 0.42's shape) is not readable by this version. Restoration leaves
+codec-1 records out of the provider history with one log line, and the session
+still starts; there is no decoder for that shape. On upgrade the event log is
+rotated aside (`agent-events.jsonl.pre-<change>-<date>`) rather than converted. A completed response
 replaces its preliminary announcements without losing results that arrived early.
 `ToolCallFinished` supplies the existing authoritative result; large result bodies
 are not duplicated in conversation events. Parallel results project in call order.

@@ -16,7 +16,10 @@ use crate::contract::{
     ToolCallIdentity, ToolCallResult, ToolOutcome,
 };
 
-pub(super) const MESSAGE_CODEC: u32 = 1;
+/// Codec 1 held rig 0.42's serde shape; codec 2 is rig 0.44's. Records of an
+/// older codec are left out of the restored history (see
+/// `ConversationHistory::skip_retired`), never decoded.
+pub(super) const MESSAGE_CODEC: u32 = 2;
 
 #[derive(Clone, Debug)]
 pub(crate) enum Prompt {
@@ -52,6 +55,12 @@ pub(crate) struct ConversationHistory {
     occurrences: HashMap<OccurrenceId, (usize, usize)>,
     turn: usize,
     retired: HashSet<OccurrenceId>,
+    /// Provider call ids announced by records of a retired codec. Their
+    /// dispatch events are accepted without a canonical announcement.
+    skipped_calls: HashSet<ToolCallId>,
+    /// Records of a retired codec seen so far, and the oldest such codec.
+    skipped_records: usize,
+    skipped_codec: Option<u32>,
 }
 #[derive(Clone, Debug)]
 struct Entry {
@@ -118,6 +127,9 @@ impl ConversationHistory {
             }
             history.apply_event(event)?;
         }
+        if let Some(notice) = history.retired_codec_notice() {
+            eprintln!("{notice}");
+        }
         if history.is_empty() && events.iter().any(|event| matches!(event,
             Event::MessageCommitted(message) if message.role == crate::contract::MessageRole::User
         ) || matches!(event, Event::ToolCallRequested(_))) {
@@ -132,9 +144,12 @@ impl ConversationHistory {
             Event::ToolCallRequested(request) => {
                 // Denial retries are execution attempts of the same provider call.
                 if !self.occurrences.contains_key(&request.occurrence_id) {
-                    let location = self
-                        .pending(&request.call_id)
-                        .ok_or("Tool dispatch lacks its canonical announcement")?;
+                    let Some(location) = self.pending(&request.call_id) else {
+                        if self.skipped_calls.contains(&request.call_id) {
+                            return Ok(());
+                        }
+                        return Err("Tool dispatch lacks its canonical announcement".into());
+                    };
                     let (entry, call) = location;
                     if self.response(entry).calls[call].tool.function.name != request.tool_id {
                         return Err("Retry tool differs from the canonical call".into());
@@ -267,6 +282,9 @@ impl ConversationHistory {
     }
 
     fn apply(&mut self, record: &ConversationRecord) -> Result<(), String> {
+        if self.skip_retired(record) {
+            return Ok(());
+        }
         if let ConversationRecord::Response { response_id, .. }
         | ConversationRecord::ToolAnnounced { response_id, .. } = record
         {
@@ -387,6 +405,39 @@ impl ConversationHistory {
             }
         }
         Ok(())
+    }
+
+    /// Leaves out a record whose message codec predates [`MESSAGE_CODEC`]: its
+    /// payload is another rig version's serde shape, which this build does not
+    /// read. Its calls are remembered so their dispatch events still apply.
+    /// A codec newer than this build is not skipped and fails `check_codec`.
+    fn skip_retired(&mut self, record: &ConversationRecord) -> bool {
+        let (codec, identities) = match record {
+            ConversationRecord::ToolAnnounced {
+                codec, identity, ..
+            } => (*codec, std::slice::from_ref(identity)),
+            ConversationRecord::Response { codec, calls, .. } => (*codec, calls.as_slice()),
+            ConversationRecord::TurnOpened | ConversationRecord::Input { .. } => return false,
+        };
+        if codec >= MESSAGE_CODEC {
+            return false;
+        }
+        self.skipped_calls
+            .extend(identities.iter().map(|identity| identity.call_id.clone()));
+        self.skipped_records += 1;
+        self.skipped_codec = Some(self.skipped_codec.map_or(codec, |seen| seen.min(codec)));
+        true
+    }
+
+    /// The log line for records [`Self::skip_retired`] left out, if any.
+    fn retired_codec_notice(&self) -> Option<String> {
+        let codec = self.skipped_codec?;
+        Some(format!(
+            "horizon-agent: {} conversation record(s) use codec {codec}; resume of \
+             pre-rig-0.44 conversations is not supported, so they are left out of the \
+             restored history",
+            self.skipped_records
+        ))
     }
 
     fn ensure_response(&mut self, id: &str) -> usize {

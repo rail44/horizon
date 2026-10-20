@@ -257,6 +257,45 @@ fn unknown_codec_or_identity_conflicts_fail_without_changing_valid_history() {
 }
 
 #[test]
+fn retired_codec_records_are_left_out_without_failing_restoration() {
+    let request = request(1);
+    let Event::ConversationRecorded(mut retired) = announcement(&request, "old") else {
+        unreachable!()
+    };
+    if let ConversationRecord::ToolAnnounced {
+        codec, tool_call, ..
+    } = &mut retired
+    {
+        *codec = 1;
+        // rig 0.42's shape: a bare string id, which 0.44 cannot decode.
+        *tool_call = json!({"id": request.call_id.0, "function": {"name": "fs.read",
+            "arguments": {"path": "file"}}, "signature": "signed"})
+        .into();
+    }
+    let events = [
+        Event::ConversationRecorded(ConversationRecord::TurnOpened),
+        Event::ConversationRecorded(ConversationRecord::Input {
+            kind: ConversationInputKind::User,
+            text: "earlier".into(),
+        }),
+        Event::ConversationRecorded(retired),
+        Event::ToolCallRequested(request.clone()),
+        Event::ToolCallFinished(request.identity().result(json!({"content": "read"}))),
+    ];
+    let history = ConversationHistory::from_events(&events).unwrap();
+    assert_eq!(history.messages(), vec![Message::user("earlier")]);
+    assert!(history.pending_identities().is_empty());
+    assert_eq!(
+        history.retired_codec_notice().as_deref(),
+        Some(
+            "horizon-agent: 1 conversation record(s) use codec 1; resume of pre-rig-0.44 \
+             conversations is not supported, so they are left out of the restored history"
+        )
+    );
+    assert!(interrupted_conversation_calls(&events).unwrap().is_empty());
+}
+
+#[test]
 fn legacy_request_boundaries_keep_early_results_in_one_parallel_response() {
     let first = request(1);
     let mut second = request(2);

@@ -2654,8 +2654,8 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
         Event::ConversationRecorded(ConversationRecord::TurnOpened),
         Event::ConversationRecorded(ConversationRecord::Input {kind:ConversationInputKind::User,text:"earlier question".into()}),
         Event::ConversationRecorded(ConversationRecord::ToolAnnounced {
-            response_id:"interrupted-response".into(),identity:identity.clone(),codec:1,
-            tool_call:serde_json::json!({"id":"pending","function":{"name":"fs.read","arguments":{"path":"never-dispatched"}},"signature":"signed-call"}).into(),
+            response_id:"interrupted-response".into(),identity:identity.clone(),codec:2,
+            tool_call:serde_json::json!({"id":{"provider":"pending"},"function":{"name":"fs.read","arguments":{"path":"never-dispatched"}}}).into(),
             reasoning:serde_json::json!([]).into(),
         }),
     ].into_iter().map(Into::into).collect()).unwrap();
