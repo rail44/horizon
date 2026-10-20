@@ -244,8 +244,9 @@ async fn discover_effective_window(config: &RigAgentConfig) -> Option<u64> {
         .and_then(|limits| limits.effective_window_tokens(config.max_output_tokens));
     if window.is_none() {
         eprintln!(
-            "horizon-agent: `{}` declares no context_length at /models; history clearing is \
-             disabled for this session (docs/agent-compaction-design.md)",
+            "horizon-agent: `{}` declares no context_length at /models and the model catalog \
+             has none for it; history clearing is disabled for this session \
+             (docs/agent-compaction-design.md)",
             config.model
         );
     }

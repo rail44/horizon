@@ -3,19 +3,22 @@
 //! declares.
 //!
 //! `docs/agent-compaction-design.md` Tier 1 derives its trigger from the
-//! model's real window, and
-//! `docs/research/agent-context-memory-separation-2026-07-20.md`'s
-//! provider-path check established that Horizon does not need an external
-//! model-metadata catalog (opencode's models.dev, crush's catwalk) for this:
-//! synthetic.new's `/models` already returns both numbers per model.
-//! Standard OpenAI `/models` does not, so this reads them **when present**
-//! and reports nothing at all when absent.
+//! model's real window. `docs/research/agent-context-memory-separation-
+//! 2026-07-20.md`'s provider-path check found that synthetic.new's `/models`
+//! returns both numbers per model, so no external catalog was needed then;
+//! standard OpenAI `/models` does not carry them, and the provider in use
+//! since 2026-09 (Ollama Cloud) is that case. So the listing is read **when
+//! it declares limits**, and otherwise the model catalog
+//! ([`super::model_catalog`], models.dev, decided 2026-10-20) is asked for
+//! the provider's base URL and the model id.
 //!
-//! "Nothing at all" is the whole failure model. Every failure mode -- no API
-//! key, an unreachable endpoint, a non-JSON body, a model that isn't listed,
-//! a listing without the two fields -- resolves to `None`, and a `None`
-//! window means Tier 1 clearing **never fires**. There is no fallback
-//! window: an unknown window never clears history.
+//! "Nothing at all" is still the failure model past those two. Every
+//! failure mode -- no API key, an unreachable endpoint, a non-JSON body, a
+//! model that isn't listed, a listing without the two fields, a catalog
+//! that is unreachable and uncached or that doesn't know the provider or
+//! the model -- resolves to `None`, and a `None` window means Tier 1
+//! clearing **never fires**. There is no fallback window: an unknown window
+//! never clears history.
 //!
 //! The bearer token is read from the environment variable **named** by
 //! [`RigAgentConfig::api_key_env`], the same variable
@@ -97,7 +100,9 @@ type ListingCache = Mutex<HashMap<String, Vec<String>>>;
 /// Resolves this process's cached limits for this session's provider entry,
 /// fetching them on the first call and reusing the answer -- including a
 /// negative one -- for every later session on the same
-/// `(base_url, api_key_env, model)`.
+/// `(base_url, api_key_env, model)`. The provider's own listing is asked
+/// first; a listing that declares no limits for the model defers to the
+/// model catalog (`super::model_catalog`).
 pub(super) async fn model_limits(config: &RigAgentConfig) -> Option<ModelLimits> {
     match config.kind {
         ProviderKind::OpenAiCompatible => {}
@@ -120,7 +125,10 @@ pub(super) async fn model_limits(config: &RigAgentConfig) -> Option<ModelLimits>
         return cached;
     }
 
-    let fetched = fetch_model_limits(&base, &config.api_key_env, &config.model).await;
+    let fetched = match fetch_model_limits(&base, &config.api_key_env, &config.model).await {
+        Some(declared) => Some(declared),
+        None => super::model_catalog::catalog_limits(&base, &config.model).await,
+    };
     if let Ok(mut map) = cache().lock() {
         map.insert(key, fetched);
     }
@@ -539,6 +547,49 @@ mod tests {
                 },
             ]
         })
+    }
+
+    /// The listing answers but declares nothing for the model (standard
+    /// OpenAI `/models`, Ollama's too): the catalog's entry for this base
+    /// URL is the window. The catalog comes from a cached copy, since
+    /// nothing listens on the fetch URL.
+    #[tokio::test]
+    async fn a_listing_without_limits_defers_to_the_catalog() {
+        std::env::set_var("HORIZON_TEST_CATALOG_KEY", "catalog-key");
+        let mock = ModelsMock::start("catalog-key").await;
+        let dir = std::env::temp_dir().join(format!("horizon-catalog-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cache = dir.join("catalog.json");
+        std::fs::write(
+            &cache,
+            serde_json::json!({
+                "mock": {
+                    "api": mock.base_url,
+                    "models": {"unlisted-model": {"limit": {"context": 1048576, "output": 384000}}}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::env::set_var(
+            super::super::model_catalog::CATALOG_URL_VAR,
+            "http://127.0.0.1:1/api.json",
+        );
+        std::env::set_var(super::super::model_catalog::CATALOG_CACHE_VAR, &cache);
+
+        let mut config = config_on(&mock.base_url, "HORIZON_TEST_CATALOG_KEY");
+        config.model = "unlisted-model".to_string();
+        let limits = model_limits(&config)
+            .await
+            .expect("the catalog knows the model");
+        assert_eq!(limits.context_length, 1_048_576);
+        assert_eq!(limits.max_output_length, Some(384_000));
+        // The listing was still asked first.
+        assert_eq!(mock.recorded().len(), 1);
+        // A model neither source knows stays unknown.
+        config.model = "nowhere".to_string();
+        assert_eq!(model_limits(&config).await, None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

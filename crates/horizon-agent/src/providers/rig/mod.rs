@@ -4,6 +4,7 @@ pub(crate) mod conversation;
 mod guards;
 mod history;
 mod mapping;
+mod model_catalog;
 mod model_limits;
 mod retry;
 mod session;

@@ -27,6 +27,26 @@ Only environment-variable names go in TOML; credentials stay in the environment.
 `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` override file URLs. No environment
 variable selects a model.
 
+## Context windows
+
+Tier 1 history clearing (`docs/agent-compaction-design.md`) needs the model's
+context window. An `openai-compatible` entry's `/models` listing is read first
+(synthetic.new declares `context_length` and `max_output_length` there); a
+listing that declares nothing -- standard OpenAI, Ollama Cloud (`id`,
+`object`, `created`, `owned_by` only) -- defers to the model catalog,
+models.dev's `api.json`, the catalog OpenCode lists models from. The entry is
+matched to a catalog provider by its `base_url` (`https://ollama.com/v1` is
+the catalog's `ollama-cloud`), and the model by exact id within it; the same
+id under another provider is another model. The catalog is fetched once per
+daemon start and cached at `$XDG_CACHE_HOME/horizon/models-dev-api.json`
+(`~/.cache` when unset); a failed fetch uses the cached copy, and with
+neither, or with a provider or model the catalog does not know, clearing
+stays off for the session and agentd says so on stderr. No window is ever
+guessed. `HORIZON_MODEL_CATALOG_URL` and `HORIZON_MODEL_CATALOG_CACHE`
+relocate the fetch and the copy. Decided 2026-10-20 after the owner's long
+session on Ollama ran to 620k tokens with clearing never firing; reading
+Ollama's own `/api/show` was rejected as a provider-specific branch.
+
 ## `default_model`
 
 The model a new conversation session runs until it is explicitly switched. Its

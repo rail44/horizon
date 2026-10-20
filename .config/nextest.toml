@@ -172,7 +172,7 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # the actual tools sent over HTTP. It runs in the default profile.
 #
 # `/models` limit-discovery loopback mock --
-# `test(/^providers::rig::model_limits::tests::(the_entrys_own_key_variable_authenticates_the_lookup|entries_differing_only_by_key_variable_do_not_share_an_answer|the_cached_answer_is_reused_for_the_same_entry|the_default_single_provider_setup_still_reads_openai_api_key|an_anthropic_entry_is_never_asked_for_an_openai_listing)$/)`
+# `test(/^providers::rig::model_limits::tests::(the_entrys_own_key_variable_authenticates_the_lookup|entries_differing_only_by_key_variable_do_not_share_an_answer|the_cached_answer_is_reused_for_the_same_entry|the_default_single_provider_setup_still_reads_openai_api_key|an_anthropic_entry_is_never_asked_for_an_openai_listing|a_listing_without_limits_defers_to_the_catalog)$/)`
 # (2026-09-20). Same mechanism as the Exa adapter mock above: each spawns a
 # loopback `/models` server on `127.0.0.1:0` so the lookup's real request
 # (and the API-key variable it authenticates with) can be inspected, and the
@@ -224,7 +224,7 @@ default-filter = '''
         + test(/^providers::rig::completion::tests::provider_wire_/)
         + test(/^judge::client::tests::auxiliary_clients_keep_their_selected_endpoint_and_credentials$/)
         + test(/^providers::rig::session::turn::tests::cap_summary_request_disables_tools_without_changing_session_config$/)
-        + test(/^providers::rig::model_limits::tests::(the_entrys_own_key_variable_authenticates_the_lookup|entries_differing_only_by_key_variable_do_not_share_an_answer|the_cached_answer_is_reused_for_the_same_entry|the_default_single_provider_setup_still_reads_openai_api_key|an_anthropic_entry_is_never_asked_for_an_openai_listing)$/)
+        + test(/^providers::rig::model_limits::tests::(the_entrys_own_key_variable_authenticates_the_lookup|entries_differing_only_by_key_variable_do_not_share_an_answer|the_cached_answer_is_reused_for_the_same_entry|the_default_single_provider_setup_still_reads_openai_api_key|an_anthropic_entry_is_never_asked_for_an_openai_listing|a_listing_without_limits_defers_to_the_catalog)$/)
         + test(/attempts_with_nothing_in_common_fall_back_to_per_attempt_grants$/)
         + test(/process_table_snapshot_is_available$/)
         + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^tests::sigterm_/))

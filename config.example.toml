@@ -415,6 +415,13 @@ cyan = "#56b6c2"
 #   HORIZON_AGENT_STATE_DB    overrides the DuckDB projection database path
 #                             (default: $XDG_DATA_HOME/horizon/agent-state.duckdb,
 #                             same fallback as above)
+#   HORIZON_MODEL_CATALOG_URL overrides where the model catalog (context
+#                             windows for providers whose /models listing
+#                             declares none) is fetched from
+#                             (default: https://models.dev/api.json)
+#   HORIZON_MODEL_CATALOG_CACHE overrides the catalog's cached copy
+#                             (default: $XDG_CACHE_HOME/horizon/models-dev-api.json,
+#                             falling back to ~/.cache/horizon/...)
 #
 # A leading "~/" in either is expanded against $HOME. Every other former
 # [agent] knob (bash/fs tool caps, the turn-loop guard's iteration cap and
