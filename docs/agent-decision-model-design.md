@@ -120,8 +120,9 @@ the model or the user speaks next.
   or queued input is pending, and the turn's final assistant text is not
   empty. An exploration child's end of turn is consumed by its parent, so
   it is left alone.
-- **Question.** `next_speaker`, a `choice` between `user` (listed first)
-  and `model`. The instructions restate the three rules: `model` when the
+- **Question.** `next_speaker`, a `choice` between `user` and `model`
+  (a tie cannot continue: the threshold below is far above one half). The
+  instructions restate the three rules: `model` when the
   reply states an immediate next action the assistant itself will take
   (including a tool call it describes but did not make) or is clearly
   incomplete against the request; `user` when the reply ends with a direct
