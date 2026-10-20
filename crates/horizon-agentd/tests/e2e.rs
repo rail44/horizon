@@ -1594,6 +1594,103 @@ async fn worktree_enter_records_the_spawn_source_as_parent() {
     assert_eq!(context.workspace_root.as_ref(), Some(&root));
 }
 
+/// The spawn source survives a daemon restart that happens before the child
+/// enters a worktree: it is persisted in the child's session context, put
+/// back on the restored entry, and recorded as the parent on activation
+/// (board #70).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worktree_enter_after_a_restart_still_records_the_spawn_source_as_parent() {
+    let repo = isolated_session_fixture();
+    let agentd = spawn_agentd();
+    let socket_path = agentd.socket_path.clone();
+    let event_log_path = agentd.event_log_path.clone();
+    let client = connect(&socket_path).await;
+    let parent = SessionId::new();
+    open_session(
+        &client,
+        shared_session_in(parent, repo.path().to_path_buf()),
+    )
+    .await;
+
+    let child = SessionId::new();
+    let mut meta = None;
+    acp::write_horizon_meta(
+        &mut meta,
+        &acp::SessionNewMeta {
+            session_id: child,
+            provider_id: mock_provider_id().0,
+            role_id: None,
+            spawn_source_session_id: Some(parent),
+        },
+    )
+    .unwrap();
+    open_session(
+        &client,
+        v2::NewSessionRequest::new(repo.path().to_path_buf()).meta(meta),
+    )
+    .await;
+
+    wait_for_persisted_event(&event_log_path, child, |_| true).await;
+    let report = horizon_agent::persistence::event_log::read(&event_log_path).unwrap();
+    let context = report
+        .records
+        .iter()
+        .rev()
+        .find(|record| record.session_id == child)
+        .and_then(|record| record.session_context.clone())
+        .expect("the child's latest record carries its context");
+    assert_eq!(context.spawn_source_session_id, Some(parent));
+    assert_eq!(
+        context.parent_session_id, None,
+        "no edge before a worktree exists"
+    );
+    assert!(!context.isolated_worktree);
+
+    drop(client);
+    agentd.kill_and_wait();
+
+    let respawned = spawn_agentd_at(socket_path, event_log_path.clone());
+    let mut client = connect(&respawned.socket_path).await;
+    let listed = list_sessions(&client)
+        .await
+        .into_iter()
+        .find(|info| info.session_id == acp_id(child))
+        .expect("the child resumes live");
+    assert_eq!(
+        info_meta(&listed).parent_session_id,
+        None,
+        "still no edge after the restart"
+    );
+    let _ = resume(&mut client, child).await.unwrap();
+
+    prompt(&client, child, "please enter a worktree").await;
+    let collected = collect_until(&mut client, |inbound| {
+        resolved_root(inbound, child).is_some_and(|root| root != repo.path())
+    })
+    .await;
+    let resolved = resolved_info(collected.last().unwrap(), child).unwrap();
+    assert_eq!(resolved.parent_session_id, Some(parent));
+    let root = resolved.workspace_root.unwrap();
+
+    wait_for_persisted_event(
+        &event_log_path,
+        child,
+        |event| matches!(event, Event::EnvironmentActivated(identity) if identity.path == root),
+    )
+    .await;
+    let report = horizon_agent::persistence::event_log::read(&event_log_path).unwrap();
+    let context = report
+        .records
+        .iter()
+        .rev()
+        .find(|record| record.session_id == child)
+        .and_then(|record| record.session_context.clone())
+        .expect("the child's latest record carries its context");
+    assert_eq!(context.parent_session_id, Some(parent));
+    assert!(context.isolated_worktree);
+    assert_eq!(context.workspace_root.as_ref(), Some(&root));
+}
+
 /// `worktree.enter` end to end: a shared session asks for a worktree, the
 /// activation lands at the turn boundary, the client learns the new root
 /// live, later writes are confined to it, and a daemon restart resumes the

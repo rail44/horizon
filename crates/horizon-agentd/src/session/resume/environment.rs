@@ -9,7 +9,10 @@ use crate::worktree::{self, WorktreeInfo};
 
 pub(super) struct RestoredEnvironment {
     pub(super) workspace_root: Option<PathBuf>,
-    pub(super) parent_session_id: Option<SessionId>,
+    /// Restored onto the session entry as its spawn source; activation turns
+    /// it into the parent. An activated session's persisted parent, else the
+    /// persisted spawn source.
+    pub(super) spawn_source_session_id: Option<SessionId>,
     pub(super) worktree: Option<WorktreeInfo>,
 }
 
@@ -23,7 +26,7 @@ pub(super) fn restore(
         // no-worktree behavior; the next record stores explicit context.
         return Ok(RestoredEnvironment {
             workspace_root: None,
-            parent_session_id: None,
+            spawn_source_session_id: None,
             worktree: None,
         });
     };
@@ -43,7 +46,7 @@ pub(super) fn restore(
     if !context.isolated_worktree {
         return Ok(RestoredEnvironment {
             workspace_root: context.workspace_root.clone(),
-            parent_session_id: None,
+            spawn_source_session_id: context.spawn_source_session_id,
             worktree: None,
         });
     }
@@ -65,7 +68,9 @@ pub(super) fn restore(
         .map_err(|error| format!("refusing to resume isolated session {session_id:?}: {error}"))?;
     Ok(RestoredEnvironment {
         workspace_root: Some(worktree.path.clone()),
-        parent_session_id: context.parent_session_id,
+        spawn_source_session_id: context
+            .parent_session_id
+            .or(context.spawn_source_session_id),
         worktree: Some(worktree),
     })
 }

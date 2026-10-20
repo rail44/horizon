@@ -37,6 +37,9 @@ pub(super) struct SessionEnvironment<'a> {
 /// The resolved location and trust of one environment, after worktree selection.
 pub(super) struct EnvironmentLocation {
     pub(super) workspace_root: Option<PathBuf>,
+    /// The session's spawn source; persisted as
+    /// `session_context.spawn_source_session_id`, and as
+    /// `session_context.parent_session_id` once `isolated`.
     pub(super) parent_session_id: Option<SessionId>,
     /// Whether `workspace_root` is a worktree the session owns (activated or
     /// restored); persisted as `session_context.isolated_worktree`.
@@ -185,6 +188,7 @@ impl SessionEnvironment<'_> {
             // approved later restates this on every subsequent record (see
             // `LiveState::record_filesystem_grants`).
             filesystem_grants,
+            spawn_source_session_id: parent_session_id,
         };
         PreparedEnvironment {
             tool_state,

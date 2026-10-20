@@ -80,9 +80,12 @@ messaging need, so it is designed once, here.
      (`SessionNew.spawn_source_session_id`) on its entry, and
      environment activation makes it the session's `parent_session_id`:
      persisted in `session_context`, announced live in
-     `WorkspaceRootResolved`, and listed in `session/list`. A session
-     with no spawn source, or one that never enters a worktree, has no
-     edge. Board review sessions take their caller as parent; edges
+     `WorkspaceRootResolved`, and listed in `session/list`. The spawn
+     source is also persisted as `session_context.spawn_source_session_id`
+     on every record, and restore puts it back on the entry, so a session
+     that enters a worktree after an agentd restart still records the
+     edge (board #70). A session with no spawn source, or one that never
+     enters a worktree, has no edge. Board review sessions take their caller as parent; edges
      persisted by sessions spawned into a worktree before board #65 are
      restored as recorded.
 
@@ -275,9 +278,7 @@ linked worktree's own `.git` is a *file*, so this walks past a session's
 own worktree to the *main* checkout it branched from, matching
 the example above); cheap enough to run on every visible row's render.
 
-Remaining is a roadmap item under shared-foundation 4: the spawn source
-surviving an agentd restart before activation (it is persisted only once it becomes an edge),
-and parent/child navigation from the session
+Remaining is a roadmap item under shared-foundation 4: parent/child navigation from the session
 manager (jumping directly to an ancestor/descendant row). Messaging/
 supervision layer onto the same tree in shared-foundation 4's own
 consultation. A separate, owner-deferred design consultation on

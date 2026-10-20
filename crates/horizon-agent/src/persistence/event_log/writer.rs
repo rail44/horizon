@@ -1620,6 +1620,7 @@ mod tests {
             isolated_worktree: false,
             parent_session_id: None,
             filesystem_grants: Vec::new(),
+            spawn_source_session_id: None,
         };
         let mut record = message_record(session, 0, "a");
         record.session_context = Some(context.clone());

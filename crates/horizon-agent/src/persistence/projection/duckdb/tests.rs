@@ -1506,6 +1506,7 @@ fn context_rooted_at(root: &str) -> crate::persistence::event_log::PersistedSess
         workspace_root: Some(std::path::PathBuf::from(root)),
         isolated_worktree: true,
         parent_session_id: Some(SessionId::new()),
+        spawn_source_session_id: None,
         filesystem_grants: vec![horizon_sandbox::FilesystemGrant {
             path: std::path::PathBuf::from(root).join("cache"),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,

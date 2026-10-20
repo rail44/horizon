@@ -345,7 +345,8 @@ pub(super) struct SessionEntry {
     pub(super) parent_session_id: Option<SessionId>,
     /// The pane/session this session was spawned from
     /// (`SessionNew.spawn_source_session_id`; for a restored session, its
-    /// persisted parent). Becomes `parent_session_id` when the session
+    /// persisted parent or, before activation, its persisted
+    /// `session_context.spawn_source_session_id`). Becomes `parent_session_id` when the session
     /// enters a worktree through environment activation.
     pub(super) spawn_source_session_id: Option<SessionId>,
     /// The directory this session's file tools are actually confined to --

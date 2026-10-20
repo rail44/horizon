@@ -279,7 +279,7 @@ fn resume_one_session(
         provider_id,
         role_id,
         restored.workspace_root,
-        restored.parent_session_id,
+        restored.spawn_source_session_id,
         restored.worktree,
         events,
         persisted_context,
@@ -512,7 +512,9 @@ pub(crate) fn resume_session(
         provider_id,
         role_id,
         context.workspace_root.clone(),
-        context.parent_session_id,
+        context
+            .parent_session_id
+            .or(context.spawn_source_session_id),
         worktree,
         events,
         Some(context),
@@ -658,6 +660,7 @@ mod delivery_tests {
             isolated_worktree: false,
             parent_session_id: None,
             filesystem_grants: vec![],
+            spawn_source_session_id: None,
         };
         let mut appender = Appender::new(
             writer.clone(),
@@ -1088,6 +1091,7 @@ mod tests {
                 workspace_root: None,
                 isolated_worktree: missing_root,
                 parent_session_id: None,
+                spawn_source_session_id: None,
                 filesystem_grants: if missing_root {
                     vec![]
                 } else {

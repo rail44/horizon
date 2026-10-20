@@ -71,6 +71,13 @@ pub struct PersistedSessionContext {
     /// value, so the log states what a session could reach at the point
     /// each event was written rather than only what it started with.
     pub filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
+    /// The session this one was spawned from (`SessionNew`'s spawn source),
+    /// whether or not it has entered a worktree yet. Restore puts it back on
+    /// the session entry, so an activation after an agentd restart still
+    /// records it as `parent_session_id` (board #70). `None` in records
+    /// written before the field existed.
+    #[serde(default)]
+    pub spawn_source_session_id: Option<SessionId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -563,6 +570,7 @@ mod tests {
                 scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
                 excluded_subpaths: Vec::new(),
             }],
+            spawn_source_session_id: Some(SessionId::new()),
         };
         let mut appender = Appender::new(
             writer.clone(),
@@ -605,6 +613,24 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// Records written before `spawn_source_session_id` existed restore with
+    /// no spawn source (board #70).
+    #[test]
+    fn session_context_without_a_spawn_source_deserializes_with_none() {
+        let context: PersistedSessionContext = serde_json::from_value(serde_json::json!({
+            "workspace_root": "/tmp/session-root",
+            "isolated_worktree": false,
+            "parent_session_id": null,
+            "filesystem_grants": [],
+        }))
+        .expect("a context without the field still deserializes");
+        assert_eq!(context.spawn_source_session_id, None);
+        assert_eq!(
+            context.workspace_root,
+            Some(PathBuf::from("/tmp/session-root"))
+        );
+    }
+
     /// The audit half of `docs/containment-denial-narrow-grants-design.md`'s
     /// 2026-07-26 decision: the log must state what filesystem authority a
     /// session ran with. Records written before a grant was approved keep
@@ -633,6 +659,7 @@ mod tests {
                 isolated_worktree: true,
                 parent_session_id: None,
                 filesystem_grants: vec![configured.clone()],
+                spawn_source_session_id: None,
             });
 
         let message = |text: &str| {

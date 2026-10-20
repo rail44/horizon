@@ -254,7 +254,9 @@ impl LiveState {
         Self {
             inner: Rc::new(RefCell::new(State::from_history(history))),
             runtime_failure: Rc::default(),
-            persistence: Some(Rc::new(Persistence::EventLog(RefCell::new(appender)))),
+            persistence: Some(Rc::new(Persistence::EventLog(Box::new(RefCell::new(
+                appender,
+            ))))),
         }
     }
 
@@ -341,7 +343,7 @@ impl LiveState {
 }
 
 enum Persistence {
-    EventLog(RefCell<event_log::Appender>),
+    EventLog(Box<RefCell<event_log::Appender>>),
     Disabled,
 }
 
