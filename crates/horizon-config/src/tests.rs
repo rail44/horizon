@@ -614,6 +614,7 @@ fn small_model_is_independent_of_default_model_and_never_uses_anthropic() {
         r#"
         default_model = { provider = "chat", model = "big" }
         small_model = { provider = "helper", model = "small" }
+        decision_model = { provider = "helper", model = "clef:cloud" }
         [[providers]]
         name = "chat"
         kind = "anthropic"
@@ -658,6 +659,88 @@ fn small_model_is_independent_of_default_model_and_never_uses_anthropic() {
         .resolved_small_model()
         .unwrap_err()
         .contains("openai-compatible"));
+}
+
+#[test]
+fn an_absent_decision_model_warns_naming_the_key_and_the_disabled_checks() {
+    let config = parse("[[providers]]\nname = \"ollama\"\n").unwrap();
+    let error = config.resolved_decision_model().unwrap_err();
+    assert!(error.starts_with("decision_model: not set"));
+    assert!(error.contains("approval judgments and turn-continuation checks are disabled"));
+    assert!(provider_config_warnings(&config)
+        .iter()
+        .any(|warning| warning.starts_with("decision_model: not set")));
+}
+
+#[test]
+fn a_decision_model_without_a_model_id_is_rejected() {
+    let config =
+        parse("decision_model = { provider = \"ollama\" }\n[[providers]]\nname = \"ollama\"\n")
+            .unwrap();
+    assert!(config
+        .resolved_decision_model()
+        .unwrap_err()
+        .starts_with("decision_model: has no model id"));
+}
+
+#[test]
+fn a_decision_model_naming_an_unknown_entry_is_rejected() {
+    let config = parse(
+        "decision_model = { provider = \"missing\", model = \"clef:cloud\" }\n\
+         [[providers]]\nname = \"ollama\"\n",
+    )
+    .unwrap();
+    let error = config.resolved_decision_model().unwrap_err();
+    assert!(error.starts_with("decision_model:"));
+    assert!(error.contains("\"missing\""));
+    assert!(provider_config_warnings(&config)
+        .iter()
+        .any(|warning| warning.starts_with("decision_model:")));
+}
+
+#[test]
+fn a_decision_model_on_an_anthropic_entry_is_rejected() {
+    let config = parse(
+        "decision_model = { provider = \"claude\", model = \"clef:cloud\" }\n\
+         [[providers]]\nname = \"claude\"\nkind = \"anthropic\"\n",
+    )
+    .unwrap();
+    let error = config.resolved_decision_model().unwrap_err();
+    assert!(error.contains("openai-compatible"));
+    assert!(error.contains("turn-continuation checks are disabled"));
+}
+
+#[test]
+fn a_valid_decision_model_resolves_its_entry_and_model() {
+    let config = parse(
+        r#"
+        decision_model = { provider = "ollama", model = "clef:cloud" }
+        [[providers]]
+        name = "ollama"
+        base_url = "https://ollama.com/v1"
+        api_key_env = "OLLAMA_API_KEY"
+    "#,
+    )
+    .unwrap();
+    let decision = config.resolved_decision_model().unwrap();
+    assert_eq!(decision.provider.name, "ollama");
+    assert_eq!(
+        decision.provider.base_url.as_deref(),
+        Some("https://ollama.com/v1")
+    );
+    assert_eq!(decision.provider.api_key_env, "OLLAMA_API_KEY");
+    assert_eq!(decision.model, "clef:cloud");
+    assert!(!provider_config_warnings(&config)
+        .iter()
+        .any(|warning| warning.starts_with("decision_model:")));
+}
+
+#[test]
+fn small_model_errors_name_only_titles_as_the_consequence() {
+    let config = parse("[[providers]]\nname = \"ollama\"\n").unwrap();
+    let error = config.resolved_small_model().unwrap_err();
+    assert!(error.contains("titles are disabled"));
+    assert!(!error.contains("approval"));
 }
 
 #[test]

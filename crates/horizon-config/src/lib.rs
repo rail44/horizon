@@ -9,9 +9,10 @@
 //! defaults on top (env var > this file > built-in default).
 //!
 //! Named `[[providers]]` entries describe endpoints and credentials only.
-//! Models are chosen by two top-level `{ provider, model }` pairs:
-//! `default_model` for conversation sessions and `small_model` (which must
-//! name an OpenAI-compatible entry) for titles and approval judgments.
+//! Models are chosen by three top-level `{ provider, model }` pairs:
+//! `default_model` for conversation sessions, `small_model` for titles, and
+//! `decision_model` for approval judgments and turn-continuation checks (the
+//! last two must name an OpenAI-compatible entry).
 //! No provider entries means the built-in OpenAI-compatible `default` entry.
 //! Environment values override file values; secrets remain environment-only.
 //! A missing file uses defaults. Invalid files warn at startup; reload errors
@@ -57,11 +58,17 @@ pub struct RawConfig {
     /// not resolve) means no model at all: sessions start without one.
     #[serde(deserialize_with = "deserialize_lenient_model_pair")]
     pub default_model: Option<RawModelPair>,
-    /// `small_model = { provider, model }`: the model titles and approval
-    /// judgments run on. The provider must be an openai-compatible entry;
-    /// `None` (or an invalid pair) disables both.
+    /// `small_model = { provider, model }`: the model titles run on. The
+    /// provider must be an openai-compatible entry; `None` (or an invalid
+    /// pair) disables titles.
     #[serde(deserialize_with = "deserialize_lenient_model_pair")]
     pub small_model: Option<RawModelPair>,
+    /// `decision_model = { provider, model }`: the System One decision model
+    /// approval judgments and turn-continuation checks ask. The provider
+    /// must be an openai-compatible entry whose `base_url` serves the
+    /// `/systemone` route; `None` (or an invalid pair) disables both.
+    #[serde(deserialize_with = "deserialize_lenient_model_pair")]
+    pub decision_model: Option<RawModelPair>,
     pub terminal: RawTerminalConfig,
     pub ui: RawUiConfig,
     /// Key chord string (e.g. `"ctrl+shift+t"`) to `CommandId` string (e.g.
@@ -128,7 +135,7 @@ impl RawProviderKind {
 /// One `[[providers]]` entry as the file writes it: an endpoint and the
 /// name of its credential variable. There is no model here: the picker's
 /// candidates come from the provider's own `/models` listing, and the
-/// top-level `default_model`/`small_model` pairs name the models that run
+/// top-level `default_model`/`small_model`/`decision_model` pairs name the models that run
 /// when nothing else selected one.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
@@ -143,7 +150,7 @@ pub struct RawNamedProviderConfig {
 }
 
 /// A top-level `{ provider, model }` pair as the file writes it
-/// (`default_model`, `small_model`): a `[[providers]]` entry name plus a
+/// (`default_model`, `small_model`, `decision_model`): a `[[providers]]` entry name plus a
 /// model id.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
@@ -163,6 +170,14 @@ pub struct ResolvedModelPair {
 /// the `small_model` pair names, plus the model id to run on it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedSmallModel {
+    pub provider: ResolvedProviderConfig,
+    pub model: String,
+}
+
+/// [`RawConfig::resolved_decision_model`]'s output: the openai-compatible
+/// entry the `decision_model` pair names, plus the decision model id.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedDecisionModel {
     pub provider: ResolvedProviderConfig,
     pub model: String,
 }
@@ -251,12 +266,32 @@ impl RawConfig {
         let (entry, pair) = resolve_pair(SMALL_MODEL_KEY, self.small_model.as_ref(), &providers)?;
         if entry.kind != RawProviderKind::OpenAiCompatible {
             return Err(format!(
-                "{SMALL_MODEL_KEY}: provider {:?} must be openai-compatible — titles and \
-                 approval judgments are disabled",
-                pair.provider
+                "{SMALL_MODEL_KEY}: provider {:?} must be openai-compatible — {}",
+                pair.provider,
+                pair_consequence(SMALL_MODEL_KEY)
             ));
         }
         Ok(ResolvedSmallModel {
+            provider: entry,
+            model: pair.model,
+        })
+    }
+
+    /// The `decision_model` pair resolved against the provider entries. Its
+    /// provider must be openai-compatible; an invalid pair never redirects a
+    /// request to another entry.
+    pub fn resolved_decision_model(&self) -> Result<ResolvedDecisionModel, String> {
+        let providers = self.resolved_providers().providers;
+        let (entry, pair) =
+            resolve_pair(DECISION_MODEL_KEY, self.decision_model.as_ref(), &providers)?;
+        if entry.kind != RawProviderKind::OpenAiCompatible {
+            return Err(format!(
+                "{DECISION_MODEL_KEY}: provider {:?} must be openai-compatible — {}",
+                pair.provider,
+                pair_consequence(DECISION_MODEL_KEY)
+            ));
+        }
+        Ok(ResolvedDecisionModel {
             provider: entry,
             model: pair.model,
         })
@@ -265,8 +300,20 @@ impl RawConfig {
 
 /// The top-level key naming the conversation sessions' default model.
 pub const DEFAULT_MODEL_KEY: &str = "default_model";
-/// The top-level key naming the model titles and approval judgments use.
+/// The top-level key naming the model titles use.
 pub const SMALL_MODEL_KEY: &str = "small_model";
+/// The top-level key naming the decision model approval judgments and
+/// turn-continuation checks ask.
+pub const DECISION_MODEL_KEY: &str = "decision_model";
+
+/// What stops working while the pair under `key` does not resolve.
+fn pair_consequence(key: &str) -> &'static str {
+    match key {
+        DEFAULT_MODEL_KEY => "sessions start without a model",
+        DECISION_MODEL_KEY => "approval judgments and turn-continuation checks are disabled",
+        _ => "titles are disabled",
+    }
+}
 
 /// Resolves one top-level `{ provider, model }` pair against `providers`.
 /// The error names `key` and what runs instead.
@@ -275,11 +322,7 @@ fn resolve_pair(
     pair: Option<&RawModelPair>,
     providers: &[ResolvedProviderConfig],
 ) -> Result<(ResolvedProviderConfig, ResolvedModelPair), String> {
-    let consequence = if key == DEFAULT_MODEL_KEY {
-        "sessions start without a model"
-    } else {
-        "titles and approval judgments are disabled"
-    };
+    let consequence = pair_consequence(key);
     let pair = pair.ok_or_else(|| {
         format!(
             "{key}: not set — {consequence} (set {key} = {{ provider = \"...\", model = \"...\" }})"
@@ -330,6 +373,9 @@ pub fn provider_config_warnings(config: &RawConfig) -> Vec<String> {
         warnings.push(error);
     }
     if let Err(error) = config.resolved_small_model() {
+        warnings.push(error);
+    }
+    if let Err(error) = config.resolved_decision_model() {
         warnings.push(error);
     }
     for (index, entry) in config.providers.iter().enumerate() {

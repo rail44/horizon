@@ -156,6 +156,7 @@ mod tests {
 
         let agent_config = AgentConfig {
             auxiliary: None,
+            decision: None,
             rig: RigAgentConfig {
                 api_key_present: false,
                 model: "m-solo".to_string(),
