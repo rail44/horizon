@@ -288,3 +288,73 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
         super::super::history::load_rig_session_history(Some(&stored), session, &[]).unwrap();
     assert_eq!(restored.messages.messages(), messages);
 }
+
+fn continuation_verdict() -> crate::contract::ContinuationVerdict {
+    crate::contract::ContinuationVerdict {
+        next_speaker: Some("model".into()),
+        model_probability: Some(0.9),
+        user_probability: Some(0.1),
+        threshold: 0.8,
+        continued: true,
+        continuations_so_far: 0,
+        latency_ms: 42,
+        fallback_reason: None,
+        fallback_error: None,
+    }
+}
+
+/// The continuation check's audit record persists through the event log
+/// and the projection without touching the provider view or the frame.
+#[test]
+fn continuation_verdicts_replay_without_affecting_history_or_the_frame() {
+    let user = crate::contract::Message {
+        role: crate::contract::MessageRole::User,
+        text: "fix it".into(),
+    };
+    let plain = vec![Event::MessageCommitted(user.clone())];
+    let audited = vec![
+        Event::MessageCommitted(user),
+        Event::ContinuationVerdict(continuation_verdict()),
+    ];
+    assert_eq!(
+        rig_messages_from_horizon_events(&audited),
+        rig_messages_from_horizon_events(&plain)
+    );
+
+    let events = super::super::conversation::upgrade::fixture(audited);
+    let session_id = crate::contract::SessionId::new();
+    let store = crate::persistence::projection::duckdb::Store::open_in_memory().unwrap();
+    store
+        .append_events(session_id, None, events.clone())
+        .unwrap();
+    let stored = store.events_for_session(session_id).unwrap();
+    let record = stored
+        .iter()
+        .find(|record| record.event_kind == "continuation_verdict")
+        .expect("the audit record is stored");
+    assert_eq!(
+        record.event,
+        Event::ContinuationVerdict(continuation_verdict())
+    );
+
+    let plain_store = crate::persistence::projection::duckdb::Store::open_in_memory().unwrap();
+    let plain_session = crate::contract::SessionId::new();
+    plain_store
+        .append_events(
+            plain_session,
+            None,
+            super::super::conversation::upgrade::fixture(plain),
+        )
+        .unwrap();
+    assert_eq!(
+        store.frame_for_session(session_id).unwrap().items,
+        plain_store.frame_for_session(plain_session).unwrap().items
+    );
+
+    let store = crate::persistence::projection::duckdb::DuckdbStoreHandle::new(store);
+    let from_store =
+        super::super::history::load_rig_session_history(Some(&store), session_id, &[]).unwrap();
+    let from_log =
+        super::super::history::load_rig_session_history(None, session_id, &events).unwrap();
+    assert_eq!(from_store.messages.messages(), from_log.messages.messages());
+}

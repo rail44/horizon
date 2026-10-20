@@ -371,6 +371,12 @@ pub enum Event {
     /// shows the resumed turn's `TurnEnded` receipt and the next turn's
     /// events; the audit row sits in the event log alongside them.
     ContinueTurnRequested(ContinueTurnRequested),
+    /// The harness asked the decision model whether a turn the model ended
+    /// with a plain reply should continue (`docs/agent-decision-model-design.md`,
+    /// "The turn-continuation check"). One per check, including fallbacks
+    /// and the per-turn cap. Audit-only like `ContinueTurnRequested`: a
+    /// continued turn shows up as its `AutoContinue` message.
+    ContinuationVerdict(ContinuationVerdict),
     /// The provider rejected a pre-generation request with a transient
     /// status (429 rate limit, 5xx gateway error, or a transport failure)
     /// and the turn is retrying after a backoff. Emitted right before the
@@ -566,6 +572,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::ApprovalRequested(_) => "approval_requested",
         Event::ApprovalResolved(_) => "approval_resolved",
         Event::ContinueTurnRequested(_) => "continue_turn_requested",
+        Event::ContinuationVerdict(_) => "continuation_verdict",
         Event::ProviderRequestSent(_) => "provider_request_sent",
         Event::ProviderRequestFirstToken => "provider_request_first_token",
         Event::ProviderRequestFinished => "provider_request_finished",
@@ -984,6 +991,28 @@ pub struct ApprovalResolved {
 pub struct ContinueTurnRequested {
     pub resumed_from: Option<TurnEndReason>,
 }
+
+/// Payload for [`Event::ContinuationVerdict`].
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ContinuationVerdict {
+    /// The `next_speaker` choice (`user` or `model`); `None` when the call
+    /// produced no usable answer or was not made.
+    pub next_speaker: Option<String>,
+    pub model_probability: Option<f64>,
+    pub user_probability: Option<f64>,
+    pub threshold: f64,
+    pub continued: bool,
+    /// Harness continuations this turn had already run when the check ran.
+    pub continuations_so_far: u32,
+    pub latency_ms: u64,
+    /// `client_error`, `timeout`, `unparseable`, or `cap_reached`.
+    pub fallback_reason: Option<String>,
+    pub fallback_error: Option<String>,
+}
+
+// `Event` is `Eq`; the probabilities are never NaN (they come from a JSON
+// number), so equality on them is reflexive.
+impl Eq for ContinuationVerdict {}
 
 /// Distinguishes the shape of a pending [`ApprovalRequest`] -- what
 /// `tools::approval::resolve_bash` needs to tell an ordinary approval, a

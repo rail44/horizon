@@ -260,7 +260,7 @@ pub(crate) fn apply_agent_event_to_frame(
                 .items
                 .push(AgentFrameItem::ApprovalResolved(resolved.clone()));
         }
-        Event::ContinueTurnRequested(_) => {}
+        Event::ContinueTurnRequested(_) | Event::ContinuationVerdict(_) => {}
         // The turn's receipt: see `Event::TurnEnded`'s doc comment and
         // `TurnClock`'s. `turn` is reset afterward so a stray second
         // `TurnEnded` with no intervening user message (shouldn't happen by

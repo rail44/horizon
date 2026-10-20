@@ -120,11 +120,12 @@ impl ProviderRegistry {
         for entry in &table.entries {
             let id = named_rig_provider_id(&entry.name);
             let is_default = default_name.as_deref() == Some(entry.name.as_str());
-            let provider_config = if is_default {
+            let mut provider_config = if is_default {
                 config.rig.clone()
             } else {
                 entry.resolved()
             };
+            provider_config.decision = config.decision.clone();
             let provider = Arc::new(crate::providers::rig::Provider::for_entry(
                 id.clone(),
                 provider_config,
@@ -144,7 +145,10 @@ impl ProviderRegistry {
                 id.clone(),
                 Arc::new(crate::providers::rig::Provider::for_entry(
                     id,
-                    config.rig.clone(),
+                    crate::config::RigAgentConfig {
+                        decision: config.decision.clone(),
+                        ..config.rig.clone()
+                    },
                     duckdb_cell.clone(),
                 )),
             );
@@ -155,15 +159,16 @@ impl ProviderRegistry {
         // aggregator names no provider, so a `None` here means a table that
         // changed under this build; it is skipped.
         for entry in &moa.entries {
-            let Some(config) = crate::config::moa_session_config(&table, entry) else {
+            let Some(mut session_config) = crate::config::moa_session_config(&table, entry) else {
                 continue;
             };
+            session_config.decision = config.decision.clone();
             let id = moa_provider_id(&entry.name);
             registry.insert_under(
                 id.clone(),
                 Arc::new(crate::providers::rig::Provider::for_entry(
                     id,
-                    config,
+                    session_config,
                     duckdb_cell.clone(),
                 )),
             );

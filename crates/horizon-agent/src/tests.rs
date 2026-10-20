@@ -1573,6 +1573,38 @@ fn approval_decisions_are_retained_while_continue_remains_audit_only() {
     );
 }
 
+/// `Event::ContinuationVerdict` keeps a stable kind string and its payload
+/// shape through serde, and folds into no frame item.
+#[test]
+fn continuation_verdicts_round_trip_and_stay_audit_only() {
+    let verdict = agent::Event::ContinuationVerdict(agent::ContinuationVerdict {
+        next_speaker: None,
+        model_probability: None,
+        user_probability: None,
+        threshold: 0.8,
+        continued: false,
+        continuations_so_far: 2,
+        latency_ms: 10_000,
+        fallback_reason: Some("timeout".to_string()),
+        fallback_error: None,
+    });
+    assert_eq!(agent::event_kind(&verdict), "continuation_verdict");
+    let json = serde_json::to_value(&verdict).expect("serialize ContinuationVerdict");
+    let payload = &json["ContinuationVerdict"];
+    assert_eq!(payload["threshold"], 0.8);
+    assert_eq!(payload["continued"], false);
+    assert_eq!(payload["continuations_so_far"], 2);
+    assert_eq!(payload["fallback_reason"], "timeout");
+    assert!(payload["next_speaker"].is_null());
+    let round_tripped: agent::Event = serde_json::from_value(json).expect("deserialize");
+    assert_eq!(round_tripped, verdict);
+
+    let mut frame = AgentFrame::empty();
+    let mut turn = TurnClock::new();
+    apply_agent_event_to_frame(&mut frame, &verdict, &mut turn);
+    assert!(frame.items.is_empty(), "{:?}", frame.items);
+}
+
 /// `AgentFrame::last_turn_end_reason` is the accessor
 /// `Event::ContinueTurnRequested`'s emit site uses to record *what kind of
 /// halt* the human resumed from. The `.rev()` walk must (a) find the

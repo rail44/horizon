@@ -706,6 +706,7 @@ fn fold_until_terminal(
                     // note above).
                     | Event::ApprovalResolved(_)
                     | Event::ContinueTurnRequested(_)
+                    | Event::ContinuationVerdict(_)
                     // Provider rate-limit pacing is not terminal.
                     | Event::ProviderRateLimited(_)
                     // Standing-agent memory events are not terminal for a

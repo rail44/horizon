@@ -723,6 +723,12 @@ pub struct RigAgentConfig {
     /// launches these proposers. `None` — the value every non-MoA selection
     /// produces — is ordinary single-model behavior, unchanged.
     pub moa: Option<MoaPass>,
+    /// The `decision_model` connection the session's turn-continuation
+    /// check asks (`docs/agent-decision-model-design.md`). Copied from
+    /// [`AgentConfig::decision`] onto every provider's config when the
+    /// registry is built, so a session captures it at spawn. `None` leaves
+    /// the check off.
+    pub decision: Option<crate::decision::DecisionConfig>,
 }
 
 impl Default for RigAgentConfig {
@@ -743,6 +749,7 @@ impl Default for RigAgentConfig {
             allowed_tool_ids: None,
             trusted_project: false,
             moa: None,
+            decision: None,
         }
     }
 }

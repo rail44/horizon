@@ -123,6 +123,8 @@ impl Store {
             // is the authoritative source from now on.
             | Event::ApprovalResolved(_)
             | Event::ContinueTurnRequested(_)
+            // The turn-continuation check's audit record, same treatment.
+            | Event::ContinuationVerdict(_)
             | Event::Error(_)
             | Event::ProviderRateLimited(_)
             | Event::Exited(_) => Ok(()),

@@ -479,6 +479,7 @@ impl Mapper {
             | Event::MoaPassStarted(_)
             | Event::MemorySeeded
             | Event::ContinueTurnRequested(_)
+            | Event::ContinuationVerdict(_)
             | Event::ConversationRecorded(_)
             | Event::ProviderRequestUsage(_) => Vec::new(),
         }

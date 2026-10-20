@@ -60,6 +60,10 @@ pub(crate) struct SessionLoopState {
     /// standing roles. `None` for non-standing roles (no memory mechanism).
     pub(in crate::providers::rig) memory: Option<StandingMemory>,
 
+    /// The turn-continuation check and its per-turn inputs
+    /// (`docs/agent-decision-model-design.md`).
+    pub(crate) continuation: super::continuation::ContinuationState,
+
     // --- Session identity/configuration and replaceable environment --------
     pub(crate) session_id: SessionId,
     pub(crate) config: RigAgentConfig,
@@ -88,6 +92,7 @@ impl Default for SessionLoopState {
             execution: Default::default(),
             guard: TurnLoopGuard::new(0, 0),
             memory: None,
+            continuation: Default::default(),
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
             moa_turn: None,
@@ -133,6 +138,11 @@ impl SessionLoopState {
         } else {
             None
         };
+        // Built like `memory`: only where the config and role call for it.
+        let continuation = super::continuation::ContinuationState {
+            check: super::continuation::ContinuationCheck::for_session(&config, role),
+            ..Default::default()
+        };
         Self {
             inputs: super::input::Inputs::default(),
             activation: VecDeque::new(),
@@ -145,6 +155,7 @@ impl SessionLoopState {
             execution: Default::default(),
             guard: TurnLoopGuard::new(config.iteration_cap, config.doom_loop_window),
             memory,
+            continuation,
             config,
             moa_turn: None,
             environment,
