@@ -261,6 +261,8 @@ fn default_fs_traversal_max_files() -> usize {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentConfig {
     pub auxiliary: Option<crate::auxiliary::AuxiliaryConfig>,
+    /// The `decision_model` connection (System One), when that pair resolves.
+    pub decision: Option<crate::decision::DecisionConfig>,
     pub rig: RigAgentConfig,
     /// The whole effective provider surface ([`ProvidersTable`]). The
     /// default entry's resolved view is what `rig` carries, so everything
@@ -327,6 +329,7 @@ impl AgentConfig {
             .collect();
         Self {
             auxiliary: None,
+            decision: None,
             rig,
             providers,
             moa: MoaTable { entries: moa },

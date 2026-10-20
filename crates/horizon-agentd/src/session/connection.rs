@@ -527,6 +527,7 @@ mod tests {
         ];
         let agent_config = horizon_agent::config::AgentConfig {
             auxiliary: None,
+            decision: None,
             rig: horizon_agent::config::RigAgentConfig {
                 api_key_present: true,
                 model: "test-model".to_string(),

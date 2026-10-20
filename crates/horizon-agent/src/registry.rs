@@ -285,6 +285,7 @@ mod tests {
     fn two_entries_register_independently_of_each_others_key_presence() {
         let agent_config = crate::config::AgentConfig {
             auxiliary: None,
+            decision: None,
             rig: crate::config::RigAgentConfig {
                 api_key_present: true,
                 model: "test-model".to_string(),

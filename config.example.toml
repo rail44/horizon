@@ -16,9 +16,10 @@
 # env vars (OPENAI_API_KEY, EXA_API_KEY, OPENAI_BASE_URL, ...) keep winning
 # over whatever is set below.
 #
-# Models are chosen by two top-level { provider, model } pairs: default_model
-# for conversation sessions, and small_model for both AI titles and automatic
-# approval judgments. [[providers]] entries describe endpoints and
+# Models are chosen by three top-level { provider, model } pairs:
+# default_model for conversation sessions, small_model for AI titles, and
+# decision_model for automatic approval judgments and turn-continuation
+# checks. [[providers]] entries describe endpoints and
 # credentials only. See docs/provider-configuration.md. Without provider
 # entries, the built-in OpenAI-compatible endpoint entry "default" is used;
 # there is no built-in model.
@@ -35,7 +36,7 @@
 #
 # Reload Config applies theme, keybindings, and provider configuration live.
 # Provider changes affect new sessions and future title calls. Existing sessions
-# keep their conversation and judge connections; an explicit model switch can
+# keep their conversation, judge, and decision connections; an explicit model switch can
 # select a newly configured conversation provider. [terminal]/[ui] need a restart,
 # except the runtime-only font zoom commands.
 #
@@ -52,9 +53,10 @@
 # to built-in defaults everywhere.
 
 # ---------------------------------------------------------------------------
-# default_model / small_model — which model runs when nothing else chose one.
+# default_model / small_model / decision_model — which model runs when
+# nothing else chose one.
 #
-# Both are TOP-LEVEL keys, so they go before any table header. Each is an
+# All three are TOP-LEVEL keys, so they go before any table header. Each is an
 # inline table with exactly two keys: provider (a [[providers]] entry name)
 # and model (the model id, written out).
 #
@@ -62,14 +64,22 @@
 #   Unset, or naming no [[providers]] entry: there is no model at all —
 #   startup warns naming the key, and sessions start in the deterministic
 #   fallback (no provider is called) with a first message saying so.
-# - small_model: the model AI titles and automatic approval judgments run
-#   on. Its provider must be an openai-compatible entry, whose base_url and
-#   api_key_env serve both features. Unset or invalid (warned at startup),
-#   or its key variable unset: raw titles and human approval stay active;
-#   it never borrows another entry's credentials.
+# - small_model: the model AI titles run on. Its provider must be an
+#   openai-compatible entry, whose base_url and api_key_env serve it. Unset
+#   or invalid (warned at startup), or its key variable unset: tabs keep
+#   their raw titles; it never borrows another entry's credentials.
+# - decision_model: the decision model (System One API, POST
+#   {base_url}/systemone) automatic approval judgments and turn-continuation
+#   checks ask. Its provider must be an openai-compatible entry whose
+#   base_url serves the System One route, e.g. an entry with base_url
+#   "https://ollama.com/v1" and model "clef:cloud"; that entry's
+#   api_key_env serves it. Unset or invalid: startup warns naming the key,
+#   and automatic approval judgments and turn-continuation checks stay off
+#   (approval stays with you). Ollama cloud needs a paid plan or credits.
 #
-# default_model = { provider = "synthetic", model = "hf:deepseek-ai/DeepSeek-V4.1-Flash" }
-# small_model   = { provider = "synthetic", model = "syn:small:text" }
+# default_model  = { provider = "synthetic", model = "hf:deepseek-ai/DeepSeek-V4.1-Flash" }
+# small_model    = { provider = "synthetic", model = "syn:small:text" }
+# decision_model = { provider = "ollama", model = "clef:cloud" }
 
 # ---------------------------------------------------------------------------
 # [[providers]] — endpoints and credentials, one entry per provider.
@@ -90,7 +100,8 @@
 #   OPENAI_BASE_URL / ANTHROPIC_BASE_URL win when set.
 # - There is no model here: the picker's candidates are whatever the
 #   provider's own GET /models listing answers (fetched when you drill into
-#   the entry), and default_model / small_model above name the models that
+#   the entry), and default_model / small_model / decision_model above name
+#   the models that
 #   run when nothing else chose one.
 #
 # [[providers]]

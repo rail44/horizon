@@ -51,6 +51,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "providers",
     "default_model",
     "small_model",
+    "decision_model",
     "terminal",
     "ui",
     "keybindings",
@@ -62,7 +63,11 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 
 /// The top-level `{ provider, model }` pair keys, and the keys of their
 /// inline tables.
-const MODEL_PAIR_TOP_LEVEL_KEYS: &[&str] = &[super::DEFAULT_MODEL_KEY, super::SMALL_MODEL_KEY];
+const MODEL_PAIR_TOP_LEVEL_KEYS: &[&str] = &[
+    super::DEFAULT_MODEL_KEY,
+    super::SMALL_MODEL_KEY,
+    super::DECISION_MODEL_KEY,
+];
 const MODEL_PAIR_KEYS: &[&str] = &["provider", "model"];
 
 /// Keys a single `[[providers]]` entry recognizes — checked the same way
@@ -115,7 +120,7 @@ fn collect_warnings(contents: &str) -> Vec<String> {
     warnings
 }
 
-/// Shape warnings for `default_model`/`small_model`: the value must be an
+/// Shape warnings for the top-level model pairs: the value must be an
 /// inline table with exactly `provider` and `model`. A non-table value is
 /// dropped by the lenient deserializer, so it is named here.
 fn model_pair_warnings(root: &toml::Table) -> Vec<String> {
@@ -352,6 +357,7 @@ mod tests {
         let warnings = collect_warnings(
             "default_model = { provider = \"default\", model = \"m\" }\n\
              small_model = { provider = \"default\", model = \"s\" }\n\
+             decision_model = { provider = \"default\", model = \"d\" }\n\
              [[providers]]\nname = \"default\"\napi_key_env = \"KEY\"\nbase_url = \"https://example.invalid\"\n",
         );
         assert!(warnings.is_empty(), "warnings = {warnings:?}");

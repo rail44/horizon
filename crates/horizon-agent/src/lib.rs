@@ -14,6 +14,7 @@
 pub mod auxiliary;
 pub mod config;
 pub mod contract;
+pub mod decision;
 pub mod frame;
 pub mod hosting;
 pub(crate) mod instructions;

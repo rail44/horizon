@@ -53,7 +53,7 @@ pub(crate) fn named_provider_configs(
 }
 
 /// Startup and reload share one translation, including the `small_model`
-/// connection.
+/// (titles) and `decision_model` connections.
 pub(crate) fn agent_config(raw: &horizon_config::RawConfig) -> horizon_agent::config::AgentConfig {
     let (entries, default_model) = named_provider_configs(raw);
     let mut config = horizon_agent::config::AgentConfig::from_env_and_providers(
@@ -68,6 +68,13 @@ pub(crate) fn agent_config(raw: &horizon_config::RawConfig) -> horizon_agent::co
             small.model,
         )
     });
+    config.decision = raw.resolved_decision_model().ok().map(|decision| {
+        horizon_agent::decision::DecisionConfig::from_env(
+            decision.provider.base_url,
+            decision.provider.api_key_env,
+            decision.model,
+        )
+    });
     config
 }
 
@@ -76,12 +83,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_and_small_models_resolve_independently() {
+    fn default_small_and_decision_models_resolve_independently() {
         std::env::remove_var("OPENAI_BASE_URL");
         let raw = horizon_config::parse(
             r#"
             default_model = { provider = "chat", model = "big" }
             small_model = { provider = "helper", model = "small" }
+            decision_model = { provider = "ollama", model = "clef:cloud" }
             [[providers]]
             name = "chat"
             kind = "anthropic"
@@ -91,6 +99,10 @@ mod tests {
             kind = "openai-compatible"
             base_url = "https://helper.invalid/v1"
             api_key_env = "HELPER_KEY"
+            [[providers]]
+            name = "ollama"
+            base_url = "https://ollama.com/v1"
+            api_key_env = "OLLAMA_API_KEY"
         "#,
         )
         .unwrap();
@@ -104,6 +116,22 @@ mod tests {
             auxiliary.base_url.as_deref(),
             Some("https://helper.invalid/v1")
         );
+        let decision = before.decision.as_ref().unwrap();
+        assert_eq!(decision.api_key_env, "OLLAMA_API_KEY");
+        assert_eq!(decision.model, "clef:cloud");
+        assert_eq!(decision.base_url.as_deref(), Some("https://ollama.com/v1"));
+        // An invalid decision_model leaves the other two pairs alone.
+        let mut no_decision = raw.clone();
+        no_decision.decision_model = Some(horizon_config::RawModelPair {
+            provider: "chat".into(),
+            model: "clef:cloud".into(),
+        });
+        let without = agent_config(&no_decision);
+        assert!(without.decision.is_none());
+        assert_eq!(without.auxiliary, before.auxiliary);
+        assert_eq!(without.rig.model, "big");
+        no_decision.decision_model = None;
+        assert!(agent_config(&no_decision).decision.is_none());
         let mut changed = raw.clone();
         changed.providers[1].base_url = Some("https://new.invalid/v1".into());
         let after = agent_config(&changed);
@@ -121,6 +149,8 @@ mod tests {
         assert!(agent_config(&changed).auxiliary.is_none());
         changed.small_model = None;
         assert!(agent_config(&changed).auxiliary.is_none());
+        // Neither invalid small_model disturbs the decision connection.
+        assert_eq!(agent_config(&changed).decision, before.decision);
     }
 
     #[test]
@@ -130,5 +160,6 @@ mod tests {
         assert_eq!(config.rig.model, "");
         assert_eq!(config.providers.default_model, None);
         assert!(config.auxiliary.is_none());
+        assert!(config.decision.is_none());
     }
 }

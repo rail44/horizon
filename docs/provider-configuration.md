@@ -1,15 +1,16 @@
 # Provider and model configuration
 
-`[[providers]]` entries describe endpoints and credentials only. Two top-level
-`{ provider, model }` pairs choose the models: `default_model` for
-conversation sessions, and `small_model` for both session titles and automatic
-tool-approval judgments. Each pair has the same form as a `[[moa]]` member: a
+`[[providers]]` entries describe endpoints and credentials only. Three
+top-level `{ provider, model }` pairs choose the models: `default_model` for
+conversation sessions, `small_model` for session titles, and `decision_model`
+for automatic tool-approval judgments and turn-continuation checks. Each pair has the same form as a `[[moa]]` member: a
 `[[providers]]` entry name plus a model id, written out.
 
 ```toml
 # Top-level keys must precede table headers.
 default_model = { provider = "chat", model = "claude-opus-4-6" }
 small_model   = { provider = "helpers", model = "small-model-id" }
+decision_model = { provider = "ollama", model = "clef:cloud" }
 
 [[providers]]
 name = "chat"
@@ -21,6 +22,11 @@ name = "helpers"
 kind = "openai-compatible"
 api_key_env = "HELPER_API_KEY"
 # base_url = "https://your-openai-compatible-endpoint/v1"
+
+[[providers]]
+name = "ollama"
+base_url = "https://ollama.com/v1"
+api_key_env = "OLLAMA_API_KEY"
 ```
 
 Only environment-variable names go in TOML; credentials stay in the environment.
@@ -59,25 +65,40 @@ the default in that case.
 
 ## `small_model`
 
-The model titles and approval judgments run on. Its provider must be an
-`openai-compatible` entry; that entry's `base_url` and `api_key_env` serve both
-features. When the pair is absent, invalid, or names a non-openai-compatible
-entry, startup warns naming the key, tabs keep their raw first-message titles,
-and approvals stay with the human. The same happens when the entry's key
-variable is unset. It never borrows credentials or an endpoint from another
-entry.
+The model titles run on. Its provider must be an `openai-compatible` entry;
+that entry's `base_url` and `api_key_env` serve it. When the pair is absent,
+invalid, or names a non-openai-compatible entry, startup warns naming the key
+and tabs keep their raw first-message titles. The same happens when the
+entry's key variable is unset. It never borrows credentials or an endpoint
+from another entry.
+
+## `decision_model`
+
+The decision model automatic approval judgments and turn-continuation checks
+ask. A decision model generates no text: `POST {base_url}/systemone` (the
+System One API) takes a `state` plus named `choice`/`noul` questions and
+returns a probability per option. Its provider must be an `openai-compatible`
+entry whose `base_url` serves that route beside `/chat/completions`, such as
+Ollama cloud's `https://ollama.com/v1` with model `clef:cloud`; the entry's
+`api_key_env` serves it as a bearer token. OpenAI's default URL has no such
+route, so an entry without a `base_url` cannot serve it. When the pair is
+absent, invalid, or names a non-openai-compatible entry, startup warns naming
+the key, and automatic approval judgments and turn-continuation checks stay
+off: approvals stay with the human. The same happens when the entry's key
+variable is unset. Ollama cloud serves decision models only on a paid plan or
+with credits.
 
 ## No provider entries
 
 With no `[[providers]]` entries, a built-in OpenAI-compatible endpoint entry
 named `default` exists (key variable `OPENAI_API_KEY`). It carries no model:
-both pairs still have to name it, for example
+every pair still has to name it, for example
 `default_model = { provider = "default", model = "..." }`.
 
 ## Reload
 
 Reload Config updates future title calls and new sessions. Each running session
-retains its judge connection; its conversation model can be explicitly switched
+retains its judge connection, and likewise its decision connection; its conversation model can be explicitly switched
 using the latest accepted catalog. Title clients are pooled per accepted shell
 configuration, judge clients per session. In-flight calls keep their captured
 connection when configuration changes.

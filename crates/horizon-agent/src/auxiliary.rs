@@ -1,5 +1,5 @@
-//! OpenAI-compatible connections for titles and approval judgments, built
-//! from the config file's `small_model` pair.
+//! OpenAI-compatible connections for titles, built from the config file's
+//! `small_model` pair.
 //! Clients belong to an accepted configuration, never to the whole process.
 
 use std::sync::OnceLock;
@@ -10,7 +10,7 @@ use rig_core::providers::openai;
 pub struct AuxiliaryConfig {
     pub base_url: Option<String>,
     pub api_key_env: String,
-    /// The model id titles and approval judgments run on.
+    /// The model id titles run on.
     pub model: String,
 }
 
