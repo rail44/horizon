@@ -198,11 +198,16 @@ environment-only path overrides. Provider entries are described in
 `docs/provider-configuration.md`, `[[moa]]` in `docs/agent-moa-design.md`.
 
 Secrets (`OPENAI_API_KEY`, `EXA_API_KEY`) are environment-only and never
-read from the file. One more setting exists only as an environment variable
-and is not in the example file: `HORIZON_AGENT_CLEARING_THRESHOLD_PCT` (Tier 1
-compaction's trigger percentage, clamped 1..=100 — a measurement switch,
-see `docs/agent-compaction-design.md`). Model ids come only from the file's
-`default_model`/`small_model` pairs (`docs/provider-configuration.md`).
+read from the file. Three more settings exist only as environment variables
+and are not in the example file, all measurement switches:
+`HORIZON_AGENT_CLEARING_THRESHOLD_PCT` (Tier 1 compaction's trigger
+percentage, clamped 1..=100, see `docs/agent-compaction-design.md`),
+`HORIZON_AGENT_JUDGE_ASK_THRESHOLD` and
+`HORIZON_AGENT_CONTINUATION_THRESHOLD` (the decision model's two
+probability thresholds, clamped 0..=1, see
+`docs/agent-decision-model-design.md`). Model ids come only from the file's
+`default_model`/`small_model`/`decision_model` pairs
+(`docs/provider-configuration.md`).
 
 `crates/horizon-config` is the loader — the single file-schema, parse, and
 path-resolution owner. `horizon-agentd` depends on it directly, and

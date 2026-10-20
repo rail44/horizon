@@ -276,6 +276,13 @@ lands:
   Domain and Git approvals remain narrow and sandboxed. The existing
   `FilesystemDenialRetry` serialized name is reused for readable history;
   its former incremental narrow-grant execution path is deleted.
+  **Judge moved onto a decision model 2026-10-21**
+  (`docs/agent-decision-model-design.md`): one `noul` question on Clef
+  through Ollama cloud's System One API replaces the two-stage chat
+  cascade; the same connection drives the harness turn-continuation
+  check that `docs/agent-tools-design.md`'s 2026-10-20 note left to the
+  loop. Thresholds are initial values; `judge_verdict` and
+  `continuation_verdict` records are the calibration material.
   **Sandbox backend decided 2026-07-19: migrate `horizon-sandbox`
   from the self-built bwrap+seccompiler+landlock stack to depend on
   nono (`nono` 0.68, Apache-2.0) -- full adoption, both OSes
