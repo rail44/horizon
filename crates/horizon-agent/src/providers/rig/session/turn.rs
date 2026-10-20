@@ -38,6 +38,12 @@ impl SessionLoopState {
     /// then (if it wasn't truncated) apply its outcome. Each command arm in
     /// [`super::state::SessionLoopState::run`] does its own arm-specific
     /// setup, then calls this with the prompt message and a fallback closure.
+    ///
+    /// Three hooks run in order on each round's outcome before it is
+    /// applied: truncation recovery ([`Self::handle_truncation_recovery`]),
+    /// the turn-continuation check ([`Self::handle_continuation_check`]),
+    /// and the standing-role memory checkpoint
+    /// ([`Self::handle_memory_checkpoint`]).
     pub(crate) async fn run_turn(&mut self, prompt: Prompt, fallback: impl FnOnce() -> Message) {
         self.collect_inputs();
         self.activate_environment().await;
@@ -62,7 +68,10 @@ impl SessionLoopState {
             let Some(recovered) = self.handle_truncation_recovery(outcome).await else {
                 return;
             };
-            let Some(checked) = self.handle_memory_checkpoint(recovered).await else {
+            let Some(continued) = self.handle_continuation_check(recovered).await else {
+                return;
+            };
+            let Some(checked) = self.handle_memory_checkpoint(continued).await else {
                 return;
             };
             outcome = checked;
@@ -158,7 +167,7 @@ impl SessionLoopState {
     /// observed while the turn is in flight is queued in `inbox` and replayed by
     /// the outer loop right after (in arrival order), so e.g. a `Shutdown` sent
     /// mid-turn is never silently swallowed.
-    async fn run_cancellable_turn(
+    pub(super) async fn run_cancellable_turn(
         &mut self,
         prompt: Prompt,
         fallback: impl FnOnce() -> Message,
@@ -195,9 +204,9 @@ impl SessionLoopState {
         );
         tokio::pin!(turn);
 
-        loop {
+        let outcome = loop {
             tokio::select! {
-                outcome = &mut turn => return outcome,
+                outcome = &mut turn => break outcome,
                 maybe_command = self.commands.recv() => {
                     match maybe_command {
                         Some(command @ (Command::Cancel { .. } | Command::Shutdown)) => {
@@ -210,11 +219,13 @@ impl SessionLoopState {
                             token.cancel();
                         }
                         Some(other) => self.inbox.push_back(other),
-                        None => return turn.await,
+                        None => break turn.await,
                     }
                 }
             }
-        }
+        };
+        self.continuation.tool_calls += outcome.requested_tool_call_ids.len();
+        outcome
     }
 
     /// Centralizes `Event::TurnEnded` emission for every turn-completion path

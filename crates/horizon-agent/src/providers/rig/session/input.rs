@@ -174,6 +174,10 @@ impl Inputs {
         ));
     }
 
+    pub(super) fn has_additions(&self) -> bool {
+        !self.additions.is_empty()
+    }
+
     pub(super) fn take_additions(&mut self) -> Option<String> {
         (!self.additions.is_empty()).then(|| std::mem::take(&mut self.additions).join("\n\n"))
     }

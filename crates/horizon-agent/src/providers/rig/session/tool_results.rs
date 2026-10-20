@@ -90,6 +90,8 @@ impl SessionLoopState {
         };
         self.pause_inputs(false);
         self.guard.reset();
+        // A resumed halt is a new turn on the same request.
+        self.continuation.count = 0;
         self.advance_from_tool_result(result, &tool_id).await;
     }
 

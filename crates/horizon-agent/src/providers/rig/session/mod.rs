@@ -10,6 +10,7 @@
 //!   `run_cancellable_turn`, `handle_truncation_recovery`,
 //!   `apply_turn_outcome`, `halt_turn_loop`).
 //! - [`mod@settlement`] — host acknowledgement of stopped tool batches.
+//! - [`mod@continuation`] — the turn-continuation check.
 //!
 //! The `pub(super)` surface — `spawn_rig_session` plus the six items `tests.rs`
 //! imports — is re-exported from here so callers see the same paths as before
@@ -40,6 +41,7 @@ use super::model_limits::model_limits;
 use super::session_prompt::{session_environment, session_extra_sections};
 use super::{ClearingState, ToolCallDescriptor, TurnCompletion};
 
+mod continuation;
 mod environment;
 mod input;
 mod interaction;

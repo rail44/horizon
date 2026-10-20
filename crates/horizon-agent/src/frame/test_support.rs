@@ -122,6 +122,12 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
                     requested.resumed_from,
                 ));
             }
+            Event::ContinuationVerdict(verdict) => {
+                lines.push(format!(
+                    "continuation verdict: {:?} continued {}",
+                    verdict.next_speaker, verdict.continued,
+                ));
+            }
             Event::ProviderRateLimited(rate_limited) => lines.push(format!(
                 "rate limited: status={:?} attempt={} backoff_ms={}",
                 rate_limited.status, rate_limited.attempt, rate_limited.backoff_ms,

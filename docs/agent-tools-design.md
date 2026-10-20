@@ -446,7 +446,8 @@ calls, nine times in a row. An instruction the conversation already
 carried is not made effective by repeating it in the system prompt. The
 early hand-back is a turn-boundary problem for the loop to handle
 (continuation decided by the harness, as Gemini CLI's next-speaker check
-or Claude Code's Stop hook do), not a prompt matter.
+or Claude Code's Stop hook do), not a prompt matter. The harness-side check now exists: the turn-continuation check of
+`docs/agent-decision-model-design.md`.
 
 ## Config
 

@@ -140,9 +140,13 @@ the model or the user speaks next.
   recovery already uses. No `TurnEnded` is emitted in between. At most
   three continuations per turn; after that, and on any client error or
   timeout (10 seconds), the turn ends as the model ended it.
-- **Audit.** Every check writes a `continuation_verdict` record on the
-  same carrier as `judge_verdict`: the probabilities, the threshold, the
-  outcome, the latency, and any fallback reason.
+- **Audit.** Every check that reaches a call or the cap emits an
+  `Event::ContinuationVerdict` (kind `continuation_verdict`) on the
+  session's own event stream: the probabilities, the threshold, the
+  outcome, the latency, and any fallback reason (`client_error`,
+  `timeout`, `unparseable`, `cap_reached`). The session loop has no
+  event-log writer of its own, so this is an audit-only event like
+  `ContinueTurnRequested` rather than the judge's direct-writer carrier.
 
 ## Measurement switches
 

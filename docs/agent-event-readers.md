@@ -58,6 +58,7 @@ belong in review.
 | `HistoryCleared` | consume (divider item) | ignore — provider-view decision, no row | ignore — projection, replayed separately | consume (cleared call-ids) | ignore — not terminal |
 | `ApprovalResolved` | ignore — audit-only, no item | ignore — audit-only, no row | ignore — audit-only | ignore — no clearing record | ignore — audit-only, not terminal |
 | `ContinueTurnRequested` | ignore — audit-only, no item | ignore — audit-only, no row | ignore — audit-only | ignore — no clearing record | ignore — audit-only, not terminal |
+| `ContinuationVerdict` | ignore — audit-only, no item | ignore — audit-only, no row | ignore — audit-only | ignore — no clearing record | ignore — audit-only, not terminal |
 
 ### Sub-state-dependent cells (reader 5, explore)
 
