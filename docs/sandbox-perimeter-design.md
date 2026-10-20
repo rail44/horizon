@@ -103,7 +103,14 @@ paths inside the writable roots, enforced like
 `FilesystemGrant.excluded_subpaths` (the seccomp supervisor on Linux —
 `crates/horizon-sandbox/src/linux/mod.rs`; advisory on macOS). A
 `ReadWrite` `DirectoryTree` grant at or above an excluded path lifts that
-exclusion for the run; the grant's own `excluded_subpaths` stay absolute.
+exclusion for the run; a grant's own `excluded_subpaths` are lifted only
+by a narrower `ReadWrite` `DirectoryTree` grant inside it at or above the
+excluded path, whose own exclusions then apply instead.
+A filesystem-retry tree suggestion that contains Git metadata (the
+session repository's `.git`, gitdir and common gitdir, or a `.git` at the
+tree or one of its direct children) carries those paths in its
+`excluded_subpaths` (board #71), so approving a retry never opens Git
+metadata.
 
 Git metadata writes keep the existing `GitOperation` path.
 `tools/bash/git.rs::metadata_writable_roots` already handles a plain

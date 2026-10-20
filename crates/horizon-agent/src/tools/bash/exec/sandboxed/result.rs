@@ -138,6 +138,80 @@ fn divert_git_metadata_denials(
     moved
 }
 
+/// Upper bound on the direct children of a suggested tree checked for a
+/// `.git` entry, so a tree with a huge top level stays a bounded scan.
+const NESTED_REPOSITORY_SCAN_LIMIT: usize = 1024;
+
+/// Adds the Git metadata a suggested writable tree contains to that grant's
+/// `excluded_subpaths`, so a filesystem retry never opens Git metadata
+/// (board #71); Git metadata is written only through a `GitOperation`
+/// approval. Covered paths are the session repository's metadata as
+/// `git_metadata_paths` resolves it from `workspace_root` (a plain
+/// checkout's `.git`, or a linked worktree's `.git` pointer, its gitdir, and
+/// the common gitdir), plus a `.git` entry at the tree itself or at one of
+/// its direct children (at most `NESTED_REPOSITORY_SCAN_LIMIT` of them).
+/// Repositories nested deeper than that are not scanned for.
+pub fn exclude_git_metadata(
+    grants: &mut [horizon_sandbox::FilesystemGrant],
+    workspace_root: Option<&Path>,
+) {
+    let session_metadata: Vec<PathBuf> = workspace_root
+        .map(super::git_metadata_paths)
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|path| [path.canonicalize().ok(), Some(path)])
+        .flatten()
+        .collect();
+    for grant in grants.iter_mut().filter(|grant| {
+        grant.access == horizon_sandbox::FilesystemGrantAccess::ReadWrite
+            && grant.scope == horizon_sandbox::FilesystemGrantScope::DirectoryTree
+    }) {
+        let Ok(tree) = grant.path.canonicalize() else {
+            continue;
+        };
+        let contained: Vec<PathBuf> = session_metadata
+            .iter()
+            .cloned()
+            .chain(nested_dot_git_entries(&tree))
+            .filter_map(|metadata| Some(metadata.strip_prefix(&tree).ok()?.to_path_buf()))
+            .filter(|relative| !relative.as_os_str().is_empty())
+            .collect();
+        // A linked worktree's gitdir sits inside the common gitdir; the
+        // outermost path alone is the exclusion.
+        for relative in &contained {
+            let covered = contained
+                .iter()
+                .any(|other| other != relative && relative.starts_with(other));
+            if !covered && !grant.excluded_subpaths.contains(relative) {
+                grant.excluded_subpaths.push(relative.clone());
+            }
+        }
+    }
+}
+
+/// `tree/.git` and `tree/<child>/.git`, for whichever of them exist.
+fn nested_dot_git_entries(tree: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let own = tree.join(".git");
+    if std::fs::symlink_metadata(&own).is_ok() {
+        found.push(own);
+    }
+    let Ok(children) = std::fs::read_dir(tree) else {
+        return found;
+    };
+    for child in children
+        .flatten()
+        .take(NESTED_REPOSITORY_SCAN_LIMIT)
+        .filter(|child| child.file_type().is_ok_and(|kind| kind.is_dir()))
+    {
+        let dot_git = child.path().join(".git");
+        if std::fs::symlink_metadata(&dot_git).is_ok() {
+            found.push(dot_git);
+        }
+    }
+    found
+}
+
 /// Whether `path` (or, when its leaf does not exist yet, its nearest
 /// existing ancestor once canonicalized) lies under one of `roots`.
 fn is_under_any(path: &Path, roots: &[PathBuf]) -> bool {
@@ -481,5 +555,127 @@ mod tests {
         assert_eq!(grants.len(), 1);
         assert!(!grants[0].path.starts_with(workspace.join(".git")));
         assert!(ordinary.starts_with(&grants[0].path));
+    }
+
+    /// The grants a filesystem retry would offer for `attempted`.
+    fn suggested(attempted: &[&Path], workspace: Option<&Path>) -> Vec<FilesystemGrant> {
+        let denials: Vec<_> = attempted.iter().map(|path| write_denial(path)).collect();
+        let mut grants = horizon_sandbox::suggest_grants(&denials, workspace, None);
+        exclude_git_metadata(&mut grants, workspace);
+        grants
+    }
+
+    fn tree(path: &Path, excluded: &[&str]) -> FilesystemGrant {
+        FilesystemGrant {
+            path: path.to_path_buf(),
+            access: FilesystemGrantAccess::ReadWrite,
+            scope: FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: excluded.iter().map(PathBuf::from).collect(),
+        }
+    }
+
+    /// Registers `workspace` as a linked worktree of the plain checkout at
+    /// `main`, returning the worktree's canonical path.
+    fn linked_worktree(main: &Path, workspace: &Path) -> PathBuf {
+        let worktree_git_dir = main.join(".git/worktrees/agent");
+        std::fs::create_dir_all(&worktree_git_dir).unwrap();
+        std::fs::create_dir_all(workspace).unwrap();
+        let workspace = workspace.canonicalize().unwrap();
+        std::fs::write(
+            workspace.join(".git"),
+            format!("gitdir: {}\n", worktree_git_dir.display()),
+        )
+        .unwrap();
+        std::fs::write(
+            worktree_git_dir.join("gitdir"),
+            workspace.join(".git").display().to_string(),
+        )
+        .unwrap();
+        std::fs::write(worktree_git_dir.join("commondir"), "../..\n").unwrap();
+        workspace
+    }
+
+    #[test]
+    fn retry_tree_around_the_main_checkout_excludes_its_gitdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = plain_checkout(dir.path());
+        let workspace = linked_worktree(&main, &dir.path().join("worktree"));
+        let attempted = main.join("Cargo.lock");
+        assert_eq!(
+            suggested(&[&attempted], Some(&workspace)),
+            vec![tree(&main, &[".git"])]
+        );
+    }
+
+    #[test]
+    fn session_gitdirs_are_excluded_below_the_scanned_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        let nest = dir.path().join("nest");
+        std::fs::create_dir_all(nest.join("deep")).unwrap();
+        std::fs::create_dir_all(nest.join("other")).unwrap();
+        let main = plain_checkout(&nest.join("deep"));
+        let workspace = linked_worktree(&main, &dir.path().join("worktree"));
+        let grants = suggested(
+            &[&main.join("Cargo.lock"), &nest.join("other/lock")],
+            Some(&workspace),
+        );
+        assert_eq!(
+            grants,
+            vec![tree(&nest.canonicalize().unwrap(), &["deep/repo/.git"])]
+        );
+    }
+
+    #[test]
+    fn retry_tree_excludes_every_direct_child_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let main = plain_checkout(&root);
+        let workspace = linked_worktree(&main, &root.join("worktree"));
+        let other = root.join("other");
+        std::fs::create_dir_all(other.join(".git")).unwrap();
+        let grants = suggested(
+            &[&main.join("Cargo.lock"), &other.join("lock")],
+            Some(&workspace),
+        );
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].path, root);
+        let mut excluded = grants[0].excluded_subpaths.clone();
+        excluded.sort();
+        assert_eq!(
+            excluded,
+            ["other/.git", "repo/.git", "worktree/.git"].map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn plain_checkout_tree_excludes_git_only_when_it_contains_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = plain_checkout(dir.path());
+        std::fs::create_dir_all(checkout.join("src")).unwrap();
+        assert_eq!(
+            suggested(&[&checkout.join("Cargo.lock")], None),
+            vec![tree(&checkout, &[".git"])]
+        );
+        assert_eq!(
+            suggested(&[&checkout.join("src/lib.rs")], None),
+            vec![tree(&checkout.join("src"), &[])]
+        );
+    }
+
+    #[test]
+    fn tree_without_a_repository_gets_no_exclusion() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = plain_checkout(dir.path());
+        let cargo = dir.path().join("home/.cargo");
+        std::fs::create_dir_all(cargo.join("registry")).unwrap();
+        std::fs::create_dir_all(cargo.join("git")).unwrap();
+        let grants = suggested(
+            &[
+                &cargo.join(".package-cache-mutate"),
+                &cargo.join("registry/lock"),
+            ],
+            Some(&workspace),
+        );
+        assert_eq!(grants, vec![tree(&cargo.canonicalize().unwrap(), &[])]);
     }
 }

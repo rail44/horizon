@@ -79,7 +79,11 @@ pub fn execute_supervised_helper(
 /// A grant's `excluded_subpaths` resolve against the grant path. A writable
 /// root's `writable_root_exclusions` attach to that root, except an
 /// exclusion lifted by a `ReadWrite` `DirectoryTree` grant at or above it;
-/// such a grant carries its own exclusions instead.
+/// such a grant carries its own exclusions instead. A tree grant's own
+/// exclusion is lifted the same way, but only by a narrower `ReadWrite`
+/// tree grant inside it: a filesystem-retry tree around a checkout
+/// excludes its gitdir (board #71), and a Git operation's grant on that
+/// gitdir replaces the exclusion with its own `hooks`/`config` ones.
 fn excluded_paths_by_capability(
     helper_policy: &crate::HelperPolicy,
 ) -> Vec<(PathBuf, Vec<PathBuf>)> {
@@ -102,6 +106,14 @@ fn excluded_paths_by_capability(
         .filter(|grant| grant.scope == FilesystemGrantScope::DirectoryTree)
         .filter_map(|grant| Some((grant.path.canonicalize().ok()?, grant)))
         .collect();
+    let lifted_by_narrower_grant = |outer: &PathBuf, excluded: &PathBuf| {
+        tree_grants.iter().any(|(inner, grant)| {
+            grant.access == FilesystemGrantAccess::ReadWrite
+                && inner != outer
+                && inner.starts_with(outer)
+                && excluded.starts_with(inner)
+        })
+    };
     for (resolved, grant) in &tree_grants {
         push(
             resolved.clone(),
@@ -109,6 +121,7 @@ fn excluded_paths_by_capability(
                 .excluded_subpaths
                 .iter()
                 .map(|sub| resolved.join(sub))
+                .filter(|excluded| !lifted_by_narrower_grant(resolved, excluded))
                 .collect(),
         );
     }

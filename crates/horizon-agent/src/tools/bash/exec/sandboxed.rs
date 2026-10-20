@@ -11,6 +11,8 @@ mod capture;
 mod prepare;
 mod result;
 
+pub use result::exclude_git_metadata;
+
 // --- sandboxed execution (tier 1: docs/agent-approval-design.md) ----------
 //
 // A tier-1-auto-approved `bash` call runs through `horizon_sandbox::spawn`

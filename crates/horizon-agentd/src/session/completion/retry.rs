@@ -136,11 +136,14 @@ pub(super) fn fold_filesystem_denied(
     // `horizon_sandbox::suggest_grants`. Agentd supplies the two facts it
     // owns (this session's workspace root, this account's `$HOME`) and
     // nothing about what command was run.
-    let grants = horizon_sandbox::suggest_grants(
+    let workspace_root = session_workspace_root(state, session_id);
+    let mut grants = horizon_sandbox::suggest_grants(
         &denials,
-        session_workspace_root(state, session_id).as_deref(),
+        workspace_root.as_deref(),
         horizon_sandbox::home_dir().as_deref(),
     );
+    // A suggested tree never opens Git metadata (board #71).
+    horizon_agent::tools::exclude_git_metadata(&mut grants, workspace_root.as_deref());
     let offered = grants
         .iter()
         .map(|grant| {

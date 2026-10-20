@@ -29,6 +29,7 @@ pub use approval::{
     refuse_unattended, resolve_approval, resolve_auto_approval, unattended_refusal_result,
     ApprovalDecision, ApprovalOutcome,
 };
+pub use bash::exclude_git_metadata;
 pub(crate) use bash::{
     command_requires_metadata_write, git_prefilter, metadata_writable_roots, GitPrefilterVerdict,
 };

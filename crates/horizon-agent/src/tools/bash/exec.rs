@@ -4,6 +4,7 @@ mod plain;
 mod sandboxed;
 mod stream;
 use plain::run_async;
+pub use sandboxed::exclude_git_metadata;
 pub(super) use sandboxed::run_sandboxed;
 
 use std::path::{Path, PathBuf};

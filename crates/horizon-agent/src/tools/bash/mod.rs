@@ -24,6 +24,7 @@ use std::path::PathBuf;
 #[cfg(test)]
 use super::completion::should_fold_completion;
 pub(super) use super::completion::BashCompletion;
+pub use exec::exclude_git_metadata;
 #[cfg(test)]
 use job::{run_job_body, spawn};
 pub(crate) use job::{spawn_approved_host, spawn_sandboxed, BashJob, SandboxedRun};

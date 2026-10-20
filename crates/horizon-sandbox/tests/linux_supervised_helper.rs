@@ -647,6 +647,70 @@ fn a_tree_grant_on_the_excluded_path_lifts_it_but_keeps_its_own_exclusions() {
     std::fs::remove_dir_all(root).expect("remove test directory");
 }
 
+#[test]
+fn a_retry_tree_excluding_a_gitdir_denies_writes_under_it_until_a_gitdir_grant_lifts_it() {
+    let workspace = test_dir("retry-tree-workspace").canonicalize().unwrap();
+    let checkout = test_dir("retry-tree-checkout").canonicalize().unwrap();
+    let git_dir = checkout.join(".git");
+    std::fs::create_dir_all(git_dir.join("hooks")).unwrap();
+    std::fs::create_dir_all(git_dir.join("objects")).unwrap();
+    let source = checkout.join("Cargo.lock");
+    let object = git_dir.join("objects").join("new-object");
+    let hook = git_dir.join("hooks").join("pre-commit");
+    let retry_tree = FilesystemGrant {
+        path: checkout.clone(),
+        access: FilesystemGrantAccess::ReadWrite,
+        scope: FilesystemGrantScope::DirectoryTree,
+        excluded_subpaths: vec![".git".into()],
+    };
+    let policy = horizon_sandbox::SandboxPolicy {
+        writable_roots: vec![workspace.clone()],
+        writable_root_exclusions: Vec::new(),
+        readable_scope: horizon_sandbox::ReadableScope::Full,
+        network: horizon_sandbox::NetworkPolicy::Disabled,
+    };
+    let script = format!(
+        "printf ok > {}; printf obj > {} || true; printf hook > {} || true",
+        shell_quote(&source),
+        shell_quote(&object),
+        shell_quote(&hook)
+    );
+
+    let (code, _, outcome) = run_script_in(
+        &workspace,
+        &policy,
+        std::slice::from_ref(&retry_tree),
+        &script,
+    );
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), "ok");
+    assert!(
+        !object.exists(),
+        "a write under the excluded gitdir must be denied"
+    );
+    assert!(!hook.exists());
+    assert!(outcome.approvals.iter().any(|approval| matches!(
+        &approval.request,
+        nono::ApprovalRequest::Capability { path, .. } if path == &object
+    )));
+
+    // A Git operation's grant on the gitdir lifts the retry tree's
+    // exclusion and keeps its own.
+    let metadata = FilesystemGrant {
+        path: git_dir.clone(),
+        access: FilesystemGrantAccess::ReadWrite,
+        scope: FilesystemGrantScope::DirectoryTree,
+        excluded_subpaths: vec!["hooks".into(), "config".into()],
+    };
+    let (code, _, _) = run_script_in(&workspace, &policy, &[retry_tree, metadata], &script);
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&object).unwrap(), "obj");
+    assert!(!hook.exists());
+
+    std::fs::remove_dir_all(workspace).expect("remove test directory");
+    std::fs::remove_dir_all(checkout).expect("remove test directory");
+}
+
 /// A root whose `.git` holds `hooks/` and a `config`, plus two staged files.
 fn excluded_gitdir_fixture(label: &str) -> std::path::PathBuf {
     let root = test_dir(label).canonicalize().unwrap();
