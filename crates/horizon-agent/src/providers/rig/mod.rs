@@ -19,7 +19,7 @@ use completion::{complete_rig_turn, ToolCallDescriptor, TurnCompletion};
 use history::load_rig_session_history;
 use mapping::rig_workspace_snapshot_call;
 use session::spawn_rig_session;
-use stream::{StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer};
+use stream::{StreamDeltaBuffer, StreamDeltaKind};
 
 use crate::{
     config::{ProviderKind, RigAgentConfig},

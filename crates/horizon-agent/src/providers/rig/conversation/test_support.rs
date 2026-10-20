@@ -19,13 +19,16 @@ pub(crate) fn fixture(messages: Vec<Message>) -> ConversationHistory {
                         .unwrap();
                 }
             }
-            Message::Assistant { ref content, .. } => {
+            Message::Assistant(rig_core::completion::message::AssistantMessage {
+                ref content,
+                ..
+            }) => {
                 let calls = content
                     .iter()
                     .filter_map(|part| match part {
                         AssistantContent::ToolCall(tool) => Some(ToolCallIdentity {
-                            call_id: ToolCallId(provider_call_id(tool).into()),
-                            occurrence_id: OccurrenceId(provider_call_id(tool).into()),
+                            call_id: ToolCallId(provider_call_id(tool)),
+                            occurrence_id: OccurrenceId(provider_call_id(tool)),
                         }),
                         _ => None,
                     })

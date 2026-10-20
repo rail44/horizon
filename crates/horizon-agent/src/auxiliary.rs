@@ -30,7 +30,7 @@ impl AuxiliaryConfig {
 
 pub struct AuxiliaryClient {
     config: AuxiliaryConfig,
-    client: OnceLock<Option<openai::CompletionsClient>>,
+    client: OnceLock<Option<openai::OpenAI>>,
 }
 
 impl AuxiliaryClient {
@@ -46,20 +46,20 @@ impl AuxiliaryClient {
         &self.config.model
     }
 
-    pub(crate) fn completion_client(&self) -> anyhow::Result<openai::CompletionsClient> {
+    pub(crate) fn completion_client(&self) -> anyhow::Result<openai::OpenAI> {
         self.client
             .get_or_init(|| {
                 let api_key = std::env::var(&self.config.api_key_env).ok()?;
-                let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
+                let mut config = openai::wire::OpenAIConfig::new(api_key);
                 if let Some(base_url) = &self.config.base_url {
-                    builder = builder.base_url(base_url);
+                    config = config.with_base_url(base_url);
                 }
-                builder.build().ok()
+                Some(config.client())
             })
             .clone()
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "auxiliary client unavailable ({} unset, or client build failed)",
+                    "auxiliary client unavailable ({} unset)",
                     self.config.api_key_env,
                 )
             })

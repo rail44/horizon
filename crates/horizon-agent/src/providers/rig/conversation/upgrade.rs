@@ -147,29 +147,41 @@ fn close_pending(
 
 fn restore_tool(request: &ToolCallRequest, payload: Option<&Value>) -> Result<ToolCall, String> {
     let mut tool = ToolCall::new(
-        rig_core::message::ToolCallId::new_or_mint(request.call_id.0.clone()),
+        rig_core::message::CallId::from_wire(request.call_id.0.clone()),
         rig_core::completion::message::ToolFunction::new(
-            request.tool_id.clone(),
+            rig_core::message::ToolName::new(request.tool_id.clone())
+                .map_err(|_| "empty tool id".to_string())?,
             request.input.0.clone(),
         ),
     );
     if let Some(raw) = payload.and_then(|p| p.pointer("/rig/tool_call")) {
-        if let Some(id) = raw["id"].as_str() {
-            tool.id = rig_core::message::ToolCallId::new_or_mint(id);
+        // 0.44 keeps the provider-issued id on the `CallId` itself, so a
+        // persisted `call_id` is what the identity check must compare.
+        // A v1 payload carried rig's internal id in `id` and the
+        // provider-issued one in `call_id`; 0.44 has only the `CallId`, and the
+        // recorded request id is the provider's.
+        let wire_id = raw["call_id"].as_str().or_else(|| raw["id"].as_str());
+        if let Some(id) = wire_id {
+            tool.id = rig_core::message::CallId::from_wire(id);
         }
-        tool.provider = raw["call_id"]
-            .as_str()
-            .and_then(rig_core::completion::message::ProviderCallId::new);
-        tool.signature = raw["signature"].as_str().map(str::to_owned);
-        tool.additional_params = raw
-            .get("additional_params")
-            .filter(|value| !value.is_null())
-            .cloned();
+        let native_item = serde_json::json!({
+            "call_id": raw["call_id"].clone(),
+            "signature": raw["signature"].clone(),
+            "additional_params": raw["additional_params"].clone(),
+        });
+        tool.native = Some(rig_core::message::Native {
+            fingerprint: rig_core::message::Fingerprint::of(&native_item),
+            item: native_item,
+        });
     }
     if provider_call_id(&tool) != request.call_id.0 {
         return Err("Provider payload disagrees with the recorded call identity".into());
     }
-    super::super::completion::replay_safe_tool_arguments(&mut tool.function.arguments);
+    let mut arguments = serde_json::Value::Object(tool.function.arguments.clone());
+    super::super::completion::replay_safe_tool_arguments(&mut arguments);
+    if let serde_json::Value::Object(map) = arguments {
+        tool.function.arguments = map;
+    }
     Ok(tool)
 }
 
@@ -328,7 +340,9 @@ fn conversation_changes(
                 }
             }
             content.push(AssistantContent::text(&message.text));
-            let message = Message::Assistant { id: None, content };
+            let message = Message::Assistant(rig_core::completion::message::AssistantMessage::new(
+                content,
+            ));
             extra.push(ConversationRecord::Response {
                 response_id,
                 codec: MESSAGE_CODEC,

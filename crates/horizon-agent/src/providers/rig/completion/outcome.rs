@@ -62,6 +62,9 @@ impl CompletionStop {
         text: String,
     ) -> Self {
         use rig_core::completion::FinishReason;
+        // 0.44 keeps `FinishReason` (with `ContentFilter`) on the response even
+        // though its `StopReason` has no such value, so a blocked reply is read
+        // from a typed field rather than from the provider's raw text.
         match reason {
             Some(FinishReason::ContentFilter) => Self::Refused,
             Some(FinishReason::Other(reason)) => Self::Unknown { reason },
@@ -69,6 +72,11 @@ impl CompletionStop {
             Some(FinishReason::Stop | FinishReason::ToolCalls) => {
                 Self::from_response(false, unfinished, false, text)
             }
+            // `FinishReason` is non-exhaustive: a reason this build does not
+            // know keeps its own text rather than being dropped.
+            Some(other) => Self::Unknown {
+                reason: format!("{other:?}"),
+            },
             None => Self::from_response(
                 false,
                 unfinished,

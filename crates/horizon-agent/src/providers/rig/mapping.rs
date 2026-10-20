@@ -17,7 +17,7 @@ use crate::{contract::ToolPermission, tools::Definition};
 mod tests;
 
 pub(super) const RIG_PROVIDER_PAYLOAD_SCHEMA: &str = "horizon.rig.provider_payload";
-pub(super) const RIG_PROVIDER_PAYLOAD_VERSION: u32 = 1;
+pub(super) const RIG_PROVIDER_PAYLOAD_VERSION: u32 = 2;
 
 #[cfg(test)]
 pub(super) fn horizon_events_from_rig_message(message: Message) -> Vec<Event> {
@@ -47,11 +47,11 @@ pub(super) fn horizon_provider_events_from_rig_message(message: Message) -> Vec<
                 _ => None,
             })
             .collect(),
-        Message::Assistant { content, .. } => {
+        Message::Assistant(assistant) => {
             let mut reasoning_events = Vec::new();
             let mut output_events = Vec::new();
 
-            for content in content {
+            for content in assistant.content {
                 match content {
                     AssistantContent::Text(text) => output_events.push(
                         Event::MessageCommitted(AgentMessage {
@@ -67,7 +67,7 @@ pub(super) fn horizon_provider_events_from_rig_message(message: Message) -> Vec<
                         ));
                     }
                     AssistantContent::Reasoning(reasoning) => {
-                        let text = reasoning.display_text();
+                        let text = reasoning.text;
                         if !text.is_empty() {
                             reasoning_events.push(
                                 Event::ReasoningDelta(MessageDelta {
@@ -78,7 +78,8 @@ pub(super) fn horizon_provider_events_from_rig_message(message: Message) -> Vec<
                             );
                         }
                     }
-                    AssistantContent::Image(_) => {}
+                    AssistantContent::Image(_) | AssistantContent::Opaque(_) => {}
+                    _ => {}
                 }
             }
 
@@ -94,7 +95,7 @@ pub(super) fn horizon_tool_definition_from_rig(
     permission: ToolPermission,
 ) -> Definition {
     Definition {
-        id: definition.name,
+        id: definition.name.as_str().to_string(),
         title: definition.description.clone(),
         description: definition.description,
         input_schema: definition.parameters,
@@ -119,17 +120,16 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
 
 pub(super) fn rig_tool_call_request(call: ToolCall) -> ToolCallRequest {
     ToolCallRequest {
-        // The old `call_id.unwrap_or(id)` resolution, on rig 0.42's shapes:
-        // the provider-issued id when the call carries one, rig's
-        // correlation handle otherwise.
+        // The provider-issued id when the call carries one, rig's own
+        // correlation handle otherwise (`CallId` keeps both).
         call_id: ToolCallId(
-            call.provider
-                .as_ref()
-                .map(|p| p.call_id.clone())
-                .unwrap_or_else(|| call.id.as_str().to_string()),
+            call.id
+                .provider()
+                .map(|p| p.as_str().to_string())
+                .unwrap_or_else(|| call.id.wire().into_owned()),
         ),
-        tool_id: call.function.name,
-        input: call.function.arguments.into(),
+        tool_id: call.function.name.as_str().to_string(),
+        input: serde_json::Value::Object(call.function.arguments).into(),
         // Mint a fresh `OccurrenceId` here -- the upstream provider only
         // knows its own `call_id`, which it can reuse across genuinely
         // distinct calls (the `functions.fs.edit:66` incident in session
@@ -148,13 +148,12 @@ pub(super) fn rig_tool_call_provider_payload(call: &ToolCall) -> serde_json::Val
         "version": RIG_PROVIDER_PAYLOAD_VERSION,
         "rig": {
             "tool_call": {
-                "id": call.id.as_str(),
-                "call_id": call.provider.as_ref().map(|p| p.call_id.clone()),
-                "signature": call.signature.clone(),
-                "additional_params": call.additional_params.clone(),
+                "id": call.id.wire(),
+                "call_id": call.id.provider().map(|p| p.as_str()),
+                "native": call.native.as_ref().map(|native| native.item.clone()),
                 "function": {
-                    "name": call.function.name.clone(),
-                    "arguments": call.function.arguments.clone(),
+                    "name": call.function.name.as_str(),
+                    "arguments": serde_json::Value::Object(call.function.arguments.clone()),
                 }
             }
         }
@@ -172,8 +171,12 @@ pub(super) fn rig_tool_call_from_request(request: &ToolCallRequest) -> ToolCall 
     let mut arguments = request.input.0.clone();
     super::completion::replay_safe_tool_arguments(&mut arguments);
     ToolCall::new(
-        rig_core::message::ToolCallId::new_or_mint(request.call_id.0.clone()),
-        ToolFunction::new(request.tool_id.clone(), arguments),
+        rig_core::message::CallId::from_wire(request.call_id.0.clone()),
+        ToolFunction::new(
+            rig_core::message::ToolName::new(request.tool_id.clone())
+                .expect("horizon tool ids are never empty"),
+            arguments,
+        ),
     )
 }
 
@@ -183,11 +186,19 @@ pub(super) fn rig_tool_call_from_request(request: &ToolCallRequest) -> ToolCall 
 /// announced the call: the replayed call, the pending-tool-call
 /// descriptors, or the result-producing context.
 pub(super) fn rig_tool_result_message(result: &ToolCallResult, tool_id: &str) -> Message {
-    Message::tool_result(
-        result.call_id.0.clone(),
-        tool_id,
-        serde_json::json!({"outcome": result.outcome, "output": result.output}).to_string(),
-    )
+    let content =
+        serde_json::json!({"outcome": result.outcome, "output": result.output}).to_string();
+    Message::User {
+        content: vec![rig_core::message::UserContent::ToolResult(
+            rig_core::message::ToolResult {
+                call: rig_core::message::CallId::from_wire(result.call_id.0.clone()),
+                name: rig_core::message::ToolName::new(tool_id.to_string())
+                    .expect("horizon tool ids are never empty"),
+                content: vec![rig_core::message::ToolResultContent::text(content)],
+                is_error: false,
+            },
+        )],
+    }
 }
 
 /// One `fs.read` of `path` — the deterministic fallback's hook for driving
@@ -196,15 +207,22 @@ pub(super) fn rig_tool_result_message(result: &ToolCallResult, tool_id: &str) ->
 /// `completion::deterministic_rig_response`.
 pub(super) fn rig_fs_read_call(path: &str) -> ToolCall {
     ToolCall::new(
-        rig_core::message::ToolCallId::new_or_mint("rig-fs-read-1"),
-        ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": path })),
+        rig_core::message::CallId::from_wire("rig-fs-read-1"),
+        ToolFunction::new(
+            rig_core::message::ToolName::new("fs.read").expect("fs.read is a tool id"),
+            serde_json::json!({ "path": path }),
+        ),
     )
 }
 
 pub(super) fn rig_workspace_snapshot_call() -> ToolCall {
     ToolCall::new(
-        rig_core::message::ToolCallId::new_or_mint("rig-workspace-snapshot-1"),
-        ToolFunction::new("workspace.snapshot".to_string(), serde_json::json!({})),
+        rig_core::message::CallId::from_wire("rig-workspace-snapshot-1"),
+        ToolFunction::new(
+            rig_core::message::ToolName::new("workspace.snapshot")
+                .expect("workspace.snapshot is a tool id"),
+            serde_json::json!({}),
+        ),
     )
 }
 
@@ -220,9 +238,10 @@ pub(super) fn rig_multi_snapshot_calls(count: usize) -> Vec<ToolCall> {
     (1..=count)
         .map(|index| {
             ToolCall::new(
-                rig_core::message::ToolCallId::new_or_mint(format!("rig-multi-snapshot-{index}")),
+                rig_core::message::CallId::from_wire(format!("rig-multi-snapshot-{index}")),
                 ToolFunction::new(
-                    "workspace.snapshot".to_string(),
+                    rig_core::message::ToolName::new("workspace.snapshot")
+                        .expect("workspace.snapshot is a tool id"),
                     serde_json::json!({ "n": index }),
                 ),
             )
@@ -233,12 +252,17 @@ pub(super) fn rig_multi_snapshot_calls(count: usize) -> Vec<ToolCall> {
 #[cfg(test)]
 pub(super) fn rig_workspace_snapshot_call_with_provider_metadata() -> ToolCall {
     ToolCall {
-        provider: rig_core::message::ProviderCallId::new("provider-call-1"),
-        signature: Some("signature-1".to_string()),
-        additional_params: Some(serde_json::json!({
-            "provider": "rig",
-            "reasoning_ref": "reasoning-1"
-        })),
+        native: Some(rig_core::message::Native {
+            fingerprint: rig_core::message::Fingerprint::of(&serde_json::json!({
+                "call_id": "provider-call-1",
+                "signature": "signature-1",
+            })),
+            item: serde_json::json!({
+                "call_id": "provider-call-1",
+                "signature": "signature-1",
+                "additional_params": {"provider": "rig", "reasoning_ref": "reasoning-1"},
+            }),
+        }),
         ..rig_workspace_snapshot_call()
     }
 }

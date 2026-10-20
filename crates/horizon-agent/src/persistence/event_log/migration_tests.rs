@@ -401,8 +401,11 @@ fn v3_conversion_keeps_provider_metadata_and_resolves_reused_clearing_ids() {
             Event::ConversationRecorded(ConversationRecord::ToolAnnounced {
                 tool_call, ..
             }) => {
-                assert_eq!(tool_call.0["signature"], "signed");
-                assert_eq!(tool_call.0["additional_params"]["vendor"], "preserved");
+                assert_eq!(tool_call.0["native"]["item"]["signature"], "signed");
+                assert_eq!(
+                    tool_call.0["native"]["item"]["additional_params"]["vendor"],
+                    "preserved"
+                );
                 announced += 1;
             }
             _ => {}

@@ -273,7 +273,7 @@ async fn provider_wire_interruption_retains_tools_for_both_adapters() {
                 RigCompletionClient::OpenAi(client) => {
                     run_provider_stream(
                         &config,
-                        client,
+                        client.completion(&config.model).erase(),
                         &environment,
                         &[],
                         Message::user("read"),
@@ -287,7 +287,7 @@ async fn provider_wire_interruption_retains_tools_for_both_adapters() {
                 RigCompletionClient::Anthropic(client) => {
                     run_provider_stream(
                         &config,
-                        client,
+                        client.completion(&config.model).erase(),
                         &environment,
                         &[],
                         Message::user("read"),

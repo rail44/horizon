@@ -58,6 +58,9 @@ struct Entry {
     turn: usize,
     content: Content,
 }
+// A conversation entry holds either the user's input or a whole response; the
+// response is the large side and the enum lives one per history entry.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 enum Content {
     Input {
@@ -329,7 +332,11 @@ impl ConversationHistory {
                 check_codec(*codec)?;
                 let message: Message =
                     serde_json::from_value(message.0.clone()).map_err(|e| e.to_string())?;
-                let Message::Assistant { content, .. } = &message else {
+                let Message::Assistant(rig_core::completion::message::AssistantMessage {
+                    content,
+                    ..
+                }) = &message
+                else {
                     return Err("Response must have assistant role".into());
                 };
                 let tools: Vec<_> = content
@@ -500,11 +507,11 @@ fn check_codec(codec: u32) -> Result<(), String> {
         Err(format!("Unsupported conversation message codec {codec}"))
     }
 }
-fn provider_call_id(tool: &ToolCall) -> &str {
-    tool.provider
-        .as_ref()
-        .map(|p| p.call_id.as_str())
-        .unwrap_or_else(|| tool.id.as_str())
+fn provider_call_id(tool: &ToolCall) -> String {
+    tool.id
+        .provider()
+        .map(|p| p.as_str().to_string())
+        .unwrap_or_else(|| tool.id.wire().into_owned())
 }
 
 /// Pending canonical calls can include an announcement persisted immediately

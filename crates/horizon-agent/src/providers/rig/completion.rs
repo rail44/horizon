@@ -10,12 +10,13 @@ use std::{future::Future, time::Duration};
 
 use crossbeam_channel::Sender;
 use futures_util::StreamExt;
-use rig_core::client::CompletionClient;
 use rig_core::{
     completion::{
         message::{Text, ToolCall},
-        AssistantContent, CompletionModel, Message, ToolDefinition,
+        AssistantContent, CompletionRequest, Message, ToolDefinition,
     },
+    driver::DynModel,
+    operation::Completion,
     providers::{anthropic, openai},
 };
 use tokio_util::sync::CancellationToken;
@@ -23,8 +24,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     config::{ProviderKind, RigAgentConfig},
     contract::{
-        Error, Event, MessageRole, ProviderEvent, ProviderRateLimited, ProviderRequestUsage,
-        ToolCallId, ToolCallResult,
+        Error, Event, MessageRole, ProviderEvent, ProviderRateLimited, ToolCallId, ToolCallResult,
     },
     prompt::{system_prompt, SessionEnvironment},
     tools::{definitions, Definition},
@@ -228,7 +228,7 @@ pub(super) async fn complete_rig_turn(
                     }
                     _ => {}
                 }
-                if matches!(&assistant_message, Message::Assistant { content, .. } if content.iter().any(|part| !matches!(part, AssistantContent::Text(text) if text.text.is_empty())))
+                if matches!(&assistant_message, Message::Assistant(rig_core::completion::message::AssistantMessage { content, .. }) if content.iter().any(|part| !matches!(part, AssistantContent::Text(text) if text.text.is_empty())))
                 {
                     let calls = completion
                         .requested_tool_call_ids
@@ -314,7 +314,9 @@ pub(super) async fn complete_rig_turn(
 }
 
 fn publish_response_text(events: &Sender<ProviderEvent>, message: &Message) {
-    if let Message::Assistant { content, .. } = message {
+    if let Message::Assistant(rig_core::completion::message::AssistantMessage { content, .. }) =
+        message
+    {
         let text: String = content
             .iter()
             .filter_map(|part| match part {
@@ -422,49 +424,28 @@ async fn rig_provider_turn_streaming(
     events_tx: Sender<ProviderEvent>,
     token: &CancellationToken,
 ) -> Attempt<(Message, TurnCompletion)> {
-    match client {
-        RigCompletionClient::OpenAi(client) => {
-            run_provider_stream(
-                config,
-                client,
-                environment,
-                extra_sections,
-                prompt,
-                history,
-                events_tx,
-                token,
-                ProviderDeadlines::default(),
-            )
-            .await
-        }
-        RigCompletionClient::Anthropic(client) => {
-            run_provider_stream(
-                config,
-                client,
-                environment,
-                extra_sections,
-                prompt,
-                history,
-                events_tx,
-                token,
-                ProviderDeadlines::default(),
-            )
-            .await
-        }
-    }
+    let model = client.completion_model(&config.model);
+    run_provider_stream(
+        config,
+        model,
+        environment,
+        extra_sections,
+        prompt,
+        history,
+        events_tx,
+        token,
+        ProviderDeadlines::default(),
+    )
+    .await
 }
 
-/// One streamed provider turn, generic over whichever bundled rig client
-/// the turn's kind built — every type below the client construction
-/// (`CompletionModel`, the request builder, `StreamingCompletionResponse`,
-/// `StreamedAssistantContent`) is rig-common, so both kinds share this
-/// body unchanged.
+/// One streamed provider turn on whichever client the turn's kind built:
+/// rig 0.44 hands every provider to a consumer as one erased
+/// `DynModel<Completion>`, so both kinds share this body unchanged.
 #[allow(clippy::too_many_arguments)]
-// `Clone` is the `completion_request` builder's own bound; both bundled
-// clients' models (`openai`/`anthropic` `GenericCompletionModel`) satisfy it.
-async fn run_provider_stream<C>(
+async fn run_provider_stream(
     config: &RigAgentConfig,
-    client: C,
+    model: DynModel<Completion>,
     environment: &SessionEnvironment,
     extra_sections: &[String],
     prompt: Message,
@@ -472,15 +453,7 @@ async fn run_provider_stream<C>(
     events_tx: Sender<ProviderEvent>,
     token: &CancellationToken,
     deadlines: ProviderDeadlines,
-) -> Attempt<(Message, TurnCompletion)>
-where
-    C: CompletionClient,
-    // `Clone` is the `completion_request` builder's own bound; both bundled
-    // clients' models (`openai`/`anthropic` `GenericCompletionModel`)
-    // satisfy it.
-    C::CompletionModel: Clone,
-{
-    let model = client.completion_model(&config.model);
+) -> Attempt<(Message, TurnCompletion)> {
     let mut attempt = ResponseAttempt::new(config, events_tx);
     // `history` is the *provider view* of canonical history, already
     // projected through the Tier 1 clearing seam by the caller
@@ -488,8 +461,7 @@ where
     // the projection only replaces the bodies of tool results the session's
     // frozen cleared set names, keeping every call/result pair intact, and
     // `rig_history` itself still holds the originals.
-    let stream_request = model
-        .completion_request(prompt)
+    let request = CompletionRequest::new(prompt)
         .messages(history)
         .tools(rig_tool_definitions(
             config.allowed_tool_ids.as_deref(),
@@ -497,10 +469,9 @@ where
         ))
         .preamble(system_prompt(environment, extra_sections))
         .max_tokens(config.max_output_tokens)
-        .additional_params(provider_additional_params(config.kind))
-        .stream();
+        .additional_params(provider_additional_params(config.kind));
     let mut stream = match await_provider_phase(
-        stream_request,
+        async { model.stream(request) },
         token,
         deadlines.establish,
         "stream establishment",
@@ -509,12 +480,10 @@ where
     {
         Ok(ProviderWait::Ready(Ok(stream))) => stream,
         Ok(ProviderWait::Cancelled) => {
-            return attempt.close(Ok(ResponseEnd::Cancelled), None, Vec::new())
+            return attempt.close(Ok(ResponseEnd::Cancelled), None, None)
         }
-        Ok(ProviderWait::Ready(Err(error))) => {
-            return attempt.close(Err(error.into()), None, Vec::new())
-        }
-        Err(error) => return attempt.close(Err(error), None, Vec::new()),
+        Ok(ProviderWait::Ready(Err(error))) => return attempt.close(Err(error.into()), None, None),
+        Err(error) => return attempt.close(Err(error), None, None),
     };
     let end = loop {
         match await_provider_phase(stream.next(), token, deadlines.idle, "response stream").await {
@@ -525,24 +494,18 @@ where
             Err(error) => break Err(error),
         }
     };
-    attempt.close(end, stream.message_id.clone(), stream.choice.clone())
-}
-
-pub(super) fn provider_request_usage_event_from_stream_final(
-    final_record: &rig_core::streaming::StreamFinal,
-) -> Event {
-    // rig's normalized `Usage` already folds the provider's per-field
-    // reporting (OpenAI's `prompt_tokens` and
-    // `prompt_tokens_details.cached_tokens` included) into plain counters.
-    let usage = &final_record.usage;
-    let input_tokens = usage.input_tokens;
-    let total_tokens = usage.total_tokens;
-    Event::ProviderRequestUsage(ProviderRequestUsage {
-        input_tokens,
-        output_tokens: total_tokens.saturating_sub(input_tokens),
-        total_tokens,
-        cached_input_tokens: usage.cached_input_tokens,
-    })
+    // The stream carries events only; the fold's own response (finish reason,
+    // usage, raw provider JSON) is what `finish` returns once it ended.
+    match end {
+        Ok(ResponseEnd::Finished) => match stream.finish().await {
+            Ok(response) => {
+                let message_id = response.identity().response_id.clone();
+                attempt.close(Ok(ResponseEnd::Finished), message_id, Some(response))
+            }
+            Err(error) => attempt.close(Err(error.into()), None, None),
+        },
+        other => attempt.close(other, None, None),
+    }
 }
 
 /// Fallback only for a final record with no normalized finish reason.
@@ -576,10 +539,24 @@ pub(super) fn provider_additional_params(kind: ProviderKind) -> serde_json::Valu
 /// rig-core 0.42 bundles both with no feature gates; the enum (rather than
 /// a trait object) is what lets `run_provider_stream` stay generic over the
 /// concrete `CompletionClient` impl without dyn-safe contortions.
+// Two provider clients that are only ever built once per turn and passed by
+// value into the stream runner; boxing them would buy nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(super) enum RigCompletionClient {
-    OpenAi(openai::CompletionsClient),
-    Anthropic(anthropic::Client),
+    OpenAi(openai::OpenAI),
+    Anthropic(anthropic::Anthropic),
+}
+
+impl RigCompletionClient {
+    /// The turn's completion model on this client's transport, erased the way
+    /// rig 0.44 hands every provider to a consumer that names no wire.
+    fn completion_model(&self, model: &str) -> DynModel<Completion> {
+        match self {
+            Self::OpenAi(client) => client.completion(model).erase(),
+            Self::Anthropic(client) => client.completion(model).erase(),
+        }
+    }
 }
 
 /// Builds the rig completion client for a turn — generalized from
@@ -605,18 +582,18 @@ fn completion_client(config: &RigAgentConfig) -> anyhow::Result<RigCompletionCli
 
     match config.kind {
         ProviderKind::OpenAiCompatible => {
-            let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
+            let mut provider = openai::wire::OpenAIConfig::new(api_key);
             if let Some(base_url) = &config.base_url {
-                builder = builder.base_url(base_url);
+                provider = provider.with_base_url(base_url);
             }
-            Ok(RigCompletionClient::OpenAi(builder.build()?))
+            Ok(RigCompletionClient::OpenAi(provider.client()))
         }
         ProviderKind::Anthropic => {
-            let mut builder = anthropic::Client::builder().api_key(&api_key);
+            let mut provider = anthropic::wire::AnthropicConfig::new(api_key);
             if let Some(base_url) = &config.base_url {
-                builder = builder.base_url(base_url);
+                provider = provider.with_base_url(base_url);
             }
-            Ok(RigCompletionClient::Anthropic(builder.build()?))
+            Ok(RigCompletionClient::Anthropic(provider.client()))
         }
     }
 }
@@ -670,7 +647,11 @@ pub(super) fn replay_safe_tool_arguments(arguments: &mut serde_json::Value) {
 pub(super) fn make_tool_call_arguments_replay_safe(content: &mut [AssistantContent]) {
     for item in content.iter_mut() {
         if let AssistantContent::ToolCall(call) = item {
-            replay_safe_tool_arguments(&mut call.function.arguments);
+            let mut arguments = serde_json::Value::Object(call.function.arguments.clone());
+            replay_safe_tool_arguments(&mut arguments);
+            if let serde_json::Value::Object(map) = arguments {
+                call.function.arguments = map;
+            }
         }
     }
 }
@@ -679,7 +660,7 @@ pub(super) fn make_tool_call_arguments_replay_safe(content: &mut [AssistantConte
 /// streamed before cancellation: the accumulated text (if any) followed by
 /// the tool calls that were already emitted as `ToolCallRequested` events.
 pub(super) fn partial_assistant_message(
-    message_id: Option<String>,
+    _message_id: Option<String>,
     text: &str,
     tool_calls: Vec<ToolCall>,
 ) -> Message {
@@ -694,10 +675,9 @@ pub(super) fn partial_assistant_message(
     }
     make_tool_call_arguments_replay_safe(&mut content);
 
-    Message::Assistant {
-        id: message_id,
+    Message::Assistant(rig_core::completion::message::AssistantMessage::new(
         content,
-    }
+    ))
 }
 
 /// Line prefix the deterministic fallback reads an `fs.read` target from;
@@ -714,10 +694,9 @@ pub(super) fn deterministic_rig_response(text: &str) -> Message {
         // Deterministic hook for driving a real `fs.read` -- including one
         // whose path leaves the workspace root, so the approval/refusal
         // routing is exercisable without a network provider.
-        return Message::Assistant {
-            id: None,
-            content: vec![AssistantContent::ToolCall(rig_fs_read_call(path.trim()))],
-        };
+        return Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
+            AssistantContent::ToolCall(rig_fs_read_call(path.trim())),
+        ]));
     }
     if lower.contains("multi tool") {
         // Deterministic hook for exercising a parallel-tool-call batch (see
@@ -725,17 +704,13 @@ pub(super) fn deterministic_rig_response(text: &str) -> Message {
         // provider.
         multi_tool_call_message(MULTI_TOOL_TEST_BATCH_SIZE)
     } else if lower.contains("snapshot") {
-        Message::Assistant {
-            id: None,
-            content: vec![AssistantContent::ToolCall(rig_workspace_snapshot_call())],
-        }
+        Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
+            AssistantContent::ToolCall(rig_workspace_snapshot_call()),
+        ]))
     } else {
-        Message::Assistant {
-            id: None,
-            content: vec![AssistantContent::Text(Text::new(format!(
-                "rig-core fallback response: {text}"
-            )))],
-        }
+        Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
+            AssistantContent::Text(Text::new(format!("rig-core fallback response: {text}"))),
+        ]))
     }
 }
 
@@ -751,10 +726,9 @@ pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Mes
     // tests can drive consecutive tool-driven turns (e.g. the
     // iteration-cap guard). Real tool outputs never carry this key.
     if result.output.get("loop_again") == Some(&serde_json::Value::Bool(true)) {
-        return Message::Assistant {
-            id: None,
-            content: vec![AssistantContent::ToolCall(rig_workspace_snapshot_call())],
-        };
+        return Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
+            AssistantContent::ToolCall(rig_workspace_snapshot_call()),
+        ]));
     }
     // Same idea, but for a parallel batch: requests another
     // `loop_again_batch`-many tool calls at once, so tests can drive
@@ -767,23 +741,21 @@ pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Mes
     {
         return multi_tool_call_message(count as usize);
     }
-    Message::Assistant {
-        id: None,
-        content: vec![AssistantContent::Text(Text::new(format!(
+    Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
+        AssistantContent::Text(Text::new(format!(
             "Tool result received for {}.",
             result.call_id.0
-        )))],
-    }
+        ))),
+    ]))
 }
 
 fn multi_tool_call_message(count: usize) -> Message {
-    Message::Assistant {
-        id: None,
-        content: rig_multi_snapshot_calls(count)
+    Message::Assistant(rig_core::completion::message::AssistantMessage::new(
+        rig_multi_snapshot_calls(count)
             .into_iter()
             .map(AssistantContent::ToolCall)
             .collect(),
-    }
+    ))
 }
 
 /// Converts the catalog's tool definitions to rig's `ToolDefinition` shape,
@@ -838,7 +810,8 @@ pub(super) fn rig_tool_definitions(
 
 fn rig_tool_definition_from_horizon(definition: Definition) -> ToolDefinition {
     ToolDefinition {
-        name: definition.id,
+        name: rig_core::message::ToolName::new(definition.id)
+            .expect("horizon tool ids are never empty"),
         description: definition.description,
         parameters: definition.input_schema,
     }

@@ -27,15 +27,15 @@ fn round(
         call_id: ToolCallId(provider.into()),
         occurrence_id: id(occurrence),
     };
-    let message = Message::Assistant {
-        id: Some(format!("message-{occurrence}")),
-        content: vec![rig_core::completion::AssistantContent::ToolCall(
-            ToolCall::new(
-                rig_core::message::ToolCallId::new_or_mint(provider),
-                ToolFunction::new("fs.read".into(), serde_json::json!({"path":path})),
+    let message = Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
+        rig_core::completion::AssistantContent::ToolCall(ToolCall::new(
+            rig_core::message::CallId::from_wire(provider),
+            ToolFunction::new(
+                rig_core::message::ToolName::new("fs.read").expect("tool id"),
+                serde_json::json!({"path":path}),
             ),
-        )],
-    };
+        )),
+    ]));
     history
         .record_response(
             occurrence.into(),

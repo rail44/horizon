@@ -75,9 +75,9 @@ async fn cap_summary_request_disables_tools_without_changing_session_config() {
     state.rig_history =
         crate::providers::rig::conversation::fixture(vec![rig_core::completion::Message::from(
             rig_core::completion::message::ToolCall::new(
-                rig_core::message::ToolCallId::new_or_mint("last-call"),
+                rig_core::message::CallId::from_wire("last-call"),
                 rig_core::completion::message::ToolFunction::new(
-                    "fs.read".into(),
+                    rig_core::message::ToolName::new("fs.read").expect("tool id"),
                     json!({"path":"file"}),
                 ),
             ),

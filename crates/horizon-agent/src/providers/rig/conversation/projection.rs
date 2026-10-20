@@ -9,9 +9,8 @@ impl ConversationHistory {
                 Content::Input { text, .. } => messages.push(Message::user(text.clone())),
                 Content::Response(response) => {
                     messages.push(response.message.clone().unwrap_or_else(|| {
-                        Message::Assistant {
-                            id: None,
-                            content: response
+                        Message::Assistant(rig_core::completion::message::AssistantMessage::new(
+                            response
                                 .reasoning
                                 .iter()
                                 .cloned()
@@ -23,7 +22,7 @@ impl ConversationHistory {
                                         .map(|call| AssistantContent::ToolCall(call.tool.clone())),
                                 )
                                 .collect(),
-                        }
+                        ))
                     }));
                     for call in &response.calls {
                         if let Some(result) = &call.result {
@@ -37,7 +36,6 @@ impl ConversationHistory {
                                 ) = content.first_mut()
                                 {
                                     result.call = call.tool.id.clone();
-                                    result.provider = call.tool.provider.clone();
                                 }
                             }
                             messages.push(message);
@@ -121,7 +119,10 @@ impl ConversationHistory {
                                 )
                         }) =>
                 {
-                    if let Some(Message::Assistant { content, .. }) = &response.message {
+                    if let Some(Message::Assistant(
+                        rig_core::completion::message::AssistantMessage { content, .. },
+                    )) = &response.message
+                    {
                         let text: String = content
                             .iter()
                             .filter_map(|c| match c {

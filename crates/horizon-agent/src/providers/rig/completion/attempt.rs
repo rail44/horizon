@@ -10,8 +10,8 @@ use crate::{
 };
 use crossbeam_channel::Sender;
 use rig_core::{
-    completion::{AssistantContent, Message},
-    streaming::StreamedAssistantContent,
+    completion::Message,
+    streaming::{Item, StreamEvent},
 };
 
 pub(super) struct ResponseAttempt {
@@ -31,14 +31,14 @@ impl ResponseAttempt {
             response: ResponseCollector::new(config, events),
         }
     }
-    pub(super) fn push(&mut self, chunk: StreamedAssistantContent) {
+    pub(super) fn push(&mut self, chunk: Item<StreamEvent>) {
         self.response.push(chunk);
     }
     pub(super) fn close(
         mut self,
         end: anyhow::Result<ResponseEnd>,
         message_id: Option<String>,
-        content: Vec<AssistantContent>,
+        response: Option<rig_core::completion::CompletionResponse>,
     ) -> Attempt<(Message, TurnCompletion)> {
         let durable_output_emitted = self.response.has_issued_tools();
         self.span.finish();
@@ -46,7 +46,7 @@ impl ResponseAttempt {
             Ok(end) => (end, None),
             Err(error) => (ResponseEnd::Failed, Some(error)),
         };
-        let collected = self.response.finish(end, message_id, content);
+        let collected = self.response.finish(end, message_id, response);
         match error {
             Some(error) => Attempt::Failed {
                 error,

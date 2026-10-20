@@ -20,8 +20,7 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use rig_core::client::CompletionClient;
-use rig_core::completion::{AssistantContent, CompletionModel, Message};
+use rig_core::completion::{AssistantContent, CompletionRequest, Message};
 
 /// How long one summarizer call may take before it gives up and the raw
 /// first-message title stays. A tab title is never worth more than a few
@@ -104,19 +103,20 @@ pub fn summarize_session_title(
     let user_content = prompt_input(first_message);
     runtime().block_on(async move {
         let client = connection.completion_client().ok()?;
-        let completion_model = client.completion_model(&model);
+        let model = client.completion(&model);
         let response = tokio::time::timeout(TITLE_TIMEOUT, async move {
-            completion_model
-                .completion_request(Message::user(user_content))
-                .preamble(SYSTEM_PROMPT.to_string())
-                .max_tokens(MAX_TOKENS)
-                // `reasoning_effort: none`, the judge's hard-won lesson
-                // (`judge::client`): a reasoning-first model burns its
-                // whole token budget in its think block and never emits
-                // the answer -- the exact failure mode this one-shot
-                // call cannot afford.
-                .additional_params(serde_json::json!({ "reasoning_effort": "none" }))
-                .send()
+            model
+                .call(
+                    CompletionRequest::new(Message::user(user_content))
+                        .preamble(SYSTEM_PROMPT.to_string())
+                        .max_tokens(MAX_TOKENS)
+                        // `reasoning_effort: none`, the judge's hard-won lesson
+                        // (`judge::client`): a reasoning-first model burns its
+                        // whole token budget in its think block and never emits
+                        // the answer -- the exact failure mode this one-shot
+                        // call cannot afford.
+                        .additional_params(serde_json::json!({ "reasoning_effort": "none" })),
+                )
                 .await
         })
         .await

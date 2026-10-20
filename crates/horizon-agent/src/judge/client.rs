@@ -15,8 +15,7 @@
 //! `top_logprobs` this way.
 
 use async_trait::async_trait;
-use rig_core::client::CompletionClient;
-use rig_core::completion::{AssistantContent, CompletionModel, Message};
+use rig_core::completion::{AssistantContent, CompletionRequest, Message};
 
 /// One stage's completion request, already assembled by
 /// `judge::prompt`/`judge::run_judge` -- everything a [`ModelClient`] needs
@@ -110,13 +109,14 @@ impl ModelClient for RigModelClient {
         request: RawCompletionRequest,
     ) -> anyhow::Result<RawCompletionResponse> {
         let client = self.client.completion_client()?;
-        let completion_model = client.completion_model(model);
-        let response = completion_model
-            .completion_request(Message::user(request.user_content))
-            .preamble(request.system_prompt)
-            .max_tokens(request.max_tokens)
-            .additional_params(request.additional_params)
-            .send()
+        let model = client.completion(model);
+        let response = model
+            .call(
+                CompletionRequest::new(Message::user(request.user_content))
+                    .preamble(request.system_prompt)
+                    .max_tokens(request.max_tokens)
+                    .additional_params(request.additional_params),
+            )
             .await?;
 
         let text = response

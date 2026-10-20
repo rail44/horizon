@@ -3,7 +3,7 @@
 
 use std::{future::Future, time::Duration};
 
-use rig_core::completion::CompletionError;
+use rig_core::ProviderError;
 use tokio_util::sync::CancellationToken;
 
 /// Maximum attempts for transient failures before a tool call is issued.
@@ -138,30 +138,43 @@ struct ClassifiedFailure {
 }
 
 /// rig 0.42 routes request-id-contract providers' failures (OpenAI among
-/// them) through `CompletionError::ProviderResponse`, which carries the
+/// them) through `ProviderError::ProviderResponse`, which carries the
 /// status, the preserved headers (`Retry-After`), and the provider request
 /// id as structured data; a 2026-09 regression showed the Display-only
 /// classifier silently stopped retrying those. Text-only paths (providers
 /// without the contract, or `ProviderError(String)`) keep the marker
 /// fallback.
 fn classify_failure(error: &anyhow::Error, message: &str) -> ClassifiedFailure {
-    if let Some(response) = error.downcast_ref::<CompletionError>() {
-        let status = response
-            .provider_response_status()
-            .map(|status| status.as_u16());
-        let retry_after = response
-            .provider_response_headers()
-            .and_then(|headers| headers.get("retry-after"))
-            .and_then(|value| value.to_str().ok())
-            .and_then(retry_after_seconds)
-            // Some providers echo the hint into the JSON body instead of a
-            // header; the body scrape still covers that shape.
-            .or_else(|| named_retry_after(message));
-        if status.is_some() || retry_after.is_some() {
+    if let Some(provider) = error.downcast_ref::<ProviderError>() {
+        {
+            let status = provider
+                .provider_response_status()
+                .map(|status| status.as_u16());
+            let retry_after = provider
+                .provider_response_headers()
+                .and_then(|headers| headers.get("retry-after"))
+                .and_then(|value| value.to_str().ok())
+                .and_then(retry_after_seconds)
+                // Some providers echo the hint into the JSON body instead of a
+                // header; body text remains the fallback for that shape.
+                .or_else(|| named_retry_after(message));
+            if status.is_some() || retry_after.is_some() {
+                return ClassifiedFailure {
+                    status,
+                    retry_after,
+                    transport: false,
+                    mid_stream: false,
+                };
+            }
+        }
+        // rig answers "may this be retried" for the cases its own typing
+        // covers (transport failures, cut-short replies) — the one place a
+        // 0.44 consumer can take that answer without re-deriving it.
+        if provider.is_retryable() && rejected_status(message).is_none() {
             return ClassifiedFailure {
-                status,
-                retry_after,
-                transport: false,
+                status: None,
+                retry_after: named_retry_after(message),
+                transport: true,
                 mid_stream: false,
             };
         }
@@ -337,6 +350,6 @@ fn truncate_for_log(message: &str) -> String {
 fn provider_request_id_of(error: &anyhow::Error) -> Option<String> {
     error
         .chain()
-        .filter_map(|cause| cause.downcast_ref::<CompletionError>())
+        .filter_map(|cause| cause.downcast_ref::<ProviderError>())
         .find_map(|error| error.provider_request_id().map(str::to_string))
 }

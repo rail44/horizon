@@ -1,6 +1,6 @@
 use super::*;
 use crate::contract::{ConversationInputKind, MessageRole, ToolCallRequest, TurnEndReason};
-use rig_core::completion::message::{Reasoning, ReasoningContent, ToolFunction};
+use rig_core::completion::message::{Reasoning, ToolFunction};
 use serde_json::json;
 
 fn request(index: usize) -> ToolCallRequest {
@@ -95,12 +95,21 @@ fn exact_provider_metadata_and_parallel_result_order_survive_early_results() {
     let mut calls = Vec::new();
     let mut identities = Vec::new();
     for index in 0..2 {
+        let native_item = json!({
+            "call_id": format!("wire-{index}"),
+            "signature": "signed-tool",
+            "additional_params": {"provider_specific": {"value": 42}},
+        });
         let tool = ToolCall {
-            id: rig_core::message::ToolCallId::new_or_mint(format!("local-{index}")),
-            provider: rig_core::completion::message::ProviderCallId::new(format!("wire-{index}")),
-            function: ToolFunction::new("fs.read".into(), json!({"path":index.to_string()})),
-            signature: Some("signed-tool".into()),
-            additional_params: Some(json!({"provider_specific":{"value":42}})),
+            id: rig_core::message::CallId::from_wire(format!("wire-{index}")),
+            function: ToolFunction::new(
+                rig_core::message::ToolName::new("fs.read").expect("tool id"),
+                json!({"path":index.to_string()}),
+            ),
+            native: Some(rig_core::message::Native {
+                fingerprint: rig_core::message::Fingerprint::of(&native_item),
+                item: native_item,
+            }),
         };
         identities.push(ToolCallIdentity {
             call_id: ToolCallId(format!("wire-{index}")),
@@ -109,14 +118,9 @@ fn exact_provider_metadata_and_parallel_result_order_survive_early_results() {
         calls.push(tool);
     }
     let reasoning = Reasoning {
-        id: Some("thought".into()),
-        content: vec![
-            ReasoningContent::Text {
-                text: "planning".into(),
-                signature: Some("signed-reasoning".into()),
-            },
-            ReasoningContent::Encrypted("encrypted-content".into()),
-        ],
+        text: "planning".into(),
+        redacted: false,
+        ..Reasoning::default()
     };
     for (tool, identity) in calls.iter().zip(&identities) {
         tx.send(
@@ -133,12 +137,11 @@ fn exact_provider_metadata_and_parallel_result_order_survive_early_results() {
         )
         .unwrap();
     }
-    let message = Message::Assistant {
-        id: Some("upstream-message".into()),
-        content: std::iter::once(AssistantContent::Reasoning(reasoning))
+    let message = Message::Assistant(rig_core::completion::message::AssistantMessage::new(
+        std::iter::once(AssistantContent::Reasoning(reasoning))
             .chain(calls.into_iter().map(AssistantContent::ToolCall))
             .collect(),
-    };
+    ));
     let results: Vec<_> = identities
         .iter()
         .map(|identity| identity.result(json!({"content":identity.occurrence_id.0})))
@@ -170,8 +173,7 @@ fn exact_provider_metadata_and_parallel_result_order_survive_early_results() {
     let rig_core::completion::message::UserContent::ToolResult(result) = &content[0] else {
         panic!("result")
     };
-    assert_eq!(result.call.as_str(), "local-0");
-    assert_eq!(result.wire_call_id(), "wire-0");
+    assert_eq!(result.call.wire(), "wire-0");
 }
 
 #[test]
@@ -278,7 +280,9 @@ fn legacy_request_boundaries_keep_early_results_in_one_parallel_response() {
     ]);
     let history = ConversationHistory::from_events(&events).unwrap();
     assert_eq!(history.messages().len(), 4);
-    let Message::Assistant { content, .. } = &history.messages()[1] else {
+    let Message::Assistant(rig_core::completion::message::AssistantMessage { content, .. }) =
+        &history.messages()[1]
+    else {
         panic!("batch")
     };
     assert_eq!(

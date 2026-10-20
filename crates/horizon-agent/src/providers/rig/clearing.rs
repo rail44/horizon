@@ -127,10 +127,12 @@ pub(super) fn history_for_provider_request(
         if !cleared.contains(&site.result.occurrence_id) {
             continue;
         }
-        let argument = key_argument(&site.tool.function.arguments);
+        let argument = key_argument(&serde_json::Value::Object(
+            site.tool.function.arguments.clone(),
+        ));
         let described = argument
-            .map(|arg| format!("{} {arg}", site.tool.function.name))
-            .unwrap_or_else(|| site.tool.function.name.clone());
+            .map(|arg| format!("{} {arg}", site.tool.function.name.as_str()))
+            .unwrap_or_else(|| site.tool.function.name.as_str().to_string());
         let placeholder = format!("[cleared old tool result: {described} ({} chars). The full result is retained in the session event log — use recall.search / recall.read, or re-run the tool.]", result_chars(site.result));
         let Message::User { content } = &mut messages[site.message_index] else {
             unreachable!()
