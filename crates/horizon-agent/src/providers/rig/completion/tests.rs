@@ -582,17 +582,12 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
             [ToolCallId("call-1".into()), ToolCallId("call-2".into())]
         );
         let events: Vec<_> = receive.try_iter().collect();
-        let closed: std::collections::HashSet<_> = events
-            .iter()
-            .filter_map(|event| {
-                if let ProviderEvent::ToolCallProgressClosed(key) = event {
-                    Some(key)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        assert_eq!(closed.len(), 2);
+        // Calls are shown once, complete: no preview opens, so none is left
+        // for a close to remove.
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            ProviderEvent::ToolCallProgress(_) | ProviderEvent::ToolCallProgressClosed(_)
+        )));
         let live = crate::live::LiveState::with_disabled_persistence();
         live.extend_provider_events(events).unwrap();
         assert!(!live

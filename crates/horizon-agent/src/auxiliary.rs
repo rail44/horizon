@@ -50,7 +50,10 @@ impl AuxiliaryClient {
         self.client
             .get_or_init(|| {
                 let api_key = std::env::var(&self.config.api_key_env).ok()?;
-                let mut config = openai::wire::OpenAIConfig::new(api_key);
+                // rig 0.44's OpenAI dialect defaults to `/responses`; every
+                // configured endpoint speaks `/chat/completions`.
+                let mut config =
+                    openai::wire::OpenAIConfig::new(api_key).with_route(openai::Route::Chat);
                 if let Some(base_url) = &self.config.base_url {
                     config = config.with_base_url(base_url);
                 }

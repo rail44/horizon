@@ -582,7 +582,10 @@ fn completion_client(config: &RigAgentConfig) -> anyhow::Result<RigCompletionCli
 
     match config.kind {
         ProviderKind::OpenAiCompatible => {
-            let mut provider = openai::wire::OpenAIConfig::new(api_key);
+            // rig 0.44's OpenAI dialect defaults to `/responses`; the
+            // OpenAI-compatible kind is the `/chat/completions` wire.
+            let mut provider =
+                openai::wire::OpenAIConfig::new(api_key).with_route(openai::Route::Chat);
             if let Some(base_url) = &config.base_url {
                 provider = provider.with_base_url(base_url);
             }

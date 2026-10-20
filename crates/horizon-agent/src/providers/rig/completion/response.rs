@@ -181,9 +181,9 @@ impl ResponseCollector {
         if let Some(response) = &response {
             self.record_usage(response);
             finish_reason = response.finish_reason();
-            if let Some(id) = response.identity().response_id {
-                self.response_id = id;
-            }
+            // `response_id` stays the one minted for this attempt: tool calls
+            // were already announced under it, and providers reuse their own
+            // ids across responses.
         }
 
         let assistant_message = match (end, response) {
@@ -191,7 +191,12 @@ impl ResponseCollector {
                 let mut content = response.choice;
                 // Rig's independent aggregate still contains the raw arguments.
                 make_tool_call_arguments_replay_safe(&mut content);
-                Message::Assistant(AssistantMessage::new(content))
+                // rig 0.44 replays provider items (a thinking block's
+                // signature) only for a turn whose origin names the same
+                // provider and model; without one, reasoning goes back as text.
+                let mut message = AssistantMessage::new(content);
+                message.origin = Some(response.origin);
+                Message::Assistant(message)
             }
             // Cancellation and failure: a reply folded only on exhaustion leaves
             // no choice, so history is rebuilt from the observed parts to keep
