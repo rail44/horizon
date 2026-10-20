@@ -38,6 +38,7 @@ pub(super) fn write_verdict(
     input: &JudgeInput,
     model: &str,
     verdict: &JudgeVerdict,
+    threshold: f64,
     latency_ms: u64,
 ) {
     let payload = serde_json::json!({
@@ -47,7 +48,8 @@ pub(super) fn write_verdict(
         "judge_model": model,
         "mode": "enforcing",
         "judge_decision": decision_label(verdict.decision),
-        "judge_stage": verdict.stage,
+        "judge_ask_probability": verdict.ask_probability,
+        "judge_threshold": threshold,
         "judge_confidence": verdict.confidence,
         "fallback_reason": verdict.fallback_reason.map(fallback_reason_label),
         "fallback_error": verdict.fallback_error,
@@ -61,7 +63,7 @@ pub(super) fn write_verdict(
 
 /// Writes a record for a call the rate limiter skipped -- never reached the
 /// model at all. It records the enforced fail-closed escalation and why,
-/// with no model stage/confidence/latency.
+/// with no model probability/confidence/latency.
 pub(super) fn write_skipped(
     writer: &WriterHandle,
     session_id: SessionId,
@@ -180,14 +182,15 @@ mod tests {
             &writer,
             session_id,
             &input,
-            "syn:small:text",
+            "clef:cloud",
             &JudgeVerdict {
                 decision: JudgeDecision::Escalate,
-                stage: 2,
-                confidence: None,
+                ask_probability: Some(0.75),
+                confidence: Some(0.75),
                 fallback_reason: None,
                 fallback_error: None,
             },
+            0.2,
             512,
         );
         writer.flush().expect("flush");
@@ -201,8 +204,13 @@ mod tests {
         assert_eq!(payload["call_id"], "call-1");
         assert_eq!(payload["occurrence_id"], "judge-occ");
         assert_eq!(payload["judge_decision"], "escalate");
-        assert_eq!(payload["judge_stage"], 2);
-        assert_eq!(payload["judge_confidence"], serde_json::Value::Null);
+        assert_eq!(payload["judge_ask_probability"], 0.75);
+        assert_eq!(payload["judge_threshold"], 0.2);
+        assert_eq!(payload["judge_confidence"], 0.75);
+        assert!(
+            payload.get("judge_stage").is_none(),
+            "the stage key is gone: {payload}"
+        );
         assert_eq!(payload["latency_ms"], 512);
         assert_eq!(payload["mode"], "enforcing");
         assert_eq!(payload["fallback_reason"], serde_json::Value::Null);
@@ -223,14 +231,15 @@ mod tests {
             &writer,
             session_id,
             &input,
-            "syn:small:text",
+            "clef:cloud",
             &JudgeVerdict {
                 decision: JudgeDecision::Escalate,
-                stage: 1,
+                ask_probability: None,
                 confidence: None,
                 fallback_reason: Some(JudgeFallbackReason::ClientError),
                 fallback_error: Some("judge request failed: 404 model not found".to_string()),
             },
+            0.2,
             30,
         );
         writer.flush().expect("flush");
@@ -242,6 +251,8 @@ mod tests {
             .as_ref()
             .expect("payload");
         assert_eq!(payload["fallback_reason"], "client_error");
+        assert_eq!(payload["judge_ask_probability"], serde_json::Value::Null);
+        assert_eq!(payload["judge_confidence"], serde_json::Value::Null);
         assert_eq!(
             payload["fallback_error"],
             "judge request failed: 404 model not found"
@@ -262,14 +273,15 @@ mod tests {
             &writer,
             session_id,
             &input,
-            "syn:small:text",
+            "clef:cloud",
             &JudgeVerdict {
                 decision: JudgeDecision::AutoApprove,
-                stage: 1,
+                ask_probability: Some(0.0),
                 confidence: Some(1.0),
                 fallback_reason: None,
                 fallback_error: None,
             },
+            0.2,
             12,
         );
         writer.flush().expect("flush");
@@ -291,13 +303,7 @@ mod tests {
         let session_id = SessionId::new();
         let input = judge_input("call-2");
 
-        write_skipped(
-            &writer,
-            session_id,
-            &input,
-            "syn:small:text",
-            "rate_limited",
-        );
+        write_skipped(&writer, session_id, &input, "clef:cloud", "rate_limited");
         writer.flush().expect("flush");
 
         let report = event_log::read(&path).expect("read");

@@ -98,9 +98,9 @@ every pair still has to name it, for example
 ## Reload
 
 Reload Config updates future title calls and new sessions. Each running session
-retains its judge connection, and likewise its decision connection; its conversation model can be explicitly switched
+retains its decision connection (which the judge runs on); its conversation model can be explicitly switched
 using the latest accepted catalog. Title clients are pooled per accepted shell
-configuration, judge clients per session. In-flight calls keep their captured
+configuration, decision clients per session. In-flight calls keep their captured
 connection when configuration changes.
 
 ## Removed forms

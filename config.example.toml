@@ -36,7 +36,7 @@
 #
 # Reload Config applies theme, keybindings, and provider configuration live.
 # Provider changes affect new sessions and future title calls. Existing sessions
-# keep their conversation, judge, and decision connections; an explicit model switch can
+# keep their conversation and decision connections; an explicit model switch can
 # select a newly configured conversation provider. [terminal]/[ui] need a restart,
 # except the runtime-only font zoom commands.
 #
