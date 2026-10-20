@@ -4,15 +4,22 @@
 //! spans, tool bursts, per-call views, the receipt aggregate) and the
 //! per-tool bodies from `turns`; this module only words them for
 //! [`display`](super::display).
+//!
+//! A turn that has ended is worded once: its units are kept in
+//! [`SettledUnits`], which the pane holds across re-adaptations, so a
+//! session notify re-words only the turn in progress. The frame's settled
+//! revision says when the kept units are stale.
 
 use std::collections::HashMap;
+use std::ops::Range;
+use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use horizon_acp::{MemoryDigest, MemoryField, TaskProgressNotification, ToolOutcome};
 
 use super::super::model::{
     actionable_pending_approval_identities_in, state_indicates_turn_in_flight, AgentFrameItem,
-    AgentModel, MessageRole, SessionState, ToolCallIdentity, TurnEndReason,
+    AgentModel, MessageRole, SessionState, ToolCallIdentity, TurnEndReason, TurnSpan,
 };
 use super::super::session::AgentSession;
 use super::super::turns::{
@@ -32,17 +39,44 @@ pub(crate) struct Adapted {
     pub(crate) approvals: HashMap<String, ToolCallIdentity>,
 }
 
-pub(crate) fn transcript_from(session: &AgentSession) -> Adapted {
+/// The units of the turns that have ended, as last worded. Held by the
+/// pane and handed to every adaptation of the same session: an ended
+/// turn's wording depends on its own items alone, and those are settled
+/// until the frame's settled revision moves.
+#[derive(Debug, Default)]
+pub(crate) struct SettledUnits {
+    revision: u64,
+    /// One entry per ended turn span, in frame order: the span's item
+    /// range and the units it reads as.
+    spans: Vec<(Range<usize>, Vec<Rc<Unit>>)>,
+}
+
+impl SettledUnits {
+    /// How many ended turns are held.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.spans.len()
+    }
+}
+
+pub(crate) fn transcript_from(session: &AgentSession, settled: &mut SettledUnits) -> Adapted {
     adapt(
         &session.model,
         session.runtime_unreachable(),
         unix_epoch_ms(),
+        settled,
     )
 }
 
 /// [`transcript_from`] over the session's parts, with `now_ms` the wall
-/// clock background tasks are aged against.
-pub(crate) fn adapt(model: &AgentModel, unreachable: bool, now_ms: u64) -> Adapted {
+/// clock background tasks are aged against and `settled` the ended turns'
+/// units from the previous adaptation of the same model.
+pub(crate) fn adapt(
+    model: &AgentModel,
+    unreachable: bool,
+    now_ms: u64,
+    settled: &mut SettledUnits,
+) -> Adapted {
     let frame = &model.frame;
     let state = frame.state();
     let pending = actionable_pending_approval_identities_in(&frame.items);
@@ -51,7 +85,13 @@ pub(crate) fn adapt(model: &AgentModel, unreachable: bool, now_ms: u64) -> Adapt
         approvals.insert(approval_id(identity), identity.clone());
     }
     let in_flight = state_indicates_turn_in_flight(state);
-    let units = units(&frame.items, in_flight, &pending);
+    let units = units(
+        &frame.items,
+        in_flight,
+        &pending,
+        settled,
+        frame.settled_revision,
+    );
     let composer = match pending.first() {
         Some(identity) => ComposerMode::Approval {
             id: approval_id(identity),
@@ -127,100 +167,145 @@ fn task_line(task: &TaskProgressNotification, now_ms: u64) -> Task {
 // Units
 // ---------------------------------------------------------------------------
 
-/// Every unit of the frame, in order. Within one turn span, a notice that
-/// arrives before the turn's first output precedes its card and one that
-/// arrives after follows it. A message sent into the session after the
-/// first output closes the card so far (done, without elapsed time) and
-/// starts the next one; the span's end state and elapsed time go to the
-/// last card.
-fn units(items: &[AgentFrameItem], in_flight: bool, pending: &[ToolCallIdentity]) -> Vec<Unit> {
-    let mut units = Vec::new();
-    for span in group_into_turns(items) {
-        let turn_items = &items[span.start..span.end];
-        let bursts = segment_bursts(turn_items);
-        let running = span.ended.is_none() && in_flight;
-        let ended = span.ended.is_some();
-        let mut before = Vec::new();
-        let mut after = Vec::new();
-        let mut parts = Vec::new();
-        // The call views behind the last receipt in `parts`.
-        let mut receipt_views = Vec::new();
-        let mut started = false;
-        for (index, item) in turn_items.iter().enumerate() {
-            if let Some(burst) = bursts.iter().find(|burst| burst.start == index) {
-                let key = span.start + burst.start;
-                if let Some((receipt, views)) =
-                    receipt(key, &turn_items[burst.start..burst.end], ended, pending)
-                {
-                    match parts.last_mut() {
-                        Some(TurnPart::Receipt(previous)) => {
-                            receipt_views.extend(views);
-                            merge_receipt(previous, receipt, &receipt_views);
-                        }
-                        _ => {
-                            receipt_views = views;
-                            parts.push(TurnPart::Receipt(receipt));
-                        }
-                    }
-                    started = true;
-                }
-            }
-            match item {
-                AgentFrameItem::Message(message) => match message.role {
-                    MessageRole::Assistant => {
-                        if !message.text.is_empty() {
-                            parts.push(TurnPart::Text(message.text.clone()));
-                            started = true;
-                        }
-                    }
-                    role => {
-                        if started {
-                            units.append(&mut before);
-                            units.push(Unit::Turn(Turn {
-                                state: TurnState::Done,
-                                parts: std::mem::take(&mut parts),
-                                elapsed: None,
-                            }));
-                            units.append(&mut after);
-                            started = false;
-                        }
-                        before.push(Unit::User(Message {
-                            label: label(role),
-                            text: message.text.clone(),
-                        }));
-                    }
-                },
-                AgentFrameItem::Thought(_) => started = true,
-                item => {
-                    let side = if started { &mut after } else { &mut before };
-                    side.extend(notice(item).map(Unit::Notice));
-                }
-            }
-        }
-        let has_text = parts.iter().any(|part| matches!(part, TurnPart::Text(_)));
-        let thinking_tail = matches!(turn_items.last(), Some(AgentFrameItem::Thought(_)));
-        if running && (thinking_tail || !has_text) {
-            parts.push(TurnPart::Thinking);
-        }
-        let state = match &span.ended {
-            Some(end) => turn_state(end.reason),
-            None if running => TurnState::Running,
-            None => TurnState::Done,
-        };
-        let failed_end = !matches!(state, TurnState::Done | TurnState::Running);
-        units.extend(before);
-        if started || running || failed_end {
-            units.push(Unit::Turn(Turn {
-                state,
-                parts,
-                elapsed: span
-                    .ended
-                    .as_ref()
-                    .map(|end| humanize_duration(end.elapsed)),
-            }));
-        }
-        units.extend(after);
+/// Every unit of the frame, in order: each turn span's units
+/// ([`span_units`]), with an ended span's taken from `settled` when it was
+/// worded before under the same `revision`, and kept there once worded.
+fn units(
+    items: &[AgentFrameItem],
+    in_flight: bool,
+    pending: &[ToolCallIdentity],
+    settled: &mut SettledUnits,
+    revision: u64,
+) -> Vec<Rc<Unit>> {
+    if settled.revision != revision {
+        settled.spans.clear();
+        settled.revision = revision;
     }
+    let mut units = Vec::new();
+    for (position, span) in group_into_turns(items).into_iter().enumerate() {
+        if span.ended.is_none() {
+            units.extend(
+                span_units(items, &span, in_flight, pending)
+                    .into_iter()
+                    .map(Rc::new),
+            );
+            continue;
+        }
+        let range = span.start..span.end;
+        if let Some((held, kept)) = settled.spans.get(position) {
+            if *held == range {
+                units.extend(kept.iter().cloned());
+                continue;
+            }
+        }
+        settled.spans.truncate(position);
+        let worded: Vec<Rc<Unit>> = span_units(items, &span, false, pending)
+            .into_iter()
+            .map(Rc::new)
+            .collect();
+        units.extend(worded.iter().cloned());
+        settled.spans.push((range, worded));
+    }
+    units
+}
+
+/// One turn span's units. A notice that arrives before the turn's first
+/// output precedes its card and one that arrives after follows it. A
+/// message sent into the session after the first output closes the card
+/// so far (done, without elapsed time) and starts the next one; the span's
+/// end state and elapsed time go to the last card. `in_flight` is the
+/// session's state, which only the open span reads.
+fn span_units(
+    items: &[AgentFrameItem],
+    span: &TurnSpan,
+    in_flight: bool,
+    pending: &[ToolCallIdentity],
+) -> Vec<Unit> {
+    let mut units = Vec::new();
+    let turn_items = &items[span.start..span.end];
+    let bursts = segment_bursts(turn_items);
+    let running = span.ended.is_none() && in_flight;
+    let ended = span.ended.is_some();
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    let mut parts = Vec::new();
+    // The call views behind the last receipt in `parts`.
+    let mut receipt_views = Vec::new();
+    let mut started = false;
+    for (index, item) in turn_items.iter().enumerate() {
+        if let Some(burst) = bursts.iter().find(|burst| burst.start == index) {
+            let key = span.start + burst.start;
+            if let Some((receipt, views)) =
+                receipt(key, &turn_items[burst.start..burst.end], ended, pending)
+            {
+                match parts.last_mut() {
+                    Some(TurnPart::Receipt(previous)) => {
+                        receipt_views.extend(views);
+                        merge_receipt(previous, receipt, &receipt_views);
+                    }
+                    _ => {
+                        receipt_views = views;
+                        parts.push(TurnPart::Receipt(receipt));
+                    }
+                }
+                started = true;
+            }
+        }
+        match item {
+            AgentFrameItem::Message(message) => match message.role {
+                MessageRole::Assistant => {
+                    if !message.text.is_empty() {
+                        parts.push(TurnPart::Text(message.text.clone()));
+                        started = true;
+                    }
+                }
+                role => {
+                    if started {
+                        units.append(&mut before);
+                        units.push(Unit::Turn(Turn {
+                            state: TurnState::Done,
+                            parts: std::mem::take(&mut parts),
+                            elapsed: None,
+                        }));
+                        units.append(&mut after);
+                        started = false;
+                    }
+                    before.push(Unit::User(Message {
+                        label: label(role),
+                        text: message.text.clone(),
+                    }));
+                }
+            },
+            AgentFrameItem::Thought(_) => started = true,
+            item => {
+                let side = if started { &mut after } else { &mut before };
+                side.extend(notice(item).map(Unit::Notice));
+            }
+        }
+    }
+    let has_text = parts.iter().any(|part| matches!(part, TurnPart::Text(_)));
+    let thinking_tail = matches!(turn_items.last(), Some(AgentFrameItem::Thought(_)));
+    if running && (thinking_tail || !has_text) {
+        parts.push(TurnPart::Thinking);
+    }
+    let state = match &span.ended {
+        Some(end) => turn_state(end.reason),
+        None if running => TurnState::Running,
+        None => TurnState::Done,
+    };
+    let failed_end = !matches!(state, TurnState::Done | TurnState::Running);
+    units.extend(before);
+    if started || running || failed_end {
+        units.push(Unit::Turn(Turn {
+            state,
+            parts,
+            elapsed: span
+                .ended
+                .as_ref()
+                .map(|end| humanize_duration(end.elapsed)),
+        }));
+    }
+    units.extend(after);
     units
 }
 
@@ -506,14 +591,41 @@ mod tests {
         model
     }
 
+    /// A fresh adaptation: nothing settled from before.
+    fn adapt(model: &AgentModel, unreachable: bool, now_ms: u64) -> Adapted {
+        super::adapt(model, unreachable, now_ms, &mut SettledUnits::default())
+    }
+
+    /// One asked-and-answered turn's items: the ask, a command that ran,
+    /// and the answer.
+    fn exchange(turn: usize, items: &mut Vec<AgentFrameItem>) {
+        items.push(user_message(&format!("ask {turn}")));
+        items.push(tool_finished(
+            &format!("call-{turn}"),
+            "bash",
+            json!({"command": format!("ls {turn}")}),
+            bash_output(&format!("out {turn}\n"), 0),
+        ));
+        items.push(assistant_delta(&format!("done {turn}")));
+    }
+
     fn turns(transcript: &Transcript) -> Vec<&Turn> {
         transcript
             .units
             .iter()
-            .filter_map(|unit| match unit {
+            .filter_map(|unit| match unit.as_ref() {
                 Unit::Turn(turn) => Some(turn),
                 _ => None,
             })
+            .collect()
+    }
+
+    /// The units as owned values, for comparison against literals.
+    fn plain(transcript: &Transcript) -> Vec<Unit> {
+        transcript
+            .units
+            .iter()
+            .map(|unit| unit.as_ref().clone())
             .collect()
     }
 
@@ -553,7 +665,7 @@ mod tests {
         );
         let transcript = &adapted.transcript;
         assert_eq!(
-            transcript.units[0],
+            *transcript.units[0],
             Unit::User(Message {
                 label: Label::You,
                 text: "fix it".to_string()
@@ -591,7 +703,7 @@ mod tests {
             0,
         );
         assert_eq!(
-            adapted.transcript.units,
+            plain(&adapted.transcript),
             vec![
                 Unit::Turn(Turn {
                     state: TurnState::Done,
@@ -865,7 +977,7 @@ mod tests {
             .transcript
             .units
             .iter()
-            .filter_map(|unit| match unit {
+            .filter_map(|unit| match unit.as_ref() {
                 Unit::Notice(notice) => Some((notice.tone, notice.text.clone())),
                 _ => None,
             })
@@ -887,8 +999,8 @@ mod tests {
                 (Tone::Danger, "gone".to_string()),
             ]
         );
-        assert!(matches!(adapted.transcript.units[1], Unit::Notice(_)));
-        assert!(matches!(adapted.transcript.units[2], Unit::Turn(_)));
+        assert!(matches!(*adapted.transcript.units[1], Unit::Notice(_)));
+        assert!(matches!(*adapted.transcript.units[2], Unit::Turn(_)));
         assert_eq!(adapted.transcript.status, Status::Terminated);
     }
 
@@ -918,12 +1030,122 @@ mod tests {
             .transcript
             .units
             .iter()
-            .filter_map(|unit| match unit {
+            .filter_map(|unit| match unit.as_ref() {
                 Unit::User(message) => Some(message.label),
                 _ => None,
             })
             .collect();
         assert_eq!(labels, vec![Label::Task, Label::Continue]);
+    }
+
+    #[test]
+    fn ended_turns_are_worded_once_and_kept_across_adaptations() {
+        let mut items = Vec::new();
+        for turn in 0..3 {
+            exchange(turn, &mut items);
+            items.push(turn_end(TurnEndReason::Completed));
+        }
+        exchange(3, &mut items);
+        let mut model = model(SessionPhase::Running, items);
+        let mut settled = SettledUnits::default();
+
+        let first = super::adapt(&model, false, 0, &mut settled);
+        assert_eq!(first, adapt(&model, false, 0));
+        assert_eq!(settled.len(), 3, "one entry per ended turn");
+
+        // The open turn grows: the ended turns are not worded again, and
+        // the result still matches a fresh adaptation.
+        model.frame.items.push(assistant_delta("and more"));
+        let again = super::adapt(&model, false, 0, &mut settled);
+        assert_eq!(again, adapt(&model, false, 0));
+        assert_eq!(settled.len(), 3);
+        assert_ne!(first.transcript.units, again.transcript.units);
+
+        // The open turn ends: it joins the settled ones.
+        model.frame.items.push(turn_end(TurnEndReason::Completed));
+        model.frame.phase = Some(SessionPhase::Idle);
+        let ended = super::adapt(&model, false, 0, &mut settled);
+        assert_eq!(ended, adapt(&model, false, 0));
+        assert_eq!(settled.len(), 4);
+    }
+
+    /// Not a check: a measurement of what one adaptation of a long session
+    /// costs, fresh against kept. Run it by hand with `--run-ignored all`
+    /// and `--nocapture`.
+    #[test]
+    #[ignore = "a timing, printed for the reader; not a check"]
+    fn adaptation_cost_of_a_long_session() {
+        let mut items = Vec::new();
+        for turn in 0..400 {
+            items.push(user_message(&format!("ask {turn}")));
+            for call in 0..3 {
+                let id = format!("call-{turn}-{call}");
+                items.push(tool_finished(
+                    &id,
+                    "fs.edit",
+                    json!({"path": "/repo/src/lib.rs", "edits": [{"old_string": "fn old() {}\n".repeat(20), "new_string": "fn new() {}\n".repeat(20)}]}),
+                    edit_result("/repo/src/lib.rs"),
+                ));
+                items.push(tool_finished(
+                    &format!("{id}-run"),
+                    "bash",
+                    json!({"command": "cargo test"}),
+                    bash_output(&"test result: ok\n".repeat(40), 0),
+                ));
+            }
+            items.push(assistant_delta(&"Done with this step. ".repeat(30)));
+            items.push(turn_end(TurnEndReason::Completed));
+        }
+        items.push(user_message("one more"));
+        items.push(assistant_delta("Working"));
+        let model = model(SessionPhase::Running, items);
+
+        let rounds = 20;
+        let started = std::time::Instant::now();
+        for _ in 0..rounds {
+            adapt(&model, false, 0);
+        }
+        let fresh = started.elapsed() / rounds;
+
+        let mut settled = SettledUnits::default();
+        super::adapt(&model, false, 0, &mut settled);
+        let started = std::time::Instant::now();
+        for _ in 0..rounds {
+            super::adapt(&model, false, 0, &mut settled);
+        }
+        let kept = started.elapsed() / rounds;
+        println!(
+            "{} items, {} units: fresh {fresh:?} per adaptation, with kept ended turns {kept:?}",
+            model.frame.items.len(),
+            adapt(&model, false, 0).transcript.units.len()
+        );
+    }
+
+    #[test]
+    fn a_moved_settled_revision_rewords_the_ended_turns() {
+        let mut items = Vec::new();
+        exchange(0, &mut items);
+        items.push(turn_end(TurnEndReason::Completed));
+        let mut model = model(SessionPhase::Idle, items);
+        let mut settled = SettledUnits::default();
+        let before = super::adapt(&model, false, 0, &mut settled);
+
+        // A settled item changes without the revision moving: the kept
+        // wording is what shows, which is exactly why the fold moves the
+        // revision on such a change.
+        if let AgentFrameItem::Message(message) = &mut model.frame.items[0] {
+            message.text = "edited ask".to_string();
+        }
+        assert_eq!(
+            super::adapt(&model, false, 0, &mut settled),
+            before,
+            "an unmoved revision keeps the ended turn's wording"
+        );
+        model.frame.settled_revision += 1;
+        let after = super::adapt(&model, false, 0, &mut settled);
+        assert_eq!(after, adapt(&model, false, 0));
+        assert_ne!(after, before);
+        assert_eq!(settled.len(), 1);
     }
 
     #[test]

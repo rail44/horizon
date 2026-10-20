@@ -2,9 +2,14 @@
 //! shares with every other view are [`crate::ui::spec`]; every length here
 //! is designed at that module's reference body size and scaled with it.
 
-use gpui::Pixels;
+use gpui::{px, Pixels};
 
 use crate::ui::spec::scaled;
+
+/// How far past the column's visible rows the list measures rows ahead
+/// of time, so a scroll does not wait on a row's first layout. Not
+/// scaled: it is a scrolling distance, not a drawn length.
+pub(crate) const LIST_OVERDRAW: Pixels = px(320.0);
 
 /// The gutter between the pane edge and the conversation column.
 pub(crate) fn thread_gutter() -> Pixels {

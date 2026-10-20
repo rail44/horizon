@@ -9,7 +9,7 @@ use horizon_workspace::commands::CommandId;
 
 use super::super::model::ToolCallIdentity;
 use super::super::session::AgentSession;
-use super::adapter::{transcript_from, Adapted};
+use super::adapter::{transcript_from, Adapted, SettledUnits};
 use super::{AgentView, AgentViewEvent, UiState};
 use crate::workspace::RunCommand;
 
@@ -17,6 +17,9 @@ pub(crate) struct AgentPane {
     session: Entity<AgentSession>,
     view: Entity<AgentView>,
     approvals: HashMap<String, ToolCallIdentity>,
+    /// The ended turns' units from the last adaptation, so a session
+    /// notify re-words only the turn in progress.
+    settled: SettledUnits,
     _subscriptions: [Subscription; 2],
 }
 
@@ -26,10 +29,11 @@ impl AgentPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let mut settled = SettledUnits::default();
         let Adapted {
             transcript,
             approvals,
-        } = transcript_from(session.read(cx));
+        } = transcript_from(session.read(cx), &mut settled);
         let view = cx.new(|cx| AgentView::new(transcript, UiState::default(), window, cx));
         let observe = cx.observe_in(&session, window, |pane: &mut Self, _, window, cx| {
             pane.refresh(window, cx);
@@ -58,6 +62,7 @@ impl AgentPane {
             session,
             view,
             approvals,
+            settled,
             _subscriptions: [observe, events],
         }
     }
@@ -66,7 +71,7 @@ impl AgentPane {
         let Adapted {
             transcript,
             approvals,
-        } = transcript_from(self.session.read(cx));
+        } = transcript_from(self.session.read(cx), &mut self.settled);
         self.approvals = approvals;
         self.view
             .update(cx, |view, cx| view.set_transcript(transcript, window, cx));

@@ -10,12 +10,15 @@
 
 use super::JudgeDecision;
 
-/// Stage 1's single-token parse: trim, take the first ASCII-alphabetic
+/// Stage 1's single-token parse: skip a leading think block (see
+/// [`strip_think_block`]), trim, take the first ASCII-alphabetic
 /// character, uppercase-compare against `Y`/`N`. Anything else -- empty
-/// output, a stray leading token, an unrecognized character -- defaults to
-/// [`JudgeDecision::Escalate`].
+/// output, a stray leading token, an unrecognized character, a think
+/// block the budget cut off before its answer -- is `None`, which the
+/// cascade treats as "no verdict" (`run_judge` sends the call on to stage
+/// 2), never as [`JudgeDecision::AutoApprove`].
 pub(super) fn parse_stage1_result(text: &str) -> Option<JudgeDecision> {
-    match text
+    match strip_think_block(text)
         .trim()
         .chars()
         .find(|ch| ch.is_ascii_alphabetic())
@@ -166,6 +169,24 @@ mod tests {
         assert_eq!(parse_stage1("   "), JudgeDecision::Escalate);
         assert_eq!(parse_stage1("42"), JudgeDecision::Escalate);
         assert_eq!(parse_stage1("maybe"), JudgeDecision::Escalate);
+    }
+
+    #[test]
+    fn parse_stage1_reads_the_answer_after_a_think_block() {
+        // A reasoning model that ignores `reasoning_effort: "none"` thinks
+        // in the visible reply first; the answer is what follows the block.
+        assert_eq!(
+            parse_stage1_result("<think>a routine operation</think>N"),
+            Some(JudgeDecision::AutoApprove)
+        );
+        assert_eq!(
+            parse_stage1_result("<think>\nnot asked for\n</think>\nY"),
+            Some(JudgeDecision::Escalate)
+        );
+        // A block the token budget cut off carries no answer at all: not a
+        // `Y` read out of the word "yes" inside the reasoning.
+        assert_eq!(parse_stage1_result("<think>yes, the user"), None);
+        assert_eq!(parse_stage1_result("<think>"), None);
     }
 
     // --- confidence -------------------------------------------------------

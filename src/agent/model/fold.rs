@@ -50,6 +50,30 @@ pub(crate) struct AgentModel {
 }
 
 impl AgentModel {
+    /// Starts the fold over for a new bootstrap of the attachment. The
+    /// settled revision moves on, so a reader holding units built from the
+    /// old items rebuilds them.
+    pub(crate) fn restart(&mut self) {
+        let revision = self.frame.settled_revision + 1;
+        *self = Self::default();
+        self.frame.settled_revision = revision;
+    }
+
+    /// Records that the item at `index` is about to change in place or be
+    /// removed. Inside a turn that has ended, that moves the settled
+    /// revision; the open turn changes freely.
+    fn touched(&mut self, index: usize) {
+        let settled = self
+            .frame
+            .items
+            .iter()
+            .rposition(|item| matches!(item, AgentFrameItem::TurnEnded { .. }))
+            .map_or(0, |end| end + 1);
+        if index < settled {
+            self.frame.settled_revision += 1;
+        }
+    }
+
     pub(crate) fn apply(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::Update(update) => self.apply_update(*update),
@@ -68,14 +92,14 @@ impl AgentModel {
             }
             AgentEvent::ProviderRequest(_) => {}
             AgentEvent::PermissionRequested(permission) => {
-                let existing = self.frame.items.iter_mut().find_map(|item| match item {
-                    AgentFrameItem::Permission(held) if held.identity == permission.identity => {
-                        Some(held)
-                    }
-                    _ => None,
+                let existing = self.frame.items.iter().position(|item| {
+                    matches!(item, AgentFrameItem::Permission(held) if held.identity == permission.identity)
                 });
                 match existing {
-                    Some(held) => *held = permission,
+                    Some(index) => {
+                        self.touched(index);
+                        self.frame.items[index] = AgentFrameItem::Permission(permission);
+                    }
                     None => self
                         .frame
                         .items
@@ -83,12 +107,13 @@ impl AgentModel {
                 }
             }
             AgentEvent::PermissionResolved { identity, decision } => {
-                for item in self.frame.items.iter_mut().rev() {
-                    if let AgentFrameItem::Permission(held) = item {
-                        if held.identity == identity {
-                            held.decision = Some(decision);
-                            break;
-                        }
+                let held = self.frame.items.iter().rposition(|item| {
+                    matches!(item, AgentFrameItem::Permission(held) if held.identity == identity)
+                });
+                if let Some(index) = held {
+                    self.touched(index);
+                    if let AgentFrameItem::Permission(held) = &mut self.frame.items[index] {
+                        held.decision = Some(decision);
                     }
                 }
             }
@@ -200,7 +225,10 @@ impl AgentModel {
                 |item| matches!(item, AgentFrameItem::Message(message) if message.id == id),
             );
         let index = match index {
-            Some(index) => index,
+            Some(index) => {
+                self.touched(index);
+                index
+            }
             None => {
                 self.frame.items.push(AgentFrameItem::Message(Message {
                     id,
@@ -222,7 +250,10 @@ impl AgentModel {
                 |item| matches!(item, AgentFrameItem::Thought(thought) if thought.id == id),
             );
         let index = match index {
-            Some(index) => index,
+            Some(index) => {
+                self.touched(index);
+                index
+            }
             None => {
                 self.frame.items.push(AgentFrameItem::Thought(Thought {
                     id,
@@ -294,7 +325,10 @@ impl AgentModel {
             |item| matches!(item, AgentFrameItem::ToolCall(call) if call.occurrence_id == occurrence_id),
         );
         let index = match index {
-            Some(index) => index,
+            Some(index) => {
+                self.touched(index);
+                index
+            }
             None => {
                 let tool_id = match (&update.name, &update.title) {
                     (MaybeUndefined::Value(name), _) => name.clone(),
@@ -358,20 +392,30 @@ impl AgentModel {
                     tool_id,
                     bytes,
                 };
-                match self.frame.items.iter_mut().find(|item| {
-                    matches!(item, AgentFrameItem::ToolCallPreparing(existing) if existing.key == key)
-                }) {
-                    Some(item) => *item = AgentFrameItem::ToolCallPreparing(preparing),
+                match self.preparing_index(&key) {
+                    Some(index) => {
+                        self.touched(index);
+                        self.frame.items[index] = AgentFrameItem::ToolCallPreparing(preparing);
+                    }
                     None => self
                         .frame
                         .items
                         .push(AgentFrameItem::ToolCallPreparing(preparing)),
                 }
             }
-            ToolCallProgressEvent::Closed { key } => self.frame.items.retain(
-                |item| !matches!(item, AgentFrameItem::ToolCallPreparing(existing) if existing.key == key),
-            ),
+            ToolCallProgressEvent::Closed { key } => {
+                while let Some(index) = self.preparing_index(&key) {
+                    self.touched(index);
+                    self.frame.items.remove(index);
+                }
+            }
         }
+    }
+
+    fn preparing_index(&self, key: &str) -> Option<usize> {
+        self.frame.items.iter().position(
+            |item| matches!(item, AgentFrameItem::ToolCallPreparing(existing) if existing.key == key),
+        )
     }
 
     fn apply_session_event(&mut self, event: SessionEventNotification) {

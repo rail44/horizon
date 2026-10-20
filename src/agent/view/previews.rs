@@ -3,6 +3,8 @@
 //! idle. The idle preview opens with the receipt holding the last turn's
 //! first diff open, and that diff and its failed command's output open.
 
+use std::rc::Rc;
+
 use gpui::{AnyView, App, AppContext as _, Window};
 
 use super::display::{
@@ -74,10 +76,13 @@ pub(crate) const OPENED_DIFF_REMOVED: usize = 1;
 
 #[cfg(test)]
 fn turns(transcript: &Transcript) -> impl Iterator<Item = &Turn> {
-    transcript.units.iter().filter_map(|unit| match unit {
-        Unit::Turn(turn) => Some(turn),
-        _ => None,
-    })
+    transcript
+        .units
+        .iter()
+        .filter_map(|unit| match unit.as_ref() {
+            Unit::Turn(turn) => Some(turn),
+            _ => None,
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -100,10 +105,15 @@ fn build(running: bool, window: &mut Window, cx: &mut App) -> AnyView {
 /// and the receipts holding them.
 fn last_turn_opened(transcript: &Transcript) -> UiState {
     let mut ui = UiState::default();
-    let Some(turn) = transcript.units.iter().rev().find_map(|unit| match unit {
-        Unit::Turn(turn) => Some(turn),
-        _ => None,
-    }) else {
+    let Some(turn) = transcript
+        .units
+        .iter()
+        .rev()
+        .find_map(|unit| match unit.as_ref() {
+            Unit::Turn(turn) => Some(turn),
+            _ => None,
+        })
+    else {
         return ui;
     };
     let receipts: Vec<&Receipt> = turn
@@ -367,7 +377,7 @@ pub(crate) fn sample(running: bool) -> Transcript {
         } else {
             Status::Idle
         },
-        units,
+        units: units.into_iter().map(Rc::new).collect(),
         tasks: vec![Task {
             description: "cargo build --workspace".to_string(),
             elapsed: "1m 03s".to_string(),
@@ -410,7 +420,7 @@ mod tests {
     fn strings(transcript: &Transcript) -> Vec<String> {
         let mut strings = vec![transcript.model.clone()];
         for unit in &transcript.units {
-            match unit {
+            match unit.as_ref() {
                 Unit::User(message) => strings.push(message.text.clone()),
                 Unit::Notice(notice) => strings.push(notice.text.clone()),
                 Unit::Turn(turn) => {
@@ -566,7 +576,7 @@ mod tests {
         let idle = sample(false);
         assert_eq!(running.units[..running.units.len() - 1], idle.units[..]);
         assert!(matches!(
-            running.units.last(),
+            running.units.last().map(Rc::as_ref),
             Some(Unit::Turn(Turn {
                 state: TurnState::Running,
                 ..

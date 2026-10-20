@@ -208,6 +208,11 @@ pub(crate) struct AgentFrame {
     /// The latest stop result, retained through idle and cleared when the
     /// session runs again.
     pub(crate) turn_end_reason: Option<TurnEndReason>,
+    /// Moves whenever an item of a turn that has ended changes or
+    /// disappears, or the fold starts over. Items before the last
+    /// `TurnEnded` are otherwise settled, so a reader that keeps what it
+    /// built from them (the pane's adapter) rebuilds only when this moves.
+    pub(crate) settled_revision: u64,
 }
 
 /// The session's selected provider and model, read from the `model` config

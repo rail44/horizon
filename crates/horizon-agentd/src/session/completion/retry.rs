@@ -71,12 +71,21 @@ pub(super) fn fold_domain_denied(
     domains: Vec<String>,
     result: ToolCallResult,
 ) {
-    let domain_list = domains.join(", ");
+    // One host per mention: the denials arrive one per connection attempt,
+    // so a build that polled a registry hundreds of times named the same
+    // host hundreds of times in the prompt.
+    let mut hosts: Vec<&str> = Vec::new();
+    for domain in &domains {
+        if !hosts.contains(&domain.as_str()) {
+            hosts.push(domain);
+        }
+    }
+    let domain_list = hosts.join(", ");
     let reason = format!(
         "`{}` tried to reach {domain_list}, but it isn't allowed \
          for this session yet. Allow {} for this session and retry?",
         original_request.tool_id,
-        if domains.len() == 1 { "it" } else { "them" }
+        if hosts.len() == 1 { "it" } else { "them" }
     );
     begin_reissued_approval(
         state,

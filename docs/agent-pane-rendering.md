@@ -68,6 +68,42 @@ approves and Escape denies it.
   background task runs), sends messages and approvals to the session, and
   dispatches `Stop` / `SwitchModel` as `CancelAgentTurn` / `SwitchModel`
   commands.
+- A turn that has ended is worded once. The pane keeps the units of every
+  ended turn span (`adapter::SettledUnits`) and hands them to the next
+  adaptation, which re-words only the turn in progress; the display
+  model's units are `Rc`-shared, so the kept ones are handed over by
+  reference count rather than copied. The fold marks the frame's
+  `settled_revision` whenever an item before the last turn end changes or
+  disappears (a compaction clearing an old call's output, a reattachment
+  starting the fold over), and the kept units are dropped when it moves.
+  Before this (2026-10-20), every notify re-read the whole frame -- every
+  call's JSON, every edit's diff -- and a long session's streaming turn
+  cost the shell a full re-adaptation per coalesced frame. Measured on a
+  synthetic 400-turn frame (3,602 items, 802 units, debug build,
+  `adapter::tests::adaptation_cost_of_a_long_session`): 57 ms per
+  adaptation fresh, 0.09 ms with the ended turns kept.
+
+## How it is drawn
+
+The column is gpui's `list` element: one row per unit plus a footer row
+holding the session-end notice and the task lines. Only the rows in view
+(and a short overdraw past them) are built on a frame; the list keeps the
+measured height of every row it has laid out, so scrolling through a long
+session reads the heights it already knows. The view compares the old and
+new units on each update (by pointer first, since an ended turn's units
+are shared) and marks only the rows from the first changed unit on for
+re-measurement (`ListState::remeasure_items`), or splices the row count
+when units were added. Tail following is the list's own
+(`FollowMode::Tail`): a wheel scroll away from the tail stops it and
+scrolling back down to it resumes it. The rows are laid out as roots
+inside the list, under the body text style set around it -- the same
+arrangement the previous cached column view used, for the same reason
+(`TextView` measures inline code with the text style in effect when its
+layout runs).
+
+Before 2026-10-20 the column was a plain scrolling flex column that built
+every unit on every frame; a long session's CPU use grew with its history
+while a turn streamed.
 
 ## Previews
 
@@ -89,5 +125,7 @@ overview bar, virtualized message scroller).
 
 ## Follow-up
 
-The column is eager: every unit is built on every render, unlike the
-virtualized scroller it replaced. Long sessions will need virtualization.
+A row scrolled out of view loses its `TextView` state (gpui drops element
+state that a frame does not touch), so scrolling an old turn back into
+view parses its Markdown again. That is bounded by what is in view; a
+parse cache keyed by text would remove it if it ever shows.

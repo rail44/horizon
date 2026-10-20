@@ -93,7 +93,7 @@ impl AgentSession {
                             // Restoring opens the attachment's bootstrap:
                             // the fold starts over.
                             if state == AttachmentState::Restoring {
-                                session.model = AgentModel::default();
+                                session.model.restart();
                             }
                             session.attachment = state;
                             if session.attachment.is_closed() {

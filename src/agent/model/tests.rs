@@ -399,6 +399,54 @@ fn status_follows_state_updates_and_retains_the_stop_result() {
 }
 
 #[test]
+fn the_settled_revision_moves_only_when_an_ended_turns_item_changes() {
+    let mut model = AgentModel::default();
+    apply(&mut model, user_message("u1", "ask"));
+    apply(&mut model, running());
+    apply(&mut model, agent_chunk("a1", "answer"));
+    apply(
+        &mut model,
+        v2::SessionUpdate::ToolCallUpdate(tool_update(
+            "occ-1",
+            Some(v2::ToolCallStatus::Completed),
+            Some(meta("call-1", "bash", Some(ToolOutcome::Succeeded))),
+        )),
+    );
+    apply(&mut model, idle(Some(v2::StopReason::EndTurn)));
+    let settled = model.frame.settled_revision;
+
+    // The next turn grows freely.
+    apply(&mut model, user_message("u2", "more"));
+    apply(&mut model, running());
+    apply(&mut model, agent_chunk("a2", "sec"));
+    apply(&mut model, agent_chunk("a2", "ond"));
+    model.apply(AgentEvent::PermissionRequested(permission(
+        "call-2", "occ-2",
+    )));
+    model.apply(AgentEvent::PermissionResolved {
+        identity: identity("call-2", "occ-2"),
+        decision: PermissionDecision::Approved,
+    });
+    assert_eq!(model.frame.settled_revision, settled);
+
+    // A change to the ended turn's tool call (a compaction clearing its
+    // output, say) moves it.
+    let mut cleared = tool_update("occ-1", None, None);
+    cleared.raw_output = MaybeUndefined::Null;
+    apply(&mut model, v2::SessionUpdate::ToolCallUpdate(cleared));
+    assert_eq!(model.frame.settled_revision, settled + 1);
+
+    // So does a chunk appended to the ended turn's message.
+    apply(&mut model, agent_chunk("a1", "!"));
+    assert_eq!(model.frame.settled_revision, settled + 2);
+
+    // Starting over moves it past everything before.
+    model.restart();
+    assert!(model.frame.items.is_empty());
+    assert_eq!(model.frame.settled_revision, settled + 3);
+}
+
+#[test]
 fn a_turn_end_records_the_model_of_its_last_provider_request() {
     let mut model = AgentModel::default();
     apply(&mut model, user_message("u1", "go"));

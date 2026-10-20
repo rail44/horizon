@@ -687,6 +687,22 @@ refactoring wave folds into this item.
      including an orphan one -- before scanning for the verdict. A
      verdict that appears *only* inside the think block is deliberately
      not honoured; unparseable still escalates.
+   - **A stage-1 reply with no answer goes to stage 2** (2026-10-20
+     defect fix). The owner's log showed the judge auto-approving
+     nothing once `small_model` named a model that reasons before it
+     answers and does not honour `reasoning_effort: "none"`: every
+     stage-1 call came back with no visible text inside the four-token
+     budget (`fallback_reason: "unparseable"`, 14 of 14 on
+     `glm-5.3-flash`, against 419 stage-1 auto-approvals on the
+     previous small model), and each one escalated straight to the
+     human. Such a reply is not a verdict either way, so the cascade now
+     treats it as a call the quick pass could not clear and runs stage
+     2, whose budget survives a think block; stage 1 also skips a think
+     block in front of its `Y`/`N`. Stage 2's own unparseable reply still
+     escalates, so nothing auto-approves that did not before. Whether
+     stage 2 parses on that model is not yet confirmed against the live
+     endpoint; the stage-2 reply shape is the thing to check first if the
+     escalation count does not drop.
    - **Rate limit**: a simple in-process token bucket (10 req/s, burst 5
      -- nono's reference figures), checked synchronously before ever
      spawning the async call; an exceeded budget skips that call's

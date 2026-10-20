@@ -29,6 +29,16 @@
 //! the column. Below it, the composer is one bordered box holding only the
 //! input field, which starts at one row, the model chip, and the send hint.
 //! Every fixed label comes from [`chrome`].
+//!
+//! The column is drawn through gpui's `list`: one row per unit plus a
+//! footer row for the session-end notice and the task lines, built only
+//! while in view. A long session therefore costs a frame what its visible
+//! rows cost, not what its history does. The list follows the tail on its
+//! own: a wheel scroll away from the tail stops that, and scrolling back
+//! down to it resumes it. Rows are laid out as roots inside the list, under
+//! the body text style set around it; `TextView` measures a paragraph
+//! holding inline code with the text style in effect when that layout
+//! runs, which is why the size is set there and not on each row.
 
 #[cfg(not(target_family = "wasm"))]
 mod adapter;
@@ -43,6 +53,7 @@ mod spec;
 mod units;
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use gpui::*;
 use gpui_component::input::{Escape, InputEvent, Textarea, TextareaState};
@@ -52,7 +63,7 @@ use crate::theme;
 use crate::ui::parts::key_chip;
 use crate::ui::spec::*;
 use display::{ComposerMode, Status, Transcript, Unit};
-use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS};
+use spec::{thread_gutter, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS, LIST_OVERDRAW};
 
 /// What the view asks of whatever holds it.
 #[derive(Clone, Debug, PartialEq)]
@@ -78,32 +89,19 @@ pub(crate) struct AgentView {
     transcript: Transcript,
     ui: UiState,
     composer: Entity<TextareaState>,
-    scroll: ScrollHandle,
-    /// Whether the column keeps its tail in view as it grows. A wheel
-    /// scroll away from the tail drops it; scrolling back to it restores it.
-    follow_tail: bool,
+    /// The column's rows: the measured heights the list keeps between
+    /// frames, the scroll position, and whether the tail is followed.
+    list: ListState,
     focus_handle: FocusHandle,
-    column: Entity<Column>,
-    _subscriptions: [Subscription; 2],
+    _subscriptions: [Subscription; 1],
 }
 
 impl EventEmitter<AgentViewEvent> for AgentView {}
 
-/// The scroll column, drawn by [`AgentView`] and cached as a view of its
-/// own. A cached view lays its content out as a layout root, under the text
-/// style set around it; `TextView` measures a paragraph holding inline code
-/// with the text style in effect when layout runs, not the one set around
-/// the paragraph, so the body size is set around this view.
-struct Column {
-    view: WeakEntity<AgentView>,
-}
-
-impl Render for Column {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.view
-            .update(cx, |view, cx| view.render_column(window, cx))
-            .unwrap_or_else(|_| div().into_any_element())
-    }
+/// How many rows the column has for `transcript`: its units and the
+/// footer.
+fn row_count(transcript: &Transcript) -> usize {
+    transcript.units.len() + 1
 }
 
 impl AgentView {
@@ -130,23 +128,22 @@ impl AgentView {
         );
         let focus_handle = cx.focus_handle();
         window.focus(&composer.read(cx).focus_handle(cx), cx);
-        let view = cx.weak_entity();
-        let column = cx.new(|_| Column { view });
-        let notify_column = cx.observe_self(|view, cx| view.column.update(cx, |_, cx| cx.notify()));
+        let list = ListState::new(row_count(&transcript), ListAlignment::Top, LIST_OVERDRAW);
+        list.set_follow_mode(FollowMode::Tail);
         Self {
             transcript,
             ui,
             composer,
-            scroll: ScrollHandle::new(),
-            follow_tail: true,
+            list,
             focus_handle,
-            column,
-            _subscriptions: [composer_subscription, notify_column],
+            _subscriptions: [composer_subscription],
         }
     }
 
     /// Replaces what the view shows. The UI state is kept: a receipt that
-    /// was open stays open across an update of the same session.
+    /// was open stays open across an update of the same session. Rows from
+    /// the first unit that differs on are measured again; rows before it
+    /// keep their heights.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn set_transcript(
         &mut self,
@@ -158,6 +155,25 @@ impl AgentView {
         if text != placeholder(self.transcript.status) {
             self.composer
                 .update(cx, |input, cx| input.set_placeholder(text, window, cx));
+        }
+        let old = &self.transcript.units;
+        let new = &transcript.units;
+        let unchanged = old
+            .iter()
+            .zip(new.iter())
+            .take_while(|(before, after)| Rc::ptr_eq(before, after) || before == after)
+            .count();
+        if old.len() != new.len() {
+            self.list.splice(
+                unchanged..row_count(&self.transcript),
+                row_count(&transcript) - unchanged,
+            );
+        } else if unchanged < new.len() {
+            self.list.remeasure_items(unchanged..new.len());
+        }
+        if transcript.status != self.transcript.status || transcript.tasks != self.transcript.tasks
+        {
+            self.list.remeasure_items(new.len()..new.len() + 1);
         }
         self.transcript = transcript;
         cx.notify();
@@ -221,24 +237,42 @@ impl AgentView {
 
     // -- composition --------------------------------------------------------
 
-    /// The scroll column's children.
-    fn units(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mono = cx.theme().mono_font_family.clone();
+    /// One row of the column: the unit at `index`, or past the last unit
+    /// the footer.
+    fn render_row(
+        &mut self,
+        index: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(unit) = self.transcript.units.get(index) else {
+            return self.render_footer();
+        };
         let status = self.transcript.status;
-        let mut children = Vec::new();
-        for (index, unit) in self.transcript.units.iter().enumerate() {
-            children.push(match unit {
-                Unit::User(message) => units::user(index, message).into_any_element(),
-                Unit::Notice(notice) => units::notice(notice).into_any_element(),
-                Unit::Turn(turn) => units::turn(index, turn, status, &self.ui, &mono, cx),
-            });
-        }
-        if let Some(end) = units::session_end(status) {
-            children.push(units::notice(&end).into_any_element());
-        }
-        children
-            .extend(units::task_lines(&self.transcript.tasks).map(IntoElement::into_any_element));
-        children
+        let unit = match unit.as_ref() {
+            Unit::User(message) => units::user(index, message).into_any_element(),
+            Unit::Notice(notice) => units::notice(notice).into_any_element(),
+            Unit::Turn(turn) => {
+                let mono = cx.theme().mono_font_family.clone();
+                units::turn(index, turn, status, &self.ui, &mono, cx)
+            }
+        };
+        div()
+            .w_full()
+            .pb(gap_tight())
+            .child(unit)
+            .into_any_element()
+    }
+
+    /// The notice of a session that can no longer run, then one line per
+    /// background task.
+    fn render_footer(&self) -> AnyElement {
+        v_flex()
+            .w_full()
+            .gap(gap_tight())
+            .children(units::session_end(self.transcript.status).map(|end| units::notice(&end)))
+            .children(units::task_lines(&self.transcript.tasks))
+            .into_any_element()
     }
 
     /// The composer: the field, the model chip, and the send hint.
@@ -285,36 +319,17 @@ impl AgentView {
             )
     }
 
-    /// The scroll column, drawn into [`Column`].
-    fn render_column(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        self.track_tail();
-        let column = self.units(cx);
-        v_flex()
-            .id("agent-next-scroll")
-            .size_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll)
-            .on_scroll_wheel(cx.listener(|view, _: &ScrollWheelEvent, _, _| {
-                view.follow_tail = false;
-            }))
-            .px(thread_gutter())
-            .pt(gap_section())
-            .pb(gap_composer())
-            .gap(gap_tight())
-            .children(column)
-            .into_any_element()
-    }
-
-    /// Keeps the tail in view while following it, and resumes following
-    /// once the owner scrolls back down to it.
-    fn track_tail(&mut self) {
-        let at_tail = self.scroll.offset().y <= -self.scroll.max_offset().y + px(1.0);
-        if !self.follow_tail && at_tail {
-            self.follow_tail = true;
-        }
-        if self.follow_tail {
-            self.scroll.scroll_to_bottom();
-        }
+    /// The scroll column: the list over the rows, with the column's gutter
+    /// and its padding above the first row and below the footer.
+    fn render_column(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        list(
+            self.list.clone(),
+            cx.processor(|view, index, window, cx| view.render_row(index, window, cx)),
+        )
+        .size_full()
+        .px(thread_gutter())
+        .pt(gap_section())
+        .pb(gap_composer())
     }
 }
 
@@ -354,10 +369,7 @@ impl Render for AgentView {
                     .w_full()
                     .text_size(body.size)
                     .line_height(body.line_height)
-                    .child(
-                        AnyView::from(self.column.clone())
-                            .cached(StyleRefinement::default().size_full()),
-                    ),
+                    .child(self.render_column(cx)),
             )
             .child(self.render_composer(cx))
     }

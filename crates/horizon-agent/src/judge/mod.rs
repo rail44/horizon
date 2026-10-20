@@ -164,12 +164,22 @@ const STAGE2_MAX_TOKENS: u64 = 2_000;
 
 /// The two-stage cascade: stage 1 (single-token, err-toward-block) decides
 /// on its own if it says "safe" (`N` -> [`JudgeDecision::AutoApprove`]);
-/// an explicit `Y` runs stage 2's chain-of-thought re-evaluation. An
-/// unparseable response or client error escalates immediately. Never panics
-/// or propagates a network error to the
-/// caller -- a failed stage always resolves to [`JudgeDecision::Escalate`],
-/// the fail-safe direction (`docs/agent-approval-design.md`'s
-/// "Judge-unreachable is fail-safe").
+/// an explicit `Y` runs stage 2's chain-of-thought re-evaluation, and so
+/// does a stage-1 reply with no readable answer in it. A client error
+/// escalates immediately. Never panics or propagates a network error to
+/// the caller -- a failed stage always resolves to
+/// [`JudgeDecision::Escalate`], the fail-safe direction
+/// (`docs/agent-approval-design.md`'s "Judge-unreachable is fail-safe").
+///
+/// An unparseable stage-1 reply used to escalate on its own. Measured on
+/// the owner's log (2026-10-20): a small model that reasons before it
+/// answers, and ignores `reasoning_effort: "none"`, spends the four-token
+/// stage-1 budget inside its reasoning on every call, so every candidate
+/// became a human prompt and the judge auto-approved nothing. The reply
+/// carries no verdict either way, so it is treated as what it is -- a
+/// call the quick pass could not clear -- and goes to stage 2, whose
+/// budget survives a think block (`STAGE2_MAX_TOKENS`). Stage 2's own
+/// unparseable reply still escalates: nothing here widens auto-approval.
 async fn run_judge(model: &str, client: &dyn ModelClient, input: &JudgeInput) -> JudgeVerdict {
     let stage1_request = RawCompletionRequest {
         system_prompt: prompt::STAGE1_SYSTEM_PROMPT.to_string(),
@@ -178,24 +188,17 @@ async fn run_judge(model: &str, client: &dyn ModelClient, input: &JudgeInput) ->
         additional_params: client::stage1_additional_params(),
     };
     let (stage1_decision, confidence) = match client.complete(model, stage1_request).await {
-        Ok(response) => {
-            let Some(decision) = parse::parse_stage1_result(&response.text) else {
-                return JudgeVerdict {
-                    decision: JudgeDecision::Escalate,
-                    stage: 1,
-                    confidence: None,
-                    fallback_reason: Some(JudgeFallbackReason::Unparseable),
-                    fallback_error: None,
-                };
-            };
-            (
+        Ok(response) => match parse::parse_stage1_result(&response.text) {
+            Some(decision) => (
                 decision,
                 response
                     .logprobs
                     .as_ref()
                     .and_then(parse::confidence_from_logprobs),
-            )
-        }
+            ),
+            // No answer to read: the quick pass did not clear the call.
+            None => (JudgeDecision::Escalate, None),
+        },
         Err(error) => {
             return JudgeVerdict {
                 decision: JudgeDecision::Escalate,
@@ -567,17 +570,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stage1_unparseable_response_escalates_immediately() {
-        let client = ScriptedClient::new(vec![Ok(ScriptedClient::text("", None))]);
-        let verdict = run_judge("syn:small:text", &client, &input("call-3")).await;
+    async fn stage1_unparseable_response_goes_to_stage2() {
+        // The 2026-10-20 finding: a reasoning model spent the whole
+        // stage-1 budget thinking and returned no visible text at all, on
+        // every call. That is not a verdict, so stage 2 gets to decide.
+        let client = ScriptedClient::new(vec![
+            Ok(ScriptedClient::text("", None)),
+            Ok(ScriptedClient::text(
+                "Routine, asked for.\nVERDICT: AUTO_APPROVE",
+                None,
+            )),
+        ]);
+        let verdict = run_judge("glm-5.3-flash", &client, &input("call-3")).await;
+
+        assert_eq!(verdict.decision, JudgeDecision::AutoApprove);
+        assert_eq!(verdict.stage, 2);
+        assert_eq!(verdict.fallback_reason, None);
+        assert_eq!(
+            verdict.confidence, None,
+            "no stage-1 answer means no stage-1 confidence"
+        );
+        assert_eq!(client.requests.lock().unwrap().len(), 2);
+
+        // A reply that opens a think block the budget then cuts off is the
+        // same case, and must not read a `Y` or `N` out of the reasoning.
+        let client = ScriptedClient::new(vec![
+            Ok(ScriptedClient::text("<think>No, the user", None)),
+            Ok(ScriptedClient::text("VERDICT: ESCALATE", None)),
+        ]);
+        let verdict = run_judge("glm-5.3-flash", &client, &input("call-3c")).await;
+        assert_eq!(verdict.decision, JudgeDecision::Escalate);
+        assert_eq!(verdict.stage, 2);
+        assert_eq!(verdict.fallback_reason, None);
+        assert_eq!(client.requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn both_stages_unparseable_still_escalates_as_a_fallback() {
+        let client = ScriptedClient::new(vec![
+            Ok(ScriptedClient::text("", None)),
+            Ok(ScriptedClient::text("", None)),
+        ]);
+        let verdict = run_judge("glm-5.3-flash", &client, &input("call-3d")).await;
 
         assert_eq!(verdict.decision, JudgeDecision::Escalate);
-        assert_eq!(verdict.stage, 1);
+        assert_eq!(verdict.stage, 2);
         assert_eq!(
             verdict.fallback_reason,
             Some(JudgeFallbackReason::Unparseable)
         );
-        assert_eq!(client.requests.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

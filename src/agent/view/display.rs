@@ -6,12 +6,18 @@
 //! not reach every state, so the enums with states only a live session
 //! produces allow dead code.
 
+use std::rc::Rc;
+
 /// One agent session, as the pane shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Transcript {
     pub(crate) model: String,
     pub(crate) status: Status,
-    pub(crate) units: Vec<Unit>,
+    /// Shared, not owned: a unit of a turn that has ended is the same
+    /// allocation across every transcript adapted from the same session,
+    /// so handing the view a new transcript costs the units it re-worded,
+    /// and the view tells an unchanged unit by its pointer.
+    pub(crate) units: Vec<Rc<Unit>>,
     pub(crate) tasks: Vec<Task>,
     pub(crate) composer: ComposerMode,
 }
