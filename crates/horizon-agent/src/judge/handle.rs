@@ -66,17 +66,15 @@ impl JudgeHandle {
                     threshold: ask_threshold_from(std::env::var(ASK_THRESHOLD_VAR).ok().as_deref()),
                 },
             )
-        } else if let Some(auxiliary) =
-            auxiliary.filter(|auxiliary| std::env::var_os(&auxiliary.api_key_env).is_some())
-        {
+        } else {
+            let auxiliary =
+                auxiliary.filter(|auxiliary| std::env::var_os(&auxiliary.api_key_env).is_some())?;
             (
                 auxiliary.model.clone(),
                 JudgeBackend::Chat {
                     client: Arc::new(RigModelClient::new(auxiliary.clone())),
                 },
             )
-        } else {
-            return None;
         };
         Some(Arc::new(Self {
             model,
