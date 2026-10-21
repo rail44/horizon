@@ -198,6 +198,16 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # `approved_git_commit_in_a_plain_checkout` spawns a real sandboxed helper
 # for an approved Git metadata write, like `approved_git_commit_writes_linked_
 # metadata`; a sandbox cannot nest another one under itself.
+# Continuation suite's loopback mock provider --
+# `test(/^providers::rig::session::continuation::tests::(a_confident_model_answer_continues_the_turn_once_without_ending_it|continuations_stop_at_the_per_turn_cap|client_errors_and_timeouts_hand_back_with_a_fallback_reason|a_model_answer_below_the_threshold_hands_back|a_user_answer_hands_back|a_pending_stop_or_queued_addition_is_left_to_the_turn_loop|no_request_without_a_check_or_with_an_empty_reply)$/)`
+# (2026-10-21). These drive a full turn against a fake SSE provider, so the
+# module's `session()` helper binds a loopback listener on `127.0.0.1:0` and
+# the sandbox denies the bind (Permission denied) before any turn logic runs --
+# the same mechanism as the `/models` and Exa mocks above. The module's three
+# remaining tests (`the_check_is_installed_only_with_a_decision_model_outside_exploration_roles`,
+# `the_request_carries_the_state_and_one_choice_question`,
+# `the_threshold_reads_from_its_variable_with_clamping_and_a_default`) are
+# pure logic and stay in.
 [profile.sandboxed]
 default-filter = '''
     not (
@@ -235,5 +245,6 @@ default-filter = '''
         + (binary_id(horizon-sandbox::linux_supervised_helper) & test(/^loopback_connect_grant_/))
         + test(/bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully$/)
         + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^milestone::git::tests::(actual_changed_paths_must_fit_the_declared_scope|dirty_main_and_changed_candidates_are_preserved|main_advancing_requires_new_combined_verification_and_merge_is_recoverable)$/))
+        + test(/^providers::rig::session::continuation::tests::(a_confident_model_answer_continues_the_turn_once_without_ending_it|continuations_stop_at_the_per_turn_cap|client_errors_and_timeouts_hand_back_with_a_fallback_reason|a_model_answer_below_the_threshold_hands_back|a_user_answer_hands_back|a_pending_stop_or_queued_addition_is_left_to_the_turn_loop|no_request_without_a_check_or_with_an_empty_reply)$/)
     )
 '''
