@@ -359,16 +359,7 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
             git_metadata_operation: false,
         },
         ApprovalKind::GitOperation { writable_roots } => JudgeApprovalContext {
-            requested_filesystem_grants: writable_roots
-                .iter()
-                .cloned()
-                .map(|path| horizon_sandbox::FilesystemGrant {
-                    path,
-                    access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
-                    scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
-                    excluded_subpaths: Vec::new(),
-                })
-                .collect(),
+            requested_filesystem_grants: crate::tools::metadata_grants(writable_roots),
             requested_domains: Vec::new(),
             host_execution_requested: false,
             git_metadata_operation: true,
@@ -698,6 +689,15 @@ mod tests {
         assert_eq!(
             context.requested_filesystem_grants[0].access,
             horizon_sandbox::FilesystemGrantAccess::ReadWrite
+        );
+        // The judge sees the grant exactly as the sandbox applies it,
+        // including the hooks/config write exclusion.
+        assert_eq!(
+            context.requested_filesystem_grants[0].excluded_subpaths,
+            vec![
+                std::path::PathBuf::from("hooks"),
+                std::path::PathBuf::from("config")
+            ]
         );
         assert!(context.git_metadata_operation);
 

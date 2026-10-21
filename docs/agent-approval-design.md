@@ -396,6 +396,12 @@ product-owned API. Decisions:
   gitdir as the basis, prefilter reduction rather than removal) was the
   integrator's, distinguished per the #38 thread's lesson on labeling accepted
   proposals vs. owner design decisions.
+- **Judge asks about effect, not shape** (2026-10-22): the judge prompt's copied
+  escalate cases for non-git segments, pipes, redirects, and command
+  substitution are withdrawn. The judge is told what the grant permits (incl.
+  the `hooks`/`config` exclusion, now in its input) and judges whether anything
+  on the line writes the granted metadata outside the routine operations; what
+  the grant cannot bound (`git config`, `-c`, direct URLs, ...) still escalates.
 - **Spike** (owner decision): build the thin API + per-OS composition
   directly from the start — no ai-jail stopgap (writing the thin layer
   is the spike). Deliverable: prototype + tests

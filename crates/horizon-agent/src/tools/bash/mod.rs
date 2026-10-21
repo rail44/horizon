@@ -34,7 +34,7 @@ pub(crate) use registry::cancel_call;
 #[cfg(test)]
 pub(crate) use git::validated_metadata_grants;
 pub(crate) use git::{
-    approved_metadata_roots, command_requires_metadata_write, git_prefilter,
+    approved_metadata_roots, command_requires_metadata_write, git_prefilter, metadata_grants,
     metadata_writable_roots, GitPrefilterVerdict,
 };
 pub(crate) use recent::{find_reusable_output, guidance_output};
