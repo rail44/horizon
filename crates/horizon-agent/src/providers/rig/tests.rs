@@ -727,11 +727,11 @@ fn duckdb_store_preserves_rig_provider_payload_for_tool_call() {
 #[test]
 fn converts_rig_tool_definition_without_leaking_rig_type() {
     let definition = horizon_tool_definition_from_rig(
-        ToolDefinition {
-            name: rig_core::message::ToolName::new("workspace.snapshot").expect("tool id"),
-            description: "Read workspace state".to_string(),
-            parameters: serde_json::json!({ "type": "object" }),
-        },
+        ToolDefinition::new(
+            rig_core::message::ToolName::new("workspace.snapshot").expect("tool id"),
+            "Read workspace state",
+            serde_json::json!({ "type": "object" }),
+        ),
         ToolPermission::AutoAllowRead,
     );
 

@@ -35,7 +35,7 @@ ignore = "0.4"
 libc = "0.2"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-rig-core = { version = "0.44.0", features = ["reqwest"] }
+rig-core = { version = "0.45.0", features = ["reqwest"] }
 schemars = { version = "1", features = ["uuid1"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

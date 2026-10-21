@@ -811,12 +811,15 @@ pub(super) fn rig_tool_definitions(
 }
 
 fn rig_tool_definition_from_horizon(definition: Definition) -> ToolDefinition {
-    ToolDefinition {
-        name: rig_core::message::ToolName::new(definition.id)
-            .expect("horizon tool ids are never empty"),
-        description: definition.description,
-        parameters: definition.input_schema,
-    }
+    // `ToolDefinition::new` leaves `annotations` empty, which is what this
+    // mapping wants: the hints are the host's business (approval, plan mode,
+    // side-by-side calls) and Horizon's permissions ride its own
+    // `ToolPermission` instead of rig's annotation vocabulary.
+    ToolDefinition::new(
+        rig_core::message::ToolName::new(definition.id).expect("horizon tool ids are never empty"),
+        definition.description,
+        definition.input_schema,
+    )
 }
 
 /// Whether `tool_id` is one of the two knowledge tools that are
