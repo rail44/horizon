@@ -5,7 +5,8 @@ from [nolabs-ai/nono](https://github.com/nolabs-ai/nono):
 
 - derivation base: release `v0.68.0`, commit `00692e8c7846c6ee00ad6239d1be3b9e9b8d5dea`
 - upstream reviewed against: `v0.76.0` (commit `c706d38b7d69bbcc1b2d9fcf7285e15c6e24fb5d`),
-  see "Adoption review" below
+  see "Adoption review" below; the linked `nono` crate alone was reviewed for
+  `0.80.0`, see "Dependency review" below
 - license: Apache License 2.0
 - source files:
   - `crates/nono-cli/src/exec_strategy.rs`
@@ -99,6 +100,44 @@ the three source files above was reviewed per the procedure below.
   CI-verified Linux testing of the helper: recording a denial audit entry
   when the approval backend errors, and draining pending network
   notifications after the child is reaped before returning.
+
+## Dependency review (`nono` 0.76.0 -> 0.80.0, 2026-10)
+
+The exact pin moved to `=0.80.0` on the basis below. The three derived
+nono-cli source files are not published as a crate, so this pass covers only
+the published `nono` crate's own 0.76.0 -> 0.80.0 diff -- the half this crate
+links against. The derivation base above is unchanged.
+
+- The library plumbing this crate consumes (`recv_notif`, `apply_seccomp`,
+  `SeccompOpts::external_tcp`, `notif_id_valid`, `SupervisorSocket`,
+  `ApprovalBackend`, the `supervisor::AuditEntry` record) is unchanged in
+  signature; the crate compiles against the new release unchanged.
+- `sandbox/linux.rs` gains `PreparedLandlockSandbox::create_ruleset` and
+  `apply_static_network_raw`, with `apply_raw` refactored on top of them: same
+  syscall sequence and no-new-privs ordering. A supervisor that prepares a
+  ruleset for a known child PID is new API, not new behavior here.
+- `PreparedSeccompNotifyFilter::with_openat_notifications` adds upstream's own
+  version of the combined openat + network user-notification program this
+  crate builds by hand in `src/linux/filter.rs`. Not adopted: the local filter
+  additionally carries the path-mutation and x32 notifications, which have no
+  upstream counterpart. Recorded as a possible simplification, not a port.
+- `open_path_rule` now opens Landlock rule paths with `nix::open(O_PATH)`
+  instead of `OpenOptions::custom_flags`, because musl's `O_ACCMODE` includes
+  `O_PATH` and the standard library stripped the flag. This crate does not
+  copy that function.
+- `AF_UNIX` notification routing changed: pathname mediation is opt-in, and
+  abstract/unnamed sockets are resumed rather than denied when it is off.
+  Horizon's filter denies named/abstract Unix sockets unconditionally by its
+  own deviation above, so no Horizon behavior moves.
+- `capability.rs` adds `block_dns`/`dns_enabled` and rejects port ranges that
+  end at 0 or run backwards. Horizon builds no port ranges (`bind_ports` stays
+  empty) and no DNS policy, so nothing changes for it. `supervisor/types.rs`
+  and `sandbox/mod.rs` carry doc wording plus the `prepare_landlock_with_abi`
+  re-export.
+- The two upstream improvements listed as not yet ported above stay unported.
+- `horizon-sandbox` and `horizon-sandbox-runtime` pass under the sandboxed
+  nextest profile, including the Landlock/seccomp boundary tests that profile
+  keeps.
 
 ## Update procedure
 
