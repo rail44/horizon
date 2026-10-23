@@ -130,36 +130,59 @@ is an on-demand review aid, separate from the quality gate above.
 
 ## Build setup
 
-`crates/horizon-agent` compiles DuckDB from source and links it statically
-by default (`horizon-agent`'s `bundled-duckdb` feature is a default feature),
-so nothing has to be installed and nothing is fetched over the network: the
-engine in a built binary is the one libduckdb-sys 1.20000.0 generated its
-bindings against. DuckDB is the single largest compile unit in this
-workspace — a cold `cargo build --workspace` spends several minutes in it
-(measured: ~7 min for `horizon-agent` and its tests on a 16-thread box),
-and it is cached in `target/` afterwards.
+`crates/horizon-agent` links DuckDB dynamically, and the library is a
+machine-level install, not a repository one. Install it once with
+`scripts/install-duckdb-prefix.sh`, which verifies and unpacks DuckDB 2.0's
+prebuilt `duckdb-shared-libs-*` release archive into `~/opt/duckdb/<version>`
+(no root) and points `~/opt/duckdb/current` at it. Then put this in
+`~/.cargo/config.toml` — the repo itself stays config-free:
 
-Linking a system libduckdb is still possible as an opt-out:
-`cargo build --workspace --no-default-features -p horizon-agent` (add
-`--features horizon-agent/test-fixtures` where tests need them), then
-install the dev package — Void: `sudo xbps-install duckdb-devel`, macOS:
-`brew install duckdb`. On Linux the default system paths are found
-automatically; on macOS set `DUCKDB_LIB_DIR=/opt/homebrew/lib` and
-`DUCKDB_INCLUDE_DIR=/opt/homebrew/include` (e.g. in the repo's untracked
-`.envrc.local`). Keep `duckdb`'s `default-features = false` in that mode:
-from 1.20000.0 the crate's defaults add libduckdb-sys's `download-lib`,
-which resolves *before* pkg-config — a plain `cargo build` would fetch a
-prebuilt DuckDB 2.0.0 from install.duckdb.org, link it, emit no rpath, and
-then load the system library at run time. Linked and loaded engines must be
-one library, and a build must not need the network.
+```toml
+[env]
+DUCKDB_LIB_DIR = "/home/<you>/opt/duckdb/current"
 
-Storage compatibility, measured rather than assumed (2026-10-23): the
-bundled engine reports `PRAGMA version` = v2.0.0, opens the existing
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,/home/<you>/opt/duckdb/current"]
+
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,/Users/<you>/opt/duckdb/current"]
+```
+
+The rpath is load-bearing: libduckdb-sys links by name only, so without it
+the loader resolves `libduckdb.so` from the system — 1.5.0 on Void — and the
+binary runs a different engine than the bindings target. It is scoped to the
+host `cfg` on purpose, because a global `RUSTFLAGS` would also reach the
+`wasm32-wasip2` preview build. `ldd target/debug/horizon-agentd` must show
+the `~/opt/duckdb/current` path, and an rpath also survives a GUI started
+from a desktop entry, which inherits no shell environment.
+
+Shared, not static: DuckDB 2.0 ships `core_functions` (`now()`, `range()`, …)
+as a *separate* static archive, and libduckdb-sys's static link pulls in only
+`libduckdb_static.a` — a `DUCKDB_STATIC=1` build then fails at query time with
+`Scalar Function with name "now" is not in the catalog`. The shared library
+has those built in, and the full suite passes against it.
+
+Why not the system package: `duckdb`'s crate version encodes the engine its
+bindings target (1.20000.0 = DuckDB 2.0.0), while Void's `duckdb-devel` is
+1.5.0. Keep `duckdb` declared `default-features = false` for the same
+reason: from 1.20000.0 the crate's defaults add libduckdb-sys's
+`download-lib`, which resolves *before* pkg-config, fetches a prebuilt
+library during the build, and still emits no rpath — `cargo test` then sees
+2.0 (cargo puts build-script link dirs on the loader path) while the shipped
+binary loads the system 1.5. A test asserting the engine version therefore
+proves nothing; check `ldd`.
+
+A machine that cannot fetch the archive can build with
+`cargo build --workspace --features horizon-agent/bundled-duckdb`, which
+compiles DuckDB from source (slow — the single largest compile unit here,
+paid again by every build/check/clippy/test profile).
+
+Storage compatibility, measured rather than assumed (2026-10-23): DuckDB
+2.0 reports `PRAGMA version` = v2.0.0, opens the existing
 `agent-state.duckdb` (1.5 format) and lists every projection table; after a
-2.0 write plus `CHECKPOINT`, DuckDB 1.5.0 still reads the same file. So the
-upgrade is not one-way and no backup ritual is required — but the projection
-is rebuildable from the JSONL log regardless, which is what keeps the risk
-small.
+2.0 write plus `CHECKPOINT`, DuckDB 1.5.0 still reads the same file. The
+upgrade is not one-way, and the projection is rebuildable from the JSONL log
+regardless.
 
 The quality gate's last step and the preview plugin build for
 `wasm32-wasip2`: install the target once with `rustup target add

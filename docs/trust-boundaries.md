@@ -70,11 +70,12 @@ instance nested inside the stable one.
   opt-in -- see `docs/agent-duckdb-state-design.md`'s "Runtime Boundary"),
   so the exit cost stays small: it's a derived view, not a second source of
   truth, so dropping it is a rebuild-path removal, not a data migration.
-  Since duckdb 1.20000.0 (DuckDB 2.0 bindings, 2026-10-23) the bundled build
-  is the default — DuckDB compiles from source and links statically, so the
-  engine in a binary is exactly the one the bindings target and nothing is
-  fetched at build time. Dynamically linking a system libduckdb remains an
-  opt-out (`--no-default-features`); see AGENTS.md "Build setup".
+  Since duckdb 1.20000.0 (DuckDB 2.0 bindings, 2026-10-23) the engine is
+  linked statically from a prebuilt DuckDB 2.0 archive installed per machine
+  (`scripts/install-duckdb-prefix.sh`), so a binary carries exactly the
+  engine its bindings target and depends on no `libduckdb.so` at run time.
+  See AGENTS.md "Build setup"; `--features bundled-duckdb` compiles DuckDB
+  from source instead.
 - **alacritty_terminal + termwiz + portable-pty** — a deliberate three-way
   split: output interpretation / keyboard input encoding (incl. the kitty
   protocol; alacritty_terminal exposes no input-encoding API) / PTY and

@@ -4,13 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-# DuckDB is compiled from source and linked statically by default, so every
-# build runs the same engine the bindings were generated against and no
-# system libduckdb is needed. Slow (DuckDB is the single largest compile
-# unit in this workspace) but cached in `target/`; `--no-default-features`
-# switches to dynamically linking a system libduckdb instead. See AGENTS.md
+# Compiles DuckDB from source and links it statically, for a machine with no
+# DuckDB 2.0 library installed. It is the single largest compile unit in this
+# workspace and is paid again by every build/check/clippy/test profile, so
+# the normal setup installs a prebuilt library instead -- see AGENTS.md
 # "Build setup".
-default = ["bundled-duckdb"]
 bundled-duckdb = ["duckdb/bundled"]
 # Exposes the `mock.approval_required` and `mock.boundary_crossing` test
 # fixtures in `tools::catalog::definitions`. Off in production builds so
@@ -26,6 +24,11 @@ async-trait = "0.1"
 crossbeam-channel = "0.5"
 dom_smoothie = "0.18"
 duckdb = { version = "1", default-features = false }
+# `default-features = false` keeps the build on an installed library. From
+# 1.20000.0 the crate's defaults add libduckdb-sys's `download-lib`, which
+# resolves before pkg-config: a plain build would fetch a prebuilt DuckDB
+# during compilation and still emit no rpath, so `cargo test` and the shipped
+# binary would run different engines. See AGENTS.md "Build setup".
 futures-util = "0.3"
 globset = "0.4"
 horizon-sandbox = { path = "../horizon-sandbox" }
