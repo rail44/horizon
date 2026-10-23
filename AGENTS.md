@@ -144,10 +144,22 @@ Apple Silicon) is *not* on the linker's default search path, so set
 no extra setup — Homebrew dylibs carry absolute install names. The same
 two vars also cover a manually-placed prebuilt lib on any OS
 (libduckdb-sys's standard discovery).
-Version skew note: libduckdb-sys 1.10505.0 (the pin as of this writing)
-encodes an expected DuckDB 1.5.5; Void's `duckdb-devel` currently ships
-1.5.0 — confirmed ABI-compatible (full `horizon-agent` suite green against
-it), but re-verify on any libduckdb-sys bump or when Void catches up.
+Version skew note: libduckdb-sys 1.20000.0 (the pin as of this writing)
+encodes an expected DuckDB 2.0.0; Void's `duckdb-devel` still ships 1.5.0.
+`duckdb` is declared `default-features = false` in `horizon-agent` for
+exactly that reason: from 1.20000.0 the crate's default features add
+libduckdb-sys's `download-lib`, which fetches a pinned prebuilt DuckDB
+2.0.0 from install.duckdb.org *during the build* and links it ahead of any
+system library — while the produced binary carries no rpath, so the loader
+still resolves `libduckdb.so` from the system at run time. Linked engine and
+loaded engine must be the same library, and a build must not need the
+network, so that path stays off. The v1 C API bindings differ from 1.5.x
+only additively (two `timestamp_tz_ns` value functions this code never
+calls), and the full `horizon-agent` suite is green against 1.5.0 —
+re-verify on any libduckdb-sys bump or when Void catches up to 2.0.
+Installing DuckDB 2.0 is a data event, not only a build change: the first
+open upgrades `agent-state.duckdb` to the 2.0 storage format, which a 1.5
+library can then no longer read — back that database up first.
 Machines without a system libduckdb can build with
 `cargo build --workspace --features horizon-agent/bundled-duckdb`, which
 compiles DuckDB from source instead (slow — it's the single largest

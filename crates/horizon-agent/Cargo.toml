@@ -22,7 +22,16 @@ anyhow = "1.0"
 async-trait = "0.1"
 crossbeam-channel = "0.5"
 dom_smoothie = "0.18"
-duckdb = { version = "1" }
+duckdb = { version = "1", default-features = false }
+# `default-features = false` keeps the build on a system libduckdb, as
+# AGENTS.md "Build setup" documents. Since duckdb 1.20000.0 the crate's
+# default features include libduckdb-sys's `download-lib`, which fetches a
+# pinned prebuilt DuckDB from install.duckdb.org during the build and links
+# it ahead of any system library -- while the produced binary has no rpath,
+# so at run time the loader still picks up the system `libduckdb.so`. Linked
+# engine and loaded engine must not differ, and a build must not need the
+# network, so that path stays off; `bundled-duckdb` above remains the
+# no-system-library option.
 futures-util = "0.3"
 globset = "0.4"
 horizon-sandbox = { path = "../horizon-sandbox" }
