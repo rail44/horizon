@@ -58,7 +58,7 @@ edition = "2021"
 # because `preview::schema` and `preview::registry` are shared vocabulary.
 # It depends on the same crates.io `gpui-pre` family as this crate, so the
 # graph keeps one gpui.
-embedded_gpui = { git = "https://github.com/rail44/embedded_gpui", rev = "9d3148ac3073b1b9ef2a16f33648705af0c15350" }
+embedded_gpui = { git = "https://github.com/rail44/embedded_gpui", rev = "2083aea93302a44819b826fa5c14063c996689fe" }
 # gpui ships to crates.io as the `gpui-pre` family -- the packaging the
 # gpui-component v0.6 workspace itself is developed against (`gpui-pre`,
 # `gpui-pre-platform`, `gpui-pre-macros`, `gpui-pre-sum-tree`, ...). The
@@ -77,18 +77,18 @@ gpui = { package = "gpui-pre", version = "0.3.1" }
 # pin. Bump deliberately: update the rev here and on the other two gpui-kit
 # crates below (all three share one rev), then
 # `cargo update -p gpui-base -p gpui-component -p gpui-kit-assets`.
-gpui-component = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
+gpui-component = { git = "https://github.com/longbridge/gpui-kit", rev = "1e7ffaa6d1c0c230cb84099584e6c057531d5a5d" }
 # `preview::sample` bundles icon SVGs with `icon_assets!`, which the preview
 # guest hands to its runtime as the plugin's `AssetSource` -- the crate's
 # default wasm asset source fetches over HTTP, which a WASI guest cannot do.
-gpui-kit-assets = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
+gpui-kit-assets = { git = "https://github.com/longbridge/gpui-kit", rev = "1e7ffaa6d1c0c230cb84099584e6c057531d5a5d" }
 # `gpui-base`, gpui-component's foundation crate, holds `TextSelection` (the
 # window text-selection queries; `WindowExt::selected_text` is now just a
 # deprecated wrapper around it) and the base theme `TextView` reads its
 # monospace family from, which `theme::gpui_component` sets on both targets.
 # Same rev pin as gpui-component above; bump all three gpui-kit crates
 # together.
-gpui-base = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
+gpui-base = { git = "https://github.com/longbridge/gpui-kit", rev = "1e7ffaa6d1c0c230cb84099584e6c057531d5a5d" }
 horizon-config = { path = "crates/horizon-config" }
 # The board pane is previewable (`src/board_pane/previews.rs`), so its two
 # model crates compile for the plugin target as well. `horizon-board`'s
