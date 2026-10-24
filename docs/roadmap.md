@@ -47,6 +47,13 @@ A language-independent code database spike (`scripts/code-db/`: syntax
 trees, units, tags, git history, per-commit unit changes, clone pairs and
 SCIP occurrences as DuckDB tables, queried in SQL) and its measurements on
 this repository are in [the spike record](research/code-db-spike-2026-10-24.md).
+The git layer is becoming a DuckDB extension: `duckdb-ext/` (its own
+Cargo workspace, C API v2, pinned to DuckDB 2.0.0) holds `git_history`
+with `git_commits`, `git_file_changes` and `git_hunks` computed by
+gitoxide; the syntax layer is covered by the community extension
+`sitting_duck` ([evaluation](research/sitting-duck-evaluation-2026-10-24.md));
+the measurement that chose gitoxide over libgit2 is
+[the gix record](research/gix-parity-2026-10-24.md).
 The 18 non-board built-in tools now share typed input definitions with their
 advertised schemas, validate before approval/effects, and pass typed arguments
 to handlers and workers. Restored approvals use the same validation; see

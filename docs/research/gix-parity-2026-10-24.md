@@ -229,3 +229,24 @@ README の慣例に関わる 2 点の判定は次のとおりである。
 - README の数字は ed63e944(1,586 commit、hunk 44,009 行、file changes 8,969 行)のものである。本記録の先端は 23368b0e で、1,588 commit、44,039 行、8,999 行である。拡張の `dump` の出力は、この先端でも git と一致した。
 - README には「libgit2 で末尾を削らないと 44,009 行中 142 行が違った」とある。gix で git にだけある行も 142 行だが、先端も比べている行数も違う。同じ行かどうかは照合していない。
 - ブリーフは、前任者の 9 つの `since` 値が README かテストにあるとしていたが、見つからなかった。そのため 5 節で新しく選んだ。
+
+## 12. `unit_changes` への影響(依頼側セッションの追加測定、2026-10-24)
+
+オーナーの問い「どう実害が出るズレなのかがわからないのと、gixの挙動としてバグという意味?」に答えるため、hunk が使われる唯一の場所であるスパイクの `unit_changes`(hunk の行範囲と unit の行範囲の交差)を、git の hunk と gix の hunk のそれぞれから作って比べた。スクリプトは `duckdb-ext/scripts/unit_changes_impact.py`(スパイクの `history.py` の `commits_and_changes`・`UnitCache`・`unit_changes` をそのまま使う)。入力は本記録の §3 と同じ `gix_parity.py` が `target/code-db/gix-out/` に書いた `git_hunks.tsv` と `gix_hunks_indent.tsv` で、`*.rs` に絞った。対象は 0df26a53 の作業ツリー(1,589 コミット)。
+
+```sh
+uv run --with tree-sitter==0.25.2 --with tree-sitter-rust==0.24.2 --with tree-sitter-go==0.25.0 --with tree-sitter-typescript==0.23.2 \
+  python -I duckdb-ext/scripts/unit_changes_impact.py . target/code-db/gix-out/git_hunks.tsv target/code-db/gix-out/gix_hunks_indent.tsv
+```
+
+| | git の hunk から | gix の hunk から |
+| --- | --- | --- |
+| hunk 行(`*.rs`) | 34,703 | 34,694 |
+| `unit_changes` 行 | 40,513 | 40,506 |
+| 片側にしかない行 | 7(6 コミット、7 unit) | 0 |
+
+7 行はすべて `modified` で、既存の unit の直後に新しい unit を追加したコミットに集中する。例: 901edb40f6 の `crates/horizon-agent/src/contract.rs` では、`impl ToolCallRequest { fn identity … }` の直後に `impl ApprovalRequest { fn identity … }` が追加された。git の hunk は `@@ -928,0 +901,9 @@` で、挿入 9 行の先頭 3 行が `        }`、`    }`、`}`、つまり既存の `identity` と impl の閉じ括弧を「新規」と読み、新しい塊の閉じ括弧を「既存」と読んでいる。この範囲は `ToolCallRequest.identity` の末尾と交差するため、スパイクは変更のない `impl ToolCallRequest` と `ToolCallRequest.identity` を「変更」と記録する。gix の hunk は `@@ -932,0 +905,9 @@` で `impl ApprovalRequest {` から始まり、新しい unit だけを記録する。残る 6 件(43efd46a66、9bda1b0109、b3406dfd63、c325cd098d、fed32039eb の各テスト関数、および同じ 901edb40f6 の impl 側)も同じ構図である。
+
+このリポジトリでは、`-U0` の配置差による誤った帰属は git 側に 7 件、gix 側に 0 件だった。どちらの道具も hunk を unit の境界に揃えることは保証していないので、別のリポジトリで逆向きに出ることは排除できない。「git と行単位で一致させる」という目標は、依頼側が検証の手段として置いたもので、監査の要件ではなかった。
+
+この測定を見て、オーナーは 2026-10-24 に「ではgixで進めましょう」と決めた。
