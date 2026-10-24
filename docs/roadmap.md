@@ -34,7 +34,11 @@ Refactoring discovery uses repository-local RCA, jscpd, and scoped ast-grep
 checks, followed by responsibility/contract review. History and dependency
 graphs are optional supporting evidence, not automatic refactoring decisions.
 See [the tool](../scripts/refactor-audit/README.md) and
-[review guide](refactoring-review.md).
+[review guide](refactoring-review.md). A survey of the 2026 research on
+code quality analysis (metric validity, clone detection, history and
+architecture signals, LLM assistance, Rust tooling), gathered on
+2026-10-24 before improving the tool, is
+[the trends record](research/code-quality-analysis-trends-2026-10-24.md).
 The 18 non-board built-in tools now share typed input definitions with their
 advertised schemas, validate before approval/effects, and pass typed arguments
 to handlers and workers. Restored approvals use the same validation; see
