@@ -1,0 +1,11 @@
+[package]
+name = "git_history_core"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+gix = { version = "0.90", default-features = false, features = ["blob-diff", "revision", "sha1", "max-performance"] }
+
+[dev-dependencies]
+tempfile = "3"

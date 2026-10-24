@@ -1,5 +1,5 @@
 [workspace]
-members = ["git-history", "gix-probe"]
+members = ["git-history", "git-history-core", "gix-probe"]
 # A host of the extension, kept out so its libduckdb-sys features stay apart.
 exclude = ["host-check"]
 resolver = "3"

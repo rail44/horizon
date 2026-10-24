@@ -3,13 +3,15 @@
 //! The fixture is built with the `git` CLI under a temporary directory with
 //! fixed names and dates and no user or system configuration, so the test is
 //! deterministic and offline. Expectations are parsed from `git log` output
-//! the way `scripts/code-db/history.py` parses it.
+//! the way `scripts/code-db/history.py` parses it. Where gix's conventions
+//! differ from git's (a type change's hunks, submodules), the tests assert
+//! gix's rows as `duckdb-ext/README.md` documents them.
 
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use git_history::history::{self, CommitRow, FileChangeRow, HunkRow, Range};
+use git_history_core::{self as history, CommitRow, FileChangeRow, HunkRow, Range};
 
 struct Fixture {
     dir: tempfile::TempDir,
@@ -108,6 +110,7 @@ struct Shas {
     pure_rename: String,
     edited_rename: String,
     binary: String,
+    type_change: String,
     merge: String,
 }
 
@@ -157,12 +160,12 @@ fn build() -> (Fixture, Shas) {
     f.write("bin.dat", [0u8, 9, 9, 9]);
     let binary = f.commit("Change binary");
 
-    // A file turned into a symlink (status T, printed as deletion plus creation).
+    // A file turned into a symlink (status T).
     f.write("kind.txt", "regular\n");
     f.commit("Add kind.txt");
     fs::remove_file(f.path().join("kind.txt")).unwrap();
     std::os::unix::fs::symlink("src/a.rs", f.path().join("kind.txt")).unwrap();
-    f.commit("Make kind.txt a symlink");
+    let type_change = f.commit("Make kind.txt a symlink");
 
     // A side branch merged back with a merge commit.
     f.git(&["checkout", "-q", "-b", "side"]);
@@ -183,6 +186,7 @@ fn build() -> (Fixture, Shas) {
         pure_rename,
         edited_rename,
         binary,
+        type_change,
         merge,
     };
     (f, shas)
@@ -369,15 +373,25 @@ fn rows_equal_git_cli_output() {
     let (f, shas) = build();
     // Any directory inside the worktree resolves to the repository.
     let repo = history::open(f.path().join("src").to_str().unwrap()).unwrap();
+    let not_type_change = |rows: Vec<HunkRow>| -> Vec<HunkRow> {
+        rows.into_iter()
+            .filter(|h| h.sha != shas.type_change)
+            .collect()
+    };
+    let type_change = |rows: &[HunkRow]| -> Vec<[i32; 4]> {
+        let mut out: Vec<[i32; 4]> = rows
+            .iter()
+            .filter(|h| h.sha == shas.type_change && h.path == "kind.txt")
+            .map(|h| [h.old_start, h.old_lines, h.new_start, h.new_lines])
+            .collect();
+        out.sort();
+        out
+    };
     for range in ranges(&shas) {
+        // Exact order, not only the same set.
         assert_eq!(
             history::commits(&repo, &range).unwrap(),
             cli_commits(&f, &range),
-            "{range:?}"
-        );
-        assert_eq!(
-            sorted(history::hunks(&repo, &range).unwrap()),
-            cli_hunks(&f, &range),
             "{range:?}"
         );
         assert_eq!(
@@ -385,7 +399,99 @@ fn rows_equal_git_cli_output() {
             cli_file_changes(&f, &range),
             "{range:?}"
         );
+        let ours = sorted(history::hunks(&repo, &range).unwrap());
+        let git = cli_hunks(&f, &range);
+        assert_eq!(
+            not_type_change(ours.clone()),
+            not_type_change(git.clone()),
+            "{range:?}"
+        );
+        if range.since.is_none() {
+            // git prints a file-to-symlink change as a deletion followed by a
+            // creation; gix diffs the file's content against the link target
+            // as one modification.
+            assert_eq!(type_change(&git), [[0, 0, 1, 1], [1, 1, 0, 0]]);
+            assert_eq!(type_change(&ours), [[1, 1, 1, 1]]);
+        }
     }
+}
+
+#[test]
+fn rows_are_deterministic() {
+    let (f, _) = build();
+    let with_merges = Range {
+        include_merges: true,
+        ..Range::default()
+    };
+    let run = || {
+        let repo = history::open(f.path().to_str().unwrap()).unwrap();
+        (
+            history::commits(&repo, &with_merges).unwrap(),
+            history::hunks(&repo, &with_merges).unwrap(),
+            history::file_changes(&repo, &with_merges).unwrap(),
+        )
+    };
+    assert_eq!(run(), run());
+}
+
+/// A submodule entry (gitlink) added and then moved to another commit, made
+/// with `update-index` so no submodule repository is needed.
+#[test]
+fn gitlinks_have_no_hunks_and_null_counts() {
+    let mut f = Fixture::new();
+    f.write("a.txt", "a\n");
+    let first = f.commit("Root");
+    // An empty directory stands for the unpopulated submodule, so the
+    // commit's `add -A` keeps the entry.
+    fs::create_dir(f.path().join("sub")).unwrap();
+    f.git(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("160000,{first},sub"),
+    ]);
+    let added = f.commit("Add submodule");
+    f.git(&[
+        "update-index",
+        "--cacheinfo",
+        &format!("160000,{added},sub"),
+    ]);
+    let moved = f.commit("Move submodule");
+    let repo = history::open(f.path().to_str().unwrap()).unwrap();
+    let all = Range::default();
+
+    let ours: Vec<_> = history::file_changes(&repo, &all)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.path == "sub")
+        .map(|c| (c.sha, c.status, c.added, c.deleted))
+        .collect();
+    assert_eq!(
+        ours,
+        [
+            (moved.clone(), "M".to_string(), None, None),
+            (added.clone(), "A".to_string(), None, None),
+        ]
+    );
+    // git reports the same statuses, with the counts of its `Subproject commit` line.
+    let git: Vec<_> = cli_file_changes(&f, &all)
+        .into_iter()
+        .filter(|c| c.path == "sub")
+        .map(|c| (c.sha, c.status, c.added, c.deleted))
+        .collect();
+    assert_eq!(
+        sorted(git),
+        sorted(vec![
+            (moved, "M".to_string(), Some(1), Some(1)),
+            (added, "A".to_string(), Some(1), Some(0)),
+        ])
+    );
+    assert!(
+        history::hunks(&repo, &all)
+            .unwrap()
+            .iter()
+            .all(|h| h.path != "sub")
+    );
 }
 
 #[test]
@@ -447,10 +553,10 @@ fn fixture_covers_each_case() {
         (binary.status.as_str(), binary.added, binary.deleted),
         ("M", None, None)
     );
-    assert!(
-        changes
-            .iter()
-            .any(|c| c.path == "kind.txt" && c.status == "T")
+    let kind = change(&s.type_change, "kind.txt");
+    assert_eq!(
+        (kind.status.as_str(), kind.added, kind.deleted),
+        ("T", Some(1), Some(1))
     );
     assert!(changes.iter().all(|c| c.sha != s.merge));
 

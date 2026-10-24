@@ -3,7 +3,7 @@
 python3 duckdb-ext/scripts/cli_file_changes.py REPO [extra git log args...]
 
 The parse is the one in scripts/code-db/history.py (`commits_and_changes`);
-NULL is printed as \\N, matching the `dump` example of the extension crate.
+NULL is printed as \\N, matching the `gix-probe` binary.
 """
 
 import re

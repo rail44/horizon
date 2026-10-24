@@ -1,48 +1,47 @@
-//! The probe binary; usage is in the crate docs (`src/lib.rs`).
+//! Print the rows of `git_hunks`, `git_file_changes` or `git_commits` as TSV,
+//! computed by `git_history_core` without DuckDB, for comparing with the git
+//! CLI (`scripts/gix_parity.py`).
+//!
+//! Usage: gix-probe REPO hunks|file_changes|commits [options]
+//!
+//! Options:
+//!   --since REV          history is REV..HEAD
+//!   --include-merges     diff merges against their first parent
+//!   --context N          hunks with N context lines (`-U<N>`) instead of 0
+//!   --stats              print the row count and total time to stderr
 
+use std::io::Write;
 use std::time::Instant;
 
-use gix_probe::*;
+use git_history_core::{self as history, Range, Result};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut options = Options::default();
+    if args.len() < 2 {
+        return Err("usage: gix-probe REPO hunks|file_changes|commits [options]".into());
+    }
+    let mut range = Range::default();
+    let mut context = 0;
     let mut stats = false;
     let mut rest = args[2..].iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
-            "--since" => options.since = rest.next().cloned(),
-            "--include-merges" => options.include_merges = true,
-            "--sorting" => {
-                options.sorting = Sorting::parse(rest.next().ok_or("--sorting needs a value")?)?
-            }
-            "--slider" => {
-                options.slider = match rest.next().map(String::as_str) {
-                    Some("indent") => Slider::Indent,
-                    Some("none") => Slider::None,
-                    Some("raw") => Slider::Raw,
-                    other => return Err(format!("unknown slider {other:?}").into()),
-                }
-            }
-            "--unified-header" => options.unified_header = true,
-            "--context" => {
-                options.context = Some(rest.next().ok_or("--context needs a value")?.parse()?)
-            }
-            "--no-commit-graph" => options.no_commit_graph = true,
-            "--track-empty" => options.track_empty = true,
+            "--since" => range.since = Some(rest.next().ok_or("--since needs a value")?.clone()),
+            "--include-merges" => range.include_merges = true,
+            "--context" => context = rest.next().ok_or("--context needs a value")?.parse()?,
             "--stats" => stats = true,
             other => return Err(format!("unknown argument {other}").into()),
         }
     }
     let start = Instant::now();
-    let repo = open(&args[0])?;
+    let repo = history::open(&args[0])?;
     let null = |v: &Option<String>| v.clone().unwrap_or_else(|| "\\N".into());
     let num = |v: Option<i32>| v.map_or_else(|| "\\N".into(), |v| v.to_string());
     let mut out = String::new();
     let count;
     match args[1].as_str() {
         "hunks" => {
-            let rows = hunks(&repo, &options)?;
+            let rows = history::hunks_with_context(&repo, &range, context)?;
             count = rows.len();
             for h in rows {
                 out += &format!(
@@ -52,7 +51,7 @@ fn main() -> Result<()> {
             }
         }
         "commits" => {
-            let rows = commits(&repo, &options)?;
+            let rows = history::commits(&repo, &range)?;
             count = rows.len();
             for c in rows {
                 out += &format!(
@@ -62,7 +61,7 @@ fn main() -> Result<()> {
             }
         }
         "file_changes" => {
-            let rows = file_changes(&repo, &options)?;
+            let rows = history::file_changes(&repo, &range)?;
             count = rows.len();
             for f in rows {
                 out += &format!(
@@ -79,7 +78,6 @@ fn main() -> Result<()> {
         other => return Err(format!("unknown table {other}").into()),
     }
     let elapsed = start.elapsed();
-    use std::io::Write;
     std::io::stdout().write_all(out.as_bytes())?;
     if stats {
         eprintln!("{} rows in {:.3} s", count, elapsed.as_secs_f64());

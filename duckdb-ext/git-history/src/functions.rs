@@ -1,4 +1,4 @@
-//! The DuckDB table functions over [`crate::history`].
+//! The DuckDB table functions over [`git_history_core`].
 //!
 //! Every function materializes its rows once in the global init (so `DESCRIBE`
 //! and binding stay cheap) and emits them in order, one chunk per call, from a
@@ -23,7 +23,7 @@ use duckdb_neo::{
     vector::{Unknown, Vector},
 };
 
-use crate::history::{self, CommitRow, FileChangeRow, HunkRow, Range};
+use git_history_core::{self as history, CommitRow, FileChangeRow, HunkRow, Range};
 
 /// Arguments shared by all three functions, resolved at bind time.
 pub(crate) struct Params {
@@ -40,10 +40,7 @@ trait GitTable: Send + Sync + 'static {
     fn columns(
         context: &Context,
     ) -> Result<Vec<(&'static str, duckdb_neo::logical_type::LogicalType)>>;
-    fn rows(
-        repo: &git2::Repository,
-        range: &Range,
-    ) -> std::result::Result<Vec<Self::Row>, git2::Error>;
+    fn rows(repo: &history::Repository, range: &Range) -> history::Result<Vec<Self::Row>>;
     fn write(rows: &[Self::Row], columns: [Vector<'_, Unknown>; 6]) -> Result<()>;
 }
 
@@ -55,8 +52,8 @@ pub(crate) struct Scan<R> {
 
 struct Function<T>(std::marker::PhantomData<T>);
 
-fn git_error(error: git2::Error) -> Error {
-    Error::invalid_input(error.message().to_string())
+fn git_error(error: history::Error) -> Error {
+    Error::invalid_input(error.to_string())
 }
 
 impl<T: GitTable> TableFunctionCallbacks for Function<T> {
@@ -213,7 +210,8 @@ impl GitTable for Hunks {
     type Row = HunkRow;
     const NAME: &'static str = "git_hunks";
     const DESCRIPTION: &'static str = "One row per `@@ -old_start,old_lines +new_start,new_lines @@` header of \
-        `git log -p -U0 -M` over [since..]HEAD, for every file; numbers are 1-based as in the header.";
+        `git log -p -U0 -M` over [since..]HEAD, for every file, computed with gitoxide; numbers are 1-based \
+        as in the header.";
 
     fn columns(
         context: &Context,
@@ -228,10 +226,7 @@ impl GitTable for Hunks {
         ])
     }
 
-    fn rows(
-        repo: &git2::Repository,
-        range: &Range,
-    ) -> std::result::Result<Vec<HunkRow>, git2::Error> {
+    fn rows(repo: &history::Repository, range: &Range) -> history::Result<Vec<HunkRow>> {
         history::hunks(repo, range)
     }
 
@@ -268,10 +263,7 @@ impl GitTable for Commits {
         ])
     }
 
-    fn rows(
-        repo: &git2::Repository,
-        range: &Range,
-    ) -> std::result::Result<Vec<CommitRow>, git2::Error> {
+    fn rows(repo: &history::Repository, range: &Range) -> history::Result<Vec<CommitRow>> {
         history::commits(repo, range)
     }
 
@@ -300,7 +292,8 @@ impl GitTable for FileChanges {
     type Row = FileChangeRow;
     const NAME: &'static str = "git_file_changes";
     const DESCRIPTION: &'static str = "One row per file changed by each commit of `git log --raw --numstat -M` \
-        over [since..]HEAD; old_path is set for renames, added/deleted are NULL for binary files.";
+        over [since..]HEAD; old_path is set for renames, added/deleted are NULL for binary files \
+        and submodules.";
 
     fn columns(
         context: &Context,
@@ -315,10 +308,7 @@ impl GitTable for FileChanges {
         ])
     }
 
-    fn rows(
-        repo: &git2::Repository,
-        range: &Range,
-    ) -> std::result::Result<Vec<FileChangeRow>, git2::Error> {
+    fn rows(repo: &history::Repository, range: &Range) -> history::Result<Vec<FileChangeRow>> {
         history::file_changes(repo, range)
     }
 

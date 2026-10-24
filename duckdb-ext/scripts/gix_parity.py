@@ -1,11 +1,10 @@
-"""Compare the gix probe's rows with the git CLI's on one repository.
+"""Compare git_history_core's rows (through the gix-probe binary) with the git CLI's.
 
 python3 duckdb-ext/scripts/gix_parity.py REPO PROBE OUT_DIR [SECTION...]
 
 PROBE is the built `gix-probe` binary; OUT_DIR receives every TSV it compares.
 SECTION is any of hunks, context, file_changes, tail, commits, merges, timing
-(default all; tail reads the TSVs of hunks and file_changes). With DUMP set
-to the built `dump` example of the git-history crate, timing also runs it.
+(default all; tail reads the TSVs of hunks and file_changes).
 Rows are compared as multisets, as parity.py does; the git side is parsed by
 cli_hunks.py and cli_file_changes.py, and commit order is `git log --format=%H`.
 """
@@ -143,30 +142,23 @@ def cli_hunks_with_context(ctx, name, context, *extra):
 
 def section_hunks(ctx):
     git = git_script(ctx, "hunks", "cli_hunks.py")
-    for variant, args in [("indent", ["--slider", "indent"]), ("none", ["--slider", "none"]),
-                          ("raw", ["--slider", "raw"]),
-                          ("indent_unified_header", ["--slider", "indent", "--unified-header"]),
-                          ("indent_track_empty", ["--slider", "indent", "--track-empty"])]:
-        gix = probe(ctx, f"hunks_{variant}", "hunks", *args)
-        report_hunks(f"hunks [{variant}]", git, gix)
-        print()
+    gix = probe(ctx, "hunks", "hunks")
+    report_hunks("hunks", git, gix)
 
 
 def section_context(ctx):
     for context in (1, 3):
         git = cli_hunks_with_context(ctx, f"hunks_u{context}", context)
-        gix = probe(ctx, f"hunks_u{context}", "hunks", "--slider", "indent", "--context", str(context))
-        report_hunks(f"hunks -U{context} [indent]", git, gix)
+        gix = probe(ctx, f"hunks_u{context}", "hunks", "--context", str(context))
+        report_hunks(f"hunks -U{context}", git, gix)
         print()
 
 
 def section_file_changes(ctx, suffix="", *extra):
     git = git_script(ctx, f"file_changes{suffix}", "cli_file_changes.py", *extra)
-    for variant, args in [("default", []), ("track_empty", ["--track-empty"])]:
-        merges = ["--include-merges"] if extra else []
-        gix = probe(ctx, f"file_changes{suffix}_{variant}", "file_changes", *args, *merges)
-        report_file_changes(f"file_changes{suffix} [{variant}]", git, gix)
-        print()
+    merges = ["--include-merges"] if extra else []
+    gix = probe(ctx, f"file_changes{suffix}", "file_changes", *merges)
+    report_file_changes(f"file_changes{suffix}", git, gix)
 
 
 def report_file_changes(label, git, gix):
@@ -215,20 +207,15 @@ def section_commits(ctx):
         rev = f"{since}..HEAD" if since else "HEAD"
         want = subprocess.run(["git", "log", "--format=%H", rev], cwd=ctx["repo"], check=True,
                               capture_output=True, text=True).stdout.split()
-        line = [f"{(since or 'HEAD')[:10]} ({len(want)})"]
-        for sorting, graph in [("breadth-first", []), ("commit-time", []),
-                               ("commit-time", ["--no-commit-graph"]), ("commit-time-oldest", []),
-                               ("topo-date", []), ("topo", [])]:
-            args = ["--sorting", sorting, *graph] + (["--since", since] if since else [])
-            sorting += "/no-graph" if graph else ""
-            got = [r[0] for r in probe(ctx, "commits_" + sorting.replace("/", "_"), "commits", *args)]
-            if got == want:
-                line.append(f"{sorting}=equal")
-            else:
-                moved = sum(1 for a, b in zip(got, want) if a != b) + abs(len(got) - len(want))
-                same_set = collections.Counter(got) == collections.Counter(want)
-                line.append(f"{sorting}={moved} positions{'' if same_set else ' (different set)'}")
-        print("  " + ", ".join(line))
+        args = ["--since", since] if since else []
+        got = [r[0] for r in probe(ctx, f"commits_{(since or 'HEAD')[:10]}", "commits", *args)]
+        if got == want:
+            verdict = "equal"
+        else:
+            moved = sum(1 for a, b in zip(got, want) if a != b) + abs(len(got) - len(want))
+            same_set = collections.Counter(got) == collections.Counter(want)
+            verdict = f"{moved} positions differ{'' if same_set else ' (different set)'}"
+        print(f"  {(since or 'HEAD')[:10]} ({len(want)}): {verdict}")
     git_rows = run_to(os.path.join(ctx["out"], "git_commits.tsv"),
                       ["git", "log", "--format=%H%x09%at%x09%an%x09%s%x09%P", "HEAD"], cwd=ctx["repo"])
     git_rows = [(h, t, a, s, str(len(p.split())), str(len(p.split()) > 1).lower()) for h, t, a, s, p in
@@ -254,7 +241,7 @@ def common_tail(a, b):
     return n
 
 
-def section_tail(ctx, git_name="hunks", gix_name="hunks_indent", changes="file_changes"):
+def section_tail(ctx, git_name="hunks", gix_name="hunks", changes="file_changes"):
     """For every file whose -U0 hunks differ, measure the byte length of the common tail of its two sides."""
     git = rows(os.path.join(ctx["out"], f"git_{git_name}.tsv"))
     gix = rows(os.path.join(ctx["out"], f"gix_{gix_name}.tsv"))
@@ -275,13 +262,13 @@ def section_tail(ctx, git_name="hunks", gix_name="hunks_indent", changes="file_c
 def section_merges(ctx):
     git = git_script(ctx, "hunks_merges", "cli_hunks.py", "--diff-merges=first-parent")
     gix = probe(ctx, "hunks_merges", "hunks", "--include-merges")
-    report_hunks("hunks include_merges [indent]", git, gix, n_examples=1)
+    report_hunks("hunks include_merges", git, gix, n_examples=1)
     print()
     section_file_changes(ctx, "_merges", "--diff-merges=first-parent")
     section_tail(ctx, "hunks_merges", "hunks_merges", "file_changes_merges")
     git = cli_hunks_with_context(ctx, "hunks_merges_u1", 1, "--diff-merges=first-parent")
     gix = probe(ctx, "hunks_merges_u1", "hunks", "--include-merges", "--context", "1")
-    report_hunks("hunks include_merges -U1 [indent]", git, gix)
+    report_hunks("hunks include_merges -U1", git, gix)
 
 
 def timed(args, cwd=None):
@@ -294,7 +281,7 @@ def timed(args, cwd=None):
 
 
 def section_timing(ctx, runs=3):
-    """Fresh processes: the probe, the git CLI alone, the git CLI with the TSV parse, the extension's crate."""
+    """Fresh processes: the probe, the git CLI alone, the git CLI with the TSV parse."""
     git_hunks = [*GIT, "log", "HEAD", "-p", "-U0", "-M", "--no-color", "--no-ext-diff", "--no-textconv",
                  "--diff-merges=off", "--format=%x01%H"]
     git_changes = [*GIT, "log", "HEAD", "--raw", "--numstat", "-M", "--no-abbrev", "-z", "--no-color",
@@ -309,9 +296,6 @@ def section_timing(ctx, runs=3):
         ("cli_hunks.py", [sys.executable, os.path.join(HERE, "cli_hunks.py"), ctx["repo"]], None),
         ("cli_file_changes.py", [sys.executable, os.path.join(HERE, "cli_file_changes.py"), ctx["repo"]], None),
     ]
-    if ctx.get("dump"):
-        for table in ["hunks", "file_changes", "commits"]:
-            cases.append((f"dump example {table}", [ctx["dump"], ctx["repo"], table], None))
     for name, args, cwd in cases:
         results = [timed(args, cwd) for _ in range(runs)]
         print(f"{name}: " + ", ".join(f"{t:.2f} s" for t, _ in results)
@@ -322,7 +306,7 @@ def main():
     repo, probe_bin, out = sys.argv[1:4]
     sections = sys.argv[4:] or ["hunks", "context", "file_changes", "tail", "commits", "merges", "timing"]
     os.makedirs(out, exist_ok=True)
-    ctx = {"repo": repo, "probe": os.path.abspath(probe_bin), "out": out, "dump": os.environ.get("DUMP")}
+    ctx = {"repo": repo, "probe": os.path.abspath(probe_bin), "out": out}
     for section in sections:
         print(f"## {section}")
         globals()[f"section_{section}"](ctx)

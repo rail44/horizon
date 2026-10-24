@@ -1,26 +1,14 @@
-//! Print the rows of `git_hunks`, `git_file_changes` and `git_commits` as TSV,
-//! computed with gitoxide (`gix`) only, to measure how close gix comes to
-//! `git log` without the git-derived logic of the `git_history` extension.
+//! The rows of the `git_history` table functions, computed with gitoxide (`gix`).
 //!
-//! Usage: gix-probe REPO hunks|file_changes|commits [options]
-//!
-//! Options:
-//!   --since REV          history is REV..HEAD
-//!   --include-merges     diff merges against their first parent
-//!   --sorting MODE       commit walk: breadth-first, commit-time (default),
-//!                        commit-time-oldest, topo-date, topo
-//!   --slider MODE        hunk post-processing: indent (default, gix's
-//!                        `diff_with_slider_heuristics`), none
-//!                        (`postprocess_no_heuristic`), raw (no post-processing)
-//!   --unified-header     take hunk numbers from gix's `UnifiedDiff` with zero
-//!                        context instead of the hunk ranges
-//!   --context N          take hunk numbers from `UnifiedDiff` with N context
-//!                        lines, an empty side numbered the way git does
-//!   --no-commit-graph    `rev_walk(..).use_commit_graph(false)` (the simple
-//!                        walks use the commit-graph when present by default)
-//!   --track-empty        `Rewrites::track_empty = true`
-//!   --stats              print the total time to stderr
+//! Each function corresponds to one `git log` invocation of the code database
+//! spike (`scripts/code-db/history.py`); its doc comment names it. The rows
+//! follow gix's behavior; `duckdb-ext/README.md` lists where that differs
+//! from `git log`.
 
+use std::ops::Range as Lines;
+
+use gix::ObjectId;
+pub use gix::Repository;
 use gix::bstr::{BStr, ByteSlice};
 use gix::diff::Rewrites;
 use gix::diff::blob::platform::prepare_diff::Operation;
@@ -29,142 +17,24 @@ use gix::diff::blob::{Algorithm, Diff, InternedInput, ResourceKind, UnifiedDiff}
 use gix::diff::tree_with_rewrites::{Action, ChangeRef};
 use gix::objs::tree::{EntryKind, EntryMode};
 use gix::traverse::commit::simple::CommitTimeOrder;
-use gix::{ObjectId, Repository};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sorting {
-    BreadthFirst,
-    CommitTime,
-    CommitTimeOldest,
-    TopoDate,
-    Topo,
-}
-
-impl Sorting {
-    pub const ALL: [Sorting; 5] = [
-        Sorting::BreadthFirst,
-        Sorting::CommitTime,
-        Sorting::CommitTimeOldest,
-        Sorting::TopoDate,
-        Sorting::Topo,
-    ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Sorting::BreadthFirst => "breadth-first",
-            Sorting::CommitTime => "commit-time",
-            Sorting::CommitTimeOldest => "commit-time-oldest",
-            Sorting::TopoDate => "topo-date",
-            Sorting::Topo => "topo",
-        }
-    }
-
-    pub fn parse(name: &str) -> Result<Self> {
-        Sorting::ALL
-            .into_iter()
-            .find(|s| s.name() == name)
-            .ok_or_else(|| format!("unknown sorting {name}").into())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Slider {
-    Indent,
-    None,
-    Raw,
-}
-
-#[derive(Debug, Clone)]
-pub struct Options {
+/// The revision range and merge handling shared by every function.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Range {
+    /// History is `since..HEAD` when set, else everything reachable from HEAD.
     pub since: Option<String>,
+    /// Diff merge commits against their first parent (`--diff-merges=first-parent`)
+    /// instead of producing no changes for them (`--diff-merges=off`).
     pub include_merges: bool,
-    pub sorting: Sorting,
-    pub slider: Slider,
-    pub unified_header: bool,
-    pub context: Option<u32>,
-    pub track_empty: bool,
-    pub no_commit_graph: bool,
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Options {
-            since: None,
-            include_merges: false,
-            sorting: Sorting::CommitTime,
-            slider: Slider::Indent,
-            unified_header: false,
-            context: None,
-            track_empty: false,
-            no_commit_graph: false,
-        }
-    }
-}
-
-pub fn open(path: &str) -> Result<Repository> {
-    let mut repo = gix::discover(path)?;
-    repo.object_cache_size_if_unset(64 * 1024 * 1024);
-    Ok(repo)
-}
-
-/// The commits of `[since..]HEAD` in the order of the chosen gix walk.
-pub fn walk(repo: &Repository, options: &Options) -> Result<Vec<ObjectId>> {
-    let head = repo.head_id()?.detach();
-    let since = match &options.since {
-        Some(rev) => Some(
-            repo.rev_parse_single(rev.as_str())?
-                .object()?
-                .peel_to_commit()?
-                .id,
-        ),
-        None => None,
-    };
-    let mut out = Vec::new();
-    match options.sorting {
-        Sorting::TopoDate | Sorting::Topo => {
-            let sorting = if options.sorting == Sorting::Topo {
-                gix::traverse::commit::topo::Sorting::TopoOrder
-            } else {
-                gix::traverse::commit::topo::Sorting::DateOrder
-            };
-            let walk = gix::traverse::commit::topo::Builder::from_iters(
-                &repo.objects,
-                [head],
-                since.map(|s| [s]),
-            )
-            .sorting(sorting)
-            .build()?;
-            for info in walk {
-                out.push(info?.id);
-            }
-        }
-        simple => {
-            let sorting = match simple {
-                Sorting::BreadthFirst => gix::revision::walk::Sorting::BreadthFirst,
-                Sorting::CommitTime => {
-                    gix::revision::walk::Sorting::ByCommitTime(CommitTimeOrder::NewestFirst)
-                }
-                _ => gix::revision::walk::Sorting::ByCommitTime(CommitTimeOrder::OldestFirst),
-            };
-            let mut walk = repo.rev_walk([head]).sorting(sorting).with_hidden(since);
-            if options.no_commit_graph {
-                walk = walk.use_commit_graph(false);
-            }
-            let walk = walk.all()?;
-            for info in walk {
-                out.push(info?.id);
-            }
-        }
-    }
-    Ok(out)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CommitRow {
     pub sha: String,
+    /// Seconds since the Unix epoch (UTC).
     pub author_time: i64,
     pub author_name: String,
     pub subject: String,
@@ -192,9 +62,44 @@ pub struct HunkRow {
     pub new_lines: i32,
 }
 
-pub fn commits(repo: &Repository, options: &Options) -> Result<Vec<CommitRow>> {
+/// Open the repository containing `path` (any directory inside a worktree,
+/// or a bare repository).
+pub fn open(path: &str) -> Result<Repository> {
+    let mut repo = gix::discover(path)?;
+    repo.object_cache_size_if_unset(64 * 1024 * 1024);
+    Ok(repo)
+}
+
+/// The commits of `[since..]HEAD`, newest committer time first.
+fn walk(repo: &Repository, range: &Range) -> Result<Vec<ObjectId>> {
+    let head = repo.head_id()?.detach();
+    let since = match &range.since {
+        Some(rev) => Some(
+            repo.rev_parse_single(rev.as_str())?
+                .object()?
+                .peel_to_commit()?
+                .id,
+        ),
+        None => None,
+    };
+    let walk = repo
+        .rev_walk([head])
+        .sorting(gix::revision::walk::Sorting::ByCommitTime(
+            CommitTimeOrder::NewestFirst,
+        ))
+        .with_hidden(since)
+        .all()?;
+    let mut out = Vec::new();
+    for info in walk {
+        out.push(info?.id);
+    }
+    Ok(out)
+}
+
+/// `git log [since..]HEAD --format=%H%at%an%P%s`.
+pub fn commits(repo: &Repository, range: &Range) -> Result<Vec<CommitRow>> {
     let mut rows = Vec::new();
-    for id in walk(repo, options)? {
+    for id in walk(repo, range)? {
         let commit = repo.find_commit(id)?;
         let author = commit.author()?;
         let parent_count = commit.parent_ids().count() as i32;
@@ -202,7 +107,7 @@ pub fn commits(repo: &Repository, options: &Options) -> Result<Vec<CommitRow>> {
             sha: id.to_string(),
             author_time: author.time()?.seconds,
             author_name: author.name.to_str_lossy().into_owned(),
-            subject: commit.message()?.summary().to_str_lossy().into_owned(),
+            subject: subject(commit.message_raw()?),
             parent_count,
             is_merge: parent_count > 1,
         });
@@ -210,10 +115,20 @@ pub fn commits(repo: &Repository, options: &Options) -> Result<Vec<CommitRow>> {
     Ok(rows)
 }
 
+/// The first paragraph of a commit message with its lines joined (gix's
+/// message summary).
+fn subject(message: &BStr) -> String {
+    gix::objs::commit::MessageRef::from_bytes(message)
+        .summary()
+        .to_str_lossy()
+        .into_owned()
+}
+
 /// One non-tree change of a commit, as gix's tree diff with rewrites reports it.
 struct Change {
     status: &'static str,
     path: String,
+    /// The pre-image path (equal to `path` unless renamed).
     old_path: String,
     old: (ObjectId, EntryMode),
     new: (ObjectId, EntryMode),
@@ -223,9 +138,10 @@ fn lossy(path: &BStr) -> String {
     path.to_str_lossy().into_owned()
 }
 
-/// git prints `T` when the object type changes (file, symlink, gitlink), `M` otherwise.
-fn modification_status(old: EntryMode, new: EntryMode) -> &'static str {
-    let class = |mode: EntryMode| match mode.kind() {
+/// `T` when the kind of entry changes (file, symlink, submodule), `M` otherwise;
+/// a change of the executable bit alone is `M`.
+fn modification_status(old: EntryKind, new: EntryKind) -> &'static str {
+    let class = |kind: EntryKind| match kind {
         EntryKind::Blob | EntryKind::BlobExecutable => 0,
         EntryKind::Link => 1,
         EntryKind::Commit => 2,
@@ -234,28 +150,33 @@ fn modification_status(old: EntryMode, new: EntryMode) -> &'static str {
     if class(old) == class(new) { "M" } else { "T" }
 }
 
+/// The files one commit changes, with rename detection, or `None` for a merge
+/// without `include_merges`. Root commits diff against the empty tree, merges
+/// against their first parent.
 fn commit_changes(
     repo: &Repository,
     cache: &mut gix::diff::blob::Platform,
     id: ObjectId,
-    options: &Options,
+    range: &Range,
 ) -> Result<Option<Vec<Change>>> {
     let commit = repo.find_commit(id)?;
     let parents: Vec<ObjectId> = commit.parent_ids().map(|p| p.detach()).collect();
     let base = match parents.len() {
         0 => repo.empty_tree(),
         1 => repo.find_commit(parents[0])?.tree()?,
-        _ if options.include_merges => repo.find_commit(parents[0])?.tree()?,
+        _ if range.include_merges => repo.find_commit(parents[0])?.tree()?,
         _ => return Ok(None),
     };
     let tree = commit.tree()?;
     let null = ObjectId::null(repo.object_hash());
     let mut changes = Vec::new();
+    // Renames only, at 50 % similarity, with up to 1000 candidates: `-M` at
+    // git's defaults.
     let rewrites = Rewrites {
         copies: None,
         percentage: Some(0.5),
         limit: 1000,
-        track_empty: options.track_empty,
+        track_empty: false,
     };
     gix::diff::tree_with_rewrites(
         gix::objs::TreeRefIter::from_bytes(&base.data, repo.object_hash()),
@@ -296,7 +217,7 @@ fn commit_changes(
                     entry_mode,
                     id,
                 } => Change {
-                    status: modification_status(previous_entry_mode, entry_mode),
+                    status: modification_status(previous_entry_mode.kind(), entry_mode.kind()),
                     path: lossy(location),
                     old_path: lossy(location),
                     old: (previous_id, previous_entry_mode),
@@ -332,7 +253,7 @@ fn commit_changes(
     Ok(Some(changes))
 }
 
-/// The line diff of one change: git-style `@@` numbers and added/deleted counts.
+/// The line diff of one change: hunk headers and added/deleted counts.
 #[derive(Debug, Default)]
 struct LineDiff {
     hunks: Vec<[i32; 4]>,
@@ -340,6 +261,7 @@ struct LineDiff {
     deleted: i32,
 }
 
+/// Collects the `@@` numbers of `UnifiedDiff`'s hunks.
 struct Headers(Vec<[i32; 4]>);
 
 impl ConsumeHunk for Headers {
@@ -350,12 +272,12 @@ impl ConsumeHunk for Headers {
         h: HunkHeader,
         _lines: &[(DiffLineKind, &[u8])],
     ) -> std::io::Result<()> {
-        self.0.push([
+        self.0.push(empty_side_before([
             h.before_hunk_start as i32,
             h.before_hunk_len as i32,
             h.after_hunk_start as i32,
             h.after_hunk_len as i32,
-        ]);
+        ]));
         Ok(())
     }
 
@@ -364,30 +286,51 @@ impl ConsumeHunk for Headers {
     }
 }
 
-/// Run gix's blob platform on one change. `None` means gix declined to diff it:
-/// one side is binary, or a side is a submodule (gix's blob platform refuses
-/// gitlinks with `InvalidMode`).
+/// `UnifiedDiff` numbers an empty side like a non-empty one; a unified diff
+/// header names the line before it instead.
+fn empty_side_before(mut header: [i32; 4]) -> [i32; 4] {
+    for side in [0, 2] {
+        if header[side + 1] == 0 {
+            header[side] -= 1;
+        }
+    }
+    header
+}
+
+/// The `@@` numbers of a zero-context hunk given its 0-based line ranges:
+/// 1-based starts, and an empty side names the line before.
+fn header(before: &Lines<u32>, after: &Lines<u32>) -> [i32; 4] {
+    let start = |r: &Lines<u32>| if r.is_empty() { r.start } else { r.start + 1 };
+    [
+        start(before) as i32,
+        before.len() as i32,
+        start(after) as i32,
+        after.len() as i32,
+    ]
+}
+
+/// Run gix's blob platform on one change. `None` means gix declined to diff
+/// it: one side is binary, or a side is a submodule (the blob platform
+/// rejects gitlinks).
 fn change_diff(
     repo: &Repository,
     cache: &mut gix::diff::blob::Platform,
     change: &Change,
-    options: &Options,
-    want_hunks: bool,
+    hunk_context: Option<u32>,
 ) -> Result<Option<LineDiff>> {
     if change.old.1.is_commit() || change.new.1.is_commit() {
         return Ok(None);
     }
-    let kind = |side: (ObjectId, EntryMode)| side.1.kind();
     cache.set_resource(
         change.old.0,
-        kind(change.old),
+        change.old.1.kind(),
         change.old_path.as_bytes().as_bstr(),
         ResourceKind::OldOrSource,
         &repo.objects,
     )?;
     cache.set_resource(
         change.new.0,
-        kind(change.new),
+        change.new.1.kind(),
         change.path.as_bytes().as_bstr(),
         ResourceKind::NewOrDestination,
         &repo.objects,
@@ -395,84 +338,49 @@ fn change_diff(
     let prep = cache.prepare_diff()?;
     let algorithm = match prep.operation {
         Operation::InternalDiff { algorithm } => algorithm,
-        Operation::SourceOrDestinationIsBinary => return Ok(None),
-        Operation::ExternalCommand { .. } => return Ok(None),
+        Operation::SourceOrDestinationIsBinary | Operation::ExternalCommand { .. } => {
+            return Ok(None);
+        }
     };
     let input = prep.interned_input();
     let mut diff = Diff::compute(algorithm, &input);
+    // The counts do not depend on where the slider post-processing below
+    // places the changes.
     let mut out = LineDiff {
         added: diff.count_additions() as i32,
         deleted: diff.count_removals() as i32,
         ..LineDiff::default()
     };
-    if want_hunks {
-        match options.slider {
-            Slider::Indent => diff.postprocess_lines(&input),
-            Slider::None => diff.postprocess_no_heuristic(&input),
-            Slider::Raw => {}
-        }
-        out.hunks = hunk_numbers(&diff, &input, options)?;
+    if let Some(context) = hunk_context {
+        diff.postprocess_lines(&input);
+        out.hunks = hunk_headers(&diff, &input, context)?;
     }
     Ok(Some(out))
 }
 
-fn hunk_numbers(
-    diff: &Diff,
-    input: &InternedInput<&[u8]>,
-    options: &Options,
-) -> Result<Vec<[i32; 4]>> {
-    if options.unified_header {
-        return Ok(UnifiedDiff::new(
-            diff,
-            input,
-            Headers(Vec::new()),
-            ContextSize::symmetrical(0),
-        )
-        .consume()?);
+fn hunk_headers(diff: &Diff, input: &InternedInput<&[u8]>, context: u32) -> Result<Vec<[i32; 4]>> {
+    if context == 0 {
+        return Ok(diff.hunks().map(|h| header(&h.before, &h.after)).collect());
     }
-    if let Some(context) = options.context {
-        let mut headers = UnifiedDiff::new(
-            diff,
-            input,
-            Headers(Vec::new()),
-            ContextSize::symmetrical(context),
-        )
-        .consume()?;
-        // `UnifiedDiff` numbers an empty side like a non-empty one; git names the line before.
-        for h in &mut headers {
-            for side in [0, 2] {
-                if h[side + 1] == 0 {
-                    h[side] -= 1;
-                }
-            }
-        }
-        return Ok(headers);
-    }
-    // git's `@@` numbering: 1-based starts, and an empty side names the line before.
-    let start = |r: &std::ops::Range<u32>| if r.is_empty() { r.start } else { r.start + 1 };
-    Ok(diff
-        .hunks()
-        .map(|h| {
-            [
-                start(&h.before) as i32,
-                h.before.len() as i32,
-                start(&h.after) as i32,
-                h.after.len() as i32,
-            ]
-        })
-        .collect())
+    Ok(UnifiedDiff::new(
+        diff,
+        input,
+        Headers(Vec::new()),
+        ContextSize::symmetrical(context),
+    )
+    .consume()?)
 }
 
 fn for_each_change(
     repo: &Repository,
-    options: &Options,
+    range: &Range,
     mut each: impl FnMut(&str, &Change, &mut gix::diff::blob::Platform) -> Result<()>,
 ) -> Result<()> {
     let mut cache = repo.diff_resource_cache_for_tree_diff()?;
     cache.options.algorithm = Some(Algorithm::Myers);
-    for id in walk(repo, options)? {
+    for id in walk(repo, range)? {
         let sha = id.to_string();
-        for change in commit_changes(repo, &mut cache, id, options)?.unwrap_or_default() {
+        for change in commit_changes(repo, &mut cache, id, range)?.unwrap_or_default() {
             each(&sha, &change, &mut cache)?;
         }
         cache.clear_resource_cache_keep_allocation();
@@ -480,10 +388,12 @@ fn for_each_change(
     Ok(())
 }
 
-pub fn file_changes(repo: &Repository, options: &Options) -> Result<Vec<FileChangeRow>> {
+/// `git log --raw --numstat -M`: one row per changed file; NULL counts for
+/// binary files and submodules.
+pub fn file_changes(repo: &Repository, range: &Range) -> Result<Vec<FileChangeRow>> {
     let mut rows = Vec::new();
-    for_each_change(repo, options, |sha, change, cache| {
-        let counts = change_diff(repo, cache, change, options, false)?;
+    for_each_change(repo, range, |sha, change, cache| {
+        let counts = change_diff(repo, cache, change, None)?;
         rows.push(FileChangeRow {
             sha: sha.to_string(),
             path: change.path.clone(),
@@ -497,10 +407,17 @@ pub fn file_changes(repo: &Repository, options: &Options) -> Result<Vec<FileChan
     Ok(rows)
 }
 
-pub fn hunks(repo: &Repository, options: &Options) -> Result<Vec<HunkRow>> {
+/// `git log -p -U0 -M`: one row per `@@ -a,b +c,d @@` header, for every file.
+pub fn hunks(repo: &Repository, range: &Range) -> Result<Vec<HunkRow>> {
+    hunks_with_context(repo, range, 0)
+}
+
+/// [`hunks`] with `context` lines around each change (`-U<context>`); hunks
+/// closer than that are merged as a unified diff merges them.
+pub fn hunks_with_context(repo: &Repository, range: &Range, context: u32) -> Result<Vec<HunkRow>> {
     let mut rows = Vec::new();
-    for_each_change(repo, options, |sha, change, cache| {
-        let Some(diff) = change_diff(repo, cache, change, options, true)? else {
+    for_each_change(repo, range, |sha, change, cache| {
+        let Some(diff) = change_diff(repo, cache, change, Some(context))? else {
             return Ok(());
         };
         for [old_start, old_lines, new_start, new_lines] in diff.hunks {
@@ -516,4 +433,48 @@ pub fn hunks(repo: &Repository, options: &Options) -> Result<Vec<HunkRow>> {
         Ok(())
     })?;
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subject_joins_the_first_paragraph() {
+        assert_eq!(
+            subject(b"first\nwraps here  \n\nbody\n".as_bstr()),
+            "first wraps here"
+        );
+        assert_eq!(subject(b"only".as_bstr()), "only");
+        assert_eq!(subject(b"".as_bstr()), "");
+    }
+
+    #[test]
+    fn status_is_t_only_when_the_entry_kind_changes() {
+        use EntryKind::*;
+        assert_eq!(modification_status(Blob, Blob), "M");
+        assert_eq!(modification_status(Blob, BlobExecutable), "M");
+        assert_eq!(modification_status(Blob, Link), "T");
+        assert_eq!(modification_status(Link, BlobExecutable), "T");
+        assert_eq!(modification_status(Commit, Blob), "T");
+    }
+
+    #[test]
+    fn zero_context_headers_are_one_based_and_empty_sides_name_the_line_before() {
+        // A replaced line 2.
+        assert_eq!(header(&(1..2), &(1..2)), [2, 1, 2, 1]);
+        // Two lines inserted after line 1: `@@ -1,0 +2,2 @@`.
+        assert_eq!(header(&(1..1), &(1..3)), [1, 0, 2, 2]);
+        // A whole new file: `@@ -0,0 +1,10 @@`.
+        assert_eq!(header(&(0..0), &(0..10)), [0, 0, 1, 10]);
+        // Lines 5-6 deleted: `@@ -5,2 +4,0 @@`.
+        assert_eq!(header(&(4..6), &(4..4)), [5, 2, 4, 0]);
+    }
+
+    #[test]
+    fn unified_headers_move_an_empty_side_to_the_line_before() {
+        assert_eq!(empty_side_before([1, 0, 1, 10]), [0, 0, 1, 10]);
+        assert_eq!(empty_side_before([3, 4, 5, 0]), [3, 4, 4, 0]);
+        assert_eq!(empty_side_before([3, 4, 5, 6]), [3, 4, 5, 6]);
+    }
 }

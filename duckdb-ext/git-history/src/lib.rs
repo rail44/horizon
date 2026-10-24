@@ -4,9 +4,6 @@
 //! build route.
 
 mod functions;
-pub mod history;
-mod renames;
-mod revlist;
 
 use duckdb_loadable_macros::duckdb_entrypoint_c_api_v2;
 use duckdb_neo::{Result, extension::Extension};
