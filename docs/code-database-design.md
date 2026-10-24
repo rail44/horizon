@@ -66,6 +66,33 @@ knob of the principle above. `glob()` reads no `.gitignore` and descends
 hidden directories, so the file set needs explicit include and exclude
 patterns (a tracked-files table function is the obvious fact to add).
 
+## Second increment: one scan per query, session cache, tracked files (2026-10-24/25)
+
+The owner chose the order "single-scan views → tracked files → session
+cache → incremental cache". Done so far
+([record](research/code-db-views-single-scan-2026-10-24.md)):
+
+- `units` and `tags` are each one statement whose node scan is a
+  `MATERIALIZED` CTE, which DuckDB 2.0.0 honors inside nested views: one
+  `read_ast` per query instead of 11–17. Live on this repository: units
+  0.7 s, tags 0.9–1.0 s, the clone-site queries 1.0 s (from 13–14 s). The
+  earlier slowness of `tags` over a node table was not `sitting_duck` but
+  text slicing: hex-encoding each whole file once per identifier row; the
+  fix slices BLOB bytes. Two conventions follow from the first drafts
+  (one peaked at 44 GB): join text spans, never whole nodes, to file
+  contents, and keep spans in their own `MATERIALIZED` CTE.
+- `cache.sql` materializes nodes, units, tags, commits, file_changes and
+  hunks into temporary tables and re-points the views at them (about 3 s
+  to build, 3.2 GB peak; every query then runs in 0.02–0.12 s). Re-reading
+  the view files returns to live; with a database file the re-pointed
+  views persist and must be re-read in the next session.
+- `git_tracked_files(repo, include_untracked)` is the fourth `git_history`
+  function: the worktree's files with their current content ids, matching
+  `git ls-files` and `git hash-object` on this repository in about 6 ms.
+  The views still select files with `glob()`; switching them to this
+  function and keying a per-file incremental cache by `blob_id` is the
+  next step.
+
 ## Open points
 
 - **Historical blobs for `read_ast`.** Unit changes per commit need the
