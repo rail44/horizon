@@ -1,0 +1,16 @@
+[package]
+name = "git_history"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+duckdb-neo = { version = "=0.20000.0", features = ["build-extension"] }
+duckdb-loadable-macros = { version = "=1.20000.0", features = ["neo"] }
+git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,18 @@
+# Loads the built extension into the `duckdb` crate linked against the
+# machine-installed libduckdb 2.0.0, the way Horizon's daemon links it.
+#
+# A workspace of its own: in the extension's workspace, cargo would unify
+# libduckdb-sys's features, and `loadable-extension-v2` (from duckdb-neo)
+# turns off linking libduckdb, which a host needs.
+[package]
+name = "git_history_host_check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dev-dependencies]
+# The version the root Cargo.lock pins; features as in crates/horizon-agent.
+duckdb = { version = "=1.20000.0", default-features = false }
+tempfile = "3"

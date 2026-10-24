@@ -1,6 +1,8 @@
 /target/
 # The preview plugin is its own sub-workspace, so it has its own target/.
 /preview-plugin/target/
+# So are the DuckDB extensions.
+/duckdb-ext/target/
 /.claude/settings.local.json
 /.claude/worktrees/
 /.claude/review-queue/

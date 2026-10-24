@@ -21,7 +21,9 @@ members = [
 # The preview plugin is a `wasm32-wasip2` cdylib with its own sub-workspace
 # and its own lockfile; it depends on the root package by path, so cargo
 # would otherwise pull it into this workspace and build it for the host.
-exclude = ["preview-plugin"]
+# The DuckDB extensions are a sub-workspace too (pinned to DuckDB's unstable
+# C API v2 and its own libduckdb-sys features; see duckdb-ext/README.md).
+exclude = ["preview-plugin", "duckdb-ext"]
 
 # The one workspace-wide remoc pin (docs/remoc-adoption-design.md §1,
 # "remoc version policy"): exact version (`=`), reviewed against the remoc

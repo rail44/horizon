@@ -1,0 +1,3 @@
+# Keep this check's build next to the extension's, under duckdb-ext/target/.
+[build]
+target-dir = "../target/host-check"
