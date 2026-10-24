@@ -278,19 +278,28 @@ pub(crate) fn validated_metadata_grants(
             "Git metadata roots changed after approval; refusing the stale grant".to_string(),
         );
     }
+    Ok(metadata_grants(&current))
+}
+
+/// The grant a GitOperation approval applies to each metadata root: the
+/// whole tree read-write except [`GIT_METADATA_EXCLUDED_SUBPATHS`]. Both the
+/// sandbox spawn and the approval judge's input are built from this, so the
+/// judge is asked about exactly the grant the sandbox enforces.
+pub(crate) fn metadata_grants(roots: &[PathBuf]) -> Vec<FilesystemGrant> {
     let excluded: Vec<PathBuf> = GIT_METADATA_EXCLUDED_SUBPATHS
         .iter()
         .map(PathBuf::from)
         .collect();
-    Ok(current
-        .into_iter()
+    roots
+        .iter()
+        .cloned()
         .map(|path| FilesystemGrant {
             path,
             access: FilesystemGrantAccess::ReadWrite,
             scope: FilesystemGrantScope::DirectoryTree,
             excluded_subpaths: excluded.clone(),
         })
-        .collect())
+        .collect()
 }
 
 fn validate_common_git_dir(path: &Path) -> Result<(), String> {
@@ -517,6 +526,28 @@ mod tests {
             );
         }
         fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    #[test]
+    fn metadata_grants_map_each_root_to_a_tree_grant_excluding_hooks_and_config() {
+        let roots = vec![
+            PathBuf::from("/repo/.git/worktrees/w"),
+            PathBuf::from("/repo/.git"),
+        ];
+        let grants = metadata_grants(&roots);
+        assert_eq!(
+            grants.iter().map(|grant| &grant.path).collect::<Vec<_>>(),
+            roots.iter().collect::<Vec<_>>()
+        );
+        for grant in &grants {
+            assert_eq!(grant.access, FilesystemGrantAccess::ReadWrite);
+            assert_eq!(grant.scope, FilesystemGrantScope::DirectoryTree);
+            assert_eq!(
+                grant.excluded_subpaths,
+                vec![PathBuf::from("hooks"), PathBuf::from("config")]
+            );
+        }
+        assert!(metadata_grants(&[]).is_empty());
     }
 
     #[test]

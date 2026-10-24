@@ -139,34 +139,10 @@ pub(super) fn user_content(input: &JudgeInput) -> String {
     }
 
     if input.git_metadata_operation {
-        content.push_str(
-            "[APPROVAL CONTEXT — Git metadata operation — trusted Horizon mediation]\n\
-             This is a Git command that updates repository metadata. The filesystem \
-             grants above cover Git's own metadata directories, not arbitrary \
-             workspace writes. Auto-approve if the command is a routine metadata \
-             operation — a plain commit, rebase, merge, cherry-pick, add, restore, \
-             stash, branch (within the horizon/ namespace), tag, or a fetch or pull \
-             (specifying a remote name and a branch name) on the current repository. \
-             A sequence of such plain git operations joined by `&&` or `;` (or a \
-             leading `cd` followed by one) is equally routine.\n\
-             \n\
-             Always escalate (do not auto-approve) if the command includes any of:\n\
-             - `git config`, `git hook`, `git filter-branch`, `git filter-repo`, or\n\
-             `git credential` — these can execute arbitrary code or modify trust\n\
-             settings.\n\
-             - Git global options that can redirect execution or override the\n\
-             repository: `-c`, `--config-env`, `--exec-path`, `--git-dir`,\n\
-             `--work-tree`, `--upload-pack`, or `--receive-pack`.\n\
-             - A directly-specified URL (`ext::`, `file::`, `http://`, `https://`,\n\
-             `ssh://`, or `git://`) instead of a configured remote name.\n\
-             - Shell pipes, redirects, command substitution, or subshells — a\n\
-             non-git command riding the widened metadata grant could write hooks\n\
-             or config for later host execution.\n\
-             - A non-git command segment (e.g. `cargo`, `make`, `echo`) chained\n\
-             with the git operation.\n\
-             \n\
-             Escalate if it does anything else unexpected or suspicious.\n\n",
-        );
+        content
+            .push_str("[APPROVAL CONTEXT — Git metadata operation — trusted Horizon mediation]\n");
+        content.push_str(super::request::GIT_INSTRUCTIONS);
+        content.push_str("\n\n");
     }
 
     if input.host_execution_requested {
@@ -378,7 +354,7 @@ mod tests {
         let context = content
             .find("[APPROVAL CONTEXT — Git metadata operation — trusted Horizon mediation]")
             .unwrap();
-        let guidance = content.find("routine metadata operation").unwrap();
+        let guidance = content.find("Judge the effect").unwrap();
         let fetch = content.find("fetch").unwrap();
         let pull = content.find("pull").unwrap();
         let untrusted = content.find("<<<UNTRUSTED_ARGS_call-git>>>").unwrap();
@@ -387,6 +363,24 @@ mod tests {
             "git guidance must sit in the trusted region before the untrusted args, \
              naming fetch and pull as routine metadata operations"
         );
+
+        let region = &content[context..untrusted];
+        assert!(region.contains("excluded_subpaths"));
+        for must_approve in ["`git config`", "`--config-env`", "`ssh://`"] {
+            assert!(region.contains(must_approve), "{must_approve}");
+        }
+        for shape in [
+            "non-git command segment",
+            "echo",
+            "make",
+            "pipes",
+            "redirects",
+        ] {
+            assert!(
+                !region.contains(shape),
+                "the git region must not enumerate shell shapes: {shape}"
+            );
+        }
     }
 
     #[test]

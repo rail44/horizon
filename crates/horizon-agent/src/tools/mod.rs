@@ -30,7 +30,8 @@ pub use approval::{
 };
 pub use bash::exclude_git_metadata;
 pub(crate) use bash::{
-    command_requires_metadata_write, git_prefilter, metadata_writable_roots, GitPrefilterVerdict,
+    command_requires_metadata_write, git_prefilter, metadata_grants, metadata_writable_roots,
+    GitPrefilterVerdict,
 };
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
 pub use completion::{should_fold_completion, BashCompletion, ToolCompletion};
