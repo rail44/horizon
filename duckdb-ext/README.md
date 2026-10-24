@@ -9,6 +9,7 @@ root quality gate does not read it; `./check.sh` is its gate.
 | --- | --- |
 | `git-history/` | `git_history.duckdb_extension`: the table functions `git_hunks`, `git_commits`, `git_file_changes` |
 | `host-check/` | no output; a test that loads the built extension through the `duckdb` crate (a separate workspace, see below) |
+| `gix-probe/` | a measurement binary: the same three row sets computed with gitoxide only, compared with the git CLI by `scripts/gix_parity.py` (findings: `docs/research/gix-parity-2026-10-24.md`) |
 
 ## Route and pin
 
