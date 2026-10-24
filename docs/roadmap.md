@@ -38,7 +38,11 @@ See [the tool](../scripts/refactor-audit/README.md) and
 code quality analysis (metric validity, clone detection, history and
 architecture signals, LLM assistance, Rust tooling), gathered on
 2026-10-24 before improving the tool, is
-[the trends record](research/code-quality-analysis-trends-2026-10-24.md).
+[the trends record](research/code-quality-analysis-trends-2026-10-24.md);
+a companion survey of what existing DuckDB extensions cover, how
+extensions are built and kept compatible with DuckDB 2.0, and how CodeQL,
+Glean, Kythe, Joern and SCIP model program facts is
+[the extension record](research/duckdb-extension-options-2026-10-24.md).
 The 18 non-board built-in tools now share typed input definitions with their
 advertised schemas, validate before approval/effects, and pass typed arguments
 to handlers and workers. Restored approvals use the same validation; see
