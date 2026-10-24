@@ -22,17 +22,16 @@ SELECT f.file_id, t.content
 FROM read_text(getvariable('source_paths')) t
 JOIN files f ON f.path = substr(t.filename, length(getvariable('repo')) + 2);
 
--- Bytes [s, e) of a file whose content is given hex-encoded (source_hex). DuckDB has
--- no substring on BLOB and VARCHAR substring counts code points, so slicing goes
--- through hex().
-CREATE OR REPLACE MACRO byte_slice(hex_content, s, e) AS
-    decode(unhex(substring(hex_content, 2 * s + 1, 2 * (e - s))));
+-- Bytes [s, e) of a file whose content is given as a BLOB (source_bytes). VARCHAR
+-- substring counts code points; BLOB slicing counts bytes (1-based, inclusive).
+CREATE OR REPLACE MACRO byte_slice(bytes, s, e) AS decode(bytes[s + 1:e]);
 
 -- Collapse whitespace runs to one space and strip (RE2's \s is ASCII whitespace).
 CREATE OR REPLACE MACRO normalize_ws(t) AS trim(regexp_replace(t, '\s+', ' ', 'g'));
 
-CREATE OR REPLACE VIEW source_hex AS
-SELECT file_id, hex(content) AS hex FROM sources;
+-- source_bytes(file_id, bytes): sources as BLOBs, the argument byte_slice takes.
+CREATE OR REPLACE VIEW source_bytes AS
+SELECT file_id, encode(content) AS bytes FROM sources;
 
 -- source_lines(file_id, line, nonblank_through): for each 1-based line, the number of
 -- non-blank lines up to and including it (a line is blank when it holds only ASCII

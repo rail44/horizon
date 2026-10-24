@@ -15,8 +15,12 @@
         print the counts by unit kind and tag, and run every query.
 
     uv run --script duckdb-ext/sql/check.py measure REPO [--runs 3] [--reports ...]
-        Time each step in a fresh process per run and print min-max wall time and
-        peak RSS (see docs/research/code-db-views-2026-10-24.md).
+        Time each statement in a fresh process per run, live and with cache.sql read
+        first, and the cache build; print min-max wall time and peak RSS (see
+        docs/research/code-db-views-single-scan-2026-10-24.md).
+
+    uv run --script duckdb-ext/sql/check.py explain REPO [--reports ...]
+        Count the read_ast/read_text scans in each statement's plan.
 
     uv run --script duckdb-ext/sql/check.py cli REPO [--reports ...]
         Run the same files with `.read` in the DuckDB 2.0.0 CLI (DUCKDB_CLI, default
@@ -49,6 +53,7 @@ VIEW_FILES = [
     "views/history.sql",
     "views/clones.sql",
 ]
+CACHE_FILE = "cache.sql"
 QUERIES = ["file_cochange", "file_cochange_thresholds", "clone_site_tags", "clone_site_tags_summary"]
 
 
@@ -56,6 +61,15 @@ def sql_literal(value):
     if isinstance(value, list):
         return "[" + ", ".join(sql_literal(v) for v in value) + "]"
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def read_views(con):
+    for name in VIEW_FILES:
+        con.execute((SQL_DIR / name).read_text())
+
+
+def read_cache(con):
+    con.execute((SQL_DIR / CACHE_FILE).read_text())
 
 
 def connect(repo, reports=None, variables=None):
@@ -66,8 +80,7 @@ def connect(repo, reports=None, variables=None):
         con.execute(f"SET VARIABLE clone_reports = {sql_literal([str(Path(r).resolve()) for r in reports])}")
     for name, value in (variables or {}).items():
         con.execute(f"SET VARIABLE {name} = {value}")
-    for name in VIEW_FILES:
-        con.execute((SQL_DIR / name).read_text())
+    read_views(con)
     return con
 
 
@@ -338,8 +351,42 @@ def check_fixture():
         assert rows(con, "SELECT count(*) FROM commits") == [(3,)]
         # Contents are live: an edit shows up without reloading anything.
         write(repo, "src/scratch.rs", "fn scratch() {}\nfn more() {}\n")
-        assert rows(con, "SELECT count(*) FROM units u JOIN files f USING (file_id) "
-                         "WHERE f.path = 'src/scratch.rs'") == [(2,)]
+        scratch_units = ("SELECT count(*) FROM units u JOIN files f USING (file_id) "
+                         "WHERE f.path = 'src/scratch.rs'")
+        assert rows(con, scratch_units) == [(2,)]
+
+        # cache.sql: the same rows from the copies, frozen until the view files are read.
+        con.execute("SET VARIABLE match_mode = 'contain'")
+        con.execute("SET VARIABLE clone_source = NULL")
+        probes = ["SELECT * FROM nodes ORDER BY file_id, node_id", "SELECT * FROM units ORDER BY unit_id",
+                  "SELECT * FROM tags ORDER BY ALL", "SELECT * FROM commits ORDER BY ALL",
+                  "SELECT * FROM file_changes ORDER BY ALL", "SELECT * FROM hunks ORDER BY ALL",
+                  *(query_sql(q) for q in QUERIES)]
+        live = [rows(con, q) for q in probes]
+        read_cache(con)
+        assert [rows(con, q) for q in probes] == live
+        plan = "\n".join(r[1] for r in rows(con, "EXPLAIN " + query_sql("clone_site_tags")))
+        assert "READ_AST" not in plan and "READ_TEXT" not in plan, plan
+        write(repo, "src/scratch.rs", "fn scratch() {}\nfn more() {}\nfn third() {}\n")
+        con.execute("SET VARIABLE since = NULL")
+        assert rows(con, scratch_units) == [(2,)]
+        assert rows(con, "SELECT count(*) FROM commits") == [(3,)]
+        # Reading cache.sql again without the view files in between fails instead of
+        # copying the copies.
+        try:
+            read_cache(con)
+        except duckdb.CatalogException:
+            pass
+        else:
+            raise AssertionError("cache.sql read twice in a row did not fail")
+        read_views(con)
+        assert rows(con, scratch_units) == [(3,)]
+        assert rows(con, "SELECT count(*) FROM commits") == [(4,)]
+        # Refresh: the view files, then cache.sql.
+        read_cache(con)
+        assert rows(con, scratch_units) == [(3,)]
+        write(repo, "src/scratch.rs", "fn scratch() {}\n")
+        assert rows(con, scratch_units) == [(3,)]
     print("fixture: ok")
 
 
@@ -362,52 +409,81 @@ def check_repo(repo, reports):
         print(f"{name}: {len(result)} rows; first: {result[:3]}")
 
 
-# Each step runs in its own process; `prepare` runs before the timed statement.
-CACHE_NODES = "CREATE TABLE nodes_cache AS SELECT * FROM nodes; CREATE OR REPLACE VIEW nodes AS SELECT * FROM nodes_cache;"
-CACHE_DERIVED = ("CREATE TABLE units_cache AS SELECT * FROM units; CREATE OR REPLACE VIEW units AS SELECT * FROM units_cache;"
-                 "CREATE TABLE tags_cache AS SELECT * FROM tags; CREATE OR REPLACE VIEW tags AS SELECT * FROM tags_cache;")
-CACHE_HISTORY = ("CREATE TABLE commits_cache AS SELECT * FROM commits; CREATE OR REPLACE VIEW commits AS SELECT * FROM commits_cache;"
-                 "CREATE TABLE file_changes_cache AS SELECT * FROM file_changes;"
-                 "CREATE OR REPLACE VIEW file_changes AS SELECT * FROM file_changes_cache;")
-STEPS = {
-    **{f"count {v}": ("", f"SELECT count(*) FROM {v}") for v in ["nodes", "units", "tags", "hunks", "clone_pairs"]},
-    "nodes referenced twice": ("", "SELECT (SELECT count(*) FROM nodes), (SELECT count(*) FROM nodes)"),
-    **{f"query {q}": ("", q) for q in QUERIES},
-    "build nodes_cache": ("", CACHE_NODES),
-    **{f"nodes cached: count {v}": (CACHE_NODES, f"SELECT count(*) FROM {v}") for v in ["units", "tags"]},
-    **{f"nodes cached: query {q}": (CACHE_NODES, q) for q in QUERIES},
-    "build units_cache+tags_cache (over nodes_cache)": (CACHE_NODES, CACHE_DERIVED),
-    **{f"all cached: query {q}": (CACHE_NODES + CACHE_DERIVED, q) for q in QUERIES},
-    "build commits_cache+file_changes_cache": ("", CACHE_HISTORY),
-    **{f"history cached: query {q}": (CACHE_HISTORY, q) for q in QUERIES[:2]},
+# Each step runs in its own process. A statement is timed live and, in the `cached`
+# column, after reading cache.sql (its build time is not included); `build cache` times
+# cache.sql itself, layer by layer.
+STATEMENTS = {
+    **{f"count {v}": f"SELECT count(*) FROM {v}" for v in ["nodes", "units", "tags", "hunks", "clone_pairs"]},
+    "nodes referenced twice": "SELECT (SELECT count(*) FROM nodes), (SELECT count(*) FROM nodes)",
+    **{f"query {q}": q for q in QUERIES},
 }
+BUILD_CACHE = "build cache"
 
 
-def run_step(repo, reports, step):
-    prepare, statement = STEPS[step]
+def cache_layers():
+    """cache.sql's statements grouped by layer: each layer starts at a DROP TABLE."""
+    layers = []
+    for statement in (SQL_DIR / CACHE_FILE).read_text().split(";\n"):
+        lines = [l for l in statement.splitlines() if l.strip() and not l.lstrip().startswith("--")]
+        if not lines:
+            continue
+        sql = "\n".join(lines)
+        if sql.startswith("DROP TABLE IF EXISTS "):
+            layers.append((sql.split()[-1].removesuffix("_cache"), []))
+        layers[-1][1].append(sql)
+    return layers
+
+
+def run_step(repo, reports, step, cached):
     con = connect(repo, reports)
-    if prepare:
-        con.execute(prepare)
+    rss = lambda: resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    if step == BUILD_CACHE:
+        result = {}
+        start = time.perf_counter()
+        for layer, statements in cache_layers():
+            t = time.perf_counter()
+            for sql in statements:
+                con.execute(sql)
+            result[layer] = time.perf_counter() - t
+        result["wall"] = time.perf_counter() - start
+        result["rss_mib"] = rss()
+        print(json.dumps(result))
+        return
+    if cached:
+        read_cache(con)
+    statement = STATEMENTS[step]
     sql = query_sql(statement) if statement in QUERIES else statement
     start = time.perf_counter()
     con.execute(sql).fetchall()
     wall = time.perf_counter() - start
-    print(json.dumps({"wall": wall, "rss_mib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024}))
+    print(json.dumps({"wall": wall, "rss_mib": rss()}))
 
 
 def measure(repo, reports, runs, only=None):
-    for step in STEPS:
-        if only and only not in step:
-            continue
+    def series(step, cached):
         results = []
         for _ in range(runs):
             out = subprocess.run([sys.executable, __file__, "step", str(repo), step,
-                                  "--reports", *map(str, reports)],
+                                  "--reports", *map(str, reports), *(["--cached"] if cached else [])],
                                  check=True, capture_output=True, text=True).stdout
             results.append(json.loads(out.strip().splitlines()[-1]))
-        walls = [r["wall"] for r in results]
-        rss = [r["rss_mib"] for r in results]
-        print(f"{step}: {min(walls):.2f}-{max(walls):.2f} s, peak RSS {min(rss):.0f}-{max(rss):.0f} MiB")
+        return results
+
+    def span(results, key, unit="s", fmt="{:.2f}"):
+        values = [r[key] for r in results]
+        return f"{fmt.format(min(values))}-{fmt.format(max(values))} {unit}"
+
+    for step in [*STATEMENTS, BUILD_CACHE]:
+        if only and only not in step:
+            continue
+        if step == BUILD_CACHE:
+            results = series(step, False)
+            layers = ", ".join(f"{k} {span(results, k)}" for k in results[0] if k not in ("wall", "rss_mib"))
+            print(f"{step}: {span(results, 'wall')} ({layers}), peak RSS {span(results, 'rss_mib', 'MiB', '{:.0f}')}")
+            continue
+        live, cached = series(step, False), series(step, True)
+        print(f"{step}: live {span(live, 'wall')}, peak RSS {span(live, 'rss_mib', 'MiB', '{:.0f}')}; "
+              f"cached {span(cached, 'wall')}, peak RSS {span(cached, 'rss_mib', 'MiB', '{:.0f}')}")
 
 
 def explain_counts(repo, reports):
@@ -415,7 +491,7 @@ def explain_counts(repo, reports):
     for view in ["nodes", "units", "tags"]:
         plan = "\n".join(r[1] for r in rows(con, f"EXPLAIN SELECT count(*) FROM {view}"))
         print(f"{view}: READ_AST in plan {plan.count('READ_AST')}, READ_TEXT {plan.count('READ_TEXT')}")
-    twice = STEPS["nodes referenced twice"][1]
+    twice = STATEMENTS["nodes referenced twice"]
     plan = "\n".join(r[1] for r in rows(con, "EXPLAIN " + twice))
     print(f"nodes referenced twice: READ_AST in plan {plan.count('READ_AST')}")
     for name in QUERIES:
@@ -455,6 +531,7 @@ def main():
     parser.add_argument("--reports", nargs="+")
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--only", help="measure: run only the steps whose name contains this text")
+    parser.add_argument("--cached", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.command == "fixture":
         check_fixture()
@@ -471,7 +548,7 @@ def main():
     elif args.command == "cli":
         check_cli(args.repo, reports)
     else:
-        run_step(args.repo, reports, args.step)
+        run_step(args.repo, reports, args.step, args.cached)
 
 
 if __name__ == "__main__":

@@ -11,8 +11,7 @@ WITH params AS (
     SELECT coalesce(getvariable('match_mode'), 'contain') AS match_mode
 ),
 tagged AS (
-    SELECT t.file_id, t.tag, n.start_line, n.end_line
-    FROM tags t JOIN nodes n USING (file_id, node_id)
+    SELECT file_id, tag, start_line, end_line FROM tags
 ),
 sides AS (
     SELECT pair_id, 'a' AS side, file_a AS path, start_line_a AS s, end_line_a AS e FROM clone_pairs
