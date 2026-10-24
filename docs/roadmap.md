@@ -43,6 +43,10 @@ a companion survey of what existing DuckDB extensions cover, how
 extensions are built and kept compatible with DuckDB 2.0, and how CodeQL,
 Glean, Kythe, Joern and SCIP model program facts is
 [the extension record](research/duckdb-extension-options-2026-10-24.md).
+A language-independent code database spike (`scripts/code-db/`: syntax
+trees, units, tags, git history, per-commit unit changes, clone pairs and
+SCIP occurrences as DuckDB tables, queried in SQL) and its measurements on
+this repository are in [the spike record](research/code-db-spike-2026-10-24.md).
 The 18 non-board built-in tools now share typed input definitions with their
 advertised schemas, validate before approval/effects, and pass typed arguments
 to handlers and workers. Restored approvals use the same validation; see
