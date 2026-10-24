@@ -1,9 +1,10 @@
-"""Print `git log --raw --numstat -M` file changes as TSV, parsed like the spike.
+"""Print `git log --raw --numstat -M` file changes as TSV.
 
 python3 duckdb-ext/scripts/cli_file_changes.py REPO [extra git log args...]
 
-The parse is the one in scripts/code-db/history.py (`commits_and_changes`);
-NULL is printed as \\N, matching the `gix-probe` binary.
+One `git log --raw --numstat -z` pass; the `--raw` entries give status and
+paths, `--numstat` the counts. NULL is printed as \\N, matching the
+`gix-probe` binary.
 """
 
 import re

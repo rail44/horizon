@@ -5,8 +5,8 @@ python3 duckdb-ext/scripts/gix_parity.py REPO PROBE OUT_DIR [SECTION...]
 PROBE is the built `gix-probe` binary; OUT_DIR receives every TSV it compares.
 SECTION is any of hunks, context, file_changes, tail, commits, merges, timing
 (default all; tail reads the TSVs of hunks and file_changes).
-Rows are compared as multisets, as parity.py does; the git side is parsed by
-cli_hunks.py and cli_file_changes.py, and commit order is `git log --format=%H`.
+Rows are compared as multisets; the git side is parsed by cli_hunks.py and
+cli_file_changes.py, and commit order is `git log --format=%H`.
 """
 
 import collections

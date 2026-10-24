@@ -43,11 +43,13 @@ a companion survey of what existing DuckDB extensions cover, how
 extensions are built and kept compatible with DuckDB 2.0, and how CodeQL,
 Glean, Kythe, Joern and SCIP model program facts is
 [the extension record](research/duckdb-extension-options-2026-10-24.md).
-A language-independent code database spike (`scripts/code-db/`: syntax
-trees, units, tags, git history, per-commit unit changes, clone pairs and
-SCIP occurrences as DuckDB tables, queried in SQL) and its measurements on
-this repository are in [the spike record](research/code-db-spike-2026-10-24.md).
-The git layer is becoming a DuckDB extension: `duckdb-ext/` (its own
+A Python spike of such a code database (syntax trees, units, tags, git
+history, per-commit unit changes, clone pairs and SCIP occurrences as
+DuckDB tables, queried in SQL) was built on 2026-10-24 without consulting
+the owner on its form and removed the same day at the owner's request;
+its measurements on this repository remain in
+[the spike record](research/code-db-spike-2026-10-24.md), and its code in
+history (last at 475599d5). The git layer is a DuckDB extension: `duckdb-ext/` (its own
 Cargo workspace, C API v2, pinned to DuckDB 2.0.0) holds `git_history`
 with `git_commits`, `git_file_changes` and `git_hunks` computed by
 gitoxide; the syntax layer is covered by the community extension

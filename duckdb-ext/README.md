@@ -1,7 +1,7 @@
 # DuckDB extensions
 
-DuckDB extensions for the code database (`scripts/code-db/`), written in
-Rust. This directory is a Cargo workspace of its own (own `Cargo.lock`, own
+DuckDB extensions for the code database (a repository's structure and
+history as language-independent tables, queried in SQL), written in Rust. This directory is a Cargo workspace of its own (own `Cargo.lock`, own
 `target/`), excluded from the root workspace like `preview-plugin/`. The
 root quality gate does not read it; `./check.sh` is its gate.
 
@@ -143,9 +143,9 @@ repository; it must be a constant) and two optional named parameters:
 `since VARCHAR` (any revision; history is `since..HEAD`, default all of
 `HEAD`) and `include_merges BOOLEAN` (default `false`). Rows are computed
 when the scan starts and emitted from one thread, so an unordered query
-returns them in the order below. Column names and semantics are those of the
-spike's tables (`scripts/code-db/schema.sql`, `history.py`), with the
-deviations listed under "How the rows are computed".
+returns them in the order below. Column names and semantics are defined
+below, with the deviations from `git log` listed under "How the rows are
+computed".
 
 ### `git_hunks(repo, since := …, include_merges := …)`
 
@@ -156,8 +156,8 @@ One row per `@@ -old_start,old_lines +new_start,new_lines @@` header of
 (`--diff-merges=first-parent` with `include_merges`), with git's 1-based
 numbers (a count of 0 means a pure insertion or deletion, and its start is
 the line before). `path` is the new path, or the old one for a deletion.
-Unlike the spike, which passes language pathspecs to git, this covers all
-files; filter in SQL (`WHERE path LIKE '%.rs'`). Binary files and
+This covers all files, with no pathspec; filter in SQL (`WHERE path LIKE
+'%.rs'`). Binary files and
 submodules have no rows. A type change (file to symlink or back) has the
 hunks of one diff from the old content to the new one, the symlink's
 content being its target path. Where a change could be placed at several
@@ -222,7 +222,7 @@ Measured against `git log` (git 2.55.0) on this repository, the record
   an update). The status letter is git's.
 
 Not covered, because nothing here needs it: `.mailmap`, textconv and
-external diff drivers (the spike disables both), the repository's `diff.*`
+external diff drivers (both disabled), the repository's `diff.*`
 configuration, copy detection, pathspec history simplification,
 `diff.renameLimit` other than 1000.
 
@@ -230,9 +230,7 @@ configuration, copy detection, pathspec history simplification,
 
 Measured on this repository at 0df26a53 (1,589 commits, 343 merges)
 against git 2.55.0 with `scripts/gix_parity.py` (rows as multisets, commit
-order as sequences), and against the spike database built with
-`uv run --locked --script scripts/code-db/build.py build . --out target/code-db/horizon.duckdb --languages rust`
-with `scripts/parity.py`:
+order as sequences):
 
 | Comparison | git_history | Reference | Only in git_history / only in reference |
 | --- | --- | --- | --- |
@@ -245,30 +243,25 @@ with `scripts/parity.py`:
 | hunks with one context line vs `git log -p -U1 -M` | 35,101 | 35,101 | 0 / 0 |
 | same with `include_merges` | 51,361 | 51,361 | 0 / 0 |
 | hunks with three context lines vs `git log -p -U3 -M` | 28,217 | 28,217 | 0 / 0 |
-| `git_hunks` filtered to `*.rs` vs spike `hunks` | 34,694 | 34,702 | 116 / 124 |
-| `git_commits` vs spike `commits` | 1,589 | 1,589 | 0 / 0 |
-| `git_file_changes` vs spike `file_changes` | 9,008 | 9,008 | 0 / 0 |
 
 The context-line rows come from `gix-probe --context N`, which uses the
 same diff as `git_hunks` and adds N lines of context through gix's
 `UnifiedDiff`. The extension's rows are identical, in order, to
-`gix-probe`'s TSVs for all five row sets above. The spike's `hunks` differ
-by the `-U0` placements, plus one row that is the spike's own: the spike
-runs `git log -p … -- '*.rs'`, and a pathspec turns on git's history
-simplification, which drops commits on a side branch whose merge is
-TREESAME to the other parent for those paths (commit e91103e8, reached
-through merge 4ba1ceff, deletes one line of
+`gix-probe`'s TSVs for all five row sets above. Filtering the rows by path
+in SQL is not the same as giving git a pathspec: `git log -p -- '*.rs'`
+turns on history simplification, which drops commits on a side branch
+whose merge is TREESAME to the other parent for those paths (commit
+e91103e8, reached through merge 4ba1ceff, deletes one line of
 `crates/horizon-sessiond/tests/latency_probe.rs`; `git log -- '*.rs'`
 omits it, `git log --full-history -- '*.rs'` and plain `git log -p` show
-it). Filtering an all-files result in SQL cannot reproduce that
-simplification, and arguably should not.
+it). The extension covers all files and never simplifies.
 
 Scripts (Python, run with `uv run --with duckdb==2.0.0 python …` where they
 load the extension): `scripts/gix_parity.py` (the probe against the git
 CLI; `python3 duckdb-ext/scripts/gix_parity.py REPO duckdb-ext/target/release/gix-probe OUT_DIR`),
-`scripts/parity.py` (against a spike database), `scripts/cli_hunks.py` and
-`scripts/cli_file_changes.py` (the git CLI output, parsed like the spike),
-`scripts/load_smoke.py`, `scripts/perf.py`. `gix-probe REPO
+`scripts/cli_hunks.py` and `scripts/cli_file_changes.py` (the git CLI
+output parsed into the same TSV rows), `scripts/load_smoke.py`,
+`scripts/perf.py`. `gix-probe REPO
 hunks|commits|file_changes [--since REV] [--include-merges] [--context N]
 [--stats]` prints any function's rows as TSV.
 

@@ -251,3 +251,7 @@ uv run --with duckdb==2.0.0 python -I target/code-db/sd/measure.py target/code-d
 - `ast_definitions`(keymap.rs で 63 行を返すことだけを確かめた)と `ast_function_scope` の内容。
 - `is_named` を型名から推す近似が、grammar 全体で成り立つ範囲(`node-types.json` との照合)。
 - 2.0 のレジストリのビルドが `skip_tests: true` である点。本評価では、使った経路が動くことを見ただけである。
+
+---
+
+**追記(2026-10-24)**: ここで参照している Python のスパイク `scripts/code-db/`(`build.py`、`views/` の SQL、比較スクリプトを含む)は、実装の形をオーナーに相談せずに作ったものだったため、同日オーナーの指示「python版はそもそも相談されずに勝手に作ったものなので捨ててほしいです」により削除した。コードは履歴(最終 475599d5)に残る。本記録の数値と観察は削除前の測定として有効である。

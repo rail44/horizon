@@ -1,8 +1,8 @@
-"""Print `git log -p -U0 -M` hunk headers for all files as TSV, parsed like the spike.
+"""Print `git log -p -U0 -M` hunk headers for all files as TSV.
 
 python3 duckdb-ext/scripts/cli_hunks.py REPO [extra git log args...]
 
-The parse is the one in scripts/code-db/history.py (`hunks`), without its
+Only the `@@` headers are read (content lines are skipped), with no
 pathspec, so the output is what git_hunks is meant to reproduce.
 """
 
