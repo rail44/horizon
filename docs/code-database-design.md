@@ -47,6 +47,25 @@ Consequences:
 | Clone facts | jscpd's JSON report read with the core `read_json` (no extension) | — |
 | Reference facts | SCIP (`rust-analyzer scip`, `scip-go`, `scip-typescript`); reader form undecided: `scip print --json` with `read_json`, or a small Rust `read_scip` | — |
 
+## First increment: views only (2026-10-24)
+
+`duckdb-ext/sql/` holds the views and the first two questions as plain
+SQL files read in order by any DuckDB 2.0.0 client (`00_load.sql` with
+parameters as variables, `views/`, `lang/rust.sql`, `queries/`), plus
+`check.py` (fixture, counts, timings, CLI comparison) and `jscpd.sh`. No
+Rust changed. Measured on this repository
+([record](research/code-db-views-2026-10-24.md)): every reference to a
+view over `read_ast` re-scans it (11–17 scans per query, no pushdown), so
+live queries over units and tags take 6–18 s; with `nodes`, `units` and
+`tags` materialized (about 8 s to build) the same queries take under
+0.1 s, and with `commits`/`file_changes` materialized (1–2 s) the
+co-change queries drop from 2–3 s to 0.02 s. `nodes`, `hunks` and
+`clone_pairs` are cheap live for a single reference. Which layers to
+cache, where the cache lives and when it is refreshed is the open "cache"
+knob of the principle above. `glob()` reads no `.gitignore` and descends
+hidden directories, so the file set needs explicit include and exclude
+patterns (a tracked-files table function is the obvious fact to add).
+
 ## Open points
 
 - **Historical blobs for `read_ast`.** Unit changes per commit need the
