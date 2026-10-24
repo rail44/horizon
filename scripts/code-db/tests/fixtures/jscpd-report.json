@@ -1,0 +1,33 @@
+{
+  "duplicates": [
+    {
+      "format": "rust",
+      "lines": 7,
+      "tokens": 40,
+      "firstFile": {"name": "lib.rs", "start": 1, "end": 7},
+      "secondFile": {"name": "lib.rs", "start": 9, "end": 15}
+    },
+    {
+      "format": "typescript",
+      "lines": 7,
+      "tokens": 42,
+      "firstFile": {"name": "calc.ts", "start": 1, "end": 7},
+      "secondFile": {"name": "./calc.ts", "start": 9, "end": 15}
+    },
+    {
+      "format": "go",
+      "lines": 7,
+      "tokens": 38,
+      "firstFile": {"name": "pkg/calc.go", "start": 9, "end": 15},
+      "secondFile": {"name": "pkg/calc.go", "start": 17, "end": 23}
+    },
+    {
+      "format": "rust",
+      "lines": 3,
+      "tokens": 12,
+      "firstFile": {"name": "lib.rs", "start": 28, "end": 30},
+      "secondFile": {"name": "lib.rs", "start": 2, "end": 4}
+    }
+  ],
+  "statistics": {"total": {"clones": 4}}
+}
