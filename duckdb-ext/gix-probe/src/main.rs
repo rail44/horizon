@@ -1,13 +1,15 @@
-//! Print the rows of `git_hunks`, `git_file_changes` or `git_commits` as TSV,
+//! Print the rows of `git_hunks`, `git_file_changes`, `git_commits` or
+//! `git_tracked_files` as TSV,
 //! computed by `git_history_core` without DuckDB, for comparing with the git
 //! CLI (`scripts/gix_parity.py`).
 //!
-//! Usage: gix-probe REPO hunks|file_changes|commits [options]
+//! Usage: gix-probe REPO hunks|file_changes|commits|tracked_files [options]
 //!
 //! Options:
 //!   --since REV          history is REV..HEAD
 //!   --include-merges     diff merges against their first parent
 //!   --context N          hunks with N context lines (`-U<N>`) instead of 0
+//!   --include-untracked  tracked_files also lists untracked, not ignored files
 //!   --stats              print the row count and total time to stderr
 
 use std::io::Write;
@@ -18,11 +20,14 @@ use git_history_core::{self as history, Range, Result};
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 2 {
-        return Err("usage: gix-probe REPO hunks|file_changes|commits [options]".into());
+        return Err(
+            "usage: gix-probe REPO hunks|file_changes|commits|tracked_files [options]".into(),
+        );
     }
     let mut range = Range::default();
     let mut context = 0;
     let mut stats = false;
+    let mut include_untracked = false;
     let mut rest = args[2..].iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -30,6 +35,7 @@ fn main() -> Result<()> {
             "--include-merges" => range.include_merges = true,
             "--context" => context = rest.next().ok_or("--context needs a value")?.parse()?,
             "--stats" => stats = true,
+            "--include-untracked" => include_untracked = true,
             other => return Err(format!("unknown argument {other}").into()),
         }
     }
@@ -72,6 +78,16 @@ fn main() -> Result<()> {
                     f.status,
                     num(f.added),
                     num(f.deleted)
+                );
+            }
+        }
+        "tracked_files" => {
+            let rows = history::tracked_files(&repo, include_untracked)?;
+            count = rows.len();
+            for t in rows {
+                out += &format!(
+                    "{}\t{}\t{}\t{}\t{}\n",
+                    t.path, t.mode, t.blob_id, t.is_tracked, t.is_modified
                 );
             }
         }

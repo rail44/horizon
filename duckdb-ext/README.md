@@ -7,8 +7,8 @@ root quality gate does not read it; `./check.sh` is its gate.
 
 | Crate | Output |
 | --- | --- |
-| `git-history-core/` | a library: the rows of the three functions, computed with gitoxide (`gix`) only; no DuckDB dependency, unit-tested and compared with the git CLI on a fixture |
-| `git-history/` | `git_history.duckdb_extension`: the DuckDB table functions `git_hunks`, `git_commits`, `git_file_changes` over `git-history-core` |
+| `git-history-core/` | a library: the rows of the four functions, computed with gitoxide (`gix`) only; no DuckDB dependency, unit-tested and compared with the git CLI on fixtures |
+| `git-history/` | `git_history.duckdb_extension`: the DuckDB table functions `git_hunks`, `git_commits`, `git_file_changes`, `git_tracked_files` over `git-history-core` |
 | `gix-probe/` | a binary printing any function's rows of `git-history-core` as TSV, compared with the git CLI by `scripts/gix_parity.py` |
 | `host-check/` | no output; a test that loads the built extension through the `duckdb` crate (a separate workspace, see below) |
 
@@ -35,7 +35,7 @@ Pins:
 | DuckDB | v2.0.0 (`PRAGMA version`: `v2.0.0`, source id `d54cbbe3df`) |
 | `duckdb-neo` | `=0.20000.0`, feature `build-extension` |
 | `duckdb-loadable-macros` | `=1.20000.0`, feature `neo` |
-| `gix` | 0.90.0, no default features, features `blob-diff`, `revision`, `sha1`, `max-performance` (resolves `gix-diff` 0.70.0, `gix-imara-diff` 0.3.2, `gix-traverse` 0.64.0, `gix-odb` 0.87.0, `gix-pack` 0.77.0) |
+| `gix` | 0.90.0, no default features, features `blob-diff`, `revision`, `sha1`, `max-performance`, `status` (resolves `gix-diff` 0.70.0, `gix-imara-diff` 0.3.2, `gix-traverse` 0.64.0, `gix-odb` 0.87.0, `gix-pack` 0.77.0, `gix-status` 0.37.0, `gix-dir` 0.32.0, `gix-filter` 0.36.1) |
 | `duckdb` (host check only) | `=1.20000.0`, the version the root `Cargo.lock` pins |
 
 What was kept from the template: the `cdylib` with the
@@ -61,8 +61,9 @@ version `v2.0.0`, extension version `v<crate version>`, ABI type
 The extension links no C code and no GPL code: git access is gitoxide only
 (no libgit2), and nothing in the workspace is ported from git's sources.
 The normal dependency tree of `git_history` (`cargo tree -p git_history -e
-normal --prefix none -f "{p} {l}"`, 120 crates besides the two of this
-workspace) has these licenses:
+normal --prefix none -f "{p} {l}"`, 122 crates besides the two of this
+workspace; `status` added `gix-status` and `gix-dir`, both MIT OR
+Apache-2.0) has these licenses:
 
 | License | Crates |
 | --- | --- |
@@ -97,7 +98,7 @@ duckdb-ext/check.sh      # fmt, clippy, tests of every member, build.sh, then th
 ```
 
 Output: `duckdb-ext/target/extension/v2.0.0/linux_amd64/git_history.duckdb_extension`
-(about 4.6 MB; links only `libc` and `libgcc_s` dynamically).
+(about 5.9 MB; links only `libc` and `libgcc_s` dynamically).
 
 ## Loading
 
@@ -138,8 +139,9 @@ Invalid Input Error: Failed to load '…/git_history.duckdb_extension', The file
 
 ## Functions
 
-All three take `repo VARCHAR` (any path inside a worktree, or a bare
-repository; it must be a constant) and two optional named parameters:
+The three history functions take `repo VARCHAR` (any path inside a
+worktree, or a bare repository; it must be a constant) and two optional
+named parameters:
 `since VARCHAR` (any revision; history is `since..HEAD`, default all of
 `HEAD`) and `include_merges BOOLEAN` (default `false`). Rows are computed
 when the scan starts and emitted from one thread, so an unordered query
@@ -182,6 +184,38 @@ letter (`A`, `M`, `D`, `R`, `T`; `C` cannot occur, copies are not
 detected), `old_path` is set for renames, `added`/`deleted` are the
 `--numstat` counts and NULL for binary files and submodules. Merges have no
 rows unless `include_merges`.
+
+### `git_tracked_files(repo, include_untracked := …)`
+
+`(path VARCHAR, mode VARCHAR, blob_id VARCHAR, is_tracked BOOLEAN, is_modified BOOLEAN)`
+
+The worktree's files now, not history: one row per path of `git ls-files`,
+sorted by path bytes. `repo` is any path inside a worktree (a bare
+repository is an error); `include_untracked BOOLEAN` (default `false`) adds
+the files of `git ls-files -o --exclude-standard`. `path` is
+repository-relative and unquoted (`core.quotePath` does not apply). `mode`
+is git's mode string (`100644`, `100755`, `120000`, `160000`) and `blob_id`
+the object id of the **current** content, both as `git add` would record
+them now:
+
+| Row | `mode` | `blob_id` | `is_tracked` | `is_modified` |
+| --- | --- | --- | --- | --- |
+| tracked, unchanged in the worktree | the index entry's | the index entry's | true | false |
+| tracked, content or executable bit changed (staged or not) | the worktree file's | the hash of the worktree content after the clean filters (`git hash-object PATH`) | true | true |
+| tracked, deleted in the worktree | no row | | | |
+| tracked symlink | `120000` | the blob of the link's target path | true | as for files |
+| gitlink (submodule) | `160000` | the commit the index records; submodules are never opened | true | false |
+| unmerged (stages 1–3) | the worktree file's | the hash of the worktree content (with conflict markers) | true | true; no row if the file is gone |
+| `git add -N` (intent to add) | the worktree file's | the hash of the worktree content | true | when it is not the empty blob |
+| untracked, not ignored | the worktree file's | the hash of the worktree content | false | false |
+
+Never listed: ignored files (`.gitignore`, `.git/info/exclude`,
+`core.excludesFile`), anything under `.git`, and anything inside a nested
+repository: a directory holding a `.git` (another clone, a linked worktree
+placed in this one, an unregistered `git init`) is neither descended nor
+listed, where `git ls-files -o` prints it as one `sub/` line. Untracked
+sockets and FIFOs are skipped. Sparse-checkout
+(skip-worktree) entries keep their index row.
 
 ## How the rows are computed
 
@@ -226,6 +260,25 @@ external diff drivers (both disabled), the repository's `diff.*`
 configuration, copy detection, pathspec history simplification,
 `diff.renameLimit` other than 1000.
 
+`git_tracked_files` is `git-history-core/src/tracked.rs`:
+
+| Step | gix call and settings |
+| --- | --- |
+| Index | `repo.index_or_empty()`, entries in index order (by path bytes) |
+| Worktree changes of tracked files | `repo.index_worktree_status(index, no patterns, Recorder, HashEq, BuiltinSubmoduleStatus(Ignore::All), …)` with no rewrite tracking: gix's stat check against the index (racy-git aware, `core.*` stat options), and for a file whose stat differs, `HashEq` hashes it through gix's to-git pipeline and reports the new id only if it differs from the index id |
+| Untracked files | the same call with `repo.dirwalk_options().emit_untracked(Matching)`: gix's directory walk with the standard excludes, emitting each untracked file (no collapsed directories, no ignored entries); only entries whose disk kind is file or symlink are kept |
+| Content ids not reported by the status (type changes, unmerged and intent-to-add paths, untracked files) | `repo.filter_pipeline(None)` then `convert_to_git` on the file and `gix::objs::compute_hash(Blob)`; a symlink is hashed as its `read_link` target |
+| Worktree mode | `gix::index::fs::Metadata::from_path_no_follow`: symlink if `core.symlinks`, `100755` if the owner's executable bit is set and `core.fileMode`, else `100644` |
+
+The clean filters applied are gix's to-git pipeline as the repository's
+attributes and configuration select it: `text`/`eol`/`core.autocrlf`
+conversion, `ident`, `working-tree-encoding`, and `filter.<driver>.clean`
+or `.process` drivers (run as configured, like git). No filter is skipped.
+`git hash-object PATH` itself differs from these ids in one case: it
+follows a symlink and hashes the file it points to; the ids here are those
+of `git add` (the link's target path), which the parity script obtains with
+`git hash-object --stdin`.
+
 ## Parity
 
 Measured on this repository at 0df26a53 (1,589 commits, 343 merges)
@@ -256,14 +309,35 @@ e91103e8, reached through merge 4ba1ceff, deletes one line of
 omits it, `git log --full-history -- '*.rs'` and plain `git log -p` show
 it). The extension covers all files and never simplifies.
 
+`git_tracked_files`, with `scripts/tracked_parity.py` (rows as sets; the
+reference row for each path is built from `git ls-files -s -z`, `git
+ls-files -o --exclude-standard -z`, `git status --porcelain=v2 -z` and `git
+hash-object` as the table in "Functions" describes), at 2a0de30a with this
+change's own edits in the worktree:
+
+| Comparison | git_history | Reference | Only in git_history / only in reference |
+| --- | --- | --- | --- |
+| tracked rows vs `git ls-files -s` (824 lines), 6 of them modified | 824 | 824 | 0 / 0 |
+| with `include_untracked` vs the above plus `git ls-files -o --exclude-standard` (3 lines) | 827 | 827 | 0 / 0 |
+| same, with an unregistered nested repository `scratch-nested/` added | 827 | 827 | 0 / 0 (git lists `scratch-nested/`, which has no file row by design) |
+| unchanged rows whose index id differs from `git hash-object` | 0 | | |
+
+On the main checkout, whose `.claude/worktrees/` holds the nested
+worktrees that a core `glob()` walked in 20.9 s, `git_tracked_files` with
+`include_untracked` returns 778 rows, all tracked, in 5 ms (the directory
+is ignored, so no row comes from it). The extension's rows
+are identical, in order, to `gix-probe tracked_files`'s TSV.
+
 Scripts (Python, run with `uv run --with duckdb==2.0.0 python …` where they
 load the extension): `scripts/gix_parity.py` (the probe against the git
 CLI; `python3 duckdb-ext/scripts/gix_parity.py REPO duckdb-ext/target/release/gix-probe OUT_DIR`),
 `scripts/cli_hunks.py` and `scripts/cli_file_changes.py` (the git CLI
 output parsed into the same TSV rows), `scripts/load_smoke.py`,
-`scripts/perf.py`. `gix-probe REPO
-hunks|commits|file_changes [--since REV] [--include-merges] [--context N]
-[--stats]` prints any function's rows as TSV.
+`scripts/perf.py`, `scripts/tracked_parity.py` (`python3
+duckdb-ext/scripts/tracked_parity.py REPO duckdb-ext/target/release/gix-probe`).
+`gix-probe REPO hunks|commits|file_changes|tracked_files [--since REV]
+[--include-merges] [--context N] [--include-untracked] [--stats]` prints
+any function's rows as TSV.
 
 ## Performance
 
@@ -284,6 +358,21 @@ The scan is single-threaded and keeps a 64 MiB object cache per
 repository; diffing commits in parallel is the obvious next step if this
 matters.
 
+`git_tracked_files` on this repository at 2a0de30a (824 tracked files, 6
+modified, 3 untracked), same setup, five fresh processes each:
+
+| Call | Rows | Wall time | Peak RSS (one scan) |
+| --- | --- | --- | --- |
+| `git_tracked_files('.')` | 824 | 9–31 ms | 77 MiB (70 MiB after `LOAD`) |
+| `git_tracked_files('.', include_untracked := true)` | 827 | 10–51 ms | 76 MiB |
+
+`gix-probe tracked_files` takes 5.6–6.2 ms (min–median of 20 runs; 5.7–6.9
+ms with `--include-untracked`), against 3.7–3.9 ms for `git ls-files -s`,
+4.1–5.5 ms for `git ls-files -o --exclude-standard`, and 4.9–7.7 ms for
+`git status --porcelain=v2`. Files whose index stat is current are not
+read; a file is hashed only when its stat differs from the index (or is
+racily clean), and gix runs that check on several threads.
+
 ## Tests
 
 - `git-history-core/src/lib.rs` unit tests: `%s` subject folding, the
@@ -300,6 +389,23 @@ matters.
   convention (one hunk) it asserts. It also asserts each case's rows, that
   two runs give identical rows, and, on a fixture with a submodule entry,
   that gitlinks get git's statuses, NULL counts and no hunks.
+- `git-history-core/tests/tracked_files.rs`: builds a worktree with the
+  `git` CLI (same isolation) holding a tracked unchanged file, a file
+  modified in the worktree, one staged and then modified again, one deleted
+  in the worktree, an executable, a file whose only change is its
+  executable bit, a symlink, a gitlink without a submodule repository, a
+  nested directory, names with a space and with non-ASCII characters, a
+  CRLF file normalized by a `text eol=crlf` attribute, untracked files
+  (plain, executable, symlink, CRLF, in a new directory), files ignored by
+  `.gitignore` (by pattern and by directory), by `.git/info/exclude` and by
+  `core.excludesFile`, and a nested repository with a commit. It compares `tracked_files` with
+  rows built from `git ls-files -s -z`, `git ls-files -o --exclude-standard
+  -z`, `git status --porcelain=v2 -z` and `git hash-object` for both values
+  of `include_untracked`, asserts that every unchanged file's index id is
+  its `git hash-object` id, and asserts each case's row (or its absence),
+  the clean filter's effect on a CRLF id, and that two runs agree. A second
+  fixture with a merge conflict asserts the one row of an unmerged path.
 - `host-check/tests/load.rs`: loads the built extension into the `duckdb`
   crate with the machine's `libduckdb` 2.0.0 and checks `git_hunks` joined
-  with `git_commits` on a fixture.
+  with `git_commits`, and `git_tracked_files` with `include_untracked`, on
+  a fixture.

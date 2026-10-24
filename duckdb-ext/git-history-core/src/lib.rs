@@ -1,9 +1,10 @@
 //! The rows of the `git_history` table functions, computed with gitoxide (`gix`).
 //!
-//! Each function corresponds to one `git log` invocation of the code database
-//! spike (`scripts/code-db/history.py`); its doc comment names it. The rows
-//! follow gix's behavior; `duckdb-ext/README.md` lists where that differs
-//! from `git log`.
+//! Each history function corresponds to one `git log` invocation of the code
+//! database spike (`scripts/code-db/history.py`); its doc comment names it.
+//! [`tracked_files`] is the worktree's current files (`git ls-files`). The
+//! rows follow gix's behavior; `duckdb-ext/README.md` lists where that
+//! differs from git.
 
 use std::ops::Range as Lines;
 
@@ -17,6 +18,9 @@ use gix::diff::blob::{Algorithm, Diff, InternedInput, ResourceKind, UnifiedDiff}
 use gix::diff::tree_with_rewrites::{Action, ChangeRef};
 use gix::objs::tree::{EntryKind, EntryMode};
 use gix::traverse::commit::simple::CommitTimeOrder;
+
+mod tracked;
+pub use tracked::{TrackedFileRow, tracked_files};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;

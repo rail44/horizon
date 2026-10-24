@@ -1,5 +1,5 @@
 //! LOAD the built `git_history.duckdb_extension` through the `duckdb` crate
-//! and query `git_hunks` on a fixture repository.
+//! and query `git_hunks` and `git_tracked_files` on a fixture repository.
 //!
 //! Run `duckdb-ext/build.sh` first; `GIT_HISTORY_EXTENSION` overrides the
 //! extension path.
@@ -104,6 +104,39 @@ fn horizon_linked_duckdb_loads_the_extension() {
             ("Add a.rs", "a.rs", 0, 0, 1, 3),
             ("Edit a.rs", "a.rs", 2, 1, 2, 1),
             ("Edit a.rs", "a.rs", 3, 0, 4, 1),
+        ]
+    );
+
+    std::fs::write(dir.join("a.rs"), "changed\n").unwrap();
+    std::fs::write(dir.join("b.rs"), "new\n").unwrap();
+    let mut statement = conn
+        .prepare(
+            "SELECT path, mode, length(blob_id), is_tracked, is_modified
+             FROM git_tracked_files(?, include_untracked := true)",
+        )
+        .unwrap();
+    let rows: Vec<(String, String, i64, bool, bool)> = statement
+        .query_map([path], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let rows: Vec<(&str, &str, i64, bool, bool)> = rows
+        .iter()
+        .map(|(p, m, l, t, d)| (p.as_str(), m.as_str(), *l, *t, *d))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("a.rs", "100644", 40, true, true),
+            ("b.rs", "100644", 40, false, false),
         ]
     );
 }
