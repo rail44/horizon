@@ -49,7 +49,10 @@ DuckDB tables, queried in SQL) was built on 2026-10-24 without consulting
 the owner on its form and removed the same day at the owner's request;
 its measurements on this repository remain in
 [the spike record](research/code-db-spike-2026-10-24.md), and its code in
-history (last at 475599d5). The git layer is a DuckDB extension: `duckdb-ext/` (its own
+history (last at 475599d5). The design that replaced it — facts as
+DuckDB table functions, everything derived as views, materialization only
+as a cache — is [the code database design](code-database-design.md).
+The git layer is a DuckDB extension: `duckdb-ext/` (its own
 Cargo workspace, C API v2, pinned to DuckDB 2.0.0) holds `git_history`
 with `git_commits`, `git_file_changes` and `git_hunks` computed by
 gitoxide; the syntax layer is covered by the community extension
