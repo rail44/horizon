@@ -1,7 +1,7 @@
 //! Assemble provider chunks into live events, replayable history, and a turn
 //! outcome. Text commitment belongs to selection after the retry decision.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crossbeam_channel::Sender;
 use rig_core::{
@@ -9,7 +9,7 @@ use rig_core::{
         message::{AssistantMessage, ToolCall},
         AssistantContent, CompletionResponse, Message,
     },
-    streaming::{Item, PartKind, StreamEvent},
+    streaming::{Item, StreamEvent},
 };
 
 use crate::{
@@ -42,9 +42,11 @@ pub(super) struct ResponseCollector {
     requested_tool_calls: HashMap<ToolCallId, ToolCallDescriptor>,
     tool_calls: Vec<ToolCall>,
     reasoning: Vec<rig_core::completion::message::Reasoning>,
-    /// Tool-call parts that opened but never ended. rig 0.44 tells a truncated
-    /// stream apart from a complete one by these, not by a final record.
-    started_tool_parts: HashSet<usize>,
+    /// Tool-call parts that opened without ending, as rig's own fold counts
+    /// them: its reply carries the calls a provider left open
+    /// ([`CompletionResponse::unfinished_calls`]), which is the authority
+    /// here — a second tally of parts could only disagree with it.
+    unfinished_tool_calls: usize,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     max_output_tokens: u64,
@@ -75,7 +77,7 @@ impl ResponseCollector {
             requested_tool_calls: HashMap::new(),
             tool_calls: Vec::new(),
             reasoning: Vec::new(),
-            started_tool_parts: HashSet::new(),
+            unfinished_tool_calls: 0,
             input_tokens: None,
             output_tokens: None,
             max_output_tokens: config.max_output_tokens,
@@ -102,23 +104,16 @@ impl ResponseCollector {
             // Reasoning stays hidden (decided): the finalized block is kept as
             // history only, never shown, so the deltas are dropped here.
             StreamEvent::Reasoning { .. } => {}
-            StreamEvent::Start { part, kind, .. } => {
-                if kind == PartKind::ToolCall {
-                    self.started_tool_parts.insert(part.index());
-                }
-            }
+            StreamEvent::Start { .. } => {}
             StreamEvent::Arguments { .. } => {}
-            StreamEvent::End { part, content } => {
-                self.started_tool_parts.remove(&part.index());
-                match content {
-                    AssistantContent::ToolCall(call) => self.record_tool_call(call),
-                    AssistantContent::Reasoning(reasoning) if !reasoning.text.is_empty() => {
-                        self.reasoning_buffer.flush();
-                        self.reasoning.push(reasoning);
-                    }
-                    _ => {}
+            StreamEvent::End { content, .. } => match content {
+                AssistantContent::ToolCall(call) => self.record_tool_call(call),
+                AssistantContent::Reasoning(reasoning) if !reasoning.text.is_empty() => {
+                    self.reasoning_buffer.flush();
+                    self.reasoning.push(reasoning);
                 }
-            }
+                _ => {}
+            },
         }
     }
 
@@ -181,6 +176,10 @@ impl ResponseCollector {
         if let Some(response) = &response {
             self.record_usage(response);
             finish_reason = response.finish_reason();
+            // The calls the provider left open: rig folded them as it built
+            // the reply, so its count is taken before the reply is destructured
+            // for history below.
+            self.unfinished_tool_calls = response.unfinished_calls().count();
             // `response_id` stays the one minted for this attempt: tool calls
             // were already announced under it, and providers reuse their own
             // ids across responses.
@@ -222,7 +221,7 @@ impl ResponseCollector {
             },
             ResponseEnd::Finished => CompletionStop::from_provider(
                 finish_reason,
-                self.started_tool_parts.len(),
+                self.unfinished_tool_calls,
                 self.output_tokens,
                 self.max_output_tokens,
                 self.text,

@@ -231,6 +231,107 @@ fn partial_response(kind: ProviderKind) -> String {
     }
 }
 
+/// A reply the provider ended in the middle of a tool call: the call opens and
+/// its arguments start, no frame ever closes it, and the finish reason says the
+/// output cap was reached. This is the shape rig's fold reports through
+/// `CompletionResponse::unfinished_calls`, which the collector now trusts.
+fn tool_call_cut_by_usage_cap(kind: ProviderKind) -> String {
+    let frames = match kind {
+        ProviderKind::OpenAiCompatible => vec![
+            json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
+                "choices":[{"index":0,"delta":{"role":"assistant","content":"reading"},"finish_reason":null}]}),
+            json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
+                "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"fs.read","arguments":"{\"path\":"}}]},"finish_reason":null}]}),
+            json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
+                "choices":[{"index":0,"delta":{},"finish_reason":"length"}],
+                "usage":{"prompt_tokens":10,"completion_tokens":100,"total_tokens":110}}),
+        ],
+        ProviderKind::Anthropic => vec![
+            json!({"type":"message_start","message":{"id":"message-1","role":"assistant","content":[],"model":"test-model","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"reading"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call-1","name":"fs.read","input":{}}}),
+            json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"output_tokens":100}}),
+            json!({"type":"message_stop"}),
+        ],
+    };
+    let mut sse = String::new();
+    for frame in frames {
+        if let Some(event) = frame["type"].as_str() {
+            sse.push_str(&format!("event: {event}\n"));
+        }
+        sse.push_str(&format!("data: {frame}\n\n"));
+    }
+    if kind == ProviderKind::OpenAiCompatible {
+        sse.push_str("data: [DONE]\n\n");
+    }
+    sse
+}
+
+/// A tool call the provider left open reaches the turn as a truncation, and the
+/// count comes from rig's own fold rather than a tally kept here — the reason
+/// `CompletionResponse::unfinished_calls` replaced it.
+#[tokio::test]
+async fn provider_wire_reports_an_open_tool_call_as_a_truncation() {
+    let key = "HORIZON_TEST_PROVIDER_OPEN_CALL_KEY";
+    std::env::set_var(key, "local-test-key");
+    for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = RigAgentConfig {
+            kind,
+            api_key_present: true,
+            api_key_env: key.into(),
+            base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
+            model: "test-model".into(),
+            max_output_tokens: 100,
+            allowed_tool_ids: Some(vec!["fs.read".into()]),
+            ..Default::default()
+        };
+        let server = tokio::spawn(serve(listener, false, tool_call_cut_by_usage_cap(kind)));
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut history = ConversationHistory::default();
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            complete_rig_turn(
+                &config,
+                &SessionEnvironment::for_workspace_root(None),
+                &[],
+                &mut history,
+                Prompt::input(ConversationInputKind::User, "read the file"),
+                &tx,
+                &mut ClearingState::new(None, 80),
+                None,
+                || panic!("must use the configured provider"),
+                &CancellationToken::new(),
+            ),
+        )
+        .await
+        .expect("local provider timed out");
+        server.await.unwrap();
+        // Both adapters report the cap; only the Anthropic wire also reports the
+        // call as open. The OpenAI decoder closes an unclosed tool call itself
+        // when the reply ends, so its `unfinished_calls` is empty and the cap is
+        // what names the truncation. Measured against rig 0.45 with a canned
+        // stream through the public client seam, not assumed.
+        let expected = match kind {
+            ProviderKind::OpenAiCompatible => {
+                crate::providers::rig::completion::Truncation::OutputCap
+            }
+            ProviderKind::Anthropic => crate::providers::rig::completion::Truncation::Tools {
+                unfinished: std::num::NonZeroUsize::new(1).expect("one open call"),
+                output_cap: true,
+            },
+        };
+        assert_eq!(
+            outcome.stop,
+            CompletionStop::Truncated(expected),
+            "{kind:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn provider_wire_interruption_retains_tools_for_both_adapters() {
     let key = "HORIZON_TEST_PROVIDER_INTERRUPTION_KEY";

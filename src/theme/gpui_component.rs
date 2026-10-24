@@ -346,17 +346,26 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
 /// Projects the resolved `[theme]` scheme onto gpui-component's global
 /// `Theme`, via [`gpui_component_theme_config`] and gpui-component's own
 /// `ThemeColor::apply_config` fallback chain, and sets the monospace family
-/// (inline code, receipt targets) to the `[ui] font_family` primary on both
-/// gpui-component's theme and the base theme `TextView` reads. Call once at
-/// startup, right after `gpui_component::init` (`src/entry.rs`), and again
+/// (inline code, receipt targets) to the `[ui] font_family` primary. Call once
+/// at startup, right after `gpui_component::init` (`src/entry.rs`), and again
 /// after [`super::scheme::reload_from`] on `Reload Config` so an overridden
 /// `[theme]` scheme keeps applying live.
+///
+/// Both edits ride one [`gpui_component::Theme::update`]: it reconciles the
+/// tokens against the colors, then rebuilds the Base projection and refreshes
+/// every window. That projection is what `TextView` reads its monospace
+/// family from (`typography_tokens` copies `mono_font_family` into
+/// `tokens.mono`), so the family must be set inside the closure — writing
+/// `gpui_base::Theme` afterwards by hand would be undone by the next update's
+/// `sync_base`, and skipping the update left the projection holding the
+/// previous family until something else rebuilt it.
 pub fn apply_gpui_component_theme(cx: &mut gpui::App) {
-    let config = gpui_component_theme_config(&scheme());
-    gpui_component::Theme::global_mut(cx).apply_config(&std::rc::Rc::new(config));
+    let config = std::rc::Rc::new(gpui_component_theme_config(&scheme()));
     let mono = crate::ui::font::resolved_font().family;
-    gpui_component::Theme::global_mut(cx).mono_font_family = mono.clone();
-    gpui_base::Theme::global_mut(cx).tokens.typography.mono = mono;
+    gpui_component::Theme::update(cx, |theme| {
+        theme.apply_config(&config);
+        theme.mono_font_family = mono;
+    });
 }
 
 #[cfg(test)]

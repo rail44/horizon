@@ -12,12 +12,25 @@ trait FinishShim {
     ) -> (Message, TurnCompletion);
 }
 
-/// A response as rig 0.44 folds it: `CompletionResponse` has private fields and
-/// no constructor, so a fixture decodes the shape rig serializes.
+/// A response as rig folds it: `CompletionResponse` has private fields and no
+/// constructor, so a fixture decodes the shape rig serializes. No tool call is
+/// left open.
 fn completion_response(
     reason: Option<serde_json::Value>,
     usage_tokens: Option<(u64, u64)>,
     choice: Vec<AssistantContent>,
+) -> rig_core::completion::CompletionResponse {
+    completion_response_with_open_calls(reason, usage_tokens, choice, Vec::new())
+}
+
+/// [`completion_response`], with the tool calls the provider left open — what
+/// rig's fold reports for a reply it ended mid-call, and what the collector
+/// now reads instead of counting started parts itself.
+fn completion_response_with_open_calls(
+    reason: Option<serde_json::Value>,
+    usage_tokens: Option<(u64, u64)>,
+    choice: Vec<AssistantContent>,
+    open_calls: Vec<rig_core::completion::message::CallId>,
 ) -> rig_core::completion::CompletionResponse {
     serde_json::from_value(serde_json::json!({
         "choice": serde_json::to_value(choice).expect("choice json"),
@@ -29,6 +42,7 @@ fn completion_response(
         },
         "origin": { "api": "openai", "provider": "openai", "model": "test" },
         "finish_reason": reason,
+        "unfinished_calls": open_calls,
         "raw": { "choices": [ { "finish_reason": reason } ] },
     }))
     .expect("fixture completion response")
@@ -283,13 +297,26 @@ fn unfinished_call_and_usage_cap_withhold_a_normal_final_answer() {
     response.push(text_item("partial"));
     response.push(tool_start_item("workspace.snapshot"));
     response.push(tool_arguments_item("{"));
+    // What a reply cut mid-call looks like: the call is in the reply's content
+    // with the arguments as far as they came, and the response names it as
+    // unfinished. The collector reads that count rather than tallying stream
+    // parts of its own.
+    let call = ToolCall::new(
+        rig_core::message::CallId::from_wire("call-1"),
+        ToolFunction::new(
+            rig_core::message::ToolName::new("workspace.snapshot").expect("tool id"),
+            serde_json::json!({}),
+        ),
+    );
+    let open = call.id.clone();
     let (_, outcome) = response.finish(
         ResponseEnd::Finished,
         None,
-        Some(completion_response(
+        Some(completion_response_with_open_calls(
             Some(serde_json::json!("length")),
             Some((10, config().max_output_tokens)),
-            Vec::new(),
+            vec![AssistantContent::ToolCall(call)],
+            vec![open],
         )),
     );
     assert_eq!(
@@ -302,6 +329,38 @@ fn unfinished_call_and_usage_cap_withhold_a_normal_final_answer() {
     assert_eq!(outcome.input_tokens, Some(10));
     assert_eq!(outcome.output_tokens, Some(20));
     assert!(outcome.final_text().is_none());
+}
+
+#[test]
+fn a_reply_with_no_open_call_finishes_despite_streamed_tool_parts() {
+    let (tx, _) = crossbeam_channel::unbounded();
+    let mut response = ResponseCollector::new(&config(), tx);
+    response.push(text_item("done"));
+    // A part that opened and ended is not an unfinished call: the response says
+    // nothing was left open, so the turn is a normal finish.
+    response.push(tool_start_item("workspace.snapshot"));
+    response.push(tool_end_item(ToolCall::new(
+        rig_core::message::CallId::from_wire("call-1"),
+        ToolFunction::new(
+            rig_core::message::ToolName::new("workspace.snapshot").expect("tool id"),
+            serde_json::json!({}),
+        ),
+    )));
+    let (_, outcome) = response.finish(
+        ResponseEnd::Finished,
+        None,
+        Some(completion_response(
+            Some(serde_json::json!("stop")),
+            Some((10, 2)),
+            Vec::new(),
+        )),
+    );
+    assert_eq!(
+        outcome.stop,
+        CompletionStop::Finished {
+            text: "done".to_string()
+        }
+    );
 }
 
 #[test]
