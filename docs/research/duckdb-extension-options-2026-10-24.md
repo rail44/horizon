@@ -341,3 +341,13 @@ sitting_duck は木を preorder で走査する。部分木への所属は `d.no
 - SQL に格納した AST の公開測定(KLOC あたりの行数、byte 範囲の包含結合の性能)と、コードの AST で nested set と path enumeration を比べた研究。
 - World of Code(EMSE 2021, arXiv 2010.16196)と Software Heritage の SANER 2020 の PDF は、取得しても読めないバイナリだった。WoC の map 名と大きさ、SWH のエッジあたりのビット数は確かめていない。
 - クローンの系譜の数値(72%、38%、約半分)は原典と照合していない。jscpd の出力スキーマと、系譜の道具がペアや群をどう保存するかは調べていない。FinerGit の数値は見つからなかった。
+
+## 追記(2026-10-24): C API からのカスタムファイルシステム登録
+
+本文の「v2 にはないもの … カスタムファイルシステム(PR #25916 は未マージ)」と「ファイルシステムは v1.5.6 で安定化」は第三者調査の記述だったため、2.0.0 のヘッダ(`~/opt/duckdb/current/duckdb.h`、`duckdb_extension.h`、`duckdb_v2.h`、`duckdb_extension_v2.h`)と GitHub で確かめた(★)。
+
+- v1(`duckdb.h`)のファイルシステム関数は `duckdb_client_context_get_file_system`、`duckdb_destroy_file_system`、`duckdb_file_system_error_data`、`duckdb_file_system_open` の 4 つで、拡張が DuckDB のファイルシステムを**使う**ための口である。独自ファイルシステムの**登録**は無い。「v1.5.6 で安定化」はこの利用側の関数のことである。
+- v2(`duckdb_extension_v2.h`)も `duckdb_v2_context_get_file_system` / `connection_get_file_system` / `instance_get_file_system`、`duckdb_v2_file_system_open`、`path_exists` / `path_expand` / `path_is_remote` など 45 箇所あるが、すべて利用側で、登録は無い。
+- 登録を足すのが duckdb/duckdb の PR #25916「C-API-V2: Add custom file system support」(Maxxen、2026-09-18 起票、2026-10-18 更新、25 ファイル、+14,010 / −5,170、draft ではない、未マージ)。
+
+したがって、C API 拡張から `git://` のようなファイルシステムを登録する口は、v1 にも v2 にも 2026-10-24 時点で存在せず、v2 に追加される途中である。今日それができるのは C++ API(duck_tails の経路)だけである。この日の相談で依頼側が「v1 なら作れる」と述べたのは誤りで、ここで訂正する。
