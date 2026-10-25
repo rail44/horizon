@@ -21,6 +21,12 @@ CREATE OR REPLACE VIEW units AS SELECT * FROM derived_units;
 
 CREATE OR REPLACE VIEW tags AS SELECT * FROM derived_tags;
 
+-- impl_parts(file_id, node_id, part, start_line, start_column, head_end_line,
+-- head_end_column): the trait and self type parts of each impl unit's node
+-- (lang/rust.sql, rust_impl_parts), which views/graph.sql resolves to units. Read live
+-- from `nodes` (whichever nodes are in place); neither cache stores it.
+CREATE OR REPLACE VIEW impl_parts AS SELECT * FROM rust_impl_parts;
+
 -- blob_units(blob_id, unit_ord, parent_unit_ord, node_id, kind, name, qualified_name,
 --            start_line, end_line, loc): the units of every blob of views/blobs.sql,
 -- derived by the same rules as units (the language views' *_blob_units). unit_ord is

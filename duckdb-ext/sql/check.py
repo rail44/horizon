@@ -13,13 +13,16 @@
         new session); a history fixture asserts blob_files, blob_units and every row
         of unit_changes, unit_churn and clone_change_consistency; a SCIP fixture
         (a rust-analyzer index of the fixture crate; skipped without rust-analyzer)
-        asserts views/scip.sql and unit_fan_in_churn, live and cached.
+        asserts views/scip.sql and unit_fan_in_churn, live and cached; a graph
+        fixture (the history fixture's crate plus a module cycle, indexed the same
+        way) asserts views/graph.sql and its queries, live and cached.
 
     uv run --script duckdb-ext/sql/check.py scip-fixture
-        Only the SCIP fixture.
+    uv run --script duckdb-ext/sql/check.py graph-fixture
+        Only the SCIP fixture; only the graph fixture.
 
-    The commands below read views/scip.sql too when REPO/target/code-db/index.scip
-    exists, and then include the SCIP views and unit_fan_in_churn.
+    The commands below read views/scip.sql and views/graph.sql too when
+    REPO/target/code-db/index.scip exists, and then include their views and queries.
 
     uv run --script duckdb-ext/sql/check.py refresh REPO [--reports ...]
         Read refresh.sql twice (cache REPO/target/code-db/cache.duckdb) and compare
@@ -90,6 +93,13 @@ QUERIES = ["file_cochange", "file_cochange_thresholds", "clone_site_tags", "clon
 SCIP_FILE = "views/scip.sql"
 SCIP_VIEWS = ["scip_occurrences", "scip_symbols"]
 SCIP_QUERIES = ["unit_fan_in_churn"]
+# views/graph.sql needs views/scip.sql; this script reads it whenever it reads that file.
+GRAPH_FILE = "views/graph.sql"
+GRAPH_VIEWS = ["unit_occurrences", "unit_references", "unit_edges", "impl_targets", "unit_module",
+               "module_edges", "crate_edges", "module_cycle_edges", "unit_cochange", "edge_cochange",
+               "cochange_without_reference"]
+GRAPH_QUERIES = ["unit_dependencies", "module_graph", "module_cycles", "unit_cochange",
+                 "cochange_without_reference"]
 RUST_ANALYZER = os.environ.get("RUST_ANALYZER", "rust-analyzer")
 
 
@@ -105,22 +115,58 @@ def scip_loaded(con):
                      "WHERE view_name = 'scip_index_occurrences' AND NOT internal")[0][0] > 0
 
 
+def graph_loaded(con):
+    """Whether views/graph.sql has been read on this connection."""
+    return rows(con, "SELECT count(*) FROM duckdb_views() "
+                     "WHERE view_name = 'unit_references' AND NOT internal")[0][0] > 0
+
+
+def read_scip_views(con):
+    """Read views/scip.sql and views/graph.sql."""
+    con.execute((SQL_DIR / SCIP_FILE).read_text())
+    con.execute((SQL_DIR / GRAPH_FILE).read_text())
+
+
 def read_views(con, scip=None):
-    """Read the view files, and views/scip.sql when `scip` (None: when it was read before)."""
+    """Read the view files, and views/scip.sql and views/graph.sql when `scip` (None:
+    when they were read before)."""
     if scip is None:
         scip = scip_loaded(con)
     for name in VIEW_FILES:
         con.execute((SQL_DIR / name).read_text())
     if scip:
-        con.execute((SQL_DIR / SCIP_FILE).read_text())
+        read_scip_views(con)
+
+
+# unit_dependencies needs a unit: TerminalSession.spawn when the repository has it (this
+# repository), else the first unit. Set only when `path` is unset.
+DEPENDENCY_UNIT = ("src/terminal/session.rs", "method", "TerminalSession.spawn")
+
+
+def set_dependency_unit(con):
+    if rows(con, "SELECT getvariable('path') IS NOT NULL")[0][0]:
+        return
+    path, kind, name = DEPENDENCY_UNIT
+    unit = rows(con, f"""
+        SELECT f.path, u.kind, u.qualified_name FROM units u JOIN files f USING (file_id)
+        ORDER BY (f.path = {sql_literal(path)} AND u.kind = {sql_literal(kind)}
+                  AND u.qualified_name = {sql_literal(name)}) DESC, u.unit_id
+        LIMIT 1""")
+    if unit:
+        for var, value in zip(("path", "unit_kind", "qualified_name"), unit[0]):
+            con.execute(f"SET VARIABLE {var} = {sql_literal(value)}")
 
 
 def queries(con):
-    return QUERIES + (SCIP_QUERIES if scip_loaded(con) else [])
+    graph = graph_loaded(con)
+    if graph:
+        set_dependency_unit(con)
+    return QUERIES + (SCIP_QUERIES if scip_loaded(con) else []) + (GRAPH_QUERIES if graph else [])
 
 
 def refreshed_views(con):
-    return REFRESHED_VIEWS + (SCIP_VIEWS if scip_loaded(con) else [])
+    return (REFRESHED_VIEWS + (SCIP_VIEWS if scip_loaded(con) else [])
+            + (GRAPH_VIEWS if graph_loaded(con) else []))
 
 
 def repo_index(repo):
@@ -519,6 +565,7 @@ def check_fixture():
     print("fixture: ok")
     check_history_fixture()
     check_scip_fixture()
+    check_graph_fixture()
     check_refresh_fixture()
 
 
@@ -808,6 +855,233 @@ def check_scip_fixture():
     print("scip fixture: ok")
 
 
+# The graph fixture adds, to the history fixture's crate, two modules that call each
+# other (a module cycle), and an impl of an external generic trait for a local type
+# whose method calls a trait method.
+CYCLE_A = """\
+use crate::cycle_b;
+
+pub fn ping(n: u32) -> u32 {
+    if n == 0 { 0 } else { cycle_b::pong(n - 1) }
+}
+"""
+
+CYCLE_B = """\
+use crate::cycle_a;
+
+pub fn pong(n: u32) -> u32 {
+    if n == 0 { 1 } else { cycle_a::ping(n - 1) + crate::area(n, 1) }
+}
+"""
+
+CONVERT = """\
+use crate::shapes::{Shape, Square};
+
+pub struct Side(pub u32);
+
+impl From<Square> for Side {
+    fn from(square: Square) -> Self {
+        Side(square.area())
+    }
+}
+
+pub fn total<S: Shape>(shapes: &[S]) -> u32 {
+    shapes.iter().map(|s| s.area()).sum()
+}
+"""
+
+# The unit graph rows, with units as (path, kind, qualified_name).
+GRAPH_UNIT = """
+    SELECT u.unit_id, {'path': f.path, 'kind': u.kind, 'name': u.qualified_name} AS unit
+    FROM units u JOIN files f USING (file_id)"""
+
+
+def unit_rows_sql(view, unit_columns, other_columns, where="true"):
+    """`view` with each unit id column replaced by (path, kind, qualified_name), sorted."""
+    joins = "\n".join(f"JOIN ({GRAPH_UNIT}) u{i} ON u{i}.unit_id = v.{c}" for i, c in enumerate(unit_columns))
+    units = ", ".join(f"(u{i}.unit.path, u{i}.unit.kind, u{i}.unit.name)" for i in range(len(unit_columns)))
+    others = "".join(f", v.{c}" for c in other_columns)
+    return f"SELECT {units}{others} FROM {view} v {joins} WHERE {where} ORDER BY ALL"
+
+
+def check_graph_fixture():
+    """views/graph.sql and its queries over a rust-analyzer index of the history fixture
+    plus a module cycle; skipped when rust-analyzer is not installed."""
+    with tempfile.TemporaryDirectory(prefix="code-db-graph-") as tmp:
+        root = Path(tmp)
+        repo, _ = build_history_fixture(root)
+        report, _ = fixture_report(root, repo)
+        lib = (repo / "src/lib.rs").read_text()
+        write(repo, "src/lib.rs", lib.replace("pub mod rect;", "pub mod convert;\npub mod cycle_a;\npub mod cycle_b;\npub mod rect;"))
+        write(repo, "src/cycle_a.rs", CYCLE_A)
+        write(repo, "src/cycle_b.rs", CYCLE_B)
+        write(repo, "src/convert.rs", CONVERT)
+        git(repo, "add", "src/lib.rs", "src/cycle_a.rs", "src/cycle_b.rs", "src/convert.rs")
+        git(repo, "commit", "-q", "-m", "Add a module cycle and a conversion", date="2026-03-01T00:00:00Z")
+        if make_scip_index(repo, root) is None:
+            print(f"graph fixture: SKIPPED ({RUST_ANALYZER} not found)")
+            return
+        con = connect(repo, [report], {"min_shared": "2"}, scip=True)
+        probes = {
+            "unit_references": unit_rows_sql(
+                "unit_references", ["src_unit_id", "dst_unit_id"],
+                ["occurrences", "macro_occurrences", "via_macro", "ambiguous", "src_is_test", "dst_is_test"]),
+            "unit_edges_self": unit_rows_sql("unit_edges", ["src_unit_id"], ["symbols", "occurrences"], "v.is_self"),
+            "impl_targets": unit_rows_sql("impl_targets", ["impl_unit_id"], ["part", "symbol", "target_unit_id IS NOT NULL"]),
+            "impl_for": unit_rows_sql("impl_for", ["impl_unit_id", "type_unit_id"], []),
+            "implements": unit_rows_sql("implements", ["impl_unit_id", "trait_unit_id"], []),
+            "unit_module": unit_rows_sql("unit_module", ["unit_id"], ["module", "module_unit_id IS NOT NULL", "crate"]),
+            "module_edges": "SELECT * FROM module_edges ORDER BY ALL",
+            "crate_edges": "SELECT * FROM crate_edges ORDER BY ALL",
+            "module_cycles": "SELECT * FROM module_cycles ORDER BY ALL",
+            "crate_cycles": "SELECT * FROM crate_cycles ORDER BY ALL",
+            "unit_cochange": unit_rows_sql("unit_cochange", ["unit_a", "unit_b"],
+                                           ["shared_commits", "commits_a", "commits_b", "coupling_pct", "same_file", "nested"]),
+            "edge_cochange": unit_rows_sql("edge_cochange", ["src_unit_id", "dst_unit_id"],
+                                           ["shared_commits", "commits_src", "commits_dst"], "v.shared_commits > 0"),
+            "cochange_without_reference": unit_rows_sql("cochange_without_reference", ["unit_a", "unit_b"],
+                                                        ["shared_commits", "commits_a", "commits_b", "coupling_pct"]),
+        }
+        got = {name: rows(con, sql) for name, sql in probes.items()}
+
+        conv, cya, cyb, lib, rect, shapes = (f"src/{n}.rs" for n in ("convert", "cycle_a", "cycle_b", "lib",
+                                                                       "rect", "shapes"))
+        from_impl, from_fn = (conv, "impl", "From<Square> for Side"), (conv, "method", "From<Square> for Side.from")
+        side, total = (conv, "type", "Side"), (conv, "function", "total")
+        ping, pong, area = (cya, "function", "ping"), (cyb, "function", "pong"), (lib, "function", "area")
+        rect_t, rect_impl, rect_area = (rect, "type", "Rect"), (rect, "impl", "Shape for Rect"), (rect, "method", "Shape for Rect.area")
+        shape_t, shape_area = (shapes, "type", "Shape"), (shapes, "method", "Shape.area")
+        square_t, square_impl, square_new = (shapes, "type", "Square"), (shapes, "impl", "Square"), (shapes, "method", "Square.new")
+        sq_impl, sq_area = (shapes, "impl", "Shape for Square"), (shapes, "method", "Shape for Square.area")
+        test_fn, it_fn = (shapes, "function", "tests.square_area"), ("tests/area.rs", "function", "integration_area")
+        plain, in_test_macro = (1, 0, False, False, False, False), (1, 1, True, False, True, False)
+        # Every reference edge. A call on a concrete receiver (`square.area()`) reaches the
+        # impl's method, a call through a generic bound (`s.area()` in total) the trait's;
+        # the test's calls sit inside assert_eq! (via_macro); the `use` lines and the
+        # `mod` declarations give no edge (outside every unit, or naming a file module).
+        assert sorted(got["unit_references"]) == sorted([
+            (total, shape_area, *plain), (total, shape_t, *plain),
+            (from_impl, side, *plain), (from_impl, square_t, *plain),
+            (from_fn, side, *plain), (from_fn, sq_area, *plain), (from_fn, square_t, *plain),
+            (ping, pong, *plain), (pong, ping, *plain), (pong, area, *plain),
+            (rect_impl, rect_t, *plain), (rect_impl, shape_t, *plain), (rect_area, rect_t, *plain),
+            (test_fn, sq_area, *in_test_macro), (test_fn, square_new, *in_test_macro), (test_fn, square_t, *in_test_macro),
+            (sq_impl, shape_t, *plain), (sq_impl, square_t, *plain), (square_impl, square_t, *plain),
+            (sq_area, square_t, *plain), (square_new, square_t, *plain),
+            (it_fn, area, *in_test_macro),
+        ]), got["unit_references"]
+        assert got["unit_edges_self"] == []
+        assert rows(con, "SELECT count(*) FROM unit_references WHERE starts_with(symbol, 'local ')") == [(0,)]
+        # The trait of `From<Square> for Side` is From (external), not its argument Square.
+        fixture_sym = "rust-analyzer cargo fixture 0.1.0 "
+        assert got["impl_targets"] == [
+            (from_impl, "trait", "rust-analyzer cargo core https://github.com/rust-lang/rust/library/core convert/From#", False),
+            (from_impl, "type", fixture_sym + "convert/Side#", True),
+            (rect_impl, "trait", fixture_sym + "shapes/Shape#", True), (rect_impl, "type", fixture_sym + "rect/Rect#", True),
+            (sq_impl, "trait", fixture_sym + "shapes/Shape#", True), (sq_impl, "type", fixture_sym + "shapes/Square#", True),
+            (square_impl, "type", fixture_sym + "shapes/Square#", True),
+        ], got["impl_targets"]
+        assert got["impl_for"] == [(from_impl, side), (rect_impl, rect_t), (sq_impl, square_t), (square_impl, square_t)]
+        assert got["implements"] == [(rect_impl, shape_t), (sq_impl, shape_t)]
+        modules = {r[0]: r[1:] for r in got["unit_module"]}
+        assert len(modules) == rows(con, "SELECT count(*) FROM units")[0][0], modules
+        assert modules[test_fn] == ("src/shapes.rs::tests", True, "horizon"), modules
+        assert modules[(shapes, "module", "tests")] == ("src/shapes.rs::tests", True, "horizon"), modules
+        assert modules[ping] == (cya, False, "horizon") and modules[sq_area] == (shapes, False, "horizon"), modules
+        assert modules[(lib, "module", "rect")] == ("src/lib.rs::rect", True, "horizon"), modules
+        assert got["module_edges"] == [
+            (conv, shapes, "horizon", "horizon", 5, 5, 0, 0, 0),
+            (cya, cyb, "horizon", "horizon", 1, 1, 0, 0, 0),
+            (cyb, cya, "horizon", "horizon", 1, 1, 0, 0, 0),
+            (cyb, lib, "horizon", "horizon", 1, 1, 0, 0, 0),
+            (rect, shapes, "horizon", "horizon", 1, 1, 0, 0, 0),
+            ("src/shapes.rs::tests", shapes, "horizon", "horizon", 3, 3, 3, 3, 0),
+            ("tests/area.rs", lib, "horizon", "horizon", 1, 1, 1, 1, 0),
+        ], got["module_edges"]
+        # One crate (every path maps to horizon): no crate edges, no crate cycle.
+        assert got["crate_edges"] == [] and got["crate_cycles"] == []
+        assert got["module_cycles"] == [(cya, "horizon", 2, [cya, cyb], 2, 2, 2)], got["module_cycles"]
+        # Co-change over the history fixture's commits (min_shared 2): the clone pair's two
+        # area methods (and their impls) changed together twice without referencing each
+        # other; nested pairs are flagged.
+        assert got["unit_cochange"] == [
+            (area, square_impl, 2, 2, 3, 66.7, False, False), (area, square_new, 2, 2, 3, 66.7, False, False),
+            (rect_impl, rect_area, 2, 2, 2, 100.0, True, True),
+            (rect_impl, sq_impl, 2, 2, 3, 66.7, False, False), (rect_impl, sq_area, 2, 2, 3, 66.7, False, False),
+            (rect_area, sq_impl, 2, 2, 3, 66.7, False, False), (rect_area, sq_area, 2, 2, 3, 66.7, False, False),
+            (sq_impl, sq_area, 3, 3, 3, 100.0, True, True), (square_impl, square_new, 3, 3, 3, 100.0, True, True),
+        ], got["unit_cochange"]
+        assert got["edge_cochange"] == [
+            (from_impl, side, 1, 1, 1), (from_fn, side, 1, 1, 1), (ping, pong, 1, 1, 1), (pong, ping, 1, 1, 1),
+            (rect_impl, rect_t, 1, 2, 1), (rect_impl, shape_t, 1, 2, 1), (rect_area, rect_t, 1, 2, 1),
+            (test_fn, sq_area, 1, 1, 3), (test_fn, square_new, 1, 1, 3), (test_fn, square_t, 1, 1, 1),
+            (sq_impl, shape_t, 1, 3, 1), (sq_impl, square_t, 1, 3, 1), (square_impl, square_t, 1, 3, 1),
+            (sq_area, square_t, 1, 3, 1), (square_new, square_t, 1, 3, 1),
+        ], got["edge_cochange"]
+        # Every pair in different files is unreferenced here.
+        assert got["cochange_without_reference"] == [r[:6] for r in got["unit_cochange"] if not r[6]], \
+            got["cochange_without_reference"]
+        con.execute("SET VARIABLE min_coupling_pct = 70")
+        assert rows(con, "SELECT count(*) FROM cochange_without_reference") == [(0,)]
+        con.execute("SET VARIABLE min_coupling_pct = NULL")
+        con.execute("SET VARIABLE min_shared = 3")
+        assert [r[:2] for r in rows(con, probes["unit_cochange"])] == [(sq_impl, sq_area), (square_impl, square_new)]
+        con.execute("SET VARIABLE min_shared = 2")
+
+        # The queries.
+        for var, value in [("path", cya), ("unit_kind", "function"), ("qualified_name", "ping")]:
+            con.execute(f"SET VARIABLE {var} = {sql_literal(value)}")
+        deps = rows(con, query_sql("unit_dependencies"))
+        assert deps == [("out", 1, cyb, "function", "pong", 3, 3, 1, 1, 1, ["pong"], 1, 1),
+                        ("in", 1, cyb, "function", "pong", 3, 3, 1, 1, 1, ["ping"], 1, 1)], deps
+        con.execute("SET VARIABLE depth = 2")
+        con.execute("SET VARIABLE direction = 'out'")
+        deps = [(r[0], r[1], r[4], r[10]) for r in rows(con, query_sql("unit_dependencies"))]
+        assert deps == [("out", 1, "pong", ["pong"]), ("out", 2, "area", ["area"])], deps  # ping itself is the root
+        for var in ("depth", "direction", "path"):
+            con.execute(f"SET VARIABLE {var} = NULL")
+        try:
+            rows(con, query_sql("unit_dependencies"))
+        except duckdb.Error as e:
+            assert "set the variables path" in str(e), e
+        else:
+            raise AssertionError("unit_dependencies without a unit did not fail")
+        con.execute(f"SET VARIABLE path = {sql_literal(cya)}")
+        graph = rows(con, query_sql("module_graph"))
+        assert sorted(r[:-1] for r in graph) == got["module_edges"], graph
+        assert [(r[0], r[1], r[-1]) for r in graph if r[-1]] == [(cya, cyb, 1), (cyb, cya, 1)], graph
+        assert graph[0][:2] == (conv, shapes), graph
+        con.execute("SET VARIABLE crate = 'horizon-agent'")
+        assert rows(con, query_sql("module_graph")) == [] and rows(con, query_sql("module_cycles")) == []
+        con.execute("SET VARIABLE crate = NULL")
+        cycles = rows(con, query_sql("module_cycles"))
+        assert cycles == [(cya, "horizon", 2, cya, cyb, 1, 1, 0, 0, 0, 1, ["pong"]),
+                          (cya, "horizon", 2, cyb, cya, 1, 1, 0, 0, 0, 1, ["ping"])], cycles
+        cochange = rows(con, query_sql("unit_cochange"))
+        assert [(r[0], r[2], r[3], r[5], r[6], r[11], r[12]) for r in cochange[:3]] == [
+            (shapes, "Shape for Square", shapes, "Shape for Square.area", 3, True, False),
+            (shapes, "Square", shapes, "Square.new", 3, True, False),
+            (rect, "Shape for Rect", rect, "Shape for Rect.area", 2, True, False)], cochange
+        assert len(cochange) == 9 and not any(r[12] for r in cochange), cochange
+        without = rows(con, query_sql("cochange_without_reference"))
+        assert [(r[0], r[2], r[3], r[5]) for r in without] == [
+            (lib, "area", shapes, "Square"), (lib, "area", shapes, "Square.new"),
+            (rect, "Shape for Rect", shapes, "Shape for Square"), (rect, "Shape for Rect", shapes, "Shape for Square.area"),
+            (rect, "Shape for Rect.area", shapes, "Shape for Square"),
+            (rect, "Shape for Rect.area", shapes, "Shape for Square.area")], without
+
+        # cache.sql: the same rows, and no query reads a source or the index.
+        probe_sql = list(probes.values()) + [query_sql(q) for q in GRAPH_QUERIES]
+        live = [rows(con, q) for q in probe_sql]
+        read_cache(con)
+        assert [rows(con, q) for q in probe_sql] == live
+        for name in GRAPH_QUERIES:
+            plan = "\n".join(r[1] for r in rows(con, "EXPLAIN " + query_sql(name)))
+            assert "READ_AST" not in plan and "READ_SCIP" not in plan and "READ_TEXT" not in plan, (name, plan)
+        con.close()
+    print("graph fixture: ok")
+
+
 def cached_rows_by_path(con, path_filter):
     """Rows of the cache's per-file tables for the paths matching path_filter (SQL)."""
     return {t: sorted(rows(con, f"SELECT * FROM cache.{t} WHERE {path_filter}"), key=repr)
@@ -944,7 +1218,7 @@ def check_refresh_fixture():
         if index is None:
             print(f"refresh fixture: SCIP steps SKIPPED ({RUST_ANALYZER} not found)")
         else:
-            con.execute((SQL_DIR / SCIP_FILE).read_text())
+            read_scip_views(con)
             _, meta = refresh_against_live(con)
             expect(meta, scip="rebuilt")
             live_counts = rows(con, "SELECT (SELECT count(*) FROM live_scip_occurrences), "
@@ -1027,10 +1301,16 @@ def connect_repo(repo, reports, variables=None):
 def check_repo(repo, reports):
     con = connect_repo(repo, reports)
     views = ["files", "nodes", "units", "tags", "commits", "file_changes", "hunks", "clone_pairs"]
-    for view in views + (SCIP_VIEWS if scip_loaded(con) else []):
+    graph = GRAPH_VIEWS + ["module_cycles", "crate_cycles"] if graph_loaded(con) else []
+    for view in views + (SCIP_VIEWS if scip_loaded(con) else []) + graph:
         print(f"{view}: {rows(con, f'SELECT count(*) FROM {view}')[0][0]}")
     print("units by kind:", rows(con, "SELECT kind, count(*) FROM units GROUP BY 1 ORDER BY 2 DESC"))
     print("tags by tag:", rows(con, "SELECT tag, count(*) FROM tags GROUP BY 1 ORDER BY 2 DESC"))
+    if graph:
+        # Cargo forbids crate cycles: a row here is an aggregation error (or a
+        # dev-dependency cycle through test code, which this repository does not have).
+        crate_cycles = rows(con, "SELECT * FROM crate_cycles")
+        assert crate_cycles == [], crate_cycles
     for name in queries(con):
         result = rows(con, query_sql(name))
         print(f"{name}: {len(result)} rows; first: {result[:3]}")
@@ -1052,6 +1332,8 @@ SCIP_STATEMENTS = {
                                                            "scip_occurrences", "scip_symbols"]},
     "scip_index_metadata": "SELECT * FROM scip_index_metadata",
     **{f"query {q}": q for q in SCIP_QUERIES},
+    **{f"count {v}": f"SELECT count(*) FROM {v}" for v in GRAPH_VIEWS + ["module_cycles", "crate_cycles"]},
+    **{f"query {q}": q for q in GRAPH_QUERIES},
 }
 STATEMENTS.update(SCIP_STATEMENTS)
 BUILD_CACHE = "build cache"
@@ -1128,8 +1410,10 @@ def run_step(repo, reports, step, cached, refreshed=False, uc_table=False):
         return
     if cached:
         read_cache(con)
+    if graph_loaded(con):
+        set_dependency_unit(con)
     statement = STATEMENTS[step]
-    sql = query_sql(statement) if statement in QUERIES + SCIP_QUERIES else statement
+    sql = query_sql(statement) if statement in QUERIES + SCIP_QUERIES + GRAPH_QUERIES else statement
     start = time.perf_counter()
     con.execute(sql).fetchall()
     wall = time.perf_counter() - start
@@ -1258,7 +1542,9 @@ def measure_refresh(repo, reports, runs):
     reset_and_sync()
     size = sum(p.stat().st_size for p in (cache, cache.with_name(cache.name + ".wal")) if p.exists())
     print(f"cache file: {size / 2**20:.1f} MiB")
-    for name in [*(f"query {q}" for q in QUERIES + (SCIP_QUERIES if index else [])), "count unit_changes"]:
+    graph_counts = [f"count {v}" for v in GRAPH_VIEWS + ["module_cycles", "crate_cycles"]]
+    for name in [*(f"query {q}" for q in QUERIES + (SCIP_QUERIES + GRAPH_QUERIES if index else [])),
+                 "count unit_changes", *(graph_counts if index else [])]:
         results = [step(name, "--refreshed") for _ in range(runs)]
         print(f"{name} from the cache: {span(results, 'wall')} s, "
               f"peak RSS {span(results, 'rss_mib', '{:.0f}')} MiB (refresh included)")
@@ -1293,15 +1579,20 @@ def check_cli(repo, reports):
         return
     con = connect_repo(repo, reports)
     scip = scip_loaded(con)
-    reads = "\n".join(f".read {SQL_DIR.relative_to(HORIZON_ROOT) / f}" for f in VIEW_FILES + ([SCIP_FILE] if scip else []))
+    reads = "\n".join(f".read {SQL_DIR.relative_to(HORIZON_ROOT) / f}"
+                      for f in VIEW_FILES + ([SCIP_FILE, GRAPH_FILE] if scip else []))
     probe = ("SELECT (SELECT count(*) FROM files), (SELECT count(*) FROM units), (SELECT count(*) FROM tags), "
              "(SELECT count(*) FROM hunks), (SELECT count(*) FROM clone_pairs)"
-             + (", (SELECT count(*) FROM scip_occurrences), (SELECT count(*) FROM scip_symbols);" if scip else ";"))
+             + (", (SELECT count(*) FROM scip_occurrences), (SELECT count(*) FROM scip_symbols), "
+                "(SELECT count(*) FROM unit_edges), (SELECT count(*) FROM module_edges);" if scip else ";"))
     query_counts = "\n".join(f"SELECT count(*) FROM ({query_sql(q).rstrip().rstrip(';')});" for q in queries(con))
+    # unit_dependencies' unit, as queries() set it on this connection.
+    unit_vars = "".join(f"SET VARIABLE {v} = {sql_literal(rows(con, f'SELECT getvariable({sql_literal(v)})')[0][0])};\n"
+                        for v in ("path", "unit_kind", "qualified_name") if scip)
     # The same counts again after refresh.sql (the persistent cache of REPO).
     script = (f"SET VARIABLE repo = {sql_literal(str(Path(repo).resolve()))};\n"
               f"SET VARIABLE clone_reports = {sql_literal([str(Path(r).resolve()) for r in reports])};\n"
-              f"SET VARIABLE cache_path = {sql_literal(str(refresh_cache_path(repo)))};\n"
+              f"SET VARIABLE cache_path = {sql_literal(str(refresh_cache_path(repo)))};\n{unit_vars}"
               f"{reads}\n.mode csv\n.headers off\n{probe}\n{query_counts}\n"
               f".read {SQL_DIR.relative_to(HORIZON_ROOT) / REFRESH_FILE}\n{probe}\n{query_counts}\n")
     proc = subprocess.run([cli, "-unsigned", "-no-agent", "-batch", "-bail"], input=script, cwd=HORIZON_ROOT,
@@ -1321,8 +1612,8 @@ def check_cli(repo, reports):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["fixture", "scip-fixture", "repo", "refresh", "measure", "measure-refresh",
-                                            "explain", "cli", "step"])
+    parser.add_argument("command", choices=["fixture", "scip-fixture", "graph-fixture", "repo", "refresh", "measure",
+                                            "measure-refresh", "explain", "cli", "step"])
     parser.add_argument("repo", nargs="?")
     parser.add_argument("step", nargs="?")
     parser.add_argument("--reports", nargs="+")
@@ -1337,6 +1628,9 @@ def main():
         return
     if args.command == "scip-fixture":
         check_scip_fixture()
+        return
+    if args.command == "graph-fixture":
+        check_graph_fixture()
         return
     if not args.repo:
         parser.error("REPO is required")

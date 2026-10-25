@@ -21,7 +21,8 @@ per query, the session cache) and
 persistent cache), `docs/research/code-db-unit-changes-2026-10-25.md` (the
 blob layer, `unit_changes` and the two history-joined queries) and
 `docs/research/code-db-scip-2026-10-25.md` (the SCIP views, `unit_fan_in_churn`
-and their cache).
+and their cache) and `docs/research/code-db-graph-2026-10-26.md` (the graph
+views and their queries).
 
 ## Running
 
@@ -45,11 +46,13 @@ duckdb-ext/sql/views/history.sql
 duckdb-ext/sql/views/unit_changes.sql
 duckdb-ext/sql/views/clones.sql
 duckdb-ext/sql/views/scip.sql      (optional)
+duckdb-ext/sql/views/graph.sql     (optional, after views/scip.sql)
 ```
 
 `views/scip.sql` is optional and needs the SCIP index to exist (see SCIP);
 nothing in the other files depends on it, and `cache.sql` and `refresh.sql`
-work with or without it. `views/clones.sql` needs the jscpd reports to exist (below); the others do
+work with or without it. `views/graph.sql` (see Graph) needs `views/scip.sql`
+and nothing depends on it either. `views/clones.sql` needs the jscpd reports to exist (below); the others do
 not read any source when they are executed, except that `00_load.sql` takes
 the file snapshot from `git_tracked_files` and `views/blobs.sql` takes the
 blob snapshot from `git_changed_blobs`, which writes the blob files that are
@@ -76,6 +79,7 @@ duckdb2 -unsigned -cmd "SET VARIABLE repo = '$PWD'"
 .read duckdb-ext/sql/views/unit_changes.sql
 .read duckdb-ext/sql/views/clones.sql
 .read duckdb-ext/sql/views/scip.sql
+.read duckdb-ext/sql/views/graph.sql
 SET VARIABLE min_coupling_pct = 50;
 .read duckdb-ext/sql/queries/file_cochange.sql
 ```
@@ -207,6 +211,93 @@ units count everything they contain), and its churn is its commits in
 run on the same tree and index, apart from the commits of two units that
 git's and gitoxide's `-U0` placement attribute differently.
 
+## Graph
+
+`views/graph.sql` derives edges from the facts above: which unit references which,
+how units nest, which type an impl is for and which trait it implements, module and
+crate edges folded from the unit edges, the module cycles, and co-change on units and
+on edges. Everything is a view (both caches keep them as views; see Cache).
+
+- **Locating an occurrence.** An occurrence is inside a unit when its lines lie within
+  the unit's lines; it belongs to the innermost such unit, the containing unit with
+  the greatest `unit_id` (an enclosing unit is numbered before what it contains). A
+  definition that spans a whole file (rust-analyzer's file modules) lies in no unit.
+  Units have lines only: two units that do not nest but share a line both contain an
+  occurrence on it, which then goes to the later one (none on this repository when
+  this was written), and code outside a unit but on its first or last line goes to
+  that unit. Macro and test tags apply by lines too.
+- **`unit_occurrences(file_id, symbol, start_line, start_column, end_line,
+  end_column, is_definition, is_local, unit_id, in_macro)`**: every occurrence in a
+  source file with its unit (NULL at file level: `use` declarations, `mod x;`, file
+  level consts) and whether a `generated_or_macro` tag contains it.
+- **`unit_references(src_unit_id, dst_unit_id, symbol, occurrences,
+  macro_occurrences, via_macro, ambiguous, src_is_test, dst_is_test)`**: for each
+  non-local symbol, each unit holding a reference occurrence (source) and each unit
+  holding a definition occurrence (destination). `via_macro`: every source
+  occurrence is inside a macro invocation. `ambiguous`: the symbol has several
+  definition units, and the row is one of them; rust-analyzer names symbols by
+  package, not target, so a helper defined in two integration tests (or two binaries)
+  of one package is one symbol and both definitions receive the edges. Test flags
+  come from `unit_tests(unit_id, is_test)` (a `test` tag contains the unit).
+- **`unit_edges(src_unit_id, dst_unit_id, symbols, occurrences, macro_occurrences,
+  is_self, via_macro, ambiguous, src_is_test, dst_is_test)`**: the same folded over
+  symbols (`symbols` is their number; `via_macro`/`ambiguous` hold for every symbol).
+- **`unit_contains(parent_unit_id, child_unit_id)`**, **`unit_ancestors(unit_id,
+  ancestor_id, depth)`** (depth 0 is the unit itself).
+- **`impl_targets(impl_unit_id, part, symbol, target_unit_id)`**, **`impl_for(impl_unit_id,
+  type_unit_id)`**, **`implements(impl_unit_id, trait_unit_id)`**: `impl_parts`
+  (`lang/rust.sql`, through `views/units.sql`) gives the span of an impl's `type` part
+  and, for `impl Trait for Type`, its `trait` part, each cut before its first type
+  argument list; the part's last reference occurrence in that head is resolved to a
+  `type` unit. `impl From<Foo> for Bar` implements `From` (external, no unit), not
+  `Foo`; `impl Trait for Box<dyn X>` is for `Box`. Unresolved parts (external
+  traits and types, type parameters, primitives) have a NULL target.
+- **`file_crate(file_id, crate)`**: from this repository's layout:
+  `crates/<name>/…` and `duckdb-ext/<name>/…` are `<name>`, `preview-plugin/…` is
+  `preview-plugin`, anything else `horizon`.
+- **`modules(module, file_id, module_unit_id, crate)`** and **`unit_module(unit_id,
+  module, module_unit_id, file_id, crate)`**: a file is an implicit module named by
+  its path; a module unit is `<path>::<qualified name>` (`src/shapes.rs::tests`). A
+  unit belongs to the nearest module unit among itself and its enclosing units, else
+  to its file. A `mod x;` declaration is a module unit with nothing in it (its items
+  are in x's file).
+- **`module_edges(src_module, dst_module, src_crate, dst_crate, unit_edges,
+  occurrences, test_unit_edges, macro_unit_edges, ambiguous_unit_edges)`** and
+  **`crate_edges(src_crate, dst_crate, …)`**: `unit_edges` between different modules
+  (crates), self edges excluded.
+- **`module_cycle_edges(cycle, src_module, dst_module, …)`** and
+  **`module_cycles(cycle, crate, modules, members, edges, unit_edges,
+  occurrences)`**: the strongly connected groups of `module_edges` (each member
+  reaches every other), named by their least member, from a recursive transitive
+  closure. **`crate_cycles`** is the same over `crate_edges`; Cargo forbids crate
+  cycles, so a row is an aggregation error or a dev-dependency cycle.
+- **`unit_commits(sha, unit_id)`**: the commits of `unit_changes` that touched each
+  current unit (identity `(path, kind, qualified_name)`), without commits touching
+  more than `max_commit_files` files and, unless `include_merges`, merges.
+- **`unit_cochange(unit_a, unit_b, shared_commits, commits_a, commits_b,
+  coupling_pct, same_file, nested)`**: pairs (`unit_a < unit_b`) with at least
+  `min_shared` shared commits; `coupling_pct` divides by the larger count; `nested`
+  marks a unit and one of its enclosing units.
+- **`edge_cochange(src_unit_id, dst_unit_id, symbols, occurrences, via_macro,
+  ambiguous, src_is_test, dst_is_test, shared_commits, commits_src,
+  commits_dst)`**: every non-self unit edge with its ends' shared commits (0 when
+  none; not subject to `min_shared`).
+- **`cochange_without_reference(unit_a, unit_b, shared_commits, commits_a,
+  commits_b, coupling_pct)`**: `unit_cochange` pairs in different files with no unit
+  edge between the two units in either direction and `coupling_pct >=
+  min_coupling_pct`. Edges of the units they contain do not count.
+
+Accepted limitations: `local` symbols are excluded (they close within a document);
+a call through a generic bound or `dyn` resolves to the trait's method, not to an
+impl's (a call on a concrete type reaches the impl's method); occurrences inside
+macro invocations are the ones rust-analyzer maps back through the expansion, and
+references inside `macro_rules!` bodies have none.
+
+Queries: `unit_dependencies` (a unit's references and referrers up to `depth`, with
+the edges' symbols, each neighbor's churn and fan-in), `module_graph`,
+`module_cycles` (the inner edges of each cycle, weakest first), `unit_cochange`,
+`cochange_without_reference`.
+
 ## Cache
 
 Two ways to stop recomputing the expensive layers (`nodes`, `units`,
@@ -216,7 +307,10 @@ Two ways to stop recomputing the expensive layers (`nodes`, `units`,
 keeps its text and reads whichever is in place. `unit_changes` stays a view
 in both: over the cached layers a query reading it takes 0.16–0.21 s on
 this repository, against 0.05–0.13 s from a materialized copy that itself
-takes 0.14–0.20 s to build.
+takes 0.14–0.20 s to build. The views of `views/graph.sql` stay views too:
+over the cached layers each takes 0.01–0.3 s on this repository (`cochange_without_reference` 1.2–1.7 s over `cache.sql`), so a
+copy would save little and would have to be rebuilt whenever a file, the index or
+the history changed.
 
 | | `cache.sql` (session) | `refresh.sql` (persistent) |
 | --- | --- | --- |
@@ -403,7 +497,7 @@ con.execute("SET VARIABLE repo = '/abs/path/to/repo'")
 for f in ["00_load.sql", "views/files.sql", "views/nodes.sql", "views/blobs.sql",
           "lang/rust.sql", "views/units.sql", "views/history.sql",
           "views/unit_changes.sql", "views/clones.sql",
-          "views/scip.sql"]:  # the last one optional, needs the index
+          "views/scip.sql", "views/graph.sql"]:  # the last two optional, need the index
     con.execute(pathlib.Path("duckdb-ext/sql", f).read_text())
 con.execute(pathlib.Path("duckdb-ext/sql/refresh.sql").read_text())  # optional
 print(con.sql(pathlib.Path("duckdb-ext/sql/queries/file_cochange.sql").read_text()))
@@ -419,6 +513,7 @@ statements). This route is not exercised by `check.py`.
 ```sh
 uv run --locked --script duckdb-ext/sql/check.py fixture          # assertions on a generated fixture
 uv run --locked --script duckdb-ext/sql/check.py scip-fixture     # only the SCIP fixture
+uv run --locked --script duckdb-ext/sql/check.py graph-fixture    # only the graph fixture
 uv run --locked --script duckdb-ext/sql/check.py repo .           # counts and every query on a repository
 uv run --locked --script duckdb-ext/sql/check.py refresh .        # refresh.sql twice, every view compared with live
 uv run --locked --script duckdb-ext/sql/check.py cli .            # the same files through the CLI's .read, live and refreshed
@@ -427,10 +522,12 @@ uv run --locked --script duckdb-ext/sql/check.py measure-refresh CLONE --runs 3 
 uv run --locked --script duckdb-ext/sql/check.py explain .        # read_ast/read_text scans per plan
 ```
 
-Every command given a repository reads `views/scip.sql` too when
-`REPO/target/code-db/index.scip` exists, and then covers the SCIP views and
-`unit_fan_in_churn` (`measure` adds the three source views and a baseline,
-`measure-refresh` a changed index). `refresh`, `cli` and `measure-refresh` write the cache to
+Every command given a repository reads `views/scip.sql` and `views/graph.sql` too
+when `REPO/target/code-db/index.scip` exists, and then covers the SCIP and graph
+views and their queries (`measure` adds the three source views and a baseline,
+`measure-refresh` a changed index); `unit_dependencies` is run for
+`TerminalSession.spawn` of `src/terminal/session.rs` when the repository has it, else
+for its first unit, unless `path` is set. `refresh`, `cli` and `measure-refresh` write the cache to
 `REPO/target/code-db/cache.duckdb`; every command that reads the view files
 writes the blob files to `REPO/target/code-db/blobs` (`git_changed_blobs`). `refresh` compares
 `blob_nodes` with live through a per-blob digest (count and sum of row
@@ -479,6 +576,22 @@ the same rows through `cache.sql` with no index scan in the query's plan, a
 document excluded from the snapshot (no `file_id`, its references not
 counted), and `cache.sql` without `views/scip.sql` (empty views).
 
+A graph fixture indexes the history fixture's crate after one more commit, which
+adds two modules calling each other, an `impl From<Square> for Side` whose method
+calls `area` on a concrete `Square`, and a function calling `area` through a generic
+bound. It asserts every row of `unit_references` (the concrete call reaching the
+impl's method, the generic one the trait's, the test's calls inside `assert_eq!` as
+`via_macro`, no local symbol), `impl_targets`, `impl_for` and `implements` (`From`,
+not `Square`, as the trait), `unit_module` (an inline test module, a `mod x;`
+declaration), `module_edges`, one module cycle of two, no crate edges or cycles,
+`unit_cochange`, `edge_cochange` and `cochange_without_reference` with
+`min_shared := 2` (the clone pair's two `area` methods, changed together without
+referencing each other), the thresholds, every graph query's rows (`depth := 2`,
+`direction`, `crate`, the error without a unit), and the same rows through
+`cache.sql` with no source or index scan in the queries' plans. The refresh
+fixture's SCIP steps read `views/graph.sql` too, so the graph views and queries are
+compared with live after each refresh.
+
 On a third fixture it reads `refresh.sql` after each of these steps and
 asserts every refreshed view equal to live row for row (the blob layer
 and `unit_changes` included), the six queries equal, and the `meta`
@@ -504,13 +617,14 @@ files reset it to live). It needs `git` and rust-analyzer but no jscpd.
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `scope_files`, `sources(file_id, content)`, `source_bytes(file_id, bytes)`, `source_lines(file_id, line, nonblank_through)` (over the table macros `source_bytes_of`, `source_lines_of`), macros `byte_slice`, `normalize_ws` |
 | `views/nodes.sql` | `nodes`: `file_id` plus every column of `read_ast(…, source := 'full', peek := 'none', context := 'none')`; `scope_nodes` (the nodes of `scope_files`) |
 | `views/blobs.sql` | `blob_files`, the snapshot `blob_snapshot`/`blob_paths`, `blob_list(blob_id, file, blob_ord)`, `blob_nodes(blob_id, …)`; the derivation inputs `blob_scope_nodes`, `blob_sources`, `blob_source_bytes`, `blob_source_lines` (keyed by `blob_ord`) |
-| `lang/rust.sql` | the table macro `rust_units_over(nodes_t, bytes_t, lines_t)` and its two applications `rust_units`, `rust_blob_units`; `rust_tags(file_id, node_id, tag, start_line, end_line)`; the intermediate steps are common table expressions inside them |
-| `views/units.sql` | `derived_units`, `derived_tags`, `derived_blob_units`: the union over languages (Rust only today); `units`, `tags`, `blob_units` over them |
+| `lang/rust.sql` | the table macro `rust_units_over(nodes_t, bytes_t, lines_t)` and its two applications `rust_units`, `rust_blob_units`; `rust_tags(file_id, node_id, tag, start_line, end_line)`; `rust_impl_parts(file_id, node_id, part, start_line, start_column, head_end_line, head_end_column)`; the intermediate steps are common table expressions inside them |
+| `views/units.sql` | `derived_units`, `derived_tags`, `derived_blob_units`: the union over languages (Rust only today); `units`, `tags`, `blob_units` over them; `impl_parts` (`rust_impl_parts`) |
 | `views/history.sql` | `commits`, `file_changes`, `hunks` |
 | `views/unit_changes.sql` | `unit_changes` |
 | `views/clones.sql` | `clone_pairs(pair_id, source, file_a, start_line_a, end_line_a, file_b, start_line_b, end_line_b, tokens, lines)` |
 | `views/scip.sql` (optional) | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (see SCIP) |
-| `queries/*.sql` | one statement each: `file_cochange`, `file_cochange_thresholds`, `clone_site_tags`, `clone_site_tags_summary`, `unit_churn`, `clone_change_consistency`, `unit_fan_in_churn` (needs `views/scip.sql`); the header states the question, the parameters and the evidence |
+| `views/graph.sql` (optional) | `unit_occurrences`, `unit_tests`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impl_targets`, `impl_for`, `implements`, `file_crate`, `modules`, `unit_module`, `module_edges`, `crate_edges`, `module_cycle_edges`, `module_cycles`, `crate_cycles`, `unit_commits`, `unit_cochange`, `edge_cochange`, `cochange_without_reference` (see Graph) |
+| `queries/*.sql` | one statement each: `file_cochange`, `file_cochange_thresholds`, `clone_site_tags`, `clone_site_tags_summary`, `unit_churn`, `clone_change_consistency`, `unit_fan_in_churn` (needs `views/scip.sql`), `unit_dependencies`, `module_graph`, `module_cycles`, `unit_cochange`, `cochange_without_reference` (need `views/graph.sql`); the header states the question, the parameters and the evidence |
 | `jscpd.sh` | the two jscpd reports `clones.sql` reads |
 | `cache.sql` | the session cache (above) |
 | `refresh.sql` | the persistent cache (above) |
@@ -586,7 +700,9 @@ which `00_load.sql` (and `refresh.sql`) take as a snapshot.
 | `scip_index` | `repo/target/code-db/index.scip` (must exist when `views/scip.sql` is read) | `views/scip.sql`, `refresh.sql` |
 | `blob_dir` | `repo/target/code-db/blobs` (where `git_changed_blobs` writes the blob files) | `views/blobs.sql`, `refresh.sql` |
 | `scope_paths` | NULL (all files); set only by `refresh.sql` | `scope_files` |
-| `min_shared`, `max_commit_files`, `min_coupling_pct`, `basis` | 3, 50, 30, `'max'` | `file_cochange` (the first two also `file_cochange_thresholds`) |
+| `min_shared`, `max_commit_files`, `min_coupling_pct`, `basis` | 3, 50, 30, `'max'` | `file_cochange` (the first two also `file_cochange_thresholds`, `unit_commits`/`unit_cochange` and their queries; `min_coupling_pct` also `cochange_without_reference`) |
+| `path`, `unit_kind`, `qualified_name`, `depth`, `direction` | required, required, required, 1, `'both'` (`'in'`, `'out'`) | `unit_dependencies` |
+| `crate` | NULL (all crates) | `module_graph`, `module_cycles` |
 | `match_mode`, `clone_source` | `'contain'`, NULL (all reports) | `clone_site_tags` (`match_mode` also the summary); `clone_source` also `clone_change_consistency` |
 | `since_time`, `kind` | NULL (all commits; all unit kinds) | `unit_churn` (`kind` also `unit_fan_in_churn`) |
 | `min_fan_in` | 1 | `unit_fan_in_churn` |
@@ -614,10 +730,10 @@ be parsed as a positional argument (`ignore_errors := len(x) = 0` is
 ## Deliberately not here yet
 
 - **Tags of blobs**, and following a unit across renames and moves.
-- Go and TypeScript, clone groups (the spike's `group_id`), and any query
-  beyond the seven ported ones. SCIP relationships (`relationship_count`
-  only; rust-analyzer 1.99.1 writes none) and an index of the historical
-  blobs.
+- Go and TypeScript, clone groups (the spike's `group_id`). SCIP
+  relationships (`relationship_count` only; rust-analyzer 1.99.1 writes none),
+  so no edge from an impl's method to the trait method it implements, and an
+  index of the historical blobs (the graph is the current tree's only).
 - **Per-layer choice.** Both caches hold all their layers; `clone_pairs`
   and `unit_changes` stay live in both, and `cache.sql` leaves
   `blob_nodes` live.

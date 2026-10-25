@@ -331,3 +331,69 @@ tagged AS (
 SELECT t.file_id, t.node_id, t.tag, n.start_line, n.end_line
 FROM tagged t
 JOIN rust_nodes n ON n.file_id = t.file_id AND n.node_id = t.node_id;
+
+-- rust_impl_parts(file_id, node_id, part, start_line, start_column, head_end_line,
+--                 head_end_column): the trait and the self type an impl names, for
+-- views/graph.sql's impl_for and implements. node_id is the impl_item (the impl unit's
+-- node). Part `trait` is the child right before the `for` token, part `type` the child
+-- right after it, or without `for` the first child after `impl` that is not
+-- type_parameters (the children rust_units_over names the impl by). The head of a part
+-- is its span up to its first type_arguments descendant, or the whole part: the head's
+-- last occurrence is the named trait or type (`From` in `From<Foo>`, `Baz` in
+-- `a::b::Baz<T>` and in `&'a Baz`), not a type argument. head_end is exclusive: the
+-- type arguments' start, else the part's end (1-based lines, byte columns).
+CREATE OR REPLACE VIEW rust_impl_parts AS
+WITH rust_nodes AS MATERIALIZED (
+    SELECT file_id, node_id, parent_id, type, sibling_index,
+           start_line::BIGINT AS start_line, start_column::BIGINT AS start_column,
+           end_line::BIGINT AS end_line, end_column::BIGINT AS end_column,
+           descendant_count::BIGINT AS descendant_count
+    FROM scope_nodes WHERE language = 'rust'
+),
+children AS MATERIALIZED (
+    SELECT c.file_id, i.node_id AS impl_node, c.node_id, c.type, c.sibling_index
+    FROM rust_nodes i
+    JOIN rust_nodes c ON c.file_id = i.file_id AND c.parent_id = i.node_id
+    WHERE i.type = 'impl_item'
+),
+markers AS (
+    SELECT file_id, impl_node,
+           min(sibling_index) FILTER (WHERE type = 'for') AS for_idx,
+           min(sibling_index) FILTER (WHERE type = 'impl') AS impl_idx
+    FROM children GROUP BY ALL
+),
+parts AS MATERIALIZED (
+    SELECT c.file_id, c.impl_node, 'trait' AS part, arg_max(c.node_id, c.sibling_index) AS part_node
+    FROM children c JOIN markers m USING (file_id, impl_node)
+    WHERE m.for_idx IS NOT NULL AND c.sibling_index < m.for_idx
+      AND c.type NOT IN ('line_comment', 'block_comment')
+    GROUP BY ALL
+    UNION ALL
+    SELECT c.file_id, c.impl_node, 'type', arg_min(c.node_id, c.sibling_index)
+    FROM children c JOIN markers m USING (file_id, impl_node)
+    WHERE c.type NOT IN ('line_comment', 'block_comment')
+      AND CASE WHEN m.for_idx IS NOT NULL THEN c.sibling_index > m.for_idx
+               ELSE c.sibling_index > m.impl_idx AND c.type <> 'type_parameters' END
+    GROUP BY ALL
+),
+part_spans AS MATERIALIZED (
+    SELECT p.file_id, p.impl_node, p.part, n.node_id, n.descendant_count,
+           n.start_line, n.start_column, n.end_line, n.end_column
+    FROM parts p JOIN rust_nodes n ON n.file_id = p.file_id AND n.node_id = p.part_node
+),
+type_arguments AS MATERIALIZED (
+    SELECT file_id, node_id, start_line, start_column FROM rust_nodes WHERE type = 'type_arguments'
+),
+first_arguments AS (
+    SELECT p.file_id, p.impl_node, p.part,
+           arg_min(a.start_line, a.node_id) AS start_line, arg_min(a.start_column, a.node_id) AS start_column
+    FROM part_spans p
+    JOIN type_arguments a ON a.file_id = p.file_id
+         AND a.node_id > p.node_id AND a.node_id <= p.node_id + p.descendant_count
+    GROUP BY ALL
+)
+SELECT p.file_id, p.impl_node AS node_id, p.part, p.start_line, p.start_column,
+       coalesce(a.start_line, p.end_line) AS head_end_line,
+       coalesce(a.start_column, p.end_column) AS head_end_column
+FROM part_spans p
+LEFT JOIN first_arguments a USING (file_id, impl_node, part);
