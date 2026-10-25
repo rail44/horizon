@@ -90,7 +90,7 @@ SELECT NULL::VARCHAR AS document, NULL::VARCHAR AS symbol, NULL::INTEGER AS star
        NULL::INTEGER AS enclosing_end_line, NULL::INTEGER AS enclosing_end_column
 WHERE false;
 CREATE VIEW IF NOT EXISTS scip_document_symbols AS
-SELECT NULL::VARCHAR AS document, NULL::VARCHAR AS symbol, NULL::INTEGER AS kind,
+SELECT NULL::VARCHAR AS document, NULL::VARCHAR AS symbol, NULL::VARCHAR AS kind,
        NULL::VARCHAR AS display_name, NULL::VARCHAR AS enclosing_symbol, NULL::VARCHAR[] AS documentation,
        NULL::INTEGER AS relationship_count
 WHERE false;

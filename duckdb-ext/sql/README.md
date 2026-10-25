@@ -4,8 +4,10 @@ A repository's syntax, history and clone reports as SQL views over table
 functions, with no build step (`docs/code-database-design.md`, principle of
 2026-10-24): facts come from `read_ast` (community extension
 `sitting_duck`), `git_tracked_files`/`git_commits`/`git_file_changes`/`git_hunks`
-and `git_changed_blobs` (this workspace's `git_history`, `../README.md`) and
-jscpd's JSON read with the core `read_json`; everything else is a view. Nothing is stored: every
+and `git_changed_blobs` (this workspace's `git_history`, `../README.md`),
+`read_scip`/`read_scip_symbols`/`read_scip_metadata` (this workspace's
+`scip_index`, over a rust-analyzer SCIP index) and jscpd's JSON read with the
+core `read_json`; everything else is a view. Nothing is stored: every
 query reads the sources again, unless the client also reads `cache.sql`,
 which copies the expensive layers into temporary tables for the session, or
 `refresh.sql`, which keeps them in a database file and updates only what
@@ -16,16 +18,18 @@ Measurements of what this costs on this repository are in
 `docs/research/code-db-views-single-scan-2026-10-24.md` (one `read_ast` scan
 per query, the session cache) and
 `docs/research/code-db-incremental-cache-2026-10-25.md` (tracked files, the
-persistent cache) and `docs/research/code-db-unit-changes-2026-10-25.md` (the
-blob layer, `unit_changes` and the two history-joined queries).
+persistent cache), `docs/research/code-db-unit-changes-2026-10-25.md` (the
+blob layer, `unit_changes` and the two history-joined queries) and
+`docs/research/code-db-scip-2026-10-25.md` (the SCIP views, `unit_fan_in_churn`
+and their cache).
 
 ## Running
 
 Every client needs DuckDB **2.0.0** (git_history loads only into that
 version), unsigned extensions allowed, network access the first time (to
-`INSTALL sitting_duck`), and the git_history binary built
-(`duckdb-ext/build.sh`). Run from the root of this Horizon checkout:
-`00_load.sql` loads git_history by a path relative to it. The analyzed
+`INSTALL sitting_duck`), and the git_history and scip_index binaries built
+(`duckdb-ext/build.sh` builds both). Run from the root of this Horizon checkout:
+`00_load.sql` loads both by paths relative to it. The analyzed
 repository is a variable and can be anywhere.
 
 The files are executed in this order:
@@ -40,9 +44,12 @@ duckdb-ext/sql/views/units.sql
 duckdb-ext/sql/views/history.sql
 duckdb-ext/sql/views/unit_changes.sql
 duckdb-ext/sql/views/clones.sql
+duckdb-ext/sql/views/scip.sql      (optional)
 ```
 
-`views/clones.sql` needs the jscpd reports to exist (below); the others do
+`views/scip.sql` is optional and needs the SCIP index to exist (see SCIP);
+nothing in the other files depends on it, and `cache.sql` and `refresh.sql`
+work with or without it. `views/clones.sql` needs the jscpd reports to exist (below); the others do
 not read any source when they are executed, except that `00_load.sql` takes
 the file snapshot from `git_tracked_files` and `views/blobs.sql` takes the
 blob snapshot from `git_changed_blobs`, which writes the blob files that are
@@ -55,6 +62,7 @@ DuckDB CLI 2.0.0 (here `~/.local/bin/duckdb2`; the system `duckdb` is
 
 ```sh
 duckdb-ext/sql/jscpd.sh . target/code-db/jscpd src crates preview-plugin/src
+rust-analyzer scip . --output target/code-db/index.scip   # for views/scip.sql
 duckdb2 -unsigned -cmd "SET VARIABLE repo = '$PWD'"
 ```
 ```
@@ -67,6 +75,7 @@ duckdb2 -unsigned -cmd "SET VARIABLE repo = '$PWD'"
 .read duckdb-ext/sql/views/history.sql
 .read duckdb-ext/sql/views/unit_changes.sql
 .read duckdb-ext/sql/views/clones.sql
+.read duckdb-ext/sql/views/scip.sql
 SET VARIABLE min_coupling_pct = 50;
 .read duckdb-ext/sql/queries/file_cochange.sql
 ```
@@ -154,11 +163,56 @@ Limits:
   about 18 s and the two history-joined queries 14–20 s, at a peak RSS of
   about 8 GB; both caches below hold the blob layer.
 
+## SCIP
+
+`views/scip.sql` reads a SCIP index of the repository (`scip_index`, default
+`<repo>/target/code-db/index.scip`), written by `rust-analyzer scip .
+--output target/code-db/index.scip` from the repository root (160-280 s on
+this repository, with many warnings). The functions open the file when the
+view file is read, so a missing index fails `views/scip.sql` (and only it).
+The index describes the tree it was generated from; nothing checks it
+against `files`: regenerate it after edits.
+
+- **`scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`**
+  are `read_scip`, `read_scip_symbols` and `read_scip_metadata` as they come
+  (`../README.md`): 0-based lines and characters, raw `local N` symbols.
+- **`scip_occurrences(file_id, document, symbol, start_line, start_column,
+  end_line, end_column, roles, is_definition, is_reference, is_import,
+  is_write, is_read, is_generated, is_test, is_forward_definition,
+  enclosing_start_line, enclosing_start_column, enclosing_end_line,
+  enclosing_end_column)`**: lines 1-based and inclusive, columns 1-based with
+  the end the column after the last character (as `nodes`), in the unit of
+  the document's position encoding (UTF-8 bytes for rust-analyzer).
+  `file_id` is `document` joined to `files.path`, NULL for a document that
+  is not a source file. `local N` symbols are qualified as `local N
+  <document>`. `is_reference` is `NOT is_definition`: rust-analyzer 1.99.1
+  sets no role bit but Definition. Occurrences without a symbol are dropped.
+- **`scip_symbols(document, symbol, kind, display_name, enclosing_symbol,
+  documentation, relationship_count)`**: `read_scip_symbols` with the same
+  qualification (of `symbol` and `enclosing_symbol`); `document` is NULL for
+  an external symbol. A non-local symbol can be listed under several
+  documents (a package's `crate/` symbol under each target's root file),
+  one row per listing.
+- `scip_document_occurrences` and `scip_document_symbols` are the same rows
+  without `file_id`; `cache.sql` and `refresh.sql` copy them and replace
+  `scip_occurrences` and `scip_symbols`, never these.
+
+`queries/unit_fan_in_churn.sql` is the spike's query on these views: a
+unit's fan-in is the number of distinct files other than its own that hold
+a reference to any symbol whose definition occurrence lies within the
+unit's lines (a module's whole-file definition lies in no unit; enclosing
+units count everything they contain), and its churn is its commits in
+`unit_changes`. Parameters `kind`, `min_fan_in` (default 1) and
+`include_merges`. On this repository its 2,915 rows equal the spike's code
+run on the same tree and index, apart from the commits of two units that
+git's and gitoxide's `-U0` placement attribute differently.
+
 ## Cache
 
 Two ways to stop recomputing the expensive layers (`nodes`, `units`,
-`tags`, `commits`, `file_changes`, `hunks`, and the blob layer
-`blob_files`, `blob_nodes`, `blob_units`); every other view and every query
+`tags`, `commits`, `file_changes`, `hunks`, the blob layer
+`blob_files`, `blob_nodes`, `blob_units`, and `scip_occurrences`,
+`scip_symbols`); every other view and every query
 keeps its text and reads whichever is in place. `unit_changes` stays a view
 in both: over the cached layers a query reading it takes 0.16–0.21 s on
 this repository, against 0.05–0.13 s from a materialized copy that itself
@@ -180,7 +234,12 @@ copies. Re-reading the view files resets both to live.
 `cache.sql`, read after the view files, copies `nodes`, `units`, `tags`,
 `commits`, `file_changes`, `hunks`, `blob_files` and `blob_units` into
 temporary tables `<view>_cache` and replaces each of those views with
-`SELECT * FROM <view>_cache`. Every other view and every query keeps its
+`SELECT * FROM <view>_cache`; `scip_occurrences_cache` and
+`scip_symbols_cache` are copies of `scip_document_occurrences` and
+`scip_document_symbols` (`scip_occurrences` joins `file_id` to the copy at
+query time). Without `views/scip.sql`, empty views of the same columns stand
+in for those two (they stay until `views/scip.sql` replaces them), so the
+SCIP views exist and are empty. Every other view and every query keeps its
 text and reads the copies; `units` and `tags` are built from `nodes_cache`.
 `blob_nodes` is not copied (about 31 million rows here) and stays live:
 building `blob_units_cache` parses every blob once, which is most of the
@@ -207,7 +266,7 @@ build time.
 `refresh.sql`, read after the view files (in any session, as often as
 wanted), brings the database file `cache_path` (default
 `<repo>/target/code-db/cache.duckdb`; the directory must exist, ATTACH does
-not create it) up to date and points the nine views at it:
+not create it) up to date and points the eleven views at it:
 
 1. **File snapshot**: `source_files`/`source_paths` are taken again from
    `git_tracked_files`, as `00_load.sql` does.
@@ -243,7 +302,17 @@ not create it) up to date and points the nine views at it:
    the range, and `blob_files`, `blob_nodes` and `blob_units` read the
    cache, showing only the blobs of the range (blobs that left it, after an
    amend, stay in the file and are not shown).
-8. `CHECKPOINT cache`, and the `meta` row.
+8. **SCIP**: `cache.scip_occurrences` and `cache.scip_symbols` (the rows of
+   `scip_document_occurrences` and `scip_document_symbols`) are rebuilt whole
+   when the key changes: the index's path, `hash()` of its content (read with
+   `read_blob`, about 20 ms for 30 MB) and the text of the five views of
+   `views/scip.sql` that shape the rows. Otherwise the insert's false
+   condition folds to an empty result and the index is not read. Without
+   `views/scip.sql` (the key is NULL) the tables are emptied, the same empty
+   stand-ins as in `cache.sql` are created, and both views are empty. With
+   `views/scip.sql` read and no index, the refresh fails before anything
+   changes.
+9. `CHECKPOINT cache`, and the `meta` row.
 
 With nothing changed, `read_ast` is still called, because it refuses an
 empty list when it is bound and no `CASE` around the call can avoid that:
@@ -260,11 +329,11 @@ current one appear; `unit_id` is the row number over `(file_id, unit_ord)`
 and `parent_unit_id` is derived from it. After a refresh every view equals
 its live counterpart row for row (`check.py fixture`, `check.py refresh`).
 
-Layout of the file (schema version 2):
+Layout of the file (schema version 3):
 
 | Table | Rows |
 | --- | --- |
-| `meta` | one: `schema_version`, `repo`, `state` (`ok`, or `refreshing` while a refresh runs), `built_at`, `refreshed_at`, `syntax_key` (sitting_duck version), `derive_key` (md5 of the derived views' text), `history_key` (`since`, `include_merges`, `languages`, `blob_dir`), `head`; the last refresh: `syntax`/`derived` (`rebuilt` or `incremental`), `history` and `blob_history` (for `blob_files`; `rebuilt` or `appended`), `files_added`, `files_changed`, `files_removed`, `files_unchanged`, `nodes_parsed`, `units_inserted`, `tags_inserted`, `commits_added`, `blob_rows_added`, `blobs_parsed`, `blob_bytes_parsed`, `blob_nodes_parsed`, `blobs_derived`, `blob_units_inserted`, `blobs_cached` (all parsed blobs in the file), `seconds` (per layer: `files`, `nodes`, `units`, `tags`, `commits`, `file_changes`, `hunks`, `blob_files`, `blob_nodes`, `blob_units`, `checkpoint`, `total`) |
+| `meta` | one: `schema_version`, `repo`, `state` (`ok`, or `refreshing` while a refresh runs), `built_at`, `refreshed_at`, `syntax_key` (sitting_duck version), `derive_key` (md5 of the derived views' text), `history_key` (`since`, `include_merges`, `languages`, `blob_dir`), `head`; the last refresh: `syntax`/`derived` (`rebuilt` or `incremental`), `history` and `blob_history` (for `blob_files`; `rebuilt` or `appended`), `files_added`, `files_changed`, `files_removed`, `files_unchanged`, `nodes_parsed`, `units_inserted`, `tags_inserted`, `commits_added`, `blob_rows_added`, `blobs_parsed`, `blob_bytes_parsed`, `blob_nodes_parsed`, `blobs_derived`, `blob_units_inserted`, `blobs_cached` (all parsed blobs in the file), `scip_key` (NULL without `views/scip.sql`), `scip_cache` (`rebuilt` or `kept`), `scip_occurrences_inserted`, `scip_symbols_inserted`, `seconds` (per layer: `files`, `nodes`, `units`, `tags`, `commits`, `file_changes`, `hunks`, `blob_files`, `blob_nodes`, `blob_units`, `scip`, `checkpoint`, `total`) |
 | `nodes_files` | one per cached file: `path`, `blob_id`, `language` |
 | `nodes` | `path` plus `read_ast`'s columns (as in `views/nodes.sql`) |
 | `units` | `path`, `unit_ord`, `parent_unit_ord`, then the columns of `units` without the ids |
@@ -274,6 +343,7 @@ Layout of the file (schema version 2):
 | `blob_derived` | one per blob whose units are in `blob_units` (a blob can have none) |
 | `blob_nodes` | `blob_id` plus `read_ast`'s columns |
 | `blob_units` | the columns of `blob_units` |
+| `scip_occurrences`, `scip_symbols` | the columns of `scip_document_occurrences`, `scip_document_symbols` |
 
 What forces a rebuild:
 
@@ -294,6 +364,11 @@ What forces a rebuild:
 - **History** (and `blob_files`): a different `since`, `include_merges`,
   `languages` or `blob_dir`; a cached head that is not among the commits of
   `since..HEAD`; no cached head (no commits).
+- **SCIP**: a different key (another index file or content, a change in
+  `views/scip.sql`'s shaping views, `views/scip.sql` read or not), and the
+  first two cases of the syntax rebuild (no `meta` row, `state` not `ok`).
+  Nothing else depends on it: reading `views/scip.sql` or not rebuilds no
+  other layer.
 - **A different schema version** is an error: delete the file.
 
 Limits:
@@ -327,7 +402,8 @@ con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
 con.execute("SET VARIABLE repo = '/abs/path/to/repo'")
 for f in ["00_load.sql", "views/files.sql", "views/nodes.sql", "views/blobs.sql",
           "lang/rust.sql", "views/units.sql", "views/history.sql",
-          "views/unit_changes.sql", "views/clones.sql"]:
+          "views/unit_changes.sql", "views/clones.sql",
+          "views/scip.sql"]:  # the last one optional, needs the index
     con.execute(pathlib.Path("duckdb-ext/sql", f).read_text())
 con.execute(pathlib.Path("duckdb-ext/sql/refresh.sql").read_text())  # optional
 print(con.sql(pathlib.Path("duckdb-ext/sql/queries/file_cochange.sql").read_text()))
@@ -342,6 +418,7 @@ statements). This route is not exercised by `check.py`.
 
 ```sh
 uv run --locked --script duckdb-ext/sql/check.py fixture          # assertions on a generated fixture
+uv run --locked --script duckdb-ext/sql/check.py scip-fixture     # only the SCIP fixture
 uv run --locked --script duckdb-ext/sql/check.py repo .           # counts and every query on a repository
 uv run --locked --script duckdb-ext/sql/check.py refresh .        # refresh.sql twice, every view compared with live
 uv run --locked --script duckdb-ext/sql/check.py cli .            # the same files through the CLI's .read, live and refreshed
@@ -350,7 +427,10 @@ uv run --locked --script duckdb-ext/sql/check.py measure-refresh CLONE --runs 3 
 uv run --locked --script duckdb-ext/sql/check.py explain .        # read_ast/read_text scans per plan
 ```
 
-`refresh`, `cli` and `measure-refresh` write the cache to
+Every command given a repository reads `views/scip.sql` too when
+`REPO/target/code-db/index.scip` exists, and then covers the SCIP views and
+`unit_fan_in_churn` (`measure` adds the three source views and a baseline,
+`measure-refresh` a changed index). `refresh`, `cli` and `measure-refresh` write the cache to
 `REPO/target/code-db/cache.duckdb`; every command that reads the view files
 writes the blob files to `REPO/target/code-db/blobs` (`git_changed_blobs`). `refresh` compares
 `blob_nodes` with live through a per-blob digest (count and sum of row
@@ -385,6 +465,20 @@ pure-rename commits), `unit_churn` (commits and authors, `since_time`,
 unresolved side; `clone_source`), and `since` narrowing `blob_files` and
 `unit_changes`.
 
+A SCIP fixture runs rust-analyzer (`RUST_ANALYZER`, default
+`rust-analyzer` on `PATH`; skipped with a message when missing) on a copy of
+the first fixture's `src/` and `tests/` with a `Cargo.toml` for the package
+`fixture`, into `REPO/target/code-db/index.scip` (about 6 s), and asserts
+the metadata, every document joined to its file, 1-based lines and columns
+of the trait's definition and its enclosing lines (the unit's), its three
+references, local symbols qualified per document (in `scip_symbols`'
+`enclosing_symbol` too), the package's `crate/` symbol listed under two
+documents, every row of `unit_fan_in_churn` (a function called from the
+integration test, the trait named from `rect.rs`; `kind` and `min_fan_in`),
+the same rows through `cache.sql` with no index scan in the query's plan, a
+document excluded from the snapshot (no `file_id`, its references not
+counted), and `cache.sql` without `views/scip.sql` (empty views).
+
 On a third fixture it reads `refresh.sql` after each of these steps and
 asserts every refreshed view equal to live row for row (the blob layer
 and `unit_changes` included), the six queries equal, and the `meta`
@@ -394,16 +488,19 @@ session; 0.14–0.30 s with the blob steps, under a load average of 5–22); one
 unchanged); a file added, deleted, renamed; a new commit (history
 appended, one new blob parsed); an amended commit (history and
 `blob_files` rebuilt, no blob parsed); an untracked file toggled
-by `include_untracked`; an interrupted refresh (rebuilt); `cache.sql` and
+by `include_untracked`; an interrupted refresh (rebuilt); `views/scip.sql`
+read (SCIP rebuilt, no other layer), nothing changed (kept, the insert's plan
+reads no index), the index changed (rebuilt) and missing (the refresh fails,
+`state` stays `ok`); `cache.sql` and
 `refresh.sql` refusing each other's views; and the cache file in a new
-session (nothing rebuilt, the view files reset it to live). It needs `git`
-but no jscpd.
+session without `views/scip.sql` (SCIP emptied, nothing else rebuilt; the view
+files reset it to live). It needs `git` and rust-analyzer but no jscpd.
 
 ## Layout
 
 | File | Defines |
 | --- | --- |
-| `00_load.sql` | `INSTALL`/`LOAD` of both extensions; parameter defaults; `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths` |
+| `00_load.sql` | `INSTALL`/`LOAD` of the three extensions; parameter defaults; `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths` |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `scope_files`, `sources(file_id, content)`, `source_bytes(file_id, bytes)`, `source_lines(file_id, line, nonblank_through)` (over the table macros `source_bytes_of`, `source_lines_of`), macros `byte_slice`, `normalize_ws` |
 | `views/nodes.sql` | `nodes`: `file_id` plus every column of `read_ast(…, source := 'full', peek := 'none', context := 'none')`; `scope_nodes` (the nodes of `scope_files`) |
 | `views/blobs.sql` | `blob_files`, the snapshot `blob_snapshot`/`blob_paths`, `blob_list(blob_id, file, blob_ord)`, `blob_nodes(blob_id, …)`; the derivation inputs `blob_scope_nodes`, `blob_sources`, `blob_source_bytes`, `blob_source_lines` (keyed by `blob_ord`) |
@@ -412,7 +509,8 @@ but no jscpd.
 | `views/history.sql` | `commits`, `file_changes`, `hunks` |
 | `views/unit_changes.sql` | `unit_changes` |
 | `views/clones.sql` | `clone_pairs(pair_id, source, file_a, start_line_a, end_line_a, file_b, start_line_b, end_line_b, tokens, lines)` |
-| `queries/*.sql` | one statement each: `file_cochange`, `file_cochange_thresholds`, `clone_site_tags`, `clone_site_tags_summary`, `unit_churn`, `clone_change_consistency`; the header states the question, the parameters and the evidence |
+| `views/scip.sql` (optional) | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (see SCIP) |
+| `queries/*.sql` | one statement each: `file_cochange`, `file_cochange_thresholds`, `clone_site_tags`, `clone_site_tags_summary`, `unit_churn`, `clone_change_consistency`, `unit_fan_in_churn` (needs `views/scip.sql`); the header states the question, the parameters and the evidence |
 | `jscpd.sh` | the two jscpd reports `clones.sql` reads |
 | `cache.sql` | the session cache (above) |
 | `refresh.sql` | the persistent cache (above) |
@@ -485,11 +583,13 @@ which `00_load.sql` (and `refresh.sql`) take as a snapshot.
 | `include_merges` | `false` | history views, `blob_files`, co-change and history-joined queries, `refresh.sql` |
 | `clone_reports` | `[repo/target/code-db/jscpd/exact/jscpd-report.json, repo/target/code-db/jscpd/normalized/jscpd-report.json]` | `clone_pairs` |
 | `cache_path` | `repo/target/code-db/cache.duckdb` | `refresh.sql` |
+| `scip_index` | `repo/target/code-db/index.scip` (must exist when `views/scip.sql` is read) | `views/scip.sql`, `refresh.sql` |
 | `blob_dir` | `repo/target/code-db/blobs` (where `git_changed_blobs` writes the blob files) | `views/blobs.sql`, `refresh.sql` |
 | `scope_paths` | NULL (all files); set only by `refresh.sql` | `scope_files` |
 | `min_shared`, `max_commit_files`, `min_coupling_pct`, `basis` | 3, 50, 30, `'max'` | `file_cochange` (the first two also `file_cochange_thresholds`) |
 | `match_mode`, `clone_source` | `'contain'`, NULL (all reports) | `clone_site_tags` (`match_mode` also the summary); `clone_source` also `clone_change_consistency` |
-| `since_time`, `kind` | NULL (all commits; all unit kinds) | `unit_churn` |
+| `since_time`, `kind` | NULL (all commits; all unit kinds) | `unit_churn` (`kind` also `unit_fan_in_churn`) |
+| `min_fan_in` | 1 | `unit_fan_in_churn` |
 
 The source files are the regular files (mode `100644` or `100755`) that
 `git_tracked_files` lists, with an extension in `languages`: ignored files,
@@ -502,7 +602,7 @@ own intermediate values; `blob_snapshot`, `blob_paths` and
 
 How parameters reach the table functions: `getvariable('…')` is accepted
 as an argument of `read_ast`, `read_text`, `read_json`, `glob`, `ATTACH` and
-the four git functions, including their named parameters, inside a view,
+the git and scip functions, including their named parameters, inside a view,
 and is evaluated when the view is scanned. `LOAD` takes only a literal, so
 the git_history path is fixed in `00_load.sql`. A list-valued variable
 cannot be empty where a table function reads it (`read_ast` refuses an
@@ -514,9 +614,10 @@ be parsed as a positional argument (`ignore_errors := len(x) = 0` is
 ## Deliberately not here yet
 
 - **Tags of blobs**, and following a unit across renames and moves.
-- **SCIP**, Go and TypeScript, clone groups (the spike's `group_id`), and
-  any query beyond the six ported ones (the spike's `unit_fan_in_churn`
-  needs SCIP).
+- Go and TypeScript, clone groups (the spike's `group_id`), and any query
+  beyond the seven ported ones. SCIP relationships (`relationship_count`
+  only; rust-analyzer 1.99.1 writes none) and an index of the historical
+  blobs.
 - **Per-layer choice.** Both caches hold all their layers; `clone_pairs`
   and `unit_changes` stay live in both, and `cache.sql` leaves
   `blob_nodes` live.

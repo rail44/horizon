@@ -7,13 +7,14 @@
 -- git_tracked_files: re-read this file (or refresh.sql) to pick up added or removed
 -- files and new content ids. File contents are always read live.
 --
--- The git_history path is relative to the current directory, which must be the root
--- of the Horizon checkout that built it (duckdb-ext/build.sh). LOAD accepts only a
--- literal, not getvariable(). The host must allow unsigned extensions.
+-- The git_history and scip_index paths are relative to the current directory, which must
+-- be the root of the Horizon checkout that built them (duckdb-ext/build.sh). LOAD accepts
+-- only a literal, not getvariable(). The host must allow unsigned extensions.
 
 INSTALL sitting_duck FROM community;
 LOAD sitting_duck;
 LOAD 'duckdb-ext/target/extension/v2.0.0/linux_amd64/git_history.duckdb_extension';
+LOAD 'duckdb-ext/target/extension/v2.0.0/linux_amd64/scip_index.duckdb_extension';
 
 SET VARIABLE repo = CASE
     WHEN getvariable('repo') LIKE '/%' THEN rtrim(getvariable('repo'), '/')

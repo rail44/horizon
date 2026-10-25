@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS cache.meta (
     blob_units_inserted BIGINT,
     blobs_cached BIGINT,        -- all parsed blobs in the file, in the range or not
     scip_key VARCHAR,           -- scip_index, its content hash and the shaping views' md5; NULL without views/scip.sql
-    scip VARCHAR,               -- 'rebuilt' or 'kept'
+    scip_cache VARCHAR,         -- 'rebuilt' or 'kept'
     scip_occurrences_inserted BIGINT,
     scip_symbols_inserted BIGINT,
     seconds STRUCT(files DOUBLE, nodes DOUBLE, units DOUBLE, tags DOUBLE, commits DOUBLE,
@@ -149,7 +149,7 @@ CREATE TABLE IF NOT EXISTS cache.scip_occurrences (document VARCHAR, symbol VARC
     is_reference BOOLEAN, is_import BOOLEAN, is_write BOOLEAN, is_read BOOLEAN, is_generated BOOLEAN,
     is_test BOOLEAN, is_forward_definition BOOLEAN, enclosing_start_line INTEGER,
     enclosing_start_column INTEGER, enclosing_end_line INTEGER, enclosing_end_column INTEGER);
-CREATE TABLE IF NOT EXISTS cache.scip_symbols (document VARCHAR, symbol VARCHAR, kind INTEGER,
+CREATE TABLE IF NOT EXISTS cache.scip_symbols (document VARCHAR, symbol VARCHAR, kind VARCHAR,
     display_name VARCHAR, enclosing_symbol VARCHAR, documentation VARCHAR[], relationship_count INTEGER);
 
 SET VARIABLE refresh_prior = (SELECT m FROM cache.meta m);
@@ -201,7 +201,7 @@ SELECT NULL::VARCHAR AS document, NULL::VARCHAR AS symbol, NULL::INTEGER AS star
        NULL::INTEGER AS enclosing_end_line, NULL::INTEGER AS enclosing_end_column
 WHERE false;
 CREATE VIEW IF NOT EXISTS scip_document_symbols AS
-SELECT NULL::VARCHAR AS document, NULL::VARCHAR AS symbol, NULL::INTEGER AS kind,
+SELECT NULL::VARCHAR AS document, NULL::VARCHAR AS symbol, NULL::VARCHAR AS kind,
        NULL::VARCHAR AS display_name, NULL::VARCHAR AS enclosing_symbol, NULL::VARCHAR[] AS documentation,
        NULL::INTEGER AS relationship_count
 WHERE false;
@@ -212,7 +212,7 @@ END;
 SET VARIABLE refresh_scip_key = CASE WHEN getvariable('refresh_scip_loaded') THEN concat_ws(' ',
     getvariable('scip_index'), getvariable('refresh_scip_hash'),
     (SELECT md5(string_agg(view_name || ':' || sql, chr(10) ORDER BY view_name)) FROM duckdb_views()
-     WHERE NOT internal AND view_name IN ('scip_json_index', 'scip_index_occurrences', 'scip_index_symbols',
+     WHERE NOT internal AND view_name IN ('scip_index_occurrences', 'scip_index_symbols',
                                           'scip_document_occurrences', 'scip_document_symbols'))) END;
 
 UPDATE cache.meta SET state = 'refreshing';

@@ -11,7 +11,15 @@
         rows of every view and query, live, through cache.sql and through refresh.sql
         (edits, additions, deletions, renames, commits, an amend, untracked files, a
         new session); a history fixture asserts blob_files, blob_units and every row
-        of unit_changes, unit_churn and clone_change_consistency.
+        of unit_changes, unit_churn and clone_change_consistency; a SCIP fixture
+        (a rust-analyzer index of the fixture crate; skipped without rust-analyzer)
+        asserts views/scip.sql and unit_fan_in_churn, live and cached.
+
+    uv run --script duckdb-ext/sql/check.py scip-fixture
+        Only the SCIP fixture.
+
+    The commands below read views/scip.sql too when REPO/target/code-db/index.scip
+    exists, and then include the SCIP views and unit_fan_in_churn.
 
     uv run --script duckdb-ext/sql/check.py refresh REPO [--reports ...]
         Read refresh.sql twice (cache REPO/target/code-db/cache.duckdb) and compare
@@ -83,9 +91,6 @@ SCIP_FILE = "views/scip.sql"
 SCIP_VIEWS = ["scip_occurrences", "scip_symbols"]
 SCIP_QUERIES = ["unit_fan_in_churn"]
 RUST_ANALYZER = os.environ.get("RUST_ANALYZER", "rust-analyzer")
-# Stand-in until read_scip is available: views/scip.sql reads the JSON that the pinned
-# Sourcegraph scip CLI prints for the index (see scip_json).
-SCIP_CLI = Path(os.environ.get("SCIP_CLI", HORIZON_ROOT / "target/code-db/tools/scip-v0.10.0/scip"))
 
 
 def sql_literal(value):
@@ -118,22 +123,10 @@ def refreshed_views(con):
     return REFRESHED_VIEWS + (SCIP_VIEWS if scip_loaded(con) else [])
 
 
-def scip_json(index):
-    """Stand-in until read_scip is available: write INDEX.json with `scip print --json`
-    when it is missing or older than the index."""
-    out = index.with_name(index.name + ".json")
-    if not out.exists() or out.stat().st_mtime < index.stat().st_mtime:
-        with open(out, "wb") as f:
-            subprocess.run([str(SCIP_CLI), "print", "--json", str(index)], stdout=f, check=True)
-
-
 def repo_index(repo):
     """REPO's SCIP index at the default scip_index path, or None when there is none."""
     index = Path(repo).resolve() / "target/code-db/index.scip"
-    if not index.exists():
-        return None
-    scip_json(index)
-    return index
+    return index if index.exists() else None
 
 
 def read_cache(con):
@@ -717,7 +710,6 @@ def make_scip_index(repo, root):
     index.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([RUST_ANALYZER, "scip", str(crate), "--output", str(index)], check=True,
                    capture_output=True, cwd=root)
-    scip_json(index)
     return index
 
 
@@ -838,7 +830,7 @@ def check_refresh_fixture():
             return {k: meta[k] for k in counts}
 
         def expect(meta, syntax="incremental", history="appended", scip="kept", **nonzero):
-            assert meta["scip"] == scip, meta
+            assert meta["scip_cache"] == scip, meta
             expected = {k: nonzero.get(k, 0) for k in counts}
             got = stats(meta)
             for k, v in nonzero.items():
@@ -970,7 +962,6 @@ def check_refresh_fixture():
             # length 0) changes the content hash.
             with open(index, "ab") as f:
                 f.write(b"\x12\x00")
-            scip_json(index)
             _, meta = refresh_against_live(con)
             expect(meta, scip="rebuilt")
             # A missing index fails the refresh before anything changes.
@@ -1094,7 +1085,7 @@ def file_set_statement():
 
 REFRESH_STATS = ("syntax", "derived", "history", "nodes_parsed", "units_inserted", "tags_inserted",
                  "commits_added", "blob_history", "blob_rows_added", "blobs_parsed", "blob_bytes_parsed",
-                 "blob_nodes_parsed", "blobs_derived", "blob_units_inserted", "blobs_cached", "scip",
+                 "blob_nodes_parsed", "blobs_derived", "blob_units_inserted", "blobs_cached", "scip_cache",
                  "scip_occurrences_inserted", "scip_symbols_inserted")
 
 
@@ -1260,12 +1251,10 @@ def measure_refresh(repo, reports, runs):
         reset_and_sync()
         with open(index, "ab") as f:
             f.write(b"\x12\x00")
-        scip_json(index)
 
     if index:
         scenario("SCIP index changed (SCIP rebuilt)", change_index)
         index.write_bytes(index_bytes)
-        scip_json(index)
     reset_and_sync()
     size = sum(p.stat().st_size for p in (cache, cache.with_name(cache.name + ".wal")) if p.exists())
     print(f"cache file: {size / 2**20:.1f} MiB")
