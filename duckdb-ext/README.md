@@ -7,8 +7,8 @@ root quality gate does not read it; `./check.sh` is its gate.
 
 | Crate | Output |
 | --- | --- |
-| `git-history-core/` | a library: the rows of the four functions, computed with gitoxide (`gix`) only; no DuckDB dependency, unit-tested and compared with the git CLI on fixtures |
-| `git-history/` | `git_history.duckdb_extension`: the DuckDB table functions `git_hunks`, `git_commits`, `git_file_changes`, `git_tracked_files` over `git-history-core` |
+| `git-history-core/` | a library: the rows of the five functions, computed with gitoxide (`gix`) only; no DuckDB dependency, unit-tested and compared with the git CLI on fixtures |
+| `git-history/` | `git_history.duckdb_extension`: the DuckDB table functions `git_hunks`, `git_commits`, `git_file_changes`, `git_tracked_files`, `git_changed_blobs` over `git-history-core` |
 | `gix-probe/` | a binary printing any function's rows of `git-history-core` as TSV, compared with the git CLI by `scripts/gix_parity.py` |
 | `host-check/` | no output; a test that loads the built extension through the `duckdb` crate (a separate workspace, see below) |
 
@@ -139,9 +139,9 @@ Invalid Input Error: Failed to load '…/git_history.duckdb_extension', The file
 
 ## Functions
 
-The three history functions take `repo VARCHAR` (any path inside a
-worktree, or a bare repository; it must be a constant) and two optional
-named parameters:
+The three history functions and `git_changed_blobs` take `repo VARCHAR`
+(any path inside a worktree, or a bare repository; it must be a constant)
+and two optional named parameters:
 `since VARCHAR` (any revision; history is `since..HEAD`, default all of
 `HEAD`) and `include_merges BOOLEAN` (default `false`). Rows are computed
 when the scan starts and emitted from one thread, so an unordered query
@@ -217,6 +217,79 @@ listed, where `git ls-files -o` prints it as one `sub/` line. Untracked
 sockets and FIFOs are skipped. Sparse-checkout
 (skip-worktree) entries keep their index row.
 
+### `git_changed_blobs(repo, dir, since := …, include_merges := …, extensions := …)`
+
+`(sha VARCHAR, path VARCHAR, old_path VARCHAR, side VARCHAR, blob_id VARCHAR, mode VARCHAR, file VARCHAR)`
+
+Writes the pre- and post-image blobs of the changed files of a history range
+to the directory `dir` and returns one row per written side. It is the
+interim way to give historical file contents to `read_ast`: once DuckDB's C
+API v2 can register a file system (duckdb/duckdb#25916, open), a
+`git://` file system replaces it. Until then, `read_ast` reads history
+through the same path as current files (a list of files on disk), so the
+same unit and tag SQL applies to both.
+
+The changes are those of `git_file_changes(repo, since, include_merges)`:
+the same commits, merge handling and rename detection, enumerated by the
+same code. Each change has up to two rows, `side = 'old'` (the pre-image,
+at `old_path` for a rename, else at `path`) and `side = 'new'` (the
+post-image at `path`), `old` first; rows follow `git_file_changes`'s row
+order. `path` and `old_path` are `git_file_changes`'s (the new path; the
+pre-image path for renames, else NULL); `blob_id` is the side's object id
+and `mode` its mode string (`100644` or `100755`). A side has a row only
+when all of these hold:
+
+- it exists: no `old` row for an addition, no `new` row for a deletion;
+- it is a regular file (`100644`/`100755`): symlinks and gitlinks have no
+  row for that side, so a type change has a row for its regular side only;
+- it is not binary by gix's rule, judged per side: the `diff`/`binary`
+  attributes, else a NUL byte in the first 8,000 bytes, or a size above
+  `core.bigFileThreshold`. A text file that turns binary keeps its `old`
+  row; a change whose counts are NULL in `git_file_changes` because one
+  side is binary therefore can still have a row for the other side;
+- with `extensions` (a `VARCHAR[]` such as `['rs']`), the extension of
+  that side's path is in the list. The extension is the part after the
+  last `.` of the last path component (`.gitignore` has `gitignore`; `Makefile`
+  and `name.` have none and never match); the comparison is exact (case
+  sensitive). An empty list matches nothing, NULL (the default) everything.
+
+A change whose two sides are regular files with the same blob has no rows
+at all: a rename without content change (git lists it with status `R` and
+`0 0` counts; there is no content to parse that the earlier commit did not
+already provide, which is also what the spike's `unit_changes` did), and a
+change of the executable bit alone.
+
+Writing rules:
+
+- `dir` must be an absolute path (a relative one is an error at bind time,
+  since the DuckDB process's working directory need not be the
+  repository's); it is created with its parents if missing.
+- Each blob is written once per extension as `<dir>/<blob_id>.<ext>`, where
+  `<ext>` is the extension of the side's path, or `<dir>/<blob_id>` when it
+  has none, so `read_ast` can infer the language from the name. `file` is
+  that absolute path. A blob referenced by several rows is one file.
+- The bytes are the blob's exactly, read from the object database (no
+  smudge filters, no end-of-line conversion).
+- A file that already exists with the blob's size is not rewritten (the
+  content is implied by the id); one with another size is replaced. Each
+  file is written to a temporary name in `dir` (`.<name>.<pid>-<n>.tmp`)
+  and renamed into place, so a reader never sees a partial file.
+- The repository is only read. Running the function again with the same
+  arguments writes nothing and returns the same rows; files from other
+  ranges or older runs are left in `dir`, never deleted.
+
+The files are written when the scan starts (any query that reads the
+function, `SELECT count(*)` included), not at bind time. The function
+returns only rows; the counts of written and skipped files are printed by
+`gix-probe changed_blobs --stats`.
+
+```sql
+CREATE TEMP TABLE blobs AS
+SELECT * FROM git_changed_blobs('/repo', '/repo/target/code-db/blobs', extensions := ['rs']);
+SET VARIABLE files = (SELECT list(DISTINCT file) FROM blobs);
+SELECT * FROM read_ast(getvariable('files'), 'rust', source := 'full', peek := 'none', context := 'none');
+```
+
 ## How the rows are computed
 
 Everything is gitoxide, called from `git-history-core/src/lib.rs`:
@@ -259,6 +332,15 @@ Not covered, because nothing here needs it: `.mailmap`, textconv and
 external diff drivers (both disabled), the repository's `diff.*`
 configuration, copy detection, pathspec history simplification,
 `diff.renameLimit` other than 1000.
+
+`git_changed_blobs` is `git-history-core/src/blobs.rs`, on the change
+enumeration above (`for_each_change`, which `git_file_changes` uses):
+
+| Step | gix call and settings |
+| --- | --- |
+| Binary check per side | `set_resource` of that side alone on the tree-diff blob platform, then `resource(kind).data`: `Data::Binary` means binary (gix's pipeline applies the `diff` attribute and its driver's `binary` setting, NUL detection and the big-file threshold) |
+| Existing file | `repo.find_header(id).size()` against the file's `symlink_metadata` length |
+| Bytes | `repo.find_blob(id).data`, written with `std::fs::write` to the temporary name and `std::fs::rename`d |
 
 `git_tracked_files` is `git-history-core/src/tracked.rs`:
 
@@ -335,9 +417,27 @@ CLI; `python3 duckdb-ext/scripts/gix_parity.py REPO duckdb-ext/target/release/gi
 output parsed into the same TSV rows), `scripts/load_smoke.py`,
 `scripts/perf.py`, `scripts/tracked_parity.py` (`python3
 duckdb-ext/scripts/tracked_parity.py REPO duckdb-ext/target/release/gix-probe`).
-`gix-probe REPO hunks|commits|file_changes|tracked_files [--since REV]
-[--include-merges] [--context N] [--include-untracked] [--stats]` prints
-any function's rows as TSV.
+`gix-probe REPO hunks|commits|file_changes|tracked_files|changed_blobs
+[--since REV] [--include-merges] [--context N] [--include-untracked]
+[--dir DIR] [--extensions A,B] [--stats]` prints any function's rows as
+TSV; for `changed_blobs`, `--stats` also prints the files written (with
+their bytes) and skipped.
+
+`git_changed_blobs` on this repository at 865e4045 (1,601 commits), with
+`extensions := ['rs']`, compared with `git log --raw --no-abbrev -M
+--diff-merges=off` (old/new ids and modes, with the rules above applied to
+its lines; no `.rs` blob is binary): 12,490 rows (5,983 `old`, 6,507
+`new`) and 6,581 distinct blobs on both sides, 0 / 0 rows only on one
+side. The extension's rows are identical, in order, to `gix-probe
+changed_blobs`'s TSV. The spike (`docs/research/code-db-spike-2026-10-24.md`)
+parsed 6,558 blobs from 12,451 lookups at 4ad82864 (1,585 commits) with
+`git log -- '*.rs'`; the CLI at that commit gives exactly those numbers
+with the pathspec, and 12,453 rows (the same 6,558 blobs) without it: the
+two extra rows are e91103e8's change to
+`crates/horizon-sessiond/tests/latency_probe.rs`, which history
+simplification drops (see above), and whose two blobs occur in other
+commits too. The 23 further blobs (37 rows) come from the 16 commits
+after 4ad82864.
 
 ## Performance
 
@@ -373,6 +473,14 @@ ms with `--include-untracked`), against 3.7–3.9 ms for `git ls-files -s`,
 read; a file is hashed only when its stat differs from the index (or is
 racily clean), and gix runs that check on several threads.
 
+`git_changed_blobs('.', dir, extensions := ['rs'])` on this repository at
+865e4045 (12,490 rows, 6,581 files, 152,326,274 bytes written), Python
+`duckdb` 2.0.0, `SELECT count(*), count(DISTINCT blob_id), count(DISTINCT
+file)`, fresh processes: 1.10–1.12 s into an empty directory, 0.63–0.76 s
+for a run that finds every file present (6,581 skipped). `gix-probe
+changed_blobs --extensions rs` takes 0.93 s writing and 0.54–0.62 s
+skipping.
+
 ## Tests
 
 - `git-history-core/src/lib.rs` unit tests: `%s` subject folding, the
@@ -405,6 +513,22 @@ racily clean), and gix runs that check on several threads.
   its `git hash-object` id, and asserts each case's row (or its absence),
   the clean filter's effect on a CRLF id, and that two runs agree. A second
   fixture with a merge conflict asserts the one row of an unmerged path.
+- `git-history-core/tests/changed_blobs.rs`: builds a fixture (same
+  isolation) with additions (including an executable and an extensionless
+  file), a modification, a deletion, a rename without and with content
+  change, a retargeted symlink, a binary change, a text file turned
+  binary, both type changes (file to symlink and back), an executable-bit
+  change alone, two commits sharing a blob, and a merge. For no `since` and
+  a `since`, with and without `include_merges`, and for no `extensions`,
+  `['rs']` and `['rs', 'sh']`, it compares the rows with `git log --raw
+  --no-abbrev -M` (git's binary rule applied to `git cat-file -p` of each
+  side) and every file with `git cat-file -p` of its blob, checks the file
+  names, the write counts and that `dir` holds nothing else; asserts that
+  rows follow `file_changes`'s order with `old` first and which of its
+  changes have no rows; asserts each case's rows, that a shared blob is one
+  file, that extensions are judged per side and an empty list matches
+  nothing, that a second run skips every file but rewrites a truncated one
+  (and trusts a same-size one), and that a relative `dir` is an error.
 - `host-check/tests/load.rs`: loads the built extension into the `duckdb`
   crate with the machine's `libduckdb` 2.0.0 and checks `git_hunks` joined
   with `git_commits`, and `git_tracked_files` with `include_untracked`, on

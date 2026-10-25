@@ -23,7 +23,9 @@ use duckdb_neo::{
     vector::{Unknown, Vector},
 };
 
-use git_history_core::{self as history, CommitRow, FileChangeRow, HunkRow, Range, TrackedFileRow};
+use git_history_core::{
+    self as history, ChangedBlobRow, CommitRow, FileChangeRow, HunkRow, Range, TrackedFileRow,
+};
 
 /// Arguments shared by the three history functions, resolved at bind time.
 pub(crate) struct Params {
@@ -356,7 +358,8 @@ pub(crate) fn register(extension: &Extension) -> Result<()> {
     register_one::<Hunks>(extension)?;
     register_one::<Commits>(extension)?;
     register_one::<FileChanges>(extension)?;
-    register_tracked_files(extension)
+    register_tracked_files(extension)?;
+    register_changed_blobs(extension)
 }
 
 /// Arguments of `git_tracked_files`, resolved at bind time.
@@ -481,4 +484,167 @@ fn register_tracked_files(extension: &Extension) -> Result<()> {
                 ),
         );
     TableFunctionBuilder::new(TRACKED_FILES, signature, TrackedFiles).register(extension)
+}
+
+/// Arguments of `git_changed_blobs`, resolved at bind time.
+pub(crate) struct BlobParams {
+    repo: String,
+    dir: String,
+    range: Range,
+    extensions: Option<Vec<String>>,
+}
+
+/// `git_changed_blobs`: writes files as well as returning rows, so it has its
+/// own arguments instead of being a [`GitTable`].
+struct ChangedBlobs;
+
+const CHANGED_BLOBS: &str = "git_changed_blobs";
+
+impl TableFunctionCallbacks for ChangedBlobs {
+    type BindData = BlobParams;
+    type LocalState = ();
+    type GlobalState = Mutex<Scan<ChangedBlobRow>>;
+
+    fn bind(
+        &self,
+        context: &Context,
+        arguments: Vec<BindArgument>,
+        bind: BindFunctionHandle<'_>,
+    ) -> Result<BlobParams> {
+        let value = |index: usize| {
+            arguments
+                .get(index)
+                .and_then(|argument| argument.value.as_ref())
+        };
+        let required = |index: usize, name: &str| {
+            value(index)
+                .map(|value| value.get::<String>())
+                .transpose()?
+                .flatten()
+                .ok_or_else(|| {
+                    Error::invalid_input(format!(
+                        "{CHANGED_BLOBS}: {name} must be a constant, non-NULL path"
+                    ))
+                })
+        };
+        let repo = required(0, "repo")?;
+        let dir = required(1, "dir")?;
+        let since = value(2)
+            .map(|value| value.get::<String>())
+            .transpose()?
+            .flatten();
+        let include_merges = value(3)
+            .map(|value| value.get::<bool>())
+            .transpose()?
+            .flatten()
+            .unwrap_or(false);
+        // NULL elements of the list match no path.
+        let extensions = value(4)
+            .map(|value| value.get::<Vec<Option<String>>>())
+            .transpose()?
+            .flatten()
+            .map(|list| list.into_iter().flatten().collect());
+        history::open(&repo).map_err(git_error)?;
+        if !std::path::Path::new(&dir).is_absolute() {
+            return Err(Error::invalid_input(format!(
+                "{CHANGED_BLOBS}: dir must be an absolute path, got '{dir}'"
+            )));
+        }
+        for name in ["sha", "path", "old_path", "side", "blob_id", "mode", "file"] {
+            bind.add_result_column(name, &varchar(context)?)?;
+        }
+        Ok(BlobParams {
+            repo,
+            dir,
+            range: Range {
+                since,
+                include_merges,
+            },
+            extensions,
+        })
+    }
+
+    fn init_global_state(
+        &self,
+        params: &BlobParams,
+        _context: &Context,
+        _columns: InitColumnData<'_>,
+    ) -> Result<(Option<Self::GlobalState>, Option<usize>)> {
+        let repo = history::open(&params.repo).map_err(git_error)?;
+        let (rows, _stats) = history::changed_blobs(
+            &repo,
+            &params.range,
+            std::path::Path::new(&params.dir),
+            params.extensions.as_deref(),
+        )
+        .map_err(git_error)?;
+        Ok((Some(Mutex::new(Scan { rows, next: 0 })), Some(1)))
+    }
+
+    fn exec(
+        &self,
+        _params: &BlobParams,
+        global: Option<&Self::GlobalState>,
+        _local: Option<&mut ()>,
+        _context: &Context,
+        mut output: DataChunkRef<'_>,
+        _columns: ExecColumnInfo<'_>,
+    ) -> Result<()> {
+        let mut scan = global
+            .ok_or_else(|| Error::internal("scan state missing"))?
+            .lock()
+            .map_err(|_| Error::internal("scan state poisoned"))?;
+        let start = scan.next;
+        let end = scan.rows.len().min(start + output.capacity()?);
+        scan.next = end;
+        let rows = &scan.rows[start..end];
+        if output.col_count() != 7 {
+            return Err(Error::internal("expected seven columns"));
+        }
+        let [sha, path, old_path, side, blob_id, mode, file] =
+            output.get_vector_array_mut([0, 1, 2, 3, 4, 5, 6])?;
+        let n = rows.len();
+        strings(sha, n, |i| Some(rows[i].sha.as_str()))?;
+        strings(path, n, |i| Some(rows[i].path.as_str()))?;
+        strings(old_path, n, |i| rows[i].old_path.as_deref())?;
+        strings(side, n, |i| Some(rows[i].side))?;
+        strings(blob_id, n, |i| Some(rows[i].blob_id.as_str()))?;
+        strings(mode, n, |i| Some(rows[i].mode))?;
+        strings(file, n, |i| Some(rows[i].file.as_str()))
+    }
+}
+
+fn register_changed_blobs(extension: &Extension) -> Result<()> {
+    let signature = SignatureBuilder::new()
+        .param(FunctionParameter::new::<String>("repo"))
+        .param(FunctionParameter::new::<String>("dir"))
+        .param(
+            FunctionParameter::with_default::<Option<String>>("since", None)
+                .kind(FunctionParameterKind::Named),
+        )
+        .param(
+            FunctionParameter::with_default("include_merges", false)
+                .kind(FunctionParameterKind::Named),
+        )
+        .param(
+            FunctionParameter::with_default::<Option<Vec<String>>>("extensions", None)
+                .kind(FunctionParameterKind::Named),
+        )
+        .documentation(
+            FunctionDocumentationBuilder::new()
+                .add_category("git")
+                .description(
+                    "Writes the pre- and post-image blobs of the regular, non-binary files that \
+                     git_file_changes lists over [since..]HEAD to dir (absolute; created if missing) \
+                     as <blob_id>.<ext>, each once, and returns one row per written side ('old' or \
+                     'new') with the file's absolute path; extensions limits the paths considered.",
+                )
+                .add_example(
+                    "Rust blobs of all history",
+                    format!(
+                        "SELECT * FROM {CHANGED_BLOBS}('.', '/tmp/blobs', extensions := ['rs'])"
+                    ),
+                ),
+        );
+    TableFunctionBuilder::new(CHANGED_BLOBS, signature, ChangedBlobs).register(extension)
 }
