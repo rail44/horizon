@@ -19,3 +19,10 @@ CREATE OR REPLACE VIEW nodes AS
 SELECT f.file_id, a.*
 FROM read_ast(getvariable('source_paths'), source := 'full', peek := 'none', context := 'none') a
 JOIN files f ON f.path = substr(a.file_path, length(getvariable('repo')) + 2);
+
+-- scope_nodes: the nodes of the files in scope_files (all files unless refresh.sql sets
+-- `scope_paths`), the node input of the language views. The NULL test comes first so
+-- that it folds away live (docs/research/code-db-incremental-cache-2026-10-25.md §2).
+CREATE OR REPLACE VIEW scope_nodes AS
+SELECT * FROM nodes
+WHERE getvariable('scope_paths') IS NULL OR file_id IN (SELECT file_id FROM scope_files);

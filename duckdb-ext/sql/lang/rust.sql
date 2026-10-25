@@ -1,4 +1,5 @@
--- Rust units and tags as views over `nodes` (sitting_duck's read_ast) and `sources`.
+-- Rust units and tags as views over `nodes` (sitting_duck's read_ast) and `sources`,
+-- and the units of historical blobs over the same rules.
 --
 -- Ported from the code database spike's Rust adapter (its tree-sitter queries
 -- restated in SQL; the restatement reproduced the spike's units and tags exactly,
@@ -11,6 +12,9 @@
 --     kind: function, method, impl, type, module, macro. qualified_name joins the
 --     names of the enclosing units, outermost first, with `.`; parent_unit_id is the
 --     innermost enclosing unit; loc counts non-blank lines.
+--   rust_blob_units: the columns of rust_units for the blobs of views/blobs.sql, with
+--     file_id holding the blob's position in the blob snapshot (views/units.sql maps it
+--     back to the blob id).
 --   rust_tags(file_id, node_id, tag, start_line, end_line)
 --     tag: test, trait_impl, generated_or_macro; one row per distinct (node, tag), with
 --     the tagged node's lines. File-level tags sit on the root node (node_id 0).
@@ -24,26 +28,33 @@
 -- again (docs/research/code-db-views-2026-10-24.md §6). Intermediate steps that are
 -- referenced more than once, or that slice source text, are MATERIALIZED as well.
 --
--- Both views cover the files of `scope_files` (views/files.sql): all files, or the
--- subset refresh.sql recomputes. Every input (nodes, sources, file paths) is restricted
--- to that set, so the rows of a file depend on that file alone. unit_id numbers the
--- units of the scope, ordered by file_id first, so a file's units are consecutive.
--- The node filter tests `scope_paths IS NULL` first: with the bare `file_id IN (…)`, a
--- live `units` or `tags` peaked about 200 MB higher on this repository; with the test
--- first, at the same memory as without any filter.
+-- The unit rules are the table macro rust_units_over(nodes_t, bytes_t, lines_t), whose
+-- arguments name the node, byte and line relations (columns of scope_nodes,
+-- source_bytes and source_lines, keyed by file_id); query_table reads them. rust_units
+-- applies it to the current files, rust_blob_units to the blobs, so
+-- the two sets of units come from one text. Tags have no blob counterpart yet.
+--
+-- Both views over the current files cover the files of `scope_files`
+-- (views/files.sql): all files, or the subset refresh.sql recomputes. Every input
+-- (scope_nodes, sources, file paths) is restricted to that set, so the rows of a file
+-- depend on that file alone; the blob inputs cover the blob snapshot of
+-- views/blobs.sql, which refresh.sql narrows the same way. unit_id numbers the units of the scope, ordered by file_id first, so a file's
+-- units are consecutive. The node filter (views/nodes.sql, scope_nodes) tests
+-- `scope_paths IS NULL` first: with the bare `file_id IN (…)`, a live `units` or `tags`
+-- peaked about 200 MB higher on this repository; with the test first, at the same
+-- memory as without any filter.
 --
 -- read_ast exposes no tree-sitter field names and no is_named flag, so field-based
 -- patterns are restated by child type and sibling position (see the comments below).
 
-CREATE OR REPLACE VIEW rust_units AS
+CREATE OR REPLACE MACRO rust_units_over(nodes_t, bytes_t, lines_t) AS TABLE
 WITH rust_nodes AS MATERIALIZED (
     SELECT file_id, node_id, parent_id, type,
            -- read_ast's positions are UINTEGER; widen them before any subtraction.
            start_byte::BIGINT AS start_byte, end_byte::BIGINT AS end_byte,
            start_line::BIGINT AS start_line, end_line::BIGINT AS end_line,
            sibling_index, descendant_count::BIGINT AS descendant_count
-    FROM nodes WHERE language = 'rust'
-      AND (getvariable('scope_paths') IS NULL OR file_id IN (SELECT file_id FROM scope_files))
+    FROM query_table(nodes_t) WHERE language = 'rust'
 ),
 rust_unit_candidates AS MATERIALIZED (
     SELECT n.file_id, n.node_id, n.type, n.start_byte, n.end_byte, n.start_line, n.end_line,
@@ -127,7 +138,7 @@ rust_unit_names AS MATERIALIZED (
     SELECT x.file_id, x.unit_node, x.start_byte,
            normalize_ws(byte_slice(b.bytes, x.start_byte, x.end_byte)) AS text
     FROM rust_unit_name_spans x
-    JOIN source_bytes b ON b.file_id = x.file_id
+    JOIN query_table(bytes_t) b ON b.file_id = x.file_id
 ),
 rust_units_unnested AS MATERIALIZED (
     SELECT u.file_id, u.node_id, u.kind, u.start_byte, u.end_byte, u.start_line, u.end_line,
@@ -156,7 +167,7 @@ numbered AS MATERIALIZED (
     FROM nested n
 ),
 lines AS MATERIALIZED (
-    SELECT * FROM source_lines
+    SELECT * FROM query_table(lines_t)
 )
 SELECT n.unit_id, n.file_id, n.node_id, p.unit_id AS parent_unit_id, n.kind, n.name,
        n.qualified_name, n.start_line, n.end_line,
@@ -166,14 +177,19 @@ LEFT JOIN numbered p ON p.file_id = n.file_id AND p.node_id = n.parent_node_id
 JOIN lines e ON e.file_id = n.file_id AND e.line = n.end_line
 LEFT JOIN lines s ON s.file_id = n.file_id AND s.line = n.start_line - 1;
 
+CREATE OR REPLACE VIEW rust_units AS
+FROM rust_units_over('scope_nodes', 'source_bytes', 'source_lines');
+
+CREATE OR REPLACE VIEW rust_blob_units AS
+FROM rust_units_over('blob_scope_nodes', 'blob_source_bytes', 'blob_source_lines');
+
 CREATE OR REPLACE VIEW rust_tags AS
 WITH rust_nodes AS MATERIALIZED (
     SELECT file_id, node_id, parent_id, type,
            start_byte::BIGINT AS start_byte, end_byte::BIGINT AS end_byte,
            start_line::BIGINT AS start_line, end_line::BIGINT AS end_line,
            sibling_index, children_count
-    FROM nodes WHERE language = 'rust'
-      AND (getvariable('scope_paths') IS NULL OR file_id IN (SELECT file_id FROM scope_files))
+    FROM scope_nodes WHERE language = 'rust'
 ),
 -- Text of the identifier-like nodes the predicates compare (#eq?, #any-of?), sliced in a
 -- step of its own as in rust_units.

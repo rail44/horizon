@@ -20,3 +20,19 @@ CREATE OR REPLACE VIEW derived_tags AS SELECT * FROM rust_tags;
 CREATE OR REPLACE VIEW units AS SELECT * FROM derived_units;
 
 CREATE OR REPLACE VIEW tags AS SELECT * FROM derived_tags;
+
+-- blob_units(blob_id, unit_ord, parent_unit_ord, node_id, kind, name, qualified_name,
+--            start_line, end_line, loc): the units of every blob of views/blobs.sql,
+-- derived by the same rules as units (the language views' *_blob_units). unit_ord is
+-- the unit's position within its blob (the order of unit_id within a file) and
+-- parent_unit_ord its innermost enclosing unit's, so the rows of a blob do not depend
+-- on which other blobs are in the snapshot. refresh.sql replaces blob_units with a view
+-- over its copy and keeps computing new rows from derived_blob_units.
+CREATE OR REPLACE VIEW derived_blob_units AS
+SELECT l.blob_id,
+       u.unit_id - min(u.unit_id) OVER (PARTITION BY u.file_id) AS unit_ord,
+       u.parent_unit_id - min(u.unit_id) OVER (PARTITION BY u.file_id) AS parent_unit_ord,
+       u.node_id, u.kind, u.name, u.qualified_name, u.start_line, u.end_line, u.loc
+FROM rust_blob_units u JOIN blob_list l ON l.blob_ord = u.file_id;
+
+CREATE OR REPLACE VIEW blob_units AS SELECT * FROM derived_blob_units;

@@ -1,5 +1,6 @@
 -- Persistent cache: bring the cache file up to date with the repository, then point
--- nodes, units, tags, commits, file_changes and hunks at it.
+-- nodes, units, tags, commits, file_changes, hunks, blob_files, blob_nodes and
+-- blob_units at it (unit_changes reads them).
 --
 -- Read after all view files, in any session and as often as wanted: each read takes a
 -- new file snapshot (as 00_load.sql does), re-parses only the files whose content id
@@ -22,6 +23,15 @@
 -- views of views/files.sql) differ. History is rebuilt when `since`, `include_merges`
 -- or `languages` differ or the cached head is not among the commits since..HEAD (a
 -- rewritten or reset branch); otherwise the commits cached_head..HEAD are appended.
+--
+-- Blobs. A blob's content never changes, so its parse (`cache.blob_nodes`) and units
+-- (`cache.blob_units`) are keyed by blob_id alone and only ever added: a blob is parsed
+-- when it is in the cached blob_files and not in `cache.blob_parsed`, and its units are
+-- derived when it is not in `cache.blob_derived`. `cache.blob_files` follows the
+-- history: appended with the commits cached_head..HEAD, rebuilt with it (keeping the
+-- parsed blobs) and also when the units of every blob are re-derived, since that reads
+-- every blob file again and the rebuild exports the missing ones. Blobs that leave the
+-- range (an amended commit) stay in the cache and are not shown.
 -- meta records what happened. A different cache schema version is an error: delete
 -- the file.
 --
@@ -55,7 +65,7 @@ SELECT CASE WHEN getvariable('cache_path') LIKE '/%'
     THEN error('refresh.sql: the database cache is attached from another file; DETACH cache first')
 END;
 
--- Layout (schema version 1).
+-- Layout (schema version 2).
 CREATE TABLE IF NOT EXISTS cache.meta (
     schema_version INTEGER,
     repo VARCHAR,
@@ -64,7 +74,7 @@ CREATE TABLE IF NOT EXISTS cache.meta (
     refreshed_at TIMESTAMP,
     syntax_key VARCHAR,         -- sitting_duck version
     derive_key VARCHAR,         -- md5 of the derived views' definitions
-    history_key VARCHAR,        -- since, include_merges, languages
+    history_key VARCHAR,        -- since, include_merges, languages, blob_dir
     head VARCHAR,               -- HEAD when the history was cached; NULL for no commits
     -- the last refresh
     syntax VARCHAR,             -- 'rebuilt' or 'incremental'
@@ -78,8 +88,17 @@ CREATE TABLE IF NOT EXISTS cache.meta (
     units_inserted BIGINT,
     tags_inserted BIGINT,
     commits_added BIGINT,
+    blob_history VARCHAR,       -- 'rebuilt' or 'appended' (cache.blob_files)
+    blob_rows_added BIGINT,     -- rows inserted into cache.blob_files
+    blobs_parsed BIGINT,        -- blobs read by read_ast in this refresh
+    blob_bytes_parsed BIGINT,   -- their size in bytes
+    blob_nodes_parsed BIGINT,
+    blobs_derived BIGINT,       -- blobs whose units were derived
+    blob_units_inserted BIGINT,
+    blobs_cached BIGINT,        -- all parsed blobs in the file, in the range or not
     seconds STRUCT(files DOUBLE, nodes DOUBLE, units DOUBLE, tags DOUBLE, commits DOUBLE,
-                   file_changes DOUBLE, hunks DOUBLE, checkpoint DOUBLE, total DOUBLE)
+                   file_changes DOUBLE, hunks DOUBLE, blob_files DOUBLE, blob_nodes DOUBLE,
+                   blob_units DOUBLE, checkpoint DOUBLE, total DOUBLE)
 );
 CREATE TABLE IF NOT EXISTS cache.nodes_files (path VARCHAR, blob_id VARCHAR, language VARCHAR);
 -- read_ast's own columns, from a read of a path that does not exist (no file is read).
@@ -100,25 +119,45 @@ CREATE TABLE IF NOT EXISTS cache.file_changes (sha VARCHAR, path VARCHAR, old_pa
     status VARCHAR, added INTEGER, deleted INTEGER);
 CREATE TABLE IF NOT EXISTS cache.hunks (sha VARCHAR, path VARCHAR, old_start INTEGER,
     old_lines INTEGER, new_start INTEGER, new_lines INTEGER);
+CREATE TABLE IF NOT EXISTS cache.blob_files (sha VARCHAR, path VARCHAR, old_path VARCHAR, side VARCHAR,
+    blob_id VARCHAR, mode VARCHAR, file VARCHAR);
+CREATE TABLE IF NOT EXISTS cache.blob_parsed (blob_id VARCHAR, bytes BIGINT);
+CREATE TABLE IF NOT EXISTS cache.blob_derived (blob_id VARCHAR);
+-- blob_id plus read_ast's columns, as cache.nodes.
+CREATE TABLE IF NOT EXISTS cache.blob_nodes AS
+SELECT ''::VARCHAR AS blob_id, *
+FROM read_ast([getvariable('cache_path') || '.no-such-file.rs'], source := 'full', peek := 'none',
+              context := 'none', ignore_errors := true);
+-- The columns of blob_units (views/units.sql).
+CREATE TABLE IF NOT EXISTS cache.blob_units (blob_id VARCHAR, unit_ord BIGINT, parent_unit_ord BIGINT,
+    node_id BIGINT, kind VARCHAR, name VARCHAR, qualified_name VARCHAR, start_line BIGINT,
+    end_line BIGINT, loc HUGEINT);
 
 SET VARIABLE refresh_prior = (SELECT m FROM cache.meta m);
-SELECT CASE WHEN getvariable('refresh_prior').schema_version <> 1
+SELECT CASE WHEN getvariable('refresh_prior').schema_version <> 2
     THEN error('refresh.sql: ' || getvariable('cache_path') || ' has another schema version; delete it')
 END;
 
 SET VARIABLE refresh_syntax_key = (SELECT extension_version FROM duckdb_extensions()
                                    WHERE extension_name = 'sitting_duck');
--- The text of the views units and tags are derived through. The macros byte_slice and
--- normalize_ws are not covered: reading duckdb_functions() costs about 18 ms (sitting_duck
--- registers thousands of functions), a fifth of a refresh with nothing to do.
-SET VARIABLE refresh_derive_key = (
-    SELECT md5(string_agg(view_name || ':' || sql, chr(10) ORDER BY view_name))
-    FROM duckdb_views()
-    WHERE NOT internal AND (view_name IN ('scope_files', 'sources', 'source_bytes', 'source_lines')
-                            OR view_name LIKE '%\_units' ESCAPE '\' OR view_name LIKE '%\_tags' ESCAPE '\')
-);
+-- The text of the views and macros units, tags and blob units are derived through. The
+-- unit rules are a table macro (lang/*.sql), so every macro that is not internal is
+-- included (sitting_duck's own among them; their text changes only with its version):
+-- reading duckdb_functions() costs about 18 ms of every refresh (sitting_duck registers
+-- thousands of functions). blob_units is excluded because this file replaces it.
+SET VARIABLE refresh_derive_key = md5(concat_ws(chr(10),
+    (SELECT string_agg(view_name || ':' || sql, chr(10) ORDER BY view_name)
+     FROM duckdb_views()
+     WHERE NOT internal AND view_name <> 'blob_units'
+       AND (view_name IN ('scope_files', 'sources', 'source_bytes', 'source_lines', 'scope_nodes',
+                          'blob_scope_nodes', 'blob_sources', 'blob_source_bytes', 'blob_source_lines')
+            OR view_name LIKE '%\_units' ESCAPE '\' OR view_name LIKE '%\_tags' ESCAPE '\')),
+    (SELECT string_agg(function_name || ':' || macro_definition, chr(10) ORDER BY function_name, macro_definition)
+     FROM duckdb_functions()
+     WHERE NOT internal AND function_type IN ('macro', 'table_macro'))));
 SET VARIABLE refresh_history_key = concat_ws(' ', 'since=' || coalesce(getvariable('since'), ''),
-    'include_merges=' || getvariable('include_merges'), 'languages=' || getvariable('languages')::VARCHAR);
+    'include_merges=' || getvariable('include_merges'), 'languages=' || getvariable('languages')::VARCHAR,
+    'blob_dir=' || getvariable('blob_dir'));
 
 SET VARIABLE refresh_syntax_reset = getvariable('refresh_prior') IS NULL
     OR getvariable('refresh_prior').state IS DISTINCT FROM 'ok'
@@ -261,12 +300,95 @@ CREATE OR REPLACE VIEW commits AS SELECT * FROM cache.commits;
 CREATE OR REPLACE VIEW file_changes AS SELECT * FROM cache.file_changes;
 CREATE OR REPLACE VIEW hunks AS SELECT * FROM cache.hunks;
 
+-- Blob files: rebuilt with the history, or when every blob's units are re-derived (that
+-- reads every blob file, and the rebuild exports the missing ones); else appended with
+-- the same commits as the history. git_changed_blobs exports what it lists.
+SET VARIABLE refresh_blob_files_reset = getvariable('refresh_history_reset') OR getvariable('refresh_derive_reset');
+DELETE FROM cache.blob_files WHERE getvariable('refresh_blob_files_reset');
+SET VARIABLE refresh_blob_since = CASE WHEN getvariable('refresh_blob_files_reset')
+    THEN getvariable('since') ELSE getvariable('refresh_prior').head END;
+SET VARIABLE refresh_blob_rows_before = (SELECT count(*) FROM cache.blob_files);
+-- As views/blobs.sql.
+INSERT INTO cache.blob_files
+SELECT * FROM git_changed_blobs(getvariable('repo'), getvariable('blob_dir'), since := getvariable('refresh_blob_since'),
+                                include_merges := getvariable('include_merges'),
+                                extensions := map_keys(getvariable('languages')));
+SET VARIABLE refresh_blob_rows_added = (SELECT count(*) FROM cache.blob_files) - getvariable('refresh_blob_rows_before');
+SET VARIABLE refresh_t_blob_files = epoch(now());
+
+-- Blob syntax: parse the blobs of the range that are not cached, through the live
+-- blob_nodes of views/blobs.sql with its snapshot narrowed to them (the same sentinel
+-- as views/blobs.sql when there are none).
+DELETE FROM cache.blob_parsed WHERE getvariable('refresh_syntax_reset');
+DELETE FROM cache.blob_nodes WHERE getvariable('refresh_syntax_reset');
+DELETE FROM cache.blob_derived WHERE getvariable('refresh_derive_reset');
+DELETE FROM cache.blob_units WHERE getvariable('refresh_derive_reset');
+SET VARIABLE blob_snapshot = (
+    SELECT coalesce(list({'blob_id': blob_id, 'file': file} ORDER BY blob_id), [])
+    FROM (SELECT blob_id, min(file) AS file FROM cache.blob_files
+          WHERE blob_id NOT IN (SELECT blob_id FROM cache.blob_parsed) GROUP BY blob_id)
+);
+SET VARIABLE blob_paths_empty = len(getvariable('blob_snapshot')) = 0;
+SET VARIABLE blob_paths = CASE WHEN getvariable('blob_paths_empty')
+    THEN [getvariable('blob_dir') || '/no-such-blob.rs']
+    ELSE list_transform(getvariable('blob_snapshot'), lambda b: b.file) END;
+CREATE OR REPLACE VIEW blob_nodes AS
+SELECT l.blob_id, a.*
+FROM read_ast(getvariable('blob_paths'), source := 'full', peek := 'none', context := 'none',
+              ignore_errors := getvariable('blob_paths_empty')) a
+JOIN blob_list l ON l.file = a.file_path;
+SET VARIABLE refresh_blob_nodes_before = (SELECT count(*) FROM cache.blob_nodes);
+INSERT INTO cache.blob_nodes SELECT * FROM blob_nodes;
+-- read_text reads only the sizes here (projection pushdown).
+INSERT INTO cache.blob_parsed
+SELECT l.blob_id, t.size FROM read_text(getvariable('blob_paths')) t JOIN blob_list l ON l.file = t.filename;
+SET VARIABLE refresh_blobs_parsed = len(getvariable('blob_snapshot'));
+SET VARIABLE refresh_blob_bytes_parsed = (SELECT coalesce(sum(bytes), 0) FROM cache.blob_parsed
+                                          WHERE blob_id IN (SELECT blob_id FROM blob_list));
+SET VARIABLE refresh_blob_nodes_parsed = (SELECT count(*) FROM cache.blob_nodes) - getvariable('refresh_blob_nodes_before');
+SET VARIABLE refresh_t_blob_nodes = epoch(now());
+
+-- Blob units: derived from the cached nodes of the blobs of the range that have none
+-- yet, by derived_blob_units over the snapshot narrowed to them; blob_nodes reads the
+-- cache, restricted to the snapshot.
+SET VARIABLE blob_snapshot = (
+    SELECT coalesce(list({'blob_id': blob_id, 'file': file} ORDER BY blob_id), [])
+    FROM (SELECT blob_id, min(file) AS file FROM cache.blob_files
+          WHERE blob_id NOT IN (SELECT blob_id FROM cache.blob_derived) GROUP BY blob_id)
+);
+SET VARIABLE blob_paths_empty = len(getvariable('blob_snapshot')) = 0;
+SET VARIABLE blob_paths = CASE WHEN getvariable('blob_paths_empty')
+    THEN [getvariable('blob_dir') || '/no-such-blob.rs']
+    ELSE list_transform(getvariable('blob_snapshot'), lambda b: b.file) END;
+CREATE OR REPLACE VIEW blob_nodes AS
+SELECT n.* FROM cache.blob_nodes n WHERE n.blob_id IN (SELECT blob_id FROM blob_list);
+SET VARIABLE refresh_blob_units_before = (SELECT count(*) FROM cache.blob_units);
+INSERT INTO cache.blob_units BY NAME SELECT * FROM derived_blob_units;
+INSERT INTO cache.blob_derived SELECT blob_id FROM blob_list;
+SET VARIABLE refresh_blobs_derived = len(getvariable('blob_snapshot'));
+SET VARIABLE refresh_blob_units_inserted = (SELECT count(*) FROM cache.blob_units) - getvariable('refresh_blob_units_before');
+
+-- The snapshot of views/blobs.sql again, over the cached blob files: every blob of the
+-- range. The views show only those blobs.
+SET VARIABLE blob_snapshot = (
+    SELECT coalesce(list({'blob_id': blob_id, 'file': file} ORDER BY blob_id), [])
+    FROM (SELECT blob_id, min(file) AS file FROM cache.blob_files GROUP BY blob_id)
+);
+SET VARIABLE blob_paths_empty = len(getvariable('blob_snapshot')) = 0;
+SET VARIABLE blob_paths = CASE WHEN getvariable('blob_paths_empty')
+    THEN [getvariable('blob_dir') || '/no-such-blob.rs']
+    ELSE list_transform(getvariable('blob_snapshot'), lambda b: b.file) END;
+CREATE OR REPLACE VIEW blob_files AS SELECT * FROM cache.blob_files;
+CREATE OR REPLACE VIEW blob_units AS
+SELECT u.* FROM cache.blob_units u WHERE u.blob_id IN (SELECT blob_id FROM blob_list);
+SET VARIABLE refresh_t_blob_units = epoch(now());
+
 CHECKPOINT cache;
 SET VARIABLE refresh_t_end = epoch(now());
 
 DELETE FROM cache.meta;
 INSERT INTO cache.meta
-SELECT 1, getvariable('repo'), 'ok',
+SELECT 2, getvariable('repo'), 'ok',
        CASE WHEN getvariable('refresh_syntax_reset') THEN now()::TIMESTAMP ELSE getvariable('refresh_prior').built_at END,
        now()::TIMESTAMP,
        getvariable('refresh_syntax_key'), getvariable('refresh_derive_key'), getvariable('refresh_history_key'),
@@ -282,6 +404,14 @@ SELECT 1, getvariable('repo'), 'ok',
        getvariable('refresh_units_inserted'),
        getvariable('refresh_tags_inserted'),
        getvariable('refresh_commits_added'),
+       CASE WHEN getvariable('refresh_blob_files_reset') THEN 'rebuilt' ELSE 'appended' END,
+       getvariable('refresh_blob_rows_added'),
+       getvariable('refresh_blobs_parsed'),
+       getvariable('refresh_blob_bytes_parsed'),
+       getvariable('refresh_blob_nodes_parsed'),
+       getvariable('refresh_blobs_derived'),
+       getvariable('refresh_blob_units_inserted'),
+       (SELECT count(*) FROM cache.blob_parsed),
        {'files': getvariable('refresh_t_files') - getvariable('refresh_t_start'),
         'nodes': getvariable('refresh_t_nodes') - getvariable('refresh_t_files'),
         'units': getvariable('refresh_t_units') - getvariable('refresh_t_nodes'),
@@ -289,5 +419,8 @@ SELECT 1, getvariable('repo'), 'ok',
         'commits': getvariable('refresh_t_commits') - getvariable('refresh_t_tags'),
         'file_changes': getvariable('refresh_t_file_changes') - getvariable('refresh_t_commits'),
         'hunks': getvariable('refresh_t_hunks') - getvariable('refresh_t_file_changes'),
-        'checkpoint': getvariable('refresh_t_end') - getvariable('refresh_t_hunks'),
+        'blob_files': getvariable('refresh_t_blob_files') - getvariable('refresh_t_hunks'),
+        'blob_nodes': getvariable('refresh_t_blob_nodes') - getvariable('refresh_t_blob_files'),
+        'blob_units': getvariable('refresh_t_blob_units') - getvariable('refresh_t_blob_nodes'),
+        'checkpoint': getvariable('refresh_t_end') - getvariable('refresh_t_blob_units'),
         'total': getvariable('refresh_t_end') - getvariable('refresh_t_start')};

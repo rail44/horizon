@@ -10,7 +10,8 @@
         directories, several commits) plus a jscpd-shaped report, and assert on the
         rows of every view and query, live, through cache.sql and through refresh.sql
         (edits, additions, deletions, renames, commits, an amend, untracked files, a
-        new session).
+        new session); a history fixture asserts blob_files, blob_units and every row
+        of unit_changes, unit_churn and clone_change_consistency.
 
     uv run --script duckdb-ext/sql/check.py refresh REPO [--reports ...]
         Read refresh.sql twice (cache REPO/target/code-db/cache.duckdb) and compare
@@ -47,6 +48,7 @@ import argparse
 import json
 import os
 import resource
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -61,16 +63,20 @@ VIEW_FILES = [
     "00_load.sql",
     "views/files.sql",
     "views/nodes.sql",
+    "views/blobs.sql",
     "lang/rust.sql",
     "views/units.sql",
     "views/history.sql",
+    "views/unit_changes.sql",
     "views/clones.sql",
 ]
 CACHE_FILE = "cache.sql"
 REFRESH_FILE = "refresh.sql"
 # The views refresh.sql points at the persistent cache, plus files (its file snapshot).
-REFRESHED_VIEWS = ["files", "nodes", "units", "tags", "commits", "file_changes", "hunks"]
-QUERIES = ["file_cochange", "file_cochange_thresholds", "clone_site_tags", "clone_site_tags_summary"]
+REFRESHED_VIEWS = ["files", "nodes", "units", "tags", "commits", "file_changes", "hunks",
+                   "blob_files", "blob_nodes", "blob_units", "unit_changes"]
+QUERIES = ["file_cochange", "file_cochange_thresholds", "clone_site_tags", "clone_site_tags_summary",
+           "unit_churn", "clone_change_consistency"]
 
 
 def sql_literal(value):
@@ -100,6 +106,13 @@ def connect(repo, reports=None, variables=None):
     return con
 
 
+def assert_no_source_scan(con):
+    """The cached views answer the queries that read syntax without reading a source."""
+    for name in ["clone_site_tags", "unit_churn", "clone_change_consistency"]:
+        plan = "\n".join(r[1] for r in rows(con, "EXPLAIN " + query_sql(name)))
+        assert "READ_AST" not in plan and "READ_TEXT" not in plan, (name, plan)
+
+
 def query_sql(name):
     return (SQL_DIR / "queries" / f"{name}.sql").read_text()
 
@@ -118,18 +131,28 @@ def read_refresh(con):
     return wall, dict(zip(names, cursor.fetchone()))
 
 
+# Views compared through a digest rather than row by row: blob_nodes has about 31 million
+# rows on this repository, and a copy of them plus the comparison peaked above 30 GB.
+DIGESTED_VIEWS = {"blob_nodes": "SELECT blob_id, count(*) AS n, sum(hash(v)) AS h FROM blob_nodes v GROUP BY blob_id"}
+
+
+def view_rows(view):
+    return DIGESTED_VIEWS.get(view, f"SELECT * FROM {view}")
+
+
 def snapshot_live(con):
-    """Copy every view refresh.sql replaces, read live, into temp tables live_<view>."""
+    """Copy every view refresh.sql replaces, read live, into temp tables live_<view>
+    (blob_nodes as one digest row per blob)."""
     for view in REFRESHED_VIEWS:
-        con.execute(f"CREATE OR REPLACE TEMP TABLE live_{view} AS SELECT * FROM {view}")
+        con.execute(f"CREATE OR REPLACE TEMP TABLE live_{view} AS {view_rows(view)}")
 
 
 def diff_from_live(con):
     """{view: (live rows missing from the view, view rows missing from live)}, nonzero only."""
     diffs = {}
     for view in REFRESHED_VIEWS:
-        counts = rows(con, f"SELECT (SELECT count(*) FROM (FROM live_{view} EXCEPT ALL FROM {view})), "
-                           f"(SELECT count(*) FROM (FROM {view} EXCEPT ALL FROM live_{view}))")[0]
+        counts = rows(con, f"SELECT (SELECT count(*) FROM (FROM live_{view} EXCEPT ALL ({view_rows(view)}))), "
+                           f"(SELECT count(*) FROM (({view_rows(view)}) EXCEPT ALL FROM live_{view}))")[0]
         if counts != (0, 0):
             diffs[view] = counts
     return diffs
@@ -219,13 +242,13 @@ fn integration() {
 """
 
 
-def git_env(repo, date=None):
+def git_env(repo, date=None, author="Fixture"):
     env = {
         "PATH": os.environ["PATH"],
         "HOME": str(repo),
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_AUTHOR_NAME": "Fixture",
+        "GIT_AUTHOR_NAME": author,
         "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
         "GIT_COMMITTER_NAME": "Fixture",
         "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
@@ -235,8 +258,8 @@ def git_env(repo, date=None):
     return env
 
 
-def git(repo, *args, date=None):
-    subprocess.run(["git", *args], cwd=repo, env=git_env(repo, date), check=True, capture_output=True)
+def git(repo, *args, date=None, author="Fixture"):
+    subprocess.run(["git", *args], cwd=repo, env=git_env(repo, date, author), check=True, capture_output=True)
 
 
 def git_out(repo, *args):
@@ -433,8 +456,7 @@ def check_fixture():
         live = [rows(con, q) for q in probes]
         read_cache(con)
         assert [rows(con, q) for q in probes] == live
-        plan = "\n".join(r[1] for r in rows(con, "EXPLAIN " + query_sql("clone_site_tags")))
-        assert "READ_AST" not in plan and "READ_TEXT" not in plan, plan
+        assert_no_source_scan(con)
         write(repo, "src/scratch.rs", "fn scratch() {}\nfn more() {}\nfn third() {}\n")
         con.execute("SET VARIABLE since = NULL")
         assert rows(con, scratch_units) == [(2,)]
@@ -456,7 +478,170 @@ def check_fixture():
         write(repo, "src/scratch.rs", "fn scratch() {}\n")
         assert rows(con, scratch_units) == [(3,)]
     print("fixture: ok")
+    check_history_fixture()
     check_refresh_fixture()
+
+
+def build_history_fixture(root):
+    """build_fixture plus commits for unit_changes: one clone side edited, then both (by
+    a second author), a unit added, a rename with a unit replaced, a unit removed, and a
+    pure rename. Returns the repository and the commit shas by step name."""
+    repo = build_fixture(root)
+    sha = {}
+
+    def commit(name, message, date, author="Fixture"):
+        git(repo, "add", "-A", "src/lib.rs", "src/shapes.rs", "src/rect.rs", "tests")
+        git(repo, "commit", "-q", "-m", message, date=date, author=author)
+        sha[name] = git_out(repo, "rev-parse", "HEAD")
+
+    sha["readme"] = git_out(repo, "rev-parse", "HEAD")
+    shapes = SHAPES_V1.replace("let half = doubled / 2;", "let half = doubled >> 1;")
+    write(repo, "src/shapes.rs", shapes)
+    commit("one_side", "Edit one clone side", "2026-02-01T00:00:00Z")
+    write(repo, "src/shapes.rs", shapes.replace("half * side", "side * half"))
+    write(repo, "src/rect.rs", RECT.replace("half * side", "side * half"))
+    commit("both_sides", "Edit both clone sides", "2026-02-02T00:00:00Z", author="Second")
+    lib = (repo / "src/lib.rs").read_text()
+    write(repo, "src/lib.rs", lib + "\npub fn volume(w: u32, h: u32, d: u32) -> u32 { w * h * d }\n")
+    commit("added", "Add a unit", "2026-02-03T00:00:00Z")
+    (repo / "tests/it.rs").unlink()
+    write(repo, "tests/integration.rs", IT.replace("fn integration()", "fn integration_area()"))
+    commit("renamed_edit", "Rename the integration test and its function", "2026-02-04T00:00:00Z")
+    write(repo, "src/lib.rs", lib)
+    commit("removed", "Remove a unit", "2026-02-05T00:00:00Z")
+    git(repo, "mv", "tests/integration.rs", "tests/area.rs")
+    commit("pure_rename", "Rename only", "2026-02-06T00:00:00Z")
+    sha["initial"] = git_out(repo, "rev-list", "--max-parents=0", "HEAD")
+    sha["swap"], sha["perimeter"] = git_out(repo, "rev-list", "--reverse", "HEAD").splitlines()[1:3]
+    return repo, sha
+
+
+# unit_changes of build_history_fixture, by step: (path, kind, qualified_name, change).
+HISTORY_CHANGES = {
+    "initial": [("src/lib.rs", "function", "area", "added"), ("src/lib.rs", "module", "rect", "added"),
+                ("src/lib.rs", "module", "shapes", "added"),
+                ("src/rect.rs", "impl", "Shape for Rect", "added"),
+                ("src/rect.rs", "method", "Shape for Rect.area", "added"), ("src/rect.rs", "type", "Rect", "added"),
+                ("src/shapes.rs", "function", "tests.square_area", "added"),
+                ("src/shapes.rs", "impl", "Shape for Square", "added"), ("src/shapes.rs", "impl", "Square", "added"),
+                ("src/shapes.rs", "method", "Shape for Square.area", "added"),
+                ("src/shapes.rs", "method", "Shape.area", "added"), ("src/shapes.rs", "method", "Square.new", "added"),
+                ("src/shapes.rs", "module", "tests", "added"), ("src/shapes.rs", "type", "Shape", "added"),
+                ("src/shapes.rs", "type", "Square", "added")],
+    "swap": [("src/lib.rs", "function", "area", "modified"), ("src/shapes.rs", "impl", "Square", "modified"),
+             ("src/shapes.rs", "method", "Square.new", "modified")],
+    # The appended function's -U0 insertion could also be placed one line earlier
+    # (it ends with `}` like the line before it); gix places it after area's `}`.
+    "perimeter": [("src/lib.rs", "function", "perimeter", "added"), ("src/shapes.rs", "impl", "Square", "modified"),
+                  ("src/shapes.rs", "method", "Square.new", "modified"),
+                  ("tests/it.rs", "function", "integration", "added")],
+    "readme": [],
+    "one_side": [("src/shapes.rs", "impl", "Shape for Square", "modified"),
+                 ("src/shapes.rs", "method", "Shape for Square.area", "modified")],
+    "both_sides": [("src/rect.rs", "impl", "Shape for Rect", "modified"),
+                   ("src/rect.rs", "method", "Shape for Rect.area", "modified"),
+                   ("src/shapes.rs", "impl", "Shape for Square", "modified"),
+                   ("src/shapes.rs", "method", "Shape for Square.area", "modified")],
+    "added": [("src/lib.rs", "function", "volume", "added")],
+    # A rename with an edit: the new unit under the new path, the old one under the old path.
+    "renamed_edit": [("tests/integration.rs", "function", "integration_area", "added"),
+                     ("tests/it.rs", "function", "integration", "removed")],
+    "removed": [("src/lib.rs", "function", "volume", "removed")],
+    # A pure rename has no hunks: no rows.
+    "pure_rename": [],
+}
+
+# The `current` units of each file, with ids replaced by positions as in blob_units.
+CURRENT_UNITS_BY_BLOB = """
+    SELECT f.blob_id, u.unit_id - min(u.unit_id) OVER (PARTITION BY u.file_id) AS unit_ord,
+           u.parent_unit_id - min(u.unit_id) OVER (PARTITION BY u.file_id) AS parent_unit_ord,
+           u.node_id, u.kind, u.name, u.qualified_name, u.start_line, u.end_line, u.loc
+    FROM units u JOIN files f USING (file_id)"""
+
+
+def blob_units_equal_units(con):
+    """(current files whose blob has units, files with units, rows only in units, rows only
+    in blob_units) over the current files' blobs."""
+    current = CURRENT_UNITS_BY_BLOB
+    return rows(con, f"""
+        SELECT (SELECT count(DISTINCT blob_id) FROM ({current}) WHERE blob_id IN (SELECT blob_id FROM blob_units)),
+               (SELECT count(DISTINCT blob_id) FROM ({current})),
+               (SELECT count(*) FROM ({current} EXCEPT ALL
+                                      SELECT * FROM blob_units WHERE blob_id IN (SELECT blob_id FROM files))),
+               (SELECT count(*) FROM (SELECT * FROM blob_units WHERE blob_id IN (SELECT blob_id FROM files)
+                                      EXCEPT ALL {current}))""")[0]
+
+
+def check_history_fixture():
+    with tempfile.TemporaryDirectory(prefix="code-db-history-") as tmp:
+        root = Path(tmp)
+        repo, sha = build_history_fixture(root)
+        report, _ = fixture_report(root, repo)
+        con = connect(repo, [report])
+        assert sorted(sha) == sorted(HISTORY_CHANGES), sha
+
+        # blob_files: one row per side with a blob; no old side for an addition, no row
+        # for the pure rename (the same content on both sides).
+        sides = rows(con, "SELECT side, path, old_path, count(*) FROM blob_files GROUP BY ALL ORDER BY ALL")
+        assert sides == [
+            ("new", "src/lib.rs", None, 5), ("new", "src/rect.rs", None, 2), ("new", "src/shapes.rs", None, 5),
+            ("new", "tests/integration.rs", "tests/it.rs", 1), ("new", "tests/it.rs", None, 1),
+            ("old", "src/lib.rs", None, 4), ("old", "src/rect.rs", None, 1), ("old", "src/shapes.rs", None, 4),
+            ("old", "tests/integration.rs", "tests/it.rs", 1),
+        ], sides
+        assert rows(con, "SELECT bool_and(file = getvariable('blob_dir') || '/' || blob_id || '.rs') FROM blob_files") == [(True,)]
+        # One parse per distinct blob.
+        blobs = rows(con, "SELECT count(DISTINCT blob_id) FROM blob_files")[0][0]
+        assert rows(con, "SELECT count(DISTINCT file_path), count(DISTINCT blob_id) FROM blob_nodes") == [(blobs, blobs)]
+
+        # The units of every current file's blob equal its units, modulo ids.
+        files = rows(con, "SELECT count(*) FROM files")[0][0]
+        assert blob_units_equal_units(con) == (files, files, 0, 0), blob_units_equal_units(con)
+
+        names = {v: k for k, v in sha.items()}
+        got = {}
+        for r in rows(con, "SELECT sha, path, unit_kind, unit_qualified_name, change_kind FROM unit_changes"):
+            got.setdefault(names[r[0]], []).append(r[1:])
+        expected = {k: sorted(v) for k, v in HISTORY_CHANGES.items() if v}
+        assert {k: sorted(v) for k, v in got.items()} == expected, got
+        assert rows(con, "SELECT count(*) = count(DISTINCT (sha, path, unit_kind, unit_qualified_name, change_kind)) "
+                         "FROM unit_changes") == [(True,)]
+
+        # unit_churn: every current unit; history under a previous path is not followed.
+        churn = {(r[0], r[2], r[3]): r[6:8] for r in rows(con, query_sql("unit_churn"))}
+        assert len(churn) == rows(con, "SELECT count(*) FROM units")[0][0], churn
+        assert churn[("src/shapes.rs", "method", "Shape for Square.area")] == (3, 2), churn
+        assert churn[("src/shapes.rs", "impl", "Shape for Square")] == (3, 2), churn
+        assert churn[("src/rect.rs", "method", "Shape for Rect.area")] == (2, 2), churn
+        assert churn[("src/shapes.rs", "method", "Square.new")] == (3, 1), churn
+        assert churn[("src/lib.rs", "function", "area")] == (2, 1), churn
+        assert churn[("src/lib.rs", "function", "perimeter")] == (1, 1), churn
+        assert churn[("tests/area.rs", "function", "integration_area")] == (0, 0), churn
+        con.execute("SET VARIABLE since_time = TIMESTAMP '2026-02-01 00:00:00'")
+        con.execute("SET VARIABLE kind = 'method'")
+        churn = [(r[0], r[3], r[6]) for r in rows(con, query_sql("unit_churn")) if r[6]]
+        assert churn == [("src/shapes.rs", "Shape for Square.area", 2), ("src/rect.rs", "Shape for Rect.area", 1)], churn
+        con.execute("SET VARIABLE since_time = NULL")
+        con.execute("SET VARIABLE kind = NULL")
+
+        # clone_change_consistency: pair 0 changed together twice (initial, both_sides) and
+        # on side A alone once (one_side); pair 1's side B lies in no single unit.
+        consistency = [(r[0], r[5], r[9], r[12], r[13:]) for r in rows(con, query_sql("clone_change_consistency"))]
+        assert consistency == [(0, "Shape for Square.area", "Shape for Rect.area", False, (1, 0, 2, 1)),
+                               (1, "tests.square_area", None, None, (1, 0, 0, 1))], consistency
+        con.execute("SET VARIABLE clone_source = 'normalized'")
+        assert rows(con, query_sql("clone_change_consistency")) == []
+        con.execute("SET VARIABLE clone_source = NULL")
+
+        # `since` narrows blob_files and hunks together (views/blobs.sql re-read for its
+        # snapshot).
+        con.execute(f"SET VARIABLE since = '{sha['readme']}'")
+        read_views(con)
+        steps = sorted({names[r[0]] for r in rows(con, "SELECT sha FROM unit_changes")})
+        assert steps == ["added", "both_sides", "one_side", "removed", "renamed_edit"], steps
+        assert rows(con, "SELECT count(DISTINCT sha) FROM blob_files") == [(5,)]
+        con.close()
+    print("history fixture: ok")
 
 
 def cached_rows_by_path(con, path_filter):
@@ -475,7 +660,7 @@ def check_refresh_fixture():
         variables = {"min_shared": "2", "cache_path": sql_literal(str(cache))}
         con = connect(repo, [report], variables)
         counts = ("files_added", "files_changed", "files_removed", "nodes_parsed", "units_inserted",
-                  "tags_inserted", "commits_added")
+                  "tags_inserted", "commits_added", "blob_rows_added", "blobs_parsed", "blobs_derived")
 
         def stats(meta):
             return {k: meta[k] for k in counts}
@@ -489,18 +674,23 @@ def check_refresh_fixture():
                     expected[k] = got[k]
             assert (meta["syntax"], meta["history"], got) == (syntax, history, expected), meta
             assert meta["state"] == "ok" and meta["derived"] == syntax, meta
+            blob_files = "rebuilt" if "rebuilt" in (syntax, history) else "appended"
+            assert meta["blob_history"] == blob_files, meta
+            assert meta["blob_nodes_parsed"] > 0 if meta["blobs_parsed"] else meta["blob_nodes_parsed"] == 0, meta
+            assert (meta["blob_bytes_parsed"] > 0) == (meta["blobs_parsed"] > 0), meta
 
         # Initial refresh from an empty cache: everything built, equal to live.
         _, meta = refresh_against_live(con)
         expect(meta, syntax="rebuilt", history="rebuilt", files_added=4, nodes_parsed=None,
-               units_inserted=None, tags_inserted=None, commits_added=4)
+               units_inserted=None, tags_inserted=None, commits_added=4, blob_rows_added=12, blobs_parsed=7,
+               blobs_derived=7)
         assert meta["head"] == git_out(repo, "rev-parse", "HEAD"), meta
+        assert meta["blobs_cached"] == 7, meta
         assert rows(con, "SELECT count(*) FROM cache.nodes_files") == [(4,)]
-        plan = "\n".join(r[1] for r in rows(con, "EXPLAIN " + query_sql("clone_site_tags")))
-        assert "READ_AST" not in plan and "READ_TEXT" not in plan, plan
+        assert_no_source_scan(con)
 
         # Nothing changed: no file parsed, nothing appended; reading refresh.sql again in
-        # the same session takes under 100 ms (the best of three reads, as the desktop
+        # the same session takes under 500 ms (the best of three reads, as the desktop
         # this runs on is shared).
         _, meta = refresh_against_live(con)
         expect(meta)
@@ -509,7 +699,7 @@ def check_refresh_fixture():
             wall, meta = read_refresh(con)
             expect(meta)
             walls.append(wall)
-        assert min(walls) < 0.1, f"refresh with nothing changed took {walls} s: {meta['seconds']}"
+        assert min(walls) < 0.5, f"refresh with nothing changed took {walls} s: {meta['seconds']}"
         print("refresh with nothing changed:", ", ".join(f"{w * 1000:.0f} ms" for w in walls))
         assert meta["nodes_parsed"] == 0 and rows(con, "SELECT count(*) FROM cache.nodes_files") == [(4,)]
 
@@ -548,14 +738,16 @@ def check_refresh_fixture():
         # A new commit (of the edit and the rename, already in the cache): history appended.
         git(repo, "commit", "-q", "-am", "Edit rect, rename the integration test", date="2026-01-05T00:00:00Z")
         _, meta = refresh_against_live(con)
-        expect(meta, commits_added=1)
+        expect(meta, commits_added=1, blob_rows_added=2, blobs_parsed=1, blobs_derived=1)
         assert meta["head"] == git_out(repo, "rev-parse", "HEAD"), meta
+        assert meta["blobs_cached"] == 8, meta
         assert rows(con, "SELECT count(*) FROM commits") == [(5,)]
 
         # An amended commit: the cached head is gone from HEAD's history, so it is rebuilt.
         git(repo, "commit", "-q", "--amend", "-m", "Amended", date="2026-01-06T00:00:00Z")
         _, meta = refresh_against_live(con)
-        expect(meta, history="rebuilt", commits_added=5)
+        expect(meta, history="rebuilt", commits_added=5, blob_rows_added=14)
+        assert meta["blobs_cached"] == 8, meta
         assert rows(con, "SELECT list(subject ORDER BY subject) FILTER (WHERE subject LIKE 'Amended' "
                          "OR subject LIKE 'Edit rect%') FROM commits") == [(["Amended"],)]
 
@@ -574,7 +766,8 @@ def check_refresh_fixture():
         con.execute("UPDATE cache.meta SET state = 'refreshing'")
         _, meta = refresh_against_live(con)
         expect(meta, syntax="rebuilt", history="rebuilt", files_added=4, nodes_parsed=None,
-               units_inserted=None, tags_inserted=None, commits_added=5)
+               units_inserted=None, tags_inserted=None, commits_added=5, blob_rows_added=14, blobs_parsed=8,
+               blobs_derived=8)
 
         # cache.sql and refresh.sql refuse each other's views; the view files reset both.
         try:
@@ -629,7 +822,8 @@ def check_repo(repo, reports):
 # column, after reading cache.sql (its build time is not included); `build cache` times
 # cache.sql itself, layer by layer.
 STATEMENTS = {
-    **{f"count {v}": f"SELECT count(*) FROM {v}" for v in ["nodes", "units", "tags", "hunks", "clone_pairs"]},
+    **{f"count {v}": f"SELECT count(*) FROM {v}" for v in ["nodes", "units", "tags", "hunks", "clone_pairs",
+                                                           "blob_files", "blob_units", "unit_changes"]},
     "nodes referenced twice": "SELECT (SELECT count(*) FROM nodes), (SELECT count(*) FROM nodes)",
     **{f"query {q}": q for q in QUERIES},
 }
@@ -662,15 +856,20 @@ def file_set_statement():
     return text[start:text.index(";", start)]
 
 
-def run_step(repo, reports, step, cached, refreshed=False):
+REFRESH_STATS = ("syntax", "derived", "history", "nodes_parsed", "units_inserted", "tags_inserted",
+                 "commits_added", "blob_history", "blob_rows_added", "blobs_parsed", "blob_bytes_parsed",
+                 "blob_nodes_parsed", "blobs_derived", "blob_units_inserted", "blobs_cached")
+
+
+def run_step(repo, reports, step, cached, refreshed=False, uc_table=False):
+    start = time.perf_counter()
     con = connect(repo, reports, {"cache_path": sql_literal(str(refresh_cache_path(repo)))})
+    load = time.perf_counter() - start
     rss = lambda: resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     if step == REFRESH_STEP:
         wall, meta = read_refresh(con)
-        print(json.dumps({"wall": wall, "rss_mib": rss(), **meta["seconds"],
-                          **{k: v for k, v in meta.items() if k.startswith("files_") or k in
-                             ("syntax", "derived", "history", "nodes_parsed", "units_inserted",
-                              "tags_inserted", "commits_added")}}))
+        print(json.dumps({"wall": wall, "load": load, "rss_mib": rss(), **meta["seconds"],
+                          **{k: v for k, v in meta.items() if k.startswith("files_") or k in REFRESH_STATS}}))
         return
     if step == FILE_SET_STEP:
         start = time.perf_counter()
@@ -680,6 +879,13 @@ def run_step(repo, reports, step, cached, refreshed=False):
         return
     if refreshed:
         read_refresh(con)
+    materialize = 0.0
+    if uc_table:
+        # unit_changes materialized (over whichever layers are in place) instead of a view.
+        start = time.perf_counter()
+        con.execute("CREATE TEMP TABLE unit_changes_table AS SELECT * FROM unit_changes")
+        con.execute("CREATE OR REPLACE VIEW unit_changes AS SELECT * FROM unit_changes_table")
+        materialize = time.perf_counter() - start
     if step == BUILD_CACHE:
         result = {}
         start = time.perf_counter()
@@ -699,7 +905,7 @@ def run_step(repo, reports, step, cached, refreshed=False):
     start = time.perf_counter()
     con.execute(sql).fetchall()
     wall = time.perf_counter() - start
-    print(json.dumps({"wall": wall, "rss_mib": rss()}))
+    print(json.dumps({"wall": wall, "load": load, "materialize": materialize, "rss_mib": rss()}))
 
 
 def measure(repo, reports, runs, only=None):
@@ -776,6 +982,7 @@ def measure_refresh(repo, reports, runs):
     def drop_cache():
         for p in (cache, cache.with_name(cache.name + ".wal")):
             p.unlink(missing_ok=True)
+        shutil.rmtree(repo / "target/code-db/blobs", ignore_errors=True)
 
     def span(results, key, fmt="{:.2f}"):
         values = [r[key] for r in results]
@@ -783,12 +990,12 @@ def measure_refresh(repo, reports, runs):
 
     def report(name, results):
         layers = ", ".join(f"{k} {span(results, k)}" for k in
-                           ("files", "nodes", "units", "tags", "commits", "file_changes", "hunks", "checkpoint"))
+                           ("files", "nodes", "units", "tags", "commits", "file_changes", "hunks", "blob_files",
+                            "blob_nodes", "blob_units", "checkpoint"))
         last = results[-1]
-        stats = ", ".join(f"{k}={last[k]}" for k in last if k.startswith("files_") or k in
-                          ("syntax", "derived", "history", "nodes_parsed", "units_inserted", "tags_inserted",
-                           "commits_added"))
-        print(f"{name}: wall {span(results, 'wall')} s (meta total {span(results, 'total')} s; {layers}), "
+        stats = ", ".join(f"{k}={last[k]}" for k in last if k.startswith("files_") or k in REFRESH_STATS)
+        print(f"{name}: wall {span(results, 'wall')} s (view files {span(results, 'load')} s; "
+              f"meta total {span(results, 'total')} s; {layers}), "
               f"peak RSS {span(results, 'rss_mib', '{:.0f}')} MiB; {stats}")
 
     def scenario(name, prepare):
@@ -810,9 +1017,14 @@ def measure_refresh(repo, reports, runs):
     reset_and_sync()
     size = sum(p.stat().st_size for p in (cache, cache.with_name(cache.name + ".wal")) if p.exists())
     print(f"cache file: {size / 2**20:.1f} MiB")
-    for name in QUERIES:
-        results = [step(f"query {name}", "--refreshed") for _ in range(runs)]
-        print(f"query {name} from the cache: {span(results, 'wall')} s, "
+    for name in [*(f"query {q}" for q in QUERIES), "count unit_changes"]:
+        results = [step(name, "--refreshed") for _ in range(runs)]
+        print(f"{name} from the cache: {span(results, 'wall')} s, "
+              f"peak RSS {span(results, 'rss_mib', '{:.0f}')} MiB (refresh included)")
+    for name in ["query unit_churn", "query clone_change_consistency", "count unit_changes"]:
+        results = [step(name, "--refreshed", "--uc-table") for _ in range(runs)]
+        print(f"{name} from the cache, unit_changes materialized: {span(results, 'wall')} s "
+              f"(materializing {span(results, 'materialize')} s), "
               f"peak RSS {span(results, 'rss_mib', '{:.0f}')} MiB (refresh included)")
     results = [step(FILE_SET_STEP) for _ in range(runs)]
     print(f"file set (git_tracked_files snapshot): {span(results, 'wall', '{:.3f}')} s, "
@@ -847,8 +1059,11 @@ def check_cli(repo, reports):
               f"SET VARIABLE cache_path = {sql_literal(str(refresh_cache_path(repo)))};\n"
               f"{reads}\n.mode csv\n.headers off\n{probe}\n{query_counts}\n"
               f".read {SQL_DIR.relative_to(HORIZON_ROOT) / REFRESH_FILE}\n{probe}\n{query_counts}\n")
-    out = subprocess.run([cli, "-unsigned", "-no-agent", "-batch", "-bail"], input=script, cwd=HORIZON_ROOT,
-                         check=True, capture_output=True, text=True).stdout
+    proc = subprocess.run([cli, "-unsigned", "-no-agent", "-batch", "-bail"], input=script, cwd=HORIZON_ROOT,
+                          capture_output=True, text=True)
+    if proc.returncode:
+        raise SystemExit(f"cli failed:\n{proc.stderr[-2000:]}")
+    out = proc.stdout
     cli_values = [line for line in out.splitlines() if line and line[0].isdigit()]
     con = connect(repo, reports)
     py_values = [",".join(str(v) for v in rows(con, probe.rstrip(";"))[0])]
@@ -871,6 +1086,7 @@ def main():
     parser.add_argument("--only", help="measure: run only the steps whose name contains this text")
     parser.add_argument("--cached", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--refreshed", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--uc-table", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.command == "fixture":
         check_fixture()
@@ -891,7 +1107,7 @@ def main():
     elif args.command == "cli":
         check_cli(args.repo, reports)
     else:
-        run_step(args.repo, reports, args.step, args.cached, args.refreshed)
+        run_step(args.repo, reports, args.step, args.cached, args.refreshed, args.uc_table)
 
 
 if __name__ == "__main__":

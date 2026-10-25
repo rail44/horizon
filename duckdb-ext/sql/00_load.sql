@@ -61,6 +61,10 @@ SET VARIABLE clone_reports = coalesce(getvariable('clone_reports'), [
     getvariable('repo') || '/target/code-db/jscpd/exact/jscpd-report.json',
     getvariable('repo') || '/target/code-db/jscpd/normalized/jscpd-report.json']);
 
+-- Historical blobs (views/blobs.sql): git_changed_blobs writes each changed file's old
+-- and new content here, once per blob, as <blob_id>.<extension>.
+SET VARIABLE blob_dir = coalesce(getvariable('blob_dir'), getvariable('repo') || '/target/code-db/blobs');
+
 -- Persistent cache (refresh.sql): the database file, created when missing.
 SET VARIABLE cache_path = coalesce(getvariable('cache_path'),
     getvariable('repo') || '/target/code-db/cache.duckdb');

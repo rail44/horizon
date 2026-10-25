@@ -6,7 +6,7 @@
 -- `SELECT * FROM <view>_cache`. The views above a cached layer reference it by name, so
 -- `units` and `tags` are built from `nodes_cache`.
 --
--- Live mode again: re-read the view files (views/nodes.sql, lang/rust.sql,
+-- Live mode again: re-read the view files (views/nodes.sql, views/blobs.sql, lang/rust.sql,
 -- views/units.sql, views/history.sql; reading all of them in order is simplest), which
 -- replace the views with their live definitions. Refresh: re-read the view files, then
 -- this file. Reading this file twice without the view files in between fails on purpose
@@ -14,8 +14,8 @@
 -- The tables stay until the session ends or this file drops them on the next read.
 --
 -- Frozen at the time this file is read: the syntax and text of every source file (an
--- edit is not seen), `languages`, and the history for the `since` and `include_merges`
--- set then. Query parameters (min_shared, match_mode, ...) still apply at every query.
+-- edit is not seen), `languages`, and the history and blob layer for the `since` and
+-- `include_merges` set then. Query parameters (min_shared, match_mode, ...) still apply at every query.
 --
 -- Why not temporary tables named like the views: DuckDB resolves `temp` before `main`,
 -- so such a table would shadow the view, but re-reading a view file would then replace
@@ -58,3 +58,15 @@ CREATE OR REPLACE VIEW file_changes AS SELECT * FROM file_changes_cache;
 DROP TABLE IF EXISTS hunks_cache;
 CREATE TEMP TABLE hunks_cache AS SELECT * FROM hunks;
 CREATE OR REPLACE VIEW hunks AS SELECT * FROM hunks_cache;
+
+-- The blob layer: blob_files (for the same `since` and `include_merges` as the history
+-- copies) and blob_units, which parses every blob once (the live blob_nodes) to build
+-- the copy. blob_nodes itself is not copied (about 31 million rows on this repository)
+-- and stays live; unit_changes reads the copies.
+DROP TABLE IF EXISTS blob_files_cache;
+CREATE TEMP TABLE blob_files_cache AS SELECT * FROM blob_files;
+CREATE OR REPLACE VIEW blob_files AS SELECT * FROM blob_files_cache;
+
+DROP TABLE IF EXISTS blob_units_cache;
+CREATE TEMP TABLE blob_units_cache AS SELECT * FROM blob_units;
+CREATE OR REPLACE VIEW blob_units AS SELECT * FROM blob_units_cache;
