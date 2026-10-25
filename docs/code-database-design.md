@@ -113,19 +113,37 @@ queries from the cache run in 0.02–0.08 s; the cache file is about 50 MB
 and does not compact deleted rows. The session cache (`cache.sql`) stays
 for one-off use; the two refuse to be mixed.
 
+## Fourth increment: historical blobs and unit changes (2026-10-25)
+
+([record](research/code-db-unit-changes-2026-10-25.md)) The owner chose
+the interim route "a table function that writes blob files" (option B)
+over "content as a column parsed by `parse_ast_list`" (option A): A
+returns no byte offsets, and the unit names depend on byte slicing, so the
+history's units would not match the current ones. `git_changed_blobs`
+(fifth `git_history` function) writes each changed regular file's old and
+new blob once as `<dir>/<blob_id>.<ext>` and returns the (commit, path,
+side, blob) rows; `read_ast` then reads history through the same path as
+current files, and the unit rules — now a table macro over named node,
+bytes and lines relations — derive `blob_units` with the same SQL (for
+every current file in range, the blob's units equal `units`). The
+`unit_changes` view applies the spike's hunk-range rules and reproduced
+its rows exactly on the same hunks (40,731 rows on this repository);
+`unit_churn` and `clone_change_consistency` return the spike record's
+top rows. Blobs are immutable, so the blob layer of the cache is
+append-only. Reproduced on this worktree: cold refresh 27.6 s (blob
+parsing 19.5 s for 6,586 blobs and 31.4 M nodes, peak about 7 GB), then
+0.4 s with nothing changed; the cache file grows to about 600 MB. Live
+(uncached) history queries take 14–20 s at 8–9 GB and are not meant to
+be run that way.
+
 ## Open points
 
-- **Historical blobs for `read_ast`.** Unit changes per commit need the
-  syntax of each changed file at that commit. The DuckDB-native way is a
-  `git://<path>@<rev>` file system so that `read_ast`, `read_text` and
-  `read_json` all read history; `duck_tails` registers one through the C++
-  API. The C API registers none today: both v1 and v2 only let an extension
-  *use* the host file system (checked against the 2.0.0 headers), and
-  registration is being added to v2 in duckdb/duckdb#25916 (open). Until
-  then the candidates are an interim table function returning blob
-  contents (parsed with `sitting_duck`'s `parse_ast_list`, line ranges
-  only), a C++ file-system extension, or `duck_tails` once its 2.0 binary
-  exists.
+- **A `git://` file system** remains the target for history access. The
+  C API registers none today: both v1 and v2 only let an extension *use*
+  the host file system (checked against the 2.0.0 headers), and
+  registration is being added to v2 in duckdb/duckdb#25916 (open). When it
+  lands, `git_changed_blobs` and the blob directory go away and
+  `read_ast` reads `git://` paths directly.
 - **Unit identity across commits** is `(path, kind, qualified name)`;
   renames and moves start a new history. No established system solves this
   with stored identifiers; method-level history tools treat it as a
@@ -138,9 +156,8 @@ for one-off use; the two refuse to be mixed.
   catalog surface), and whether `duckdb-ext/` is extracted for use in
   other repositories. The DuckDB 2.0.0 CLI is installed as
   `~/.local/bin/duckdb2` for interactive use.
-- **Per-commit unit changes** (the join that the strongest signals need)
-  are still not computed: they wait on a way to parse historical blobs
-  (see the first open point).
+- **Fan-in × churn** still needs the SCIP facts (reader form undecided),
+  and Go/TypeScript adapters exist only as the spike's record.
 
 ## History
 
