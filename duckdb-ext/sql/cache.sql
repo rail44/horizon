@@ -1,5 +1,7 @@
 -- Session cache: materialize the expensive layers once and point their views at the
 -- copies, so that every view and query keeps working unchanged and reads the copies.
+-- The layers are nodes, units, tags, the three history views, blob_files, blob_units
+-- and, from views/scip.sql (optional), scip_occurrences and scip_symbols.
 --
 -- Read after all view files. Each cached layer becomes a temporary table
 -- `<view>_cache`, and the view of the same name is replaced by
@@ -70,3 +72,34 @@ CREATE OR REPLACE VIEW blob_files AS SELECT * FROM blob_files_cache;
 DROP TABLE IF EXISTS blob_units_cache;
 CREATE TEMP TABLE blob_units_cache AS SELECT * FROM blob_units;
 CREATE OR REPLACE VIEW blob_units AS SELECT * FROM blob_units_cache;
+
+-- SCIP (views/scip.sql, optional): the rows of scip_document_occurrences and
+-- scip_document_symbols, which views/scip.sql defines and nothing replaces; scip_occurrences
+-- joins file_id at query time, as in views/scip.sql. When views/scip.sql was not read,
+-- empty views of the same columns stand in (they persist until it replaces them), so
+-- that the copies, and the two views, exist and are empty.
+DROP TABLE IF EXISTS scip_occurrences_cache;
+-- The same two statements as in refresh.sql.
+CREATE VIEW IF NOT EXISTS scip_document_occurrences AS
+SELECT NULL::VARCHAR AS document, NULL::VARCHAR AS symbol, NULL::INTEGER AS start_line,
+       NULL::INTEGER AS start_column, NULL::INTEGER AS end_line, NULL::INTEGER AS end_column,
+       NULL::INTEGER AS roles, NULL::BOOLEAN AS is_definition, NULL::BOOLEAN AS is_reference,
+       NULL::BOOLEAN AS is_import, NULL::BOOLEAN AS is_write, NULL::BOOLEAN AS is_read,
+       NULL::BOOLEAN AS is_generated, NULL::BOOLEAN AS is_test, NULL::BOOLEAN AS is_forward_definition,
+       NULL::INTEGER AS enclosing_start_line, NULL::INTEGER AS enclosing_start_column,
+       NULL::INTEGER AS enclosing_end_line, NULL::INTEGER AS enclosing_end_column
+WHERE false;
+CREATE VIEW IF NOT EXISTS scip_document_symbols AS
+SELECT NULL::VARCHAR AS document, NULL::VARCHAR AS symbol, NULL::INTEGER AS kind,
+       NULL::VARCHAR AS display_name, NULL::VARCHAR AS enclosing_symbol, NULL::VARCHAR[] AS documentation,
+       NULL::INTEGER AS relationship_count
+WHERE false;
+CREATE TEMP TABLE scip_occurrences_cache AS SELECT * FROM scip_document_occurrences;
+CREATE OR REPLACE VIEW scip_occurrences AS
+SELECT f.file_id, o.*
+FROM scip_occurrences_cache o
+LEFT JOIN files f ON f.path = o.document;
+
+DROP TABLE IF EXISTS scip_symbols_cache;
+CREATE TEMP TABLE scip_symbols_cache AS SELECT * FROM scip_document_symbols;
+CREATE OR REPLACE VIEW scip_symbols AS SELECT * FROM scip_symbols_cache;

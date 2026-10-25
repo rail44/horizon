@@ -1,6 +1,6 @@
 -- Persistent cache: bring the cache file up to date with the repository, then point
--- nodes, units, tags, commits, file_changes, hunks, blob_files, blob_nodes and
--- blob_units at it (unit_changes reads them).
+-- nodes, units, tags, commits, file_changes, hunks, blob_files, blob_nodes, blob_units,
+-- scip_occurrences and scip_symbols at it (unit_changes reads them).
 --
 -- Read after all view files, in any session and as often as wanted: each read takes a
 -- new file snapshot (as 00_load.sql does), re-parses only the files whose content id
@@ -32,6 +32,13 @@
 -- parsed blobs) and also when the units of every blob are re-derived, since that reads
 -- every blob file again and the rebuild exports the missing ones. Blobs that leave the
 -- range (an amended commit) stay in the cache and are not shown.
+--
+-- SCIP. views/scip.sql is optional. When it was read, `cache.scip_occurrences` and
+-- `cache.scip_symbols` hold its rows (without file_id, which the view joins at query
+-- time), rebuilt whole when the key changes: the index file's path and content hash
+-- (hash() over read_blob, about 20 ms for 30 MB) and the text of the views that shape
+-- the rows. When it was not read, the tables are emptied and scip_occurrences and
+-- scip_symbols are empty views.
 -- meta records what happened. A different cache schema version is an error: delete
 -- the file.
 --
@@ -65,7 +72,7 @@ SELECT CASE WHEN getvariable('cache_path') LIKE '/%'
     THEN error('refresh.sql: the database cache is attached from another file; DETACH cache first')
 END;
 
--- Layout (schema version 2).
+-- Layout (schema version 3).
 CREATE TABLE IF NOT EXISTS cache.meta (
     schema_version INTEGER,
     repo VARCHAR,
@@ -96,9 +103,13 @@ CREATE TABLE IF NOT EXISTS cache.meta (
     blobs_derived BIGINT,       -- blobs whose units were derived
     blob_units_inserted BIGINT,
     blobs_cached BIGINT,        -- all parsed blobs in the file, in the range or not
+    scip_key VARCHAR,           -- scip_index, its content hash and the shaping views' md5; NULL without views/scip.sql
+    scip VARCHAR,               -- 'rebuilt' or 'kept'
+    scip_occurrences_inserted BIGINT,
+    scip_symbols_inserted BIGINT,
     seconds STRUCT(files DOUBLE, nodes DOUBLE, units DOUBLE, tags DOUBLE, commits DOUBLE,
                    file_changes DOUBLE, hunks DOUBLE, blob_files DOUBLE, blob_nodes DOUBLE,
-                   blob_units DOUBLE, checkpoint DOUBLE, total DOUBLE)
+                   blob_units DOUBLE, scip DOUBLE, checkpoint DOUBLE, total DOUBLE)
 );
 CREATE TABLE IF NOT EXISTS cache.nodes_files (path VARCHAR, blob_id VARCHAR, language VARCHAR);
 -- read_ast's own columns, from a read of a path that does not exist (no file is read).
@@ -132,9 +143,17 @@ FROM read_ast([getvariable('cache_path') || '.no-such-file.rs'], source := 'full
 CREATE TABLE IF NOT EXISTS cache.blob_units (blob_id VARCHAR, unit_ord BIGINT, parent_unit_ord BIGINT,
     node_id BIGINT, kind VARCHAR, name VARCHAR, qualified_name VARCHAR, start_line BIGINT,
     end_line BIGINT, loc HUGEINT);
+-- The columns of scip_document_occurrences and scip_document_symbols (views/scip.sql).
+CREATE TABLE IF NOT EXISTS cache.scip_occurrences (document VARCHAR, symbol VARCHAR, start_line INTEGER,
+    start_column INTEGER, end_line INTEGER, end_column INTEGER, roles INTEGER, is_definition BOOLEAN,
+    is_reference BOOLEAN, is_import BOOLEAN, is_write BOOLEAN, is_read BOOLEAN, is_generated BOOLEAN,
+    is_test BOOLEAN, is_forward_definition BOOLEAN, enclosing_start_line INTEGER,
+    enclosing_start_column INTEGER, enclosing_end_line INTEGER, enclosing_end_column INTEGER);
+CREATE TABLE IF NOT EXISTS cache.scip_symbols (document VARCHAR, symbol VARCHAR, kind INTEGER,
+    display_name VARCHAR, enclosing_symbol VARCHAR, documentation VARCHAR[], relationship_count INTEGER);
 
 SET VARIABLE refresh_prior = (SELECT m FROM cache.meta m);
-SELECT CASE WHEN getvariable('refresh_prior').schema_version <> 2
+SELECT CASE WHEN getvariable('refresh_prior').schema_version <> 3
     THEN error('refresh.sql: ' || getvariable('cache_path') || ' has another schema version; delete it')
 END;
 
@@ -165,6 +184,36 @@ SET VARIABLE refresh_syntax_reset = getvariable('refresh_prior') IS NULL
     OR getvariable('refresh_prior').syntax_key IS DISTINCT FROM getvariable('refresh_syntax_key');
 SET VARIABLE refresh_derive_reset = getvariable('refresh_syntax_reset')
     OR getvariable('refresh_prior').derive_key IS DISTINCT FROM getvariable('refresh_derive_key');
+
+-- SCIP: whether views/scip.sql was read (scip_index_occurrences exists only then), and
+-- the key. Without it, empty views of the cached columns stand in for the two views the
+-- rows are copied from (they persist until views/scip.sql replaces them).
+SET VARIABLE refresh_scip_loaded = EXISTS (SELECT 1 FROM duckdb_views()
+                                           WHERE view_name = 'scip_index_occurrences' AND NOT internal);
+-- The same two statements as in cache.sql.
+CREATE VIEW IF NOT EXISTS scip_document_occurrences AS
+SELECT NULL::VARCHAR AS document, NULL::VARCHAR AS symbol, NULL::INTEGER AS start_line,
+       NULL::INTEGER AS start_column, NULL::INTEGER AS end_line, NULL::INTEGER AS end_column,
+       NULL::INTEGER AS roles, NULL::BOOLEAN AS is_definition, NULL::BOOLEAN AS is_reference,
+       NULL::BOOLEAN AS is_import, NULL::BOOLEAN AS is_write, NULL::BOOLEAN AS is_read,
+       NULL::BOOLEAN AS is_generated, NULL::BOOLEAN AS is_test, NULL::BOOLEAN AS is_forward_definition,
+       NULL::INTEGER AS enclosing_start_line, NULL::INTEGER AS enclosing_start_column,
+       NULL::INTEGER AS enclosing_end_line, NULL::INTEGER AS enclosing_end_column
+WHERE false;
+CREATE VIEW IF NOT EXISTS scip_document_symbols AS
+SELECT NULL::VARCHAR AS document, NULL::VARCHAR AS symbol, NULL::INTEGER AS kind,
+       NULL::VARCHAR AS display_name, NULL::VARCHAR AS enclosing_symbol, NULL::VARCHAR[] AS documentation,
+       NULL::INTEGER AS relationship_count
+WHERE false;
+SET VARIABLE refresh_scip_hash = (SELECT hash(content)::VARCHAR FROM read_blob(getvariable('scip_index')));
+SELECT CASE WHEN getvariable('refresh_scip_loaded') AND getvariable('refresh_scip_hash') IS NULL
+    THEN error('refresh.sql: views/scip.sql was read but the index ' || getvariable('scip_index') || ' does not exist')
+END;
+SET VARIABLE refresh_scip_key = CASE WHEN getvariable('refresh_scip_loaded') THEN concat_ws(' ',
+    getvariable('scip_index'), getvariable('refresh_scip_hash'),
+    (SELECT md5(string_agg(view_name || ':' || sql, chr(10) ORDER BY view_name)) FROM duckdb_views()
+     WHERE NOT internal AND view_name IN ('scip_json_index', 'scip_index_occurrences', 'scip_index_symbols',
+                                          'scip_document_occurrences', 'scip_document_symbols'))) END;
 
 UPDATE cache.meta SET state = 'refreshing';
 
@@ -383,12 +432,33 @@ CREATE OR REPLACE VIEW blob_units AS
 SELECT u.* FROM cache.blob_units u WHERE u.blob_id IN (SELECT blob_id FROM blob_list);
 SET VARIABLE refresh_t_blob_units = epoch(now());
 
+-- SCIP: rebuilt whole when the key changed (or after an interrupted refresh), from the
+-- views of views/scip.sql (or the empty stand-ins).
+SET VARIABLE refresh_scip_reset = getvariable('refresh_prior') IS NULL
+    OR getvariable('refresh_prior').state IS DISTINCT FROM 'ok'
+    OR getvariable('refresh_prior').scip_key IS DISTINCT FROM getvariable('refresh_scip_key');
+DELETE FROM cache.scip_occurrences WHERE getvariable('refresh_scip_reset');
+DELETE FROM cache.scip_symbols WHERE getvariable('refresh_scip_reset');
+-- A false WHERE folds to an empty result: the index is not read when the key is unchanged.
+INSERT INTO cache.scip_occurrences SELECT * FROM scip_document_occurrences WHERE getvariable('refresh_scip_reset');
+SET VARIABLE refresh_scip_occurrences_inserted = CASE WHEN getvariable('refresh_scip_reset')
+    THEN (SELECT count(*) FROM cache.scip_occurrences) ELSE 0 END;
+INSERT INTO cache.scip_symbols SELECT * FROM scip_document_symbols WHERE getvariable('refresh_scip_reset');
+SET VARIABLE refresh_scip_symbols_inserted = CASE WHEN getvariable('refresh_scip_reset')
+    THEN (SELECT count(*) FROM cache.scip_symbols) ELSE 0 END;
+CREATE OR REPLACE VIEW scip_occurrences AS
+SELECT f.file_id, o.*
+FROM cache.scip_occurrences o
+LEFT JOIN files f ON f.path = o.document;
+CREATE OR REPLACE VIEW scip_symbols AS SELECT * FROM cache.scip_symbols;
+SET VARIABLE refresh_t_scip = epoch(now());
+
 CHECKPOINT cache;
 SET VARIABLE refresh_t_end = epoch(now());
 
 DELETE FROM cache.meta;
 INSERT INTO cache.meta
-SELECT 2, getvariable('repo'), 'ok',
+SELECT 3, getvariable('repo'), 'ok',
        CASE WHEN getvariable('refresh_syntax_reset') THEN now()::TIMESTAMP ELSE getvariable('refresh_prior').built_at END,
        now()::TIMESTAMP,
        getvariable('refresh_syntax_key'), getvariable('refresh_derive_key'), getvariable('refresh_history_key'),
@@ -412,6 +482,10 @@ SELECT 2, getvariable('repo'), 'ok',
        getvariable('refresh_blobs_derived'),
        getvariable('refresh_blob_units_inserted'),
        (SELECT count(*) FROM cache.blob_parsed),
+       getvariable('refresh_scip_key'),
+       CASE WHEN getvariable('refresh_scip_reset') THEN 'rebuilt' ELSE 'kept' END,
+       getvariable('refresh_scip_occurrences_inserted'),
+       getvariable('refresh_scip_symbols_inserted'),
        {'files': getvariable('refresh_t_files') - getvariable('refresh_t_start'),
         'nodes': getvariable('refresh_t_nodes') - getvariable('refresh_t_files'),
         'units': getvariable('refresh_t_units') - getvariable('refresh_t_nodes'),
@@ -422,5 +496,6 @@ SELECT 2, getvariable('repo'), 'ok',
         'blob_files': getvariable('refresh_t_blob_files') - getvariable('refresh_t_hunks'),
         'blob_nodes': getvariable('refresh_t_blob_nodes') - getvariable('refresh_t_blob_files'),
         'blob_units': getvariable('refresh_t_blob_units') - getvariable('refresh_t_blob_nodes'),
-        'checkpoint': getvariable('refresh_t_end') - getvariable('refresh_t_blob_units'),
+        'scip': getvariable('refresh_t_scip') - getvariable('refresh_t_blob_units'),
+        'checkpoint': getvariable('refresh_t_end') - getvariable('refresh_t_scip'),
         'total': getvariable('refresh_t_end') - getvariable('refresh_t_start')};

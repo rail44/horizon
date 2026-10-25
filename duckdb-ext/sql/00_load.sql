@@ -65,6 +65,9 @@ SET VARIABLE clone_reports = coalesce(getvariable('clone_reports'), [
 -- and new content here, once per blob, as <blob_id>.<extension>.
 SET VARIABLE blob_dir = coalesce(getvariable('blob_dir'), getvariable('repo') || '/target/code-db/blobs');
 
+-- SCIP index (views/scip.sql, optional): must exist when views/scip.sql is read.
+SET VARIABLE scip_index = coalesce(getvariable('scip_index'), getvariable('repo') || '/target/code-db/index.scip');
+
 -- Persistent cache (refresh.sql): the database file, created when missing.
 SET VARIABLE cache_path = coalesce(getvariable('cache_path'),
     getvariable('repo') || '/target/code-db/cache.duckdb');

@@ -77,6 +77,15 @@ REFRESHED_VIEWS = ["files", "nodes", "units", "tags", "commits", "file_changes",
                    "blob_files", "blob_nodes", "blob_units", "unit_changes"]
 QUERIES = ["file_cochange", "file_cochange_thresholds", "clone_site_tags", "clone_site_tags_summary",
            "unit_churn", "clone_change_consistency"]
+# views/scip.sql is optional: read after VIEW_FILES when a SCIP index is given. Its views
+# and queries join the lists above once it has been read.
+SCIP_FILE = "views/scip.sql"
+SCIP_VIEWS = ["scip_occurrences", "scip_symbols"]
+SCIP_QUERIES = ["unit_fan_in_churn"]
+RUST_ANALYZER = os.environ.get("RUST_ANALYZER", "rust-analyzer")
+# Stand-in until read_scip is available: views/scip.sql reads the JSON that the pinned
+# Sourcegraph scip CLI prints for the index (see scip_json).
+SCIP_CLI = Path(os.environ.get("SCIP_CLI", HORIZON_ROOT / "target/code-db/tools/scip-v0.10.0/scip"))
 
 
 def sql_literal(value):
@@ -85,16 +94,53 @@ def sql_literal(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def read_views(con):
+def scip_loaded(con):
+    """Whether views/scip.sql has been read on this connection."""
+    return rows(con, "SELECT count(*) FROM duckdb_views() "
+                     "WHERE view_name = 'scip_index_occurrences' AND NOT internal")[0][0] > 0
+
+
+def read_views(con, scip=None):
+    """Read the view files, and views/scip.sql when `scip` (None: when it was read before)."""
+    if scip is None:
+        scip = scip_loaded(con)
     for name in VIEW_FILES:
         con.execute((SQL_DIR / name).read_text())
+    if scip:
+        con.execute((SQL_DIR / SCIP_FILE).read_text())
+
+
+def queries(con):
+    return QUERIES + (SCIP_QUERIES if scip_loaded(con) else [])
+
+
+def refreshed_views(con):
+    return REFRESHED_VIEWS + (SCIP_VIEWS if scip_loaded(con) else [])
+
+
+def scip_json(index):
+    """Stand-in until read_scip is available: write INDEX.json with `scip print --json`
+    when it is missing or older than the index."""
+    out = index.with_name(index.name + ".json")
+    if not out.exists() or out.stat().st_mtime < index.stat().st_mtime:
+        with open(out, "wb") as f:
+            subprocess.run([str(SCIP_CLI), "print", "--json", str(index)], stdout=f, check=True)
+
+
+def repo_index(repo):
+    """REPO's SCIP index at the default scip_index path, or None when there is none."""
+    index = Path(repo).resolve() / "target/code-db/index.scip"
+    if not index.exists():
+        return None
+    scip_json(index)
+    return index
 
 
 def read_cache(con):
     con.execute((SQL_DIR / CACHE_FILE).read_text())
 
 
-def connect(repo, reports=None, variables=None):
+def connect(repo, reports=None, variables=None, scip=False):
     os.chdir(HORIZON_ROOT)
     con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     con.execute(f"SET VARIABLE repo = {sql_literal(str(Path(repo).resolve()))}")
@@ -102,7 +148,7 @@ def connect(repo, reports=None, variables=None):
         con.execute(f"SET VARIABLE clone_reports = {sql_literal([str(Path(r).resolve()) for r in reports])}")
     for name, value in (variables or {}).items():
         con.execute(f"SET VARIABLE {name} = {value}")
-    read_views(con)
+    read_views(con, scip)
     return con
 
 
@@ -143,14 +189,14 @@ def view_rows(view):
 def snapshot_live(con):
     """Copy every view refresh.sql replaces, read live, into temp tables live_<view>
     (blob_nodes as one digest row per blob)."""
-    for view in REFRESHED_VIEWS:
+    for view in refreshed_views(con):
         con.execute(f"CREATE OR REPLACE TEMP TABLE live_{view} AS {view_rows(view)}")
 
 
 def diff_from_live(con):
     """{view: (live rows missing from the view, view rows missing from live)}, nonzero only."""
     diffs = {}
-    for view in REFRESHED_VIEWS:
+    for view in refreshed_views(con):
         counts = rows(con, f"SELECT (SELECT count(*) FROM (FROM live_{view} EXCEPT ALL ({view_rows(view)}))), "
                            f"(SELECT count(*) FROM (({view_rows(view)}) EXCEPT ALL FROM live_{view}))")[0]
         if counts != (0, 0):
@@ -163,11 +209,11 @@ def refresh_against_live(con):
     the four queries' results, read refresh.sql and compare. Returns (wall, meta)."""
     read_views(con)
     snapshot_live(con)
-    live_queries = [rows(con, query_sql(q)) for q in QUERIES]
+    live_queries = [rows(con, query_sql(q)) for q in queries(con)]
     wall, meta = read_refresh(con)
     diffs = diff_from_live(con)
     assert not diffs, f"refreshed views differ from live: {diffs}"
-    assert [rows(con, query_sql(q)) for q in QUERIES] == live_queries, "queries differ after refresh"
+    assert [rows(con, query_sql(q)) for q in queries(con)] == live_queries, "queries differ after refresh"
     return wall, meta
 
 
@@ -479,6 +525,7 @@ def check_fixture():
         assert rows(con, scratch_units) == [(3,)]
     print("fixture: ok")
     check_history_fixture()
+    check_scip_fixture()
     check_refresh_fixture()
 
 
@@ -644,6 +691,131 @@ def check_history_fixture():
     print("history fixture: ok")
 
 
+FIXTURE_CARGO_TOML = """\
+[package]
+name = "fixture"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+"""
+
+
+def make_scip_index(repo, root):
+    """Index the fixture's crate with rust-analyzer into REPO/target/code-db/index.scip
+    (the default scip_index; target/ is ignored in the fixture): a copy of src/ and tests/
+    plus a Cargo.toml for the package `fixture`, outside the repository. Returns the
+    index, or None when rust-analyzer is not installed."""
+    if shutil.which(RUST_ANALYZER) is None:
+        return None
+    crate = root / "scip-crate"
+    shutil.rmtree(crate, ignore_errors=True)
+    for d in ("src", "tests"):
+        shutil.copytree(repo / d, crate / d)
+    (crate / "Cargo.toml").write_text(FIXTURE_CARGO_TOML)
+    index = repo / "target/code-db/index.scip"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([RUST_ANALYZER, "scip", str(crate), "--output", str(index)], check=True,
+                   capture_output=True, cwd=root)
+    scip_json(index)
+    return index
+
+
+def assert_no_scip_scan(con):
+    """The cached views answer the SCIP query without reading the index."""
+    plan = "\n".join(r[1] for r in rows(con, "EXPLAIN " + query_sql("unit_fan_in_churn")))
+    assert "READ_JSON" not in plan and "READ_SCIP" not in plan, plan
+
+
+def check_scip_fixture():
+    """views/scip.sql and unit_fan_in_churn over a real rust-analyzer index of the first
+    fixture, live and through cache.sql; skipped when rust-analyzer is not installed."""
+    with tempfile.TemporaryDirectory(prefix="code-db-scip-") as tmp:
+        root = Path(tmp)
+        repo = build_fixture(root)
+        report, _ = fixture_report(root, repo)
+        if make_scip_index(repo, root) is None:
+            print(f"scip fixture: SKIPPED ({RUST_ANALYZER} not found)")
+            return
+        con = connect(repo, [report], scip=True)
+        shapes = (repo / "src/shapes.rs").read_text()
+        rect = (repo / "src/rect.rs").read_text()
+        lib = (repo / "src/lib.rs").read_text()
+
+        meta = rows(con, "SELECT tool_name, document_count, occurrence_count, external_symbol_count "
+                         "FROM scip_index_metadata")
+        assert meta == [("rust-analyzer", 4, rows(con, "SELECT count(*) FROM scip_index_occurrences")[0][0], 0)], meta
+        # Every document is a source file (src/scratch.rs is in no crate's module tree).
+        docs = rows(con, "SELECT DISTINCT o.document, o.file_id = f.file_id FROM scip_occurrences o "
+                         "LEFT JOIN files f ON f.path = o.document ORDER BY 1")
+        assert docs == [(p, True) for p in ["src/lib.rs", "src/rect.rs", "src/shapes.rs", "tests/it.rs"]], docs
+        assert rows(con, "SELECT bool_and(is_reference = NOT is_definition) FROM scip_occurrences") == [(True,)]
+
+        # Lines 1-based; columns 1-based with the end after the last character. The trait's
+        # definition encloses exactly its unit's lines.
+        shape = "'rust-analyzer cargo fixture 0.1.0 shapes/Shape#'"
+        trait_line = line_of(shapes, "pub trait Shape")
+        col = shapes.splitlines()[trait_line - 1].index("Shape") + 1
+        defs = rows(con, f"SELECT document, start_line, start_column, end_line, end_column, enclosing_start_line, "
+                         f"enclosing_end_line FROM scip_occurrences WHERE symbol = {shape} AND is_definition")
+        assert defs == [("src/shapes.rs", trait_line, col, trait_line, col + 5, 1, 3)], defs
+        refs = rows(con, f"SELECT document, start_line FROM scip_occurrences WHERE symbol = {shape} AND is_reference "
+                         "ORDER BY ALL")
+        assert refs == [("src/rect.rs", line_of(rect, "use crate::shapes::Shape")),
+                        ("src/rect.rs", line_of(rect, "impl Shape for Rect")),
+                        ("src/shapes.rs", line_of(shapes, "impl Shape for Square"))], refs
+
+        # Local symbols are qualified by their document, in occurrences and symbols.
+        assert rows(con, "SELECT count(*) FROM scip_occurrences WHERE starts_with(symbol, 'local ') "
+                         "AND NOT ends_with(symbol, ' ' || document)") == [(0,)]
+        assert rows(con, "SELECT list(DISTINCT symbol ORDER BY symbol) FROM scip_occurrences "
+                         "WHERE symbol LIKE 'local 0 %'") == [(["local 0 src/lib.rs", "local 0 src/rect.rs",
+                                                              "local 0 src/shapes.rs"],)]
+        local = rows(con, "SELECT display_name, enclosing_symbol FROM scip_symbols WHERE symbol = 'local 0 src/rect.rs'")
+        assert local == [("self", "rust-analyzer cargo fixture 0.1.0 rect/impl#[Rect][Shape]area().")], local
+        # The package's crate/ symbol is listed under each target's root.
+        crate = rows(con, "SELECT list(document ORDER BY document) FROM scip_symbols "
+                          "WHERE symbol = 'rust-analyzer cargo fixture 0.1.0 crate/'")
+        assert crate == [(["src/lib.rs", "tests/it.rs"],)], crate
+
+        # unit_fan_in_churn: lib.rs's area is called from tests/it.rs, the trait is named
+        # twice in rect.rs; the whole-file definitions of the modules lie in no unit.
+        fan_in = [("src/lib.rs", "rust", "function", "area", line_of(lib, "pub fn area"), 3, 1, 1, 2),
+                  ("src/shapes.rs", "rust", "type", "Shape", trait_line, 3, 1, 2, 1)]
+        assert rows(con, query_sql("unit_fan_in_churn")) == fan_in, rows(con, query_sql("unit_fan_in_churn"))
+        con.execute("SET VARIABLE kind = 'type'")
+        assert rows(con, query_sql("unit_fan_in_churn")) == fan_in[1:]
+        con.execute("SET VARIABLE kind = NULL")
+        con.execute("SET VARIABLE min_fan_in = 2")
+        assert rows(con, query_sql("unit_fan_in_churn")) == []
+        con.execute("SET VARIABLE min_fan_in = NULL")
+
+        # cache.sql: the same rows from the copies, and the query reads no index.
+        probes = ["SELECT * FROM scip_occurrences ORDER BY ALL", "SELECT * FROM scip_symbols ORDER BY ALL",
+                  query_sql("unit_fan_in_churn")]
+        live = [rows(con, q) for q in probes]
+        read_cache(con)
+        assert [rows(con, q) for q in probes] == live
+        assert_no_scip_scan(con)
+
+        # A document that is not a source file has no file_id, and its references count
+        # for nothing (tests/it.rs excluded from the snapshot).
+        con.execute("SET VARIABLE exclude_patterns = ['tests/*']")
+        read_views(con)
+        assert rows(con, "SELECT count(*), count(file_id) FROM scip_occurrences WHERE document = 'tests/it.rs'")[0][1] == 0
+        assert rows(con, query_sql("unit_fan_in_churn")) == fan_in[1:]
+        con.close()
+
+        # Without views/scip.sql: cache.sql still covers the SCIP views, empty.
+        con = connect(repo, [report])
+        assert not scip_loaded(con)
+        read_cache(con)
+        assert rows(con, "SELECT (SELECT count(*) FROM scip_occurrences), (SELECT count(*) FROM scip_symbols), "
+                         "(SELECT count(*) FROM scip_occurrences_cache)") == [(0, 0, 0)]
+        con.close()
+    print("scip fixture: ok")
+
+
 def cached_rows_by_path(con, path_filter):
     """Rows of the cache's per-file tables for the paths matching path_filter (SQL)."""
     return {t: sorted(rows(con, f"SELECT * FROM cache.{t} WHERE {path_filter}"), key=repr)
@@ -665,7 +837,8 @@ def check_refresh_fixture():
         def stats(meta):
             return {k: meta[k] for k in counts}
 
-        def expect(meta, syntax="incremental", history="appended", **nonzero):
+        def expect(meta, syntax="incremental", history="appended", scip="kept", **nonzero):
+            assert meta["scip"] == scip, meta
             expected = {k: nonzero.get(k, 0) for k in counts}
             got = stats(meta)
             for k, v in nonzero.items():
@@ -681,9 +854,12 @@ def check_refresh_fixture():
 
         # Initial refresh from an empty cache: everything built, equal to live.
         _, meta = refresh_against_live(con)
-        expect(meta, syntax="rebuilt", history="rebuilt", files_added=4, nodes_parsed=None,
+        expect(meta, syntax="rebuilt", history="rebuilt", scip="rebuilt", files_added=4, nodes_parsed=None,
                units_inserted=None, tags_inserted=None, commits_added=4, blob_rows_added=12, blobs_parsed=7,
                blobs_derived=7)
+        # Without views/scip.sql the SCIP tables are empty, and so are the two views.
+        assert meta["scip_key"] is None and meta["scip_occurrences_inserted"] == 0, meta
+        assert rows(con, "SELECT (SELECT count(*) FROM scip_occurrences), (SELECT count(*) FROM scip_symbols)") == [(0, 0)]
         assert meta["head"] == git_out(repo, "rev-parse", "HEAD"), meta
         assert meta["blobs_cached"] == 7, meta
         assert rows(con, "SELECT count(*) FROM cache.nodes_files") == [(4,)]
@@ -765,9 +941,48 @@ def check_refresh_fixture():
         # An interrupted refresh (state left at 'refreshing') makes the next one rebuild.
         con.execute("UPDATE cache.meta SET state = 'refreshing'")
         _, meta = refresh_against_live(con)
-        expect(meta, syntax="rebuilt", history="rebuilt", files_added=4, nodes_parsed=None,
+        expect(meta, syntax="rebuilt", history="rebuilt", scip="rebuilt", files_added=4, nodes_parsed=None,
                units_inserted=None, tags_inserted=None, commits_added=5, blob_rows_added=14, blobs_parsed=8,
                blobs_derived=8)
+
+        # SCIP: views/scip.sql read, then refreshed against live (rebuilt), unchanged
+        # (kept, and the index is not read), the index changed (rebuilt). Nothing else
+        # is rebuilt or re-derived by reading views/scip.sql.
+        index = make_scip_index(repo, root)
+        if index is None:
+            print(f"refresh fixture: SCIP steps SKIPPED ({RUST_ANALYZER} not found)")
+        else:
+            con.execute((SQL_DIR / SCIP_FILE).read_text())
+            _, meta = refresh_against_live(con)
+            expect(meta, scip="rebuilt")
+            live_counts = rows(con, "SELECT (SELECT count(*) FROM live_scip_occurrences), "
+                                    "(SELECT count(*) FROM live_scip_symbols)")[0]
+            assert live_counts[0] > 0 and (meta["scip_occurrences_inserted"], meta["scip_symbols_inserted"]) == live_counts, meta
+            assert rows(con, "SELECT count(*) FROM cache.scip_occurrences") == [(live_counts[0],)]
+            _, meta = refresh_against_live(con)
+            expect(meta)
+            assert meta["scip_occurrences_inserted"] == 0, meta
+            plan = "\n".join(r[1] for r in rows(con, "EXPLAIN INSERT INTO cache.scip_occurrences "
+                                                     "SELECT * FROM scip_document_occurrences WHERE getvariable('refresh_scip_reset')"))
+            assert "READ_JSON" not in plan and "READ_SCIP" not in plan, plan
+            assert_no_scip_scan(con)
+            # Another index with the same rows: an empty document appended (field 2,
+            # length 0) changes the content hash.
+            with open(index, "ab") as f:
+                f.write(b"\x12\x00")
+            scip_json(index)
+            _, meta = refresh_against_live(con)
+            expect(meta, scip="rebuilt")
+            # A missing index fails the refresh before anything changes.
+            index.rename(index.with_name("moved.scip"))
+            try:
+                read_refresh(con)
+            except duckdb.Error as e:
+                assert "does not exist" in str(e), e
+            else:
+                raise AssertionError("refresh.sql with views/scip.sql and no index did not fail")
+            assert rows(con, "SELECT state FROM cache.meta") == [("ok",)]
+            index.with_name("moved.scip").rename(index)
 
         # cache.sql and refresh.sql refuse each other's views; the view files reset both.
         try:
@@ -787,10 +1002,12 @@ def check_refresh_fixture():
         con.close()
 
         # The cache file in a new session: read the view files, refresh (nothing to do),
-        # query; and the views are live again after the view files are re-read.
+        # query; and the views are live again after the view files are re-read. Without
+        # views/scip.sql in this session, the SCIP tables are emptied.
         con = connect(repo, [report], variables)
         _, meta = refresh_against_live(con)
-        expect(meta)  # nothing rebuilt or parsed
+        expect(meta, scip="rebuilt" if index else "kept")  # nothing else rebuilt or parsed
+        assert rows(con, "SELECT count(*) FROM cache.scip_occurrences") == [(0,)]
         assert rows(con, "SELECT count(*) FROM units") == rows(con, "SELECT count(*) FROM live_units")
         read_views(con)
         view_sql = rows(con, "SELECT sql FROM duckdb_views() WHERE view_name = 'nodes'")[0][0]
@@ -807,13 +1024,23 @@ def default_reports(repo):
     return [base / "exact/jscpd-report.json", base / "normalized/jscpd-report.json"]
 
 
+def connect_repo(repo, reports, variables=None):
+    """connect(), reading views/scip.sql too when REPO has an index (repo_index)."""
+    index = repo_index(repo)
+    if index is None:
+        print(f"no SCIP index at {Path(repo).resolve() / 'target/code-db/index.scip'}: views/scip.sql not read",
+              file=sys.stderr)
+    return connect(repo, reports, variables, scip=index is not None)
+
+
 def check_repo(repo, reports):
-    con = connect(repo, reports)
-    for view in ["files", "nodes", "units", "tags", "commits", "file_changes", "hunks", "clone_pairs"]:
+    con = connect_repo(repo, reports)
+    views = ["files", "nodes", "units", "tags", "commits", "file_changes", "hunks", "clone_pairs"]
+    for view in views + (SCIP_VIEWS if scip_loaded(con) else []):
         print(f"{view}: {rows(con, f'SELECT count(*) FROM {view}')[0][0]}")
     print("units by kind:", rows(con, "SELECT kind, count(*) FROM units GROUP BY 1 ORDER BY 2 DESC"))
     print("tags by tag:", rows(con, "SELECT tag, count(*) FROM tags GROUP BY 1 ORDER BY 2 DESC"))
-    for name in QUERIES:
+    for name in queries(con):
         result = rows(con, query_sql(name))
         print(f"{name}: {len(result)} rows; first: {result[:3]}")
 
@@ -827,6 +1054,15 @@ STATEMENTS = {
     "nodes referenced twice": "SELECT (SELECT count(*) FROM nodes), (SELECT count(*) FROM nodes)",
     **{f"query {q}": q for q in QUERIES},
 }
+# Run only when REPO has a SCIP index. `baseline` is the process after the view files.
+SCIP_STATEMENTS = {
+    "baseline": "SELECT 1",
+    **{f"count {v}": f"SELECT count(*) FROM {v}" for v in ["scip_index_occurrences", "scip_index_symbols",
+                                                           "scip_occurrences", "scip_symbols"]},
+    "scip_index_metadata": "SELECT * FROM scip_index_metadata",
+    **{f"query {q}": q for q in SCIP_QUERIES},
+}
+STATEMENTS.update(SCIP_STATEMENTS)
 BUILD_CACHE = "build cache"
 
 
@@ -858,12 +1094,13 @@ def file_set_statement():
 
 REFRESH_STATS = ("syntax", "derived", "history", "nodes_parsed", "units_inserted", "tags_inserted",
                  "commits_added", "blob_history", "blob_rows_added", "blobs_parsed", "blob_bytes_parsed",
-                 "blob_nodes_parsed", "blobs_derived", "blob_units_inserted", "blobs_cached")
+                 "blob_nodes_parsed", "blobs_derived", "blob_units_inserted", "blobs_cached", "scip",
+                 "scip_occurrences_inserted", "scip_symbols_inserted")
 
 
 def run_step(repo, reports, step, cached, refreshed=False, uc_table=False):
     start = time.perf_counter()
-    con = connect(repo, reports, {"cache_path": sql_literal(str(refresh_cache_path(repo)))})
+    con = connect_repo(repo, reports, {"cache_path": sql_literal(str(refresh_cache_path(repo)))})
     load = time.perf_counter() - start
     rss = lambda: resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     if step == REFRESH_STEP:
@@ -901,7 +1138,7 @@ def run_step(repo, reports, step, cached, refreshed=False, uc_table=False):
     if cached:
         read_cache(con)
     statement = STATEMENTS[step]
-    sql = query_sql(statement) if statement in QUERIES else statement
+    sql = query_sql(statement) if statement in QUERIES + SCIP_QUERIES else statement
     start = time.perf_counter()
     con.execute(sql).fetchall()
     wall = time.perf_counter() - start
@@ -922,8 +1159,9 @@ def measure(repo, reports, runs, only=None):
         values = [r[key] for r in results]
         return f"{fmt.format(min(values))}-{fmt.format(max(values))} {unit}"
 
+    has_index = repo_index(repo) is not None
     for step in [*STATEMENTS, BUILD_CACHE]:
-        if only and only not in step:
+        if only and only not in step or step in SCIP_STATEMENTS and not has_index:
             continue
         if step == BUILD_CACHE:
             results = series(step, False)
@@ -944,7 +1182,7 @@ def refresh_cache_path(repo):
 
 def check_refresh_repo(repo, reports):
     """Refresh REPO's cache twice, comparing every refreshed view and query with live."""
-    con = connect(repo, reports, {"cache_path": sql_literal(str(refresh_cache_path(repo)))})
+    con = connect_repo(repo, reports, {"cache_path": sql_literal(str(refresh_cache_path(repo)))})
     for attempt in ("first", "second"):
         wall, meta = refresh_against_live(con)
         print(f"{attempt} refresh: {wall:.2f} s, equal to live; meta: "
@@ -963,6 +1201,8 @@ def measure_refresh(repo, reports, runs):
     base = git_out(repo, "rev-parse", "HEAD")
     rust = git_out(repo, "ls-files", "*.rs").splitlines()
     spread = rust[:: max(1, len(rust) // 10)][:10]
+    index = repo_index(repo)
+    index_bytes = index.read_bytes() if index else None
 
     def step(name, *extra):
         out = subprocess.run([sys.executable, __file__, "step", str(repo), name,
@@ -991,7 +1231,7 @@ def measure_refresh(repo, reports, runs):
     def report(name, results):
         layers = ", ".join(f"{k} {span(results, k)}" for k in
                            ("files", "nodes", "units", "tags", "commits", "file_changes", "hunks", "blob_files",
-                            "blob_nodes", "blob_units", "checkpoint"))
+                            "blob_nodes", "blob_units", "scip", "checkpoint"))
         last = results[-1]
         stats = ", ".join(f"{k}={last[k]}" for k in last if k.startswith("files_") or k in REFRESH_STATS)
         print(f"{name}: wall {span(results, 'wall')} s (view files {span(results, 'load')} s; "
@@ -1014,10 +1254,22 @@ def measure_refresh(repo, reports, runs):
              lambda: (reset_and_sync(), edit(spread[:3]), git(repo, "commit", "-q", "-am", "Measure")))
     scenario("amended HEAD (history rebuilt)",
              lambda: (reset_and_sync(), git(repo, "commit", "-q", "--amend", "-m", "Measure amend")))
+
+    def change_index():
+        # Another index with the same rows: an empty document appended (field 2, length 0).
+        reset_and_sync()
+        with open(index, "ab") as f:
+            f.write(b"\x12\x00")
+        scip_json(index)
+
+    if index:
+        scenario("SCIP index changed (SCIP rebuilt)", change_index)
+        index.write_bytes(index_bytes)
+        scip_json(index)
     reset_and_sync()
     size = sum(p.stat().st_size for p in (cache, cache.with_name(cache.name + ".wal")) if p.exists())
     print(f"cache file: {size / 2**20:.1f} MiB")
-    for name in [*(f"query {q}" for q in QUERIES), "count unit_changes"]:
+    for name in [*(f"query {q}" for q in QUERIES + (SCIP_QUERIES if index else [])), "count unit_changes"]:
         results = [step(name, "--refreshed") for _ in range(runs)]
         print(f"{name} from the cache: {span(results, 'wall')} s, "
               f"peak RSS {span(results, 'rss_mib', '{:.0f}')} MiB (refresh included)")
@@ -1032,16 +1284,17 @@ def measure_refresh(repo, reports, runs):
 
 
 def explain_counts(repo, reports):
-    con = connect(repo, reports)
+    con = connect_repo(repo, reports)
     for view in ["nodes", "units", "tags"]:
         plan = "\n".join(r[1] for r in rows(con, f"EXPLAIN SELECT count(*) FROM {view}"))
         print(f"{view}: READ_AST in plan {plan.count('READ_AST')}, READ_TEXT {plan.count('READ_TEXT')}")
     twice = STATEMENTS["nodes referenced twice"]
     plan = "\n".join(r[1] for r in rows(con, "EXPLAIN " + twice))
     print(f"nodes referenced twice: READ_AST in plan {plan.count('READ_AST')}")
-    for name in QUERIES:
+    for name in queries(con):
         plan = "\n".join(r[1] for r in rows(con, "EXPLAIN " + query_sql(name)))
-        print(f"{name}: READ_AST in plan {plan.count('READ_AST')}, READ_TEXT {plan.count('READ_TEXT')}")
+        print(f"{name}: READ_AST in plan {plan.count('READ_AST')}, READ_TEXT {plan.count('READ_TEXT')}, "
+              f"READ_JSON {plan.count('READ_JSON')}, READ_SCIP {plan.count('READ_SCIP')}")
 
 
 def check_cli(repo, reports):
@@ -1049,10 +1302,13 @@ def check_cli(repo, reports):
     if not Path(cli).exists():
         print(f"cli: {cli} not found; skipped")
         return
-    reads = "\n".join(f".read {SQL_DIR.relative_to(HORIZON_ROOT) / f}" for f in VIEW_FILES)
+    con = connect_repo(repo, reports)
+    scip = scip_loaded(con)
+    reads = "\n".join(f".read {SQL_DIR.relative_to(HORIZON_ROOT) / f}" for f in VIEW_FILES + ([SCIP_FILE] if scip else []))
     probe = ("SELECT (SELECT count(*) FROM files), (SELECT count(*) FROM units), (SELECT count(*) FROM tags), "
-             "(SELECT count(*) FROM hunks), (SELECT count(*) FROM clone_pairs);")
-    query_counts = "\n".join(f"SELECT count(*) FROM ({query_sql(q).rstrip().rstrip(';')});" for q in QUERIES)
+             "(SELECT count(*) FROM hunks), (SELECT count(*) FROM clone_pairs)"
+             + (", (SELECT count(*) FROM scip_occurrences), (SELECT count(*) FROM scip_symbols);" if scip else ";"))
+    query_counts = "\n".join(f"SELECT count(*) FROM ({query_sql(q).rstrip().rstrip(';')});" for q in queries(con))
     # The same counts again after refresh.sql (the persistent cache of REPO).
     script = (f"SET VARIABLE repo = {sql_literal(str(Path(repo).resolve()))};\n"
               f"SET VARIABLE clone_reports = {sql_literal([str(Path(r).resolve()) for r in reports])};\n"
@@ -1065,9 +1321,8 @@ def check_cli(repo, reports):
         raise SystemExit(f"cli failed:\n{proc.stderr[-2000:]}")
     out = proc.stdout
     cli_values = [line for line in out.splitlines() if line and line[0].isdigit()]
-    con = connect(repo, reports)
     py_values = [",".join(str(v) for v in rows(con, probe.rstrip(";"))[0])]
-    py_values += [str(len(rows(con, query_sql(q)))) for q in QUERIES]
+    py_values += [str(len(rows(con, query_sql(q)))) for q in queries(con)]
     py_values += py_values  # live, then refreshed
     print("cli:", cli_values)
     print("python:", py_values)
@@ -1077,7 +1332,7 @@ def check_cli(repo, reports):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["fixture", "repo", "refresh", "measure", "measure-refresh",
+    parser.add_argument("command", choices=["fixture", "scip-fixture", "repo", "refresh", "measure", "measure-refresh",
                                             "explain", "cli", "step"])
     parser.add_argument("repo", nargs="?")
     parser.add_argument("step", nargs="?")
@@ -1090,6 +1345,9 @@ def main():
     args = parser.parse_args()
     if args.command == "fixture":
         check_fixture()
+        return
+    if args.command == "scip-fixture":
+        check_scip_fixture()
         return
     if not args.repo:
         parser.error("REPO is required")
