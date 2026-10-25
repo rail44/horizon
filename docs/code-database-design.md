@@ -163,6 +163,36 @@ All three literature-backed signals (unit-level churn, inconsistent clone
 changes, fan-in × churn) are now computable from the cache in under
 0.2 s each.
 
+## Sixth increment: the graph itself (2026-10-26)
+
+([record](research/code-db-graph-2026-10-26.md)) The owner restated the
+purpose — understand the code as a graph of structure and dependencies,
+then judge — and the first candidate for the next step (a review ledger
+with fingerprints and expiry, carried over from the old audit's sweep
+workflow) was dropped as not following from it. The layer so far had only
+aggregates; this increment derives the edges as views over the existing
+facts (`views/graph.sql`): `unit_references`/`unit_edges` (the innermost
+unit containing a reference occurrence → the innermost unit containing
+the symbol's definition; `local` symbols excluded, 29 cross-unit edges
+would have come from them; macro call sites and test ends flagged;
+symbols with several definition units flagged `ambiguous`), structural
+edges (`unit_contains`, `impl_for`, `implements` from the impl header's
+occurrences), `unit_module` (files as implicit modules) and `file_crate`
+with `module_edges`/`crate_edges`, `module_cycles` by recursive CTE
+(crate cycles asserted empty), and history on edges (`unit_cochange`,
+`edge_cochange`, `cochange_without_reference`). Queries:
+`unit_dependencies` (callers/callees to a depth), `module_graph`,
+`module_cycles`, `unit_cochange`, `cochange_without_reference`. All graph
+views stay views over the cache (0.1–0.3 s per query; `unit_references`
+0.15 s). On this repository: 34,195 unit edges, 3,517 module edges, 35
+crate edges, 31 module cycles of which 3 are artifacts of rust-analyzer
+giving same-named items in two targets of one package one symbol
+(the largest real one: 40 modules under `horizon-agent/src/judge/`).
+Two facts corrected the plan: a method call on a concrete type resolves
+to the impl's method (7,517 edges) and only generic/`dyn` calls to the
+trait's (32); and file-level `pub use` re-exports lie in no unit, so the
+unit graph sees 105 of the 107 files referencing `SessionId`.
+
 ## Open points
 
 - **A `git://` file system** remains the target for history access. The
