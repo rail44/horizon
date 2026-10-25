@@ -45,7 +45,7 @@ Consequences:
 | Git facts | Own extension `git_history` (`git_commits`, `git_file_changes`, `git_hunks`) on gitoxide; chosen over libgit2 plus ported git logic (GPL) after measuring parity with `git log`: commits and file changes exact, `-U0` hunk placement differs in about 0.4 % of rows with no effect found on unit attribution | [gix record](research/gix-parity-2026-10-24.md) |
 | Syntax facts | The community extension `sitting_duck` (`read_ast`): its node rows matched an independent tree-sitter parse of all 515 Rust files exactly, and SQL views over them reproduced the reference units and tags exactly | [evaluation](research/sitting-duck-evaluation-2026-10-24.md) |
 | Clone facts | jscpd's JSON report read with the core `read_json` (no extension) | — |
-| Reference facts | SCIP (`rust-analyzer scip`, `scip-go`, `scip-typescript`); reader form undecided: `scip print --json` with `read_json`, or a small Rust `read_scip` | — |
+| Reference facts | SCIP indexes (`rust-analyzer scip`, `scip-go`, `scip-typescript`) read by our second extension `scip_index` (chosen 2026-10-25 over the `scip` CLI's JSON) | [SCIP record](research/code-db-scip-2026-10-25.md) |
 
 ## First increment: views only (2026-10-24)
 
@@ -136,6 +136,33 @@ parsing 19.5 s for 6,586 blobs and 31.4 M nodes, peak about 7 GB), then
 (uncached) history queries take 14–20 s at 8–9 GB and are not meant to
 be run that way.
 
+## Fifth increment: SCIP references and fan-in (2026-10-25)
+
+([record](research/code-db-scip-2026-10-25.md)) The owner chose to read
+SCIP indexes with a Rust table function rather than through the `scip`
+CLI's JSON, after the downsides were laid out (schema tracking by hand,
+one more version-pinned extension, decisions fixed in Rust, the CLI still
+needed as a test reference, index generation external either way). The
+second extension `scip_index` (`read_scip`, `read_scip_symbols`,
+`read_scip_metadata`; a dependency-free wire-format decoder of about 160
+lines citing `scip.proto` at scip-code/scip v0.10.0; documents streamed
+one at a time) matched `scip print --json` on three indexes with zero
+differences and reads this repository's 30 MB index in 0.07 s at 11 MiB
+peak (the JSON route: 59 MB of JSON, 0.4 s to convert, 0.3–0.5 s and
+420–470 MiB to load with `read_json`; both were measured, the table
+function won on every number). `views/scip.sql` shapes the facts
+(1-based lines and columns, `local N` symbols qualified by document,
+`is_reference` = not definition since rust-analyzer 1.99.1 sets only the
+Definition bit) and is optional in the file order; `unit_fan_in_churn`
+reproduced the spike's 2,915 rows and top entries; the cache keys the
+SCIP layer by the index file's content hash (0.02 s to hash) and rebuilds
+it whole on change. The index itself is still produced outside DuckDB
+(`rust-analyzer scip`, 160–280 s on this repository at 7 GB).
+
+All three literature-backed signals (unit-level churn, inconsistent clone
+changes, fan-in × churn) are now computable from the cache in under
+0.2 s each.
+
 ## Open points
 
 - **A `git://` file system** remains the target for history access. The
@@ -156,8 +183,9 @@ be run that way.
   catalog surface), and whether `duckdb-ext/` is extracted for use in
   other repositories. The DuckDB 2.0.0 CLI is installed as
   `~/.local/bin/duckdb2` for interactive use.
-- **Fan-in × churn** still needs the SCIP facts (reader form undecided),
-  and Go/TypeScript adapters exist only as the spike's record.
+- **Go and TypeScript** adapters exist only in the spike's record; the
+  per-language SQL (`lang/<language>.sql`) and the SCIP indexers
+  (`scip-go`, `scip-typescript`) are the pieces to add.
 
 ## History
 
