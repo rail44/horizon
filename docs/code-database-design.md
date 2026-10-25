@@ -89,9 +89,29 @@ cache → incremental cache". Done so far
 - `git_tracked_files(repo, include_untracked)` is the fourth `git_history`
   function: the worktree's files with their current content ids, matching
   `git ls-files` and `git hash-object` on this repository in about 6 ms.
-  The views still select files with `glob()`; switching them to this
-  function and keying a per-file incremental cache by `blob_id` is the
-  next step.
+
+## Third increment: tracked files and a persistent incremental cache (2026-10-25)
+
+([record](research/code-db-incremental-cache-2026-10-25.md)) The file
+set now comes from `git_tracked_files` (regular files whose extension is
+in the `languages` map; `include_untracked` optional), so the `glob()`
+caveats are gone and `files` carries each file's `blob_id`. `refresh.sql`
+keeps a per-repository cache file (`target/code-db/cache.duckdb`,
+attached as `cache`): `nodes`, `units` and `tags` are stored per file and
+only the files whose `(path, blob_id)` changed are re-parsed and
+re-derived (one `read_ast` over the changed paths; the per-language views
+take a `scope_paths` variable); history is appended with
+`since := <cached head>` and rebuilt when that head is no longer in the
+range; a `meta` row records keys (sitting_duck version, the derived
+views' text, history parameters) whose change forces the matching
+rebuild, and an interrupted refresh rebuilds everything. Reproduced on a
+throwaway clone of this repository: cold 3.7 s (2.1 GB peak), nothing
+changed 0.14–0.17 s, one edited file 0.20–0.24 s, ten files 0.24–0.26 s,
+one commit of three files 0.25 s, an amended head 2.8–3.3 s (history
+rebuilt); every refreshed view equals its live counterpart row for row;
+queries from the cache run in 0.02–0.08 s; the cache file is about 50 MB
+and does not compact deleted rows. The session cache (`cache.sql`) stays
+for one-off use; the two refuse to be mixed.
 
 ## Open points
 
@@ -113,10 +133,14 @@ cache → incremental cache". Done so far
 - **Unit granularity**: nested units (impl blocks, modules) are credited
   with every change inside them; the views keep the nesting (`parent`
   columns) so the choice can be made per query.
-- **Where the views live and how they are loaded** (SQL files read by the
-  client, or registered by an extension), the DuckDB 2.0 client for
-  interactive use (the system CLI is 1.5.0), and whether `duckdb-ext/` is
-  extracted for use in other repositories.
+- **How the views are loaded** (SQL files read by the client today;
+  registration by an extension is not available on the C API v2 without a
+  catalog surface), and whether `duckdb-ext/` is extracted for use in
+  other repositories. The DuckDB 2.0.0 CLI is installed as
+  `~/.local/bin/duckdb2` for interactive use.
+- **Per-commit unit changes** (the join that the strongest signals need)
+  are still not computed: they wait on a way to parse historical blobs
+  (see the first open point).
 
 ## History
 
