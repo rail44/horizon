@@ -24,6 +24,14 @@
 -- again (docs/research/code-db-views-2026-10-24.md §6). Intermediate steps that are
 -- referenced more than once, or that slice source text, are MATERIALIZED as well.
 --
+-- Both views cover the files of `scope_files` (views/files.sql): all files, or the
+-- subset refresh.sql recomputes. Every input (nodes, sources, file paths) is restricted
+-- to that set, so the rows of a file depend on that file alone. unit_id numbers the
+-- units of the scope, ordered by file_id first, so a file's units are consecutive.
+-- The node filter tests `scope_paths IS NULL` first: with the bare `file_id IN (…)`, a
+-- live `units` or `tags` peaked about 200 MB higher on this repository; with the test
+-- first, at the same memory as without any filter.
+--
 -- read_ast exposes no tree-sitter field names and no is_named flag, so field-based
 -- patterns are restated by child type and sibling position (see the comments below).
 
@@ -35,6 +43,7 @@ WITH rust_nodes AS MATERIALIZED (
            start_line::BIGINT AS start_line, end_line::BIGINT AS end_line,
            sibling_index, descendant_count::BIGINT AS descendant_count
     FROM nodes WHERE language = 'rust'
+      AND (getvariable('scope_paths') IS NULL OR file_id IN (SELECT file_id FROM scope_files))
 ),
 rust_unit_candidates AS MATERIALIZED (
     SELECT n.file_id, n.node_id, n.type, n.start_byte, n.end_byte, n.start_line, n.end_line,
@@ -164,6 +173,7 @@ WITH rust_nodes AS MATERIALIZED (
            start_line::BIGINT AS start_line, end_line::BIGINT AS end_line,
            sibling_index, children_count
     FROM nodes WHERE language = 'rust'
+      AND (getvariable('scope_paths') IS NULL OR file_id IN (SELECT file_id FROM scope_files))
 ),
 -- Text of the identifier-like nodes the predicates compare (#eq?, #any-of?), sliced in a
 -- step of its own as in rust_units.
@@ -286,7 +296,7 @@ tagged AS (
     -- File tags: the spike's fnmatch globs **/tests/**, **/tests.rs, **/*_tests.rs and
     -- **/test_*.rs, where `*` also matches `/` and `**/` also matches at the root.
     SELECT f.file_id, 0, 'test'
-    FROM files f
+    FROM scope_files f
     WHERE f.language = 'rust' AND (
            f.path LIKE '%/tests/%' OR f.path LIKE 'tests/%'
         OR f.path LIKE '%/tests.rs' OR f.path = 'tests.rs'

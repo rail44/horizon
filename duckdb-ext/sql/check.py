@@ -8,7 +8,19 @@
         Build a small git repository in a temporary directory (Rust files with a
         trait impl, a test module, an untracked file, excluded build and hidden
         directories, several commits) plus a jscpd-shaped report, and assert on the
-        rows of every view and query.
+        rows of every view and query, live, through cache.sql and through refresh.sql
+        (edits, additions, deletions, renames, commits, an amend, untracked files, a
+        new session).
+
+    uv run --script duckdb-ext/sql/check.py refresh REPO [--reports ...]
+        Read refresh.sql twice (cache REPO/target/code-db/cache.duckdb) and compare
+        every refreshed view and query with its live counterpart.
+
+    uv run --script duckdb-ext/sql/check.py measure-refresh CLONE [--runs 3]
+        Time refresh.sql in a fresh process per run: empty cache, nothing changed,
+        1 and 10 files edited, one commit of 3 files, an amend; then the queries from
+        the cache, the cache file size and the file snapshot. Edits, commits to and
+        resets CLONE: pass a throwaway clone.
 
     uv run --script duckdb-ext/sql/check.py repo REPO [--reports R1 R2 ...]
         Load REPO (reports default to REPO/target/code-db/jscpd/{exact,normalized}),
@@ -24,7 +36,8 @@
 
     uv run --script duckdb-ext/sql/check.py cli REPO [--reports ...]
         Run the same files with `.read` in the DuckDB 2.0.0 CLI (DUCKDB_CLI, default
-        ~/.local/bin/duckdb2) and compare its counts with this client's.
+        ~/.local/bin/duckdb2), then refresh.sql, and compare its counts with this
+        client's.
 
 The process works from the root of the Horizon checkout holding this file, because
 00_load.sql loads git_history by a path relative to it.
@@ -54,6 +67,9 @@ VIEW_FILES = [
     "views/clones.sql",
 ]
 CACHE_FILE = "cache.sql"
+REFRESH_FILE = "refresh.sql"
+# The views refresh.sql points at the persistent cache, plus files (its file snapshot).
+REFRESHED_VIEWS = ["files", "nodes", "units", "tags", "commits", "file_changes", "hunks"]
 QUERIES = ["file_cochange", "file_cochange_thresholds", "clone_site_tags", "clone_site_tags_summary"]
 
 
@@ -90,6 +106,46 @@ def query_sql(name):
 
 def rows(con, sql):
     return con.execute(sql).fetchall()
+
+
+def read_refresh(con):
+    """Read refresh.sql; return its wall time and the cache's meta row as a dict."""
+    start = time.perf_counter()
+    con.execute((SQL_DIR / REFRESH_FILE).read_text())
+    wall = time.perf_counter() - start
+    cursor = con.execute("SELECT * FROM cache.meta")
+    names = [d[0] for d in cursor.description]
+    return wall, dict(zip(names, cursor.fetchone()))
+
+
+def snapshot_live(con):
+    """Copy every view refresh.sql replaces, read live, into temp tables live_<view>."""
+    for view in REFRESHED_VIEWS:
+        con.execute(f"CREATE OR REPLACE TEMP TABLE live_{view} AS SELECT * FROM {view}")
+
+
+def diff_from_live(con):
+    """{view: (live rows missing from the view, view rows missing from live)}, nonzero only."""
+    diffs = {}
+    for view in REFRESHED_VIEWS:
+        counts = rows(con, f"SELECT (SELECT count(*) FROM (FROM live_{view} EXCEPT ALL FROM {view})), "
+                           f"(SELECT count(*) FROM (FROM {view} EXCEPT ALL FROM live_{view}))")[0]
+        if counts != (0, 0):
+            diffs[view] = counts
+    return diffs
+
+
+def refresh_against_live(con):
+    """Re-read the view files (live, with a new file snapshot), copy the live rows and
+    the four queries' results, read refresh.sql and compare. Returns (wall, meta)."""
+    read_views(con)
+    snapshot_live(con)
+    live_queries = [rows(con, query_sql(q)) for q in QUERIES]
+    wall, meta = read_refresh(con)
+    diffs = diff_from_live(con)
+    assert not diffs, f"refreshed views differ from live: {diffs}"
+    assert [rows(con, query_sql(q)) for q in QUERIES] == live_queries, "queries differ after refresh"
+    return wall, meta
 
 
 # --- fixture ---------------------------------------------------------------------
@@ -163,7 +219,7 @@ fn integration() {
 """
 
 
-def git(repo, *args, date=None):
+def git_env(repo, date=None):
     env = {
         "PATH": os.environ["PATH"],
         "HOME": str(repo),
@@ -176,7 +232,16 @@ def git(repo, *args, date=None):
     }
     if date:
         env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = date
-    subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True)
+    return env
+
+
+def git(repo, *args, date=None):
+    subprocess.run(["git", *args], cwd=repo, env=git_env(repo, date), check=True, capture_output=True)
+
+
+def git_out(repo, *args):
+    return subprocess.run(["git", *args], cwd=repo, env=git_env(repo), check=True,
+                          capture_output=True, text=True).stdout.strip()
 
 
 def write(repo, path, text):
@@ -212,6 +277,7 @@ def build_fixture(root):
     write(repo, "src/shapes.rs", SHAPES_V1)
     write(repo, "src/rect.rs", RECT)
     write(repo, "README.md", "fixture\n")
+    write(repo, ".gitignore", "target/\n.hidden/\n")
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", "Add shapes", date="2026-01-01T00:00:00Z")
     # Two more commits touching lib.rs and shapes.rs together, one touching README only.
@@ -226,8 +292,8 @@ def build_fixture(root):
     git(repo, "commit", "-q", "-m", "Add perimeter and an integration test", date="2026-01-03T00:00:00Z")
     write(repo, "README.md", "fixture\nmore\n")
     git(repo, "commit", "-q", "-am", "Extend README", date="2026-01-04T00:00:00Z")
-    # Not committed: an untracked source file (included), a build output and a file in
-    # a hidden directory (both excluded by the default exclude_patterns).
+    # Not committed: an untracked source file (included with include_untracked), a
+    # build output and a file in a hidden directory (both ignored by .gitignore).
     write(repo, "src/scratch.rs", "fn scratch() {}\n")
     write(repo, "target/debug/build/out.rs", "fn generated() {}\n")
     write(repo, ".hidden/x.rs", "fn hidden() {}\n")
@@ -267,12 +333,14 @@ def check_fixture():
         root = Path(tmp)
         repo = build_fixture(root)
         report, lines = fixture_report(root, repo)
-        con = connect(repo, [report], {"min_shared": "2"})
+        con = connect(repo, [report], {"min_shared": "2", "include_untracked": "true"})
         shapes = (repo / "src/shapes.rs").read_text()
 
-        files = rows(con, "SELECT path, language FROM files ORDER BY path")
-        assert files == [("src/lib.rs", "rust"), ("src/rect.rs", "rust"), ("src/scratch.rs", "rust"),
-                         ("src/shapes.rs", "rust"), ("tests/it.rs", "rust")], files
+        files = rows(con, "SELECT path, language, mode, length(blob_id) FROM files ORDER BY path")
+        assert files == [(p, "rust", "100644", 40) for p in
+                         ["src/lib.rs", "src/rect.rs", "src/scratch.rs", "src/shapes.rs", "tests/it.rs"]], files
+        blob = rows(con, "SELECT blob_id FROM files WHERE path = 'src/shapes.rs'")[0][0]
+        assert blob == git_out(repo, "rev-parse", "HEAD:src/shapes.rs"), blob
 
         node_files = rows(con, "SELECT count(DISTINCT file_id), min(start_line), bool_and(file_id IS NOT NULL) FROM nodes")
         assert node_files == [(5, 1, True)], node_files
@@ -317,7 +385,7 @@ def check_fixture():
 
         assert rows(con, "SELECT count(*), count(*) FILTER (WHERE is_merge) FROM commits") == [(4, 0)]
         changes = rows(con, "SELECT path, count(*) FROM file_changes GROUP BY 1 ORDER BY 1")
-        assert changes == [("README.md", 2), ("src/lib.rs", 3), ("src/rect.rs", 1),
+        assert changes == [(".gitignore", 1), ("README.md", 2), ("src/lib.rs", 3), ("src/rect.rs", 1),
                            ("src/shapes.rs", 3), ("tests/it.rs", 1)], changes
         hunk_paths = rows(con, "SELECT DISTINCT path FROM hunks ORDER BY 1")
         assert hunk_paths == [("src/lib.rs",), ("src/rect.rs",), ("src/shapes.rs",), ("tests/it.rs",)], hunk_paths
@@ -388,6 +456,154 @@ def check_fixture():
         write(repo, "src/scratch.rs", "fn scratch() {}\n")
         assert rows(con, scratch_units) == [(3,)]
     print("fixture: ok")
+    check_refresh_fixture()
+
+
+def cached_rows_by_path(con, path_filter):
+    """Rows of the cache's per-file tables for the paths matching path_filter (SQL)."""
+    return {t: sorted(rows(con, f"SELECT * FROM cache.{t} WHERE {path_filter}"), key=repr)
+            for t in ["nodes", "units", "tags"]}
+
+
+def check_refresh_fixture():
+    with tempfile.TemporaryDirectory(prefix="code-db-refresh-") as tmp:
+        root = Path(tmp)
+        repo = build_fixture(root)
+        report, _ = fixture_report(root, repo)
+        cache = root / "cache" / "cache.duckdb"
+        cache.parent.mkdir()
+        variables = {"min_shared": "2", "cache_path": sql_literal(str(cache))}
+        con = connect(repo, [report], variables)
+        counts = ("files_added", "files_changed", "files_removed", "nodes_parsed", "units_inserted",
+                  "tags_inserted", "commits_added")
+
+        def stats(meta):
+            return {k: meta[k] for k in counts}
+
+        def expect(meta, syntax="incremental", history="appended", **nonzero):
+            expected = {k: nonzero.get(k, 0) for k in counts}
+            got = stats(meta)
+            for k, v in nonzero.items():
+                if v is None:  # nonzero, value not asserted
+                    assert got[k] > 0, (k, got)
+                    expected[k] = got[k]
+            assert (meta["syntax"], meta["history"], got) == (syntax, history, expected), meta
+            assert meta["state"] == "ok" and meta["derived"] == syntax, meta
+
+        # Initial refresh from an empty cache: everything built, equal to live.
+        _, meta = refresh_against_live(con)
+        expect(meta, syntax="rebuilt", history="rebuilt", files_added=4, nodes_parsed=None,
+               units_inserted=None, tags_inserted=None, commits_added=4)
+        assert meta["head"] == git_out(repo, "rev-parse", "HEAD"), meta
+        assert rows(con, "SELECT count(*) FROM cache.nodes_files") == [(4,)]
+        plan = "\n".join(r[1] for r in rows(con, "EXPLAIN " + query_sql("clone_site_tags")))
+        assert "READ_AST" not in plan and "READ_TEXT" not in plan, plan
+
+        # Nothing changed: no file parsed, nothing appended; reading refresh.sql again in
+        # the same session takes under 100 ms (the best of three reads, as the desktop
+        # this runs on is shared).
+        _, meta = refresh_against_live(con)
+        expect(meta)
+        walls = []
+        for _ in range(3):
+            wall, meta = read_refresh(con)
+            expect(meta)
+            walls.append(wall)
+        assert min(walls) < 0.1, f"refresh with nothing changed took {walls} s: {meta['seconds']}"
+        print("refresh with nothing changed:", ", ".join(f"{w * 1000:.0f} ms" for w in walls))
+        assert meta["nodes_parsed"] == 0 and rows(con, "SELECT count(*) FROM cache.nodes_files") == [(4,)]
+
+        # Edit one file: exactly its rows are replaced.
+        others = "path <> 'src/rect.rs'"
+        before = cached_rows_by_path(con, others)
+        old_rect = cached_rows_by_path(con, "path = 'src/rect.rs'")
+        write(repo, "src/rect.rs", RECT + "\n#[test]\nfn rect_area() {\n    assert!(true);\n}\n")
+        _, meta = refresh_against_live(con)
+        rect_nodes = rows(con, "SELECT count(*) FROM cache.nodes WHERE path = 'src/rect.rs'")[0][0]
+        rect_units = rows(con, "SELECT count(*) FROM cache.units WHERE path = 'src/rect.rs'")[0][0]
+        rect_tags = rows(con, "SELECT count(*) FROM cache.tags WHERE path = 'src/rect.rs'")[0][0]
+        expect(meta, files_changed=1, nodes_parsed=rect_nodes, units_inserted=rect_units, tags_inserted=rect_tags)
+        assert cached_rows_by_path(con, others) == before
+        assert cached_rows_by_path(con, "path = 'src/rect.rs'") != old_rect
+
+        # Add a file (tracked, not committed).
+        write(repo, "src/extra.rs", "pub fn extra() -> u32 {\n    1\n}\n")
+        git(repo, "add", "src/extra.rs")
+        before = cached_rows_by_path(con, "path <> 'src/extra.rs'")
+        _, meta = refresh_against_live(con)
+        expect(meta, files_added=1, nodes_parsed=None, units_inserted=1)
+        assert cached_rows_by_path(con, "path <> 'src/extra.rs'") == before
+
+        # Delete it again.
+        git(repo, "rm", "-q", "-f", "src/extra.rs")
+        _, meta = refresh_against_live(con)
+        expect(meta, files_removed=1)
+        assert rows(con, "SELECT count(*) FROM cache.nodes WHERE path = 'src/extra.rs'") == [(0,)]
+
+        # Rename a file: the old path is dropped, the new one parsed (paths are keys).
+        git(repo, "mv", "tests/it.rs", "tests/integration.rs")
+        _, meta = refresh_against_live(con)
+        expect(meta, files_added=1, files_removed=1, nodes_parsed=None, units_inserted=1, tags_inserted=3)
+
+        # A new commit (of the edit and the rename, already in the cache): history appended.
+        git(repo, "commit", "-q", "-am", "Edit rect, rename the integration test", date="2026-01-05T00:00:00Z")
+        _, meta = refresh_against_live(con)
+        expect(meta, commits_added=1)
+        assert meta["head"] == git_out(repo, "rev-parse", "HEAD"), meta
+        assert rows(con, "SELECT count(*) FROM commits") == [(5,)]
+
+        # An amended commit: the cached head is gone from HEAD's history, so it is rebuilt.
+        git(repo, "commit", "-q", "--amend", "-m", "Amended", date="2026-01-06T00:00:00Z")
+        _, meta = refresh_against_live(con)
+        expect(meta, history="rebuilt", commits_added=5)
+        assert rows(con, "SELECT list(subject ORDER BY subject) FILTER (WHERE subject LIKE 'Amended' "
+                         "OR subject LIKE 'Edit rect%') FROM commits") == [(["Amended"],)]
+
+        # Untracked files count only with include_untracked (scratch.rs is untracked).
+        _, meta = refresh_against_live(con)
+        expect(meta)
+        con.execute("SET VARIABLE include_untracked = true")
+        _, meta = refresh_against_live(con)
+        expect(meta, files_added=1, nodes_parsed=None, units_inserted=1)
+        assert rows(con, "SELECT count(*) FROM files WHERE path = 'src/scratch.rs'") == [(1,)]
+        con.execute("SET VARIABLE include_untracked = false")
+        _, meta = refresh_against_live(con)
+        expect(meta, files_removed=1)
+
+        # An interrupted refresh (state left at 'refreshing') makes the next one rebuild.
+        con.execute("UPDATE cache.meta SET state = 'refreshing'")
+        _, meta = refresh_against_live(con)
+        expect(meta, syntax="rebuilt", history="rebuilt", files_added=4, nodes_parsed=None,
+               units_inserted=None, tags_inserted=None, commits_added=5)
+
+        # cache.sql and refresh.sql refuse each other's views; the view files reset both.
+        try:
+            read_cache(con)
+        except duckdb.Error as e:
+            assert "persistent cache" in str(e), e
+        else:
+            raise AssertionError("cache.sql over the persistent cache did not fail")
+        read_views(con)
+        read_cache(con)
+        try:
+            read_refresh(con)
+        except duckdb.Error as e:
+            assert "session copies" in str(e), e
+        else:
+            raise AssertionError("refresh.sql over the session cache did not fail")
+        con.close()
+
+        # The cache file in a new session: read the view files, refresh (nothing to do),
+        # query; and the views are live again after the view files are re-read.
+        con = connect(repo, [report], variables)
+        _, meta = refresh_against_live(con)
+        expect(meta)  # nothing rebuilt or parsed
+        assert rows(con, "SELECT count(*) FROM units") == rows(con, "SELECT count(*) FROM live_units")
+        read_views(con)
+        view_sql = rows(con, "SELECT sql FROM duckdb_views() WHERE view_name = 'nodes'")[0][0]
+        assert "cache.nodes" not in view_sql and "read_ast" in view_sql, view_sql
+        con.close()
+    print("refresh fixture: ok")
 
 
 # --- this repository -------------------------------------------------------------
@@ -421,8 +637,9 @@ BUILD_CACHE = "build cache"
 
 
 def cache_layers():
-    """cache.sql's statements grouped by layer: each layer starts at a DROP TABLE."""
-    layers = []
+    """cache.sql's statements grouped by layer: each layer starts at a DROP TABLE; the
+    statements before the first one (the guard) form a layer of their own."""
+    layers = [("guard", [])]
     for statement in (SQL_DIR / CACHE_FILE).read_text().split(";\n"):
         lines = [l for l in statement.splitlines() if l.strip() and not l.lstrip().startswith("--")]
         if not lines:
@@ -434,9 +651,35 @@ def cache_layers():
     return layers
 
 
-def run_step(repo, reports, step, cached):
-    con = connect(repo, reports)
+REFRESH_STEP = "refresh"
+FILE_SET_STEP = "file set"
+
+
+def file_set_statement():
+    """00_load.sql's statement that takes the file snapshot (the git_tracked_files step)."""
+    text = (SQL_DIR / "00_load.sql").read_text()
+    start = text.index("SET VARIABLE source_files = (")
+    return text[start:text.index(";", start)]
+
+
+def run_step(repo, reports, step, cached, refreshed=False):
+    con = connect(repo, reports, {"cache_path": sql_literal(str(refresh_cache_path(repo)))})
     rss = lambda: resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    if step == REFRESH_STEP:
+        wall, meta = read_refresh(con)
+        print(json.dumps({"wall": wall, "rss_mib": rss(), **meta["seconds"],
+                          **{k: v for k, v in meta.items() if k.startswith("files_") or k in
+                             ("syntax", "derived", "history", "nodes_parsed", "units_inserted",
+                              "tags_inserted", "commits_added")}}))
+        return
+    if step == FILE_SET_STEP:
+        start = time.perf_counter()
+        con.execute(file_set_statement())
+        print(json.dumps({"wall": time.perf_counter() - start, "rss_mib": rss(),
+                          "files": len(rows(con, "SELECT * FROM files"))}))
+        return
+    if refreshed:
+        read_refresh(con)
     if step == BUILD_CACHE:
         result = {}
         start = time.perf_counter()
@@ -486,6 +729,96 @@ def measure(repo, reports, runs, only=None):
               f"cached {span(cached, 'wall')}, peak RSS {span(cached, 'rss_mib', 'MiB', '{:.0f}')}")
 
 
+def refresh_cache_path(repo):
+    """refresh.sql's default cache file for REPO, with its directory created."""
+    path = Path(repo).resolve() / "target/code-db/cache.duckdb"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def check_refresh_repo(repo, reports):
+    """Refresh REPO's cache twice, comparing every refreshed view and query with live."""
+    con = connect(repo, reports, {"cache_path": sql_literal(str(refresh_cache_path(repo)))})
+    for attempt in ("first", "second"):
+        wall, meta = refresh_against_live(con)
+        print(f"{attempt} refresh: {wall:.2f} s, equal to live; meta: "
+              + ", ".join(f"{k}={v}" for k, v in meta.items() if k not in ("seconds", "derive_key")))
+        print("  seconds:", {k: round(v, 3) for k, v in meta["seconds"].items()})
+    print("refresh: ok")
+
+
+def measure_refresh(repo, reports, runs):
+    """Time refresh.sql in a fresh process per run on REPO, a throwaway clone this
+    command edits, commits to and resets (never a checkout you work in)."""
+    repo = Path(repo).resolve()
+    if repo == HORIZON_ROOT.resolve() or not (repo / ".git").is_dir():
+        raise SystemExit("measure-refresh edits and commits: pass a throwaway clone")
+    cache = refresh_cache_path(repo)
+    base = git_out(repo, "rev-parse", "HEAD")
+    rust = git_out(repo, "ls-files", "*.rs").splitlines()
+    spread = rust[:: max(1, len(rust) // 10)][:10]
+
+    def step(name, *extra):
+        out = subprocess.run([sys.executable, __file__, "step", str(repo), name,
+                              "--reports", *map(str, reports), *extra],
+                             check=True, capture_output=True, text=True).stdout
+        return json.loads(out.strip().splitlines()[-1])
+
+    def reset_and_sync():
+        git(repo, "reset", "-q", "--hard", base)
+        step(REFRESH_STEP)
+
+    def edit(paths):
+        for p in paths:
+            with open(repo / p, "a") as f:
+                f.write("\nfn code_db_measure_edit() {}\n")
+
+    def drop_cache():
+        for p in (cache, cache.with_name(cache.name + ".wal")):
+            p.unlink(missing_ok=True)
+
+    def span(results, key, fmt="{:.2f}"):
+        values = [r[key] for r in results]
+        return f"{fmt.format(min(values))}-{fmt.format(max(values))}"
+
+    def report(name, results):
+        layers = ", ".join(f"{k} {span(results, k)}" for k in
+                           ("files", "nodes", "units", "tags", "commits", "file_changes", "hunks", "checkpoint"))
+        last = results[-1]
+        stats = ", ".join(f"{k}={last[k]}" for k in last if k.startswith("files_") or k in
+                          ("syntax", "derived", "history", "nodes_parsed", "units_inserted", "tags_inserted",
+                           "commits_added"))
+        print(f"{name}: wall {span(results, 'wall')} s (meta total {span(results, 'total')} s; {layers}), "
+              f"peak RSS {span(results, 'rss_mib', '{:.0f}')} MiB; {stats}")
+
+    def scenario(name, prepare):
+        results = []
+        for _ in range(runs):
+            prepare()
+            results.append(step(REFRESH_STEP))
+        report(name, results)
+
+    git(repo, "reset", "-q", "--hard", base)
+    scenario("cold (empty cache)", drop_cache)
+    scenario("nothing changed", lambda: None)
+    scenario("1 file edited", lambda: (reset_and_sync(), edit(spread[:1])))
+    scenario("10 files edited", lambda: (reset_and_sync(), edit(spread)))
+    scenario("1 commit of 3 edited files",
+             lambda: (reset_and_sync(), edit(spread[:3]), git(repo, "commit", "-q", "-am", "Measure")))
+    scenario("amended HEAD (history rebuilt)",
+             lambda: (reset_and_sync(), git(repo, "commit", "-q", "--amend", "-m", "Measure amend")))
+    reset_and_sync()
+    size = sum(p.stat().st_size for p in (cache, cache.with_name(cache.name + ".wal")) if p.exists())
+    print(f"cache file: {size / 2**20:.1f} MiB")
+    for name in QUERIES:
+        results = [step(f"query {name}", "--refreshed") for _ in range(runs)]
+        print(f"query {name} from the cache: {span(results, 'wall')} s, "
+              f"peak RSS {span(results, 'rss_mib', '{:.0f}')} MiB (refresh included)")
+    results = [step(FILE_SET_STEP) for _ in range(runs)]
+    print(f"file set (git_tracked_files snapshot): {span(results, 'wall', '{:.3f}')} s, "
+          f"{results[-1]['files']} files")
+
+
 def explain_counts(repo, reports):
     con = connect(repo, reports)
     for view in ["nodes", "units", "tags"]:
@@ -508,15 +841,19 @@ def check_cli(repo, reports):
     probe = ("SELECT (SELECT count(*) FROM files), (SELECT count(*) FROM units), (SELECT count(*) FROM tags), "
              "(SELECT count(*) FROM hunks), (SELECT count(*) FROM clone_pairs);")
     query_counts = "\n".join(f"SELECT count(*) FROM ({query_sql(q).rstrip().rstrip(';')});" for q in QUERIES)
+    # The same counts again after refresh.sql (the persistent cache of REPO).
     script = (f"SET VARIABLE repo = {sql_literal(str(Path(repo).resolve()))};\n"
               f"SET VARIABLE clone_reports = {sql_literal([str(Path(r).resolve()) for r in reports])};\n"
-              f"{reads}\n.mode csv\n.headers off\n{probe}\n{query_counts}\n")
-    out = subprocess.run([cli, "-unsigned", "-no-agent", "-batch"], input=script, cwd=HORIZON_ROOT,
+              f"SET VARIABLE cache_path = {sql_literal(str(refresh_cache_path(repo)))};\n"
+              f"{reads}\n.mode csv\n.headers off\n{probe}\n{query_counts}\n"
+              f".read {SQL_DIR.relative_to(HORIZON_ROOT) / REFRESH_FILE}\n{probe}\n{query_counts}\n")
+    out = subprocess.run([cli, "-unsigned", "-no-agent", "-batch", "-bail"], input=script, cwd=HORIZON_ROOT,
                          check=True, capture_output=True, text=True).stdout
     cli_values = [line for line in out.splitlines() if line and line[0].isdigit()]
     con = connect(repo, reports)
     py_values = [",".join(str(v) for v in rows(con, probe.rstrip(";"))[0])]
     py_values += [str(len(rows(con, query_sql(q)))) for q in QUERIES]
+    py_values += py_values  # live, then refreshed
     print("cli:", cli_values)
     print("python:", py_values)
     assert cli_values == py_values, "CLI and Python results differ"
@@ -525,13 +862,15 @@ def check_cli(repo, reports):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["fixture", "repo", "measure", "explain", "cli", "step"])
+    parser.add_argument("command", choices=["fixture", "repo", "refresh", "measure", "measure-refresh",
+                                            "explain", "cli", "step"])
     parser.add_argument("repo", nargs="?")
     parser.add_argument("step", nargs="?")
     parser.add_argument("--reports", nargs="+")
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--only", help="measure: run only the steps whose name contains this text")
     parser.add_argument("--cached", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--refreshed", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.command == "fixture":
         check_fixture()
@@ -541,14 +880,18 @@ def main():
     reports = args.reports or default_reports(args.repo)
     if args.command == "repo":
         check_repo(args.repo, reports)
+    elif args.command == "refresh":
+        check_refresh_repo(args.repo, reports)
     elif args.command == "measure":
         measure(args.repo, reports, args.runs, args.only)
+    elif args.command == "measure-refresh":
+        measure_refresh(args.repo, reports, args.runs)
     elif args.command == "explain":
         explain_counts(args.repo, reports)
     elif args.command == "cli":
         check_cli(args.repo, reports)
     else:
-        run_step(args.repo, reports, args.step, args.cached)
+        run_step(args.repo, reports, args.step, args.cached, args.refreshed)
 
 
 if __name__ == "__main__":

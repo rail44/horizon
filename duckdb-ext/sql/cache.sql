@@ -22,6 +22,16 @@
 -- the hidden view and leave the shadow in place. With a database file, the replaced
 -- views persist pointing at temporary tables that the next session does not have: read
 -- the view files in every session, as every client does anyway.
+--
+-- refresh.sql is the persistent, incremental counterpart. The two are not mixed: this
+-- file refuses to run while the views read the persistent cache (re-read the view
+-- files first), and refresh.sql refuses while they read these copies.
+
+-- (duckdb_views() returns the view text normalized, the database name quoted.)
+SELECT CASE WHEN EXISTS (SELECT 1 FROM duckdb_views()
+                         WHERE view_name = 'nodes' AND regexp_matches(sql, '"?cache"?\.nodes\b'))
+    THEN error('cache.sql: the views read the persistent cache of refresh.sql; re-read the view files first')
+END;
 
 DROP TABLE IF EXISTS nodes_cache;
 CREATE TEMP TABLE nodes_cache AS SELECT * FROM nodes;

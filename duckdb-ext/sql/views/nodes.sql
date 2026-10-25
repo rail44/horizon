@@ -12,7 +12,8 @@
 --
 -- context := 'none' skips sitting_duck's semantic context, whose default ('native')
 -- is quadratic in the statements of a block; peek := 'none' drops the source excerpt.
--- The language is detected from the file extension.
+-- The language is detected from the file extension. refresh.sql calls read_ast with the
+-- same parameters for the files it re-parses; change both together.
 
 CREATE OR REPLACE VIEW nodes AS
 SELECT f.file_id, a.*
