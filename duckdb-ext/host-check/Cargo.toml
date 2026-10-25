@@ -1,4 +1,4 @@
-# Loads the built extension into the `duckdb` crate linked against the
+# Loads the built extensions into the `duckdb` crate linked against the
 # machine-installed libduckdb 2.0.0, the way Horizon's daemon links it.
 #
 # A workspace of its own: in the extension's workspace, cargo would unify

@@ -1,0 +1,8 @@
+[package]
+name = "scip-probe"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+scip_index_core = { path = "../scip-index-core" }

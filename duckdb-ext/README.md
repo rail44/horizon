@@ -10,7 +10,10 @@ root quality gate does not read it; `./check.sh` is its gate.
 | `git-history-core/` | a library: the rows of the five functions, computed with gitoxide (`gix`) only; no DuckDB dependency, unit-tested and compared with the git CLI on fixtures |
 | `git-history/` | `git_history.duckdb_extension`: the DuckDB table functions `git_hunks`, `git_commits`, `git_file_changes`, `git_tracked_files`, `git_changed_blobs` over `git-history-core` |
 | `gix-probe/` | a binary printing any function's rows of `git-history-core` as TSV, compared with the git CLI by `scripts/gix_parity.py` |
-| `host-check/` | no output; a test that loads the built extension through the `duckdb` crate (a separate workspace, see below) |
+| `scip-index-core/` | a library: a streaming decoder of SCIP indexes (protobuf) and the rows of the three SCIP functions; no dependencies, unit-tested and compared with `scip print --json` |
+| `scip-index/` | `scip_index.duckdb_extension`: the DuckDB table functions `read_scip`, `read_scip_symbols`, `read_scip_metadata` over `scip-index-core` (see "`scip_index`" below) |
+| `scip-probe/` | a binary printing any SCIP function's rows of `scip-index-core` as TSV, compared with the extension by `scripts/scip_ext_parity.py` |
+| `host-check/` | no output; a test that loads both built extensions through the `duckdb` crate (a separate workspace, see below) |
 
 ## Route and pin
 
@@ -37,6 +40,9 @@ Pins:
 | `duckdb-loadable-macros` | `=1.20000.0`, feature `neo` |
 | `gix` | 0.90.0, no default features, features `blob-diff`, `revision`, `sha1`, `max-performance`, `status` (resolves `gix-diff` 0.70.0, `gix-imara-diff` 0.3.2, `gix-traverse` 0.64.0, `gix-odb` 0.87.0, `gix-pack` 0.77.0, `gix-status` 0.37.0, `gix-dir` 0.32.0, `gix-filter` 0.36.1) |
 | `duckdb` (host check only) | `=1.20000.0`, the version the root `Cargo.lock` pins |
+| `scip.proto` (field numbers cited, not vendored) | `scip-code/scip` v0.10.0, commit `1c2b6db7e560d5233c944f36e4ac1377cc6963fc` |
+| `scip` CLI (tests only, never linked) | v0.10.0 `scip-linux-amd64.tar.gz`, sha256 `eeb28ebbff443c01609fb1691809958f3f0c7a8651af689a5bc8560061cd8ab0`, fetched by `scripts/fetch-scip-cli.sh` into `target/tools/scip-v0.10.0/` |
+| `rust-analyzer` (tests and measurements) | whatever is on `PATH`; the numbers below are from 1.99.1 (58cf8f9 2026-10-13) |
 
 What was kept from the template: the `cdylib` with the
 `#[duckdb_entrypoint_c_api_v2]` entrypoint, the release profile (`lto`,
@@ -87,23 +93,38 @@ allowing the set above) also reports ISC (`ring`, `untrusted`,
 build-time only, for `libduckdb-sys`'s build script, and are not linked
 into the extension.
 
+`scip_index` adds nothing to that set: `scip-index-core` has no
+dependencies, so the extension's normal tree is `duckdb-neo` and
+`libduckdb-sys` (both MIT) plus the proc macros of
+`duckdb-loadable-macros` (MIT, MIT OR Apache-2.0, and `unicode-ident`'s
+`(MIT OR Apache-2.0) AND Unicode-3.0`), 14 crates besides the two of this
+workspace. `scip.proto` (Apache-2.0) is not copied; the decoder's module
+doc cites its field numbers and enum values. `serde`, `serde_json` and
+`tempfile` are dev-dependencies of `scip-index-core`'s tests.
+
 ## Build
 
 Requires a Rust toolchain, `python3`, and a C compiler for `ring`, which
 `libduckdb-sys`'s build script uses (the extension itself links no C).
 
 ```sh
-duckdb-ext/build.sh      # prints the path of the built extension
-duckdb-ext/check.sh      # fmt, clippy, tests of every member, build.sh, then the host check
+duckdb-ext/build.sh      # builds and stamps both extensions, prints their paths
+duckdb-ext/check.sh      # fetches the scip CLI, fmt, clippy, tests of every member, build.sh, then the host check
 ```
 
-Output: `duckdb-ext/target/extension/v2.0.0/linux_amd64/git_history.duckdb_extension`
-(about 5.9 MB; links only `libc` and `libgcc_s` dynamically).
+Output, in `duckdb-ext/target/extension/v2.0.0/linux_amd64/`:
+`git_history.duckdb_extension` (about 5.9 MB) and
+`scip_index.duckdb_extension` (about 0.6 MB), each with its own footer
+(name, `v<crate version>`, the same platform, DuckDB version and ABI type);
+both link only `libc` and `libgcc_s` dynamically. `check.sh` also needs
+`curl` and `sha256sum` (for `scripts/fetch-scip-cli.sh`) and
+`rust-analyzer` on `PATH` (`rustup component add rust-analyzer`).
 
 ## Loading
 
-The extension is unsigned, so the host must allow unsigned extensions and
-`LOAD` it by absolute path.
+The extensions are unsigned, so the host must allow unsigned extensions and
+`LOAD` them by absolute path. They are independent: load either or both
+into the same connection.
 
 Python (`duckdb==2.0.0`):
 
@@ -111,7 +132,9 @@ Python (`duckdb==2.0.0`):
 import duckdb
 con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
 con.sql("LOAD '/abs/path/git_history.duckdb_extension'")
+con.sql("LOAD '/abs/path/scip_index.duckdb_extension'")
 con.sql("SELECT * FROM git_hunks('.') WHERE path LIKE '%.rs'")
+con.sql("SELECT * FROM read_scip('target/code-db/index.scip') WHERE is_definition")
 ```
 
 Rust, with the `duckdb` crate linked against the machine-installed
@@ -123,7 +146,9 @@ let conn = duckdb::Connection::open_in_memory_with_flags(config)?;
 conn.execute_batch("LOAD '/abs/path/git_history.duckdb_extension'")?;
 ```
 
-`host-check/tests/load.rs` does exactly this on a fixture repository. It is
+`host-check/tests/load.rs` does exactly this on a fixture repository, and
+loads both extensions into one connection for the SCIP functions on a
+hand-encoded index. It is
 a workspace of its own because cargo unifies features within a workspace:
 next to `duckdb-neo`, `libduckdb-sys` would get `loadable-extension-v2`,
 which stops it from linking `libduckdb`, and the host would not link.
@@ -131,7 +156,8 @@ Horizon's daemon could load the extension the same way; nothing in Horizon
 does so yet.
 
 The DuckDB CLI: `duckdb -unsigned -c "LOAD '/abs/path/git_history.duckdb_extension'"`,
-only with a v2.0.0 CLI. The system CLI here is v1.5.0 and refuses it:
+only with a v2.0.0 CLI (`~/.local/bin/duckdb2 -unsigned -no-agent` loads
+both here). The system CLI here is v1.5.0 and refuses it:
 
 ```
 Invalid Input Error: Failed to load '…/git_history.duckdb_extension', The file was built specifically for DuckDB version 'v2.0.0' and can only be loaded with that version of DuckDB. (this version of DuckDB is 'v1.5.0')
@@ -532,4 +558,212 @@ skipping.
 - `host-check/tests/load.rs`: loads the built extension into the `duckdb`
   crate with the machine's `libduckdb` 2.0.0 and checks `git_hunks` joined
   with `git_commits`, and `git_tracked_files` with `include_untracked`, on
-  a fixture.
+  a fixture; a second test loads both extensions into one connection and
+  checks the three SCIP functions on a hand-encoded index (packed and typed
+  ranges, a NULL enclosing range, the role booleans, a list column, an
+  external symbol, the metadata counts) and the bind-time error for a
+  missing file.
+
+## `scip_index`
+
+Three table functions over a [SCIP](https://github.com/scip-code/scip)
+index (the protobuf file `rust-analyzer scip . --output
+target/code-db/index.scip` writes), for the code database's fan-in: how
+many files reference a unit's definitions. They return the facts as SCIP
+encodes them; converting to 1-based positions, resolving symbols to units
+and counting belong to the SQL layer.
+
+Each takes `path VARCHAR`, a constant: a local file opened by the extension
+itself (not through DuckDB's file system, so no `s3://` or globs), relative
+paths resolved against the DuckDB process's working directory. A missing or
+unreadable file is an error at bind time. Rows are emitted from one thread
+in file order: documents in index order, each document's occurrences or
+symbols in its order, external symbols where they occur in the file
+(rust-analyzer writes them after the documents). A malformed index (a
+truncated field, invalid UTF-8 in a string, a range of other than three or
+four elements) fails the query with an error naming the document. The Go
+reference decoder rejects truncation and invalid UTF-8 too; it does not
+check range lengths, but `scip.proto` says a packed range "must be
+exactly three or four elements", and a row with no position cannot fill
+the range columns.
+
+### `read_scip(path)`
+
+`(document VARCHAR, symbol VARCHAR, start_line INTEGER, start_char INTEGER, end_line INTEGER, end_char INTEGER, roles INTEGER, is_definition BOOLEAN, is_import BOOLEAN, is_write BOOLEAN, is_read BOOLEAN, is_generated BOOLEAN, is_test BOOLEAN, is_forward_definition BOOLEAN, enclosing_start_line INTEGER, enclosing_start_char INTEGER, enclosing_end_line INTEGER, enclosing_end_char INTEGER)`
+
+One row per `Occurrence` of each `Document`.
+
+- `document` is the document's `relative_path` (relative to the metadata's
+  `project_root`); `''` if the document has none.
+- `symbol` is the raw symbol string, `''` for an occurrence without one
+  (SCIP allows syntax-highlighting-only occurrences; this repository's
+  index has none).
+- The range is half-open, `[start, end)`, **0-based** lines and characters.
+  A typed range (`single_line_range`, `multi_line_range`) takes precedence
+  over the deprecated packed `range`, as `scip.proto` specifies; a
+  single-line range, typed or a three-element packed `[line, start, end]`,
+  has `end_line = start_line`. Characters are in the unit of the document's
+  `position_encoding`, which is not a column: rust-analyzer writes
+  `UTF8CodeUnitOffsetFromLineStart` (byte offsets within the line) for every
+  document.
+- `roles` is the raw `symbol_roles` bitmask, bits beyond the defined roles
+  included; the booleans test one bit each: `is_definition` 0x1,
+  `is_import` 0x2, `is_write` 0x4 (`WriteAccess`), `is_read` 0x8
+  (`ReadAccess`), `is_generated` 0x10, `is_test` 0x20,
+  `is_forward_definition` 0x40.
+- The enclosing range (for a definition, the whole definition node with its
+  documentation) follows the same rules from `typed_enclosing_range` or the
+  packed `enclosing_range`; all four columns are NULL when the occurrence
+  has neither.
+
+**Local symbols.** A symbol `local N` is scoped to its document: the same
+string in two documents names two unrelated symbols, so locals join on
+`(document, symbol)` and global symbols on `symbol` alone. Global symbols
+follow SCIP's grammar `<scheme> <manager> <package> <version>
+<descriptors>`; rust-analyzer's are `rust-analyzer cargo <crate> <version>
+<path>`, such as `rust-analyzer cargo horizon 0.1.0 workspace/WorkspaceShell#`.
+On this repository 82,970 of the 301,687 occurrences are locals.
+
+**Roles.** An occurrence without the definition bit is a reference. The
+other bits are only as good as the indexer: rust-analyzer 1.99.1 sets the
+definition bit and nothing else (on this repository 42,376 occurrences
+have `roles = 1`, all others `0`; no import, read, write, test or
+generated bit occurs), so `is_read`/`is_write` cannot separate reads from
+writes for Rust, and `NOT is_definition` is the reference test. A file's
+module or crate symbol has a definition occurrence spanning the file (a
+four-element packed range such as `[0, 0, 14, 0]`).
+
+### `read_scip_symbols(path)`
+
+`(document VARCHAR, symbol VARCHAR, kind VARCHAR, display_name VARCHAR, enclosing_symbol VARCHAR, documentation VARCHAR[], relationship_count INTEGER)`
+
+One row per `SymbolInformation`: those of each document (`document` is its
+`relative_path`) and those of `Index.external_symbols` (`document` NULL).
+`kind` is the `Kind` enum's name (`Function`, `Struct`, ...;
+`UnspecifiedKind` for 0, the value in decimal for a number this
+`scip.proto` does not define). `display_name` and `enclosing_symbol` are
+`''` when absent. `documentation` is the list in order, empty when absent;
+rust-analyzer writes the doc comment as one element (with its newlines) and
+the signature in `signature_documentation`, which is not read.
+`relationship_count` is the number of `Relationship` entries
+(rust-analyzer 1.99.1 writes none; the relationships themselves are not
+returned).
+
+### `read_scip_metadata(path)`
+
+`(version INTEGER, tool_name VARCHAR, tool_version VARCHAR, tool_arguments VARCHAR[], project_root VARCHAR, text_document_encoding VARCHAR, document_count BIGINT, occurrence_count BIGINT, external_symbol_count BIGINT)`
+
+One row. `version` is the raw `ProtocolVersion` value (0,
+`UnspecifiedProtocolVersion`, is the only one defined);
+`tool_name`/`tool_version`/`tool_arguments` are `ToolInfo`'s;
+`project_root` is the URI as written (`file:///...`);
+`text_document_encoding` is the `TextEncoding` name
+(`UnspecifiedTextEncoding`, `UTF8`, `UTF16`, or the number). The counts are
+the index's `Document`, `Occurrence` (over all documents) and
+`external_symbols` entries, so this function reads the whole file;
+`occurrence_count` equals `count(*)` of `read_scip`.
+
+### Decoding
+
+`scip-index-core` is a hand-written protobuf wire-format reader (`wire.rs`:
+varints, field keys, length-delimited fields, skipping by wire type), not
+`prost` with a vendored `scip.proto`. Generated code needs a build step
+(`prost-build` with `protox` to avoid `protoc`) with their dependency
+trees, and `prost`'s `Index::decode` materializes the whole index: to
+stream, the top-level loop would have been hand-written anyway. The cost is
+that the field numbers are maintained by hand: the module doc of
+`scip-index-core/src/lib.rs` lists every field read with its number at the
+pinned commit, and a `scip.proto` change has to be applied there; the
+parity tests against the Go reference catch a mismatch on the encodings
+they exercise.
+
+Protobuf's rules are followed where they matter: unknown fields, and known
+fields with an unexpected wire type, are skipped (groups, which proto3 does
+not have, are an error); `repeated int32` is read packed or unpacked; a
+singular message field that occurs twice is merged; within a oneof the
+last member wins; `int32` values are sign-extended ten-byte varints.
+
+Streaming: `Index` is one message whose `metadata`, `documents` and
+`external_symbols` are top-level length-delimited fields, so the reader
+reads one top-level field at a time from a buffered file into a reused
+buffer, decodes it, and emits its rows before reading the next; other
+top-level fields are skipped without being read into memory. The largest
+document of this repository's index is 775,295 bytes, and `scip-probe`
+peaks at 11.5 MiB RSS over the 30 MB index; `SELECT count(*) FROM
+read_scip(…)` adds 4–5 MiB to the 70 MiB of a DuckDB process after
+`LOAD`.
+
+### Parity
+
+`scip-index-core/tests/cli_parity.rs` compares the three row sets with rows
+built from `scip print --json` of the `scip` CLI v0.10.0, as multisets:
+
+| Index | `read_scip` | `read_scip_symbols` | Metadata row | Only ours / only reference |
+| --- | --- | --- | --- | --- |
+| fixture crate indexed by `rust-analyzer scip` in a temp dir (2 documents) | 85 | 27 | equal | 0 / 0 |
+| hand-encoded index (typed ranges, every role bit, negative values, unknown fields at every level, relationships, external symbols) | 5 | 4 | equal | 0 / 0 |
+| this repository at 20941942, 30 MB (509 documents, 9 external symbols) | 301,687 | 42,839 | equal | 0 / 0 |
+
+No difference to characterize. What the rust-analyzer indexes cannot
+exercise, because rust-analyzer 1.99.1 never writes it: typed ranges (all
+its ranges are packed: 3 elements, or 4 for the 683 multi-line ones),
+role bits other than the definition bit, relationships, and syntax-only
+occurrences; the hand-encoded index covers those against the same Go
+decoder. The extension's rows are identical, in order, to `scip-probe`'s
+TSVs for all three functions on all three indexes
+(`scripts/scip_ext_parity.py`).
+
+```sh
+SCIP_INDEX=/abs/target/code-db/index.scip cargo test --release -p scip_index_core \
+    --test cli_parity -- --ignored --nocapture
+uv run --with duckdb==2.0.0 python duckdb-ext/scripts/scip_ext_parity.py \
+    "$PWD/duckdb-ext/target/extension/v2.0.0/linux_amd64/scip_index.duckdb_extension" \
+    duckdb-ext/target/release/scip-probe target/code-db/index.scip
+```
+
+`scip-probe INDEX occurrences|symbols|metadata [--stats]` prints the
+extension's columns as TSV (NULL as `\N`, strings escaped as JSON string
+content, lists as JSON arrays).
+
+### Performance
+
+The index of this repository at 20941942: `rust-analyzer scip .` took
+202.6 s with a peak RSS of 7.0 GiB and wrote 30,385,713 bytes (and 32
+"Duplicate symbol" lines, noise). Python `duckdb` 2.0.0, a fresh process
+per query (`scripts/scip_perf.py`), three runs, on a shared 24-thread
+desktop; `CREATE TABLE` is into an in-memory database:
+
+| Query | Rows | Wall time | Peak RSS (70 MiB after `LOAD`) |
+| --- | --- | --- | --- |
+| `SELECT count(*) FROM read_scip(…)` | 301,687 | 0.074–0.076 s | 74 MiB |
+| `CREATE TABLE t AS SELECT * FROM read_scip(…)` | 301,687 | 0.12–0.23 s | 121 MiB |
+| `SELECT count(*) FROM read_scip_symbols(…)` | 42,839 | 0.026–0.027 s | 73 MiB |
+| `CREATE TABLE t AS SELECT * FROM read_scip_symbols(…)` | 42,839 | 0.034–0.035 s | 83 MiB |
+| `SELECT * FROM read_scip_metadata(…)` (count or table) | 1 | 0.008–0.013 s | 73 MiB |
+
+For the other route (convert, then `read_json`): `scip print --json` of the
+same index takes 0.36–0.43 s with a peak RSS of 288–303 MiB and writes
+59,372,955 bytes of JSON, about twice the index; reading that JSON into
+tables was not measured. `scip-probe` takes 0.15 s for the occurrences (TSV
+writing included), 0.04 s for the symbols, at 11.5 MiB peak RSS.
+
+### Tests
+
+- `scip-index-core/src/tests.rs`, on hand-made protobuf bytes: packed
+  legacy ranges of three and four elements (also unpacked, and split over
+  two fields), typed single- and multi-line ranges (including an empty
+  one), typed-over-packed precedence, oneof switching and same-member
+  merging, malformed ranges as errors, every role bit and bits beyond them,
+  negative `int32`s, missing, packed and typed enclosing ranges, unknown
+  fields and wrong wire types skipped at every level, file order with the
+  path after the occurrences and an empty document, `local` symbols kept
+  raw, document and external symbols with documentation lists,
+  relationships and unknown kinds, metadata with merged fields and counts,
+  the kind table, and truncated or invalid input.
+- `scip-index-core/tests/cli_parity.rs`: the parity above for the fixture
+  crate (written to a temp dir and indexed with `rust-analyzer scip`; it
+  also asserts that the fixture produces locals, definitions and references,
+  rows with and without an enclosing range, a multi-line range and
+  multi-line documentation) and the hand-encoded index; the ignored
+  `repository_index_parity` takes an index from `SCIP_INDEX`.
+- `host-check/tests/load.rs` (above).
