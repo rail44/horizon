@@ -22,10 +22,11 @@
 -- range, the list is one file that does not exist: read_ast refuses an empty list,
 -- `ignore_errors` lets it return no rows, and read_text returns none for a missing file.
 --
--- Units of blobs (rust_blob_units, blob_units) are derived from the private inputs
--- below, which mirror scope_nodes, sources, source_bytes and source_lines with
--- file_id holding the blob's position in the snapshot. A blob's rows depend on that blob alone; refresh.sql
--- narrows the snapshot to the blobs it parses.
+-- Units of blobs (rust_blob_units, blob_units) and their blank lines (blob_blank_lines)
+-- are derived from the private inputs below, which mirror scope_nodes, sources,
+-- source_bytes and source_lines with file_id holding the blob's position in the
+-- snapshot. A blob's rows depend on that blob alone; refresh.sql narrows the snapshot to
+-- the blobs it parses.
 
 CREATE OR REPLACE VIEW blob_files AS
 SELECT * FROM git_changed_blobs(getvariable('repo'), getvariable('blob_dir'), since := getvariable('since'),
@@ -71,3 +72,19 @@ JOIN blob_list l ON l.file = t.filename;
 CREATE OR REPLACE VIEW blob_source_bytes AS FROM source_bytes_of('blob_sources');
 
 CREATE OR REPLACE VIEW blob_source_lines AS FROM source_lines_of('blob_sources');
+
+-- blob_blank_lines(blob_id, line): the blank lines of every blob of the snapshot (only
+-- ASCII space, tab, CR, VT or FF, the rule of source_lines_of), which the innermost
+-- attribution of views/unit_changes.sql reads. A file ending in a newline has one more,
+-- empty, line after its last. refresh.sql and cache.sql replace blob_blank_lines with a
+-- view over their copy; refresh.sql keeps computing new rows from
+-- derived_blob_blank_lines.
+CREATE OR REPLACE VIEW derived_blob_blank_lines AS
+SELECT l.blob_id, t.line
+FROM (SELECT file_id, unnest(string_split(content, chr(10))) AS text,
+             generate_subscripts(string_split(content, chr(10)), 1) AS line
+      FROM blob_sources) t
+JOIN blob_list l ON l.blob_ord = t.file_id
+WHERE regexp_full_match(t.text, '[ \t\r\x0b\x0c]*');
+
+CREATE OR REPLACE VIEW blob_blank_lines AS SELECT * FROM derived_blob_blank_lines;

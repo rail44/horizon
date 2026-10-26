@@ -1,7 +1,7 @@
 -- units and tags across languages, read after every lang/*.sql file.
 --
 -- units(unit_id, file_id, node_id, parent_unit_id, kind, name, qualified_name,
---       start_line, end_line, loc) and tags(file_id, node_id, tag, start_line, end_line)
+--       start_line, end_line, loc, lead_start_line) and tags(file_id, node_id, tag, start_line, end_line)
 -- (the tagged node's lines) use the neutral vocabulary every language view maps to:
 -- kinds function, method, impl, type, module, macro; tags test and generated_or_macro
 -- (plus language-specific ones such as Rust's trait_impl). Rust is the only language so far; a second one turns each view into a
@@ -28,7 +28,7 @@ CREATE OR REPLACE VIEW tags AS SELECT * FROM derived_tags;
 CREATE OR REPLACE VIEW impl_parts AS SELECT * FROM rust_impl_parts;
 
 -- blob_units(blob_id, unit_ord, parent_unit_ord, node_id, kind, name, qualified_name,
---            start_line, end_line, loc): the units of every blob of views/blobs.sql,
+--            start_line, end_line, loc, lead_start_line): the units of every blob of views/blobs.sql,
 -- derived by the same rules as units (the language views' *_blob_units). unit_ord is
 -- the unit's position within its blob (the order of unit_id within a file) and
 -- parent_unit_ord its innermost enclosing unit's, so the rows of a blob do not depend
@@ -38,7 +38,7 @@ CREATE OR REPLACE VIEW derived_blob_units AS
 SELECT l.blob_id,
        u.unit_id - min(u.unit_id) OVER (PARTITION BY u.file_id) AS unit_ord,
        u.parent_unit_id - min(u.unit_id) OVER (PARTITION BY u.file_id) AS parent_unit_ord,
-       u.node_id, u.kind, u.name, u.qualified_name, u.start_line, u.end_line, u.loc
+       u.node_id, u.kind, u.name, u.qualified_name, u.start_line, u.end_line, u.loc, u.lead_start_line
 FROM rust_blob_units u JOIN blob_list l ON l.blob_ord = u.file_id;
 
 CREATE OR REPLACE VIEW blob_units AS SELECT * FROM derived_blob_units;

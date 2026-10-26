@@ -13,15 +13,19 @@
 --     `modified` when it still exists on the new side (recorded under `path`), else
 --     `removed` (recorded under old_path, or path when there is no rename).
 -- A unit's credited lines follow `attribution`:
---   innermost (default)  its lines [start_line, end_line] minus the lines of the units
---                        nested in it (blob_units.parent_unit_ord): a changed line credits
+--   innermost (default)  its lines [lead_start_line, end_line] (its leading doc comments
+--                        and attributes included, lang/rust.sql) minus the same lines of
+--                        the units nested in it (blob_units.parent_unit_ord), and minus the
+--                        lines that are blank in that side's text: a changed line credits
 --                        only the innermost unit containing it, so an impl, module or type
---                        is credited for its header, its closing line and whatever lies
---                        between its inner units (blank lines, comments, and the
---                        attributes and doc comments of inner items, which the syntax tree
---                        places outside the item), not for a change inside a method;
+--                        is credited for its own doc comments and attributes, its header,
+--                        its closing line and the non-blank lines between its inner units
+--                        (plain comments, fields, other items), not for a change inside a
+--                        method or to a method's doc comments; a hunk of blank lines
+--                        credits no unit;
 --   all                  every line [start_line, end_line]: an enclosing unit is credited
---                        with every change inside it.
+--                        with every change inside it, blank lines included, and leading
+--                        doc comments and attributes credit no unit but an enclosing one.
 -- A hunk with new_lines = 0 (old_lines = 0) intersects nothing on the new (old) side:
 -- git's -U0 start is then the line before the deletion (insertion). Lines are 1-based
 -- and inclusive on both sides. Unit identity is (kind, qualified_name) within a path:
@@ -40,6 +44,7 @@
 -- sides of a modified unit carry the change. views/lineage.sql reads it (the `_all`
 -- columns, whatever `attribution` is), so that the units of the blobs are derived once
 -- per query.
+-- Blank lines are those of blob_blank_lines (views/blobs.sql) for that side's blob.
 -- Parameters (DuckDB variables; default when unset): attribution 'innermost' (or 'all').
 CREATE OR REPLACE VIEW unit_change_sides AS
 WITH params AS MATERIALIZED (
@@ -53,17 +58,19 @@ hunk_files AS MATERIALIZED (
 -- The units of each side of each changed file with hunks.
 side_units AS MATERIALIZED (
     SELECT b.sha, b.path, b.old_path, b.side, b.blob_id, u.unit_ord, u.parent_unit_ord, u.kind,
-           u.qualified_name, u.start_line, u.end_line
+           u.qualified_name, u.start_line, u.end_line, u.lead_start_line
     FROM blob_files b
     JOIN hunk_files h ON h.sha = b.sha AND h.path = b.path
     JOIN blob_units u ON u.blob_id = b.blob_id
 ),
 -- The lines each unit of those blobs owns under innermost attribution, as spans [s, e]:
--- its range minus the ranges of its direct inner units (before each inner unit, after the
--- last one, or the whole range when it has none). prev_end is the furthest end among the
--- inner units before this one in line order, so inner units sharing a line leave no gap.
+-- its range [lead_start_line, end_line] minus the same ranges of its direct inner units
+-- (before each inner unit, after the last one, or the whole range when it has none).
+-- prev_end is the furthest end among the inner units before this one in line order, so
+-- inner units sharing a line leave no gap. Blank lines are dropped below.
 blob_unit_rows AS MATERIALIZED (
-    SELECT DISTINCT blob_id, unit_ord, parent_unit_ord, start_line, end_line FROM side_units
+    SELECT DISTINCT blob_id, unit_ord, parent_unit_ord, lead_start_line AS start_line, end_line
+    FROM side_units
 ),
 inner_units AS MATERIALIZED (
     SELECT blob_id, parent_unit_ord, start_line, end_line,
@@ -87,6 +94,36 @@ own_spans AS MATERIALIZED (
     )
     WHERE s <= e
 ),
+-- Under innermost attribution, the lines [lo, hi] each hunk changes in each own span; a
+-- hit credits its unit unless every one of those lines is blank. The spans and the
+-- hunks' sides are materialized first, so that the hits are one join on (sha, path,
+-- side): live, a plan that joined own_spans to the hunks on the line ranges alone
+-- peaked above 30 GB on this repository.
+side_spans AS MATERIALIZED (
+    SELECT u.sha, u.path, u.old_path, u.side, u.blob_id, u.kind, u.qualified_name, o.s, o.e
+    FROM side_units u
+    JOIN own_spans o ON o.blob_id = u.blob_id AND o.unit_ord = u.unit_ord
+),
+side_hunks AS MATERIALIZED (
+    SELECT sha, path, 'new' AS side, new_start AS hs, new_start + new_lines - 1 AS he
+    FROM hunks WHERE new_lines > 0
+    UNION ALL
+    SELECT sha, path, 'old', old_start, old_start + old_lines - 1
+    FROM hunks WHERE old_lines > 0
+),
+own_hits AS MATERIALIZED (
+    SELECT DISTINCT u.sha, u.path, u.old_path, u.side, u.blob_id, u.kind, u.qualified_name,
+           greatest(u.s, h.hs) AS lo, least(u.e, h.he) AS hi
+    FROM side_spans u
+    JOIN side_hunks h ON h.sha = u.sha AND h.path = u.path AND h.side = u.side AND h.hs <= u.e AND h.he >= u.s
+),
+own_credited AS MATERIALIZED (
+    SELECT i.sha, i.path, i.old_path, i.side, i.kind, i.qualified_name
+    FROM own_hits i
+    LEFT JOIN blob_blank_lines b ON b.blob_id = i.blob_id AND b.line BETWEEN i.lo AND i.hi
+    GROUP BY i.sha, i.path, i.old_path, i.side, i.kind, i.qualified_name, i.blob_id, i.lo, i.hi
+    HAVING count(b.line) < i.hi - i.lo + 1
+),
 -- The identities each hunk touches, under both attributions (`mode`).
 touched AS MATERIALIZED (
     SELECT DISTINCT 'all' AS mode, u.sha, u.path, u.old_path, u.side, u.kind, u.qualified_name
@@ -99,16 +136,7 @@ touched AS MATERIALIZED (
              AND h.old_start + h.old_lines - 1 >= u.start_line
     END
     UNION ALL
-    SELECT DISTINCT 'innermost', u.sha, u.path, u.old_path, u.side, u.kind, u.qualified_name
-    FROM side_units u
-    JOIN own_spans o ON o.blob_id = u.blob_id AND o.unit_ord = u.unit_ord
-    JOIN hunks h ON h.sha = u.sha AND h.path = u.path
-    WHERE CASE u.side
-        WHEN 'new' THEN h.new_lines > 0 AND h.new_start <= o.e
-                        AND h.new_start + h.new_lines - 1 >= o.s
-        ELSE h.old_lines > 0 AND h.old_start <= o.e
-             AND h.old_start + h.old_lines - 1 >= o.s
-    END
+    SELECT DISTINCT 'innermost', sha, path, old_path, side, kind, qualified_name FROM own_credited
 ),
 present AS MATERIALIZED (
     SELECT DISTINCT sha, path, side, kind, qualified_name FROM side_units

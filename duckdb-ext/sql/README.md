@@ -162,7 +162,7 @@ chose (2026-10-25) to write historical blobs to files, so that `read_ast`,
   commits reference it. The language is what `read_ast` detects from the
   file's extension, the extension of the path the blob was recorded under.
 - **`blob_units(blob_id, unit_ord, parent_unit_ord, node_id, kind, name,
-  qualified_name, start_line, end_line, loc)`** applies the same rules as
+  qualified_name, start_line, end_line, loc, lead_start_line)`** applies the same rules as
   `units`: `lang/rust.sql` defines them once, as the table macro
   `rust_units_over(nodes_t, bytes_t, lines_t)` over relations named by its
   arguments (read with `query_table`), and applies it to the current files
@@ -174,6 +174,9 @@ chose (2026-10-25) to write historical blobs to files, so that `read_ast`,
   every current file whose blob is in `blob_files`, its blob's units equal
   its `units` row for row apart from the ids (`check.py fixture`, and on
   this repository). Blobs have no tags yet.
+- **`blob_blank_lines(blob_id, line)`**: the blank lines of every blob of the
+  snapshot (only ASCII space, tab, CR, VT or FF, the rule of `source_lines` and
+  `loc`), read from `blob_sources`; the innermost attribution reads it.
 - **`unit_changes(sha, path, unit_kind, unit_qualified_name,
   change_kind)`**: for each `(sha, path)` with hunks, the units of the new
   side's blob whose credited lines intersect a hunk's new
@@ -188,15 +191,26 @@ chose (2026-10-25) to write historical blobs to files, so that `read_ast`,
   distinct tuple.
 - **Attribution** (`attribution`; one of the counting rules, see Graph): which
   lines credit a unit. `innermost` (the default) credits a changed line only to the
-  innermost unit containing it: a unit's credited lines are `[start_line, end_line]`
-  minus the lines of the units nested in it (`blob_units.parent_unit_ord`), so an impl,
-  module or type is credited for its header, its closing line and what lies between
-  its inner units — blank lines, comments, and the attributes and doc comments of its
-  inner items, which the syntax tree places outside the item — but not for a change
-  inside one of its methods. `all` credits every line `[start_line, end_line]`: an
-  enclosing unit is credited with every change inside it. `all` is the spike's
-  definition (`git show 475599d5:scripts/code-db/history.py`, `unit_changes`) with
-  1-based lines, and what every record before 2026-10-27 measured.
+  innermost unit containing it, and a blank line to no unit. A unit's credited lines
+  are `[lead_start_line, end_line]` minus the same range of each unit nested in it
+  (`blob_units.parent_unit_ord`), minus the lines that are blank on that side
+  (`blob_blank_lines`). `lead_start_line` is where the unit's leading doc comments and
+  attributes start (`start_line` when it has none), a language rule
+  (`lang/rust.sql`: the run of attribute items and comments right before the item
+  among its siblings, from its first attribute item or outer doc comment `///`,
+  `/** */`; plain comments before that point and inner doc comments `//!` are not
+  part of it). So a method's doc comment or attribute credits the method; a method
+  added with its separating blank line credits the method only; an impl, module or
+  type is credited for its own doc comments and attributes, its header, its closing
+  line and the non-blank lines between its inner units that belong to none of them
+  (plain comments, fields, items that are not units); a hunk of blank lines credits
+  nothing. `start_line` and `loc` keep the item's own lines. `all` credits every line
+  `[start_line, end_line]`, blank or not: an enclosing unit is credited with every
+  change inside it, and a doc comment or attribute credits the units around the item
+  it leads, not that item. `all` is the spike's definition (`git show
+  475599d5:scripts/code-db/history.py`, `unit_changes`) with 1-based lines, and what
+  every record before 2026-10-27 measured. Under `innermost`, a unit can therefore be
+  credited where `all` credits nothing (a doc comment change of a top-level function).
 - **`unit_change_sides(sha, path, old_path, side, blob_id, kind, qualified_name,
   start_line, end_line, record_path, change_kind, record_path_all, change_kind_all)`**
   is the statement `unit_changes` projects: every unit of both sides of every
@@ -222,9 +236,10 @@ Limits:
   unit; a rename or move starts a new identity under the new path, which
   `unit_changes` does not follow; the lineage views (below) connect them.
 - **Nested units**: with `attribution` `innermost`, an enclosing unit is still
-  credited when a method is added or removed together with the blank line that
-  separates it, or when an inner item's attributes or doc comments change (those lines
-  lie outside the inner unit); with `all`, with every change inside it.
+  credited for a plain comment between its inner units, and for the doc comments and
+  attributes of inner items that are not units (fields, constants, `use`); with `all`,
+  with every change inside it. Blank lines are judged per side, by the text alone: a
+  line changed from code to blank still credits through the other side.
 - **Placement**: `-U0` hunks are placed by gitoxide; where an insertion or
   deletion could sit at several lines, the unit it is attributed to follows
   that placement (`docs/research/gix-parity-2026-10-24.md` §12).
@@ -540,8 +555,8 @@ copies. Re-reading the view files resets both to live.
 
 `cache.sql`, read after the view files, copies `nodes`, `units`, `tags`,
 `commit_order` (before `commits`, from the live order), `commits`, `file_changes`,
-`hunks`, `blob_files`, `blob_units` and `unit_successions` (derived over the copies
-before it, reading the blob texts once) into temporary tables `<view>_cache` and
+`hunks`, `blob_files`, `blob_units`, `blob_blank_lines` and `unit_successions` (derived
+over the copies before it, reading the blob texts once) into temporary tables `<view>_cache` and
 replaces each of those views with `SELECT * FROM <view>_cache`; `scip_occurrences_cache` and
 `scip_symbols_cache` are copies of `scip_document_occurrences` and
 `scip_document_symbols` (`scip_occurrences` joins `file_id` to the copy at
@@ -606,8 +621,10 @@ not create it) up to date and points the eleven views at it:
 7. **Blob units**: for the blobs of the range not in `cache.blob_derived`,
    `derived_blob_units` is computed over the cached nodes (`blob_nodes`
    re-pointed at the cache, the snapshot narrowed to those blobs) and
-   appended to `cache.blob_units`. The snapshot is then set to every blob of
-   the range, and `blob_files`, `blob_nodes` and `blob_units` read the
+   appended to `cache.blob_units`, and `derived_blob_blank_lines` over their
+   texts to `cache.blob_blank_lines`. The snapshot is then set to every blob of
+   the range, and `blob_files`, `blob_nodes`, `blob_units` and
+   `blob_blank_lines` read the
    cache, showing only the blobs of the range (blobs that left it, after an
    amend, stay in the file and are not shown).
 8. **Lineage**: `cache.commit_order` is rebuilt with the history and otherwise
@@ -645,7 +662,7 @@ current one appear; `unit_id` is the row number over `(file_id, unit_ord)`
 and `parent_unit_id` is derived from it. After a refresh every view equals
 its live counterpart row for row (`check.py fixture`, `check.py refresh`).
 
-Layout of the file (schema version 4):
+Layout of the file (schema version 5):
 
 | Table | Rows |
 | --- | --- |
@@ -656,9 +673,10 @@ Layout of the file (schema version 4):
 | `tags` | `path`, then the columns of `tags` without `file_id` |
 | `commits`, `file_changes`, `hunks`, `blob_files` | the columns of the views |
 | `blob_parsed` | one per parsed blob: `blob_id`, `bytes` |
-| `blob_derived` | one per blob whose units are in `blob_units` (a blob can have none) |
+| `blob_derived` | one per blob whose units and blank lines are in `blob_units` and `blob_blank_lines` (a blob can have none) |
 | `blob_nodes` | `blob_id` plus `read_ast`'s columns |
 | `blob_units` | the columns of `blob_units` |
+| `blob_blank_lines` | the columns of `blob_blank_lines` |
 | `commit_order`, `unit_successions` | the columns of the views (`views/lineage.sql`) |
 | `lineage_derived` | one per commit whose successions are in `unit_successions` (a commit can have none) |
 | `scip_occurrences`, `scip_symbols` | the columns of `scip_document_occurrences`, `scip_document_symbols` |
@@ -671,7 +689,8 @@ What forces a rebuild:
   `repo` (`nodes.file_path` is absolute); a different sitting_duck version.
 - **Units and tags of every file, units of every blob** (no re-parse): a
   change in the text of `scope_files`, `sources`, `source_bytes`,
-  `source_lines`, `scope_nodes`, the four `blob_*` inputs, any view named
+  `source_lines`, `scope_nodes`, the four `blob_*` inputs,
+  `derived_blob_blank_lines`, any view named
   `*_units` (except `blob_units`, which `refresh.sql` replaces) or
   `*_tags`, or of any macro that is not internal (the unit rules are the
   macro `rust_units_over`; `byte_slice` and `normalize_ws` are now covered
@@ -836,7 +855,7 @@ counted with `attribution := 'all'`. The refresh
 fixture's SCIP steps read `views/graph.sql` too, so the graph views and queries are
 compared with live after each refresh.
 
-A counting fixture (`check.py counting-fixture`) builds a crate of its own over ten
+A counting fixture (`check.py counting-fixture`) builds a crate of its own over sixteen
 commits, indexes it the same way, and asserts each counting rule against the variable
 that restores the previous count: two functions added and edited together, then moved
 together to a new file (two `content_match` links in one commit: `via_link` on the
@@ -845,7 +864,12 @@ move, `unit_churn` 3 commits with `move_commits` 1, `unit_cochange` 2 shared com
 commits of the first (one-sided 1 / 1 from the copy on, `since_sha` the copy; 3 / 1 with
 `clone_before_both`); an impl whose method body changes, then whose header changes
 (the method, then the impl, in `unit_changes`; the impl both times with `attribution :=
-'all'`); two integration tests changed together three times (no pair in
+'all'`); in another impl, a method's doc comment and then another method's attribute
+changed (the method each time; the impl with `all`), a method added after a blank line
+(the method only; the impl too with `all`), and blank lines added inside a method and
+between two (nothing; the impl and the method with `all`); an inline module's outer doc
+comment changed (the module; nothing with `all`), then its inner doc comment (the
+module either way), with each unit's `lead_start_line`; two integration tests changed together three times (no pair in
 `unit_cochange` or `cochange_without_reference`; the pair with `include_tests`); a file
 module and its child file calling each other, and two files of impls of one type
 calling each other (`nested_modules` and `same_type_unit_edges` set, no cycle; both
@@ -878,7 +902,7 @@ files reset it to live). It needs `git` and rust-analyzer but no jscpd.
 | `00_load.sql` | `INSTALL`/`LOAD` of the three extensions; parameter defaults; `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths` |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `scope_files`, `sources(file_id, content)`, `source_bytes(file_id, bytes)`, `source_lines(file_id, line, nonblank_through)` (over the table macros `source_bytes_of`, `source_lines_of`), macros `byte_slice`, `normalize_ws` |
 | `views/nodes.sql` | `nodes`: `file_id` plus every column of `read_ast(…, source := 'full', peek := 'none', context := 'none')`; `scope_nodes` (the nodes of `scope_files`) |
-| `views/blobs.sql` | `blob_files`, the snapshot `blob_snapshot`/`blob_paths`, `blob_list(blob_id, file, blob_ord)`, `blob_nodes(blob_id, …)`; the derivation inputs `blob_scope_nodes`, `blob_sources`, `blob_source_bytes`, `blob_source_lines` (keyed by `blob_ord`) |
+| `views/blobs.sql` | `blob_files`, the snapshot `blob_snapshot`/`blob_paths`, `blob_list(blob_id, file, blob_ord)`, `blob_nodes(blob_id, …)`; the derivation inputs `blob_scope_nodes`, `blob_sources`, `blob_source_bytes`, `blob_source_lines` (keyed by `blob_ord`); `derived_blob_blank_lines`, `blob_blank_lines(blob_id, line)` |
 | `lang/rust.sql` | the table macro `rust_units_over(nodes_t, bytes_t, lines_t)` and its two applications `rust_units`, `rust_blob_units`; `rust_tags(file_id, node_id, tag, start_line, end_line)`; `rust_impl_parts(file_id, node_id, part, start_line, start_column, head_end_line, head_end_column)`; the intermediate steps are common table expressions inside them |
 | `views/units.sql` | `derived_units`, `derived_tags`, `derived_blob_units`: the union over languages (Rust only today); `units`, `tags`, `blob_units` over them; `impl_parts` (`rust_impl_parts`) |
 | `views/history.sql` | `commits`, `file_changes`, `hunks` |

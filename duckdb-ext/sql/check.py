@@ -94,8 +94,8 @@ REFRESH_FILE = "refresh.sql"
 # The views refresh.sql points at the persistent cache, plus files (its file snapshot),
 # and the views over them that the cache changes most (unit_changes, the lineage views).
 REFRESHED_VIEWS = ["files", "nodes", "units", "tags", "commits", "file_changes", "hunks",
-                   "blob_files", "blob_nodes", "blob_units", "unit_changes", "commit_order", "unit_successions",
-                   "unit_lineage", "unit_history", "unit_lineage_counts"]
+                   "blob_files", "blob_nodes", "blob_units", "blob_blank_lines", "unit_changes", "commit_order",
+                   "unit_successions", "unit_lineage", "unit_history", "unit_lineage_counts"]
 QUERIES = ["file_cochange", "file_cochange_thresholds", "clone_site_tags", "clone_site_tags_summary",
            "unit_churn", "clone_change_consistency"]
 # views/scip.sql is optional: read after VIEW_FILES when a SCIP index is given. Its views
@@ -665,7 +665,7 @@ HISTORY_CHANGES_INNERMOST = {k: [r for r in v if r not in HISTORY_ENCLOSING_ONLY
 CURRENT_UNITS_BY_BLOB = """
     SELECT f.blob_id, u.unit_id - min(u.unit_id) OVER (PARTITION BY u.file_id) AS unit_ord,
            u.parent_unit_id - min(u.unit_id) OVER (PARTITION BY u.file_id) AS parent_unit_ord,
-           u.node_id, u.kind, u.name, u.qualified_name, u.start_line, u.end_line, u.loc
+           u.node_id, u.kind, u.name, u.qualified_name, u.start_line, u.end_line, u.loc, u.lead_start_line
     FROM units u JOIN files f USING (file_id)"""
 
 
@@ -1421,9 +1421,11 @@ def check_graph_fixture():
 # The counting-rules fixture: one crate with a case per counting rule (two units moved
 # together; a clone whose second side appears later; an impl whose method changes, then
 # its header; two test functions changed together; a parent and child module, and one
-# type's impls in two files, referencing each other; a sibling module cycle that stays).
+# type's impls in two files, referencing each other; a sibling module cycle that stays;
+# doc comments, attributes and blank lines of an impl's methods and of a module).
 COUNTING_LIB = """\
 pub mod clones;
+pub mod doc;
 pub mod mover;
 pub mod parent;
 pub mod ping;
@@ -1517,6 +1519,40 @@ impl crate::Twin {
 }
 """
 
+COUNTING_DOC = """\
+pub struct Doc {
+    pub n: u32,
+}
+
+impl Doc {
+    /// Returns n.
+    pub fn get(&self) -> u32 {
+        self.n
+    }
+
+    #[inline]
+    pub fn twice(&self) -> u32 {
+        self.n * 2
+    }
+}
+
+/// An inner module.
+pub mod inner {
+    //! Inner docs.
+
+    pub fn deep() -> u8 {
+        1
+    }
+}
+"""
+
+COUNTING_THRICE = """\
+
+    pub fn thrice(&self) -> u32 {
+        self.n * 3
+    }
+"""
+
 COUNTING_PING = "pub fn ping(n: u32) -> u32 {\n    if n == 0 { 0 } else { crate::pong::pong(n - 1) }\n}\n"
 COUNTING_PONG = "pub fn pong(n: u32) -> u32 {\n    if n == 0 { 1 } else { crate::ping::ping(n - 1) }\n}\n"
 COUNTING_TEST = "#[test]\nfn {name}() {{\n    assert_eq!(fixture::stay(), {value});\n}}\n"
@@ -1543,6 +1579,7 @@ def build_counting_fixture(root):
     write(repo, "src/mover.rs", COUNTING_ALPHA + "\n" + COUNTING_BETA + "\n" + COUNTING_STAY)
     write(repo, "src/clones.rs", original)
     write(repo, "src/shape.rs", COUNTING_SHAPE)
+    write(repo, "src/doc.rs", COUNTING_DOC)
     write(repo, "src/parent.rs", COUNTING_PARENT)
     write(repo, "src/parent/child.rs", COUNTING_CHILD)
     write(repo, "src/twin_a.rs", COUNTING_TWIN_A)
@@ -1579,6 +1616,26 @@ def build_counting_fixture(root):
     write(repo, "tests/a.rs", test("t_one", 7))
     write(repo, "tests/b.rs", test("t_two", 7))
     commit("edit_tests_again", "Edit both tests again", "2026-01-10T00:00:00Z")
+    doc = COUNTING_DOC.replace("/// Returns n.", "/// Returns the stored n.")
+    write(repo, "src/doc.rs", doc)
+    commit("doc_method", "Edit a method's doc comment", "2026-01-11T00:00:00Z")
+    doc = doc.replace("#[inline]", "#[inline(always)]")
+    write(repo, "src/doc.rs", doc)
+    commit("attr_method", "Edit a method's attribute", "2026-01-12T00:00:00Z")
+    at = doc.index("        self.n * 2\n    }\n") + len("        self.n * 2\n    }\n")
+    doc = doc[:at] + COUNTING_THRICE + doc[at:]
+    write(repo, "src/doc.rs", doc)
+    commit("add_method", "Add a method after a blank line", "2026-01-13T00:00:00Z")
+    doc = doc.replace("/// An inner module.", "/// The inner module.")
+    write(repo, "src/doc.rs", doc)
+    commit("mod_outer_doc", "Edit a module's doc comment", "2026-01-14T00:00:00Z")
+    doc = doc.replace("//! Inner docs.", "//! The inner docs.")
+    write(repo, "src/doc.rs", doc)
+    commit("mod_inner_doc", "Edit a module's inner doc comment", "2026-01-15T00:00:00Z")
+    doc = doc.replace("    pub fn get(&self) -> u32 {\n", "    pub fn get(&self) -> u32 {\n\n")
+    doc = doc.replace("    }\n\n    #[inline", "    }\n\n\n    #[inline")
+    write(repo, "src/doc.rs", doc)
+    commit("blank_only", "Add blank lines", "2026-01-16T00:00:00Z")
     return repo, sha
 
 
@@ -1666,6 +1723,41 @@ def check_counting_fixture():
             ("edit_method", "method", "Sq.area", "modified")], shape_changes()
         con.execute("SET VARIABLE attribution = NULL")
 
+        # M1, leading lines and blank lines: a method's doc comment and attribute credit
+        # the method (with 'all', the impl around them); a method added after a blank line
+        # credits the method only; a module's outer doc comment credits the module (with
+        # 'all', nothing: it lies outside every unit), its inner one the module either way;
+        # blank lines alone credit nothing (with 'all', every unit around them).
+        doc_steps = ["doc_method", "attr_method", "add_method", "mod_outer_doc", "mod_inner_doc", "blank_only"]
+
+        def doc_changes():
+            changes = {step: [] for step in doc_steps}
+            for r in rows(con, "SELECT sha, unit_kind, unit_qualified_name, change_kind FROM unit_changes "
+                               "WHERE path = 'src/doc.rs' ORDER BY ALL"):
+                if names[r[0]] in changes:
+                    changes[names[r[0]]].append(r[1:])
+            return changes
+        assert doc_changes() == {
+            "doc_method": [("method", "Doc.get", "modified")],
+            "attr_method": [("method", "Doc.twice", "modified")],
+            "add_method": [("method", "Doc.thrice", "added")],
+            "mod_outer_doc": [("module", "inner", "modified")],
+            "mod_inner_doc": [("module", "inner", "modified")],
+            "blank_only": []}, doc_changes()
+        leads = rows(con, "SELECT u.qualified_name, u.start_line - u.lead_start_line FROM units u "
+                          "JOIN files f USING (file_id) WHERE f.path = 'src/doc.rs' ORDER BY u.start_line, u.kind")
+        assert leads == [("Doc", 0), ("Doc", 0), ("Doc.get", 1), ("Doc.twice", 1), ("Doc.thrice", 0),
+                         ("inner", 1), ("inner.deep", 0)], leads
+        con.execute("SET VARIABLE attribution = 'all'")
+        assert doc_changes() == {
+            "doc_method": [("impl", "Doc", "modified")],
+            "attr_method": [("impl", "Doc", "modified")],
+            "add_method": [("impl", "Doc", "modified"), ("method", "Doc.thrice", "added")],
+            "mod_outer_doc": [],
+            "mod_inner_doc": [("module", "inner", "modified")],
+            "blank_only": [("impl", "Doc", "modified"), ("method", "Doc.get", "modified")]}, doc_changes()
+        con.execute("SET VARIABLE attribution = NULL")
+
         # M5: the two integration tests changed together three times; their pair is left
         # out of unit_cochange and cochange_without_reference unless include_tests.
         assert cochange(t_one, t_two) == [], cochange(t_one, t_two)
@@ -1698,9 +1790,16 @@ def check_counting_fixture():
         # The same through cache.sql.
         probe = [cochange_sql, clone_sql, query_sql("unit_churn"), "SELECT * FROM module_cycles ORDER BY ALL",
                  "SELECT * FROM unit_changes ORDER BY ALL", "SELECT * FROM unit_history ORDER BY ALL"]
-        live = [rows(con, q) for q in probe]
+
+        def probe_rows():
+            out = [rows(con, q) for q in probe]
+            con.execute("SET VARIABLE attribution = 'all'")
+            out.append(rows(con, "SELECT * FROM unit_changes ORDER BY ALL"))
+            con.execute("SET VARIABLE attribution = NULL")
+            return out
+        live = probe_rows()
         read_cache(con)
-        assert [rows(con, q) for q in probe] == live
+        assert probe_rows() == live
         con.close()
     print("counting fixture: ok")
 

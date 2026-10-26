@@ -1,7 +1,7 @@
 -- Session cache: materialize the expensive layers once and point their views at the
 -- copies, so that every view and query keeps working unchanged and reads the copies.
 -- The layers are nodes, units, tags, the three history views, blob_files, blob_units,
--- commit_order and unit_successions (views/lineage.sql) and, from views/scip.sql
+-- blob_blank_lines, commit_order and unit_successions (views/lineage.sql) and, from views/scip.sql
 -- (optional), scip_occurrences and scip_symbols.
 --
 -- Read after all view files. Each cached layer becomes a temporary table
@@ -69,8 +69,8 @@ CREATE TEMP TABLE hunks_cache AS SELECT * FROM hunks;
 CREATE OR REPLACE VIEW hunks AS SELECT * FROM hunks_cache;
 
 -- The blob layer: blob_files (for the same `since` and `include_merges` as the history
--- copies) and blob_units, which parses every blob once (the live blob_nodes) to build
--- the copy. blob_nodes itself is not copied (about 31 million rows on this repository)
+-- copies), blob_units, which parses every blob once (the live blob_nodes) to build the
+-- copy, and blob_blank_lines, which reads every blob's text once. blob_nodes itself is not copied (about 31 million rows on this repository)
 -- and stays live; unit_changes reads the copies.
 DROP TABLE IF EXISTS blob_files_cache;
 CREATE TEMP TABLE blob_files_cache AS SELECT * FROM blob_files;
@@ -79,6 +79,10 @@ CREATE OR REPLACE VIEW blob_files AS SELECT * FROM blob_files_cache;
 DROP TABLE IF EXISTS blob_units_cache;
 CREATE TEMP TABLE blob_units_cache AS SELECT * FROM blob_units;
 CREATE OR REPLACE VIEW blob_units AS SELECT * FROM blob_units_cache;
+
+DROP TABLE IF EXISTS blob_blank_lines_cache;
+CREATE TEMP TABLE blob_blank_lines_cache AS SELECT * FROM blob_blank_lines;
+CREATE OR REPLACE VIEW blob_blank_lines AS SELECT * FROM blob_blank_lines_cache;
 
 -- The successions (views/lineage.sql), derived over the copies above and the blob texts
 -- (read once, here). unit_lineage, unit_history and the history-based queries read the

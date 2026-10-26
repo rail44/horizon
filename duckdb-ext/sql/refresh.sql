@@ -1,6 +1,6 @@
 -- Persistent cache: bring the cache file up to date with the repository, then point
 -- nodes, units, tags, commits, file_changes, hunks, blob_files, blob_nodes, blob_units,
--- commit_order, unit_successions, scip_occurrences and scip_symbols at it (unit_changes
+-- blob_blank_lines, commit_order, unit_successions, scip_occurrences and scip_symbols at it (unit_changes
 -- and the lineage views read them).
 --
 -- Read after all view files, in any session and as often as wanted: each read takes a
@@ -25,10 +25,11 @@
 -- or `languages` differ or the cached head is not among the commits since..HEAD (a
 -- rewritten or reset branch); otherwise the commits cached_head..HEAD are appended.
 --
--- Blobs. A blob's content never changes, so its parse (`cache.blob_nodes`) and units
--- (`cache.blob_units`) are keyed by blob_id alone and only ever added: a blob is parsed
--- when it is in the cached blob_files and not in `cache.blob_parsed`, and its units are
--- derived when it is not in `cache.blob_derived`. `cache.blob_files` follows the
+-- Blobs. A blob's content never changes, so its parse (`cache.blob_nodes`), units
+-- (`cache.blob_units`) and blank lines (`cache.blob_blank_lines`) are keyed by blob_id
+-- alone and only ever added: a blob is parsed when it is in the cached blob_files and
+-- not in `cache.blob_parsed`, and its units and blank lines are derived when it is not in
+-- `cache.blob_derived`. `cache.blob_files` follows the
 -- history: appended with the commits cached_head..HEAD, rebuilt with it (keeping the
 -- parsed blobs) and also when the units of every blob are re-derived, since that reads
 -- every blob file again and the rebuild exports the missing ones. Blobs that leave the
@@ -85,7 +86,7 @@ SELECT CASE WHEN getvariable('cache_path') LIKE '/%'
     THEN error('refresh.sql: the database cache is attached from another file; DETACH cache first')
 END;
 
--- Layout (schema version 4).
+-- Layout (schema version 5).
 CREATE TABLE IF NOT EXISTS cache.meta (
     schema_version INTEGER,
     repo VARCHAR,
@@ -138,7 +139,7 @@ FROM read_ast([getvariable('cache_path') || '.no-such-file.rs'], source := 'full
 -- parent_unit_id are kept as positions within the file (see below).
 CREATE TABLE IF NOT EXISTS cache.units (path VARCHAR, unit_ord BIGINT, parent_unit_ord BIGINT,
     node_id BIGINT, kind VARCHAR, name VARCHAR, qualified_name VARCHAR, start_line BIGINT,
-    end_line BIGINT, loc HUGEINT);
+    end_line BIGINT, loc HUGEINT, lead_start_line BIGINT);
 CREATE TABLE IF NOT EXISTS cache.tags (path VARCHAR, node_id BIGINT, tag VARCHAR, start_line BIGINT,
     end_line BIGINT);
 CREATE TABLE IF NOT EXISTS cache.commits (sha VARCHAR, author_time TIMESTAMP, author_name VARCHAR,
@@ -159,7 +160,9 @@ FROM read_ast([getvariable('cache_path') || '.no-such-file.rs'], source := 'full
 -- The columns of blob_units (views/units.sql).
 CREATE TABLE IF NOT EXISTS cache.blob_units (blob_id VARCHAR, unit_ord BIGINT, parent_unit_ord BIGINT,
     node_id BIGINT, kind VARCHAR, name VARCHAR, qualified_name VARCHAR, start_line BIGINT,
-    end_line BIGINT, loc HUGEINT);
+    end_line BIGINT, loc HUGEINT, lead_start_line BIGINT);
+-- The columns of blob_blank_lines (views/blobs.sql).
+CREATE TABLE IF NOT EXISTS cache.blob_blank_lines (blob_id VARCHAR, line BIGINT);
 -- The columns of scip_document_occurrences and scip_document_symbols (views/scip.sql).
 CREATE TABLE IF NOT EXISTS cache.scip_occurrences (document VARCHAR, symbol VARCHAR, start_line INTEGER,
     start_column INTEGER, end_line INTEGER, end_column INTEGER, roles INTEGER, is_definition BOOLEAN,
@@ -176,7 +179,7 @@ CREATE TABLE IF NOT EXISTS cache.unit_successions (sha VARCHAR, pred_path VARCHA
 CREATE TABLE IF NOT EXISTS cache.lineage_derived (sha VARCHAR);
 
 SET VARIABLE refresh_prior = (SELECT m FROM cache.meta m);
-SELECT CASE WHEN getvariable('refresh_prior').schema_version <> 4
+SELECT CASE WHEN getvariable('refresh_prior').schema_version <> 5
     THEN error('refresh.sql: ' || getvariable('cache_path') || ' has another schema version; delete it')
 END;
 
@@ -186,13 +189,15 @@ SET VARIABLE refresh_syntax_key = (SELECT extension_version FROM duckdb_extensio
 -- unit rules are a table macro (lang/*.sql), so every macro that is not internal is
 -- included (sitting_duck's own among them; their text changes only with its version):
 -- reading duckdb_functions() costs about 18 ms of every refresh (sitting_duck registers
--- thousands of functions). blob_units is excluded because this file replaces it.
+-- thousands of functions). blob_units and blob_blank_lines are excluded because this file
+-- replaces them.
 SET VARIABLE refresh_derive_key = md5(concat_ws(chr(10),
     (SELECT string_agg(view_name || ':' || sql, chr(10) ORDER BY view_name)
      FROM duckdb_views()
-     WHERE NOT internal AND view_name <> 'blob_units'
+     WHERE NOT internal AND view_name NOT IN ('blob_units', 'blob_blank_lines')
        AND (view_name IN ('scope_files', 'sources', 'source_bytes', 'source_lines', 'scope_nodes',
-                          'blob_scope_nodes', 'blob_sources', 'blob_source_bytes', 'blob_source_lines')
+                          'blob_scope_nodes', 'blob_sources', 'blob_source_bytes', 'blob_source_lines',
+                          'derived_blob_blank_lines')
             OR view_name LIKE '%\_units' ESCAPE '\' OR view_name LIKE '%\_tags' ESCAPE '\')),
     (SELECT string_agg(function_name || ':' || macro_definition, chr(10) ORDER BY function_name, macro_definition)
      FROM duckdb_functions()
@@ -335,7 +340,7 @@ SET VARIABLE refresh_t_tags = epoch(now());
 
 CREATE OR REPLACE VIEW units AS
 SELECT unit_id, file_id, node_id, unit_id - unit_ord + parent_unit_ord AS parent_unit_id,
-       kind, name, qualified_name, start_line, end_line, loc
+       kind, name, qualified_name, start_line, end_line, loc, lead_start_line
 FROM (
     SELECT row_number() OVER (ORDER BY f.file_id, u.unit_ord) - 1 AS unit_id, f.file_id, u.*
     FROM cache.units u
@@ -420,6 +425,7 @@ DELETE FROM cache.blob_parsed WHERE getvariable('refresh_syntax_reset');
 DELETE FROM cache.blob_nodes WHERE getvariable('refresh_syntax_reset');
 DELETE FROM cache.blob_derived WHERE getvariable('refresh_derive_reset');
 DELETE FROM cache.blob_units WHERE getvariable('refresh_derive_reset');
+DELETE FROM cache.blob_blank_lines WHERE getvariable('refresh_derive_reset');
 SET VARIABLE blob_snapshot = (
     SELECT coalesce(list({'blob_id': blob_id, 'file': file} ORDER BY blob_id), [])
     FROM (SELECT blob_id, min(file) AS file FROM cache.blob_files
@@ -461,6 +467,8 @@ CREATE OR REPLACE VIEW blob_nodes AS
 SELECT n.* FROM cache.blob_nodes n WHERE n.blob_id IN (SELECT blob_id FROM blob_list);
 SET VARIABLE refresh_blob_units_before = (SELECT count(*) FROM cache.blob_units);
 INSERT INTO cache.blob_units BY NAME SELECT * FROM derived_blob_units;
+-- blob_sources reads the texts of the narrowed snapshot only.
+INSERT INTO cache.blob_blank_lines BY NAME SELECT * FROM derived_blob_blank_lines;
 INSERT INTO cache.blob_derived SELECT blob_id FROM blob_list;
 SET VARIABLE refresh_blobs_derived = len(getvariable('blob_snapshot'));
 SET VARIABLE refresh_blob_units_inserted = (SELECT count(*) FROM cache.blob_units) - getvariable('refresh_blob_units_before');
@@ -478,6 +486,8 @@ SET VARIABLE blob_paths = CASE WHEN getvariable('blob_paths_empty')
 CREATE OR REPLACE VIEW blob_files AS SELECT * FROM cache.blob_files;
 CREATE OR REPLACE VIEW blob_units AS
 SELECT u.* FROM cache.blob_units u WHERE u.blob_id IN (SELECT blob_id FROM blob_list);
+CREATE OR REPLACE VIEW blob_blank_lines AS
+SELECT b.* FROM cache.blob_blank_lines b WHERE b.blob_id IN (SELECT blob_id FROM blob_list);
 SET VARIABLE refresh_t_blob_units = epoch(now());
 
 -- Lineage: the successions of the commits of the range not derived yet, from their
@@ -536,7 +546,7 @@ SET VARIABLE refresh_t_end = epoch(now());
 
 DELETE FROM cache.meta;
 INSERT INTO cache.meta
-SELECT 4, getvariable('repo'), 'ok',
+SELECT 5, getvariable('repo'), 'ok',
        CASE WHEN getvariable('refresh_syntax_reset') THEN now()::TIMESTAMP ELSE getvariable('refresh_prior').built_at END,
        now()::TIMESTAMP,
        getvariable('refresh_syntax_key'), getvariable('refresh_derive_key'), getvariable('refresh_history_key'),

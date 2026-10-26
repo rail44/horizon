@@ -8,10 +8,14 @@
 --
 -- Outputs:
 --   rust_units(unit_id, file_id, node_id, parent_unit_id, kind, name, qualified_name,
---              start_line, end_line, loc)
+--              start_line, end_line, loc, lead_start_line)
 --     kind: function, method, impl, type, module, macro. qualified_name joins the
 --     names of the enclosing units, outermost first, with `.`; parent_unit_id is the
---     innermost enclosing unit; loc counts non-blank lines.
+--     innermost enclosing unit; loc counts non-blank lines of [start_line, end_line].
+--     lead_start_line is where the unit's leading doc comments and attributes start
+--     (start_line when it has none): the syntax tree places them before the item, as
+--     its siblings, so [start_line, end_line] leaves them out. Only the innermost
+--     attribution of views/unit_changes.sql reads it.
 --   rust_blob_units: the columns of rust_units for the blobs of views/blobs.sql, with
 --     file_id holding the blob's position in the blob snapshot (views/units.sql maps it
 --     back to the blob id).
@@ -57,8 +61,8 @@ WITH rust_nodes AS MATERIALIZED (
     FROM query_table(nodes_t) WHERE language = 'rust'
 ),
 rust_unit_candidates AS MATERIALIZED (
-    SELECT n.file_id, n.node_id, n.type, n.start_byte, n.end_byte, n.start_line, n.end_line,
-           n.descendant_count,
+    SELECT n.file_id, n.node_id, n.parent_id, n.sibling_index, n.type, n.start_byte, n.end_byte,
+           n.start_line, n.end_line, n.descendant_count,
            CASE
                -- (impl_item|trait_item body: (declaration_list (function_item ...) @unit.method))
                WHEN n.type = 'function_item' AND p.type = 'declaration_list'
@@ -77,6 +81,39 @@ rust_unit_candidates AS MATERIALIZED (
     LEFT JOIN rust_nodes g ON g.file_id = p.file_id AND g.node_id = p.parent_id
     WHERE n.type IN ('function_item', 'function_signature_item', 'impl_item', 'struct_item', 'enum_item',
                      'union_item', 'type_item', 'trait_item', 'mod_item', 'macro_definition')
+),
+-- Leading doc comments and attributes. Among the siblings of a unit's node, the run of
+-- attribute items and comments directly before it (the run rust_tags reads) leads the
+-- unit; the lead starts at the run's first attribute item or outer doc comment (`///`,
+-- `/** */`: a comment with an outer_doc_comment_marker child). Plain comments before
+-- that point stay with the enclosing unit; inner doc comments (`//!`) belong to the
+-- enclosing item. A run is numbered by the breaks (siblings that are neither attribute
+-- items nor comments, anonymous tokens included) before it, so a unit and the run in
+-- front of it share a number.
+lead_siblings AS MATERIALIZED (
+    SELECT s.file_id, s.parent_id, s.node_id, s.sibling_index, s.start_line,
+           s.type IN ('attribute_item', 'line_comment', 'block_comment') AS in_run,
+           s.type = 'attribute_item' OR EXISTS (
+               SELECT 1 FROM rust_nodes m
+               WHERE m.file_id = s.file_id AND m.parent_id = s.node_id AND m.type = 'outer_doc_comment_marker'
+           ) AS leads
+    FROM rust_nodes s
+    JOIN (SELECT DISTINCT file_id, parent_id FROM rust_unit_candidates WHERE kind IS NOT NULL) p
+      ON p.file_id = s.file_id AND p.parent_id = s.parent_id
+),
+lead_runs AS (
+    SELECT *, coalesce(sum(CASE WHEN in_run THEN 0 ELSE 1 END)
+                           OVER (PARTITION BY file_id, parent_id ORDER BY sibling_index
+                                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS run
+    FROM lead_siblings
+),
+rust_unit_leads AS MATERIALIZED (
+    SELECT u.file_id, u.node_id, min(r.start_line) AS lead_start_line
+    FROM lead_runs u
+    JOIN lead_runs r ON r.file_id = u.file_id AND r.parent_id = u.parent_id AND r.run = u.run
+         AND r.sibling_index < u.sibling_index AND r.leads
+    WHERE NOT u.in_run
+    GROUP BY ALL
 ),
 -- Name nodes. A field like `name: (identifier)` becomes "the first direct child of that
 -- type": the other direct children of these items never have that type.
@@ -171,9 +208,11 @@ lines AS MATERIALIZED (
 )
 SELECT n.unit_id, n.file_id, n.node_id, p.unit_id AS parent_unit_id, n.kind, n.name,
        n.qualified_name, n.start_line, n.end_line,
-       e.nonblank_through - coalesce(s.nonblank_through, 0) AS loc
+       e.nonblank_through - coalesce(s.nonblank_through, 0) AS loc,
+       coalesce(l.lead_start_line, n.start_line) AS lead_start_line
 FROM numbered n
 LEFT JOIN numbered p ON p.file_id = n.file_id AND p.node_id = n.parent_node_id
+LEFT JOIN rust_unit_leads l ON l.file_id = n.file_id AND l.node_id = n.node_id
 JOIN lines e ON e.file_id = n.file_id AND e.line = n.end_line
 LEFT JOIN lines s ON s.file_id = n.file_id AND s.line = n.start_line - 1;
 
