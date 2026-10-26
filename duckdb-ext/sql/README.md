@@ -26,7 +26,46 @@ views and their queries).
 
 ## Running
 
-Every client needs DuckDB **2.0.0** (git_history loads only into that
+`run.sh` is the way to use this layer from the shell; it does what the rest of this
+section describes (the file order, the variables, the persistent cache). From the
+root of this Horizon checkout, for any repository `REPO`:
+
+```sh
+duckdb-ext/sql/run.sh index REPO                       # inputs: SCIP index and jscpd reports
+duckdb-ext/sql/run.sh query REPO unit_churn LIMIT=20   # queries/unit_churn.sql, as a table
+duckdb-ext/sql/run.sh query REPO cochange_without_reference min_coupling_pct=50 FORMAT=box
+duckdb-ext/sql/run.sh sql REPO my-question.sql         # any SQL file, after the same loading
+duckdb-ext/sql/run.sh shell REPO                       # an interactive duckdb2 session
+```
+
+- **`index REPO`** writes `REPO/target/code-db/jscpd/{exact,normalized}` (`jscpd.sh` over
+  those of `src`, `crates` and `preview-plugin/src` that exist, or `JSCPD_PATHS`) and
+  `REPO/target/code-db/index.scip` (`rust-analyzer scip`, 160–280 s and about 7 GB on
+  this repository; its output goes to `index.scip.log` beside it), and prints the time
+  of each. Run it again after edits: nothing checks the index against the tree.
+- **`query`, `sql`, `shell`** set `repo`, read `00_load.sql` and the view files in the
+  order below (`views/scip.sql` and `views/graph.sql` when the index exists), then
+  `refresh.sql` (the persistent cache in `REPO/target/code-db/cache.duckdb`; the first
+  run builds it, 20–26 s here, later runs refresh it), with the loading's own output
+  suppressed. `query QUERY` then runs `queries/QUERY.sql`, `sql FILE.sql` reads the
+  file, `shell` leaves the CLI open with everything in place.
+- **Variables**: `NAME=VALUE` sets a DuckDB variable before anything is read (a
+  number, `true`, `false` or `NULL` as it is, anything else as a string, so
+  `since=e3c619a0` and `kind=function` need no quotes); `NAME:=EXPR` passes SQL text
+  (`"exclude_patterns:=['src/*']"`). `FORMAT` is the CLI's output mode (default
+  `markdown`; `box`, `csv`, `json`, …) and `LIMIT` the number of rows `query` prints
+  (it wraps the query in `SELECT * FROM (…) LIMIT n`; the query files stay as they are).
+- **Errors** are one line saying what to do: no jscpd report or no index for a query
+  that needs it (run `index`), an extension not built (`duckdb-ext/build.sh`), the
+  CLI not found (`DUCKDB_CLI`, default `~/.local/bin/duckdb2`), jscpd not installed.
+- `retro/` holds a retrospective check of the signals against a past refactoring
+  sweep, run through `run.sh sql` (`retro/changes.sql` on the range's end,
+  `retro/signals.sql` on its base; see
+  `docs/research/code-db-dogfood-retrospective-2026-10-26.md`).
+
+`check.py` (Check, below) stays the tool for assertions and measurements.
+
+The rest of this section is what `run.sh` does, for other clients. Every client needs DuckDB **2.0.0** (git_history loads only into that
 version), unsigned extensions allowed, network access the first time (to
 `INSTALL sitting_duck`), and the git_history and scip_index binaries built
 (`duckdb-ext/build.sh` builds both). Run from the root of this Horizon checkout:
@@ -628,6 +667,8 @@ files reset it to live). It needs `git` and rust-analyzer but no jscpd.
 | `jscpd.sh` | the two jscpd reports `clones.sql` reads |
 | `cache.sql` | the session cache (above) |
 | `refresh.sql` | the persistent cache (above) |
+| `run.sh` | the launcher (Running) |
+| `retro/` | the retrospective check: `changes.sql` (the unit changes of a range, to Parquet), `signals.sql` (rankings and ground truth at a baseline), `september-2026-record-preserves.csv` (the preserve rows taken from the September 2026 records) |
 | `check.py` | the check above |
 
 `views/units.sql` is an addition to the layout first proposed: the union of
