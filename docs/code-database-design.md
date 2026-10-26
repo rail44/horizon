@@ -264,13 +264,65 @@ units or a file are not a single receiver). Links at threshold 0.5:
 same_name 14,044, file_rename 3,293, content_match 3,506 (18.5 %
 ambiguous), body_move 127 (11.8 %).
 
+## Re-evaluation after lineage (2026-10-26)
+
+Both checks were repeated with lineage
+([retrospective 2](research/code-db-dogfood-retrospective-2-2026-10-26.md),
+[reading check 2](research/code-db-dogfood-reading-2-2026-10-26.md)).
+
+Retrospective: aligning the ground truth through lineage changes little
+(87 more sweep-changed identities map to the baseline, precision moves by
+at most 0.01 at the ≥1-commit truth); the signals themselves changed. In
+production scope at P@100, `unit_churn` 0.74 → 0.71, clone one-sidedness
+0.65 → 0.68, fan-in × churn 0.58 → 0.43, co-change without reference
+0.49 → 0.41 with its P@10 collapsing 0.9 → 0.4, fan-in alone and `loc`
+unchanged (0.29, 0.75). The collapse has a named cause: units that moved
+together now share their move commits, so relocation counts as
+co-change (checked on two of the new top pairs: 2 of 5 and 3 of 7 shared
+commits are moves). Two preserved units that never changed in the sweep
+entered a history signal's top 100 through merged or moved helpers
+(`scheme_from` 343 → 40 in churn), so round 1's observation that history
+signals never flagged a preserved unit no longer holds.
+
+Reading check: the sources are identical between rounds, so every change
+in the top candidates comes from lineage (6/3/3/7 of 10 entered per
+signal; cycles unchanged). Entrants judged: 3 with the same causes as
+round 1 (`WorkspaceShell` channels, `AgentdState` locks), 2 small
+test-only defects found by reading clone pairs (a match-arm paste in the
+test renderer; a `GIT_CONFIG_*` reset inside a conditional loop), 13
+benign. Totals 13 / 31 / 1 (round 1: 12 / 32 / 1). The mechanism table
+counts, over the current 45 top candidates, how many each false-alarm
+mechanism explains and whether SQL alone can fix it: nested units
+credited with inner changes 11 (yes: innermost unit per hunk line);
+kept-name stubs 3 (needs a lineage rule beyond the four approved); contract
+types 3 (flag only); clone one-sidedness on the enclosing unit 10
+(approximate on the fragment's lines); test units in co-change 6 (yes);
+parent/child module cycles 4 (yes); and three mechanisms lineage
+introduced or amplified: move commits counted as shared co-change 7 (yes:
+exclude each unit's link commits), one-sided clone commits from before
+the partner existed 6 (yes: count from the later side's first commit),
+mechanical sweep commits 8 (only partly).
+
+What this says about the mechanism: lineage made the candidates point at
+the code's actual bodies (the stubs left, `build_definitions` and
+`run_session` entered), which is what the reading check needs, while on
+the retrospective's precision it is neutral for churn and clones and
+harmful for the co-change signals until relocation commits are excluded.
+The next improvements are measured, SQL-only, and ordered by how many
+false alarms they remove.
+
 ## Open points
 
+- **Counting rules the re-evaluation showed to be wrong**: shared commits
+  must exclude the lineage link commits themselves; one-sided clone
+  commits must start at the later side's first commit; inner changes
+  should credit the innermost unit; test units should be excluded or
+  flagged in co-change pairs; parent/child and same-type-impl edges
+  should be collapsed before cycle detection.
 - **Lineage limits**: links are same-commit only; a body split into
   several units or moved into a new file does not cut the stub's history;
   heavy rewrites below the threshold break the chain; short and test
-  units link easily. The retrospective's ground truth still counts by
-  name.
+  units link easily.
 - **A `git://` file system** remains the target for history access. The
   C API registers none today: both v1 and v2 only let an extension *use*
   the host file system (checked against the 2.0.0 headers), and
