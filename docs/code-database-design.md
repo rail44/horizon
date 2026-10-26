@@ -239,12 +239,38 @@ fragment; test units in co-change pairs; parent/child module cycles and
 one type's impl split over many files. The hand-over list and the
 undecided question are in the record.
 
+## Seventh increment: unit lineage (2026-10-26)
+
+([record](research/code-db-lineage-2026-10-26.md)) Two owner decisions:
+history follows the body, not the name (a body moved under a kept name
+continues in the receiving unit; the stub starts a new lineage), and
+lineage is many-to-many with churn counted as distinct commits over all
+ancestors. `views/lineage.sql` links unit identities across one commit by
+four rules — `same_name`, `file_rename` (through `file_changes.old_path`),
+`content_match` (a removed and an added unit of the same commit whose
+normalized line sets have Jaccard ≥ 0.5, gix's rename default) and
+`body_move` (a modified unit whose pre-image is dissimilar to its
+post-image while an added unit matches the pre-image) — marks ambiguous
+links, derives `unit_lineage` by recursion and `unit_history` as the
+distinct commits of all ancestors; the history-based queries read it,
+and `unit_churn` keeps `commits_by_name` and `ancestors` so the effect is
+visible. Materialized in `refresh.sql` per commit (cold +5.5 s, unchanged
++0.05 s). On this repository 3,245 of 9,264 units changed their count
+(3,187 up, 58 down); `SessionId` and `definitions`→`build_definitions`
+(2 → 49) resolved; `run_session` 21 → 50 with three ancestors; the
+fan-in × churn order has no `commits = 1` rows; `mod tests;` with its
+body moved into a *file* stays unresolved (bodies moved into several
+units or a file are not a single receiver). Links at threshold 0.5:
+same_name 14,044, file_rename 3,293, content_match 3,506 (18.5 %
+ambiguous), body_move 127 (11.8 %).
+
 ## Open points
 
-- **Unit identity** breaks both ways: renames start a new history, and a
-  body moved under a kept name keeps the old one. The retrospective and
-  prospective checks both hit it; it is the first thing to decide before
-  trusting churn on specific units.
+- **Lineage limits**: links are same-commit only; a body split into
+  several units or moved into a new file does not cut the stub's history;
+  heavy rewrites below the threshold break the chain; short and test
+  units link easily. The retrospective's ground truth still counts by
+  name.
 - **A `git://` file system** remains the target for history access. The
   C API registers none today: both v1 and v2 only let an extension *use*
   the host file system (checked against the 2.0.0 headers), and
