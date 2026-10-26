@@ -344,7 +344,37 @@ docs or attributes, 110 to blank or comment-only lines. The owner decided
 precede (a Rust rule in `lang/rust.sql`), whitespace-only lines credit no
 unit, and the innermost and test-exclusion rules stay the defaults.
 
+## Ninth increment: attribution of leading docs and blank lines (2026-10-27)
+
+([record](research/code-db-attribution-2026-10-27.md)) `rust_units_over`
+gains `lead_start_line` (the first attribute or outer doc comment in the
+run directly before the item; `start_line` and `loc` unchanged, so no
+recorded number moved), and a cached `blob_blank_lines` layer lets
+`unit_change_sides` drop hits whose lines are all blank on that side.
+Under `all` attribution nothing changed (`unit_changes` 40,924 rows,
+successions 20,970, row hashes equal). Under innermost, impls still
+`modified` fell 853 → 68 (51 by code lines, 8 by their own lead, 8 by
+comments) and modules 874 → 420; doc-only changes now credit the item
+they document, so innermost is no longer a subset of `all`. Seven more of
+the 45 round-2 candidates left the top lists (none of the 19 returned),
+among them both true positives the previous round had kept: the
+`AgentdState` impl (its type, the same cause, stays 2nd by fan-in ×
+churn) and the `AgentdHandle`/`TerminaldHandle` clone pair, whose
+fragments span several methods and therefore resolve to the impls (the
+clone-side resolution, M4, is the remaining open mechanism). Retrospective
+in production scope: churn unchanged (P@100 0.71 → 0.72), clones
+unchanged, fan-in × churn 0.43 → 0.48, co-change 0.49 → 0.43 (a signal
+effect; the truth also grew slightly because doc-only changes now count).
+A first draft of the span join used over 30 GB live and was fixed by
+materializing spans and hunk sides first (12.8 s at 8.7 GB live, as
+before).
+
 ## Open points
+
+- **Clone-side resolution (M4)**: a clone fragment that spans several
+  units resolves to the enclosing impl, so counts on impls' own lines no
+  longer represent the fragment; measuring one-sidedness on the
+  fragment's lines is the next counting fix.
 - **Lineage limits**: links are same-commit only; a body split into
   several units or moved into a new file does not cut the stub's history;
   heavy rewrites below the threshold break the chain; short and test
