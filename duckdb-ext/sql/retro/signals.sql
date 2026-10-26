@@ -3,7 +3,10 @@
 --       retro_changes=/abs/changes.parquet retro_reviews=/abs/reviews.json \
 --       retro_record_preserves=/abs/duckdb-ext/sql/retro/september-2026-record-preserves.csv \
 --       retro_record_targets=/abs/duckdb-ext/sql/retro/september-2026-record-targets.csv \
---       retro_ranks_out=/abs/ranks.csv [retro_scope=production] [retro_min_commits=N]
+--       retro_ranks_out=/abs/ranks.csv [retro_scope=production] [retro_min_commits=N] \
+--       [retro_lineage_changes=/abs/lineage-changes.parquet] \
+--       [retro_lineage_preserves=/abs/lineage-preserves.parquet] [retro_all_ranks_out=/abs/all.csv]
+-- (signals_by_name.sql runs this file with the history signals counted by identity.)
 -- Needs views/graph.sql (the SCIP index of the baseline).
 --
 -- Identity. A unit is (path, kind, qualified_name), the identity unit_changes uses; the
@@ -17,6 +20,13 @@
 -- at least retro_min_commits (default 1) commits;
 -- `preserve` is every baseline identity that a review of retro_reviews (the old audit's
 -- ledger, target file/owner/name) or a row of retro_record_preserves (path, name) names.
+-- With retro_lineage_changes and retro_lineage_preserves (written by lineage.sql on the
+-- end checkout) the truth is by name or through lineage: a change also counts for every
+-- baseline identity its lineage walk reaches at the range's start, and a preserve source
+-- also names every baseline identity reached from the units it names; commits are
+-- counted once per identity either way. A refactored source then reads "... in N commits
+-- (M by name)" when lineage added commits, and a preserve source " via lineage" when
+-- only lineage maps it.
 -- A review with owner '<free>' names a unit whose qualified name is the name, or a
 -- function whose qualified name ends in '.name' (inside an inline module); a review with
 -- an owner names the method `owner.name` (possibly inside an inline module). A record
@@ -28,10 +38,24 @@
 -- of its first row (fan_in by fan_in_files then commits, since unit_fan_in_churn orders
 -- by their product). Pair signals rank an identity at the first pair it is a side of.
 -- History signals count the commits of each unit's lineage (views/lineage.sql); the
--- ground truth counts unit_changes by identity. module_cycles is a set (the units of every module in a cycle), with no order.
+-- ground truth counts unit_changes by identity, or through lineage (above). module_cycles is a set (the units of every module in a cycle), with no order.
+-- retro_all_ranks_out (default /dev/null) receives every ranked identity of the scope.
 
 SET VARIABLE retro_scope = coalesce(getvariable('retro_scope'), 'all');
 SET VARIABLE retro_min_commits = coalesce(getvariable('retro_min_commits'), 1);
+SET VARIABLE retro_all_ranks_out = coalesce(getvariable('retro_all_ranks_out'), '/dev/null');
+-- The lineage files, or empty relations of their shape when unset.
+SET VARIABLE retro_lineage_changes_sql = CASE WHEN getvariable('retro_lineage_changes') IS NULL
+    THEN 'SELECT NULL::VARCHAR AS sha, NULL::VARCHAR AS change_kind, NULL::VARCHAR AS path, NULL::VARCHAR AS kind,
+                 NULL::VARCHAR AS qualified_name WHERE false'
+    ELSE 'SELECT sha, change_kind, path, kind, qualified_name FROM read_parquet('''
+         || replace(getvariable('retro_lineage_changes'), '''', '''''') || ''')' END;
+SET VARIABLE retro_lineage_preserves_sql = CASE WHEN getvariable('retro_lineage_preserves') IS NULL
+    THEN 'SELECT NULL::VARCHAR AS source, NULL::VARCHAR AS source_path, NULL::VARCHAR AS owner, NULL::VARCHAR AS name,
+                 NULL::VARCHAR AS variant, NULL::VARCHAR AS path, NULL::VARCHAR AS kind, NULL::VARCHAR AS qualified_name
+          WHERE false'
+    ELSE 'SELECT source, source_path, owner, name, variant, path, kind, qualified_name FROM read_parquet('''
+         || replace(getvariable('retro_lineage_preserves'), '''', '''''') || ''')' END;
 
 -- The query files' text (without the final semicolon).
 SET VARIABLE retro_q_churn = (SELECT rtrim(trim(content), ';') FROM read_text('duckdb-ext/sql/queries/unit_churn.sql'));
@@ -65,8 +89,8 @@ SELECT 'reviews.json ' || substr(review_commit, 1, 8) AS source, path, owner, na
 UNION ALL
 SELECT record, path, '<any>', name, NULL FROM read_csv(getvariable('retro_record_preserves'), header := true);
 
-CREATE OR REPLACE TEMP TABLE retro_preserve_map AS
-SELECT s.source, s.path AS source_path, s.owner, s.name, s.variant, u.kind, u.qualified_name
+CREATE OR REPLACE TEMP TABLE retro_preserve_map_by_name AS
+SELECT s.source, s.path AS source_path, s.owner, s.name, s.variant, u.kind, u.qualified_name, u.path AS unit_path
 FROM retro_preserve_sources s
 LEFT JOIN retro_units u
   ON u.path = s.path
@@ -79,21 +103,59 @@ LEFT JOIN retro_units u
                                       OR u.qualified_name LIKE '%.' || s.owner || '.' || s.name)
      END;
 
+-- Baseline identities a preserve source reaches through lineage (none without the file),
+-- added to the by-name map; a source's unmapped row is dropped when lineage maps it.
+CREATE OR REPLACE TEMP TABLE retro_preserve_map AS
+WITH lineage AS (
+    SELECT DISTINCT l.source, l.source_path, l.owner, l.name, l.variant, u.kind, u.qualified_name, u.path AS unit_path
+    FROM query(getvariable('retro_lineage_preserves_sql')) l
+    JOIN retro_units u ON u.path = l.path AND u.kind = l.kind AND u.qualified_name = l.qualified_name
+),
+both_ AS (
+    SELECT *, false AS via_lineage FROM retro_preserve_map_by_name WHERE qualified_name IS NOT NULL
+    UNION ALL
+    SELECT l.*, true FROM lineage l
+    WHERE NOT EXISTS (SELECT 1 FROM retro_preserve_map_by_name m
+                      WHERE m.source = l.source AND m.source_path = l.source_path AND m.owner = l.owner
+                        AND m.name = l.name AND m.variant IS NOT DISTINCT FROM l.variant
+                        AND m.unit_path = l.unit_path AND m.kind = l.kind AND m.qualified_name = l.qualified_name)
+)
+SELECT * FROM both_
+UNION ALL
+SELECT m.*, false FROM retro_preserve_map_by_name m
+WHERE m.qualified_name IS NULL
+  AND NOT EXISTS (SELECT 1 FROM both_ b
+                  WHERE b.source = m.source AND b.source_path = m.source_path AND b.owner = m.owner
+                    AND b.name = m.name AND b.variant IS NOT DISTINCT FROM m.variant);
+
+-- Each change counts for its own identity and, through lineage, for the baseline
+-- identities its walk reaches.
+CREATE OR REPLACE TEMP TABLE retro_truth_changes AS
+SELECT sha, change_kind, path, unit_kind AS kind, unit_qualified_name AS qualified_name, true AS by_name
+FROM read_parquet(getvariable('retro_changes'))
+WHERE change_kind IN ('modified', 'removed')
+UNION ALL
+SELECT sha, change_kind, path, kind, qualified_name, false
+FROM query(getvariable('retro_lineage_changes_sql'));
+
 CREATE OR REPLACE TEMP TABLE retro_truth AS
 SELECT u.path, u.kind AS unit_kind, u.qualified_name, 'refactored' AS decision,
        'unit_changes ' || string_agg(DISTINCT c.change_kind, '+' ORDER BY c.change_kind)
-       || ' in ' || count(DISTINCT c.sha) || ' commits' AS source
+       || ' in ' || count(DISTINCT c.sha) || ' commits'
+       || CASE WHEN count(DISTINCT c.sha) FILTER (WHERE c.by_name) < count(DISTINCT c.sha)
+               THEN ' (' || count(DISTINCT c.sha) FILTER (WHERE c.by_name) || ' by name)' ELSE '' END AS source
 FROM retro_units u
-JOIN read_parquet(getvariable('retro_changes')) c
-  ON c.path = u.path AND c.unit_kind = u.kind AND c.unit_qualified_name = u.qualified_name
-WHERE c.change_kind IN ('modified', 'removed')
+JOIN retro_truth_changes c
+  ON c.path = u.path AND c.kind = u.kind AND c.qualified_name = u.qualified_name
 GROUP BY ALL
 HAVING count(DISTINCT c.sha) >= getvariable('retro_min_commits')
 UNION ALL
-SELECT source_path, kind, qualified_name, 'preserve', string_agg(DISTINCT source, ', ' ORDER BY source)
+SELECT unit_path, kind, qualified_name, 'preserve',
+       string_agg(DISTINCT source || CASE WHEN via_lineage THEN ' via lineage' ELSE '' END, ', '
+                  ORDER BY source || CASE WHEN via_lineage THEN ' via lineage' ELSE '' END)
 FROM retro_preserve_map
 WHERE qualified_name IS NOT NULL
-GROUP BY source_path, kind, qualified_name;
+GROUP BY unit_path, kind, qualified_name;
 
 -- Signal rankings over every identity (scope applied in the evaluation).
 CREATE OR REPLACE TEMP TABLE retro_q_churn AS
@@ -176,7 +238,8 @@ ORDER BY r.record, r.path, r.name;
 
 .print
 .print ## Preserve sources mapped to baseline identities (all kinds)
-SELECT source, source_path, owner, name, variant, kind, qualified_name FROM retro_preserve_map ORDER BY source, source_path, name, variant;
+SELECT source, source_path, owner, name, variant, unit_path, kind, qualified_name, via_lineage
+FROM retro_preserve_map ORDER BY source, source_path, name, variant, unit_path;
 
 .print
 .print ## Precision and recall against the refactored set
@@ -268,3 +331,7 @@ COPY (
     ORDER BY t.decision, churn NULLS LAST, t.path, t.qualified_name
 ) TO (getvariable('retro_ranks_out')) (FORMAT csv, HEADER);
 SELECT count(*) AS rows_written FROM read_csv(getvariable('retro_ranks_out'));
+
+COPY (
+    SELECT r.signal, r.rank, r.path, r.kind, r.qualified_name, r.value FROM retro_ranks r ORDER BY r.signal, r.rank
+) TO (getvariable('retro_all_ranks_out')) (FORMAT csv, HEADER);

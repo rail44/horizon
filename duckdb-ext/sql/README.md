@@ -62,7 +62,12 @@ duckdb-ext/sql/run.sh shell REPO                       # an interactive duckdb2 
 - `retro/` holds a retrospective check of the signals against a past refactoring
   sweep, run through `run.sh sql` (`retro/changes.sql` on the range's end,
   `retro/signals.sql` on its base; see
-  `docs/research/code-db-dogfood-retrospective-2026-10-26.md`).
+  `docs/research/code-db-dogfood-retrospective-2026-10-26.md`). For a ground truth
+  through lineage, `retro/changes.sql` and `retro/lineage.sql` run on the end with
+  `retro_since` (the whole history cached) and `retro/signals.sql` reads the two
+  lineage files; `retro/signals_by_name.sql` runs `retro/signals.sql` with the history
+  signals counted by identity, as before lineage (see
+  `docs/research/code-db-dogfood-retrospective-2-2026-10-26.md`).
 
 `check.py` (Check, below) stays the tool for assertions and measurements.
 
@@ -803,7 +808,7 @@ files reset it to live). It needs `git` and rust-analyzer but no jscpd.
 | `cache.sql` | the session cache (above) |
 | `refresh.sql` | the persistent cache (above) |
 | `run.sh` | the launcher (Running) |
-| `retro/` | the retrospective check: `changes.sql` (the unit changes of a range, to Parquet), `signals.sql` (rankings and ground truth at a baseline), `september-2026-record-preserves.csv` (the preserve rows taken from the September 2026 records) |
+| `retro/` | the retrospective check: `changes.sql` (the unit changes of a range, to Parquet), `lineage.sql` (the baseline identities each change and preserve source reaches through lineage, to Parquet), `signals.sql` (rankings and ground truth at a baseline), `signals_by_name.sql` (the same with history counted by identity), `september-2026-record-preserves.csv` (the preserve rows taken from the September 2026 records) |
 | `check.py` | the check above |
 
 `views/units.sql` is an addition to the layout first proposed: the union of
