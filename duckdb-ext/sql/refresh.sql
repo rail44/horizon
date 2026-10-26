@@ -207,12 +207,15 @@ SET VARIABLE refresh_syntax_reset = getvariable('refresh_prior') IS NULL
     OR getvariable('refresh_prior').syntax_key IS DISTINCT FROM getvariable('refresh_syntax_key');
 SET VARIABLE refresh_derive_reset = getvariable('refresh_syntax_reset')
     OR getvariable('refresh_prior').derive_key IS DISTINCT FROM getvariable('refresh_derive_key');
--- The text of the views the successions are derived through (views/lineage.sql and
--- unit_changes, which stays a view over the cached layers) and the threshold.
+-- The text of the views the successions are derived through (views/lineage.sql, and
+-- unit_change_sides and unit_changes, which stay views over the cached layers) and the
+-- threshold. `attribution` is not part of it: the successions read the attribution-'all'
+-- columns of unit_change_sides whatever it is.
 SET VARIABLE refresh_lineage_key = md5(concat_ws(chr(10),
     (SELECT string_agg(view_name || ':' || sql, chr(10) ORDER BY view_name)
      FROM duckdb_views()
-     WHERE NOT internal AND view_name IN ('derived_unit_successions', 'lineage_sources', 'unit_changes')),
+     WHERE NOT internal
+       AND view_name IN ('derived_unit_successions', 'lineage_sources', 'unit_change_sides', 'unit_changes')),
     'lineage_threshold=' || getvariable('lineage_threshold')));
 SET VARIABLE refresh_lineage_reset = getvariable('refresh_derive_reset')
     OR getvariable('refresh_prior').state IS DISTINCT FROM 'ok'

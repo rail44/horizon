@@ -18,11 +18,15 @@
         (a rust-analyzer index of the fixture crate; skipped without rust-analyzer)
         asserts views/scip.sql and unit_fan_in_churn, live and cached; a graph
         fixture (the history fixture's crate plus a module cycle, indexed the same
-        way) asserts views/graph.sql and its queries, live and cached.
+        way) asserts views/graph.sql and its queries, live and cached; a counting
+        fixture (a crate of its own, indexed the same way) asserts each counting rule
+        (link commits, clone sides, innermost attribution, test units, structural
+        module edges) against its previous behavior.
 
     uv run --script duckdb-ext/sql/check.py scip-fixture
     uv run --script duckdb-ext/sql/check.py graph-fixture
-        Only the SCIP fixture; only the graph fixture.
+    uv run --script duckdb-ext/sql/check.py counting-fixture
+        Only the SCIP fixture; only the graph fixture; only the counting fixture.
 
     The commands below read views/scip.sql and views/graph.sql too when
     REPO/target/code-db/index.scip exists, and then include their views and queries.
@@ -573,6 +577,7 @@ def check_fixture():
     check_lineage_fixture()
     check_scip_fixture()
     check_graph_fixture()
+    check_counting_fixture()
     check_refresh_fixture()
 
 
@@ -644,6 +649,17 @@ HISTORY_CHANGES = {
     # A pure rename has no hunks: no rows.
     "pure_rename": [],
 }
+# The rows above that attribution 'all' adds: impls credited with a change inside one of
+# their methods. Under the default innermost attribution they are absent.
+HISTORY_ENCLOSING_ONLY = {
+    "swap": [("src/shapes.rs", "impl", "Square", "modified")],
+    "perimeter": [("src/shapes.rs", "impl", "Square", "modified")],
+    "one_side": [("src/shapes.rs", "impl", "Shape for Square", "modified")],
+    "both_sides": [("src/rect.rs", "impl", "Shape for Rect", "modified"),
+                   ("src/shapes.rs", "impl", "Shape for Square", "modified")],
+}
+HISTORY_CHANGES_INNERMOST = {k: [r for r in v if r not in HISTORY_ENCLOSING_ONLY.get(k, [])]
+                             for k, v in HISTORY_CHANGES.items()}
 
 # The `current` units of each file, with ids replaced by positions as in blob_units.
 CURRENT_UNITS_BY_BLOB = """
@@ -693,13 +709,29 @@ def check_history_fixture():
         assert blob_units_equal_units(con) == (files, files, 0, 0), blob_units_equal_units(con)
 
         names = {v: k for k, v in sha.items()}
-        got = {}
-        for r in rows(con, "SELECT sha, path, unit_kind, unit_qualified_name, change_kind FROM unit_changes"):
-            got.setdefault(names[r[0]], []).append(r[1:])
+
+        def changes_by_step():
+            got = {}
+            for r in rows(con, "SELECT sha, path, unit_kind, unit_qualified_name, change_kind FROM unit_changes"):
+                got.setdefault(names[r[0]], []).append(r[1:])
+            return {k: sorted(v) for k, v in got.items()}
+
+        # Innermost attribution (the default): a change inside a method credits the method,
+        # not its impl; an added impl is credited (its header and closing lines are its own).
+        expected = {k: sorted(v) for k, v in HISTORY_CHANGES_INNERMOST.items() if v}
+        assert changes_by_step() == expected, changes_by_step()
+        # Attribution 'all' (the spike's): every enclosing unit too.
+        con.execute("SET VARIABLE attribution = 'all'")
         expected = {k: sorted(v) for k, v in HISTORY_CHANGES.items() if v}
-        assert {k: sorted(v) for k, v in got.items()} == expected, got
+        assert changes_by_step() == expected, changes_by_step()
         assert rows(con, "SELECT count(*) = count(DISTINCT (sha, path, unit_kind, unit_qualified_name, change_kind)) "
                          "FROM unit_changes") == [(True,)]
+        con.execute("SET VARIABLE attribution = 'innermost'")
+        # Whatever the attribution, the `_all` columns are attribution 'all's.
+        assert rows(con, "SELECT count(*) FROM unit_change_sides "
+                         "WHERE change_kind IS DISTINCT FROM change_kind_all") == [(10,)], \
+            rows(con, "SELECT * FROM unit_change_sides WHERE change_kind IS DISTINCT FROM change_kind_all")
+        con.execute("SET VARIABLE attribution = NULL")
 
         # unit_successions: the modified units in place, the renamed test (its function
         # renamed too: a content match), the pure rename (the units of the old path's
@@ -722,7 +754,8 @@ def check_history_fixture():
         churn = {(r[0], r[2], r[3]): r[6:8] for r in rows(con, query_sql("unit_churn"))}
         assert len(churn) == rows(con, "SELECT count(*) FROM units")[0][0], churn
         assert churn[("src/shapes.rs", "method", "Shape for Square.area")] == (3, 2), churn
-        assert churn[("src/shapes.rs", "impl", "Shape for Square")] == (3, 2), churn
+        # The impl only for its own lines (its addition), its method for every change.
+        assert churn[("src/shapes.rs", "impl", "Shape for Square")] == (1, 1), churn
         assert churn[("src/rect.rs", "method", "Shape for Rect.area")] == (2, 2), churn
         assert churn[("src/shapes.rs", "method", "Square.new")] == (3, 1), churn
         assert churn[("src/lib.rs", "function", "area")] == (2, 1), churn
@@ -737,9 +770,12 @@ def check_history_fixture():
 
         # clone_change_consistency: pair 0 changed together twice (initial, both_sides) and
         # on side A alone once (one_side); pair 1's side B lies in no single unit.
-        consistency = [(r[0], r[5], r[9], r[12], r[13:]) for r in rows(con, query_sql("clone_change_consistency"))]
-        assert consistency == [(0, "Shape for Square.area", "Shape for Rect.area", False, (1, 0, 2, 1)),
-                               (1, "tests.square_area", None, None, (1, 0, 0, 1))], consistency
+        # Both sides of both pairs exist from the first commit, which is since_sha (an
+        # unresolved side sets no bound).
+        consistency = [(r[0], r[5], r[9], r[12], r[13:17], names.get(r[17]))
+                       for r in rows(con, query_sql("clone_change_consistency"))]
+        assert consistency == [(0, "Shape for Square.area", "Shape for Rect.area", False, (1, 0, 2, 1), "initial"),
+                               (1, "tests.square_area", None, None, (1, 0, 0, 1), "initial")], consistency
         con.execute("SET VARIABLE clone_source = 'normalized'")
         assert rows(con, query_sql("clone_change_consistency")) == []
         con.execute("SET VARIABLE clone_source = NULL")
@@ -1216,7 +1252,9 @@ def check_graph_fixture():
         if make_scip_index(repo, root) is None:
             print(f"graph fixture: SKIPPED ({RUST_ANALYZER} not found)")
             return
-        con = connect(repo, [report], {"min_shared": "2"}, scip=True)
+        # The co-change rows below count with attribution 'all' (an impl changes with each
+        # of its methods); the counting-rules fixture covers the default.
+        con = connect(repo, [report], {"min_shared": "2", "attribution": "'all'"}, scip=True)
         probes = {
             "unit_references": unit_rows_sql(
                 "unit_references", ["src_unit_id", "dst_unit_id"],
@@ -1284,14 +1322,17 @@ def check_graph_fixture():
         assert modules[(shapes, "module", "tests")] == ("src/shapes.rs::tests", True, "horizon"), modules
         assert modules[ping] == (cya, False, "horizon") and modules[sq_area] == (shapes, False, "horizon"), modules
         assert modules[(lib, "module", "rect")] == ("src/lib.rs::rect", True, "horizon"), modules
+        # nested_modules: an inline module and its file; a module and the crate root
+        # (src/lib.rs is src, the ancestor of src/cycle_b); an integration test is not
+        # under src. No impl-to-impl edges of one type here.
         assert got["module_edges"] == [
-            (conv, shapes, "horizon", "horizon", 5, 5, 0, 0, 0),
-            (cya, cyb, "horizon", "horizon", 1, 1, 0, 0, 0),
-            (cyb, cya, "horizon", "horizon", 1, 1, 0, 0, 0),
-            (cyb, lib, "horizon", "horizon", 1, 1, 0, 0, 0),
-            (rect, shapes, "horizon", "horizon", 1, 1, 0, 0, 0),
-            ("src/shapes.rs::tests", shapes, "horizon", "horizon", 3, 3, 3, 3, 0),
-            ("tests/area.rs", lib, "horizon", "horizon", 1, 1, 1, 1, 0),
+            (conv, shapes, "horizon", "horizon", 5, 5, 0, 0, 0, False, 0),
+            (cya, cyb, "horizon", "horizon", 1, 1, 0, 0, 0, False, 0),
+            (cyb, cya, "horizon", "horizon", 1, 1, 0, 0, 0, False, 0),
+            (cyb, lib, "horizon", "horizon", 1, 1, 0, 0, 0, True, 0),
+            (rect, shapes, "horizon", "horizon", 1, 1, 0, 0, 0, False, 0),
+            ("src/shapes.rs::tests", shapes, "horizon", "horizon", 3, 3, 3, 3, 0, True, 0),
+            ("tests/area.rs", lib, "horizon", "horizon", 1, 1, 1, 1, 0, False, 0),
         ], got["module_edges"]
         # One crate (every path maps to horizon): no crate edges, no crate cycle.
         assert got["crate_edges"] == [] and got["crate_cycles"] == []
@@ -1343,7 +1384,7 @@ def check_graph_fixture():
             raise AssertionError("unit_dependencies without a unit did not fail")
         con.execute(f"SET VARIABLE path = {sql_literal(cya)}")
         graph = rows(con, query_sql("module_graph"))
-        assert sorted(r[:-1] for r in graph) == got["module_edges"], graph
+        assert sorted(r[:-1] for r in graph) == [r[:9] for r in got["module_edges"]], graph
         assert [(r[0], r[1], r[-1]) for r in graph if r[-1]] == [(cya, cyb, 1), (cyb, cya, 1)], graph
         assert graph[0][:2] == (conv, shapes), graph
         con.execute("SET VARIABLE crate = 'horizon-agent'")
@@ -1375,6 +1416,293 @@ def check_graph_fixture():
             assert "READ_AST" not in plan and "READ_SCIP" not in plan and "READ_TEXT" not in plan, (name, plan)
         con.close()
     print("graph fixture: ok")
+
+
+# The counting-rules fixture: one crate with a case per counting rule (two units moved
+# together; a clone whose second side appears later; an impl whose method changes, then
+# its header; two test functions changed together; a parent and child module, and one
+# type's impls in two files, referencing each other; a sibling module cycle that stays).
+COUNTING_LIB = """\
+pub mod clones;
+pub mod mover;
+pub mod parent;
+pub mod ping;
+pub mod pong;
+pub mod shape;
+pub mod twin_a;
+pub mod twin_b;
+
+pub struct Twin {
+    pub n: u32,
+}
+"""
+
+COUNTING_ALPHA = """\
+pub fn alpha(values: &[u32]) -> u32 {
+    let mut total = 0;
+    for value in values {
+        total += value * 3;
+    }
+    total
+}
+"""
+
+COUNTING_BETA = """\
+pub fn beta(text: &str) -> usize {
+    let words = text.split_whitespace();
+    let lengths: Vec<usize> = words.map(str::len).collect();
+    lengths.iter().copied().max().unwrap_or(0)
+}
+"""
+
+COUNTING_STAY = "pub fn stay() -> u8 {\n    7\n}\n"
+
+COUNTING_ORIGINAL = """\
+pub fn {name}(input: &[i64]) -> i64 {
+    let positive: Vec<i64> = input.iter().copied().filter(|v| *v > 0).collect();
+    let squares: Vec<i64> = positive.iter().map(|v| v * v).collect();
+    let sum: i64 = squares.iter().sum();
+    let count = squares.len() as i64;
+    if count == 0 { 0 } else { sum / count }
+}
+"""
+
+COUNTING_SHAPE = """\
+pub struct Sq {
+    pub side: u32,
+}
+
+impl Sq {
+    pub fn area(&self) -> u32 {
+        self.side * self.side
+    }
+}
+"""
+
+COUNTING_PARENT = """\
+pub mod child;
+
+pub fn up() -> u32 {
+    child::down() + 1
+}
+"""
+
+COUNTING_CHILD = """\
+pub fn down() -> u32 {
+    1
+}
+
+pub fn back() -> u32 {
+    super::up()
+}
+"""
+
+COUNTING_TWIN_A = """\
+impl crate::Twin {
+    pub fn a(&self) -> u32 {
+        self.b() + 1
+    }
+}
+"""
+
+COUNTING_TWIN_B = """\
+impl crate::Twin {
+    pub fn b(&self) -> u32 {
+        self.n
+    }
+
+    pub fn c(&self) -> u32 {
+        self.a()
+    }
+}
+"""
+
+COUNTING_PING = "pub fn ping(n: u32) -> u32 {\n    if n == 0 { 0 } else { crate::pong::pong(n - 1) }\n}\n"
+COUNTING_PONG = "pub fn pong(n: u32) -> u32 {\n    if n == 0 { 1 } else { crate::ping::ping(n - 1) }\n}\n"
+COUNTING_TEST = "#[test]\nfn {name}() {{\n    assert_eq!(fixture::stay(), {value});\n}}\n"
+
+
+def build_counting_fixture(root):
+    """The counting-rules fixture's repository and its commit shas by step name."""
+    repo = root / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    sha = {}
+
+    def commit(name, message, date):
+        git(repo, "add", "-A", ".")
+        git(repo, "commit", "-q", "-m", message, date=date)
+        sha[name] = git_out(repo, "rev-parse", "HEAD")
+
+    def test(name, value):
+        return COUNTING_TEST.replace("{name}", name).replace("{value}", str(value))
+
+    original = COUNTING_ORIGINAL.replace("{name}", "original")
+    write(repo, ".gitignore", "target/\n")
+    write(repo, "src/lib.rs", COUNTING_LIB)
+    write(repo, "src/mover.rs", COUNTING_ALPHA + "\n" + COUNTING_BETA + "\n" + COUNTING_STAY)
+    write(repo, "src/clones.rs", original)
+    write(repo, "src/shape.rs", COUNTING_SHAPE)
+    write(repo, "src/parent.rs", COUNTING_PARENT)
+    write(repo, "src/parent/child.rs", COUNTING_CHILD)
+    write(repo, "src/twin_a.rs", COUNTING_TWIN_A)
+    write(repo, "src/twin_b.rs", COUNTING_TWIN_B)
+    write(repo, "src/ping.rs", COUNTING_PING)
+    write(repo, "src/pong.rs", COUNTING_PONG)
+    write(repo, "tests/a.rs", test("t_one", 7))
+    write(repo, "tests/b.rs", test("t_two", 7))
+    commit("init", "Add the crate", "2026-01-01T00:00:00Z")
+    alpha, beta = COUNTING_ALPHA.replace("* 3", "* 4"), COUNTING_BETA.replace("max()", "min()")
+    write(repo, "src/mover.rs", alpha + "\n" + beta + "\n" + COUNTING_STAY)
+    commit("edit_both", "Edit alpha and beta", "2026-01-02T00:00:00Z")
+    original = original.replace("*v > 0", "*v >= 0")
+    write(repo, "src/clones.rs", original)
+    commit("edit_original", "Edit the original", "2026-01-03T00:00:00Z")
+    write(repo, "src/copy.rs", original.replace("fn original(", "fn copied("))
+    write(repo, "src/lib.rs", COUNTING_LIB.replace("pub mod clones;", "pub mod clones;\npub mod copy;"))
+    commit("copy", "Copy the original", "2026-01-04T00:00:00Z")
+    write(repo, "src/mover.rs", COUNTING_STAY)
+    write(repo, "src/moved.rs", alpha + "\n" + beta)
+    write(repo, "src/lib.rs", COUNTING_LIB.replace("pub mod clones;", "pub mod clones;\npub mod copy;")
+          .replace("pub mod mover;", "pub mod moved;\npub mod mover;"))
+    commit("move", "Move alpha and beta", "2026-01-05T00:00:00Z")
+    write(repo, "src/clones.rs", original.replace("sum / count", "sum / count.max(1)"))
+    commit("edit_original_again", "Edit the original again", "2026-01-06T00:00:00Z")
+    write(repo, "src/shape.rs", COUNTING_SHAPE.replace("self.side * self.side", "self.side.pow(2)"))
+    commit("edit_method", "Edit the method", "2026-01-07T00:00:00Z")
+    write(repo, "src/shape.rs", COUNTING_SHAPE.replace("self.side * self.side", "self.side.pow(2)")
+          .replace("impl Sq {", "impl Sq where Sq: Sized {"))
+    commit("edit_impl", "Edit the impl's header", "2026-01-08T00:00:00Z")
+    write(repo, "tests/a.rs", test("t_one", 7).replace("assert_eq!", "assert_eq! "))
+    write(repo, "tests/b.rs", test("t_two", 7).replace("assert_eq!", "assert_eq! "))
+    commit("edit_tests", "Edit both tests", "2026-01-09T00:00:00Z")
+    write(repo, "tests/a.rs", test("t_one", 7))
+    write(repo, "tests/b.rs", test("t_two", 7))
+    commit("edit_tests_again", "Edit both tests again", "2026-01-10T00:00:00Z")
+    return repo, sha
+
+
+def counting_report(root, repo):
+    """A jscpd-shaped report pairing the body of `original` with that of `copied`."""
+    clones = (repo / "src/clones.rs").read_text()
+    copy = (repo / "src/copy.rs").read_text()
+    a, b = line_of(clones, "let positive"), line_of(copy, "let positive")
+
+    def side(path, start, end):
+        return {"name": str(repo / path), "start": start, "end": end,
+                "startLoc": {"line": start, "column": 1, "position": 0},
+                "endLoc": {"line": end, "column": 1, "position": 0}}
+
+    duplicates = [{"format": "rust", "lines": 5, "tokens": 60, "fragment": "", "isNew": False, "kind": "exact",
+                   "firstFile": side("src/clones.rs", a, a + 4), "secondFile": side("src/copy.rs", b, b + 4)}]
+    path = root / "jscpd" / "exact" / "jscpd-report.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"duplicates": duplicates, "statistics": {}}))
+    return path
+
+
+def check_counting_fixture():
+    """The five counting rules (link commits out of co-change, clone sides counted once
+    both exist, innermost attribution, test units out of co-change pairs, structural
+    module edges out of cycles), each against its previous behavior; skipped when
+    rust-analyzer is not installed."""
+    with tempfile.TemporaryDirectory(prefix="code-db-counting-") as tmp:
+        root = Path(tmp)
+        repo, sha = build_counting_fixture(root)
+        report = counting_report(root, repo)
+        if make_scip_index(repo, root) is None:
+            print(f"counting fixture: SKIPPED ({RUST_ANALYZER} not found)")
+            return
+        con = connect(repo, [report], {"min_shared": "1"}, scip=True)
+        names = {v: k for k, v in sha.items()}
+        moved = "src/moved.rs"
+        alpha, beta = (moved, "function", "alpha"), (moved, "function", "beta")
+        t_one, t_two = ("tests/a.rs", "function", "t_one"), ("tests/b.rs", "function", "t_two")
+        cochange_sql = unit_rows_sql("unit_cochange", ["unit_a", "unit_b"], ["shared_commits", "commits_a", "commits_b"])
+
+        def cochange(*pair):
+            return [r[2:] for r in rows(con, cochange_sql) if r[:2] == pair]
+
+        # N1: alpha and beta, added together and edited together, then moved together to
+        # moved.rs (two content matches in one commit). The move is a link commit of both:
+        # it stays in their history (via_link) and in unit_churn, not in their co-change.
+        links = rows(con, "SELECT link, pred_path, pred_qualified_name, succ_qualified_name FROM unit_successions "
+                          f"WHERE sha = '{sha['move']}' AND link <> 'same_name' ORDER BY ALL")
+        assert links == [("content_match", "src/mover.rs", "alpha", "alpha"),
+                         ("content_match", "src/mover.rs", "beta", "beta")], links
+        history = rows(con, "SELECT h.sha, h.via_link FROM unit_history h JOIN units u USING (unit_id) "
+                            "JOIN files f USING (file_id) WHERE f.path = 'src/moved.rs' AND u.qualified_name = 'alpha'")
+        assert sorted((names[s], v) for s, v in history) == [("edit_both", False), ("init", False), ("move", True)], \
+            history
+        churn = {(r[0], r[2], r[3]): (r[6], r[13]) for r in rows(con, query_sql("unit_churn"))}
+        assert churn[alpha] == (3, 1) and churn[beta] == (3, 1), churn
+        assert cochange(alpha, beta) == [(2, 2, 2)], cochange(alpha, beta)
+        con.execute("SET VARIABLE cochange_link_commits = true")
+        assert cochange(alpha, beta) == [(3, 3, 3)], cochange(alpha, beta)
+        con.execute("SET VARIABLE cochange_link_commits = NULL")
+
+        # N2: copied appears in `copy`, after original's first two commits; from then on
+        # original changed once alone (edit_original_again) and copied once alone (its
+        # addition). With clone_before_both, original's earlier commits count as well.
+        clone_sql = query_sql("clone_change_consistency")
+        clone = [(r[5], r[9], r[13:17], names.get(r[17])) for r in rows(con, clone_sql)]
+        assert clone == [("original", "copied", (1, 1, 0, 2), "copy")], clone
+        con.execute("SET VARIABLE clone_before_both = true")
+        clone = [(r[5], r[9], r[13:17], names.get(r[17])) for r in rows(con, clone_sql)]
+        assert clone == [("original", "copied", (3, 1, 0, 4), "copy")], clone
+        con.execute("SET VARIABLE clone_before_both = NULL")
+
+        # M1: a change inside the method credits the method only; a change to the impl's
+        # header credits the impl only. With attribution 'all' the impl takes both.
+        def shape_changes():
+            return rows(con, "SELECT sha, unit_kind, unit_qualified_name, change_kind FROM unit_changes "
+                             f"WHERE path = 'src/shape.rs' AND sha IN ('{sha['edit_method']}', '{sha['edit_impl']}')"
+                             " ORDER BY ALL")
+        assert sorted((names[r[0]], *r[1:]) for r in shape_changes()) == [
+            ("edit_impl", "impl", "Sq", "modified"), ("edit_method", "method", "Sq.area", "modified")], shape_changes()
+        con.execute("SET VARIABLE attribution = 'all'")
+        assert sorted((names[r[0]], *r[1:]) for r in shape_changes()) == [
+            ("edit_impl", "impl", "Sq", "modified"), ("edit_method", "impl", "Sq", "modified"),
+            ("edit_method", "method", "Sq.area", "modified")], shape_changes()
+        con.execute("SET VARIABLE attribution = NULL")
+
+        # M5: the two integration tests changed together three times; their pair is left
+        # out of unit_cochange and cochange_without_reference unless include_tests.
+        assert cochange(t_one, t_two) == [], cochange(t_one, t_two)
+        assert rows(con, "SELECT count(*) FROM cochange_without_reference c JOIN unit_tests t ON t.unit_id IN "
+                         "(c.unit_a, c.unit_b) WHERE t.is_test") == [(0,)]
+        con.execute("SET VARIABLE include_tests = true")
+        assert cochange(t_one, t_two) == [(3, 3, 3)], cochange(t_one, t_two)
+        without = unit_rows_sql("cochange_without_reference", ["unit_a", "unit_b"], ["shared_commits"])
+        assert (t_one, t_two, 3) in rows(con, without), rows(con, without)
+        con.execute("SET VARIABLE include_tests = NULL")
+
+        # M6: parent.rs and parent/child.rs call each other (a parent and its child), and
+        # twin_a.rs and twin_b.rs call each other only between methods of impls of one type
+        # (Twin): neither forms a cycle; ping and pong (siblings) still do.
+        flags = rows(con, "SELECT src_module, dst_module, nested_modules, same_type_unit_edges, unit_edges "
+                          "FROM module_edges WHERE src_module IN ('src/parent.rs', 'src/parent/child.rs', "
+                          "'src/twin_a.rs', 'src/twin_b.rs') AND dst_module <> 'src/lib.rs' ORDER BY ALL")
+        assert flags == [("src/parent.rs", "src/parent/child.rs", True, 0, 1),
+                         ("src/parent/child.rs", "src/parent.rs", True, 0, 1),
+                         ("src/twin_a.rs", "src/twin_b.rs", False, 1, 1),
+                         ("src/twin_b.rs", "src/twin_a.rs", False, 1, 1)], flags
+        cycles = rows(con, "SELECT members FROM module_cycles ORDER BY ALL")
+        assert cycles == [(["src/ping.rs", "src/pong.rs"],)], cycles
+        con.execute("SET VARIABLE cycle_edges = 'raw'")
+        cycles = rows(con, "SELECT members FROM module_cycles ORDER BY ALL")
+        assert cycles == [(["src/parent.rs", "src/parent/child.rs"],), (["src/ping.rs", "src/pong.rs"],),
+                          (["src/twin_a.rs", "src/twin_b.rs"],)], cycles
+        con.execute("SET VARIABLE cycle_edges = NULL")
+
+        # The same through cache.sql.
+        probe = [cochange_sql, clone_sql, query_sql("unit_churn"), "SELECT * FROM module_cycles ORDER BY ALL",
+                 "SELECT * FROM unit_changes ORDER BY ALL", "SELECT * FROM unit_history ORDER BY ALL"]
+        live = [rows(con, q) for q in probe]
+        read_cache(con)
+        assert [rows(con, q) for q in probe] == live
+        con.close()
+    print("counting fixture: ok")
 
 
 def cached_rows_by_path(con, path_filter):
@@ -1914,7 +2242,8 @@ def check_cli(repo, reports):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["fixture", "scip-fixture", "graph-fixture", "repo", "refresh", "measure",
+    parser.add_argument("command", choices=["fixture", "scip-fixture", "graph-fixture", "counting-fixture", "repo",
+                                            "refresh", "measure",
                                             "measure-refresh", "explain", "cli", "step"])
     parser.add_argument("repo", nargs="?")
     parser.add_argument("step", nargs="?")
@@ -1933,6 +2262,9 @@ def main():
         return
     if args.command == "graph-fixture":
         check_graph_fixture()
+        return
+    if args.command == "counting-fixture":
+        check_counting_fixture()
         return
     if not args.repo:
         parser.error("REPO is required")

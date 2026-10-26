@@ -71,9 +71,16 @@ JOIN (SELECT b.blob_id, b.file FROM (SELECT unnest(getvariable('lineage_text_sna
 -- commit_order and the blob texts. unit_successions reads it live; refresh.sql stores
 -- its rows per commit. Each source is read once (a view is expanded at every reference,
 -- and live every expansion of the blob units parses every blob again).
+-- The successions read the changes under attribution 'all' (unit_change_sides'
+-- change_kind_all), whatever `attribution` is: a unit's movement is judged on its whole
+-- text, inner units included (an impl whose methods moved out is a modified unit whose
+-- pre-image may have moved elsewhere), and the successions, which both caches store, then
+-- do not depend on the attribution the counting queries use.
 CREATE OR REPLACE VIEW derived_unit_successions AS
 WITH sides AS MATERIALIZED (
-    SELECT * FROM unit_change_sides
+    SELECT sha, path, old_path, side, blob_id, kind, qualified_name, start_line, end_line,
+           record_path_all AS record_path, change_kind_all AS change_kind
+    FROM unit_change_sides
 ),
 scope AS MATERIALIZED (
     SELECT sha FROM commits
@@ -324,15 +331,27 @@ FROM unit_lineage_segments w
 LEFT JOIN commit_order o ON o.ord = w.from_ord
 GROUP BY w.unit_id, w.sha, w.path, w.kind, w.qualified_name, w.link, o.sha;
 
--- unit_history(unit_id, sha, change_kind, depth): the distinct commits of unit_changes
--- that touched any identity of each current unit's lineage within the range it
--- contributes; change_kind and depth are those of the nearest such identity.
+-- unit_history(unit_id, sha, change_kind, depth, via_link): the distinct commits of
+-- unit_changes that touched any identity of each current unit's lineage within the range
+-- it contributes; change_kind and depth are those of the nearest such identity. via_link
+-- marks a commit at which the unit's lineage links one of its identities to its
+-- predecessor (a file_rename, content_match or body_move of unit_lineage's `sha`): the
+-- commit that moved, renamed, split or merged the code, counted here because it touched
+-- the successor. The co-change views leave these commits out (views/graph.sql,
+-- unit_commits); unit_churn counts them and reports how many (move_commits).
 CREATE OR REPLACE VIEW unit_history AS
+WITH segments AS MATERIALIZED (
+    SELECT * FROM unit_lineage_segments
+),
+link_commits AS MATERIALIZED (
+    SELECT DISTINCT unit_id, sha FROM segments WHERE sha IS NOT NULL
+)
 SELECT w.unit_id, uc.sha, (list(uc.change_kind ORDER BY w.depth, uc.change_kind))[1] AS change_kind,
-       min(w.depth) AS depth
-FROM unit_lineage_segments w
+       min(w.depth) AS depth, bool_or(l.sha IS NOT NULL) AS via_link
+FROM segments w
 JOIN unit_changes uc ON uc.path = w.path AND uc.unit_kind = w.kind AND uc.unit_qualified_name = w.qualified_name
 JOIN commit_order o ON o.sha = uc.sha AND o.ord >= w.from_ord AND o.ord <= w.until_ord
+LEFT JOIN link_commits l ON l.unit_id = w.unit_id AND l.sha = uc.sha
 GROUP BY w.unit_id, uc.sha;
 
 -- unit_lineage_counts(unit_id, ancestors, successors_at_split): for each current unit,

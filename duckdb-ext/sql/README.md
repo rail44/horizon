@@ -67,7 +67,10 @@ duckdb-ext/sql/run.sh shell REPO                       # an interactive duckdb2 
   `retro_since` (the whole history cached) and `retro/signals.sql` reads the two
   lineage files; `retro/signals_by_name.sql` runs `retro/signals.sql` with the history
   signals counted by identity, as before lineage (see
-  `docs/research/code-db-dogfood-retrospective-2-2026-10-26.md`).
+  `docs/research/code-db-dogfood-retrospective-2-2026-10-26.md`). The ground truth
+  follows `attribution` like every reader of `unit_changes` (the first two
+  retrospectives used `all`; `docs/research/code-db-counting-rules-2026-10-27.md` has
+  both).
 
 `check.py` (Check, below) stays the tool for assertions and measurements.
 
@@ -173,23 +176,35 @@ chose (2026-10-25) to write historical blobs to files, so that `read_ast`,
   this repository). Blobs have no tags yet.
 - **`unit_changes(sha, path, unit_kind, unit_qualified_name,
   change_kind)`**: for each `(sha, path)` with hunks, the units of the new
-  side's blob whose lines `[start_line, end_line]` intersect a hunk's new
+  side's blob whose credited lines intersect a hunk's new
   range `[new_start, new_start + new_lines - 1]` are `modified` when the old
   side has a unit with the same `(kind, qualified_name)`, else `added`; the
-  units of the old side's blob that intersect a hunk's old range
+  units of the old side's blob whose credited lines intersect a hunk's old range
   `[old_start, old_start + old_lines - 1]` and are not already classified
   are `modified` when they still exist on the new side (recorded under
   `path`), else `removed` (recorded under `old_path`, or `path`). A hunk
   with `new_lines = 0` (`old_lines = 0`) intersects nothing on that side:
   git's start is then the line before the insertion or deletion. One row per
-  distinct tuple. This is the spike's definition (`git show
-  475599d5:scripts/code-db/history.py`, `unit_changes`) with 1-based lines.
+  distinct tuple.
+- **Attribution** (`attribution`; one of the counting rules, see Graph): which
+  lines credit a unit. `innermost` (the default) credits a changed line only to the
+  innermost unit containing it: a unit's credited lines are `[start_line, end_line]`
+  minus the lines of the units nested in it (`blob_units.parent_unit_ord`), so an impl,
+  module or type is credited for its header, its closing line and what lies between
+  its inner units — blank lines, comments, and the attributes and doc comments of its
+  inner items, which the syntax tree places outside the item — but not for a change
+  inside one of its methods. `all` credits every line `[start_line, end_line]`: an
+  enclosing unit is credited with every change inside it. `all` is the spike's
+  definition (`git show 475599d5:scripts/code-db/history.py`, `unit_changes`) with
+  1-based lines, and what every record before 2026-10-27 measured.
 - **`unit_change_sides(sha, path, old_path, side, blob_id, kind, qualified_name,
-  start_line, end_line, record_path, change_kind)`** is the statement `unit_changes`
-  projects: every unit of both sides of every `(sha, path)` with hunks, with the
-  change recorded for its identity (`change_kind` under `record_path`; both sides of a
-  modified unit carry it) or NULL when the commit did not touch it. `views/lineage.sql`
-  reads it, so that a query reading the successions derives the blobs' units once.
+  start_line, end_line, record_path, change_kind, record_path_all, change_kind_all)`**
+  is the statement `unit_changes` projects: every unit of both sides of every
+  `(sha, path)` with hunks, with the change recorded for its identity under
+  `attribution` (`change_kind` under `record_path`; both sides of a modified unit carry
+  it) and under `all` (`change_kind_all` under `record_path_all`), or NULL when the
+  commit did not touch it. `views/lineage.sql` reads it (the `_all` columns), so that a
+  query reading the successions derives the blobs' units once.
 
 `views/blobs.sql` takes a snapshot when it is read, as `00_load.sql` does
 for the current files: `read_ast` and `read_text` need a constant list of
@@ -206,8 +221,10 @@ Limits:
   with the same kind and name in one blob (two `impl Foo` blocks) are one
   unit; a rename or move starts a new identity under the new path, which
   `unit_changes` does not follow; the lineage views (below) connect them.
-- **Nested units** are credited with every change inside them (an impl
-  with each change to one of its methods).
+- **Nested units**: with `attribution` `innermost`, an enclosing unit is still
+  credited when a method is added or removed together with the blank line that
+  separates it, or when an inner item's attributes or doc comments change (those lines
+  lie outside the inner unit); with `all`, with every change inside it.
 - **Placement**: `-U0` hunks are placed by gitoxide; where an insertion or
   deletion could sit at several lines, the unit it is attributed to follows
   that placement (`docs/research/gix-parity-2026-10-24.md` §12).
@@ -254,6 +271,12 @@ decisions (2026-10-26) fix the semantics:
     while an `added` unit of the commit is similar to the pre-image: the pre-image
     links to the added unit, and the stub gets no predecessor at that commit (no
     `same_name` or `file_rename` row).
+- **Attribution**: the successions read the changes under `attribution` `all`
+  (`unit_change_sides.change_kind_all`) whatever `attribution` is. Whether a unit moved
+  is judged on its whole text, inner units included (an impl whose methods all moved
+  out is a modified impl whose pre-image went elsewhere: a `body_move`), and the stored
+  successions then do not depend on the attribution the counting queries use. The
+  commits counted along a lineage (`unit_history`) follow `attribution`.
 - **Similarity** is the Jaccard index of the two texts' line sets: a unit's text is the
   lines `[start_line, end_line]` of every unit with its identity in that blob, each line
   whitespace-normalized (`normalize_ws`), blank lines dropped, compared by `hash()`.
@@ -276,19 +299,32 @@ decisions (2026-10-26) fix the semantics:
   reached through `link` at commit `sha` contributes its commits before `sha`; an
   identity whose lineage restarted at a `body_move` contributes its commits from that
   commit on (`from_sha`).
-- **`unit_history(unit_id, sha, change_kind, depth)`**: the distinct commits of
-  `unit_changes` that touched an identity of the unit's lineage within the range it
-  contributes (`change_kind` and `depth` of the nearest such identity).
+- **`unit_history(unit_id, sha, change_kind, depth, via_link)`**: the distinct commits
+  of `unit_changes` that touched an identity of the unit's lineage within the range it
+  contributes (`change_kind` and `depth` of the nearest such identity). `via_link`
+  marks a *link commit*: a commit at which the lineage links one of the unit's
+  identities to a predecessor (`unit_lineage.sha`: a `file_rename`, `content_match` or
+  `body_move`), that is the move, rename, split or merge itself, which is in the history
+  because it touched the successor. The co-change views leave link commits out
+  (`unit_commits`, see Graph); `unit_churn` counts them and reports how many
+  (`move_commits`). The restart commit of a stub is not a link commit of the stub.
 - **`unit_lineage_counts(unit_id, ancestors, successors_at_split)`**: the number of
   identities other than the unit's own in its lineage, and the largest number of
   successors a link of its lineage gave its predecessor (1: no split).
 
 `unit_churn` (plus the columns `commits_by_name`, the count by identity before
-lineage, `ancestors` and `successors_at_split`), `unit_fan_in_churn` (now ordered by
-`fan_in_x_commits`), `clone_change_consistency`, `unit_dependencies`' churn and the
-graph's `unit_commits` (and so `unit_cochange`, `edge_cochange`,
+lineage, `ancestors`, `successors_at_split` and `move_commits`), `unit_fan_in_churn`
+(now ordered by `fan_in_x_commits`), `clone_change_consistency`, `unit_dependencies`'
+churn and the graph's `unit_commits` (and so `unit_cochange`, `edge_cochange`,
 `cochange_without_reference`) read `unit_history`; `unit_changes` stays the
 per-commit fact.
+
+`clone_change_consistency` counts a pair's commits from when both sides exist: only
+the commits at or after the later of the two sides' first commits in their lineage
+(the first commit of `unit_history` for each side's unit) count as one-sided or both,
+and the pair reports that commit (`since_sha`, `since_time`). A side with no unit or no
+commit in the range sets no bound. `clone_before_both := true` counts every commit, as
+before this rule.
 
 Limits:
 
@@ -402,37 +438,66 @@ on edges. Everything is a view (both caches keep them as views; see Cache).
 - **`file_crate(file_id, crate)`**: from this repository's layout:
   `crates/<name>/…` and `duckdb-ext/<name>/…` are `<name>`, `preview-plugin/…` is
   `preview-plugin`, anything else `horizon`.
-- **`modules(module, file_id, module_unit_id, crate)`** and **`unit_module(unit_id,
-  module, module_unit_id, file_id, crate)`**: a file is an implicit module named by
-  its path; a module unit is `<path>::<qualified name>` (`src/shapes.rs::tests`). A
-  unit belongs to the nearest module unit among itself and its enclosing units, else
-  to its file. A `mod x;` declaration is a module unit with nothing in it (its items
-  are in x's file).
+- **`modules(module, file_id, module_unit_id, crate, module_path)`** and
+  **`unit_module(unit_id, module, module_unit_id, file_id, crate, module_path)`**: a
+  file is an implicit module named by its path; a module unit is `<path>::<qualified
+  name>` (`src/shapes.rs::tests`). A unit belongs to the nearest module unit among
+  itself and its enclosing units, else to its file. A `mod x;` declaration is a module
+  unit with nothing in it (its items are in x's file). `module_path` places a module in
+  its crate's module tree by Rust's file-module convention: a crate root (`…/lib.rs`,
+  `…/main.rs`) and a `…/mod.rs` are their directory, another file its path without
+  `.rs`, a module unit its file's `module_path` and its names (`src/shapes.rs::tests` is
+  `src/shapes/tests`; `mod x;` in `src/lib.rs` is `src/x`, as `src/x.rs` is). A module
+  is an ancestor of another when its `module_path` is a prefix of the other's at a `/`.
+  `#[path]` attributes are not read, and a binary under `src/bin/` falls under the
+  library's root.
 - **`module_edges(src_module, dst_module, src_crate, dst_crate, unit_edges,
-  occurrences, test_unit_edges, macro_unit_edges, ambiguous_unit_edges)`** and
-  **`crate_edges(src_crate, dst_crate, …)`**: `unit_edges` between different modules
-  (crates), self edges excluded.
+  occurrences, test_unit_edges, macro_unit_edges, ambiguous_unit_edges, nested_modules,
+  same_type_unit_edges)`** and **`crate_edges(src_crate, dst_crate, …)`** (without the
+  last two): `unit_edges` between different modules (crates), self edges excluded.
+  `nested_modules` marks an edge between a module and one of its ancestors or
+  descendants in the same crate (the crate root is an ancestor of every module of its
+  crate); `same_type_unit_edges` counts the unit edges whose two ends both lie in impls
+  of one type (each end's nearest enclosing impl, the end itself included, by
+  `impl_for`): one type's impl blocks split over several files. The edge to the type's
+  own definition is not one of them.
 - **`module_cycle_edges(cycle, src_module, dst_module, …)`** and
   **`module_cycles(cycle, crate, modules, members, edges, unit_edges,
-  occurrences)`**: the strongly connected groups of `module_edges` (each member
+  occurrences)`**: the strongly connected groups of the module edges (each member
   reaches every other), named by their least member, from a recursive transitive
-  closure. **`crate_cycles`** is the same over `crate_edges`; Cargo forbids crate
-  cycles, so a row is an aggregation error or a dev-dependency cycle.
+  closure. The structural edges are collapsed first: an
+  edge that is `nested_modules`, or whose every unit edge is same-type
+  (`same_type_unit_edges = unit_edges`), is left out. `cycle_edges := 'raw'` keeps every
+  module edge, as before. **`crate_cycles`** is the same over `crate_edges`; Cargo
+  forbids crate cycles, so a row is an aggregation error or a dev-dependency cycle.
 - **`unit_commits(sha, unit_id)`**: the commits of each current unit's lineage
-  (`unit_history`), without commits touching more than `max_commit_files` files and,
-  unless `include_merges`, merges.
+  (`unit_history`) other than its link commits (`via_link`), so that units moved,
+  renamed or split together do not share those commits (`cochange_link_commits :=
+  true` keeps them, as before), without commits touching more than `max_commit_files`
+  files and, unless `include_merges`, merges.
 - **`unit_cochange(unit_a, unit_b, shared_commits, commits_a, commits_b,
-  coupling_pct, same_file, nested)`**: pairs (`unit_a < unit_b`) with at least
+  coupling_pct, same_file, nested)`**: pairs (`unit_a < unit_b`) of units that are not
+  tests (`unit_tests`; `include_tests := true` keeps them) with at least
   `min_shared` shared commits; `coupling_pct` divides by the larger count; `nested`
   marks a unit and one of its enclosing units.
 - **`edge_cochange(src_unit_id, dst_unit_id, symbols, occurrences, via_macro,
   ambiguous, src_is_test, dst_is_test, shared_commits, commits_src,
   commits_dst)`**: every non-self unit edge with its ends' shared commits (0 when
-  none; not subject to `min_shared`).
+  none; not subject to `min_shared`). Test units stay, flagged.
 - **`cochange_without_reference(unit_a, unit_b, shared_commits, commits_a,
   commits_b, coupling_pct)`**: `unit_cochange` pairs in different files with no unit
   edge between the two units in either direction and `coupling_pct >=
-  min_coupling_pct`. Edges of the units they contain do not count.
+  min_coupling_pct` (no test units, as in `unit_cochange`). Edges of the units they
+  contain do not count.
+
+The five counting rules (attribution and clone sides from when both exist, under Lineage
+and Historical blobs; link commits, test units out of co-change pairs and structural
+module edges out of cycles, above) fix the false-alarm mechanisms the second reading
+check named, and the owner approved them on 2026-10-26; their effect on this
+repository's candidates and on the retrospective is in
+`docs/research/code-db-counting-rules-2026-10-27.md`. Each has a variable that restores
+the previous count: `attribution := 'all'`, `cochange_link_commits := true`,
+`clone_before_both := true`, `include_tests := true`, `cycle_edges := 'raw'`.
 
 Accepted limitations: `local` symbols are excluded (they close within a document);
 a call through a generic bound or `dyn` resolves to the trait's method, not to an
@@ -584,7 +649,7 @@ Layout of the file (schema version 4):
 
 | Table | Rows |
 | --- | --- |
-| `meta` | one: `schema_version`, `repo`, `state` (`ok`, or `refreshing` while a refresh runs), `built_at`, `refreshed_at`, `syntax_key` (sitting_duck version), `derive_key` (md5 of the derived views' text), `history_key` (`since`, `include_merges`, `languages`, `blob_dir`), `head`; the last refresh: `syntax`/`derived` (`rebuilt` or `incremental`), `history` and `blob_history` (for `blob_files`; `rebuilt` or `appended`), `files_added`, `files_changed`, `files_removed`, `files_unchanged`, `nodes_parsed`, `units_inserted`, `tags_inserted`, `commits_added`, `blob_rows_added`, `blobs_parsed`, `blob_bytes_parsed`, `blob_nodes_parsed`, `blobs_derived`, `blob_units_inserted`, `blobs_cached` (all parsed blobs in the file), `scip_key` (NULL without `views/scip.sql`), `scip_cache` (`rebuilt` or `kept`), `scip_occurrences_inserted`, `scip_symbols_inserted`, `lineage_key` (md5 of `derived_unit_successions`, `lineage_sources` and `unit_changes`, and `lineage_threshold`), `lineage` (`rebuilt` or `appended`), `lineage_commits_derived`, `successions_inserted`, `seconds` (per layer: `files`, `nodes`, `units`, `tags`, `commits`, `file_changes`, `hunks`, `blob_files`, `blob_nodes`, `blob_units`, `lineage`, `scip`, `checkpoint`, `total`) |
+| `meta` | one: `schema_version`, `repo`, `state` (`ok`, or `refreshing` while a refresh runs), `built_at`, `refreshed_at`, `syntax_key` (sitting_duck version), `derive_key` (md5 of the derived views' text), `history_key` (`since`, `include_merges`, `languages`, `blob_dir`), `head`; the last refresh: `syntax`/`derived` (`rebuilt` or `incremental`), `history` and `blob_history` (for `blob_files`; `rebuilt` or `appended`), `files_added`, `files_changed`, `files_removed`, `files_unchanged`, `nodes_parsed`, `units_inserted`, `tags_inserted`, `commits_added`, `blob_rows_added`, `blobs_parsed`, `blob_bytes_parsed`, `blob_nodes_parsed`, `blobs_derived`, `blob_units_inserted`, `blobs_cached` (all parsed blobs in the file), `scip_key` (NULL without `views/scip.sql`), `scip_cache` (`rebuilt` or `kept`), `scip_occurrences_inserted`, `scip_symbols_inserted`, `lineage_key` (md5 of `derived_unit_successions`, `lineage_sources`, `unit_change_sides` and `unit_changes`, and `lineage_threshold`; not `attribution`), `lineage` (`rebuilt` or `appended`), `lineage_commits_derived`, `successions_inserted`, `seconds` (per layer: `files`, `nodes`, `units`, `tags`, `commits`, `file_changes`, `hunks`, `blob_files`, `blob_nodes`, `blob_units`, `lineage`, `scip`, `checkpoint`, `total`) |
 | `nodes_files` | one per cached file: `path`, `blob_id`, `language` |
 | `nodes` | `path` plus `read_ast`'s columns (as in `views/nodes.sql`) |
 | `units` | `path`, `unit_ord`, `parent_unit_ord`, then the columns of `units` without the ids |
@@ -677,6 +742,7 @@ statements). This route is not exercised by `check.py`.
 uv run --locked --script duckdb-ext/sql/check.py fixture          # assertions on a generated fixture
 uv run --locked --script duckdb-ext/sql/check.py scip-fixture     # only the SCIP fixture
 uv run --locked --script duckdb-ext/sql/check.py graph-fixture    # only the graph fixture
+uv run --locked --script duckdb-ext/sql/check.py counting-fixture # only the counting-rules fixture
 uv run --locked --script duckdb-ext/sql/check.py repo .           # counts and every query on a repository
 uv run --locked --script duckdb-ext/sql/check.py refresh .        # refresh.sql twice, every view compared with live
 uv run --locked --script duckdb-ext/sql/check.py cli .            # the same files through the CLI's .read, live and refreshed
@@ -735,8 +801,9 @@ ids), every row of `unit_changes` per commit (`added`, `modified`,
 `removed` under the old path of a rename, nothing for README-only and
 pure-rename commits), `unit_churn` (commits and authors, `since_time`,
 `kind`), `clone_change_consistency` (one side only once, both twice; an
-unresolved side; `clone_source`), and `since` narrowing `blob_files` and
-`unit_changes`.
+unresolved side; `clone_source`; `since_sha`), and `since` narrowing `blob_files` and
+`unit_changes`. `unit_changes` is asserted under both attributions: the impls
+credited with their methods' changes appear only with `all`.
 
 A SCIP fixture runs rust-analyzer (`RUST_ANALYZER`, default
 `rust-analyzer` on `PATH`; skipped with a message when missing) on a copy of
@@ -764,9 +831,26 @@ declaration), `module_edges`, one module cycle of two, no crate edges or cycles,
 `min_shared := 2` (the clone pair's two `area` methods, changed together without
 referencing each other), the thresholds, every graph query's rows (`depth := 2`,
 `direction`, `crate`, the error without a unit), and the same rows through
-`cache.sql` with no source or index scan in the queries' plans. The refresh
+`cache.sql` with no source or index scan in the queries' plans. Its co-change rows are
+counted with `attribution := 'all'`. The refresh
 fixture's SCIP steps read `views/graph.sql` too, so the graph views and queries are
 compared with live after each refresh.
+
+A counting fixture (`check.py counting-fixture`) builds a crate of its own over ten
+commits, indexes it the same way, and asserts each counting rule against the variable
+that restores the previous count: two functions added and edited together, then moved
+together to a new file (two `content_match` links in one commit: `via_link` on the
+move, `unit_churn` 3 commits with `move_commits` 1, `unit_cochange` 2 shared commits,
+3 with `cochange_link_commits`); a clone whose second side is a copy made after two
+commits of the first (one-sided 1 / 1 from the copy on, `since_sha` the copy; 3 / 1 with
+`clone_before_both`); an impl whose method body changes, then whose header changes
+(the method, then the impl, in `unit_changes`; the impl both times with `attribution :=
+'all'`); two integration tests changed together three times (no pair in
+`unit_cochange` or `cochange_without_reference`; the pair with `include_tests`); a file
+module and its child file calling each other, and two files of impls of one type
+calling each other (`nested_modules` and `same_type_unit_edges` set, no cycle; both
+cycles with `cycle_edges := 'raw'`), beside two sibling modules whose cycle stays; and
+the same rows through `cache.sql`.
 
 On a third fixture it reads `refresh.sql` after each of these steps and
 asserts every refreshed view equal to live row for row (the blob layer,
@@ -889,6 +973,11 @@ which `00_load.sql` (and `refresh.sql`) take as a snapshot.
 | `lineage_threshold` | 0.5 | `derived_unit_successions` (part of the persistent cache's `lineage_key`) |
 | `lineage_scope` | NULL (all commits); set only by `refresh.sql` | `derived_unit_successions` |
 | `min_fan_in` | 1 | `unit_fan_in_churn` |
+| `attribution` | `'innermost'` (`'all'`: every enclosing unit is credited with what it contains) | `unit_change_sides`, `unit_changes` and everything reading them (not the successions) |
+| `cochange_link_commits` | `false` (`true`: link commits count in co-change) | `unit_commits`, `unit_cochange`, `edge_cochange`, `cochange_without_reference` |
+| `include_tests` | `false` (`true`: pairs with a test unit stay) | `unit_cochange`, `cochange_without_reference` |
+| `clone_before_both` | `false` (`true`: commits before the later side's first commit count) | `clone_change_consistency` |
+| `cycle_edges` | `'collapsed'` (`'raw'`: every module edge) | `module_cycle_edges`, `module_cycles` and the `module_cycles` query |
 
 The source files are the regular files (mode `100644` or `100755`) that
 `git_tracked_files` lists, with an extension in `languages`: ignored files,

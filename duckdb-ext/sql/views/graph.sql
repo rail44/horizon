@@ -198,20 +198,36 @@ SELECT file_id,
             ELSE 'horizon' END AS crate
 FROM files;
 
--- modules(module, file_id, module_unit_id, crate): every file as an implicit module
--- (module = its path, module_unit_id NULL) and every module unit (module =
--- `<path>::<qualified name>` with `::` between names, e.g. src/shapes.rs::tests).
+-- modules(module, file_id, module_unit_id, crate, module_path): every file as an
+-- implicit module (module = its path, module_unit_id NULL) and every module unit (module
+-- = `<path>::<qualified name>` with `::` between names, e.g. src/shapes.rs::tests).
+-- module_path places each module in its crate's module tree by Rust's file-module
+-- convention, as a `/`-separated path: a crate root (`…/lib.rs`, `…/main.rs`) and a
+-- `…/mod.rs` are their directory, any other file its path without `.rs`, and a module
+-- unit its file's module_path followed by its names (src/shapes.rs::tests is
+-- src/shapes/tests; a `mod x;` declaration in src/lib.rs is src/x, the module_path of
+-- src/x.rs). A module is an ancestor of another when its module_path is a prefix of the
+-- other's at a `/`. `#[path]` attributes are not read, and a binary under src/bin/ is
+-- placed under the library's root.
 CREATE OR REPLACE VIEW modules AS
-SELECT f.path AS module, f.file_id, NULL::BIGINT AS module_unit_id, c.crate
-FROM files f JOIN file_crate c USING (file_id)
+WITH file_modules AS MATERIALIZED (
+    SELECT f.path, f.file_id, c.crate,
+           CASE WHEN regexp_matches(f.path, '(^|/)(lib|main|mod)\.rs$')
+                THEN regexp_replace(f.path, '/?(lib|main|mod)\.rs$', '')
+                ELSE regexp_replace(f.path, '\.rs$', '') END AS module_path
+    FROM files f JOIN file_crate c USING (file_id)
+)
+SELECT path AS module, file_id, NULL::BIGINT AS module_unit_id, crate, module_path
+FROM file_modules
 UNION ALL
-SELECT f.path || '::' || replace(u.qualified_name, '.', '::'), u.file_id, u.unit_id, c.crate
-FROM units u JOIN files f USING (file_id) JOIN file_crate c USING (file_id)
+SELECT m.path || '::' || replace(u.qualified_name, '.', '::'), u.file_id, u.unit_id, m.crate,
+       m.module_path || '/' || replace(u.qualified_name, '.', '/')
+FROM units u JOIN file_modules m USING (file_id)
 WHERE u.kind = 'module';
 
--- unit_module(unit_id, module, module_unit_id, file_id, crate): the module a unit
--- belongs to: the nearest module unit among the unit itself and its enclosing units (a
--- module unit belongs to the module it defines), else its file's implicit module.
+-- unit_module(unit_id, module, module_unit_id, file_id, crate, module_path): the module a
+-- unit belongs to: the nearest module unit among the unit itself and its enclosing units
+-- (a module unit belongs to the module it defines), else its file's implicit module.
 CREATE OR REPLACE VIEW unit_module AS
 WITH unit_rows AS MATERIALIZED (
     SELECT unit_id, file_id FROM units
@@ -222,32 +238,49 @@ nearest AS (
     WHERE m.kind = 'module'
     GROUP BY a.unit_id
 )
-SELECT u.unit_id, m.module, n.module_unit_id, u.file_id, m.crate
+SELECT u.unit_id, m.module, n.module_unit_id, u.file_id, m.crate, m.module_path
 FROM unit_rows u
 LEFT JOIN nearest n USING (unit_id)
 JOIN modules m ON m.file_id = u.file_id AND m.module_unit_id IS NOT DISTINCT FROM n.module_unit_id;
 
 -- module_edges(src_module, dst_module, src_crate, dst_crate, unit_edges, occurrences,
---     test_unit_edges, macro_unit_edges, ambiguous_unit_edges) and crate_edges(src_crate,
---     dst_crate, unit_edges, occurrences, test_unit_edges, macro_unit_edges,
---     ambiguous_unit_edges): unit_edges between different modules (crates), self edges
--- excluded. unit_edges counts the unit edges, occurrences their occurrences;
--- test_unit_edges counts the edges with a test unit at either end, macro_unit_edges
--- (ambiguous_unit_edges) those that are via_macro (ambiguous).
+--     test_unit_edges, macro_unit_edges, ambiguous_unit_edges, nested_modules,
+--     same_type_unit_edges) and crate_edges(src_crate, dst_crate, unit_edges, occurrences,
+--     test_unit_edges, macro_unit_edges, ambiguous_unit_edges): unit_edges between
+-- different modules (crates), self edges excluded. unit_edges counts the unit edges,
+-- occurrences their occurrences; test_unit_edges counts the edges with a test unit at
+-- either end, macro_unit_edges (ambiguous_unit_edges) those that are via_macro
+-- (ambiguous). nested_modules marks an edge between a module and one of its ancestors
+-- or descendants (modules.module_path; in one crate), same_type_unit_edges counts the
+-- unit edges whose two ends both lie in impls (the nearest enclosing impl of each end,
+-- the end itself included) of one type (impl_for): one type's impl blocks split over
+-- several files. module_cycle_edges leaves out the edges that are nested_modules or whose
+-- every unit edge is same-type.
 CREATE OR REPLACE VIEW module_edges AS
 WITH m AS MATERIALIZED (
-    SELECT unit_id, module, crate FROM unit_module
+    SELECT unit_id, module, crate, module_path FROM unit_module
+),
+-- The type of each unit's nearest enclosing impl that has one.
+impl_type AS MATERIALIZED (
+    SELECT a.unit_id, arg_min(f.type_unit_id, a.depth) AS type_unit_id
+    FROM unit_ancestors a JOIN impl_for f ON f.impl_unit_id = a.ancestor_id
+    GROUP BY a.unit_id
 )
 SELECT ms.module AS src_module, md.module AS dst_module, ms.crate AS src_crate, md.crate AS dst_crate,
        count(*) AS unit_edges, sum(e.occurrences) AS occurrences,
        count(*) FILTER (WHERE e.src_is_test OR e.dst_is_test) AS test_unit_edges,
        count(*) FILTER (WHERE e.via_macro) AS macro_unit_edges,
-       count(*) FILTER (WHERE e.ambiguous) AS ambiguous_unit_edges
+       count(*) FILTER (WHERE e.ambiguous) AS ambiguous_unit_edges,
+       ms.crate = md.crate AND (starts_with(md.module_path || '/', ms.module_path || '/')
+                                OR starts_with(ms.module_path || '/', md.module_path || '/')) AS nested_modules,
+       count(*) FILTER (WHERE ts.type_unit_id = td.type_unit_id) AS same_type_unit_edges
 FROM unit_edges e
 JOIN m ms ON ms.unit_id = e.src_unit_id
 JOIN m md ON md.unit_id = e.dst_unit_id
+LEFT JOIN impl_type ts ON ts.unit_id = e.src_unit_id
+LEFT JOIN impl_type td ON td.unit_id = e.dst_unit_id
 WHERE NOT e.is_self AND ms.module <> md.module
-GROUP BY ALL;
+GROUP BY ms.module, md.module, ms.crate, md.crate, ms.module_path, md.module_path;
 
 CREATE OR REPLACE VIEW crate_edges AS
 WITH c AS MATERIALIZED (
@@ -267,16 +300,24 @@ GROUP BY ALL;
 -- module_cycle_edges(cycle, src_module, dst_module, unit_edges, occurrences,
 --     test_unit_edges, macro_unit_edges, ambiguous_unit_edges): the module edges inside
 -- each strongly connected group of modules (two modules are in one group when each
--- reaches the other along module_edges). cycle names the group by its least member.
+-- reaches the other along the edges). cycle names the group by its least member.
 -- module_cycles(cycle, crate, modules, members, edges, unit_edges, occurrences): one
 -- row per group, with its members and the counts of its inner edges. Reachability is
--- the transitive closure of module_edges, by a recursive common table expression that
+-- the transitive closure of the edges, by a recursive common table expression that
 -- adds only new pairs (UNION).
+-- The edges are module_edges without the structural ones: those between a module and its
+-- ancestor or descendant (nested_modules) and those whose every unit edge joins impls of
+-- one type (same_type_unit_edges = unit_edges). Parameter (DuckDB variable; default
+-- when unset): cycle_edges 'collapsed' ('raw': every module edge, as before this rule).
 CREATE OR REPLACE VIEW module_cycle_edges AS
 WITH RECURSIVE edges AS MATERIALIZED (
     SELECT src_module, dst_module, unit_edges, occurrences, test_unit_edges, macro_unit_edges,
            ambiguous_unit_edges
     FROM module_edges
+    WHERE CASE coalesce(getvariable('cycle_edges'), 'collapsed')
+        WHEN 'raw' THEN true
+        WHEN 'collapsed' THEN NOT nested_modules AND same_type_unit_edges < unit_edges
+        ELSE error('module_cycle_edges: cycle_edges is collapsed or raw') END
 ),
 reach(src, dst) AS (
     SELECT src_module, dst_module FROM edges
@@ -338,10 +379,13 @@ GROUP BY gs.cycle;
 -- Co-change on units. unit_commits(sha, unit_id): the commits of each current unit's
 -- lineage (unit_history, views/lineage.sql: its own changes and those of the units it
 -- continues; two current units with the same identity, such as two `impl Foo` blocks of
--- one file, are both credited). As in
+-- one file, are both credited), without the commits at which that lineage links an
+-- identity (unit_history.via_link: a file_rename, content_match or body_move), so that
+-- two units moved, renamed or split in one commit do not share that commit. As in
 -- queries/file_cochange.sql, commits touching more than max_commit_files files (all
 -- files, every language) are dropped, and merges count only with include_merges.
 -- Parameters (DuckDB variables; default when unset): max_commit_files 50;
+-- cochange_link_commits false (true: keep the link commits, as before this rule);
 -- include_merges (00_load.sql, false).
 CREATE OR REPLACE VIEW unit_commits AS
 WITH eligible AS (
@@ -354,18 +398,23 @@ WITH eligible AS (
 )
 SELECT DISTINCT h.sha, h.unit_id
 FROM unit_history h
-JOIN eligible USING (sha);
+JOIN eligible USING (sha)
+WHERE NOT h.via_link OR coalesce(CAST(getvariable('cochange_link_commits') AS BOOLEAN), false);
 
 -- unit_cochange(unit_a, unit_b, shared_commits, commits_a, commits_b, coupling_pct,
 --     same_file, nested): pairs of current units (unit_a < unit_b) changed together in at
 -- least min_shared commits of unit_commits. commits_a and commits_b count each unit's
 -- commits there; coupling_pct is shared_commits over the larger of the two (the basis
--- `max` of file_cochange). nested marks a unit and one of its enclosing units (an impl
--- and its method: every change to the method is a change to the impl).
--- Parameters: min_shared 3, and those of unit_commits.
+-- `max` of file_cochange). nested marks a unit and one of its enclosing units (with
+-- attribution 'all', every change to a method is a change to its impl). Test units
+-- (unit_tests) are left out unless include_tests: a pair with a test unit on either side
+-- is a test changing with what it tests, or two tests written from one template.
+-- Parameters: min_shared 3, include_tests false, and those of unit_commits.
 CREATE OR REPLACE VIEW unit_cochange AS
 WITH touched AS MATERIALIZED (
-    SELECT * FROM unit_commits
+    SELECT c.* FROM unit_commits c
+    WHERE coalesce(CAST(getvariable('include_tests') AS BOOLEAN), false)
+       OR c.unit_id NOT IN (SELECT unit_id FROM unit_tests WHERE is_test)
 ),
 per_unit AS (
     SELECT unit_id, count(*) AS commits FROM touched GROUP BY unit_id
@@ -425,8 +474,9 @@ LEFT JOIN per_unit cd ON cd.unit_id = e.dst_unit_id;
 -- either direction and a coupling of at least min_coupling_pct: units that change
 -- together without referencing each other (the "modularity violation" shape of Mo et
 -- al., TSE 2021, there between files). Only the two units themselves are compared: an
--- edge from a method of an impl does not count as an edge from the impl.
--- Parameters: min_coupling_pct 30, and those of unit_cochange.
+-- edge from a method of an impl does not count as an edge from the impl. Test units are
+-- left out as in unit_cochange.
+-- Parameters: min_coupling_pct 30, and those of unit_cochange (include_tests among them).
 CREATE OR REPLACE VIEW cochange_without_reference AS
 -- (The edges are compared as unordered pairs, an equality anti-join: an OR of the two
 -- directions made the query about five times slower over the cache.)
