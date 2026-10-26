@@ -193,8 +193,58 @@ to the impl's method (7,517 edges) and only generic/`dyn` calls to the
 trait's (32); and file-level `pub use` re-exports lie in no unit, so the
 unit graph sees 105 of the 107 files referencing `SessionId`.
 
+## Dogfooding on this repository (2026-10-26)
+
+The owner asked to dogfood the layer and make its quality checkable. Two
+checks were run, plus a one-command entry (`duckdb-ext/sql/run.sh` with
+`index`, `query`, `sql` and `shell`; it loads the views in order, applies
+the persistent cache and runs a question).
+
+**Retrospective**
+([record](research/code-db-dogfood-retrospective-2026-10-26.md)): the
+signals were computed on the tree the September 2026 sweep started from
+(e3c619a0; the sweep's commits are `e223bc20..46c37290`, 104 commits)
+and compared with what the sweep actually changed (`unit_changes` over
+that range) and with the units the owner explicitly preserved (the old
+ledger's 27 entries plus 14 record rows; 32 mapped). "Changed during the
+sweep" is broad (24.8 % of all unit identities, 29.2 % of production
+functions and methods), so precision is read against that base rate: in
+production scope `unit_churn` reaches P@10 0.9 and P@100 0.74, but plain
+`loc` reaches 0.8 and 0.75 — history and size point at the same places —
+while fan-in alone (0.28) is below the base rate, co-change without
+reference is 0.49 and module-cycle membership 0.41; with a stricter
+truth (≥3 sweep commits, base 0.026) the order is the same (churn 0.27,
+loc 0.23, fan-in × churn 0.18, clone one-sided 0.17, co-change 0.12,
+fan-in 0.04). Every preserved unit that a history signal ranked in its
+top 100 was also changed in the sweep; the only preserved units ranked
+high without having changed were ranked by `loc` or by cycle membership.
+The sweep chose its targets with the old audit's size and clone signals,
+so this is agreement between two different lenses, not an independent
+outcome measure; no defect data exists.
+
+**Prospective**
+([record](research/code-db-dogfood-prospective-2026-10-26.md)): at HEAD
+2ebd0ecb a reader took the top 10 of each signal and the 5 largest real
+module cycles, read the code with the graph context, and judged each:
+12 of 45 candidates have a nameable maintenance cost (9 distinct causes),
+32 do not, 1 needs the owner's intent. Per signal (問題あり / なし):
+`unit_churn` 4/6, fan-in × churn 3/7, clone one-sided 3/7, co-change
+without reference 1/9, cycles 1/3 (+1 undecided). False alarms share
+mechanisms the layer can name: nested units credited with inner changes;
+a unit that keeps its name after its body moved keeps the old history
+(the second way identity breaks, besides renames); contract types that
+everything imports by design, where the compiler forces the propagation;
+clone one-sidedness measured on the enclosing unit rather than the
+fragment; test units in co-change pairs; parent/child module cycles and
+one type's impl split over many files. The hand-over list and the
+undecided question are in the record.
+
 ## Open points
 
+- **Unit identity** breaks both ways: renames start a new history, and a
+  body moved under a kept name keeps the old one. The retrospective and
+  prospective checks both hit it; it is the first thing to decide before
+  trusting churn on specific units.
 - **A `git://` file system** remains the target for history access. The
   C API registers none today: both v1 and v2 only let an extension *use*
   the host file system (checked against the 2.0.0 headers), and
