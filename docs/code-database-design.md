@@ -311,14 +311,40 @@ harmful for the co-change signals until relocation commits are excluded.
 The next improvements are measured, SQL-only, and ordered by how many
 false alarms they remove.
 
-## Open points
+## Eighth increment: the five counting rules (2026-10-27)
 
-- **Counting rules the re-evaluation showed to be wrong**: shared commits
-  must exclude the lineage link commits themselves; one-sided clone
-  commits must start at the later side's first commit; inner changes
-  should credit the innermost unit; test units should be excluded or
-  flagged in co-change pairs; parent/child and same-type-impl edges
-  should be collapsed before cycle detection.
+([record](research/code-db-counting-rules-2026-10-27.md)) The owner
+approved all five fixes. As implemented, each behind a variable that
+restores the old count (with all five restored the old SQL is reproduced
+exactly): shared commits exclude a unit's lineage link commits
+(`unit_history.via_link`; churn keeps them and shows `move_commits`);
+one-sided clone changes count from the later side's first commit
+(`since_sha` per pair); hunk lines credit the innermost unit, an
+enclosing unit only its own lines (`attribution := 'innermost'`, lineage
+keeps reading the `all` result so successions do not depend on it);
+co-change pairs drop test units (`include_tests`); cycles are computed
+after dropping nested-module edges and edges made only of same-type impl
+blocks (`cycle_edges`). Effect on the 45 round-2 candidates: 19 left the
+top lists (N1 5, N2 2, M1 8, M5 4, M6 2 cycles), precision among the
+remaining 26 is 9 true (0.35 against 0.29 before); four true positives
+left too — one whose cause (`reconcile`) entered on its own, one impl
+whose problem is what it contains rather than its own lines, and two
+small test-only findings whose counts were unrelated to the defect. The
+retrospective's co-change signal recovered (P@10 0.4 → 0.6, P@100
+0.41 → 0.49; ≥3 commits 0.05 → 0.14); churn, clones and fan-in did not
+move in production scope. Cycles 31 → 24, edges 354 → 159;
+`cochange_without_reference` 8,424 → 1,239 pairs.
+
+The measurement exposed that innermost attribution still credits an
+impl or module for inner units' doc comments and attributes (the syntax
+tree places them outside the item) and for the blank lines between
+items: of 853 impls still `modified`, 51 were due to code lines, 692 to
+docs or attributes, 110 to blank or comment-only lines. The owner decided
+(2026-10-27): leading doc comments and attributes belong to the unit they
+precede (a Rust rule in `lang/rust.sql`), whitespace-only lines credit no
+unit, and the innermost and test-exclusion rules stay the defaults.
+
+## Open points
 - **Lineage limits**: links are same-commit only; a body split into
   several units or moved into a new file does not cut the stub's history;
   heavy rewrites below the threshold break the chain; short and test
