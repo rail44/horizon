@@ -1,7 +1,8 @@
 -- Session cache: materialize the expensive layers once and point their views at the
 -- copies, so that every view and query keeps working unchanged and reads the copies.
--- The layers are nodes, units, tags, the three history views, blob_files, blob_units
--- and, from views/scip.sql (optional), scip_occurrences and scip_symbols.
+-- The layers are nodes, units, tags, the three history views, blob_files, blob_units,
+-- commit_order and unit_successions (views/lineage.sql) and, from views/scip.sql
+-- (optional), scip_occurrences and scip_symbols.
 --
 -- Read after all view files. Each cached layer becomes a temporary table
 -- `<view>_cache`, and the view of the same name is replaced by
@@ -49,6 +50,12 @@ CREATE OR REPLACE VIEW tags AS SELECT * FROM tags_cache;
 
 -- The three history views together, so that all of them describe the same `since` and
 -- `include_merges` (no query reads hunks yet).
+-- commit_order numbers the commits in the order git_commits emits them, so it is copied
+-- from the live view, before commits reads its copy.
+DROP TABLE IF EXISTS commit_order_cache;
+CREATE TEMP TABLE commit_order_cache AS SELECT * FROM commit_order;
+CREATE OR REPLACE VIEW commit_order AS SELECT * FROM commit_order_cache;
+
 DROP TABLE IF EXISTS commits_cache;
 CREATE TEMP TABLE commits_cache AS SELECT * FROM commits;
 CREATE OR REPLACE VIEW commits AS SELECT * FROM commits_cache;
@@ -72,6 +79,13 @@ CREATE OR REPLACE VIEW blob_files AS SELECT * FROM blob_files_cache;
 DROP TABLE IF EXISTS blob_units_cache;
 CREATE TEMP TABLE blob_units_cache AS SELECT * FROM blob_units;
 CREATE OR REPLACE VIEW blob_units AS SELECT * FROM blob_units_cache;
+
+-- The successions (views/lineage.sql), derived over the copies above and the blob texts
+-- (read once, here). unit_lineage, unit_history and the history-based queries read the
+-- copy.
+DROP TABLE IF EXISTS unit_successions_cache;
+CREATE TEMP TABLE unit_successions_cache AS SELECT * FROM unit_successions;
+CREATE OR REPLACE VIEW unit_successions AS SELECT * FROM unit_successions_cache;
 
 -- SCIP (views/scip.sql, optional): the rows of scip_document_occurrences and
 -- scip_document_symbols, which views/scip.sql defines and nothing replaces; scip_occurrences

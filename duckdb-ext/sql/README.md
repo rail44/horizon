@@ -21,8 +21,9 @@ per query, the session cache) and
 persistent cache), `docs/research/code-db-unit-changes-2026-10-25.md` (the
 blob layer, `unit_changes` and the two history-joined queries) and
 `docs/research/code-db-scip-2026-10-25.md` (the SCIP views, `unit_fan_in_churn`
-and their cache) and `docs/research/code-db-graph-2026-10-26.md` (the graph
-views and their queries).
+and their cache), `docs/research/code-db-graph-2026-10-26.md` (the graph
+views and their queries) and `docs/research/code-db-lineage-2026-10-26.md` (unit
+lineage and the history queries over it).
 
 ## Running
 
@@ -46,7 +47,7 @@ duckdb-ext/sql/run.sh shell REPO                       # an interactive duckdb2 
 - **`query`, `sql`, `shell`** set `repo`, read `00_load.sql` and the view files in the
   order below (`views/scip.sql` and `views/graph.sql` when the index exists), then
   `refresh.sql` (the persistent cache in `REPO/target/code-db/cache.duckdb`; the first
-  run builds it, 20–26 s here, later runs refresh it), with the loading's own output
+  run builds it, about 25 s here, later runs refresh it), with the loading's own output
   suppressed. `query QUERY` then runs `queries/QUERY.sql`, `sql FILE.sql` reads the
   file, `shell` leaves the CLI open with everything in place.
 - **Variables**: `NAME=VALUE` sets a DuckDB variable before anything is read (a
@@ -83,6 +84,7 @@ duckdb-ext/sql/lang/rust.sql
 duckdb-ext/sql/views/units.sql
 duckdb-ext/sql/views/history.sql
 duckdb-ext/sql/views/unit_changes.sql
+duckdb-ext/sql/views/lineage.sql
 duckdb-ext/sql/views/clones.sql
 duckdb-ext/sql/views/scip.sql      (optional)
 duckdb-ext/sql/views/graph.sql     (optional, after views/scip.sql)
@@ -96,7 +98,8 @@ not read any source when they are executed, except that `00_load.sql` takes
 the file snapshot from `git_tracked_files` and `views/blobs.sql` takes the
 blob snapshot from `git_changed_blobs`, which writes the blob files that are
 missing (see "Historical blobs"). `views/blobs.sql` comes before
-`lang/rust.sql` because the language views are bound against its views. Either `duckdb-ext/sql/cache.sql`
+`lang/rust.sql` because the language views are bound against its views, and
+`views/lineage.sql` takes its text snapshot from the blob snapshot when it is read. Either `duckdb-ext/sql/cache.sql`
 or `duckdb-ext/sql/refresh.sql` may follow them (see Cache).
 
 DuckDB CLI 2.0.0 (here `~/.local/bin/duckdb2`; the system `duckdb` is
@@ -116,6 +119,7 @@ duckdb2 -unsigned -cmd "SET VARIABLE repo = '$PWD'"
 .read duckdb-ext/sql/views/units.sql
 .read duckdb-ext/sql/views/history.sql
 .read duckdb-ext/sql/views/unit_changes.sql
+.read duckdb-ext/sql/views/lineage.sql
 .read duckdb-ext/sql/views/clones.sql
 .read duckdb-ext/sql/views/scip.sql
 .read duckdb-ext/sql/views/graph.sql
@@ -175,6 +179,12 @@ chose (2026-10-25) to write historical blobs to files, so that `read_ast`,
   git's start is then the line before the insertion or deletion. One row per
   distinct tuple. This is the spike's definition (`git show
   475599d5:scripts/code-db/history.py`, `unit_changes`) with 1-based lines.
+- **`unit_change_sides(sha, path, old_path, side, blob_id, kind, qualified_name,
+  start_line, end_line, record_path, change_kind)`** is the statement `unit_changes`
+  projects: every unit of both sides of every `(sha, path)` with hunks, with the
+  change recorded for its identity (`change_kind` under `record_path`; both sides of a
+  modified unit carry it) or NULL when the commit did not touch it. `views/lineage.sql`
+  reads it, so that a query reading the successions derives the blobs' units once.
 
 `views/blobs.sql` takes a snapshot when it is read, as `00_load.sql` does
 for the current files: `read_ast` and `read_text` need a constant list of
@@ -189,8 +199,8 @@ Limits:
 
 - **Unit identity is `(kind, qualified_name)` within a path.** Two units
   with the same kind and name in one blob (two `impl Foo` blocks) are one
-  unit; a rename or move starts a new history under the new path, and the
-  queries do not follow it.
+  unit; a rename or move starts a new identity under the new path, which
+  `unit_changes` does not follow; the lineage views (below) connect them.
 - **Nested units** are credited with every change inside them (an impl
   with each change to one of its methods).
 - **Placement**: `-U0` hunks are placed by gitoxide; where an insertion or
@@ -205,6 +215,97 @@ Limits:
   6,586 blobs, 152 MB, 31 million nodes), so a live `blob_units` takes
   about 18 s and the two history-joined queries 14–20 s, at a peak RSS of
   about 8 GB; both caches below hold the blob layer.
+
+## Lineage
+
+`views/lineage.sql` connects each current unit to the identities it continues, so
+that the history-based queries count the commits of the code rather than those of a
+name. An identity is `(path, kind, qualified_name)`, as in `unit_changes`. Two owner
+decisions (2026-10-26) fix the semantics:
+
+1. **History follows the body, not the name.** When a unit keeps its name but its body
+   moves to another unit in the same commit, the old history continues in the unit
+   that received the body; the unit that kept the name (the stub) starts a new lineage
+   at that commit.
+2. **Lineage is many-to-many; churn counts distinct commits over all ancestors.** A
+   split gives every successor the predecessor's history, a merge gives the successor
+   the union; counts are `count(DISTINCT sha)`, so nothing is counted twice, and the
+   multiplicity is a column (`successors_at_split`).
+
+- **`unit_successions(sha, pred_path, pred_kind, pred_qualified_name, succ_path,
+  succ_kind, succ_qualified_name, link, similarity, ambiguous)`**: within one commit, a
+  predecessor identity (the commit's pre-image side) and a successor (its post-image
+  side). `link` is one of:
+  - `same_name`: a unit modified in place (its pre-image against its post-image as
+    `similarity`); informational, an identity's own commits are its history anyway.
+  - `file_rename`: the file was renamed (`file_changes.old_path` → `path`, gix's
+    rename detection at 50 %), and the unit has the same kind and qualified name on
+    both sides: every such unit of the file, touched or not (`similarity` 1 when the
+    commit did not touch it). For a pure rename (no hunks, no blob rows) the units are
+    those of the new side of the old path's latest earlier change in the range.
+  - `content_match`: a `removed` unit and an `added` unit of the commit whose texts
+    are similar.
+  - `body_move`: a `modified` unit whose pre-image is dissimilar to its post-image
+    while an `added` unit of the commit is similar to the pre-image: the pre-image
+    links to the added unit, and the stub gets no predecessor at that commit (no
+    `same_name` or `file_rename` row).
+- **Similarity** is the Jaccard index of the two texts' line sets: a unit's text is the
+  lines `[start_line, end_line]` of every unit with its identity in that blob, each line
+  whitespace-normalized (`normalize_ws`), blank lines dropped, compared by `hash()`.
+  `content_match` and `body_move` compare units of the same kind, or a function with a
+  method (a move into or out of an impl changes one into the other), and link every
+  candidate at or above `lineage_threshold` (default 0.5, gix's rename default).
+  Measured on this repository against a Jaccard index over token multisets, the line
+  set resolved the same known cases with far fewer links between units whose last name
+  segments differ (598 against 9,186 at 0.5; the record has the counts).
+- **`ambiguous`** marks a `content_match` or `body_move` link whose predecessor or
+  successor has several such links at the commit, or whose two best candidates on
+  either side are within 0.1 (a modified unit's own post-image counts as a candidate of
+  its pre-image).
+- **`commit_order(sha, ord)`**: each commit's position in git log's order, 1 = the
+  oldest (`git_commits` emits the commits in that order from one thread; both caches
+  copy it).
+- **`unit_lineage_segments`**, **`unit_lineage(unit_id, sha, path, kind, qualified_name,
+  depth, link, from_sha)`**: a recursive walk from each current unit back through the
+  successions (other than `same_name`). Depth 0 is the unit itself; an identity
+  reached through `link` at commit `sha` contributes its commits before `sha`; an
+  identity whose lineage restarted at a `body_move` contributes its commits from that
+  commit on (`from_sha`).
+- **`unit_history(unit_id, sha, change_kind, depth)`**: the distinct commits of
+  `unit_changes` that touched an identity of the unit's lineage within the range it
+  contributes (`change_kind` and `depth` of the nearest such identity).
+- **`unit_lineage_counts(unit_id, ancestors, successors_at_split)`**: the number of
+  identities other than the unit's own in its lineage, and the largest number of
+  successors a link of its lineage gave its predecessor (1: no split).
+
+`unit_churn` (plus the columns `commits_by_name`, the count by identity before
+lineage, `ancestors` and `successors_at_split`), `unit_fan_in_churn` (now ordered by
+`fan_in_x_commits`), `clone_change_consistency`, `unit_dependencies`' churn and the
+graph's `unit_commits` (and so `unit_cochange`, `edge_cochange`,
+`cochange_without_reference`) read `unit_history`; `unit_changes` stays the
+per-commit fact.
+
+Limits:
+
+- **Same commit only.** A unit deleted in one commit and re-created elsewhere in a
+  later one is not linked; nor is a move whose file rename gix does not detect
+  together with edits that leave the unit below the threshold.
+- **Heavy edits break the link.** A rename or move that rewrites more than about half of
+  the unit's lines falls below 0.5; a split into parts that each keep less than half of
+  the predecessor's lines links none of them (each part's index is at most its share).
+- **Bodies that move out of a unit into several units, or into a file, do not cut the
+  stub.** `body_move` needs one added unit similar to the whole pre-image: an inline
+  `mod tests { … }` moved to `tests.rs` leaves `mod tests;` with the module's history
+  (its functions move one by one, as `content_match`).
+- **Short units link easily.** Two three-line functions that share their signature line
+  and a closing brace already reach 0.5; most such links between different names are
+  `ambiguous`, and test functions written from one template are the commonest case.
+- **Names are reused.** An identity removed and later re-added under the same path and
+  name is still one identity (as in `unit_changes`).
+- **Live**, a query over `unit_history` derives the successions and reads
+  `unit_changes` again: `unit_churn` live takes about 18 s and 17 GB on this repository
+  (8–9 GB before lineage), `derived_unit_successions` alone 14 s and 8 GB; both caches
+  hold the successions.
 
 ## SCIP
 
@@ -245,10 +346,12 @@ unit's fan-in is the number of distinct files other than its own that hold
 a reference to any symbol whose definition occurrence lies within the
 unit's lines (a module's whole-file definition lies in no unit; enclosing
 units count everything they contain), and its churn is its commits in
-`unit_changes`. Parameters `kind`, `min_fan_in` (default 1) and
+`unit_history` (see Lineage); rows are ordered by fan-in × commits
+(`fan_in_x_commits`). Parameters `kind`, `min_fan_in` (default 1) and
 `include_merges`. On this repository its 2,915 rows equal the spike's code
-run on the same tree and index, apart from the commits of two units that
-git's and gitoxide's `-U0` placement attribute differently.
+run on the same tree and index (with commits by identity, before lineage),
+apart from the commits of two units that git's and gitoxide's `-U0` placement
+attribute differently.
 
 ## Graph
 
@@ -310,9 +413,9 @@ on edges. Everything is a view (both caches keep them as views; see Cache).
   reaches every other), named by their least member, from a recursive transitive
   closure. **`crate_cycles`** is the same over `crate_edges`; Cargo forbids crate
   cycles, so a row is an aggregation error or a dev-dependency cycle.
-- **`unit_commits(sha, unit_id)`**: the commits of `unit_changes` that touched each
-  current unit (identity `(path, kind, qualified_name)`), without commits touching
-  more than `max_commit_files` files and, unless `include_merges`, merges.
+- **`unit_commits(sha, unit_id)`**: the commits of each current unit's lineage
+  (`unit_history`), without commits touching more than `max_commit_files` files and,
+  unless `include_merges`, merges.
 - **`unit_cochange(unit_a, unit_b, shared_commits, commits_a, commits_b,
   coupling_pct, same_file, nested)`**: pairs (`unit_a < unit_b`) with at least
   `min_shared` shared commits; `coupling_pct` divides by the larger count; `nested`
@@ -341,8 +444,9 @@ the edges' symbols, each neighbor's churn and fan-in), `module_graph`,
 
 Two ways to stop recomputing the expensive layers (`nodes`, `units`,
 `tags`, `commits`, `file_changes`, `hunks`, the blob layer
-`blob_files`, `blob_nodes`, `blob_units`, and `scip_occurrences`,
-`scip_symbols`); every other view and every query
+`blob_files`, `blob_nodes`, `blob_units`, the lineage layer `commit_order` and
+`unit_successions`, and `scip_occurrences`, `scip_symbols`); every other view and
+every query
 keeps its text and reads whichever is in place. `unit_changes` stays a view
 in both: over the cached layers a query reading it takes 0.16–0.21 s on
 this repository, against 0.05–0.13 s from a materialized copy that itself
@@ -354,7 +458,7 @@ the history changed.
 | | `cache.sql` (session) | `refresh.sql` (persistent) |
 | --- | --- | --- |
 | Where | temporary tables, gone with the session | `cache_path`, a DuckDB file, attached as `cache` |
-| Build | everything, 17–20 s on this repository (13–16 s of it parsing the blobs for `blob_units`; 3 s without the blob layer), peak RSS about 9 GB | everything the first time (20–26 s, 14–18 s of it parsing and storing the blobs; peak RSS about 6.8 GB; the file is about 620 MB); then only the files whose blob id changed, the new commits and their new blobs (0.2–0.7 s for nothing to 10 files or one commit; a rewritten history 3.6–4.2 s) |
+| Build | everything, 16.6 s on this repository (8.6 s of it parsing the blobs for `blob_units`, 5.0 s the successions), peak RSS about 8.9 GB | everything the first time (24.5–24.7 s, 14–15 s of it parsing and storing the blobs and 5.5 s the successions; peak RSS about 6.9 GB; the file is about 620 MB); then only the files whose blob id changed, the new commits, their new blobs and their successions (0.26–0.64 s for nothing to 10 files or one commit; an amended head 2.8–3.5 s) |
 | A changed file | not seen until the view files and `cache.sql` are read again | re-parsed by the next `refresh.sql` |
 | Use for | one session of queries over a fixed state | repeated sessions, or a session that refreshes as the repository changes |
 
@@ -365,9 +469,10 @@ copies. Re-reading the view files resets both to live.
 ### Session cache
 
 `cache.sql`, read after the view files, copies `nodes`, `units`, `tags`,
-`commits`, `file_changes`, `hunks`, `blob_files` and `blob_units` into
-temporary tables `<view>_cache` and replaces each of those views with
-`SELECT * FROM <view>_cache`; `scip_occurrences_cache` and
+`commit_order` (before `commits`, from the live order), `commits`, `file_changes`,
+`hunks`, `blob_files`, `blob_units` and `unit_successions` (derived over the copies
+before it, reading the blob texts once) into temporary tables `<view>_cache` and
+replaces each of those views with `SELECT * FROM <view>_cache`; `scip_occurrences_cache` and
 `scip_symbols_cache` are copies of `scip_document_occurrences` and
 `scip_document_symbols` (`scip_occurrences` joins `file_id` to the copy at
 query time). Without `views/scip.sql`, empty views of the same columns stand
@@ -435,7 +540,15 @@ not create it) up to date and points the eleven views at it:
    the range, and `blob_files`, `blob_nodes` and `blob_units` read the
    cache, showing only the blobs of the range (blobs that left it, after an
    amend, stay in the file and are not shown).
-8. **SCIP**: `cache.scip_occurrences` and `cache.scip_symbols` (the rows of
+8. **Lineage**: `cache.commit_order` is rebuilt with the history and otherwise
+   appended with it (the new commits after the cached ones). The commits of the range
+   not in `cache.lineage_derived` are derived by `derived_unit_successions` (with
+   `lineage_scope` set to them and the text snapshot narrowed to their blobs) and
+   appended to `cache.unit_successions`; a commit's successions depend only on it and
+   its ancestors, so the rows are kept across history rebuilds (an amend derives only
+   the new commit) and `unit_successions` shows those of the range. With nothing to
+   derive, the insert's false condition folds to an empty result (about 0.03 s).
+9. **SCIP**: `cache.scip_occurrences` and `cache.scip_symbols` (the rows of
    `scip_document_occurrences` and `scip_document_symbols`) are rebuilt whole
    when the key changes: the index's path, `hash()` of its content (read with
    `read_blob`, about 20 ms for 30 MB) and the text of the five views of
@@ -445,7 +558,7 @@ not create it) up to date and points the eleven views at it:
    stand-ins as in `cache.sql` are created, and both views are empty. With
    `views/scip.sql` read and no index, the refresh fails before anything
    changes.
-9. `CHECKPOINT cache`, and the `meta` row.
+10. `CHECKPOINT cache`, and the `meta` row.
 
 With nothing changed, `read_ast` is still called, because it refuses an
 empty list when it is bound and no `CASE` around the call can avoid that:
@@ -462,11 +575,11 @@ current one appear; `unit_id` is the row number over `(file_id, unit_ord)`
 and `parent_unit_id` is derived from it. After a refresh every view equals
 its live counterpart row for row (`check.py fixture`, `check.py refresh`).
 
-Layout of the file (schema version 3):
+Layout of the file (schema version 4):
 
 | Table | Rows |
 | --- | --- |
-| `meta` | one: `schema_version`, `repo`, `state` (`ok`, or `refreshing` while a refresh runs), `built_at`, `refreshed_at`, `syntax_key` (sitting_duck version), `derive_key` (md5 of the derived views' text), `history_key` (`since`, `include_merges`, `languages`, `blob_dir`), `head`; the last refresh: `syntax`/`derived` (`rebuilt` or `incremental`), `history` and `blob_history` (for `blob_files`; `rebuilt` or `appended`), `files_added`, `files_changed`, `files_removed`, `files_unchanged`, `nodes_parsed`, `units_inserted`, `tags_inserted`, `commits_added`, `blob_rows_added`, `blobs_parsed`, `blob_bytes_parsed`, `blob_nodes_parsed`, `blobs_derived`, `blob_units_inserted`, `blobs_cached` (all parsed blobs in the file), `scip_key` (NULL without `views/scip.sql`), `scip_cache` (`rebuilt` or `kept`), `scip_occurrences_inserted`, `scip_symbols_inserted`, `seconds` (per layer: `files`, `nodes`, `units`, `tags`, `commits`, `file_changes`, `hunks`, `blob_files`, `blob_nodes`, `blob_units`, `scip`, `checkpoint`, `total`) |
+| `meta` | one: `schema_version`, `repo`, `state` (`ok`, or `refreshing` while a refresh runs), `built_at`, `refreshed_at`, `syntax_key` (sitting_duck version), `derive_key` (md5 of the derived views' text), `history_key` (`since`, `include_merges`, `languages`, `blob_dir`), `head`; the last refresh: `syntax`/`derived` (`rebuilt` or `incremental`), `history` and `blob_history` (for `blob_files`; `rebuilt` or `appended`), `files_added`, `files_changed`, `files_removed`, `files_unchanged`, `nodes_parsed`, `units_inserted`, `tags_inserted`, `commits_added`, `blob_rows_added`, `blobs_parsed`, `blob_bytes_parsed`, `blob_nodes_parsed`, `blobs_derived`, `blob_units_inserted`, `blobs_cached` (all parsed blobs in the file), `scip_key` (NULL without `views/scip.sql`), `scip_cache` (`rebuilt` or `kept`), `scip_occurrences_inserted`, `scip_symbols_inserted`, `lineage_key` (md5 of `derived_unit_successions`, `lineage_sources` and `unit_changes`, and `lineage_threshold`), `lineage` (`rebuilt` or `appended`), `lineage_commits_derived`, `successions_inserted`, `seconds` (per layer: `files`, `nodes`, `units`, `tags`, `commits`, `file_changes`, `hunks`, `blob_files`, `blob_nodes`, `blob_units`, `lineage`, `scip`, `checkpoint`, `total`) |
 | `nodes_files` | one per cached file: `path`, `blob_id`, `language` |
 | `nodes` | `path` plus `read_ast`'s columns (as in `views/nodes.sql`) |
 | `units` | `path`, `unit_ord`, `parent_unit_ord`, then the columns of `units` without the ids |
@@ -476,6 +589,8 @@ Layout of the file (schema version 3):
 | `blob_derived` | one per blob whose units are in `blob_units` (a blob can have none) |
 | `blob_nodes` | `blob_id` plus `read_ast`'s columns |
 | `blob_units` | the columns of `blob_units` |
+| `commit_order`, `unit_successions` | the columns of the views (`views/lineage.sql`) |
+| `lineage_derived` | one per commit whose successions are in `unit_successions` (a commit can have none) |
 | `scip_occurrences`, `scip_symbols` | the columns of `scip_document_occurrences`, `scip_document_symbols` |
 
 What forces a rebuild:
@@ -497,6 +612,10 @@ What forces a rebuild:
 - **History** (and `blob_files`): a different `since`, `include_merges`,
   `languages` or `blob_dir`; a cached head that is not among the commits of
   `since..HEAD`; no cached head (no commits).
+- **Successions of every commit** (and `blob_files`, which re-exports the blob files
+  their texts are read from): a different history key, a re-derivation of the units
+  (above), a different `lineage_key`, the first two cases of the syntax rebuild. A
+  history rebuild alone keeps them.
 - **SCIP**: a different key (another index file or content, a change in
   `views/scip.sql`'s shaping views, `views/scip.sql` read or not), and the
   first two cases of the syntax rebuild (no `meta` row, `state` not `ok`).
@@ -535,7 +654,7 @@ con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
 con.execute("SET VARIABLE repo = '/abs/path/to/repo'")
 for f in ["00_load.sql", "views/files.sql", "views/nodes.sql", "views/blobs.sql",
           "lang/rust.sql", "views/units.sql", "views/history.sql",
-          "views/unit_changes.sql", "views/clones.sql",
+          "views/unit_changes.sql", "views/lineage.sql", "views/clones.sql",
           "views/scip.sql", "views/graph.sql"]:  # the last two optional, need the index
     con.execute(pathlib.Path("duckdb-ext/sql", f).read_text())
 con.execute(pathlib.Path("duckdb-ext/sql/refresh.sql").read_text())  # optional
@@ -588,6 +707,19 @@ asserts the same rows from the copies, no source scan in a query's plan, an
 edit and a `since` change not seen while cached, the failure of a second
 `cache.sql`, and live rows again after the view files are re-read.
 
+A lineage fixture adds seven commits to the history fixture: a file renamed with
+`git mv` and edited, a function renamed in place, one moved to another file, one split
+into two, two merged into one, and a body moved to a new function with the old name
+kept as a one-line call. It asserts `commit_order` against `git rev-list`, every
+`unit_successions` row of those commits (link, similarity, `ambiguous`), no
+`same_name` row through the body move, every `unit_lineage` chain (and the stub's
+`from_sha`), `unit_churn`'s commits, `commits_by_name`, `ancestors` and
+`successors_at_split` for each successor and the stub, `unit_churn` agreeing with
+`unit_history` and `unit_lineage_counts`, a higher `lineage_threshold` dropping the
+split and the merge, and the same rows through `cache.sql`. The history fixture
+asserts its own successions (the modified units in place, the renamed test as a
+content match at 0.5, the pure rename) and the renamed test's churn.
+
 A second fixture adds six commits to the first one's four: one clone
 side edited, then both (by a second author), a unit added, a rename with
 its function replaced, a unit removed, and a pure rename. It asserts the
@@ -632,8 +764,10 @@ fixture's SCIP steps read `views/graph.sql` too, so the graph views and queries 
 compared with live after each refresh.
 
 On a third fixture it reads `refresh.sql` after each of these steps and
-asserts every refreshed view equal to live row for row (the blob layer
-and `unit_changes` included), the six queries equal, and the `meta`
+asserts every refreshed view equal to live row for row (the blob layer,
+`unit_changes` and the lineage views included, and the lineage statistics: the
+successions rebuilt, appended for a new commit, only the amended commit derived after
+an amend), the six queries equal, and the `meta`
 statistics (blob rows, blobs parsed and derived among them): the first refresh from an empty cache;
 nothing changed (nothing parsed or appended, under 500 ms in the same
 session; 0.14–0.30 s with the blob steps, under a load average of 5–22); one file edited (only its rows replaced, every other path's rows
@@ -659,7 +793,8 @@ files reset it to live). It needs `git` and rust-analyzer but no jscpd.
 | `lang/rust.sql` | the table macro `rust_units_over(nodes_t, bytes_t, lines_t)` and its two applications `rust_units`, `rust_blob_units`; `rust_tags(file_id, node_id, tag, start_line, end_line)`; `rust_impl_parts(file_id, node_id, part, start_line, start_column, head_end_line, head_end_column)`; the intermediate steps are common table expressions inside them |
 | `views/units.sql` | `derived_units`, `derived_tags`, `derived_blob_units`: the union over languages (Rust only today); `units`, `tags`, `blob_units` over them; `impl_parts` (`rust_impl_parts`) |
 | `views/history.sql` | `commits`, `file_changes`, `hunks` |
-| `views/unit_changes.sql` | `unit_changes` |
+| `views/unit_changes.sql` | `unit_change_sides`, `unit_changes` |
+| `views/lineage.sql` | `commit_order`, `lineage_sources`, `derived_unit_successions`, `unit_successions`, `unit_lineage_segments`, `unit_lineage`, `unit_history`, `unit_lineage_counts` (see Lineage) |
 | `views/clones.sql` | `clone_pairs(pair_id, source, file_a, start_line_a, end_line_a, file_b, start_line_b, end_line_b, tokens, lines)` |
 | `views/scip.sql` (optional) | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (see SCIP) |
 | `views/graph.sql` (optional) | `unit_occurrences`, `unit_tests`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impl_targets`, `impl_for`, `implements`, `file_crate`, `modules`, `unit_module`, `module_edges`, `crate_edges`, `module_cycle_edges`, `module_cycles`, `crate_cycles`, `unit_commits`, `unit_cochange`, `edge_cochange`, `cochange_without_reference` (see Graph) |
@@ -746,6 +881,8 @@ which `00_load.sql` (and `refresh.sql`) take as a snapshot.
 | `crate` | NULL (all crates) | `module_graph`, `module_cycles` |
 | `match_mode`, `clone_source` | `'contain'`, NULL (all reports) | `clone_site_tags` (`match_mode` also the summary); `clone_source` also `clone_change_consistency` |
 | `since_time`, `kind` | NULL (all commits; all unit kinds) | `unit_churn` (`kind` also `unit_fan_in_churn`) |
+| `lineage_threshold` | 0.5 | `derived_unit_successions` (part of the persistent cache's `lineage_key`) |
+| `lineage_scope` | NULL (all commits); set only by `refresh.sql` | `derived_unit_successions` |
 | `min_fan_in` | 1 | `unit_fan_in_churn` |
 
 The source files are the regular files (mode `100644` or `100755`) that
@@ -755,7 +892,8 @@ repository) and files deleted in the worktree never appear, symlinks and
 submodules are skipped. `refresh.sql`'s variables named `refresh_*` are its
 own intermediate values; `blob_snapshot`, `blob_paths` and
 `blob_paths_empty` are the blob snapshot of `views/blobs.sql` (and
-`refresh.sql`).
+`refresh.sql`), `lineage_text_snapshot` and `lineage_text_paths` the text snapshot of
+`views/lineage.sql`.
 
 How parameters reach the table functions: `getvariable('…')` is accepted
 as an argument of `read_ast`, `read_text`, `read_json`, `glob`, `ATTACH` and
@@ -770,7 +908,8 @@ be parsed as a positional argument (`ignore_errors := len(x) = 0` is
 
 ## Deliberately not here yet
 
-- **Tags of blobs**, and following a unit across renames and moves.
+- **Tags of blobs**; lineage across commits (a unit removed in one commit and
+  re-created in a later one).
 - Go and TypeScript, clone groups (the spike's `group_id`). SCIP
   relationships (`relationship_count` only; rust-analyzer 1.99.1 writes none),
   so no edge from an impl's method to the trait method it implements, and an

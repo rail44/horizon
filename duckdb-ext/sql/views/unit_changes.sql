@@ -1,6 +1,7 @@
 -- unit_changes(sha, path, unit_kind, unit_qualified_name, change_kind): which units each
 -- commit touched, from its hunks and the units of the blobs on both sides of the
--- change (views/blobs.sql, blob_units).
+-- change (views/blobs.sql, blob_units). It is a projection of unit_change_sides (below),
+-- which keeps every unit of both sides with its lines.
 --
 -- For every (sha, path) with hunks (hunks.path is the new path, or the old one for a
 -- deletion; only extensions in `languages`):
@@ -20,13 +21,19 @@
 -- tuple. This is the spike's unit_changes (git show 475599d5:scripts/code-db/history.py)
 -- on 1-based lines.
 
-CREATE OR REPLACE VIEW unit_changes AS
+-- unit_change_sides(sha, path, old_path, side, blob_id, kind, qualified_name, start_line,
+--     end_line, record_path, change_kind): every unit of either side of every (sha, path)
+-- with hunks (one row per unit, so two units with one identity are two rows), with the
+-- change unit_changes records for its identity (change_kind, under record_path), NULL
+-- when the commit did not touch it. Both sides of a modified unit carry the change.
+-- views/lineage.sql reads it, so that the units of the blobs are derived once per query.
+CREATE OR REPLACE VIEW unit_change_sides AS
 WITH hunk_files AS MATERIALIZED (
     SELECT DISTINCT sha, path FROM hunks
 ),
 -- The units of each side of each changed file with hunks.
 side_units AS MATERIALIZED (
-    SELECT b.sha, b.path, b.old_path, b.side, u.kind, u.qualified_name, u.start_line, u.end_line
+    SELECT b.sha, b.path, b.old_path, b.side, b.blob_id, u.kind, u.qualified_name, u.start_line, u.end_line
     FROM blob_files b
     JOIN hunk_files h ON h.sha = b.sha AND h.path = b.path
     JOIN blob_units u ON u.blob_id = b.blob_id
@@ -46,7 +53,7 @@ present AS MATERIALIZED (
     SELECT DISTINCT sha, path, side, kind, qualified_name FROM side_units
 ),
 -- New-side units, then old-side units not already classified.
-classified AS (
+classified AS MATERIALIZED (
     SELECT t.sha, t.path, t.kind AS unit_kind, t.qualified_name AS unit_qualified_name,
            CASE WHEN p.kind IS NULL THEN 'added' ELSE 'modified' END AS change_kind
     FROM touched t
@@ -65,5 +72,18 @@ classified AS (
       AND NOT EXISTS (SELECT 1 FROM touched n
                       WHERE n.sha = t.sha AND n.path = t.path AND n.side = 'new'
                         AND n.kind = t.kind AND n.qualified_name = t.qualified_name)
+),
+changes AS MATERIALIZED (
+    SELECT DISTINCT * FROM classified
 )
-SELECT DISTINCT * FROM classified;
+SELECT u.sha, u.path, u.old_path, u.side, u.blob_id, u.kind, u.qualified_name, u.start_line, u.end_line,
+       c.path AS record_path, c.change_kind
+FROM side_units u
+LEFT JOIN changes c ON c.sha = u.sha AND c.unit_kind = u.kind AND c.unit_qualified_name = u.qualified_name
+     AND c.path = CASE WHEN c.change_kind = 'removed' THEN coalesce(u.old_path, u.path) ELSE u.path END
+     AND (c.change_kind = 'modified' OR (c.change_kind = 'added') = (u.side = 'new'));
+
+CREATE OR REPLACE VIEW unit_changes AS
+SELECT DISTINCT sha, record_path AS path, kind AS unit_kind, qualified_name AS unit_qualified_name, change_kind
+FROM unit_change_sides
+WHERE change_kind IS NOT NULL;

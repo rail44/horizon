@@ -1,6 +1,7 @@
 -- Persistent cache: bring the cache file up to date with the repository, then point
 -- nodes, units, tags, commits, file_changes, hunks, blob_files, blob_nodes, blob_units,
--- scip_occurrences and scip_symbols at it (unit_changes reads them).
+-- commit_order, unit_successions, scip_occurrences and scip_symbols at it (unit_changes
+-- and the lineage views read them).
 --
 -- Read after all view files, in any session and as often as wanted: each read takes a
 -- new file snapshot (as 00_load.sql does), re-parses only the files whose content id
@@ -33,6 +34,16 @@
 -- every blob file again and the rebuild exports the missing ones. Blobs that leave the
 -- range (an amended commit) stay in the cache and are not shown.
 --
+-- Lineage (views/lineage.sql). A commit's successions depend only on that commit and its
+-- ancestors, so `cache.unit_successions` is kept per commit and only added to: the
+-- commits of the range not in `cache.lineage_derived` are derived (one
+-- derived_unit_successions over them, reading the texts of their blobs only) and
+-- appended. Everything is derived again when the history key, the units of the blobs
+-- (a derive reset) or the lineage key (the text of the views that derive the
+-- successions, and lineage_threshold) change; that also re-exports the blob files.
+-- Commits that left the range stay and are not shown. `cache.commit_order` is the
+-- position of each commit, rebuilt with the history and appended with it.
+--
 -- SCIP. views/scip.sql is optional. When it was read, `cache.scip_occurrences` and
 -- `cache.scip_symbols` hold its rows (without file_id, which the view joins at query
 -- time), rebuilt whole when the key changes: the index file's path and content hash
@@ -52,6 +63,8 @@
 SELECT CASE
     WHEN NOT EXISTS (SELECT 1 FROM duckdb_views() WHERE view_name = 'derived_units')
         THEN error('refresh.sql: read the view files first')
+    WHEN NOT EXISTS (SELECT 1 FROM duckdb_views() WHERE view_name = 'derived_unit_successions')
+        THEN error('refresh.sql: read views/lineage.sql first')
     WHEN EXISTS (SELECT 1 FROM duckdb_views() WHERE view_name = 'nodes' AND sql LIKE '%nodes\_cache%' ESCAPE '\')
         THEN error('refresh.sql: the views read the session copies of cache.sql; re-read the view files first')
 END;
@@ -72,7 +85,7 @@ SELECT CASE WHEN getvariable('cache_path') LIKE '/%'
     THEN error('refresh.sql: the database cache is attached from another file; DETACH cache first')
 END;
 
--- Layout (schema version 3).
+-- Layout (schema version 4).
 CREATE TABLE IF NOT EXISTS cache.meta (
     schema_version INTEGER,
     repo VARCHAR,
@@ -107,9 +120,13 @@ CREATE TABLE IF NOT EXISTS cache.meta (
     scip_cache VARCHAR,         -- 'rebuilt' or 'kept'
     scip_occurrences_inserted BIGINT,
     scip_symbols_inserted BIGINT,
+    lineage_key VARCHAR,        -- md5 of the views deriving the successions, and lineage_threshold
+    lineage VARCHAR,            -- 'rebuilt' or 'appended' (cache.unit_successions)
+    lineage_commits_derived BIGINT,
+    successions_inserted BIGINT,
     seconds STRUCT(files DOUBLE, nodes DOUBLE, units DOUBLE, tags DOUBLE, commits DOUBLE,
                    file_changes DOUBLE, hunks DOUBLE, blob_files DOUBLE, blob_nodes DOUBLE,
-                   blob_units DOUBLE, scip DOUBLE, checkpoint DOUBLE, total DOUBLE)
+                   blob_units DOUBLE, lineage DOUBLE, scip DOUBLE, checkpoint DOUBLE, total DOUBLE)
 );
 CREATE TABLE IF NOT EXISTS cache.nodes_files (path VARCHAR, blob_id VARCHAR, language VARCHAR);
 -- read_ast's own columns, from a read of a path that does not exist (no file is read).
@@ -151,9 +168,15 @@ CREATE TABLE IF NOT EXISTS cache.scip_occurrences (document VARCHAR, symbol VARC
     enclosing_start_column INTEGER, enclosing_end_line INTEGER, enclosing_end_column INTEGER);
 CREATE TABLE IF NOT EXISTS cache.scip_symbols (document VARCHAR, symbol VARCHAR, kind VARCHAR,
     display_name VARCHAR, enclosing_symbol VARCHAR, documentation VARCHAR[], relationship_count INTEGER);
+-- The columns of commit_order and unit_successions (views/lineage.sql).
+CREATE TABLE IF NOT EXISTS cache.commit_order (sha VARCHAR, ord BIGINT);
+CREATE TABLE IF NOT EXISTS cache.unit_successions (sha VARCHAR, pred_path VARCHAR, pred_kind VARCHAR,
+    pred_qualified_name VARCHAR, succ_path VARCHAR, succ_kind VARCHAR, succ_qualified_name VARCHAR,
+    link VARCHAR, similarity DOUBLE, ambiguous BOOLEAN);
+CREATE TABLE IF NOT EXISTS cache.lineage_derived (sha VARCHAR);
 
 SET VARIABLE refresh_prior = (SELECT m FROM cache.meta m);
-SELECT CASE WHEN getvariable('refresh_prior').schema_version <> 3
+SELECT CASE WHEN getvariable('refresh_prior').schema_version <> 4
     THEN error('refresh.sql: ' || getvariable('cache_path') || ' has another schema version; delete it')
 END;
 
@@ -184,6 +207,18 @@ SET VARIABLE refresh_syntax_reset = getvariable('refresh_prior') IS NULL
     OR getvariable('refresh_prior').syntax_key IS DISTINCT FROM getvariable('refresh_syntax_key');
 SET VARIABLE refresh_derive_reset = getvariable('refresh_syntax_reset')
     OR getvariable('refresh_prior').derive_key IS DISTINCT FROM getvariable('refresh_derive_key');
+-- The text of the views the successions are derived through (views/lineage.sql and
+-- unit_changes, which stays a view over the cached layers) and the threshold.
+SET VARIABLE refresh_lineage_key = md5(concat_ws(chr(10),
+    (SELECT string_agg(view_name || ':' || sql, chr(10) ORDER BY view_name)
+     FROM duckdb_views()
+     WHERE NOT internal AND view_name IN ('derived_unit_successions', 'lineage_sources', 'unit_changes')),
+    'lineage_threshold=' || getvariable('lineage_threshold')));
+SET VARIABLE refresh_lineage_reset = getvariable('refresh_derive_reset')
+    OR getvariable('refresh_prior').state IS DISTINCT FROM 'ok'
+    OR getvariable('refresh_prior').repo IS DISTINCT FROM getvariable('repo')
+    OR getvariable('refresh_prior').history_key IS DISTINCT FROM getvariable('refresh_history_key')
+    OR getvariable('refresh_prior').lineage_key IS DISTINCT FROM getvariable('refresh_lineage_key');
 
 -- SCIP: whether views/scip.sql was read (scip_index_occurrences exists only then), and
 -- the key. Without it, empty views of the cached columns stand in for the two views the
@@ -332,6 +367,13 @@ INSERT INTO cache.commits SELECT * FROM refresh_commits;
 SET VARIABLE refresh_head = coalesce((SELECT sha FROM refresh_commits LIMIT 1),
     CASE WHEN NOT getvariable('refresh_history_reset') THEN getvariable('refresh_prior').head END);
 SET VARIABLE refresh_commits_added = (SELECT count(*) FROM refresh_commits);
+-- Commit positions (views/lineage.sql, commit_order): refresh_commits holds the new
+-- commits in git log's order, newest first, and they all follow the cached ones.
+DELETE FROM cache.commit_order WHERE getvariable('refresh_history_reset');
+SET VARIABLE refresh_ord_base = (SELECT coalesce(max(ord), 0) FROM cache.commit_order);
+INSERT INTO cache.commit_order
+SELECT sha, getvariable('refresh_ord_base') + n - rn + 1
+FROM (SELECT sha, row_number() OVER () AS rn, count(*) OVER () AS n FROM refresh_commits);
 DROP TABLE refresh_commits;
 SET VARIABLE refresh_t_commits = epoch(now());
 INSERT INTO cache.file_changes
@@ -348,11 +390,14 @@ SET VARIABLE refresh_t_hunks = epoch(now());
 CREATE OR REPLACE VIEW commits AS SELECT * FROM cache.commits;
 CREATE OR REPLACE VIEW file_changes AS SELECT * FROM cache.file_changes;
 CREATE OR REPLACE VIEW hunks AS SELECT * FROM cache.hunks;
+CREATE OR REPLACE VIEW commit_order AS SELECT * FROM cache.commit_order;
 
--- Blob files: rebuilt with the history, or when every blob's units are re-derived (that
--- reads every blob file, and the rebuild exports the missing ones); else appended with
--- the same commits as the history. git_changed_blobs exports what it lists.
-SET VARIABLE refresh_blob_files_reset = getvariable('refresh_history_reset') OR getvariable('refresh_derive_reset');
+-- Blob files: rebuilt with the history, or when every blob's units or every commit's
+-- successions are derived again (that reads every blob file, and the rebuild exports the
+-- missing ones); else appended with the same commits as the history. git_changed_blobs
+-- exports what it lists.
+SET VARIABLE refresh_blob_files_reset = getvariable('refresh_history_reset') OR getvariable('refresh_derive_reset')
+    OR getvariable('refresh_lineage_reset');
 DELETE FROM cache.blob_files WHERE getvariable('refresh_blob_files_reset');
 SET VARIABLE refresh_blob_since = CASE WHEN getvariable('refresh_blob_files_reset')
     THEN getvariable('since') ELSE getvariable('refresh_prior').head END;
@@ -432,6 +477,36 @@ CREATE OR REPLACE VIEW blob_units AS
 SELECT u.* FROM cache.blob_units u WHERE u.blob_id IN (SELECT blob_id FROM blob_list);
 SET VARIABLE refresh_t_blob_units = epoch(now());
 
+-- Lineage: the successions of the commits of the range not derived yet, from their
+-- blobs' texts only (the text snapshot of views/lineage.sql narrowed to them; the
+-- insert's false condition folds to an empty result when there are none).
+DELETE FROM cache.unit_successions WHERE getvariable('refresh_lineage_reset');
+DELETE FROM cache.lineage_derived WHERE getvariable('refresh_lineage_reset');
+SET VARIABLE lineage_scope = (SELECT coalesce(list(sha ORDER BY sha), []) FROM cache.commits
+                              WHERE sha NOT IN (SELECT sha FROM cache.lineage_derived));
+SET VARIABLE refresh_lineage_any = len(getvariable('lineage_scope')) > 0;
+SET VARIABLE lineage_text_snapshot = (
+    SELECT coalesce(list({'blob_id': blob_id, 'file': file} ORDER BY blob_id), [])
+    FROM (SELECT blob_id, min(file) AS file FROM cache.blob_files
+          WHERE list_contains(getvariable('lineage_scope'), sha) GROUP BY blob_id)
+);
+SET VARIABLE lineage_text_paths = CASE WHEN len(getvariable('lineage_text_snapshot')) = 0
+    THEN [getvariable('blob_dir') || '/no-such-blob.rs']
+    ELSE list_transform(getvariable('lineage_text_snapshot'), lambda b: b.file) END;
+SET VARIABLE refresh_successions_before = (SELECT count(*) FROM cache.unit_successions);
+INSERT INTO cache.unit_successions SELECT * FROM derived_unit_successions WHERE getvariable('refresh_lineage_any');
+INSERT INTO cache.lineage_derived SELECT unnest(getvariable('lineage_scope'));
+SET VARIABLE refresh_successions_inserted = (SELECT count(*) FROM cache.unit_successions)
+    - getvariable('refresh_successions_before');
+SET VARIABLE refresh_lineage_commits_derived = len(getvariable('lineage_scope'));
+-- Back to the state views/lineage.sql leaves: every commit, every blob of the range.
+SET VARIABLE lineage_scope = NULL;
+SET VARIABLE lineage_text_snapshot = getvariable('blob_snapshot');
+SET VARIABLE lineage_text_paths = getvariable('blob_paths');
+CREATE OR REPLACE VIEW unit_successions AS
+SELECT s.* FROM cache.unit_successions s WHERE s.sha IN (SELECT sha FROM commits);
+SET VARIABLE refresh_t_lineage = epoch(now());
+
 -- SCIP: rebuilt whole when the key changed (or after an interrupted refresh), from the
 -- views of views/scip.sql (or the empty stand-ins).
 SET VARIABLE refresh_scip_reset = getvariable('refresh_prior') IS NULL
@@ -458,7 +533,7 @@ SET VARIABLE refresh_t_end = epoch(now());
 
 DELETE FROM cache.meta;
 INSERT INTO cache.meta
-SELECT 3, getvariable('repo'), 'ok',
+SELECT 4, getvariable('repo'), 'ok',
        CASE WHEN getvariable('refresh_syntax_reset') THEN now()::TIMESTAMP ELSE getvariable('refresh_prior').built_at END,
        now()::TIMESTAMP,
        getvariable('refresh_syntax_key'), getvariable('refresh_derive_key'), getvariable('refresh_history_key'),
@@ -486,6 +561,10 @@ SELECT 3, getvariable('repo'), 'ok',
        CASE WHEN getvariable('refresh_scip_reset') THEN 'rebuilt' ELSE 'kept' END,
        getvariable('refresh_scip_occurrences_inserted'),
        getvariable('refresh_scip_symbols_inserted'),
+       getvariable('refresh_lineage_key'),
+       CASE WHEN getvariable('refresh_lineage_reset') THEN 'rebuilt' ELSE 'appended' END,
+       getvariable('refresh_lineage_commits_derived'),
+       getvariable('refresh_successions_inserted'),
        {'files': getvariable('refresh_t_files') - getvariable('refresh_t_start'),
         'nodes': getvariable('refresh_t_nodes') - getvariable('refresh_t_files'),
         'units': getvariable('refresh_t_units') - getvariable('refresh_t_nodes'),
@@ -496,6 +575,7 @@ SELECT 3, getvariable('repo'), 'ok',
         'blob_files': getvariable('refresh_t_blob_files') - getvariable('refresh_t_hunks'),
         'blob_nodes': getvariable('refresh_t_blob_nodes') - getvariable('refresh_t_blob_files'),
         'blob_units': getvariable('refresh_t_blob_units') - getvariable('refresh_t_blob_nodes'),
-        'scip': getvariable('refresh_t_scip') - getvariable('refresh_t_blob_units'),
+        'lineage': getvariable('refresh_t_lineage') - getvariable('refresh_t_blob_units'),
+        'scip': getvariable('refresh_t_scip') - getvariable('refresh_t_lineage'),
         'checkpoint': getvariable('refresh_t_end') - getvariable('refresh_t_scip'),
         'total': getvariable('refresh_t_end') - getvariable('refresh_t_start')};

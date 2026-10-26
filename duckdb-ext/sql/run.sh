@@ -111,7 +111,7 @@ load_script() {
     printf '%s' "$variables"
     echo ".output /dev/null"
     for f in 00_load.sql views/files.sql views/nodes.sql views/blobs.sql lang/rust.sql \
-        views/units.sql views/history.sql views/unit_changes.sql views/clones.sql; do
+        views/units.sql views/history.sql views/unit_changes.sql views/lineage.sql views/clones.sql; do
         echo ".read $sql_rel/$f"
     done
     if [ -f "$out/index.scip" ]; then

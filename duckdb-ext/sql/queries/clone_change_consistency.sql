@@ -2,8 +2,8 @@
 -- without the other, and how often both together?
 -- Sides: the smallest current unit whose line range contains the whole fragment
 -- (NULL when the fragment spans units or lies outside any unit; such sides get
--- no commits). Commits: commits in unit_changes for that unit's
--- (path, kind, qualified_name). same_unit marks pairs whose sides resolve to
+-- no commits). Commits: the commits of that unit's lineage (unit_history,
+-- views/lineage.sql). same_unit marks pairs whose sides resolve to
 -- one unit, where every commit counts as "both". Changes are attributed to the
 -- enclosing unit, not to the fragment itself.
 -- Evidence: inconsistent change of clones is the clone-harm signal with
@@ -12,7 +12,8 @@
 -- length is not a supported predictor (Wagner et al. 2016). Not studied in Rust.
 -- Parameters (DuckDB variables; default when unset):
 --   clone_source NULL (all reports; or a source label such as 'exact');
---   include_merges (00_load.sql, false) also counts merges against their first parent.
+--   include_merges (00_load.sql, false) also counts merges against their first parent;
+--   lineage_threshold (views/lineage.sql, 0.5).
 WITH params AS (
     SELECT CAST(getvariable('clone_source') AS VARCHAR) AS clone_source
 ),
@@ -35,16 +36,15 @@ resolved AS (
     LEFT JOIN enclosing e ON e.pair_id = s.pair_id AND e.side = s.side AND e.rn = 1
 ),
 changes AS (
-    SELECT DISTINCT uc.sha, uc.path, uc.unit_kind, uc.unit_qualified_name
-    FROM unit_changes uc
+    SELECT h.unit_id, h.sha
+    FROM unit_history h
     JOIN commits c USING (sha)
     WHERE NOT c.is_merge OR getvariable('include_merges')
 ),
 per_commit AS (
     SELECT r.pair_id, ch.sha, bool_or(r.side = 'a') AS has_a, bool_or(r.side = 'b') AS has_b
     FROM resolved r
-    JOIN changes ch
-      ON ch.path = r.path AND ch.unit_kind = r.kind AND ch.unit_qualified_name = r.qualified_name
+    JOIN changes ch ON ch.unit_id = r.unit_id
     GROUP BY ALL
 ),
 counts AS (

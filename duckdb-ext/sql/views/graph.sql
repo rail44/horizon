@@ -2,7 +2,7 @@
 -- for and which trait it implements, the module and crate edges folded from the unit
 -- edges and the module cycles they form, and co-change on those edges. Every view is
 -- derived from units, tags, impl_parts (views/units.sql), scip_occurrences
--- (views/scip.sql) and unit_changes (views/unit_changes.sql).
+-- (views/scip.sql) and unit_history (views/lineage.sql).
 --
 -- Optional, read after views/scip.sql (which it needs): nothing else depends on it.
 -- cache.sql and refresh.sql keep these views as views; they read whichever layers are
@@ -335,10 +335,10 @@ JOIN groups gs ON gs.crate = e.src_crate
 JOIN groups gd ON gd.crate = e.dst_crate AND gd.cycle = gs.cycle
 GROUP BY gs.cycle;
 
--- Co-change on units. unit_commits(sha, unit_id): the commits in unit_changes that
--- touched each current unit, matched by (path, kind, qualified_name) (two current units
--- with the same identity, such as two `impl Foo` blocks of one file, are both
--- credited; history under a previous path is not followed). As in
+-- Co-change on units. unit_commits(sha, unit_id): the commits of each current unit's
+-- lineage (unit_history, views/lineage.sql: its own changes and those of the units it
+-- continues; two current units with the same identity, such as two `impl Foo` blocks of
+-- one file, are both credited). As in
 -- queries/file_cochange.sql, commits touching more than max_commit_files files (all
 -- files, every language) are dropped, and merges count only with include_merges.
 -- Parameters (DuckDB variables; default when unset): max_commit_files 50;
@@ -352,11 +352,9 @@ WITH eligible AS (
     GROUP BY fc.sha
     HAVING count(DISTINCT fc.path) <= coalesce(getvariable('max_commit_files'), 50)
 )
-SELECT DISTINCT uc.sha, u.unit_id
-FROM unit_changes uc
-JOIN eligible USING (sha)
-JOIN files f ON f.path = uc.path
-JOIN units u ON u.file_id = f.file_id AND u.kind = uc.unit_kind AND u.qualified_name = uc.unit_qualified_name;
+SELECT DISTINCT h.sha, h.unit_id
+FROM unit_history h
+JOIN eligible USING (sha);
 
 -- unit_cochange(unit_a, unit_b, shared_commits, commits_a, commits_b, coupling_pct,
 --     same_file, nested): pairs of current units (unit_a < unit_b) changed together in at

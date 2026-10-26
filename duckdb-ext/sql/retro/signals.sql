@@ -25,8 +25,10 @@
 --
 -- Signals: the shipped query files, read as text and run through query(), ranked by
 -- their own order (ties broken as the query breaks them), each identity at the rank
--- of its first row. Pair signals rank an identity at the first pair it is a side of.
--- module_cycles is a set (the units of every module in a cycle), with no order.
+-- of its first row (fan_in by fan_in_files then commits, since unit_fan_in_churn orders
+-- by their product). Pair signals rank an identity at the first pair it is a side of.
+-- History signals count the commits of each unit's lineage (views/lineage.sql); the
+-- ground truth counts unit_changes by identity. module_cycles is a set (the units of every module in a cycle), with no order.
 
 SET VARIABLE retro_scope = coalesce(getvariable('retro_scope'), 'all');
 SET VARIABLE retro_min_commits = coalesce(getvariable('retro_min_commits'), 1);
@@ -109,7 +111,8 @@ UNION ALL
 SELECT 'fan_in_x_commits', path, kind, qualified_name,
        row_number() OVER (ORDER BY fan_in_files * commits DESC, ord), fan_in_files * commits FROM retro_q_fan_in
 UNION ALL
-SELECT 'fan_in', path, kind, qualified_name, ord, fan_in_files FROM retro_q_fan_in
+SELECT 'fan_in', path, kind, qualified_name,
+       row_number() OVER (ORDER BY fan_in_files DESC, commits DESC, ord), fan_in_files FROM retro_q_fan_in
 UNION ALL
 SELECT 'clone_one_sided', file_a, kind_a, unit_a, ord, one_sided FROM retro_q_clones WHERE unit_a IS NOT NULL
 UNION ALL

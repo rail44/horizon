@@ -11,7 +11,10 @@
         rows of every view and query, live, through cache.sql and through refresh.sql
         (edits, additions, deletions, renames, commits, an amend, untracked files, a
         new session); a history fixture asserts blob_files, blob_units and every row
-        of unit_changes, unit_churn and clone_change_consistency; a SCIP fixture
+        of unit_changes, unit_churn and clone_change_consistency; a lineage fixture
+        (the history fixture plus a file rename, a rename in place, a move, a split, a
+        merge and a body moved under a kept name) asserts unit_successions,
+        unit_lineage and the lineage columns of unit_churn; a SCIP fixture
         (a rust-analyzer index of the fixture crate; skipped without rust-analyzer)
         asserts views/scip.sql and unit_fan_in_churn, live and cached; a graph
         fixture (the history fixture's crate plus a module cycle, indexed the same
@@ -79,13 +82,16 @@ VIEW_FILES = [
     "views/units.sql",
     "views/history.sql",
     "views/unit_changes.sql",
+    "views/lineage.sql",
     "views/clones.sql",
 ]
 CACHE_FILE = "cache.sql"
 REFRESH_FILE = "refresh.sql"
-# The views refresh.sql points at the persistent cache, plus files (its file snapshot).
+# The views refresh.sql points at the persistent cache, plus files (its file snapshot),
+# and the views over them that the cache changes most (unit_changes, the lineage views).
 REFRESHED_VIEWS = ["files", "nodes", "units", "tags", "commits", "file_changes", "hunks",
-                   "blob_files", "blob_nodes", "blob_units", "unit_changes"]
+                   "blob_files", "blob_nodes", "blob_units", "unit_changes", "commit_order", "unit_successions",
+                   "unit_lineage", "unit_history", "unit_lineage_counts"]
 QUERIES = ["file_cochange", "file_cochange_thresholds", "clone_site_tags", "clone_site_tags_summary",
            "unit_churn", "clone_change_consistency"]
 # views/scip.sql is optional: read after VIEW_FILES when a SCIP index is given. Its views
@@ -564,6 +570,7 @@ def check_fixture():
         assert rows(con, scratch_units) == [(3,)]
     print("fixture: ok")
     check_history_fixture()
+    check_lineage_fixture()
     check_scip_fixture()
     check_graph_fixture()
     check_refresh_fixture()
@@ -694,7 +701,24 @@ def check_history_fixture():
         assert rows(con, "SELECT count(*) = count(DISTINCT (sha, path, unit_kind, unit_qualified_name, change_kind)) "
                          "FROM unit_changes") == [(True,)]
 
-        # unit_churn: every current unit; history under a previous path is not followed.
+        # unit_successions: the modified units in place, the renamed test (its function
+        # renamed too: a content match), the pure rename (the units of the old path's
+        # blob at its latest earlier change).
+        succ = {}
+        for r in rows(con, "SELECT sha, link, pred_path, pred_qualified_name, succ_path, succ_qualified_name, "
+                           "round(similarity, 3), ambiguous FROM unit_successions"):
+            succ.setdefault(names[r[0]], []).append(r[1:])
+        same_name = {k: sorted((r[1], r[2]) for r in v if r[0] == "same_name") for k, v in succ.items()}
+        modified = {k: sorted((r[0], r[2]) for r in v if r[3] == "modified") for k, v in HISTORY_CHANGES.items()}
+        assert {k: v for k, v in same_name.items() if v} == {k: v for k, v in modified.items() if v}, succ
+        assert all(r[0] == "same_name" for k, v in succ.items() if k not in ("renamed_edit", "pure_rename")
+                   for r in v), succ
+        assert succ["renamed_edit"] == [("content_match", "tests/it.rs", "integration", "tests/integration.rs",
+                                         "integration_area", 0.5, False)], succ
+        assert succ["pure_rename"] == [("file_rename", "tests/integration.rs", "integration_area", "tests/area.rs",
+                                        "integration_area", 1.0, False)], succ
+
+        # unit_churn: every current unit, with the history of its lineage.
         churn = {(r[0], r[2], r[3]): r[6:8] for r in rows(con, query_sql("unit_churn"))}
         assert len(churn) == rows(con, "SELECT count(*) FROM units")[0][0], churn
         assert churn[("src/shapes.rs", "method", "Shape for Square.area")] == (3, 2), churn
@@ -703,7 +727,7 @@ def check_history_fixture():
         assert churn[("src/shapes.rs", "method", "Square.new")] == (3, 1), churn
         assert churn[("src/lib.rs", "function", "area")] == (2, 1), churn
         assert churn[("src/lib.rs", "function", "perimeter")] == (1, 1), churn
-        assert churn[("tests/area.rs", "function", "integration_area")] == (0, 0), churn
+        assert churn[("tests/area.rs", "function", "integration_area")] == (2, 1), churn
         con.execute("SET VARIABLE since_time = TIMESTAMP '2026-02-01 00:00:00'")
         con.execute("SET VARIABLE kind = 'method'")
         churn = [(r[0], r[3], r[6]) for r in rows(con, query_sql("unit_churn")) if r[6]]
@@ -729,6 +753,276 @@ def check_history_fixture():
         assert rows(con, "SELECT count(DISTINCT sha) FROM blob_files") == [(5,)]
         con.close()
     print("history fixture: ok")
+
+
+# The lineage fixture's functions (src/ops.rs, then src/geometry.rs). Each body's lines
+# are distinct enough for the line sets to tell them apart.
+OPS_V1 = """\
+pub fn scale(width: u32, height: u32, factor: u32) -> (u32, u32) {
+    let scaled_width = width * factor;
+    let scaled_height = height * factor;
+    let clamped_width = scaled_width.min(4096);
+    let clamped_height = scaled_height.min(4096);
+    (clamped_width, clamped_height)
+}
+
+pub fn translate(x: i32, y: i32, dx: i32, dy: i32) -> (i32, i32) {
+    let moved_x = x + dx;
+    let moved_y = y + dy;
+    let bounded_x = moved_x.max(0);
+    let bounded_y = moved_y.max(0);
+    (bounded_x, bounded_y)
+}
+
+pub fn describe(width: u32, height: u32) -> String {
+    let area = width * height;
+    let perimeter = 2 * (width + height);
+    let size = if area > 100 { "large" } else { "small" };
+    let square = width == height;
+    let kind = if square { "square" } else { "rectangle" };
+    let ratio = width as f32 / height.max(1) as f32;
+    format!("{size} {kind} {area} {perimeter} {ratio}")
+}
+
+pub fn sum_widths(shapes: &[(u32, u32)]) -> u32 {
+    let mut total = 0;
+    for shape in shapes {
+        total += shape.0;
+    }
+    total
+}
+
+pub fn sum_heights(shapes: &[(u32, u32)]) -> u32 {
+    let mut total = 0;
+    for shape in shapes {
+        total += shape.1;
+    }
+    total
+}
+
+pub fn build_table(rows: &[(u32, u32)]) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(String::from("width height"));
+    for (width, height) in rows {
+        lines.push(format!("{width} {height}"));
+    }
+    lines.push(String::from("end"));
+    lines
+}
+"""
+
+TRANSLATE = OPS_V1[OPS_V1.index("pub fn translate"):OPS_V1.index("pub fn describe")]
+DESCRIBE = OPS_V1[OPS_V1.index("pub fn describe"):OPS_V1.index("pub fn sum_widths")]
+SUMS = OPS_V1[OPS_V1.index("pub fn sum_widths"):OPS_V1.index("pub fn build_table")]
+BUILD_TABLE = OPS_V1[OPS_V1.index("pub fn build_table"):].replace('"end"', '"total"')
+
+# The split of describe: each part keeps six of its eight lines.
+DESCRIBE_SPLIT = """\
+pub fn describe_size(width: u32, height: u32) -> String {
+    let area = width * height;
+    let perimeter = 2 * (width + height);
+    let size = if area > 100 { "large" } else { "small" };
+    let square = width == height;
+    let ratio = width as f32 / height.max(1) as f32;
+    format!("{size} {area} {perimeter} {ratio}")
+}
+
+pub fn describe_kind(width: u32, height: u32) -> String {
+    let area = width * height;
+    let square = width == height;
+    let kind = if square { "square" } else { "rectangle" };
+    let ratio = width as f32 / height.max(1) as f32;
+    let perimeter = 2 * (width + height);
+    format!("{kind} {area} {perimeter} {ratio}")
+}
+
+"""
+
+SUM_SIDES = """\
+pub fn sum_sides(shapes: &[(u32, u32)]) -> u32 {
+    let mut total = 0;
+    for shape in shapes {
+        total += shape.0;
+        total += shape.1;
+    }
+    total
+}
+
+"""
+
+# The body of build_table moved to table_rows; the name stays with a one-line body.
+BUILD_TABLE_STUB = """\
+pub fn build_table(rows: &[(u32, u32)]) -> Vec<String> {
+    table_rows(rows)
+}
+
+""" + BUILD_TABLE.replace("pub fn build_table", "fn table_rows")
+
+
+def build_lineage_fixture(root):
+    """build_history_fixture plus seven commits: src/ops.rs added; renamed to
+    src/geometry.rs with build_table edited (git mv and a small edit); scale renamed to
+    resize in place; translate moved to src/moves.rs; describe split into describe_size
+    and describe_kind; sum_widths and sum_heights merged into sum_sides; the body of
+    build_table moved to table_rows with build_table kept as a one-line call."""
+    repo, sha = build_history_fixture(root)
+
+    def commit(name, message, date):
+        git(repo, "add", "-A", "src")
+        git(repo, "commit", "-q", "-m", message, date=date)
+        sha[name] = git_out(repo, "rev-parse", "HEAD")
+
+    write(repo, "src/ops.rs", OPS_V1)
+    commit("add_ops", "Add ops", "2026-03-01T00:00:00Z")
+    git(repo, "mv", "src/ops.rs", "src/geometry.rs")
+    geometry = OPS_V1.replace('"end"', '"total"')
+    write(repo, "src/geometry.rs", geometry)
+    commit("rename_file", "Rename ops to geometry and edit build_table", "2026-03-02T00:00:00Z")
+    geometry = geometry.replace("pub fn scale(", "pub fn resize(")
+    write(repo, "src/geometry.rs", geometry)
+    commit("rename_fn", "Rename scale to resize", "2026-03-03T00:00:00Z")
+    geometry = geometry.replace(TRANSLATE, "")
+    write(repo, "src/geometry.rs", geometry)
+    write(repo, "src/moves.rs", TRANSLATE)
+    commit("move_fn", "Move translate to moves", "2026-03-04T00:00:00Z")
+    geometry = geometry.replace(DESCRIBE, DESCRIBE_SPLIT)
+    write(repo, "src/geometry.rs", geometry)
+    commit("split", "Split describe", "2026-03-05T00:00:00Z")
+    geometry = geometry.replace(SUMS, SUM_SIDES)
+    write(repo, "src/geometry.rs", geometry)
+    commit("merge", "Merge the sums", "2026-03-06T00:00:00Z")
+    geometry = geometry.replace(BUILD_TABLE, BUILD_TABLE_STUB)
+    write(repo, "src/geometry.rs", geometry)
+    commit("stub", "Move build_table's body to table_rows", "2026-03-07T00:00:00Z")
+    return repo, sha
+
+
+# unit_successions of the lineage fixture's commits other than same_name:
+# (link, pred_path, pred_name, succ_path, succ_name, similarity, ambiguous); every unit is a
+# function. Similarities are line-set Jaccard indexes (shared lines over the union).
+LINEAGE_SUCCESSIONS = {
+    "rename_file": [("file_rename", "src/ops.rs", "build_table", "src/geometry.rs", "build_table", round(7 / 9, 3), False)]
+                   + [("file_rename", "src/ops.rs", n, "src/geometry.rs", n, 1.0, False)
+                      for n in ("describe", "scale", "sum_heights", "sum_widths", "translate")],
+    "rename_fn": [("content_match", "src/geometry.rs", "scale", "src/geometry.rs", "resize", 0.75, False)],
+    "move_fn": [("content_match", "src/geometry.rs", "translate", "src/moves.rs", "translate", 1.0, False)],
+    "split": [("content_match", "src/geometry.rs", "describe", "src/geometry.rs", "describe_kind", round(6 / 11, 3), True),
+              ("content_match", "src/geometry.rs", "describe", "src/geometry.rs", "describe_size", round(6 / 11, 3), True)],
+    "merge": [("content_match", "src/geometry.rs", "sum_heights", "src/geometry.rs", "sum_sides", 0.625, True),
+              ("content_match", "src/geometry.rs", "sum_widths", "src/geometry.rs", "sum_sides", 0.625, True)],
+    "stub": [("body_move", "src/geometry.rs", "build_table", "src/geometry.rs", "table_rows", round(7 / 9, 3), False)],
+}
+
+# unit_lineage of each successor: (depth, link, step, path, name), newest first.
+LINEAGE_CHAINS = {
+    ("src/geometry.rs", "resize"): [(0, None, None, "src/geometry.rs", "resize"),
+                                    (1, "content_match", "rename_fn", "src/geometry.rs", "scale"),
+                                    (2, "file_rename", "rename_file", "src/ops.rs", "scale")],
+    ("src/moves.rs", "translate"): [(0, None, None, "src/moves.rs", "translate"),
+                                    (1, "content_match", "move_fn", "src/geometry.rs", "translate"),
+                                    (2, "file_rename", "rename_file", "src/ops.rs", "translate")],
+    ("src/geometry.rs", "describe_size"): [(0, None, None, "src/geometry.rs", "describe_size"),
+                                           (1, "content_match", "split", "src/geometry.rs", "describe"),
+                                           (2, "file_rename", "rename_file", "src/ops.rs", "describe")],
+    ("src/geometry.rs", "sum_sides"): [(0, None, None, "src/geometry.rs", "sum_sides"),
+                                       (1, "content_match", "merge", "src/geometry.rs", "sum_heights"),
+                                       (1, "content_match", "merge", "src/geometry.rs", "sum_widths"),
+                                       (2, "file_rename", "rename_file", "src/ops.rs", "sum_heights"),
+                                       (2, "file_rename", "rename_file", "src/ops.rs", "sum_widths")],
+    ("src/geometry.rs", "table_rows"): [(0, None, None, "src/geometry.rs", "table_rows"),
+                                        (1, "body_move", "stub", "src/geometry.rs", "build_table"),
+                                        (2, "file_rename", "rename_file", "src/ops.rs", "build_table")],
+    ("src/geometry.rs", "build_table"): [(0, None, None, "src/geometry.rs", "build_table")],
+}
+
+# unit_churn's commits, commits_by_name, ancestors and successors_at_split.
+LINEAGE_CHURN = {
+    ("src/geometry.rs", "resize"): (2, 1, 2, 1),
+    ("src/moves.rs", "translate"): (2, 1, 2, 1),
+    ("src/geometry.rs", "describe_size"): (2, 1, 2, 2),
+    ("src/geometry.rs", "describe_kind"): (2, 1, 2, 2),
+    ("src/geometry.rs", "sum_sides"): (2, 1, 4, 1),
+    ("src/geometry.rs", "table_rows"): (3, 1, 2, 1),
+    # The stub restarts at the body move: its commits by name include the edit made
+    # under the old body (rename_file); its lineage starts at `stub`.
+    ("src/geometry.rs", "build_table"): (1, 2, 0, 1),
+}
+
+
+def check_lineage_fixture():
+    with tempfile.TemporaryDirectory(prefix="code-db-lineage-") as tmp:
+        root = Path(tmp)
+        repo, sha = build_lineage_fixture(root)
+        report, _ = fixture_report(root, repo)
+        con = connect(repo, [report])
+        names = {v: k for k, v in sha.items()}
+
+        # commit_order numbers the commits as git log lists them, oldest first.
+        order = rows(con, "SELECT sha FROM commit_order ORDER BY ord")
+        assert [r[0] for r in order] == git_out(repo, "rev-list", "--reverse", "HEAD").splitlines(), order
+
+        def successions():
+            got = {}
+            for r in rows(con, "SELECT sha, link, pred_path, pred_qualified_name, succ_path, succ_qualified_name, "
+                               "round(similarity, 3), ambiguous FROM unit_successions "
+                               "WHERE link <> 'same_name' AND pred_kind = 'function' AND succ_kind = 'function' "
+                               "ORDER BY ALL"):
+                if names[r[0]] in LINEAGE_SUCCESSIONS:
+                    got.setdefault(names[r[0]], []).append(r[1:])
+            return got
+
+        got = successions()
+        assert got == LINEAGE_SUCCESSIONS, got
+        # No same_name link through a body move: the stub has no predecessor there.
+        assert rows(con, f"SELECT count(*) FROM unit_successions WHERE sha = '{sha['stub']}' "
+                         "AND link = 'same_name'") == [(0,)]
+        assert rows(con, "SELECT bool_and(similarity >= 0.5) FROM unit_successions "
+                         "WHERE link IN ('content_match', 'body_move')") == [(True,)]
+
+        chains = {}
+        for r in rows(con, """
+                SELECT f.path, u.qualified_name, l.depth, l.link, l.sha, l.path, l.qualified_name
+                FROM unit_lineage l JOIN units u USING (unit_id) JOIN files f USING (file_id)
+                ORDER BY f.path, u.qualified_name, l.depth, l.path, l.qualified_name"""):
+            chains.setdefault(r[:2], []).append((r[2], r[3], names.get(r[4]), r[5], r[6]))
+        for unit, chain in LINEAGE_CHAINS.items():
+            assert chains[unit] == chain, (unit, chains[unit])
+        stub_from = rows(con, """SELECT l.from_sha FROM unit_lineage l JOIN units u USING (unit_id)
+                                 WHERE u.qualified_name = 'build_table' AND l.depth = 0""")
+        assert stub_from == [(sha["stub"],)], stub_from
+
+        # unit_churn: commits are distinct commits over every ancestor.
+        churn = {(r[0], r[2], r[3]): (r[6], r[10], r[11], r[12]) for r in rows(con, query_sql("unit_churn"))}
+        for (path, name), expected in LINEAGE_CHURN.items():
+            assert churn[(path, "function", name)] == expected, (path, name, churn[(path, "function", name)])
+        history = rows(con, """SELECT list(h.sha ORDER BY h.sha) FROM unit_history h JOIN units u USING (unit_id)
+                               WHERE u.qualified_name = 'sum_sides'""")[0][0]
+        assert sorted(names[s] for s in history) == ["add_ops", "merge"], history
+        # unit_churn restates unit_history and unit_lineage_counts; they agree.
+        views = {(r[0], r[1], r[2]): r[3:] for r in rows(con, """
+            SELECT f.path, u.kind, u.qualified_name, (SELECT count(*) FROM unit_history h WHERE h.unit_id = u.unit_id),
+                   c.ancestors, c.successors_at_split
+            FROM units u JOIN files f USING (file_id) JOIN unit_lineage_counts c USING (unit_id)""")}
+        assert {k: (v[0], v[2], v[3]) for k, v in churn.items()} == views, (churn, views)
+
+        # A higher threshold drops the weaker links (the split and the merge, the rename
+        # in place at 0.75 stays; the file renames are not similarity links).
+        con.execute("SET VARIABLE lineage_threshold = 0.7")
+        got = successions()
+        assert {k: [r[:5] for r in v] for k, v in got.items()} == {
+            k: [r[:5] for r in v] for k, v in LINEAGE_SUCCESSIONS.items() if k not in ("split", "merge")}, got
+        con.execute("SET VARIABLE lineage_threshold = 0.5")
+
+        # cache.sql: the same rows from the copies, and no query reads a source.
+        probes = ["SELECT * FROM unit_successions ORDER BY ALL", "SELECT * FROM unit_lineage ORDER BY ALL",
+                  "SELECT * FROM unit_history ORDER BY ALL", "SELECT * FROM commit_order ORDER BY ALL",
+                  query_sql("unit_churn"), query_sql("clone_change_consistency")]
+        live = [rows(con, q) for q in probes]
+        read_cache(con)
+        assert [rows(con, q) for q in probes] == live
+        assert_no_source_scan(con)
+        con.close()
+    print("lineage fixture: ok")
 
 
 FIXTURE_CARGO_TOML = """\
@@ -819,8 +1113,9 @@ def check_scip_fixture():
 
         # unit_fan_in_churn: lib.rs's area is called from tests/it.rs, the trait is named
         # twice in rect.rs; the whole-file definitions of the modules lie in no unit.
-        fan_in = [("src/lib.rs", "rust", "function", "area", line_of(lib, "pub fn area"), 3, 1, 1, 2),
-                  ("src/shapes.rs", "rust", "type", "Shape", trait_line, 3, 1, 2, 1)]
+        # Ordered by fan_in_files x commits (the last column).
+        fan_in = [("src/lib.rs", "rust", "function", "area", line_of(lib, "pub fn area"), 3, 1, 1, 2, 2),
+                  ("src/shapes.rs", "rust", "type", "Shape", trait_line, 3, 1, 2, 1, 1)]
         assert rows(con, query_sql("unit_fan_in_churn")) == fan_in, rows(con, query_sql("unit_fan_in_churn"))
         con.execute("SET VARIABLE kind = 'type'")
         assert rows(con, query_sql("unit_fan_in_churn")) == fan_in[1:]
@@ -1103,8 +1398,10 @@ def check_refresh_fixture():
         def stats(meta):
             return {k: meta[k] for k in counts}
 
-        def expect(meta, syntax="incremental", history="appended", scip="kept", **nonzero):
+        def expect(meta, syntax="incremental", history="appended", scip="kept", lineage="appended",
+                   lineage_commits=0, **nonzero):
             assert meta["scip_cache"] == scip, meta
+            assert (meta["lineage"], meta["lineage_commits_derived"]) == (lineage, lineage_commits), meta
             expected = {k: nonzero.get(k, 0) for k in counts}
             got = stats(meta)
             for k, v in nonzero.items():
@@ -1120,9 +1417,9 @@ def check_refresh_fixture():
 
         # Initial refresh from an empty cache: everything built, equal to live.
         _, meta = refresh_against_live(con)
-        expect(meta, syntax="rebuilt", history="rebuilt", scip="rebuilt", files_added=4, nodes_parsed=None,
-               units_inserted=None, tags_inserted=None, commits_added=4, blob_rows_added=12, blobs_parsed=7,
-               blobs_derived=7)
+        expect(meta, syntax="rebuilt", history="rebuilt", scip="rebuilt", lineage="rebuilt", lineage_commits=4,
+               files_added=4, nodes_parsed=None, units_inserted=None, tags_inserted=None, commits_added=4,
+               blob_rows_added=12, blobs_parsed=7, blobs_derived=7)
         # Without views/scip.sql the SCIP tables are empty, and so are the two views.
         assert meta["scip_key"] is None and meta["scip_occurrences_inserted"] == 0, meta
         assert rows(con, "SELECT (SELECT count(*) FROM scip_occurrences), (SELECT count(*) FROM scip_symbols)") == [(0, 0)]
@@ -1180,7 +1477,7 @@ def check_refresh_fixture():
         # A new commit (of the edit and the rename, already in the cache): history appended.
         git(repo, "commit", "-q", "-am", "Edit rect, rename the integration test", date="2026-01-05T00:00:00Z")
         _, meta = refresh_against_live(con)
-        expect(meta, commits_added=1, blob_rows_added=2, blobs_parsed=1, blobs_derived=1)
+        expect(meta, lineage_commits=1, commits_added=1, blob_rows_added=2, blobs_parsed=1, blobs_derived=1)
         assert meta["head"] == git_out(repo, "rev-parse", "HEAD"), meta
         assert meta["blobs_cached"] == 8, meta
         assert rows(con, "SELECT count(*) FROM commits") == [(5,)]
@@ -1188,7 +1485,8 @@ def check_refresh_fixture():
         # An amended commit: the cached head is gone from HEAD's history, so it is rebuilt.
         git(repo, "commit", "-q", "--amend", "-m", "Amended", date="2026-01-06T00:00:00Z")
         _, meta = refresh_against_live(con)
-        expect(meta, history="rebuilt", commits_added=5, blob_rows_added=14)
+        # The successions are kept per commit: only the amended commit is derived.
+        expect(meta, history="rebuilt", lineage_commits=1, commits_added=5, blob_rows_added=14)
         assert meta["blobs_cached"] == 8, meta
         assert rows(con, "SELECT list(subject ORDER BY subject) FILTER (WHERE subject LIKE 'Amended' "
                          "OR subject LIKE 'Edit rect%') FROM commits") == [(["Amended"],)]
@@ -1207,9 +1505,9 @@ def check_refresh_fixture():
         # An interrupted refresh (state left at 'refreshing') makes the next one rebuild.
         con.execute("UPDATE cache.meta SET state = 'refreshing'")
         _, meta = refresh_against_live(con)
-        expect(meta, syntax="rebuilt", history="rebuilt", scip="rebuilt", files_added=4, nodes_parsed=None,
-               units_inserted=None, tags_inserted=None, commits_added=5, blob_rows_added=14, blobs_parsed=8,
-               blobs_derived=8)
+        expect(meta, syntax="rebuilt", history="rebuilt", scip="rebuilt", lineage="rebuilt", lineage_commits=5,
+               files_added=4, nodes_parsed=None, units_inserted=None, tags_inserted=None, commits_added=5,
+               blob_rows_added=14, blobs_parsed=8, blobs_derived=8)
 
         # SCIP: views/scip.sql read, then refreshed against live (rebuilt), unchanged
         # (kept, and the index is not read), the index changed (rebuilt). Nothing else
@@ -1368,7 +1666,8 @@ def file_set_statement():
 REFRESH_STATS = ("syntax", "derived", "history", "nodes_parsed", "units_inserted", "tags_inserted",
                  "commits_added", "blob_history", "blob_rows_added", "blobs_parsed", "blob_bytes_parsed",
                  "blob_nodes_parsed", "blobs_derived", "blob_units_inserted", "blobs_cached", "scip_cache",
-                 "scip_occurrences_inserted", "scip_symbols_inserted")
+                 "scip_occurrences_inserted", "scip_symbols_inserted", "lineage_commits_derived",
+                 "successions_inserted")
 
 
 def run_step(repo, reports, step, cached, refreshed=False, uc_table=False):
@@ -1378,8 +1677,10 @@ def run_step(repo, reports, step, cached, refreshed=False, uc_table=False):
     rss = lambda: resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     if step == REFRESH_STEP:
         wall, meta = read_refresh(con)
+        # meta's `lineage` (rebuilt or appended) would collide with seconds.lineage.
         print(json.dumps({"wall": wall, "load": load, "rss_mib": rss(), **meta["seconds"],
-                          **{k: v for k, v in meta.items() if k.startswith("files_") or k in REFRESH_STATS}}))
+                          **{k: v for k, v in meta.items() if k.startswith("files_") or k in REFRESH_STATS},
+                          "lineage_cache": meta["lineage"]}))
         return
     if step == FILE_SET_STEP:
         start = time.perf_counter()
@@ -1506,9 +1807,10 @@ def measure_refresh(repo, reports, runs):
     def report(name, results):
         layers = ", ".join(f"{k} {span(results, k)}" for k in
                            ("files", "nodes", "units", "tags", "commits", "file_changes", "hunks", "blob_files",
-                            "blob_nodes", "blob_units", "scip", "checkpoint"))
+                            "blob_nodes", "blob_units", "lineage", "scip", "checkpoint"))
         last = results[-1]
-        stats = ", ".join(f"{k}={last[k]}" for k in last if k.startswith("files_") or k in REFRESH_STATS)
+        stats = ", ".join(f"{k}={last[k]}" for k in last
+                          if k.startswith("files_") or k in REFRESH_STATS or k == "lineage_cache")
         print(f"{name}: wall {span(results, 'wall')} s (view files {span(results, 'load')} s; "
               f"meta total {span(results, 'total')} s; {layers}), "
               f"peak RSS {span(results, 'rss_mib', '{:.0f}')} MiB; {stats}")

@@ -5,7 +5,7 @@
 -- defining the symbols it references (callees, used types), `in` the other way
 -- (callers, users). A neighbor is reported at its least distance in each direction,
 -- with the edges that reach it from the units one step nearer: their symbols (display
--- names), unit edges and occurrences. churn is the neighbor's commits in unit_changes
+-- names), unit edges and occurrences. churn is the neighbor's commits in unit_history
 -- (as unit_churn); fan_in_files the files other than its own holding a unit with an
 -- edge into it (unit_edges; unlike unit_fan_in_churn, references outside every unit,
 -- such as `use` declarations, and the symbols of the units it contains are not
@@ -88,11 +88,11 @@ step_counts AS (
     GROUP BY ALL
 ),
 churn AS (
-    SELECT uc.path, uc.unit_kind, uc.unit_qualified_name, count(DISTINCT uc.sha) AS commits
-    FROM unit_changes uc
+    SELECT h.unit_id, count(DISTINCT h.sha) AS commits
+    FROM unit_history h
     JOIN commits c USING (sha)
     WHERE NOT c.is_merge OR getvariable('include_merges')
-    GROUP BY ALL
+    GROUP BY h.unit_id
 ),
 unit_files AS MATERIALIZED (
     SELECT unit_id, file_id FROM units
@@ -113,6 +113,6 @@ JOIN step_counts c USING (direction, unit_id)
 JOIN step_symbols s USING (direction, unit_id)
 JOIN units u ON u.unit_id = n.unit_id
 JOIN files f ON f.file_id = u.file_id
-LEFT JOIN churn ch ON ch.path = f.path AND ch.unit_kind = u.kind AND ch.unit_qualified_name = u.qualified_name
+LEFT JOIN churn ch ON ch.unit_id = n.unit_id
 LEFT JOIN fan_in fi ON fi.unit_id = n.unit_id
 ORDER BY n.direction DESC, n.distance, c.occurrences DESC, f.path, u.start_line, u.unit_id;

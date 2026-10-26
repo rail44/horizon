@@ -5,8 +5,8 @@
 -- files; coupling_pct divides the shared commits by the larger of the two units'
 -- counts. nested marks a unit and one of its enclosing units (always changed
 -- together); same_file pairs share a file; referenced is true when a unit edge
--- connects them in either direction. History under a previous path is not followed.
--- Needs views/graph.sql.
+-- connects them in either direction. A unit's commits are those of its lineage
+-- (unit_history, views/lineage.sql). Needs views/graph.sql.
 -- Evidence: co-change is among the best-supported clone-harm predictors (Mondal,
 -- Juergens), but coupling results depend strongly on the threshold (MDPI Software
 -- 2024), and co-change alone does not establish a design flaw; the studies count files,
