@@ -74,6 +74,57 @@ duckdb-ext/sql/run.sh shell REPO                       # an interactive duckdb2 
 
 `check.py` (Check, below) stays the tool for assertions and measurements.
 
+## Limits
+
+`00_load.sql` sets DuckDB's memory, thread and spill limits every time it is read,
+from the machine's state at that moment, so a query cannot use up the machine's memory:
+past the limit DuckDB spills to disk or fails with an out-of-memory error instead.
+Measurements are in `docs/research/code-db-limits-2026-10-27.md`.
+
+| Setting | Derived value | Override (variable) |
+| --- | --- | --- |
+| `memory_limit` | 60% of what the OS can give now: `MemAvailable` from `/proc/meminfo` plus what this DuckDB instance already holds (`duckdb_memory()`); at most DuckDB's default (80% of physical memory); below 2 GB the read stops with a message. Without a readable `/proc/meminfo`, 60% of DuckDB's default | `memory_limit` (a size `SET memory_limit` accepts: `'4GB'`) |
+| `threads` | the CPU count, at most one per GB of `memory_limit` | `threads` |
+| `temp_directory` | `repo/target/code-db/tmp` | none |
+| `max_temp_directory_size` | 50% of the free space of the file system holding the spill directory, when `temp_free_bytes` says how much that is (`run.sh` and `check.py` set it from `df` and `shutil.disk_usage`); else DuckDB's default (90% of the available disk space) | `temp_limit` (`'1GB'`) |
+
+The 40% of available memory left outside `memory_limit` is for what DuckDB's limit does
+not account: allocations inside extensions (tree-sitter parse trees in `read_ast`,
+the git and SCIP readers), the OS page cache, other processes. Those allocations are not
+bounded by anything here, and neither is the page cache. A repository on a `tmpfs`
+spills into memory.
+
+The last statement of `00_load.sql` returns the chosen values as one line, for example
+
+```
+limits: memory 25.3 GB (60% of 42.2 GB available, /proc/meminfo), temp 29.1 GB (50% of 58.2 GB free), threads 24 (CPUs)
+```
+
+`run.sh` prints it to stderr, `check.py` prints it to stderr once per connection, and
+another client sees it as the result of the `.read` (a one-row table in the CLI's
+current mode) or of the executed script. The line says which source each value came
+from: an override names its variable, `/proc/meminfo unreadable` marks the fallback,
+`temp_free_bytes unset` marks DuckDB's default spill cap.
+
+DuckDB refuses to change `temp_directory` once it has spilled into it, even to the same
+path: in a CLI session that has spilled, a second `.read` of `00_load.sql` fails with
+"Cannot switch temporary directory after the current one has been used" (start a new
+session). `check.py` drops that one statement when re-reading the file on a connection
+that already has the directory.
+
+**External tools.** `run.sh index` runs `jscpd.sh` and `rust-analyzer scip` under a memory
+cap of 80% of `MemAvailable` (`tool_memory_max=SIZE` overrides it: a number with an
+optional `K`, `M`, `G` or `T` suffix, base 1024). With `systemd-run --user` available
+the cap is a cgroup (`--scope -p MemoryMax=… -p MemorySwapMax=0`): it bounds the resident
+memory of all the tool's processes together, and the kernel kills the tool at the cap.
+Otherwise it is `prlimit --as=…`, a limit on each process's address space, not its
+resident memory: a process reserves more address space than it touches (rust-analyzer's
+peak address space was 9.6 GB at 7.4 GB resident here), so the cap stops a tool earlier
+than its resident size would, and each process of a tree has its own. A tool that
+reaches it fails an allocation and aborts. Without either, the tools run unbounded and
+`run.sh` says so. `run.sh` prints the cap it chose, and a tool that fails is reported
+with its exit status or signal and the cap; the previous `index.scip` is kept.
+
 The rest of this section is what `run.sh` does, for other clients. Every client needs DuckDB **2.0.0** (git_history loads only into that
 version), unsigned extensions allowed, network access the first time (to
 `INSTALL sitting_duck`), and the git_history and scip_index binaries built
@@ -899,7 +950,7 @@ files reset it to live). It needs `git` and rust-analyzer but no jscpd.
 
 | File | Defines |
 | --- | --- |
-| `00_load.sql` | `INSTALL`/`LOAD` of the three extensions; parameter defaults; `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths` |
+| `00_load.sql` | `INSTALL`/`LOAD` of the three extensions; the limits (Limits) and the macro `setting_bytes(s)`; parameter defaults; `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `scope_files`, `sources(file_id, content)`, `source_bytes(file_id, bytes)`, `source_lines(file_id, line, nonblank_through)` (over the table macros `source_bytes_of`, `source_lines_of`), macros `byte_slice`, `normalize_ws` |
 | `views/nodes.sql` | `nodes`: `file_id` plus every column of `read_ast(…, source := 'full', peek := 'none', context := 'none')`; `scope_nodes` (the nodes of `scope_files`) |
 | `views/blobs.sql` | `blob_files`, the snapshot `blob_snapshot`/`blob_paths`, `blob_list(blob_id, file, blob_ord)`, `blob_nodes(blob_id, …)`; the derivation inputs `blob_scope_nodes`, `blob_sources`, `blob_source_bytes`, `blob_source_lines` (keyed by `blob_ord`); `derived_blob_blank_lines`, `blob_blank_lines(blob_id, line)` |
@@ -979,6 +1030,8 @@ which `00_load.sql` (and `refresh.sql`) take as a snapshot.
 | Variable | Default | Read by |
 | --- | --- | --- |
 | `repo` | required; an absolute path | everything |
+| `memory_limit`, `threads`, `temp_limit` | unset (derived; see Limits) | `00_load.sql` |
+| `temp_free_bytes` | unset (set by `run.sh` and `check.py` from the free space under `repo/target/code-db/tmp`) | `00_load.sql` |
 | `include_untracked` | `false` (also list untracked files that are not ignored) | `00_load.sql`, `refresh.sql` |
 | `exclude_patterns` | `[]` (GLOB operator patterns on the relative path; `*` crosses `/`) | `00_load.sql`, `refresh.sql` |
 | `languages` | `MAP {'rs': 'rust'}` (extension to language) | `00_load.sql`, `files`, `hunks`, `refresh.sql` |

@@ -58,6 +58,10 @@
         ~/.local/bin/duckdb2), then refresh.sql, and compare its counts with this
         client's.
 
+    `repo` and `refresh` take --set NAME=EXPR (repeatable) to set a DuckDB variable on
+    every connection, e.g. --set "memory_limit='4GB'" (README.md, Limits). Every
+    connection prints 00_load.sql's limits line to stderr.
+
 The process works from the root of the Horizon checkout holding this file, because
 00_load.sql loads git_history by a path relative to it.
 """
@@ -137,13 +141,28 @@ def read_scip_views(con):
     con.execute((SQL_DIR / GRAPH_FILE).read_text())
 
 
+TEMP_DIRECTORY_STATEMENT = "SET temp_directory = getvariable('repo') || '/target/code-db/tmp';\n"
+
+
+def without_temp_directory(con, text):
+    """00_load.sql's text, without its SET temp_directory when the connection already
+    has that directory: once DuckDB has spilled it refuses to set the directory again,
+    even to the same path, so a re-read on this connection would fail."""
+    assert TEMP_DIRECTORY_STATEMENT in text
+    same = rows(con, "SELECT current_setting('temp_directory') = getvariable('repo') || '/target/code-db/tmp'")[0][0]
+    return text.replace(TEMP_DIRECTORY_STATEMENT, "") if same else text
+
+
 def read_views(con, scip=None):
     """Read the view files, and views/scip.sql and views/graph.sql when `scip` (None:
     when they were read before)."""
     if scip is None:
         scip = scip_loaded(con)
     for name in VIEW_FILES:
-        con.execute((SQL_DIR / name).read_text())
+        text = (SQL_DIR / name).read_text()
+        if name == "00_load.sql":
+            text = without_temp_directory(con, text)
+        con.execute(text)
     if scip:
         read_scip_views(con)
 
@@ -189,15 +208,30 @@ def read_cache(con):
     con.execute((SQL_DIR / CACHE_FILE).read_text())
 
 
+# Variables from --set NAME=EXPR, set on every connection after connect()'s own (so
+# memory_limit, threads or temp_limit override 00_load.sql's limits).
+SET_VARIABLES = {}
+
+
+def temp_free_bytes(repo):
+    """Free space of the file system holding REPO's spill directory, which 00_load.sql
+    reads as temp_free_bytes (README.md, Limits)."""
+    tmp = Path(repo).resolve() / "target/code-db/tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    return shutil.disk_usage(tmp).free
+
+
 def connect(repo, reports=None, variables=None, scip=False):
     os.chdir(HORIZON_ROOT)
     con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     con.execute(f"SET VARIABLE repo = {sql_literal(str(Path(repo).resolve()))}")
+    con.execute(f"SET VARIABLE temp_free_bytes = {temp_free_bytes(repo)}")
     if reports:
         con.execute(f"SET VARIABLE clone_reports = {sql_literal([str(Path(r).resolve()) for r in reports])}")
-    for name, value in (variables or {}).items():
+    for name, value in {**(variables or {}), **SET_VARIABLES}.items():
         con.execute(f"SET VARIABLE {name} = {value}")
     read_views(con, scip)
+    print(rows(con, "SELECT getvariable('limits')")[0][0], file=sys.stderr)
     return con
 
 
@@ -2349,10 +2383,17 @@ def main():
     parser.add_argument("--reports", nargs="+")
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--only", help="measure: run only the steps whose name contains this text")
+    parser.add_argument("--set", action="append", default=[], metavar="NAME=EXPR",
+                        help="repo, refresh: set a DuckDB variable (EXPR is SQL, e.g. memory_limit=\"'4GB'\")")
     parser.add_argument("--cached", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--refreshed", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--uc-table", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    for assignment in args.set:
+        name, sep, value = assignment.partition("=")
+        if not sep or not name.isidentifier():
+            parser.error(f"--set expects NAME=EXPR, got {assignment}")
+        SET_VARIABLES[name] = value
     if args.command == "fixture":
         check_fixture()
         return

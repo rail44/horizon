@@ -2,8 +2,9 @@
 # One-command entry to the code database views (duckdb-ext/sql/README.md).
 #
 # Usage: duckdb-ext/sql/run.sh COMMAND REPO [ARGS...]
-#   index REPO                          write REPO/target/code-db/index.scip (rust-analyzer
-#                                       scip) and REPO/target/code-db/jscpd/{exact,normalized}
+#   index REPO [tool_memory_max=SIZE]   write REPO/target/code-db/index.scip (rust-analyzer
+#                                       scip) and REPO/target/code-db/jscpd/{exact,normalized},
+#                                       each tool under a memory cap (README.md, Limits)
 #   query REPO QUERY [NAME=VALUE ...]   load the views and the persistent cache, then run
 #                                       queries/QUERY.sql and print the result
 #   sql REPO FILE.sql [NAME=VALUE ...]  the same loading, then FILE.sql
@@ -17,6 +18,8 @@
 #
 # The views are read in README.md's order; views/scip.sql and views/graph.sql only when
 # the SCIP index exists. refresh.sql keeps the cache in REPO/target/code-db/cache.duckdb.
+# 00_load.sql sets DuckDB's memory, thread and spill limits (README.md, Limits; variables
+# memory_limit, threads, temp_limit) and its one-line summary goes to stderr.
 # Environment: DUCKDB_CLI (default ~/.local/bin/duckdb2), RUST_ANALYZER (default
 # rust-analyzer), JSCPD_PATHS (directories jscpd scans, default the ones of src, crates
 # and preview-plugin/src that exist).
@@ -34,7 +37,7 @@ die() {
 }
 
 usage() {
-    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//' >&2
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' >&2
     exit 2
 }
 
@@ -105,12 +108,28 @@ needs_index() {
     grep -q 'Needs views/\(scip\|graph\)\.sql' "$1"
 }
 
+# The free space, in bytes, of the file system that holds the spill directory
+# (00_load.sql caps spilling at half of it). Empty when df cannot tell.
+temp_free_bytes() {
+    mkdir -p "$out/tmp"
+    df -Pk "$out/tmp" 2>/dev/null | awk 'NR == 2 && $4 ~ /^[0-9]+$/ { printf "%.0f", $4 * 1024 }'
+}
+
 # The statements that load everything: variables, the view files, refresh.sql.
+# 00_load.sql's last statement, the limits line, goes to stderr; the rest of the
+# loading's output is dropped.
 load_script() {
     printf "SET VARIABLE repo = %s;\n" "$(sql_string "$repo")"
+    free=$(temp_free_bytes)
+    [ -z "$free" ] || printf "SET VARIABLE temp_free_bytes = %s;\n" "$free"
     printf '%s' "$variables"
+    echo ".output /dev/stderr"
+    echo ".mode list"
+    echo ".headers off"
+    echo ".read $sql_rel/00_load.sql"
     echo ".output /dev/null"
-    for f in 00_load.sql views/files.sql views/nodes.sql views/blobs.sql lang/rust.sql \
+    echo ".headers on"
+    for f in views/files.sql views/nodes.sql views/blobs.sql lang/rust.sql \
         views/units.sql views/history.sql views/unit_changes.sql views/lineage.sql views/clones.sql; do
         echo ".read $sql_rel/$f"
     done
@@ -125,16 +144,99 @@ load_script() {
     echo ".maxwidth 0"
 }
 
+# The CLI's stderr goes through a pipe to this script's: `.output /dev/stderr` reopens
+# the path, which truncates and overwrites a file stderr is redirected to, but not a pipe.
 run_cli() {
     cd "$root"
     mkdir -p "$out"
-    "$cli" -unsigned -bail -no-agent -batch
+    exec 4>&1
+    status=$({ {
+        rc=0
+        "$cli" -unsigned -bail -no-agent -batch 2>&1 1>&4 4>&- 5>&- || rc=$?
+        echo "$rc" >&5
+    } | cat >&2; } 5>&1)
+    exec 4>&-
+    return "$status"
+}
+
+# Memory caps for the external tools of `index` (README.md, Limits).
+# to_bytes SIZE: SIZE (a number with an optional K, M, G or T suffix, base 1024, as
+# systemd's MemoryMax takes it) in bytes; empty when SIZE is not one.
+to_bytes() {
+    printf '%s\n' "$1" | awk '/^[0-9]+(\.[0-9]+)?[KMGTkmgt]?$/ {
+        n = $0 + 0; u = toupper(substr($0, length($0)))
+        f = u == "K" ? 1024 : u == "M" ? 1024 ^ 2 : u == "G" ? 1024 ^ 3 : u == "T" ? 1024 ^ 4 : 1
+        printf "%.0f", n * f }'
+}
+
+human() {
+    awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1e9 }'
+}
+
+# Sets tool_cap (bytes, empty for none), tool_cap_with (systemd, prlimit or none) and
+# prints the choice. The cap is tool_memory_max, else 80% of MemAvailable.
+choose_tool_cap() {
+    if [ -n "$tool_memory_max" ]; then
+        tool_cap=$(to_bytes "$tool_memory_max")
+        [ -n "$tool_cap" ] || die "tool_memory_max must be a size such as 8G: $tool_memory_max"
+        why="tool_memory_max=$tool_memory_max"
+    else
+        avail=$(awk '/^MemAvailable:/ { printf "%.0f", $2 * 1024 }' /proc/meminfo 2>/dev/null || true)
+        if [ -n "$avail" ]; then
+            tool_cap=$(awk -v a="$avail" 'BEGIN { printf "%.0f", a * 0.8 }')
+            why="80% of $(human "$avail") available"
+        else
+            tool_cap=
+        fi
+    fi
+    if [ -z "$tool_cap" ]; then
+        tool_cap_with=none
+        echo "run.sh: warning: /proc/meminfo unreadable and tool_memory_max unset; the tools run without a memory cap" >&2
+    elif command -v systemd-run >/dev/null && systemd-run --user --scope --quiet true >/dev/null 2>&1; then
+        tool_cap_with=systemd
+        echo "tool memory cap: $(human "$tool_cap") ($why), systemd-run --user --scope -p MemoryMax (resident memory of the tool's processes)" >&2
+    elif command -v prlimit >/dev/null; then
+        tool_cap_with=prlimit
+        echo "tool memory cap: $(human "$tool_cap") ($why), prlimit --as (address space of each process, not resident memory)" >&2
+    else
+        tool_cap_with=none
+        echo "run.sh: warning: neither systemd-run --user nor prlimit is available; the tools run without a memory cap" >&2
+    fi
+}
+
+# capped COMMAND...: run COMMAND under the cap choose_tool_cap chose.
+capped() {
+    case $tool_cap_with in
+        systemd) systemd-run --user --scope --quiet -p MemoryMax="$tool_cap" -p MemorySwapMax=0 -- "$@" ;;
+        prlimit) prlimit --as="$tool_cap" -- "$@" ;;
+        *) "$@" ;;
+    esac
+}
+
+# failed TOOL STATUS LOG: the one-line error for a tool that exited with STATUS.
+failed() {
+    if [ "$2" -gt 128 ]; then
+        how="was killed by signal $(($2 - 128))"
+    else
+        how="exited with status $2"
+    fi
+    case $tool_cap_with in
+        none) die "$1 $how; see $3" ;;
+        *) die "$1 $how under the $(human "$tool_cap") memory cap ($tool_cap_with; raise it with tool_memory_max=SIZE if the log shows an allocation failure); see $3" ;;
+    esac
 }
 
 case $command in
     index)
-        [ $# -eq 0 ] || usage
+        tool_memory_max=
+        for arg in "$@"; do
+            case $arg in
+                tool_memory_max=*) tool_memory_max=${arg#*=} ;;
+                *) usage ;;
+            esac
+        done
         mkdir -p "$out"
+        choose_tool_cap
         if [ -n "${JSCPD_PATHS:-}" ]; then
             # shellcheck disable=SC2086
             set -- $JSCPD_PATHS
@@ -148,14 +250,16 @@ case $command in
         [ -x "$root/target/refactor-audit/tools/jscpd" ] || [ -n "${JSCPD:-}" ] ||
             die "jscpd not installed: run 'uv run --locked --script scripts/refactor-audit/run.py setup' in $root"
         start=$(now)
-        "$here/jscpd.sh" "$repo" "$out/jscpd" "$@" >/dev/null 2>"$out/jscpd.log" ||
-            die "jscpd failed; see $out/jscpd.log"
+        rc=0
+        capped "$here/jscpd.sh" "$repo" "$out/jscpd" "$@" >/dev/null 2>"$out/jscpd.log" || rc=$?
+        [ "$rc" -eq 0 ] || failed jscpd "$rc" "$out/jscpd.log"
         echo "jscpd ($*): $(elapsed "$start") s -> $out/jscpd (log $out/jscpd.log)" >&2
         ra=${RUST_ANALYZER:-rust-analyzer}
         command -v "$ra" >/dev/null || die "rust-analyzer not found (set RUST_ANALYZER)"
         start=$(now)
-        (cd "$repo" && "$ra" scip . --output "$out/index.scip.tmp" >"$out/index.scip.log" 2>&1) ||
-            die "rust-analyzer scip failed; see $out/index.scip.log"
+        rc=0
+        (cd "$repo" && capped "$ra" scip . --output "$out/index.scip.tmp" >"$out/index.scip.log" 2>&1) || rc=$?
+        [ "$rc" -eq 0 ] || failed "rust-analyzer scip" "$rc" "$out/index.scip.log"
         mv "$out/index.scip.tmp" "$out/index.scip"
         echo "rust-analyzer scip: $(elapsed "$start") s -> $out/index.scip (log $out/index.scip.log)" >&2
         ;;
