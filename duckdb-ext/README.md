@@ -7,8 +7,8 @@ root quality gate does not read it; `./check.sh` is its gate.
 
 | Crate | Output |
 | --- | --- |
-| `git-history-core/` | a library: the rows of the five functions, computed with gitoxide (`gix`) only; no DuckDB dependency, unit-tested and compared with the git CLI on fixtures |
-| `git-history/` | `git_history.duckdb_extension`: the DuckDB table functions `git_hunks`, `git_commits`, `git_file_changes`, `git_tracked_files`, `git_changed_blobs` over `git-history-core` |
+| `git-history-core/` | a library: the rows of the six functions, computed with gitoxide (`gix`) only; no DuckDB dependency, unit-tested and compared with the git CLI on fixtures |
+| `git-history/` | `git_history.duckdb_extension`: the DuckDB table functions `git_hunks`, `git_commits`, `git_file_changes`, `git_tracked_files`, `git_changed_blobs`, `git_tree` over `git-history-core` |
 | `gix-probe/` | a binary printing any function's rows of `git-history-core` as TSV, compared with the git CLI by `scripts/gix_parity.py` |
 | `scip-index-core/` | a library: a streaming decoder of SCIP indexes (protobuf) and the rows of the three SCIP functions; no dependencies, unit-tested and compared with `scip print --json` |
 | `scip-index/` | `scip_index.duckdb_extension`: the DuckDB table functions `read_scip`, `read_scip_symbols`, `read_scip_metadata` over `scip-index-core` (see "`scip_index`" below) |
@@ -316,6 +316,47 @@ SET VARIABLE files = (SELECT list(DISTINCT file) FROM blobs);
 SELECT * FROM read_ast(getvariable('files'), 'rust', source := 'full', peek := 'none', context := 'none');
 ```
 
+### `git_tree(repo, rev := 'HEAD')`
+
+`(path VARCHAR, mode VARCHAR, blob_id VARCHAR)`
+
+The tree of one revision, not a history range and not the worktree: one
+row per leaf entry of `git ls-tree -r <rev>`, reached recursively from the
+tree `rev` names, sorted by path bytes. `repo` is resolved like the other
+functions' (any path inside a worktree, or a bare repository). `rev` is any
+revision gix's `rev_parse_single` accepts: a commit-ish (a full or
+abbreviated id, a branch, a lightweight or annotated tag, `HEAD~2`), peeled
+to its tree, or a tree id, taken as is (`HEAD:src` names a subtree, whose
+paths are then relative to it, as with `git ls-tree -r HEAD:src`).
+
+| Entry | `mode` | `blob_id` |
+| --- | --- | --- |
+| regular file | `100644`, or `100755` if executable | the blob |
+| symlink | `120000` | the blob holding the link's target path |
+| gitlink (submodule) | `160000` | the commit the tree records; submodules are never opened |
+| directory | no row | |
+
+`path` is repository-relative (relative to the tree `rev` names) and
+unquoted (`core.quotePath` does not apply). `mode` is git's canonical mode
+string, as `git ls-tree` prints it. The revision is resolved at bind time:
+an unknown one, or one naming a blob, is an error that names it
+(`git_tree: cannot resolve revision 'nope': …`), and a NULL `rev` is an
+error, not `HEAD`. The scan lists the tree resolved at bind time, so a
+branch that moves in between does not change the result of a query.
+
+With `git_changed_blobs`, the units of an earlier commit come from the
+blob cache without a checkout: the `.rs` blobs of `git_tree(repo, rev)`
+are files `git_changed_blobs(repo, dir, extensions := ['rs'])` has
+written, provided the blob entered history through a non-merge commit (see
+"Parity" for the one exception here and `include_merges`).
+
+```sql
+SELECT t.path, b.file
+FROM git_tree('/repo', rev := 'e223bc20') t
+JOIN (SELECT DISTINCT blob_id, file FROM blobs) b USING (blob_id)
+WHERE t.path LIKE '%.rs';
+```
+
 ## How the rows are computed
 
 Everything is gitoxide, called from `git-history-core/src/lib.rs`:
@@ -387,6 +428,15 @@ follows a symlink and hashes the file it points to; the ids here are those
 of `git add` (the link's target path), which the parity script obtains with
 `git hash-object --stdin`.
 
+`git_tree` is `git-history-core/src/tree.rs`:
+
+| Step | gix call and settings |
+| --- | --- |
+| Revision | `repo.rev_parse_single(rev)`, `.object()`, `.peel_to_tree()` (a tag or commit is peeled, a tree kept), at bind time |
+| Entries | `repo.find_tree(id).traverse().breadthfirst(&mut gix::traverse::tree::Recorder::default())`, which records every entry with its full path and does not enter gitlinks |
+| Mode | the entry's `EntryMode::kind()`: `Blob` `100644`, `BlobExecutable` `100755`, `Link` `120000`, `Commit` `160000`, `Tree` dropped; a non-canonical mode stored in an old tree (such as `100664`) maps to its canonical string by the owner's executable bit, the rule git applies when reading a tree (by reading both sources; no fixture has such a tree) |
+| Order | the records sorted by path bytes (the same order as `git ls-tree -r`, whose tree order compares a directory as `name/`) |
+
 ## Parity
 
 Measured on this repository at 0df26a53 (1,589 commits, 343 merges)
@@ -443,10 +493,10 @@ CLI; `python3 duckdb-ext/scripts/gix_parity.py REPO duckdb-ext/target/release/gi
 output parsed into the same TSV rows), `scripts/load_smoke.py`,
 `scripts/perf.py`, `scripts/tracked_parity.py` (`python3
 duckdb-ext/scripts/tracked_parity.py REPO duckdb-ext/target/release/gix-probe`).
-`gix-probe REPO hunks|commits|file_changes|tracked_files|changed_blobs
+`gix-probe REPO hunks|commits|file_changes|tracked_files|changed_blobs|tree
 [--since REV] [--include-merges] [--context N] [--include-untracked]
-[--dir DIR] [--extensions A,B] [--stats]` prints any function's rows as
-TSV; for `changed_blobs`, `--stats` also prints the files written (with
+[--dir DIR] [--extensions A,B] [--rev REV] [--stats]` prints any function's
+rows as TSV (`tree` lists `--rev`, default `HEAD`); for `changed_blobs`, `--stats` also prints the files written (with
 their bytes) and skipped.
 
 `git_changed_blobs` on this repository at 865e4045 (1,601 commits), with
@@ -464,6 +514,31 @@ two extra rows are e91103e8's change to
 simplification drops (see above), and whose two blobs occur in other
 commits too. The 23 further blobs (37 rows) come from the 16 commits
 after 4ad82864.
+
+`git_tree` on this repository at d7441359 (the commit that added it; clean
+worktree), compared with `git ls-tree -r -z <rev>` (mode, type, id, path):
+
+| Comparison | git_tree | Reference | Only in git_tree / only in reference |
+| --- | --- | --- | --- |
+| `rev := 'HEAD'` vs `git ls-tree -r HEAD` (864 `100644`, 18 `100755`) | 882 | 882 | 0 / 0, same order |
+| `rev := 'e223bc20'` (558 `100644`, 9 `100755`) | 567 | 567 | 0 / 0, same order |
+| `rev := '46c37290'` (732 `100644`, 9 `100755`) | 741 | 741 | 0 / 0, same order |
+| `(path, mode, blob_id)` at HEAD vs `git_tracked_files(repo)` (0 modified) | 882 | 882 | 0 / 0 |
+
+This history has no symlink or gitlink in these trees; the fixture test
+covers both. The extension's rows are identical, in order, to `gix-probe
+tree`'s TSV.
+
+Blob coverage, the precondition for taking an earlier commit's units from
+the blob cache: of the 379 `.rs` entries of `git_tree(repo, rev :=
+'e223bc20')`, 378 blob ids occur among the rows of
+`git_changed_blobs(repo, dir, extensions := ['rs'])` over the whole
+history (at d7441359), and 379 with `include_merges := true`. The missing
+blob is `src/workspace/bindings.rs` at 92254c9a, which first appears in the
+merge 314e18db ("Merge pull request #57") and differs from the file in
+both of its parents: a content made by the merge itself, which only a diff
+of the merge (against its first parent) lists. Every file of the 379 is
+present in `dir` after the `include_merges` run.
 
 ## Performance
 
@@ -506,6 +581,18 @@ file)`, fresh processes: 1.10–1.12 s into an empty directory, 0.63–0.76 s
 for a run that finds every file present (6,581 skipped). `gix-probe
 changed_blobs --extensions rs` takes 0.93 s writing and 0.54–0.62 s
 skipping.
+
+`git_tree` on this repository at d7441359, Python `duckdb` 2.0.0, `SELECT
+count(*) FROM git_tree('.', rev := …)`, five fresh processes each (the time
+of the query after `LOAD`, bind included):
+
+| `rev` | Rows | Wall time |
+| --- | --- | --- |
+| `HEAD` | 882 | 8.4–21.9 ms |
+| `e223bc20` | 567 | 6.7–10.1 ms |
+| `46c37290` | 741 | 8.0–9.8 ms |
+
+`gix-probe tree` takes 2–4 ms for each.
 
 ## Tests
 
@@ -555,10 +642,26 @@ skipping.
   file, that extensions are judged per side and an empty list matches
   nothing, that a second run skips every file but rewrites a truncated one
   (and trusts a same-size one), and that a relative `dir` is an error.
+- `git-history-core/tests/tree.rs`: builds a fixture (same isolation) with
+  two commits on `main`, a branch and a lightweight and an annotated tag
+  on the first: files in nested directories, names that sort differently
+  as a directory (`s-x.txt`, `s.txt`, `s/y.txt`), non-ASCII and space in
+  names, an executable, a symlink, a gitlink added with `update-index`, and
+  in the second commit a deletion, a rename into a new directory and a
+  modification. It compares `tree` with `git ls-tree -r -z` (mode, type,
+  id, path, in order) for `HEAD`, `main`, `HEAD~1`, the branch, both tags,
+  the full and an abbreviated commit id, both commits' tree ids and the
+  subtree `HEAD:src`; asserts the order is by path bytes, that two runs
+  agree, each entry kind's mode and id (a symlink's blob is its target, a
+  gitlink's id the recorded commit), that no directory has a row, and the
+  deletion, rename and modification between the commits; and asserts that
+  an unknown name, a revision past the root, a missing full id and a blob
+  (`HEAD:a.txt`) are errors naming the revision.
 - `host-check/tests/load.rs`: loads the built extension into the `duckdb`
   crate with the machine's `libduckdb` 2.0.0 and checks `git_hunks` joined
-  with `git_commits`, and `git_tracked_files` with `include_untracked`, on
-  a fixture; a second test loads both extensions into one connection and
+  with `git_commits`, `git_tree` at `HEAD~1` and `HEAD` with the
+  bind-time error for an unknown `rev`, and `git_tracked_files` with
+  `include_untracked`, on a fixture; a second test loads both extensions into one connection and
   checks the three SCIP functions on a hand-encoded index (packed and typed
   ranges, a NULL enclosing range, the role booleans, a list column, an
   external symbol, the metadata counts) and the bind-time error for a
