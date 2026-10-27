@@ -1,9 +1,9 @@
 //! Print the rows of `git_hunks`, `git_file_changes`, `git_commits`,
-//! `git_tracked_files` or `git_changed_blobs` as TSV,
+//! `git_tracked_files`, `git_changed_blobs` or `git_tree` as TSV,
 //! computed by `git_history_core` without DuckDB, for comparing with the git
 //! CLI (`scripts/gix_parity.py`).
 //!
-//! Usage: gix-probe REPO hunks|file_changes|commits|tracked_files|changed_blobs [options]
+//! Usage: gix-probe REPO hunks|file_changes|commits|tracked_files|changed_blobs|tree [options]
 //!
 //! Options:
 //!   --since REV          history is REV..HEAD
@@ -12,6 +12,7 @@
 //!   --include-untracked  tracked_files also lists untracked, not ignored files
 //!   --dir DIR            changed_blobs writes the blobs to DIR (absolute, required)
 //!   --extensions A,B     changed_blobs considers only paths with these extensions
+//!   --rev REV            tree lists the tree of REV (default HEAD)
 //!   --stats              print the row count and total time to stderr, and for
 //!                        changed_blobs the files written and skipped
 
@@ -24,7 +25,7 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 2 {
         return Err(
-            "usage: gix-probe REPO hunks|file_changes|commits|tracked_files|changed_blobs [options]"
+            "usage: gix-probe REPO hunks|file_changes|commits|tracked_files|changed_blobs|tree [options]"
                 .into(),
         );
     }
@@ -34,6 +35,7 @@ fn main() -> Result<()> {
     let mut include_untracked = false;
     let mut dir: Option<String> = None;
     let mut extensions: Option<Vec<String>> = None;
+    let mut rev = "HEAD".to_string();
     let mut rest = args[2..].iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -42,6 +44,7 @@ fn main() -> Result<()> {
             "--context" => context = rest.next().ok_or("--context needs a value")?.parse()?,
             "--stats" => stats = true,
             "--include-untracked" => include_untracked = true,
+            "--rev" => rev = rest.next().ok_or("--rev needs a value")?.clone(),
             "--dir" => dir = Some(rest.next().ok_or("--dir needs a value")?.clone()),
             "--extensions" => {
                 let list = rest.next().ok_or("--extensions needs a value")?;
@@ -124,6 +127,13 @@ fn main() -> Result<()> {
                     b.mode,
                     b.file
                 );
+            }
+        }
+        "tree" => {
+            let rows = history::tree(&repo, &rev)?;
+            count = rows.len();
+            for t in rows {
+                out += &format!("{}\t{}\t{}\n", t.path, t.mode, t.blob_id);
             }
         }
         other => return Err(format!("unknown table {other}").into()),

@@ -4,13 +4,13 @@
 //! database spike (`scripts/code-db/history.py`); its doc comment names it.
 //! [`tracked_files`] is the worktree's current files (`git ls-files`).
 //! [`changed_blobs`] writes the blobs of [`file_changes`]'s changes to a
-//! directory. The
+//! directory. [`tree`] is one revision's tree (`git ls-tree -r`). The
 //! rows follow gix's behavior; `duckdb-ext/README.md` lists where that
 //! differs from git.
 
 use std::ops::Range as Lines;
 
-use gix::ObjectId;
+pub use gix::ObjectId;
 pub use gix::Repository;
 use gix::bstr::{BStr, ByteSlice};
 use gix::diff::Rewrites;
@@ -23,8 +23,10 @@ use gix::traverse::commit::simple::CommitTimeOrder;
 
 mod blobs;
 mod tracked;
+mod tree;
 pub use blobs::{BlobWriteStats, ChangedBlobRow, changed_blobs};
 pub use tracked::{TrackedFileRow, tracked_files};
+pub use tree::{TreeRow, resolve_tree, tree, tree_entries};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;

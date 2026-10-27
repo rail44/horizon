@@ -1,7 +1,8 @@
 //! LOAD the built `git_history.duckdb_extension` and
 //! `scip_index.duckdb_extension` through the `duckdb` crate: query
-//! `git_hunks` and `git_tracked_files` on a fixture repository, and the three
-//! SCIP functions on a hand-encoded index, with both extensions loaded.
+//! `git_hunks`, `git_tree` and `git_tracked_files` on a fixture
+//! repository, and the three SCIP functions on a hand-encoded index, with
+//! both extensions loaded.
 //!
 //! Run `duckdb-ext/build.sh` first; `GIT_HISTORY_EXTENSION` and
 //! `SCIP_INDEX_EXTENSION` override the extension paths.
@@ -117,6 +118,37 @@ fn horizon_linked_duckdb_loads_the_extension() {
             ("Edit a.rs", "a.rs", 3, 0, 4, 1),
         ]
     );
+
+    // The blob of "one\ntwo\nthree\n" (`git hash-object`), at the first commit.
+    let mut statement = conn
+        .prepare("SELECT path, mode, blob_id FROM git_tree(?, rev := 'HEAD~1')")
+        .unwrap();
+    let rows: Vec<(String, String, String)> = statement
+        .query_map([path], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [(
+            "a.rs".to_string(),
+            "100644".to_string(),
+            "4cb29ea38f70d7c61b2a3a25b02e3bdf44905402".to_string()
+        )]
+    );
+    let head: i64 = conn
+        .query_row("SELECT count(*) FROM git_tree(?)", [path], |row| row.get(0))
+        .unwrap();
+    assert_eq!(head, 1);
+    let error = conn
+        .query_row(
+            "SELECT count(*) FROM git_tree(?, rev := 'no-such-rev')",
+            [path],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("'no-such-rev'"), "{error}");
 
     std::fs::write(dir.join("a.rs"), "changed\n").unwrap();
     std::fs::write(dir.join("b.rs"), "new\n").unwrap();

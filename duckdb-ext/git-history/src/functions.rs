@@ -25,6 +25,7 @@ use duckdb_neo::{
 
 use git_history_core::{
     self as history, ChangedBlobRow, CommitRow, FileChangeRow, HunkRow, Range, TrackedFileRow,
+    TreeRow,
 };
 
 /// Arguments shared by the three history functions, resolved at bind time.
@@ -359,7 +360,8 @@ pub(crate) fn register(extension: &Extension) -> Result<()> {
     register_one::<Commits>(extension)?;
     register_one::<FileChanges>(extension)?;
     register_tracked_files(extension)?;
-    register_changed_blobs(extension)
+    register_changed_blobs(extension)?;
+    register_tree(extension)
 }
 
 /// Arguments of `git_tracked_files`, resolved at bind time.
@@ -647,4 +649,117 @@ fn register_changed_blobs(extension: &Extension) -> Result<()> {
                 ),
         );
     TableFunctionBuilder::new(CHANGED_BLOBS, signature, ChangedBlobs).register(extension)
+}
+
+/// Arguments of `git_tree`, resolved at bind time.
+pub(crate) struct TreeParams {
+    repo: String,
+    /// The tree `rev` named at bind time, so the scan lists that tree even if
+    /// a reference moves in between.
+    tree: history::ObjectId,
+}
+
+/// `git_tree`: one revision's tree, not a history range, so it has its own
+/// arguments instead of being a [`GitTable`].
+struct Tree;
+
+const TREE: &str = "git_tree";
+
+impl TableFunctionCallbacks for Tree {
+    type BindData = TreeParams;
+    type LocalState = ();
+    type GlobalState = Mutex<Scan<TreeRow>>;
+
+    fn bind(
+        &self,
+        context: &Context,
+        arguments: Vec<BindArgument>,
+        bind: BindFunctionHandle<'_>,
+    ) -> Result<TreeParams> {
+        let value = |index: usize| {
+            arguments
+                .get(index)
+                .and_then(|argument| argument.value.as_ref())
+        };
+        let required = |index: usize, what: &str| {
+            value(index)
+                .map(|value| value.get::<String>())
+                .transpose()?
+                .flatten()
+                .ok_or_else(|| {
+                    Error::invalid_input(format!("{TREE}: {what} must be a constant, non-NULL"))
+                })
+        };
+        let repo = required(0, "repo path")?;
+        let rev = required(1, "rev")?;
+        let opened = history::open(&repo).map_err(git_error)?;
+        let tree = history::resolve_tree(&opened, &rev)
+            .map_err(|error| Error::invalid_input(format!("{TREE}: {error}")))?;
+        for name in ["path", "mode", "blob_id"] {
+            bind.add_result_column(name, &varchar(context)?)?;
+        }
+        Ok(TreeParams { repo, tree })
+    }
+
+    fn init_global_state(
+        &self,
+        params: &TreeParams,
+        _context: &Context,
+        _columns: InitColumnData<'_>,
+    ) -> Result<(Option<Self::GlobalState>, Option<usize>)> {
+        let repo = history::open(&params.repo).map_err(git_error)?;
+        let rows = history::tree_entries(&repo, params.tree).map_err(git_error)?;
+        Ok((Some(Mutex::new(Scan { rows, next: 0 })), Some(1)))
+    }
+
+    fn exec(
+        &self,
+        _params: &TreeParams,
+        global: Option<&Self::GlobalState>,
+        _local: Option<&mut ()>,
+        _context: &Context,
+        mut output: DataChunkRef<'_>,
+        _columns: ExecColumnInfo<'_>,
+    ) -> Result<()> {
+        let mut scan = global
+            .ok_or_else(|| Error::internal("scan state missing"))?
+            .lock()
+            .map_err(|_| Error::internal("scan state poisoned"))?;
+        let start = scan.next;
+        let end = scan.rows.len().min(start + output.capacity()?);
+        scan.next = end;
+        let rows = &scan.rows[start..end];
+        if output.col_count() != 3 {
+            return Err(Error::internal("expected three columns"));
+        }
+        let [path, mode, blob_id] = output.get_vector_array_mut([0, 1, 2])?;
+        let n = rows.len();
+        strings(path, n, |i| Some(rows[i].path.as_str()))?;
+        strings(mode, n, |i| Some(rows[i].mode))?;
+        strings(blob_id, n, |i| Some(rows[i].blob_id.as_str()))
+    }
+}
+
+fn register_tree(extension: &Extension) -> Result<()> {
+    let signature = SignatureBuilder::new()
+        .param(FunctionParameter::new::<String>("repo"))
+        .param(
+            FunctionParameter::with_default("rev", "HEAD".to_string())
+                .kind(FunctionParameterKind::Named),
+        )
+        .documentation(
+            FunctionDocumentationBuilder::new()
+                .add_category("git")
+                .description(
+                    "One row per file, symlink and gitlink of the tree rev names (a commit-ish or a \
+                     tree id), recursively, as `git ls-tree -r` lists them, sorted by path: the \
+                     mode and the blob id (the commit id for a gitlink).",
+                )
+                .add_example("the tree of HEAD", format!("SELECT * FROM {TREE}('.')"))
+                .add_example(
+                    "the tree of a tag",
+                    format!("SELECT * FROM {TREE}('.', rev := 'v1.0')"),
+                ),
+        );
+    TableFunctionBuilder::new(TREE, signature, Tree).register(extension)
 }
