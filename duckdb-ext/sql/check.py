@@ -804,23 +804,26 @@ def check_history_fixture():
         con.execute("SET VARIABLE kind = NULL")
 
         # clone_change_consistency: pair 0 changed together twice (initial, both_sides) and
-        # on side A alone once (one_side). Pair 1's side B (rect.rs lines 4-9) overlaps
-        # the type Rect's own lines, the impl's header and its method: those three units
-        # (Rect has the most lines in it among the smallest), changed together with side A
-        # in initial and alone in both_sides. Both sides of both pairs exist from the first
-        # commit, which is since_sha.
+        # on side A alone once (one_side). Under clone_sides 'contain' (the default), pair
+        # 1's side B (rect.rs lines 4-9) lies in no single unit (an unresolved side sets no
+        # bound). Both sides of both pairs exist from the first commit, which is since_sha.
         def consistency():
             return [(r[0], r[5], r[9], r[12], r[13:17], names.get(r[17]), r[19:22])
                     for r in rows(con, query_sql("clone_change_consistency"))]
+        contained = [
+            (0, "Shape for Square.area", "Shape for Rect.area", False, (1, 0, 2, 1), "initial", (1, 1, 0)),
+            (1, "tests.square_area", None, None, (1, 0, 0, 1), "initial", (1, 0, 0))]
+        assert consistency() == contained, consistency()
+        con.execute("SET VARIABLE clone_sides = 'contain'")
+        assert consistency() == contained, consistency()
+        # clone_sides 'overlap': pair 1's side B overlaps the type Rect's own lines, the
+        # impl's header and its method: those three units (Rect has the most lines in it
+        # among the smallest), changed together with side A in initial and alone in
+        # both_sides.
+        con.execute("SET VARIABLE clone_sides = 'overlap'")
         assert consistency() == [
             (0, "Shape for Square.area", "Shape for Rect.area", False, (1, 0, 2, 1), "initial", (1, 1, 0)),
             (1, "tests.square_area", "Rect", False, (0, 1, 1, 1), "initial", (1, 3, 0))], consistency()
-        # clone_sides 'contain': pair 1's side B lies in no single unit (an unresolved side
-        # sets no bound).
-        con.execute("SET VARIABLE clone_sides = 'contain'")
-        assert consistency() == [
-            (0, "Shape for Square.area", "Shape for Rect.area", False, (1, 0, 2, 1), "initial", (1, 1, 0)),
-            (1, "tests.square_area", None, None, (1, 0, 0, 1), "initial", (1, 0, 0))], consistency()
         con.execute("SET VARIABLE clone_sides = NULL")
         con.execute("SET VARIABLE clone_source = 'normalized'")
         assert rows(con, query_sql("clone_change_consistency")) == []
@@ -940,13 +943,63 @@ pub fn build_table(rows: &[(u32, u32)]) -> Vec<String> {
 
 """ + BUILD_TABLE.replace("pub fn build_table", "fn table_rows")
 
+# src/meters.rs for the inherited links: an impl with two methods, and a module holding a
+# type with an impl and a method. Renaming Meter to Gauge touches the type's and the
+# impl's header lines only, besides the edit to calibrate and the added method zero.
+METERS_V1 = """\
+pub struct Meter {
+    reading_value: u32,
+    reading_offset: u32,
+    reading_scale: u32,
+}
+
+impl Meter {
+    pub fn reading(&self) -> u32 {
+        let raw = self.reading_value + self.reading_offset;
+        let scaled = raw * self.reading_scale;
+        scaled.min(9999)
+    }
+
+    pub fn calibrate(&mut self, reference: u32) {
+        let current = self.reading();
+        let delta = reference.saturating_sub(current);
+        self.reading_offset += delta;
+        self.reading_scale = self.reading_scale.max(1);
+    }
+}
+
+pub mod gauges {
+    pub struct Dial {
+        pub needle_angle: i32,
+    }
+
+    impl Dial {
+        pub fn needle(&self) -> i32 {
+            let turned = self.needle_angle % 360;
+            let positive = if turned < 0 { turned + 360 } else { turned };
+            positive / 2
+        }
+    }
+}
+"""
+
+ZERO = """
+    pub fn zero(&mut self) {
+        self.reading_value = 0;
+        self.reading_offset = 0;
+    }
+"""
+
 
 def build_lineage_fixture(root):
     """build_history_fixture plus seven commits: src/ops.rs added; renamed to
     src/geometry.rs with build_table edited (git mv and a small edit); scale renamed to
     resize in place; translate moved to src/moves.rs; describe split into describe_size
     and describe_kind; sum_widths and sum_heights merged into sum_sides; the body of
-    build_table moved to table_rows with build_table kept as a one-line call."""
+    build_table moved to table_rows with build_table kept as a one-line call. Then five
+    for inherited links: src/meters.rs added; Meter.reading edited; gauges.Dial.needle
+    edited; Meter renamed to Gauge (type and impl headers), calibrate edited and zero
+    added in the same commit; the module gauges renamed to dials."""
     repo, sha = build_history_fixture(root)
 
     def commit(name, message, date):
@@ -976,6 +1029,22 @@ def build_lineage_fixture(root):
     geometry = geometry.replace(BUILD_TABLE, BUILD_TABLE_STUB)
     write(repo, "src/geometry.rs", geometry)
     commit("stub", "Move build_table's body to table_rows", "2026-03-07T00:00:00Z")
+    meters = METERS_V1
+    write(repo, "src/meters.rs", meters)
+    commit("add_meters", "Add meters", "2026-03-08T00:00:00Z")
+    meters = meters.replace("scaled.min(9999)", "scaled.min(99999)")
+    write(repo, "src/meters.rs", meters)
+    commit("edit_reading", "Raise the reading cap", "2026-03-09T00:00:00Z")
+    meters = meters.replace("positive / 2", "positive / 4")
+    write(repo, "src/meters.rs", meters)
+    commit("edit_needle", "Halve the needle", "2026-03-10T00:00:00Z")
+    meters = (meters.replace("pub struct Meter {", "pub struct Gauge {").replace("impl Meter {", "impl Gauge {")
+              .replace("self.reading_scale.max(1);\n    }\n", "self.reading_scale.max(2);\n    }\n" + ZERO))
+    write(repo, "src/meters.rs", meters)
+    commit("rename_impl", "Rename Meter to Gauge", "2026-03-11T00:00:00Z")
+    meters = meters.replace("pub mod gauges {", "pub mod dials {")
+    write(repo, "src/meters.rs", meters)
+    commit("rename_mod", "Rename gauges to dials", "2026-03-12T00:00:00Z")
     return repo, sha
 
 
@@ -1015,6 +1084,34 @@ LINEAGE_CHAINS = {
                                         (1, "body_move", "stub", "src/geometry.rs", "build_table"),
                                         (2, "file_rename", "rename_file", "src/ops.rs", "build_table")],
     ("src/geometry.rs", "build_table"): [(0, None, None, "src/geometry.rs", "build_table")],
+}
+
+# unit_successions of the inherited-link commits other than same_name, all in
+# src/meters.rs: (link, pred_kind, pred_name, succ_kind, succ_name, similarity, ambiguous).
+# Gauge.calibrate keeps its own content_match; Gauge.zero has no predecessor (no
+# Meter.zero on the old side); the module's rename reaches its impl, type and method.
+INHERITED_SUCCESSIONS = {
+    "rename_impl": [("content_match", "impl", "Meter", "impl", "Gauge", 0.563, False),
+                    ("content_match", "method", "Meter.calibrate", "method", "Gauge.calibrate", round(5 / 7, 3), False),
+                    ("content_match", "type", "Meter", "type", "Gauge", round(4 / 6, 3), False),
+                    ("inherited", "method", "Meter.reading", "method", "Gauge.reading", 1.0, False)],
+    "rename_mod": [("content_match", "module", "gauges", "module", "dials", 0.8, False),
+                   ("inherited", "impl", "gauges.Dial", "impl", "dials.Dial", 1.0, False),
+                   ("inherited", "method", "gauges.Dial.needle", "method", "dials.Dial.needle", 1.0, False),
+                   ("inherited", "type", "gauges.Dial", "type", "dials.Dial", 1.0, False)],
+}
+
+# unit_history of src/meters.rs's units: (kind, name) -> commits.
+INHERITED_HISTORY = {
+    ("method", "Gauge.reading"): ["add_meters", "edit_reading"],
+    ("method", "Gauge.calibrate"): ["add_meters", "rename_impl"],
+    ("method", "Gauge.zero"): ["rename_impl"],
+    ("impl", "Gauge"): ["add_meters", "rename_impl"],
+    ("type", "Gauge"): ["add_meters", "rename_impl"],
+    ("module", "dials"): ["add_meters", "rename_mod"],
+    ("type", "dials.Dial"): ["add_meters"],
+    ("impl", "dials.Dial"): ["add_meters"],
+    ("method", "dials.Dial.needle"): ["add_meters", "edit_needle"],
 }
 
 # unit_churn's commits, commits_by_name, ancestors and successors_at_split.
@@ -1072,6 +1169,25 @@ def check_lineage_fixture():
         stub_from = rows(con, """SELECT l.from_sha FROM unit_lineage l JOIN units u USING (unit_id)
                                  WHERE u.qualified_name = 'build_table' AND l.depth = 0""")
         assert stub_from == [(sha["stub"],)], stub_from
+
+        # Inherited links: the inner units of a renamed unit continue under its new name.
+        inherited = {}
+        for r in rows(con, "SELECT sha, link, pred_kind, pred_qualified_name, succ_kind, succ_qualified_name, "
+                           "round(similarity, 3), ambiguous FROM unit_successions "
+                           "WHERE link <> 'same_name' AND succ_path = 'src/meters.rs' ORDER BY ALL"):
+            inherited.setdefault(names[r[0]], []).append(r[1:])
+        assert inherited == INHERITED_SUCCESSIONS, inherited
+        history = {(r[0], r[1]): sorted(names[s] for s in r[2]) for r in rows(con, """
+            SELECT u.kind, u.qualified_name, coalesce((SELECT list(h.sha) FROM unit_history h
+                                                       WHERE h.unit_id = u.unit_id), [])
+            FROM units u JOIN files f USING (file_id) WHERE f.path = 'src/meters.rs'""")}
+        assert history == INHERITED_HISTORY, history
+        # The two-level chain: the method reached through the module's rename.
+        chain = rows(con, """SELECT l.depth, l.link, l.sha, l.qualified_name FROM unit_lineage l
+                             JOIN units u USING (unit_id) WHERE u.qualified_name = 'dials.Dial.needle'
+                             ORDER BY l.depth""")
+        assert [(d, k, names.get(c), n) for d, k, c, n in chain] == [
+            (0, None, None, "dials.Dial.needle"), (1, "inherited", "rename_mod", "gauges.Dial.needle")], chain
 
         # unit_churn: commits are distinct commits over every ancestor.
         churn = {(r[0], r[2], r[3]): (r[6], r[10], r[11], r[12]) for r in rows(con, query_sql("unit_churn"))}
@@ -1797,17 +1913,18 @@ def check_counting_fixture():
 
         # M4: left.rs and right.rs, cloned from the first method's body into the second's
         # (pair 1) and from the impl's header into the first method (pair 2). Under
-        # clone_sides 'overlap' (the default) pair 1's sides are the two methods (the
+        # clone_sides 'overlap' pair 1's sides are the two methods (the
         # second's doc comment is its own; no line of the impl's own lies in between), so
         # edit_left_first is one-sided and edit_right_header touches neither; pair 2's
-        # sides add the impl (its header), so both edits are one-sided. Under 'contain'
-        # both pairs' sides are the impls, whose own lines changed only in
+        # sides add the impl (its header), so both edits are one-sided. Under 'contain' (the
+        # default) both pairs' sides are the impls, whose own lines changed only in
         # edit_right_header. Every pair starts at init.
         def split_clones():
             return {r[0]: (r[4], r[5], r[8], r[9], r[12], r[13:17], names.get(r[17]), r[19:21], r[21],
                            [(u["kind"], u["qualified_name"]) for u in r[22]],
                            [(u["kind"], u["qualified_name"]) for u in r[23]])
                     for r in rows(con, clone_sql) if r[2] == "src/left.rs"}
+        con.execute("SET VARIABLE clone_sides = 'overlap'")
         assert split_clones() == {
             # Three lines of each method (the tie goes to the later unit).
             1: ("method", "Left.second", "method", "Right.second", False, (1, 0, 1, 1), "init", (2, 2), 0,
@@ -1816,13 +1933,16 @@ def check_counting_fixture():
             2: ("method", "Left.first", "method", "Right.first", False, (1, 1, 1, 2), "init", (2, 2), 0,
                 [("method", "Left.first"), ("impl", "Left")], [("method", "Right.first"), ("impl", "Right")]),
         }, split_clones()
-        con.execute("SET VARIABLE clone_sides = 'contain'")
+        con.execute("SET VARIABLE clone_sides = NULL")
         assert split_clones() == {
             1: ("impl", "Left", "impl", "Right", False, (0, 1, 1, 1), "init", (1, 1), 0,
                 [("impl", "Left")], [("impl", "Right")]),
             2: ("impl", "Left", "impl", "Right", False, (0, 1, 1, 1), "init", (1, 1), 0,
                 [("impl", "Left")], [("impl", "Right")]),
         }, split_clones()
+        contained = split_clones()
+        con.execute("SET VARIABLE clone_sides = 'contain'")
+        assert split_clones() == contained, split_clones()
         con.execute("SET VARIABLE clone_sides = NULL")
 
         # M1: a change inside the method credits the method only; a change to the impl's
@@ -1909,7 +2029,7 @@ def check_counting_fixture():
 
         def probe_rows():
             out = [rows(con, q) for q in probe]
-            con.execute("SET VARIABLE clone_sides = 'contain'")
+            con.execute("SET VARIABLE clone_sides = 'overlap'")
             out.append(rows(con, clone_sql))
             con.execute("SET VARIABLE clone_sides = NULL")
             con.execute("SET VARIABLE attribution = 'all'")

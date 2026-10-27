@@ -337,6 +337,22 @@ decisions (2026-10-26) fix the semantics:
     while an `added` unit of the commit is similar to the pre-image: the pre-image
     links to the added unit, and the stub gets no predecessor at that commit (no
     `same_name` or `file_rename` row).
+  - `inherited`: an inner unit of a `content_match` or `body_move` predecessor (a unit
+    of the commit's old side whose qualified name extends the predecessor's) linked to
+    the identity with the successor's path and qualified name and the same relative
+    name: renaming `impl SessiondHandle` to `impl AgentdHandle` links
+    `SessiondHandle.begin_reload` to `AgentdHandle.begin_reload`, though no hunk touched
+    the method. Every level of nesting is reached from the renamed unit itself (a
+    module's rename links its impls, their methods and its types). Two conditions:
+    the inferred identity is a unit of the commit's new side (nothing is fabricated: a
+    method added in the rename's commit has no predecessor), and neither identity has
+    a `content_match`, `body_move` or `file_rename` link of its own at the commit
+    (those take precedence: a method edited while its impl was renamed keeps its own
+    `content_match`) or continues as itself (the predecessor is not on the new side, the
+    successor not on the old side, under the same path). `similarity` is 1 when no hunk
+    touched the inner unit, otherwise its pair's line-set index (0 when they share no
+    line). The links of an inner unit are reached through the walk like the others, so
+    a chain of renames is followed one commit at a time.
 - **Attribution**: the successions read the changes under `attribution` `all`
   (`unit_change_sides.change_kind_all`) whatever `attribution` is. Whether a unit moved
   is judged on its whole text, inner units included (an impl whose methods all moved
@@ -355,7 +371,8 @@ decisions (2026-10-26) fix the semantics:
 - **`ambiguous`** marks a `content_match` or `body_move` link whose predecessor or
   successor has several such links at the commit, or whose two best candidates on
   either side are within 0.1 (a modified unit's own post-image counts as a candidate of
-  its pre-image).
+  its pre-image); and an `inherited` link derived from an ambiguous link, or whose
+  predecessor or successor has several `inherited` links at the commit.
 - **`commit_order(sha, ord)`**: each commit's position in git log's order, 1 = the
   oldest (`git_commits` emits the commits in that order from one thread; both caches
   copy it).
@@ -369,8 +386,8 @@ decisions (2026-10-26) fix the semantics:
   of `unit_changes` that touched an identity of the unit's lineage within the range it
   contributes (`change_kind` and `depth` of the nearest such identity). `via_link`
   marks a *link commit*: a commit at which the lineage links one of the unit's
-  identities to a predecessor (`unit_lineage.sha`: a `file_rename`, `content_match` or
-  `body_move`), that is the move, rename, split or merge itself, which is in the history
+  identities to a predecessor (`unit_lineage.sha`: a `file_rename`, `content_match`,
+  `body_move` or `inherited`), that is the move, rename, split or merge itself, which is in the history
   because it touched the successor. The co-change views leave link commits out
   (`unit_commits`, see Graph); `unit_churn` counts them and reports how many
   (`move_commits`). The restart commit of a stub is not a link commit of the stub.
@@ -386,7 +403,9 @@ churn and the graph's `unit_commits` (and so `unit_cochange`, `edge_cochange`,
 per-commit fact.
 
 `clone_change_consistency` maps each side of a pair (a fragment: file and lines) to a
-set of units: the innermost units whose own lines overlap the fragment's lines, a
+set of units. Under `clone_sides := 'contain'` (the default) the set is the smallest
+unit containing the whole fragment, none when it spans units. Under `'overlap'` it is
+the innermost units whose own lines overlap the fragment's lines, a
 unit's own lines being `[lead_start_line, end_line]` minus those of its direct inner
 units (the spans innermost attribution credits, blank lines kept). A fragment spanning
 three methods maps to the three methods, and to their impl only when it also overlaps a
@@ -396,9 +415,10 @@ fragment outside every unit maps to none. A commit of the units' lineage is one-
 `both_sides` when it touched both. `units_a`, `units_b` and `shared_units` count the
 sets and their intersection, `side_units_a` and `side_units_b` list them, and `kind_a`,
 `unit_a` (`kind_b`, `unit_b`) name the unit with the most own lines in the fragment.
-`same_unit` now means that the two sets are identical (before this rule: that both
-sides resolved to one unit). `clone_sides := 'contain'` restores the previous sides:
-the smallest unit containing the whole fragment, none when it spans units.
+`same_unit` means that the two sets are identical (under `contain`: that both sides
+resolved to one unit). `overlap` was the default for one increment; it lowered the
+clone signal's retrospective precision without bringing back the case it was for
+(docs/research/code-db-clone-sides-2026-10-27.md), and `contain` is the default again.
 
 It counts a pair's commits from when both sides exist: only the commits at or after
 the latest first commit in its lineage (the first commit of `unit_history`) of any unit
@@ -423,6 +443,10 @@ Limits:
   `ambiguous`, and test functions written from one template are the commonest case.
 - **Names are reused.** An identity removed and later re-added under the same path and
   name is still one identity (as in `unit_changes`).
+- **Inheritance needs the enclosing unit's own link.** An inner unit inherits only
+  through a `content_match` or `body_move` of a unit enclosing it at that commit; when
+  the enclosing unit's rename is itself below the threshold, its inner units stay
+  unlinked too.
 - **Live**, a query over `unit_history` derives the successions and reads
   `unit_changes` again: `unit_churn` live takes about 18 s and 17 GB on this repository
   (8–9 GB before lineage), `derived_unit_successions` alone 14 s and 8 GB; both caches
@@ -871,7 +895,14 @@ kept as a one-line call. It asserts `commit_order` against `git rev-list`, every
 `from_sha`), `unit_churn`'s commits, `commits_by_name`, `ancestors` and
 `successors_at_split` for each successor and the stub, `unit_churn` agreeing with
 `unit_history` and `unit_lineage_counts`, a higher `lineage_threshold` dropping the
-split and the merge, and the same rows through `cache.sql`. The history fixture
+split and the merge, and the same rows through `cache.sql`. Five more commits cover
+`inherited`: an impl with two methods and a module holding a type, an impl and a
+method are added; one method and the inner method are edited; the impl's type is
+renamed (type and impl headers only) with its other method edited and a method added
+in the same commit; then the module is renamed. It asserts every succession of the two
+renames (the untouched method `inherited`, the edited one its own `content_match`, no
+predecessor for the added method, the module's type, impl and method `inherited` from
+the module's link), each unit's `unit_history`, and the method's lineage chain. The history fixture
 asserts its own successions (the modified units in place, the renamed test as a
 content match at 0.5, the pure rename) and the renamed test's churn.
 
@@ -885,7 +916,8 @@ ids), every row of `unit_changes` per commit (`added`, `modified`,
 `removed` under the old path of a rename, nothing for README-only and
 pure-rename commits), `unit_churn` (commits and authors, `since_time`,
 `kind`), `clone_change_consistency` (one side only once, both twice; a side over a
-type, an impl's header and its method, unresolved with `clone_sides := 'contain'`;
+type, an impl's header and its method with `clone_sides := 'overlap'`, unresolved
+under the default `contain`;
 `clone_source`; `since_sha`), and `since` narrowing `blob_files` and
 `unit_changes`. `unit_changes` is asserted under both attributions: the impls
 credited with their methods' changes appear only with `all`.
@@ -931,8 +963,8 @@ commits of the first (one-sided 1 / 1 from the copy on, `since_sha` the copy; 3 
 `clone_before_both`); two copies of an impl with two methods, paired twice, from the
 first method's body into the second's and from the impl's header into the first method,
 then one side's first method edited and the other side's header (sides of two methods,
-then of a method and the impl: one-sided 1 / 0 and 1 / 1; with `clone_sides :=
-'contain'` both pairs' sides are the impls, one-sided 0 / 1); an impl whose method body
+then of a method and the impl with `clone_sides := 'overlap'`: one-sided 1 / 0 and
+1 / 1; under the default `contain` both pairs' sides are the impls, one-sided 0 / 1); an impl whose method body
 changes, then whose header changes (the method, then the impl, in `unit_changes`; the impl both times with `attribution :=
 'all'`); in another impl, a method's doc comment and then another method's attribute
 changed (the method each time; the impl with `all`), a method added after a blank line
@@ -1073,7 +1105,7 @@ which `00_load.sql` (and `refresh.sql`) take as a snapshot.
 | `cochange_link_commits` | `false` (`true`: link commits count in co-change) | `unit_commits`, `unit_cochange`, `edge_cochange`, `cochange_without_reference` |
 | `include_tests` | `false` (`true`: pairs with a test unit stay) | `unit_cochange`, `cochange_without_reference` |
 | `clone_before_both` | `false` (`true`: commits before the later side's first commit count) | `clone_change_consistency` |
-| `clone_sides` | `'overlap'` (`'contain'`: a side is the smallest unit containing the whole fragment) | `clone_change_consistency` |
+| `clone_sides` | `'contain'` (`'overlap'`: a side is the innermost units whose own lines overlap the fragment) | `clone_change_consistency` |
 | `cycle_edges` | `'collapsed'` (`'raw'`: every module edge) | `module_cycle_edges`, `module_cycles` and the `module_cycles` query |
 
 The source files are the regular files (mode `100644` or `100755`) that

@@ -380,8 +380,9 @@ GROUP BY gs.cycle;
 -- lineage (unit_history, views/lineage.sql: its own changes and those of the units it
 -- continues; two current units with the same identity, such as two `impl Foo` blocks of
 -- one file, are both credited), without the commits at which that lineage links an
--- identity (unit_history.via_link: a file_rename, content_match or body_move), so that
--- two units moved, renamed or split in one commit do not share that commit. As in
+-- identity (unit_history.via_link: a file_rename, content_match, body_move or inherited
+-- link), so that two units moved, renamed or split in one commit do not share that
+-- commit. As in
 -- queries/file_cochange.sql, commits touching more than max_commit_files files (all
 -- files, every language) are dropped, and merges count only with include_merges.
 -- Parameters (DuckDB variables; default when unset): max_commit_files 50;

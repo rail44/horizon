@@ -1,7 +1,9 @@
 -- Question: for each clone pair, how often did history change one side's units
 -- without the other's, and how often both together?
 -- Sides follow `clone_sides`:
---   overlap (default)  a side's units are the innermost units whose own lines overlap
+--   contain (default)  the smallest current unit whose line range contains the whole
+--                      fragment (none when the fragment spans units).
+--   overlap            a side's units are the innermost units whose own lines overlap
 --                      the fragment's lines. A unit's own lines are [lead_start_line,
 --                      end_line] (its leading doc comments and attributes included,
 --                      lang/rust.sql) minus the same lines of its direct inner units, the
@@ -9,8 +11,6 @@
 --                      lines kept. A fragment spanning three methods maps to those three,
 --                      plus their impl only when it overlaps the impl's own lines (its
 --                      header, its closing line, the lines between its methods).
---   contain            the smallest current unit whose line range contains the whole
---                      fragment (none when the fragment spans units), as before this rule.
 -- A fragment outside every unit maps to none; such a side gets no commits. Commits: the
 -- commits of each unit's lineage (unit_history, views/lineage.sql). A commit is only_a
 -- when it touched any of side a's units and none of side b's, only_b symmetrically, and
@@ -33,7 +33,7 @@
 -- inconsistencies were faults; Mondal et al. on late propagation); clone
 -- length is not a supported predictor (Wagner et al. 2016). Not studied in Rust.
 -- Parameters (DuckDB variables; default when unset):
---   clone_sides 'overlap' ('contain': the sides as before this rule);
+--   clone_sides 'contain' ('overlap': the sets of overlapping units above);
 --   clone_source NULL (all reports; or a source label such as 'exact');
 --   include_merges (00_load.sql, false) also counts merges against their first parent;
 --   lineage_threshold (views/lineage.sql, 0.5); attribution (views/unit_changes.sql,
@@ -43,8 +43,8 @@
 WITH params AS MATERIALIZED (
     SELECT CAST(getvariable('clone_source') AS VARCHAR) AS clone_source,
            coalesce(CAST(getvariable('clone_before_both') AS BOOLEAN), false) AS before_both,
-           CASE WHEN coalesce(getvariable('clone_sides'), 'overlap') IN ('overlap', 'contain')
-                THEN coalesce(getvariable('clone_sides'), 'overlap')
+           CASE WHEN coalesce(getvariable('clone_sides'), 'contain') IN ('overlap', 'contain')
+                THEN coalesce(getvariable('clone_sides'), 'contain')
                 ELSE error('clone_change_consistency: clone_sides is overlap or contain') END AS clone_sides
 ),
 sides AS MATERIALIZED (

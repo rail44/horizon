@@ -18,6 +18,16 @@
 --                 added unit of the commit is similar to the pre-image: the pre-image
 --                 links to the added unit, and the unit that kept the name (the stub)
 --                 gets no predecessor at that commit: its lineage restarts there.
+--   inherited     an inner unit of a content_match or body_move predecessor (qualified
+--                 name extending the predecessor's) linked to the identity with the
+--                 successor's path and qualified name and the same relative name, so
+--                 that the methods of a renamed impl, untouched by the commit, continue.
+--                 Kept only when that identity is a unit of the new side, neither
+--                 identity has a content_match, body_move or file_rename link of its own
+--                 at the commit (those take precedence), and neither continues as itself
+--                 (the predecessor on the new side or the successor on the old side,
+--                 under the same path). Every nesting level is reached from the linked
+--                 unit itself.
 -- Similarity is the Jaccard index of the two texts' sets of lines, each line with its
 -- whitespace runs collapsed (normalize_ws) and blank lines dropped; a unit's text is the
 -- lines [start_line, end_line] of every unit with its identity in that blob. content_match
@@ -28,7 +38,8 @@
 -- `ambiguous` marks a content_match or body_move link whose predecessor or successor
 -- has several links at the commit, or whose two best candidates on either side are
 -- within 0.1 of each other (a modified unit's own post-image counts as one of its
--- pre-image's candidates).
+-- pre-image's candidates); an inherited link is ambiguous when the link it derives
+-- from is, or when its predecessor or successor has several inherited links.
 --
 -- History follows the body, not the name, and is the union over every ancestor:
 -- unit_lineage walks the successions back from each current unit; an ancestor reached
@@ -225,7 +236,7 @@ close_calls AS MATERIALIZED (
     HAVING count(*) FILTER (WHERE rn <= 2) = 2
        AND max(similarity) FILTER (WHERE rn = 1) - max(similarity) FILTER (WHERE rn = 2) < 0.1
 ),
-matched_links AS (
+matched_links AS MATERIALIZED (
     SELECT p.sha, p.node_path AS pred_path, p.kind AS pred_kind, p.qualified_name AS pred_qualified_name,
            s.node_path AS succ_path, s.kind AS succ_kind, s.qualified_name AS succ_qualified_name,
            m.link, m.similarity,
@@ -246,18 +257,105 @@ same_name_links AS (
     WHERE p.node_path = s.node_path AND p.img NOT IN (SELECT img FROM moved)
 ),
 -- Every unit of a renamed file that keeps its kind and name, unless its body moved.
-file_rename_links AS (
-    SELECT r.sha, r.old_path, r.kind, r.qualified_name, r.path, r.kind, r.qualified_name,
-           'file_rename', coalesce(o.similarity, 1.0), false
+file_rename_links AS MATERIALIZED (
+    SELECT r.sha, r.old_path, r.kind, r.qualified_name, r.path AS succ_path, r.kind AS succ_kind,
+           r.qualified_name AS succ_qualified_name, 'file_rename', coalesce(o.similarity, 1.0), false
     FROM rename_units r
     LEFT JOIN image_keys p ON p.sha = r.sha AND p.side = 'old' AND p.change_kind = 'modified'
          AND p.node_path = r.old_path AND p.kind = r.kind AND p.qualified_name = r.qualified_name
     LEFT JOIN scored o ON o.pred_img = p.img AND o.own
     WHERE p.img IS NULL OR p.img NOT IN (SELECT img FROM moved)
+),
+-- The identities of every unit on either side of the commit's changed files, under the
+-- path of that side.
+side_ids AS MATERIALIZED (
+    SELECT DISTINCT sha, side, CASE side WHEN 'old' THEN coalesce(old_path, path) ELSE path END AS node_path,
+           kind, qualified_name
+    FROM sides
+    WHERE sha IN (SELECT sha FROM scope)
+),
+-- The inner units of a content_match or body_move predecessor (every unit of its side
+-- whose qualified name extends the predecessor's), each with the identity it would have
+-- under the successor: the successor's path and qualified name, the same relative name.
+inherited_candidates AS MATERIALIZED (
+    SELECT DISTINCT m.sha, c.node_path AS pred_path, c.kind, c.qualified_name AS pred_qualified_name,
+           m.succ_path, m.succ_qualified_name || substr(c.qualified_name, length(m.pred_qualified_name) + 1)
+               AS succ_qualified_name,
+           m.ambiguous
+    FROM matched_links m
+    JOIN side_ids c ON c.sha = m.sha AND c.side = 'old' AND c.node_path = m.pred_path
+     AND starts_with(c.qualified_name, m.pred_qualified_name || '.')
+),
+-- The identities that have a link of their own at the commit: content_match and
+-- body_move predecessors and successors, file_rename predecessors.
+own_links AS MATERIALIZED (
+    SELECT DISTINCT sha, 'old' AS side, pred_path AS node_path, pred_kind AS kind,
+           pred_qualified_name AS qualified_name
+    FROM matched_links
+    UNION
+    SELECT sha, 'new', succ_path, succ_kind, succ_qualified_name FROM matched_links
+    UNION
+    SELECT sha, 'old', old_path, kind, qualified_name FROM file_rename_links
+),
+-- Kept when the inferred identity is a unit of the new side, neither identity continues
+-- as itself (the predecessor is not on the new side, the successor not on the old side,
+-- under the same path), and neither has a link of its own at the commit.
+inherited_kept AS MATERIALIZED (
+    SELECT c.*
+    FROM inherited_candidates c
+    SEMI JOIN side_ids n ON n.sha = c.sha AND n.side = 'new' AND n.node_path = c.succ_path
+     AND n.kind = c.kind AND n.qualified_name = c.succ_qualified_name
+    ANTI JOIN side_ids x ON x.sha = c.sha AND x.side = 'new' AND x.node_path = c.pred_path
+     AND x.kind = c.kind AND x.qualified_name = c.pred_qualified_name
+    ANTI JOIN side_ids o ON o.sha = c.sha AND o.side = 'old' AND o.node_path = c.succ_path
+     AND o.kind = c.kind AND o.qualified_name = c.succ_qualified_name
+    ANTI JOIN own_links lp ON lp.sha = c.sha AND lp.side = 'old' AND lp.node_path = c.pred_path
+     AND lp.kind = c.kind AND lp.qualified_name = c.pred_qualified_name
+    ANTI JOIN own_links ls ON ls.sha = c.sha AND ls.side = 'new' AND ls.node_path = c.succ_path
+     AND ls.kind = c.kind AND ls.qualified_name = c.succ_qualified_name
+),
+-- The images of the inner units kept, and the similarity of each pair of them.
+inherited_images AS MATERIALIZED (
+    SELECT DISTINCT i.sha, i.side, i.node_path, i.kind, i.qualified_name
+    FROM image_keys i
+    SEMI JOIN inherited_kept c ON c.sha = i.sha AND c.kind = i.kind
+     AND ((i.side = 'old' AND c.pred_path = i.node_path AND c.pred_qualified_name = i.qualified_name)
+          OR (i.side = 'new' AND c.succ_path = i.node_path AND c.succ_qualified_name = i.qualified_name))
+),
+inherited_similarity AS MATERIALIZED (
+    SELECT p.sha, p.node_path AS pred_path, p.kind, p.qualified_name AS pred_qualified_name,
+           s.node_path AS succ_path, s.qualified_name AS succ_qualified_name, max(o.similarity) AS similarity
+    FROM scored o
+    JOIN image_keys p ON p.img = o.pred_img
+    JOIN image_keys s ON s.img = o.succ_img
+    SEMI JOIN inherited_kept c ON c.sha = p.sha AND c.kind = p.kind AND c.pred_path = p.node_path
+     AND c.pred_qualified_name = p.qualified_name AND c.succ_path = s.node_path
+     AND c.succ_qualified_name = s.qualified_name
+    WHERE NOT o.own
+    GROUP BY ALL
+),
+-- An inner unit whose lines no hunk touched has no image; its similarity is 1.
+inherited_links AS (
+    SELECT c.sha, c.pred_path, c.kind, c.pred_qualified_name, c.succ_path, c.kind, c.succ_qualified_name,
+           'inherited',
+           CASE WHEN ip.sha IS NULL AND isu.sha IS NULL THEN 1.0 ELSE coalesce(m.similarity, 0) END,
+           c.ambiguous
+               OR count(*) OVER (PARTITION BY c.sha, c.pred_path, c.kind, c.pred_qualified_name) > 1
+               OR count(*) OVER (PARTITION BY c.sha, c.succ_path, c.kind, c.succ_qualified_name) > 1
+    FROM (SELECT sha, pred_path, kind, pred_qualified_name, succ_path, succ_qualified_name, bool_or(ambiguous) AS ambiguous
+          FROM inherited_kept GROUP BY ALL) c
+    LEFT JOIN inherited_images ip ON ip.sha = c.sha AND ip.side = 'old' AND ip.node_path = c.pred_path
+         AND ip.kind = c.kind AND ip.qualified_name = c.pred_qualified_name
+    LEFT JOIN inherited_images isu ON isu.sha = c.sha AND isu.side = 'new' AND isu.node_path = c.succ_path
+         AND isu.kind = c.kind AND isu.qualified_name = c.succ_qualified_name
+    LEFT JOIN inherited_similarity m ON m.sha = c.sha AND m.pred_path = c.pred_path AND m.kind = c.kind
+         AND m.pred_qualified_name = c.pred_qualified_name AND m.succ_path = c.succ_path
+         AND m.succ_qualified_name = c.succ_qualified_name
 )
 SELECT * FROM matched_links
 UNION ALL SELECT * FROM same_name_links
-UNION ALL SELECT * FROM file_rename_links;
+UNION ALL SELECT * FROM file_rename_links
+UNION ALL SELECT * FROM inherited_links;
 
 -- unit_successions(sha, pred_path, pred_kind, pred_qualified_name, succ_path, succ_kind,
 --     succ_qualified_name, link, similarity, ambiguous): every succession of the range.
@@ -335,7 +433,8 @@ GROUP BY w.unit_id, w.sha, w.path, w.kind, w.qualified_name, w.link, o.sha;
 -- unit_changes that touched any identity of each current unit's lineage within the range
 -- it contributes; change_kind and depth are those of the nearest such identity. via_link
 -- marks a commit at which the unit's lineage links one of its identities to its
--- predecessor (a file_rename, content_match or body_move of unit_lineage's `sha`): the
+-- predecessor (a file_rename, content_match, body_move or inherited link of
+-- unit_lineage's `sha`): the
 -- commit that moved, renamed, split or merged the code, counted here because it touched
 -- the successor. The co-change views leave these commits out (views/graph.sql,
 -- unit_commits); unit_churn counts them and reports how many (move_commits).
