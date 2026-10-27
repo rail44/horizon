@@ -489,6 +489,41 @@ the blob layer must diff merges against their first parent to cover
 every snapshot; with `include_merges := true` nothing is missing at any
 of the three commits (6,600 → 6,630 distinct blobs).
 
+## Fourteenth increment: before/after comparison (2026-10-28)
+
+([record](research/code-db-compare-2026-10-28.md)) The owner approved
+(2026-10-27) taking an earlier commit's snapshot from the cache through
+`git_tree` with an index of that tree, the correspondence from the lineage with
+ambiguous cases flagged, and comparison queries checked on the September sweep.
+The blob layer now diffs merges against their first parent whatever
+`include_merges` is (`blob_include_merges`, default true; the history views and
+everything joined to hunks still follow `include_merges`, and the row hashes of
+`unit_changes`, `unit_successions` and `unit_history` did not change; an existing
+cache rebuilt only its blob file list and parsed 30 blobs, 1.2 s).
+`views/snapshot.sql` resolves `compare_before` to a commit of `commits`, reads its
+tree scoped like the current files, joins it to `blob_units`, lists files whose
+blob is not in the layer (`snapshot_missing`) and gives each current unit its
+lineage identities at that commit (`unit_at_before`). The graph's derivation from
+`unit_occurrences` to `module_cycles` became table macros (`graph_*_over`) that the
+current views and the before side (its units, impl parts from the cached blob
+nodes, no tags, the index `scip_before`) both apply; the current graph views' rows
+are unchanged, and `derive_key` leaves out the macros of the two optional files.
+Queries: `compare_units` (kept, renamed, moved, added, removed, missing, with an
+`ambiguous` flag, loc, commits, fan-in and module on each side), `compare_graph`
+(module edges) and `compare_cycles`. On the sweep (46c37290 with the whole history,
+before e223bc20): nothing missing; the before side equal to the current views of
+an e223bc20 checkout (6,936 units, 2,343 module edges, 18 cycles, fan-in);
+`unit_at_before` equal to `retro/lineage.sql`'s walk from every current identity
+(6,703 pairs); kept 6,282, renamed 31, moved 390 (62 ambiguous in all), added
+1,276, removed 242. Against the retrospective's ground truth, 1,256 of 1,609
+by-name additions are added and 241 of 590 by-name removals removed, the rest
+linked by lineage (moves into new files, renames); of 36 preserved identities 30
+exist on both sides and 6 were created inside the range. Module edges added
+1,283, removed 214, kept 2,129; cycles appeared 5, kept 18. This branch against
+main: 415 units added, all under `duckdb-ext/`, everything else kept. Queries take
+3–6 s from the cache including the load; the new macros re-derive an existing cache's units once (8.9 s), cold and
+incremental refreshes are unchanged, and `check.py explain` counts are equal.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
