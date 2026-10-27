@@ -369,6 +369,39 @@ A first draft of the span join used over 30 GB live and was fixed by
 materializing spans and hunk sides first (12.8 s at 8.7 GB live, as
 before).
 
+## Tenth increment: limits derived at load time (2026-10-27)
+
+([record](research/code-db-limits-2026-10-27.md)) The owner asked that
+memory exhaustion be impossible by mechanism and that the values be
+derived, not fixed. `00_load.sql` now resets DuckDB's defaults and sets,
+on every read: `memory_limit` = 60 % of what the OS can give now
+(`MemAvailable` from `read_text('/proc/meminfo')` plus what this DuckDB
+already holds; floor 2 GB, else it stops with a message; ceiling DuckDB's
+default; without `/proc/meminfo`, 60 % of the default), `threads` =
+min(CPUs, 1 per GB of the limit), `temp_directory` under
+`target/code-db/tmp`, and `max_temp_directory_size` = 50 % of that
+filesystem's free space (from `run.sh`/`check.py`; unset otherwise). All
+four are overridable by variables and the chosen values are printed once
+(`limits: memory 25.3 GB (60% of 42.2 GB available, /proc/meminfo), temp
+29.1 GB (50% of 58.2 GB free), threads 24 (CPUs)` on this machine).
+`run.sh index` starts `rust-analyzer scip` and jscpd under a cap of 80 %
+of available memory (`systemd-run --user --scope -p MemoryMax` where it
+exists; this machine has neither systemd nor a cgroup memory controller,
+so `prlimit --as`, which bounds address space rather than resident size).
+Measured: a cold refresh completes at 2 GB (68 s, 0.9 GB spilled) and at
+4 GB (69 s, no spill) with caches identical to the unlimited one; the
+live `unit_churn` that peaked at 17.9 GB completes at 4 GB in 60–77 s
+with 9.9 GB of spill; a 1 GB spill cap fails with DuckDB's
+`Out of Memory Error … max_temp_directory_size`; rust-analyzer under a
+4.3 GB address-space cap aborts at 2.1 GB resident and `run.sh` reports
+the kill, keeping the previous index. Resident size overshoots the limit
+by about 0.5 GB at small limits (allocations outside DuckDB's accounting).
+Two side findings: DuckDB cannot change `temp_directory` after it has
+spilled in a session (`check.py` drops the statement on re-reads; a CLI
+session must be restarted), and before this change the layer spilled to
+DuckDB's default `.tmp` in the process's working directory, i.e. the
+Horizon checkout root.
+
 ## Open points
 
 - **Clone-side resolution (M4)**: a clone fragment that spans several
