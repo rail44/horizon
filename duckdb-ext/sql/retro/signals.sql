@@ -36,7 +36,9 @@
 -- Signals: the shipped query files, read as text and run through query(), ranked by
 -- their own order (ties broken as the query breaks them), each identity at the rank
 -- of its first row (fan_in by fan_in_files then commits, since unit_fan_in_churn orders
--- by their product). Pair signals rank an identity at the first pair it is a side of.
+-- by their product). Pair signals rank an identity at the first pair it is a side of (for
+-- clone_change_consistency, any unit of a side's set, side_units_a and side_units_b,
+-- which follow clone_sides).
 -- History signals count the commits of each unit's lineage (views/lineage.sql); the
 -- ground truth counts unit_changes by identity, or through lineage (above). module_cycles is a set (the units of every module in a cycle), with no order.
 -- retro_all_ranks_out (default /dev/null) receives every ranked identity of the scope.
@@ -176,9 +178,11 @@ UNION ALL
 SELECT 'fan_in', path, kind, qualified_name,
        row_number() OVER (ORDER BY fan_in_files DESC, commits DESC, ord), fan_in_files FROM retro_q_fan_in
 UNION ALL
-SELECT 'clone_one_sided', file_a, kind_a, unit_a, ord, one_sided FROM retro_q_clones WHERE unit_a IS NOT NULL
+SELECT 'clone_one_sided', file_a, u.kind, u.qualified_name, ord, one_sided
+FROM (SELECT file_a, ord, one_sided, unnest(side_units_a) AS u FROM retro_q_clones)
 UNION ALL
-SELECT 'clone_one_sided', file_b, kind_b, unit_b, ord, one_sided FROM retro_q_clones WHERE unit_b IS NOT NULL
+SELECT 'clone_one_sided', file_b, u.kind, u.qualified_name, ord, one_sided
+FROM (SELECT file_b, ord, one_sided, unnest(side_units_b) AS u FROM retro_q_clones)
 UNION ALL
 SELECT 'cochange_without_reference', path_a, kind_a, qualified_name_a, ord, coupling_pct FROM retro_q_cochange
 UNION ALL

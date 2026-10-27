@@ -385,12 +385,26 @@ churn and the graph's `unit_commits` (and so `unit_cochange`, `edge_cochange`,
 `cochange_without_reference`) read `unit_history`; `unit_changes` stays the
 per-commit fact.
 
-`clone_change_consistency` counts a pair's commits from when both sides exist: only
-the commits at or after the later of the two sides' first commits in their lineage
-(the first commit of `unit_history` for each side's unit) count as one-sided or both,
-and the pair reports that commit (`since_sha`, `since_time`). A side with no unit or no
-commit in the range sets no bound. `clone_before_both := true` counts every commit, as
-before this rule.
+`clone_change_consistency` maps each side of a pair (a fragment: file and lines) to a
+set of units: the innermost units whose own lines overlap the fragment's lines, a
+unit's own lines being `[lead_start_line, end_line]` minus those of its direct inner
+units (the spans innermost attribution credits, blank lines kept). A fragment spanning
+three methods maps to the three methods, and to their impl only when it also overlaps a
+line of the impl's own (its header, its closing line, a line between two methods); a
+fragment outside every unit maps to none. A commit of the units' lineage is one-sided
+(`only_a`, `only_b`) when it touched any unit of one set and none of the other, and
+`both_sides` when it touched both. `units_a`, `units_b` and `shared_units` count the
+sets and their intersection, `side_units_a` and `side_units_b` list them, and `kind_a`,
+`unit_a` (`kind_b`, `unit_b`) name the unit with the most own lines in the fragment.
+`same_unit` now means that the two sets are identical (before this rule: that both
+sides resolved to one unit). `clone_sides := 'contain'` restores the previous sides:
+the smallest unit containing the whole fragment, none when it spans units.
+
+It counts a pair's commits from when both sides exist: only the commits at or after
+the latest first commit in its lineage (the first commit of `unit_history`) of any unit
+of either side count as one-sided or both, and the pair reports that commit
+(`since_sha`, `since_time`). A unit with no commit in the range sets no bound.
+`clone_before_both := true` counts every commit, as before this rule.
 
 Limits:
 
@@ -870,8 +884,9 @@ blob, the units of every current file's blob equal to its `units` (modulo
 ids), every row of `unit_changes` per commit (`added`, `modified`,
 `removed` under the old path of a rename, nothing for README-only and
 pure-rename commits), `unit_churn` (commits and authors, `since_time`,
-`kind`), `clone_change_consistency` (one side only once, both twice; an
-unresolved side; `clone_source`; `since_sha`), and `since` narrowing `blob_files` and
+`kind`), `clone_change_consistency` (one side only once, both twice; a side over a
+type, an impl's header and its method, unresolved with `clone_sides := 'contain'`;
+`clone_source`; `since_sha`), and `since` narrowing `blob_files` and
 `unit_changes`. `unit_changes` is asserted under both attributions: the impls
 credited with their methods' changes appear only with `all`.
 
@@ -906,15 +921,19 @@ counted with `attribution := 'all'`. The refresh
 fixture's SCIP steps read `views/graph.sql` too, so the graph views and queries are
 compared with live after each refresh.
 
-A counting fixture (`check.py counting-fixture`) builds a crate of its own over sixteen
+A counting fixture (`check.py counting-fixture`) builds a crate of its own over eighteen
 commits, indexes it the same way, and asserts each counting rule against the variable
 that restores the previous count: two functions added and edited together, then moved
 together to a new file (two `content_match` links in one commit: `via_link` on the
 move, `unit_churn` 3 commits with `move_commits` 1, `unit_cochange` 2 shared commits,
 3 with `cochange_link_commits`); a clone whose second side is a copy made after two
 commits of the first (one-sided 1 / 1 from the copy on, `since_sha` the copy; 3 / 1 with
-`clone_before_both`); an impl whose method body changes, then whose header changes
-(the method, then the impl, in `unit_changes`; the impl both times with `attribution :=
+`clone_before_both`); two copies of an impl with two methods, paired twice, from the
+first method's body into the second's and from the impl's header into the first method,
+then one side's first method edited and the other side's header (sides of two methods,
+then of a method and the impl: one-sided 1 / 0 and 1 / 1; with `clone_sides :=
+'contain'` both pairs' sides are the impls, one-sided 0 / 1); an impl whose method body
+changes, then whose header changes (the method, then the impl, in `unit_changes`; the impl both times with `attribution :=
 'all'`); in another impl, a method's doc comment and then another method's attribute
 changed (the method each time; the impl with `all`), a method added after a blank line
 (the method only; the impl too with `all`), and blank lines added inside a method and
@@ -1054,6 +1073,7 @@ which `00_load.sql` (and `refresh.sql`) take as a snapshot.
 | `cochange_link_commits` | `false` (`true`: link commits count in co-change) | `unit_commits`, `unit_cochange`, `edge_cochange`, `cochange_without_reference` |
 | `include_tests` | `false` (`true`: pairs with a test unit stay) | `unit_cochange`, `cochange_without_reference` |
 | `clone_before_both` | `false` (`true`: commits before the later side's first commit count) | `clone_change_consistency` |
+| `clone_sides` | `'overlap'` (`'contain'`: a side is the smallest unit containing the whole fragment) | `clone_change_consistency` |
 | `cycle_edges` | `'collapsed'` (`'raw'`: every module edge) | `module_cycle_edges`, `module_cycles` and the `module_cycles` query |
 
 The source files are the regular files (mode `100644` or `100755`) that

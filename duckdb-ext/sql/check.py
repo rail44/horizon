@@ -20,8 +20,9 @@
         fixture (the history fixture's crate plus a module cycle, indexed the same
         way) asserts views/graph.sql and its queries, live and cached; a counting
         fixture (a crate of its own, indexed the same way) asserts each counting rule
-        (link commits, clone sides, innermost attribution, test units, structural
-        module edges) against its previous behavior.
+        (link commits, clone sides from when both exist and over the units a fragment
+        overlaps, innermost attribution, test units, structural module edges) against
+        its previous behavior.
 
     uv run --script duckdb-ext/sql/check.py scip-fixture
     uv run --script duckdb-ext/sql/check.py graph-fixture
@@ -803,13 +804,24 @@ def check_history_fixture():
         con.execute("SET VARIABLE kind = NULL")
 
         # clone_change_consistency: pair 0 changed together twice (initial, both_sides) and
-        # on side A alone once (one_side); pair 1's side B lies in no single unit.
-        # Both sides of both pairs exist from the first commit, which is since_sha (an
-        # unresolved side sets no bound).
-        consistency = [(r[0], r[5], r[9], r[12], r[13:17], names.get(r[17]))
-                       for r in rows(con, query_sql("clone_change_consistency"))]
-        assert consistency == [(0, "Shape for Square.area", "Shape for Rect.area", False, (1, 0, 2, 1), "initial"),
-                               (1, "tests.square_area", None, None, (1, 0, 0, 1), "initial")], consistency
+        # on side A alone once (one_side). Pair 1's side B (rect.rs lines 4-9) overlaps
+        # the type Rect's own lines, the impl's header and its method: those three units
+        # (Rect has the most lines in it among the smallest), changed together with side A
+        # in initial and alone in both_sides. Both sides of both pairs exist from the first
+        # commit, which is since_sha.
+        def consistency():
+            return [(r[0], r[5], r[9], r[12], r[13:17], names.get(r[17]), r[19:22])
+                    for r in rows(con, query_sql("clone_change_consistency"))]
+        assert consistency() == [
+            (0, "Shape for Square.area", "Shape for Rect.area", False, (1, 0, 2, 1), "initial", (1, 1, 0)),
+            (1, "tests.square_area", "Rect", False, (0, 1, 1, 1), "initial", (1, 3, 0))], consistency()
+        # clone_sides 'contain': pair 1's side B lies in no single unit (an unresolved side
+        # sets no bound).
+        con.execute("SET VARIABLE clone_sides = 'contain'")
+        assert consistency() == [
+            (0, "Shape for Square.area", "Shape for Rect.area", False, (1, 0, 2, 1), "initial", (1, 1, 0)),
+            (1, "tests.square_area", None, None, (1, 0, 0, 1), "initial", (1, 0, 0))], consistency()
+        con.execute("SET VARIABLE clone_sides = NULL")
         con.execute("SET VARIABLE clone_source = 'normalized'")
         assert rows(con, query_sql("clone_change_consistency")) == []
         con.execute("SET VARIABLE clone_source = NULL")
@@ -1460,10 +1472,12 @@ def check_graph_fixture():
 COUNTING_LIB = """\
 pub mod clones;
 pub mod doc;
+pub mod left;
 pub mod mover;
 pub mod parent;
 pub mod ping;
 pub mod pong;
+pub mod right;
 pub mod shape;
 pub mod twin_a;
 pub mod twin_b;
@@ -1587,6 +1601,26 @@ COUNTING_THRICE = """\
     }
 """
 
+# Two methods of one impl with no line of the impl's own between them (the second's doc
+# comment is its own): left.rs and right.rs, a clone pair spanning both methods.
+COUNTING_SPLIT = """\
+pub struct {name} {
+    pub n: u32,
+}
+
+impl {name} {
+    pub fn first(&self) -> u32 {
+        let a = self.n + 1;
+        a * 2
+    }
+    /// The second.
+    pub fn second(&self) -> u32 {
+        let b = self.n + 2;
+        b * 3
+    }
+}
+"""
+
 COUNTING_PING = "pub fn ping(n: u32) -> u32 {\n    if n == 0 { 0 } else { crate::pong::pong(n - 1) }\n}\n"
 COUNTING_PONG = "pub fn pong(n: u32) -> u32 {\n    if n == 0 { 1 } else { crate::ping::ping(n - 1) }\n}\n"
 COUNTING_TEST = "#[test]\nfn {name}() {{\n    assert_eq!(fixture::stay(), {value});\n}}\n"
@@ -1614,6 +1648,8 @@ def build_counting_fixture(root):
     write(repo, "src/clones.rs", original)
     write(repo, "src/shape.rs", COUNTING_SHAPE)
     write(repo, "src/doc.rs", COUNTING_DOC)
+    write(repo, "src/left.rs", COUNTING_SPLIT.replace("{name}", "Left"))
+    write(repo, "src/right.rs", COUNTING_SPLIT.replace("{name}", "Right"))
     write(repo, "src/parent.rs", COUNTING_PARENT)
     write(repo, "src/parent/child.rs", COUNTING_CHILD)
     write(repo, "src/twin_a.rs", COUNTING_TWIN_A)
@@ -1670,14 +1706,25 @@ def build_counting_fixture(root):
     doc = doc.replace("    }\n\n    #[inline", "    }\n\n\n    #[inline")
     write(repo, "src/doc.rs", doc)
     commit("blank_only", "Add blank lines", "2026-01-16T00:00:00Z")
+    write(repo, "src/left.rs", COUNTING_SPLIT.replace("{name}", "Left").replace("self.n + 1", "self.n + 10"))
+    commit("edit_left_first", "Edit the first method of one side", "2026-01-17T00:00:00Z")
+    write(repo, "src/right.rs", COUNTING_SPLIT.replace("{name}", "Right")
+          .replace("impl Right {", "impl Right where Right: Sized {"))
+    commit("edit_right_header", "Edit the other side's impl header", "2026-01-18T00:00:00Z")
     return repo, sha
 
 
 def counting_report(root, repo):
-    """A jscpd-shaped report pairing the body of `original` with that of `copied`."""
+    """A jscpd-shaped report pairing the body of `original` with that of `copied`, and
+    left.rs with right.rs twice: from the first method's body into the second's, and
+    from the impl's header into the first method."""
     clones = (repo / "src/clones.rs").read_text()
     copy = (repo / "src/copy.rs").read_text()
     a, b = line_of(clones, "let positive"), line_of(copy, "let positive")
+    left, right = (repo / "src/left.rs").read_text(), (repo / "src/right.rs").read_text()
+    la, ra = line_of(left, "let a ="), line_of(right, "let a =")
+    lb, rb = line_of(left, "let b ="), line_of(right, "let b =")
+    lh, rh = line_of(left, "impl Left"), line_of(right, "impl Right")
 
     def side(path, start, end):
         return {"name": str(repo / path), "start": start, "end": end,
@@ -1685,7 +1732,11 @@ def counting_report(root, repo):
                 "endLoc": {"line": end, "column": 1, "position": 0}}
 
     duplicates = [{"format": "rust", "lines": 5, "tokens": 60, "fragment": "", "isNew": False, "kind": "exact",
-                   "firstFile": side("src/clones.rs", a, a + 4), "secondFile": side("src/copy.rs", b, b + 4)}]
+                   "firstFile": side("src/clones.rs", a, a + 4), "secondFile": side("src/copy.rs", b, b + 4)},
+                  {"format": "rust", "lines": lb - la + 1, "tokens": 50, "fragment": "", "isNew": False,
+                   "kind": "exact", "firstFile": side("src/left.rs", la, lb), "secondFile": side("src/right.rs", ra, rb)},
+                  {"format": "rust", "lines": la - lh + 1, "tokens": 50, "fragment": "", "isNew": False,
+                   "kind": "exact", "firstFile": side("src/left.rs", lh, la), "secondFile": side("src/right.rs", rh, ra)}]
     path = root / "jscpd" / "exact" / "jscpd-report.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"duplicates": duplicates, "statistics": {}}))
@@ -1693,8 +1744,8 @@ def counting_report(root, repo):
 
 
 def check_counting_fixture():
-    """The five counting rules (link commits out of co-change, clone sides counted once
-    both exist, innermost attribution, test units out of co-change pairs, structural
+    """The counting rules (link commits out of co-change, clone sides counted once
+    both exist and over the units a fragment overlaps, innermost attribution, test units out of co-change pairs, structural
     module edges out of cycles), each against its previous behavior; skipped when
     rust-analyzer is not installed."""
     with tempfile.TemporaryDirectory(prefix="code-db-counting-") as tmp:
@@ -1736,12 +1787,43 @@ def check_counting_fixture():
         # original changed once alone (edit_original_again) and copied once alone (its
         # addition). With clone_before_both, original's earlier commits count as well.
         clone_sql = query_sql("clone_change_consistency")
-        clone = [(r[5], r[9], r[13:17], names.get(r[17])) for r in rows(con, clone_sql)]
-        assert clone == [("original", "copied", (1, 1, 0, 2), "copy")], clone
+
+        def clones(path):
+            return [(r[5], r[9], r[13:17], names.get(r[17])) for r in rows(con, clone_sql) if r[2] == path]
+        assert clones("src/clones.rs") == [("original", "copied", (1, 1, 0, 2), "copy")], clones("src/clones.rs")
         con.execute("SET VARIABLE clone_before_both = true")
-        clone = [(r[5], r[9], r[13:17], names.get(r[17])) for r in rows(con, clone_sql)]
-        assert clone == [("original", "copied", (3, 1, 0, 4), "copy")], clone
+        assert clones("src/clones.rs") == [("original", "copied", (3, 1, 0, 4), "copy")], clones("src/clones.rs")
         con.execute("SET VARIABLE clone_before_both = NULL")
+
+        # M4: left.rs and right.rs, cloned from the first method's body into the second's
+        # (pair 1) and from the impl's header into the first method (pair 2). Under
+        # clone_sides 'overlap' (the default) pair 1's sides are the two methods (the
+        # second's doc comment is its own; no line of the impl's own lies in between), so
+        # edit_left_first is one-sided and edit_right_header touches neither; pair 2's
+        # sides add the impl (its header), so both edits are one-sided. Under 'contain'
+        # both pairs' sides are the impls, whose own lines changed only in
+        # edit_right_header. Every pair starts at init.
+        def split_clones():
+            return {r[0]: (r[4], r[5], r[8], r[9], r[12], r[13:17], names.get(r[17]), r[19:21], r[21],
+                           [(u["kind"], u["qualified_name"]) for u in r[22]],
+                           [(u["kind"], u["qualified_name"]) for u in r[23]])
+                    for r in rows(con, clone_sql) if r[2] == "src/left.rs"}
+        assert split_clones() == {
+            # Three lines of each method (the tie goes to the later unit).
+            1: ("method", "Left.second", "method", "Right.second", False, (1, 0, 1, 1), "init", (2, 2), 0,
+                [("method", "Left.second"), ("method", "Left.first")],
+                [("method", "Right.second"), ("method", "Right.first")]),
+            2: ("method", "Left.first", "method", "Right.first", False, (1, 1, 1, 2), "init", (2, 2), 0,
+                [("method", "Left.first"), ("impl", "Left")], [("method", "Right.first"), ("impl", "Right")]),
+        }, split_clones()
+        con.execute("SET VARIABLE clone_sides = 'contain'")
+        assert split_clones() == {
+            1: ("impl", "Left", "impl", "Right", False, (0, 1, 1, 1), "init", (1, 1), 0,
+                [("impl", "Left")], [("impl", "Right")]),
+            2: ("impl", "Left", "impl", "Right", False, (0, 1, 1, 1), "init", (1, 1), 0,
+                [("impl", "Left")], [("impl", "Right")]),
+        }, split_clones()
+        con.execute("SET VARIABLE clone_sides = NULL")
 
         # M1: a change inside the method credits the method only; a change to the impl's
         # header credits the impl only. With attribution 'all' the impl takes both.
@@ -1827,6 +1909,9 @@ def check_counting_fixture():
 
         def probe_rows():
             out = [rows(con, q) for q in probe]
+            con.execute("SET VARIABLE clone_sides = 'contain'")
+            out.append(rows(con, clone_sql))
+            con.execute("SET VARIABLE clone_sides = NULL")
             con.execute("SET VARIABLE attribution = 'all'")
             out.append(rows(con, "SELECT * FROM unit_changes ORDER BY ALL"))
             con.execute("SET VARIABLE attribution = NULL")
