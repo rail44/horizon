@@ -52,10 +52,13 @@ CREATE OR REPLACE VIEW scip_index_metadata AS SELECT * FROM read_scip_metadata(g
 -- scip_document_occurrences and scip_document_symbols: the rows of scip_occurrences
 -- (without file_id) and of scip_symbols, which cache.sql and refresh.sql copy; those
 -- two files replace scip_occurrences and scip_symbols, never these. The types are fixed
--- here so that the copies do not depend on the source's. The qualification of local
--- symbols is written out rather than a macro: refresh.sql's derive_key covers every
--- macro, and a macro defined here would re-derive all units whenever this file is read.
-CREATE OR REPLACE VIEW scip_document_occurrences AS
+-- here so that the copies do not depend on the source's.
+-- scip_document_occurrences_of(index_path) is that shaping for any index file
+-- (views/graph.sql applies it to the index of an earlier tree, scip_before). Its name
+-- starts with scip_, which refresh.sql's derive_key leaves out (this file is optional, and
+-- a macro counted there would re-derive all units whenever this file is read or not);
+-- refresh.sql's scip_key covers its text instead.
+CREATE OR REPLACE MACRO scip_document_occurrences_of(index_path) AS TABLE
 SELECT document::VARCHAR AS document,
        (CASE WHEN starts_with(symbol, 'local ') THEN symbol || ' ' || document ELSE symbol END)::VARCHAR AS symbol,
        (start_line + 1)::INTEGER AS start_line, (start_char + 1)::INTEGER AS start_column,
@@ -66,8 +69,10 @@ SELECT document::VARCHAR AS document,
        (enclosing_start_char + 1)::INTEGER AS enclosing_start_column,
        (enclosing_end_line + 1)::INTEGER AS enclosing_end_line,
        (enclosing_end_char + 1)::INTEGER AS enclosing_end_column
-FROM scip_index_occurrences
+FROM read_scip(index_path)
 WHERE symbol <> '';
+
+CREATE OR REPLACE VIEW scip_document_occurrences AS FROM scip_document_occurrences_of(getvariable('scip_index'));
 
 CREATE OR REPLACE VIEW scip_document_symbols AS
 SELECT document::VARCHAR AS document,

@@ -381,13 +381,17 @@ JOIN rust_nodes n ON n.file_id = t.file_id AND n.node_id = t.node_id;
 -- last occurrence is the named trait or type (`From` in `From<Foo>`, `Baz` in
 -- `a::b::Baz<T>` and in `&'a Baz`), not a type argument. head_end is exclusive: the
 -- type arguments' start, else the part's end (1-based lines, byte columns).
-CREATE OR REPLACE VIEW rust_impl_parts AS
+-- rust_impl_parts_over(nodes_t) is the rule over a node relation named by its argument
+-- (the columns of scope_nodes, keyed by file_id), as rust_units_over is for units:
+-- rust_impl_parts applies it to the current files, views/snapshot.sql to an earlier
+-- commit's blobs.
+CREATE OR REPLACE MACRO rust_impl_parts_over(nodes_t) AS TABLE
 WITH rust_nodes AS MATERIALIZED (
     SELECT file_id, node_id, parent_id, type, sibling_index,
            start_line::BIGINT AS start_line, start_column::BIGINT AS start_column,
            end_line::BIGINT AS end_line, end_column::BIGINT AS end_column,
            descendant_count::BIGINT AS descendant_count
-    FROM scope_nodes WHERE language = 'rust'
+    FROM query_table(nodes_t) WHERE language = 'rust'
 ),
 children AS MATERIALIZED (
     SELECT c.file_id, i.node_id AS impl_node, c.node_id, c.type, c.sibling_index
@@ -436,3 +440,5 @@ SELECT p.file_id, p.impl_node AS node_id, p.part, p.start_line, p.start_column,
        coalesce(a.start_column, p.end_column) AS head_end_column
 FROM part_spans p
 LEFT JOIN first_arguments a USING (file_id, impl_node, part);
+
+CREATE OR REPLACE VIEW rust_impl_parts AS FROM rust_impl_parts_over('scope_nodes');

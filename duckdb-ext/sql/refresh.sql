@@ -193,7 +193,9 @@ SET VARIABLE refresh_syntax_key = (SELECT extension_version FROM duckdb_extensio
 -- included (sitting_duck's own among them; their text changes only with its version):
 -- reading duckdb_functions() costs about 18 ms of every refresh (sitting_duck registers
 -- thousands of functions). blob_units and blob_blank_lines are excluded because this file
--- replaces them.
+-- replaces them, and so are the macros of the two optional files, named graph_* (views/
+-- graph.sql) and scip_* (views/scip.sql): no cached layer is derived through them, and
+-- counting them would re-derive everything whenever those files are read or not.
 SET VARIABLE refresh_derive_key = md5(concat_ws(chr(10),
     (SELECT string_agg(view_name || ':' || sql, chr(10) ORDER BY view_name)
      FROM duckdb_views()
@@ -204,7 +206,8 @@ SET VARIABLE refresh_derive_key = md5(concat_ws(chr(10),
             OR view_name LIKE '%\_units' ESCAPE '\' OR view_name LIKE '%\_tags' ESCAPE '\')),
     (SELECT string_agg(function_name || ':' || macro_definition, chr(10) ORDER BY function_name, macro_definition)
      FROM duckdb_functions()
-     WHERE NOT internal AND function_type IN ('macro', 'table_macro'))));
+     WHERE NOT internal AND function_type IN ('macro', 'table_macro')
+       AND NOT starts_with(function_name, 'graph_') AND NOT starts_with(function_name, 'scip_'))));
 SET VARIABLE refresh_history_key = concat_ws(' ', 'since=' || coalesce(getvariable('since'), ''),
     'include_merges=' || getvariable('include_merges'), 'languages=' || getvariable('languages')::VARCHAR,
     'blob_dir=' || getvariable('blob_dir'));
@@ -266,7 +269,9 @@ SET VARIABLE refresh_scip_key = CASE WHEN getvariable('refresh_scip_loaded') THE
     getvariable('scip_index'), getvariable('refresh_scip_hash'),
     (SELECT md5(string_agg(view_name || ':' || sql, chr(10) ORDER BY view_name)) FROM duckdb_views()
      WHERE NOT internal AND view_name IN ('scip_index_occurrences', 'scip_index_symbols',
-                                          'scip_document_occurrences', 'scip_document_symbols'))) END;
+                                          'scip_document_occurrences', 'scip_document_symbols')),
+    (SELECT md5(string_agg(function_name || ':' || macro_definition, chr(10) ORDER BY function_name))
+     FROM duckdb_functions() WHERE NOT internal AND starts_with(function_name, 'scip_'))) END;
 
 UPDATE cache.meta SET state = 'refreshing';
 

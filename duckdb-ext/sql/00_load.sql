@@ -120,15 +120,22 @@ SET VARIABLE exclude_patterns = coalesce(getvariable('exclude_patterns'), []::VA
 -- hunks are restricted to the same extensions.
 SET VARIABLE languages = coalesce(getvariable('languages'), MAP {'rs': 'rust'});
 
+-- is_source_file(path, mode): whether a tree entry is a source file: a regular file
+-- (mode 100644 or 100755; a symlink's blob is its target path and a submodule's id is a
+-- commit, neither the content read_ast parses) with an extension in `languages` and no
+-- match in `exclude_patterns`. The current files and an earlier commit's tree
+-- (views/snapshot.sql) are scoped by this one rule.
+CREATE OR REPLACE MACRO is_source_file(path, mode) AS
+    mode IN ('100644', '100755')
+    AND getvariable('languages')[regexp_extract(path, '\.([^./]+)$', 1)] IS NOT NULL
+    AND NOT coalesce(list_bool_or(list_transform(getvariable('exclude_patterns'), lambda p: path GLOB p)), false);
+
 -- tracked_source_files(path, mode, blob_id): the source files now, computed at every
--- scan. Only regular files (mode 100644 or 100755) count; a symlink's blob is its
--- target path and a submodule's id is a commit, neither the content read_ast parses.
+-- scan.
 CREATE OR REPLACE VIEW tracked_source_files AS
 SELECT path, mode, blob_id
 FROM git_tracked_files(getvariable('repo'), include_untracked := getvariable('include_untracked'))
-WHERE mode IN ('100644', '100755')
-  AND getvariable('languages')[regexp_extract(path, '\.([^./]+)$', 1)] IS NOT NULL
-  AND NOT coalesce(list_bool_or(list_transform(getvariable('exclude_patterns'), lambda p: path GLOB p)), false);
+WHERE is_source_file(path, mode);
 
 -- The snapshot every view reads: a list of {path, mode, blob_id} sorted by path, and
 -- the absolute paths for the table functions. refresh.sql repeats these two statements.

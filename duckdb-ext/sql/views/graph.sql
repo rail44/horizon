@@ -4,9 +4,19 @@
 -- derived from units, tags, impl_parts (views/units.sql), scip_occurrences
 -- (views/scip.sql) and unit_history (views/lineage.sql).
 --
--- Optional, read after views/scip.sql (which it needs): nothing else depends on it.
--- cache.sql and refresh.sql keep these views as views; they read whichever layers are
--- in place.
+-- Optional, read after views/scip.sql (which it needs) and views/snapshot.sql: nothing
+-- else depends on it. cache.sql and refresh.sql keep these views as views; they read
+-- whichever layers are in place.
+--
+-- One derivation, two trees. The views from unit_occurrences to module_cycles are each a
+-- table macro graph_<view>_over(...) applied to the current tree: the macro's arguments
+-- name its input relations (files_t, units_t, tags_t, impl_parts_t, occurrences_t, with
+-- the columns of files, units, tags, impl_parts and scip_occurrences), read with
+-- query_table, and a macro reads the steps before it by applying their macros to the same
+-- names. The before/after comparison (end of this file) applies the same macros to an
+-- earlier commit's tree (views/snapshot.sql) and the index of that tree (scip_before).
+-- The macros are named graph_*, which refresh.sql's derive_key leaves out: no cached layer
+-- is derived through them, and this file is optional.
 --
 -- Locating an occurrence. An occurrence is inside a unit when its lines lie within the
 -- unit's lines [start_line, end_line] (units have lines only; a definition spanning the
@@ -35,17 +45,17 @@
 -- with the innermost unit containing it (NULL outside every unit: `use` declarations
 -- and other items at file level), and whether a generated_or_macro tag's lines contain
 -- it. Local symbols are kept (is_local) so that their share can be counted.
-CREATE OR REPLACE VIEW unit_occurrences AS
+CREATE OR REPLACE MACRO graph_unit_occurrences_over(units_t, tags_t, occurrences_t) AS TABLE
 WITH unit_lines AS MATERIALIZED (
-    SELECT unit_id, file_id, start_line, end_line FROM units
+    SELECT unit_id, file_id, start_line, end_line FROM query_table(units_t)
 ),
 occurrences AS MATERIALIZED (
     SELECT row_number() OVER () AS occurrence_ord, file_id, symbol, start_line, start_column,
            end_line, end_column, is_definition, starts_with(symbol, 'local ') AS is_local
-    FROM scip_occurrences WHERE file_id IS NOT NULL
+    FROM query_table(occurrences_t) WHERE file_id IS NOT NULL
 ),
 macros AS MATERIALIZED (
-    SELECT file_id, start_line, end_line FROM tags WHERE tag = 'generated_or_macro'
+    SELECT file_id, start_line, end_line FROM query_table(tags_t) WHERE tag = 'generated_or_macro'
 ),
 located AS MATERIALIZED (
     SELECT o.occurrence_ord, max(u.unit_id) AS unit_id
@@ -64,17 +74,21 @@ FROM occurrences o
 LEFT JOIN located l USING (occurrence_ord)
 LEFT JOIN in_macro m USING (occurrence_ord);
 
+CREATE OR REPLACE VIEW unit_occurrences AS FROM graph_unit_occurrences_over('units', 'tags', 'scip_occurrences');
+
 -- unit_tests(unit_id, is_test): whether a test-tagged node of the unit's file contains
 -- the unit's lines (a #[test] function, a #[cfg(test)] module and what it holds, every
 -- unit of a file under tests/).
-CREATE OR REPLACE VIEW unit_tests AS
+CREATE OR REPLACE MACRO graph_unit_tests_over(units_t, tags_t) AS TABLE
 WITH test_lines AS MATERIALIZED (
-    SELECT DISTINCT file_id, start_line, end_line FROM tags WHERE tag = 'test'
+    SELECT DISTINCT file_id, start_line, end_line FROM query_table(tags_t) WHERE tag = 'test'
 )
 SELECT u.unit_id,
        EXISTS (SELECT 1 FROM test_lines t
                WHERE t.file_id = u.file_id AND t.start_line <= u.start_line AND u.end_line <= t.end_line) AS is_test
-FROM units u;
+FROM query_table(units_t) u;
+
+CREATE OR REPLACE VIEW unit_tests AS FROM graph_unit_tests_over('units', 'tags');
 
 -- unit_references(src_unit_id, dst_unit_id, symbol, occurrences, macro_occurrences,
 --     via_macro, ambiguous, src_is_test, dst_is_test): for each non-local symbol, the
@@ -88,9 +102,9 @@ FROM units u;
 -- pair of definitions is too). References outside every unit, and symbols defined in
 -- no unit (external crates, file modules, consts and statics at file level), give no
 -- edge.
-CREATE OR REPLACE VIEW unit_references AS
+CREATE OR REPLACE MACRO graph_unit_references_over(units_t, tags_t, occurrences_t) AS TABLE
 WITH located AS MATERIALIZED (
-    SELECT symbol, unit_id, is_definition, in_macro FROM unit_occurrences
+    SELECT symbol, unit_id, is_definition, in_macro FROM graph_unit_occurrences_over(units_t, tags_t, occurrences_t)
     WHERE NOT is_local AND unit_id IS NOT NULL
 ),
 defs AS MATERIALIZED (
@@ -103,7 +117,7 @@ refs AS (
     GROUP BY ALL
 ),
 tests AS MATERIALIZED (
-    SELECT * FROM unit_tests
+    SELECT * FROM graph_unit_tests_over(units_t, tags_t)
 )
 SELECT r.unit_id AS src_unit_id, d.unit_id AS dst_unit_id, r.symbol, r.occurrences, r.macro_occurrences,
        r.macro_occurrences = r.occurrences AS via_macro, d.ambiguous,
@@ -113,18 +127,22 @@ JOIN defs d USING (symbol)
 JOIN tests ts ON ts.unit_id = r.unit_id
 JOIN tests td ON td.unit_id = d.unit_id;
 
+CREATE OR REPLACE VIEW unit_references AS FROM graph_unit_references_over('units', 'tags', 'scip_occurrences');
+
 -- unit_edges(src_unit_id, dst_unit_id, symbols, occurrences, macro_occurrences, is_self,
 --     via_macro, ambiguous, src_is_test, dst_is_test): unit_references folded over
 -- symbols. symbols is the number of distinct symbols; is_self marks a unit referencing
 -- what it defines itself (a recursive call, an enum's variants named in its own
 -- definition); via_macro (ambiguous) is true when every symbol of the edge is.
-CREATE OR REPLACE VIEW unit_edges AS
+CREATE OR REPLACE MACRO graph_unit_edges_over(units_t, tags_t, occurrences_t) AS TABLE
 SELECT src_unit_id, dst_unit_id, count(*) AS symbols, sum(occurrences) AS occurrences,
        sum(macro_occurrences) AS macro_occurrences, src_unit_id = dst_unit_id AS is_self,
        bool_and(via_macro) AS via_macro, bool_and(ambiguous) AS ambiguous,
        any_value(src_is_test) AS src_is_test, any_value(dst_is_test) AS dst_is_test
-FROM unit_references
+FROM graph_unit_references_over(units_t, tags_t, occurrences_t)
 GROUP BY src_unit_id, dst_unit_id;
+
+CREATE OR REPLACE VIEW unit_edges AS FROM graph_unit_edges_over('units', 'tags', 'scip_occurrences');
 
 -- unit_contains(parent_unit_id, child_unit_id): the nesting of units (units.parent_unit_id).
 CREATE OR REPLACE VIEW unit_contains AS
@@ -132,9 +150,9 @@ SELECT parent_unit_id, unit_id AS child_unit_id FROM units WHERE parent_unit_id 
 
 -- unit_ancestors(unit_id, ancestor_id, depth): every unit with itself (depth 0) and
 -- each enclosing unit (depth 1 for the parent, ...), along unit_contains.
-CREATE OR REPLACE VIEW unit_ancestors AS
+CREATE OR REPLACE MACRO graph_unit_ancestors_over(units_t) AS TABLE
 WITH RECURSIVE unit_rows AS MATERIALIZED (
-    SELECT unit_id, parent_unit_id FROM units
+    SELECT unit_id, parent_unit_id FROM query_table(units_t)
 ),
 chain(unit_id, ancestor_id, depth) AS (
     SELECT unit_id, unit_id, 0 FROM unit_rows
@@ -145,18 +163,20 @@ chain(unit_id, ancestor_id, depth) AS (
 )
 SELECT * FROM chain;
 
+CREATE OR REPLACE VIEW unit_ancestors AS FROM graph_unit_ancestors_over('units');
+
 -- impl_targets(impl_unit_id, part, symbol, target_unit_id): for each impl unit, its
 -- `type` part and (for a trait impl) its `trait` part (impl_parts), the symbol of the
 -- last reference occurrence in the part's head (NULL when the head has none), and the
 -- `type` unit that defines that symbol (NULL when none does: an external trait or type,
 -- a type parameter, a primitive). One row per part and target unit.
-CREATE OR REPLACE VIEW impl_targets AS
+CREATE OR REPLACE MACRO graph_impl_targets_over(units_t, tags_t, impl_parts_t, occurrences_t) AS TABLE
 WITH parts AS MATERIALIZED (
     SELECT u.unit_id AS impl_unit_id, p.*
-    FROM impl_parts p JOIN units u ON u.file_id = p.file_id AND u.node_id = p.node_id AND u.kind = 'impl'
+    FROM query_table(impl_parts_t) p JOIN query_table(units_t) u ON u.file_id = p.file_id AND u.node_id = p.node_id AND u.kind = 'impl'
 ),
 occurrences AS MATERIALIZED (
-    SELECT file_id, symbol, start_line, start_column, is_definition, is_local, unit_id FROM unit_occurrences
+    SELECT file_id, symbol, start_line, start_column, is_definition, is_local, unit_id FROM graph_unit_occurrences_over(units_t, tags_t, occurrences_t)
 ),
 heads AS MATERIALIZED (
     SELECT p.impl_unit_id, p.part,
@@ -169,7 +189,7 @@ heads AS MATERIALIZED (
 ),
 type_defs AS MATERIALIZED (
     SELECT DISTINCT o.symbol, o.unit_id
-    FROM occurrences o JOIN units u ON u.unit_id = o.unit_id AND u.kind = 'type'
+    FROM occurrences o JOIN query_table(units_t) u ON u.unit_id = o.unit_id AND u.kind = 'type'
     WHERE o.is_definition AND NOT o.is_local
 )
 SELECT p.impl_unit_id, p.part, h.symbol, d.unit_id AS target_unit_id
@@ -177,11 +197,15 @@ FROM parts p
 LEFT JOIN heads h USING (impl_unit_id, part)
 LEFT JOIN type_defs d ON d.symbol = h.symbol;
 
+CREATE OR REPLACE VIEW impl_targets AS FROM graph_impl_targets_over('units', 'tags', 'impl_parts', 'scip_occurrences');
+
 -- impl_for(impl_unit_id, type_unit_id) and implements(impl_unit_id, trait_unit_id): the
 -- impl_targets that resolved to a unit.
-CREATE OR REPLACE VIEW impl_for AS
-SELECT impl_unit_id, target_unit_id AS type_unit_id FROM impl_targets
+CREATE OR REPLACE MACRO graph_impl_for_over(units_t, tags_t, impl_parts_t, occurrences_t) AS TABLE
+SELECT impl_unit_id, target_unit_id AS type_unit_id FROM graph_impl_targets_over(units_t, tags_t, impl_parts_t, occurrences_t)
 WHERE part = 'type' AND target_unit_id IS NOT NULL;
+
+CREATE OR REPLACE VIEW impl_for AS FROM graph_impl_for_over('units', 'tags', 'impl_parts', 'scip_occurrences');
 
 CREATE OR REPLACE VIEW implements AS
 SELECT impl_unit_id, target_unit_id AS trait_unit_id FROM impl_targets
@@ -191,12 +215,14 @@ WHERE part = 'trait' AND target_unit_id IS NOT NULL;
 -- layout: crates/<name>/... is <name>, preview-plugin/... is preview-plugin,
 -- duckdb-ext/<name>/... is <name>, anything else the root package horizon. The name is
 -- the directory's, which is the package name in this repository.
-CREATE OR REPLACE VIEW file_crate AS
+CREATE OR REPLACE MACRO graph_file_crate_over(files_t) AS TABLE
 SELECT file_id,
        CASE WHEN path LIKE 'crates/%/%' OR path LIKE 'duckdb-ext/%/%' THEN split_part(path, '/', 2)
             WHEN path LIKE 'preview-plugin/%' THEN 'preview-plugin'
             ELSE 'horizon' END AS crate
-FROM files;
+FROM query_table(files_t);
+
+CREATE OR REPLACE VIEW file_crate AS FROM graph_file_crate_over('files');
 
 -- modules(module, file_id, module_unit_id, crate, module_path): every file as an
 -- implicit module (module = its path, module_unit_id NULL) and every module unit (module
@@ -209,39 +235,43 @@ FROM files;
 -- src/x.rs). A module is an ancestor of another when its module_path is a prefix of the
 -- other's at a `/`. `#[path]` attributes are not read, and a binary under src/bin/ is
 -- placed under the library's root.
-CREATE OR REPLACE VIEW modules AS
+CREATE OR REPLACE MACRO graph_modules_over(files_t, units_t) AS TABLE
 WITH file_modules AS MATERIALIZED (
     SELECT f.path, f.file_id, c.crate,
            CASE WHEN regexp_matches(f.path, '(^|/)(lib|main|mod)\.rs$')
                 THEN regexp_replace(f.path, '/?(lib|main|mod)\.rs$', '')
                 ELSE regexp_replace(f.path, '\.rs$', '') END AS module_path
-    FROM files f JOIN file_crate c USING (file_id)
+    FROM query_table(files_t) f JOIN graph_file_crate_over(files_t) c USING (file_id)
 )
 SELECT path AS module, file_id, NULL::BIGINT AS module_unit_id, crate, module_path
 FROM file_modules
 UNION ALL
 SELECT m.path || '::' || replace(u.qualified_name, '.', '::'), u.file_id, u.unit_id, m.crate,
        m.module_path || '/' || replace(u.qualified_name, '.', '/')
-FROM units u JOIN file_modules m USING (file_id)
+FROM query_table(units_t) u JOIN file_modules m USING (file_id)
 WHERE u.kind = 'module';
+
+CREATE OR REPLACE VIEW modules AS FROM graph_modules_over('files', 'units');
 
 -- unit_module(unit_id, module, module_unit_id, file_id, crate, module_path): the module a
 -- unit belongs to: the nearest module unit among the unit itself and its enclosing units
 -- (a module unit belongs to the module it defines), else its file's implicit module.
-CREATE OR REPLACE VIEW unit_module AS
+CREATE OR REPLACE MACRO graph_unit_module_over(files_t, units_t) AS TABLE
 WITH unit_rows AS MATERIALIZED (
-    SELECT unit_id, file_id FROM units
+    SELECT unit_id, file_id FROM query_table(units_t)
 ),
 nearest AS (
     SELECT a.unit_id, arg_min(a.ancestor_id, a.depth) AS module_unit_id
-    FROM unit_ancestors a JOIN units m ON m.unit_id = a.ancestor_id
+    FROM graph_unit_ancestors_over(units_t) a JOIN query_table(units_t) m ON m.unit_id = a.ancestor_id
     WHERE m.kind = 'module'
     GROUP BY a.unit_id
 )
 SELECT u.unit_id, m.module, n.module_unit_id, u.file_id, m.crate, m.module_path
 FROM unit_rows u
 LEFT JOIN nearest n USING (unit_id)
-JOIN modules m ON m.file_id = u.file_id AND m.module_unit_id IS NOT DISTINCT FROM n.module_unit_id;
+JOIN graph_modules_over(files_t, units_t) m ON m.file_id = u.file_id AND m.module_unit_id IS NOT DISTINCT FROM n.module_unit_id;
+
+CREATE OR REPLACE VIEW unit_module AS FROM graph_unit_module_over('files', 'units');
 
 -- module_edges(src_module, dst_module, src_crate, dst_crate, unit_edges, occurrences,
 --     test_unit_edges, macro_unit_edges, ambiguous_unit_edges, nested_modules,
@@ -256,14 +286,15 @@ JOIN modules m ON m.file_id = u.file_id AND m.module_unit_id IS NOT DISTINCT FRO
 -- the end itself included) of one type (impl_for): one type's impl blocks split over
 -- several files. module_cycle_edges leaves out the edges that are nested_modules or whose
 -- every unit edge is same-type.
-CREATE OR REPLACE VIEW module_edges AS
+CREATE OR REPLACE MACRO graph_module_edges_over(files_t, units_t, tags_t, impl_parts_t, occurrences_t) AS TABLE
 WITH m AS MATERIALIZED (
-    SELECT unit_id, module, crate, module_path FROM unit_module
+    SELECT unit_id, module, crate, module_path FROM graph_unit_module_over(files_t, units_t)
 ),
 -- The type of each unit's nearest enclosing impl that has one.
 impl_type AS MATERIALIZED (
     SELECT a.unit_id, arg_min(f.type_unit_id, a.depth) AS type_unit_id
-    FROM unit_ancestors a JOIN impl_for f ON f.impl_unit_id = a.ancestor_id
+    FROM graph_unit_ancestors_over(units_t) a
+    JOIN graph_impl_for_over(units_t, tags_t, impl_parts_t, occurrences_t) f ON f.impl_unit_id = a.ancestor_id
     GROUP BY a.unit_id
 )
 SELECT ms.module AS src_module, md.module AS dst_module, ms.crate AS src_crate, md.crate AS dst_crate,
@@ -274,13 +305,15 @@ SELECT ms.module AS src_module, md.module AS dst_module, ms.crate AS src_crate, 
        ms.crate = md.crate AND (starts_with(md.module_path || '/', ms.module_path || '/')
                                 OR starts_with(ms.module_path || '/', md.module_path || '/')) AS nested_modules,
        count(*) FILTER (WHERE ts.type_unit_id = td.type_unit_id) AS same_type_unit_edges
-FROM unit_edges e
+FROM graph_unit_edges_over(units_t, tags_t, occurrences_t) e
 JOIN m ms ON ms.unit_id = e.src_unit_id
 JOIN m md ON md.unit_id = e.dst_unit_id
 LEFT JOIN impl_type ts ON ts.unit_id = e.src_unit_id
 LEFT JOIN impl_type td ON td.unit_id = e.dst_unit_id
 WHERE NOT e.is_self AND ms.module <> md.module
 GROUP BY ms.module, md.module, ms.crate, md.crate, ms.module_path, md.module_path;
+
+CREATE OR REPLACE VIEW module_edges AS FROM graph_module_edges_over('files', 'units', 'tags', 'impl_parts', 'scip_occurrences');
 
 CREATE OR REPLACE VIEW crate_edges AS
 WITH c AS MATERIALIZED (
@@ -309,11 +342,11 @@ GROUP BY ALL;
 -- ancestor or descendant (nested_modules) and those whose every unit edge joins impls of
 -- one type (same_type_unit_edges = unit_edges). Parameter (DuckDB variable; default
 -- when unset): cycle_edges 'collapsed' ('raw': every module edge, as before this rule).
-CREATE OR REPLACE VIEW module_cycle_edges AS
+CREATE OR REPLACE MACRO graph_module_cycle_edges_over(files_t, units_t, tags_t, impl_parts_t, occurrences_t) AS TABLE
 WITH RECURSIVE edges AS MATERIALIZED (
     SELECT src_module, dst_module, unit_edges, occurrences, test_unit_edges, macro_unit_edges,
            ambiguous_unit_edges
-    FROM module_edges
+    FROM graph_module_edges_over(files_t, units_t, tags_t, impl_parts_t, occurrences_t)
     WHERE CASE coalesce(getvariable('cycle_edges'), 'collapsed')
         WHEN 'raw' THEN true
         WHEN 'collapsed' THEN NOT nested_modules AND same_type_unit_edges < unit_edges
@@ -337,16 +370,20 @@ FROM edges e
 JOIN groups gs ON gs.module = e.src_module
 JOIN groups gd ON gd.module = e.dst_module AND gd.cycle = gs.cycle;
 
-CREATE OR REPLACE VIEW module_cycles AS
+CREATE OR REPLACE VIEW module_cycle_edges AS FROM graph_module_cycle_edges_over('files', 'units', 'tags', 'impl_parts', 'scip_occurrences');
+
+CREATE OR REPLACE MACRO graph_module_cycles_over(files_t, units_t, tags_t, impl_parts_t, occurrences_t) AS TABLE
 WITH crates AS MATERIALIZED (
-    SELECT module, crate FROM modules
+    SELECT module, crate FROM graph_modules_over(files_t, units_t)
 )
 SELECT e.cycle, any_value(c.crate) AS crate, count(DISTINCT e.src_module) AS modules,
        list(DISTINCT e.src_module ORDER BY e.src_module) AS members, count(*) AS edges,
        sum(e.unit_edges) AS unit_edges, sum(e.occurrences) AS occurrences
-FROM module_cycle_edges e
+FROM graph_module_cycle_edges_over(files_t, units_t, tags_t, impl_parts_t, occurrences_t) e
 JOIN crates c ON c.module = e.src_module
 GROUP BY e.cycle;
+
+CREATE OR REPLACE VIEW module_cycles AS FROM graph_module_cycles_over('files', 'units', 'tags', 'impl_parts', 'scip_occurrences');
 
 -- crate_cycles(cycle, crates, members, edges, unit_edges, occurrences): the same over
 -- crate_edges. Cargo forbids dependency cycles between crates, so a row here means
@@ -490,3 +527,98 @@ FROM unit_cochange c
 WHERE NOT c.same_file
   AND c.coupling_pct >= coalesce(getvariable('min_coupling_pct'), 30)
   AND NOT EXISTS (SELECT 1 FROM linked l WHERE l.unit_a = c.unit_a AND l.unit_b = c.unit_b);
+
+-- The before/after comparison (README.md, "Before/after comparison").
+--
+-- unit_fan_in(unit_id, fan_in_files, reference_occurrences): for each unit with a
+-- symbol defined within its lines (a definition occurrence inside [start_line,
+-- end_line], so an enclosing unit includes what it contains), the distinct files other
+-- than its own that hold a reference occurrence of one of those symbols, and the number of
+-- those occurrences: the fan-in of queries/unit_fan_in_churn.sql, over the relations
+-- graph_unit_fan_in_over names (units_t, occurrences_t).
+CREATE OR REPLACE MACRO graph_unit_fan_in_over(units_t, occurrences_t) AS TABLE
+WITH unit_rows AS MATERIALIZED (
+    SELECT unit_id, file_id, start_line, end_line FROM query_table(units_t)
+),
+occurrences AS MATERIALIZED (
+    SELECT file_id, symbol, start_line, end_line, is_definition, is_reference
+    FROM query_table(occurrences_t) WHERE file_id IS NOT NULL
+),
+defs AS MATERIALIZED (
+    SELECT DISTINCT u.unit_id, u.file_id, o.symbol
+    FROM unit_rows u
+    JOIN occurrences o
+      ON o.file_id = u.file_id AND o.is_definition
+     AND o.start_line >= u.start_line AND o.end_line <= u.end_line
+)
+SELECT d.unit_id, count(DISTINCT o.file_id) AS fan_in_files, count(*) AS reference_occurrences
+FROM defs d
+JOIN occurrences o ON o.symbol = d.symbol AND o.is_reference AND o.file_id <> d.file_id
+GROUP BY d.unit_id;
+
+CREATE OR REPLACE VIEW unit_fan_in AS FROM graph_unit_fan_in_over('units', 'scip_occurrences');
+
+-- snapshot_scip_occurrences: the occurrences of the SCIP index `scip_before` (an index of
+-- compare_before's tree, made outside DuckDB as the current one is) in the shape of
+-- scip_occurrences, with file_id from joining `document` to snapshot_files.path. Empty
+-- when scip_before is unset (the index of the current tree is then opened when the view
+-- is bound, and never read).
+CREATE OR REPLACE VIEW snapshot_scip_occurrences AS
+SELECT f.file_id, o.*
+FROM scip_document_occurrences_of(coalesce(getvariable('scip_before'), getvariable('scip_index'))) o
+LEFT JOIN snapshot_files f ON f.path = o.document
+WHERE getvariable('scip_before') IS NOT NULL;
+
+-- The graph of the before side: the views above over snapshot_files, snapshot_units,
+-- snapshot_tags (empty: blobs have no tags), snapshot_impl_parts and
+-- snapshot_scip_occurrences. Without tags, the before side's unit edges are never
+-- via_macro nor test edges; unit_edges counts, module edges and cycles do not read them.
+CREATE OR REPLACE VIEW snapshot_unit_module AS FROM graph_unit_module_over('snapshot_files', 'snapshot_units');
+
+CREATE OR REPLACE VIEW snapshot_unit_fan_in AS
+FROM graph_unit_fan_in_over('snapshot_units', 'snapshot_scip_occurrences');
+
+CREATE OR REPLACE VIEW snapshot_module_edges AS
+FROM graph_module_edges_over('snapshot_files', 'snapshot_units', 'snapshot_tags', 'snapshot_impl_parts',
+                             'snapshot_scip_occurrences');
+
+CREATE OR REPLACE VIEW snapshot_module_cycles AS
+FROM graph_module_cycles_over('snapshot_files', 'snapshot_units', 'snapshot_tags', 'snapshot_impl_parts',
+                              'snapshot_scip_occurrences');
+
+-- module_renames(module_before, module): each module of the before side
+-- (snapshot_unit_module's modules) named as at HEAD: its file's path carried through the
+-- file renames of compare_before..HEAD (file_changes.old_path -> path, gix's rename
+-- detection, in commit order: a path is carried by the first rename of it after the
+-- commit the walk reached it at), the rest of the name (`::` and inline module names)
+-- kept. An inline module renamed in place is not followed.
+CREATE OR REPLACE VIEW module_renames AS
+WITH RECURSIVE before AS MATERIALIZED (
+    SELECT ord FROM compare_commit
+),
+renames AS MATERIALIZED (
+    SELECT o.ord, f.old_path, f.path,
+           coalesce(lag(o.ord) OVER (PARTITION BY f.old_path ORDER BY o.ord), -1) AS prev_ord
+    FROM (SELECT DISTINCT sha, old_path, path FROM file_changes
+          WHERE old_path IS NOT NULL AND old_path <> path) f
+    JOIN commit_order o USING (sha)
+    JOIN compare_range r USING (sha)
+),
+paths AS MATERIALIZED (
+    SELECT DISTINCT path FROM snapshot_files
+),
+walk(start, path, ord) AS (
+    SELECT p.path, p.path, b.ord FROM paths p, before b
+    UNION ALL
+    SELECT w.start, r.path, r.ord
+    FROM walk w JOIN renames r ON r.old_path = w.path AND r.ord > w.ord AND w.ord >= r.prev_ord
+),
+final AS MATERIALIZED (
+    SELECT start, arg_max(path, ord) AS path FROM walk GROUP BY start
+),
+before_modules AS (
+    SELECT DISTINCT m.module, f.path
+    FROM snapshot_unit_module m JOIN snapshot_files f USING (file_id)
+)
+SELECT m.module AS module_before, x.path || substr(m.module, length(m.path) + 1) AS module
+FROM before_modules m JOIN final x ON x.start = m.path;

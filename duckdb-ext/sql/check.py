@@ -22,12 +22,19 @@
         fixture (a crate of its own, indexed the same way) asserts each counting rule
         (link commits, clone sides from when both exist and over the units a fragment
         overlaps, innermost attribution, test units, structural module edges) against
-        its previous behavior.
+        its previous behavior; two comparison fixtures (indexed the same way) assert
+        compare_units on the lineage fixture against three earlier commits (renames,
+        moves, a split, a merge, a moved body, additions, a removal, missing files under
+        `since`, the errors) and the before side of views/graph.sql, compare_graph and
+        compare_cycles on the graph fixture's commits (equal to the current views at the
+        earlier commit; a cycle that appeared, then disappeared with a file rename).
 
     uv run --script duckdb-ext/sql/check.py scip-fixture
     uv run --script duckdb-ext/sql/check.py graph-fixture
     uv run --script duckdb-ext/sql/check.py counting-fixture
-        Only the SCIP fixture; only the graph fixture; only the counting fixture.
+    uv run --script duckdb-ext/sql/check.py compare-fixture
+        Only the SCIP fixture; only the graph fixture; only the counting fixture; only the
+        two comparison fixtures.
 
     The commands below read views/scip.sql and views/graph.sql too when
     REPO/target/code-db/index.scip exists, and then include their views and queries.
@@ -68,12 +75,14 @@ The process works from the root of the Horizon checkout holding this file, becau
 """
 
 import argparse
+import io
 import json
 import os
 import resource
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from pathlib import Path
@@ -92,15 +101,18 @@ VIEW_FILES = [
     "views/history.sql",
     "views/unit_changes.sql",
     "views/lineage.sql",
+    "views/snapshot.sql",
     "views/clones.sql",
 ]
 CACHE_FILE = "cache.sql"
 REFRESH_FILE = "refresh.sql"
 # The views refresh.sql points at the persistent cache, plus files (its file snapshot),
 # and the views over them that the cache changes most (unit_changes, the lineage views).
+# The snapshot views read compare_before's tree (HEAD's when it is unset, as here).
 REFRESHED_VIEWS = ["files", "nodes", "units", "tags", "commits", "file_changes", "hunks",
                    "blob_files", "blob_nodes", "blob_units", "blob_blank_lines", "unit_changes", "commit_order",
-                   "unit_successions", "unit_lineage", "unit_history", "unit_lineage_counts"]
+                   "unit_successions", "unit_lineage", "unit_history", "unit_lineage_counts",
+                   "snapshot_files", "snapshot_units", "snapshot_missing"]
 QUERIES = ["file_cochange", "file_cochange_thresholds", "clone_site_tags", "clone_site_tags_summary",
            "unit_churn", "clone_change_consistency"]
 # views/scip.sql is optional: read after VIEW_FILES when a SCIP index is given. Its views
@@ -613,6 +625,8 @@ def check_fixture():
     check_scip_fixture()
     check_graph_fixture()
     check_counting_fixture()
+    check_compare_fixture()
+    check_compare_graph_fixture()
     check_refresh_fixture()
 
 
@@ -1247,6 +1261,26 @@ def make_scip_index(repo, root):
     (crate / "Cargo.toml").write_text(FIXTURE_CARGO_TOML)
     index = repo / "target/code-db/index.scip"
     index.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([RUST_ANALYZER, "scip", str(crate), "--output", str(index)], check=True,
+                   capture_output=True, cwd=root)
+    return index
+
+
+def make_scip_index_at(repo, root, rev, name):
+    """Index the fixture's crate as of commit `rev` (its tree, from `git archive`, plus the
+    Cargo.toml of make_scip_index) into ROOT/NAME.scip, the scip_before of a comparison.
+    Returns the index, or None when rust-analyzer is not installed."""
+    if shutil.which(RUST_ANALYZER) is None:
+        return None
+    crate = root / f"scip-crate-{name}"
+    shutil.rmtree(crate, ignore_errors=True)
+    crate.mkdir()
+    archive = subprocess.run(["git", "archive", rev], cwd=repo, env=git_env(repo), check=True,
+                             capture_output=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        tar.extractall(crate, filter="data")
+    (crate / "Cargo.toml").write_text(FIXTURE_CARGO_TOML)
+    index = root / f"{name}.scip"
     subprocess.run([RUST_ANALYZER, "scip", str(crate), "--output", str(index)], check=True,
                    capture_output=True, cwd=root)
     return index
@@ -2043,6 +2077,283 @@ def check_counting_fixture():
     print("counting fixture: ok")
 
 
+# --- before/after comparison -------------------------------------------------------
+
+# compare_units columns the fixtures assert on.
+COMPARE_COLUMNS = ("status, ambiguous, path_before, kind_before, qualified_name_before, path_after, kind_after, "
+                   "qualified_name_after, commits, move_commits")
+
+
+def query_body(name):
+    """A query file's statement without its final semicolon, to wrap in a SELECT."""
+    return query_sql(name).rstrip().rstrip(";")
+
+
+def compare_rows(con, where="status <> 'kept'"):
+    return rows(con, f"SELECT {COMPARE_COLUMNS} FROM ({query_body('compare_units')}) WHERE {where} ORDER BY ALL")
+
+
+def assert_error(con, sql, text):
+    try:
+        rows(con, sql)
+    except duckdb.Error as e:
+        assert text in str(e), (text, str(e))
+        return
+    raise AssertionError(f"no error {text!r}")
+
+
+def added_row(path, kind, name, commits, move_commits):
+    return ("added", False, None, None, None, path, kind, name, commits, move_commits)
+
+
+# compare_units of the lineage fixture other than the kept rows, by compare_before step.
+# add_ops: the file rename, the rename in place, the move, the split (one before identity,
+# two after: ambiguous), the merge (two before, one after: ambiguous) and the body moved
+# under a kept name (the body is moved, the stub that kept the name is added) all change
+# the path (src/ops.rs became src/geometry.rs), so they are `moved`; src/meters.rs came
+# later and is added. add_meters: the renames inside one file are `renamed` (the methods
+# of the renamed impl and the inner units of the renamed module through inherited links;
+# untouched ones have 0 commits), the method added with the rename is added.
+GEO, METERS = "src/geometry.rs", "src/meters.rs"
+METERS_ADDED = [added_row(METERS, "impl", "Gauge", 2, 1), added_row(METERS, "method", "Gauge.calibrate", 2, 1),
+                added_row(METERS, "method", "Gauge.reading", 2, 0), added_row(METERS, "method", "Gauge.zero", 1, 0),
+                added_row(METERS, "type", "Gauge", 2, 1), added_row(METERS, "module", "dials", 2, 1),
+                added_row(METERS, "impl", "dials.Dial", 1, 0), added_row(METERS, "method", "dials.Dial.needle", 2, 0),
+                added_row(METERS, "type", "dials.Dial", 1, 0)]
+COMPARE_UNITS = {
+    "add_ops": sorted(METERS_ADDED + [
+        added_row(GEO, "function", "build_table", 1, 0),
+        ("moved", False, "src/ops.rs", "function", "build_table", GEO, "function", "table_rows", 2, 2),
+        ("moved", True, "src/ops.rs", "function", "describe", GEO, "function", "describe_kind", 1, 1),
+        ("moved", True, "src/ops.rs", "function", "describe", GEO, "function", "describe_size", 1, 1),
+        ("moved", True, "src/ops.rs", "function", "sum_heights", GEO, "function", "sum_sides", 1, 1),
+        ("moved", True, "src/ops.rs", "function", "sum_widths", GEO, "function", "sum_sides", 1, 1),
+        ("moved", False, "src/ops.rs", "function", "scale", GEO, "function", "resize", 1, 1),
+        ("moved", False, "src/ops.rs", "function", "translate", "src/moves.rs", "function", "translate", 1, 1),
+    ], key=str),
+    "add_meters": sorted([
+        added_row(METERS, "method", "Gauge.zero", 1, 0),
+        ("renamed", False, METERS, "impl", "Meter", METERS, "impl", "Gauge", 1, 1),
+        ("renamed", False, METERS, "method", "Meter.calibrate", METERS, "method", "Gauge.calibrate", 1, 1),
+        ("renamed", False, METERS, "method", "Meter.reading", METERS, "method", "Gauge.reading", 1, 0),
+        ("renamed", False, METERS, "type", "Meter", METERS, "type", "Gauge", 1, 1),
+        ("renamed", False, METERS, "module", "gauges", METERS, "module", "dials", 1, 1),
+        ("renamed", False, METERS, "impl", "gauges.Dial", METERS, "impl", "dials.Dial", 0, 0),
+        ("renamed", False, METERS, "method", "gauges.Dial.needle", METERS, "method", "dials.Dial.needle", 1, 0),
+        ("renamed", False, METERS, "type", "gauges.Dial", METERS, "type", "dials.Dial", 0, 0),
+    ], key=str),
+}
+
+
+def check_compare_fixture():
+    """views/snapshot.sql and queries/compare_units.sql over the lineage fixture, live and
+    through refresh.sql; skipped when rust-analyzer is not installed (the query needs
+    views/graph.sql)."""
+    with tempfile.TemporaryDirectory(prefix="code-db-compare-") as tmp:
+        root = Path(tmp)
+        repo, sha = build_lineage_fixture(root)
+        report, _ = fixture_report(root, repo)
+        if make_scip_index(repo, root) is None:
+            print(f"compare fixture: SKIPPED ({RUST_ANALYZER} not found)")
+            return
+        con = connect(repo, [report], scip=True)
+        live = {}
+        for step in ("added", "add_ops", "add_meters"):
+            con.execute(f"SET VARIABLE compare_before = {sql_literal(sha[step])}")
+            con.execute("SET VARIABLE scip_before = NULL")
+            # The snapshot is the step's tree: every source file, none missing.
+            tree = sorted(p for p in git_out(repo, "ls-tree", "-r", "--name-only", sha[step]).splitlines()
+                          if p.endswith(".rs"))
+            assert [r[0] for r in rows(con, "SELECT path FROM snapshot_files ORDER BY path")] == tree
+            assert rows(con, "SELECT count(*) FROM snapshot_missing") == [(0,)]
+            # Without scip_before the before side has no fan-in.
+            assert rows(con, f"SELECT count(*) FROM ({query_body('compare_units')}) "
+                             "WHERE fan_in_before IS NOT NULL OR (path_after IS NOT NULL AND fan_in_after IS NULL)") == [(0,)]
+            got = compare_rows(con)
+            if step == "added":
+                # The unit added and then removed in the range is removed; the integration
+                # test, renamed with its file and then moved again, is moved; everything
+                # under the files the lineage commits created is added.
+                created = rows(con, f"""
+                    SELECT 'added', false, NULL, NULL, NULL, f.path, u.kind, u.qualified_name
+                    FROM units u JOIN files f USING (file_id)
+                    WHERE f.path IN ('{GEO}', '{METERS}', 'src/moves.rs', 'src/scratch.rs')
+                    GROUP BY ALL ORDER BY ALL""")
+                assert [r[:8] for r in got if r[0] == "added"] == created, got
+                assert [r for r in got if r[0] != "added"] == [
+                    ("moved", False, "tests/it.rs", "function", "integration", "tests/area.rs", "function",
+                     "integration_area", 1, 1),
+                    ("removed", False, "src/lib.rs", "function", "volume", None, None, None, None, None)], got
+            else:
+                assert sorted(got, key=str) == COMPARE_UNITS[step], (step, got)
+            # Fan-in on both sides: rect.rs implements Shape, the integration test calls area.
+            index = make_scip_index_at(repo, root, sha[step], step)
+            con.execute(f"SET VARIABLE scip_before = {sql_literal(str(index))}")
+            fan_in = rows(con, f"""SELECT qualified_name_after, fan_in_before, fan_in_after FROM ({query_body('compare_units')})
+                                   WHERE (path_after, qualified_name_after) IN (('src/lib.rs', 'area'), ('src/shapes.rs', 'Shape'))
+                                   ORDER BY ALL""")
+            assert fan_in == [("Shape", 1, 1), ("area", 1, 1)], (step, fan_in)
+            live[step] = rows(con, query_sql("compare_units"))
+        assert sum(1 for r in live["add_ops"] if r[0] == "kept") == 18
+
+        # The same rows through the persistent cache.
+        read_refresh(con)
+        for step in live:
+            con.execute(f"SET VARIABLE compare_before = {sql_literal(sha[step])}")
+            con.execute(f"SET VARIABLE scip_before = {sql_literal(str(root / (step + '.scip')))}")
+            assert rows(con, query_sql("compare_units")) == live[step], step
+
+        # Errors: no compare_before; a commit HEAD does not reach.
+        con.execute("SET VARIABLE compare_before = NULL")
+        assert_error(con, query_sql("compare_units"), "set the variable compare_before")
+        tree = git_out(repo, "rev-parse", f"{sha['add_ops']}^{{tree}}")
+        side = subprocess.run(["git", "commit-tree", tree, "-p", sha["initial"], "-m", "side"], cwd=repo,
+                              env=git_env(repo, "2026-04-01T00:00:00Z"), check=True, capture_output=True,
+                              text=True).stdout.strip()
+        con.execute(f"SET VARIABLE compare_before = {sql_literal(side)}")
+        assert_error(con, query_sql("compare_units"), "is not a commit of `commits`")
+        con.close()
+
+        # A tree whose files did not change in since..HEAD is missing from the blob layer:
+        # with `since` at add_ops, the files of rename_file's tree that no commit of the
+        # range touched (all but src/geometry.rs) are missing, and listed.
+        con = connect(repo, [report], {"since": sql_literal(sha["add_ops"]),
+                                       "compare_before": sql_literal(sha["rename_file"])}, scip=True)
+        untouched = sorted(p for p in git_out(repo, "ls-tree", "-r", "--name-only", sha["rename_file"]).splitlines()
+                           if p.endswith(".rs") and p != GEO)
+        assert [r[0] for r in rows(con, "SELECT path FROM snapshot_missing ORDER BY path")] == untouched
+        missing = rows(con, f"SELECT path_before, snapshot_missing FROM ({query_body('compare_units')}) "
+                            "WHERE status = 'missing' ORDER BY ALL")
+        assert missing == [(p, len(untouched)) for p in untouched], missing
+        con.close()
+    print("compare fixture: ok")
+
+
+# The commit after the graph fixture's: src/rect.rs renamed to src/rectangle.rs, and pong
+# no longer calling ping (the cycle is gone).
+CYCLE_B_BROKEN = """\
+pub fn pong(n: u32) -> u32 {
+    if n == 0 { 1 } else { crate::area(n, 1) }
+}
+"""
+
+
+def snapshot_graph_rows(con, current):
+    """The units, module edges, module cycles, fan-in and modules of one side, by identity:
+    the current views (current) or the before side of the comparison."""
+    s = "" if current else "snapshot_"
+    files, units = ("files", "units") if current else ("snapshot_files", "snapshot_units")
+    module_edges = "module_edges" if current else "snapshot_module_edges"
+    cycles = "module_cycles" if current else "snapshot_module_cycles"
+    return [
+        rows(con, f"""SELECT f.path, u.kind, u.qualified_name, u.start_line, u.end_line, u.loc, u.lead_start_line,
+                             p.qualified_name
+                      FROM {units} u JOIN {files} f USING (file_id)
+                      LEFT JOIN {units} p ON p.unit_id = u.parent_unit_id ORDER BY ALL"""),
+        rows(con, f"""SELECT src_module, dst_module, src_crate, dst_crate, unit_edges, occurrences, nested_modules,
+                             same_type_unit_edges FROM {module_edges} ORDER BY ALL"""),
+        rows(con, f"SELECT cycle, crate, modules, members, edges, unit_edges, occurrences FROM {cycles} ORDER BY ALL"),
+        rows(con, f"""SELECT f.path, u.kind, u.qualified_name, fi.fan_in_files, fi.reference_occurrences
+                      FROM {s}unit_fan_in fi JOIN {units} u USING (unit_id) JOIN {files} f ON f.file_id = u.file_id
+                      ORDER BY ALL"""),
+        rows(con, f"""SELECT f.path, u.kind, u.qualified_name, m.module
+                      FROM {s}unit_module m JOIN {units} u USING (unit_id) JOIN {files} f ON f.file_id = u.file_id
+                      ORDER BY ALL"""),
+    ]
+
+
+def check_compare_graph_fixture():
+    """The before side of views/graph.sql (snapshot_*), queries/compare_graph.sql and
+    queries/compare_cycles.sql over the graph fixture's commits; skipped when
+    rust-analyzer is not installed."""
+    with tempfile.TemporaryDirectory(prefix="code-db-compare-graph-") as tmp:
+        root = Path(tmp)
+        repo, _ = build_history_fixture(root)
+        report, _ = fixture_report(root, repo)
+        base = git_out(repo, "rev-parse", "HEAD")
+        base_index = make_scip_index_at(repo, root, base, "base")
+        if base_index is None:
+            print(f"compare graph fixture: SKIPPED ({RUST_ANALYZER} not found)")
+            return
+        # The current views at the base commit, with its index: what the before side must be.
+        con = connect(repo, [report], {"scip_index": sql_literal(str(base_index))}, scip=True)
+        expected = snapshot_graph_rows(con, current=True)
+        con.close()
+        lib = (repo / "src/lib.rs").read_text()
+        write(repo, "src/lib.rs", lib.replace("pub mod rect;", "pub mod convert;\npub mod cycle_a;\npub mod cycle_b;\npub mod rect;"))
+        write(repo, "src/cycle_a.rs", CYCLE_A)
+        write(repo, "src/cycle_b.rs", CYCLE_B)
+        write(repo, "src/convert.rs", CONVERT)
+        git(repo, "add", "src/lib.rs", "src/cycle_a.rs", "src/cycle_b.rs", "src/convert.rs")
+        git(repo, "commit", "-q", "-m", "Add a module cycle and a conversion", date="2026-03-01T00:00:00Z")
+        cycle = git_out(repo, "rev-parse", "HEAD")
+        make_scip_index(repo, root)
+        cycle_index = root / "cycle.scip"
+        shutil.copyfile(repo / "target/code-db/index.scip", cycle_index)
+
+        con = connect(repo, [report], {"compare_before": sql_literal(base),
+                                       "scip_before": sql_literal(str(base_index))}, scip=True)
+        # One derivation: the before side equals the current views at the base commit.
+        assert snapshot_graph_rows(con, current=False) == expected
+        graph = rows(con, query_sql("compare_graph"))
+        assert graph == [
+            ("added", "src/convert.rs", "src/shapes.rs", "horizon", "horizon", None, 5, 0),
+            ("added", "src/cycle_a.rs", "src/cycle_b.rs", "horizon", "horizon", None, 1, 0),
+            ("added", "src/cycle_b.rs", "src/cycle_a.rs", "horizon", "horizon", None, 1, 0),
+            ("added", "src/cycle_b.rs", "src/lib.rs", "horizon", "horizon", None, 1, 0),
+            ("kept", "src/rect.rs", "src/shapes.rs", "horizon", "horizon", 1, 1, 0),
+            ("kept", "src/shapes.rs::tests", "src/shapes.rs", "horizon", "horizon", 3, 3, 0),
+            ("kept", "tests/area.rs", "src/lib.rs", "horizon", "horizon", 1, 1, 0)], graph
+        cycles = rows(con, query_sql("compare_cycles"))
+        assert cycles == [("appeared", False, None, "src/cycle_a.rs", None, 2, 0, None, 2, None,
+                           ["src/cycle_a.rs", "src/cycle_b.rs"], 0)], cycles
+        # Fan-in moves with the new references: pong calls area, convert implements Shape.
+        fan_in = rows(con, f"""SELECT qualified_name_after, fan_in_before, fan_in_after FROM ({query_body('compare_units')})
+                               WHERE (path_after, qualified_name_after) IN (('src/lib.rs', 'area'), ('src/shapes.rs', 'Shape'))
+                               ORDER BY ALL""")
+        assert fan_in == [("Shape", 1, 2), ("area", 1, 2)], fan_in
+        con.execute("SET VARIABLE scip_before = NULL")
+        assert_error(con, query_sql("compare_graph"), "compare_graph needs scip_before")
+        assert_error(con, query_sql("compare_cycles"), "compare_cycles needs scip_before")
+        con.close()
+
+        # The next commit renames src/rect.rs and breaks the cycle: the before modules are
+        # named as at HEAD through the file rename, the cycle disappeared and one edge was
+        # removed.
+        git(repo, "mv", "src/rect.rs", "src/rectangle.rs")
+        write(repo, "src/lib.rs", (repo / "src/lib.rs").read_text().replace("pub mod rect;", "pub mod rectangle;"))
+        write(repo, "src/cycle_b.rs", CYCLE_B_BROKEN)
+        git(repo, "add", "src/lib.rs", "src/cycle_b.rs")
+        git(repo, "commit", "-q", "-m", "Rename rect and break the cycle", date="2026-03-02T00:00:00Z")
+        make_scip_index(repo, root)
+        con = connect(repo, [report], {"compare_before": sql_literal(cycle),
+                                       "scip_before": sql_literal(str(cycle_index))}, scip=True)
+        assert rows(con, "SELECT module_before, module FROM module_renames WHERE module <> module_before") == [
+            ("src/rect.rs", "src/rectangle.rs")]
+        graph = rows(con, query_sql("compare_graph"))
+        assert graph == [
+            ("removed", "src/cycle_b.rs", "src/cycle_a.rs", "horizon", "horizon", 1, None, 0),
+            ("kept", "src/convert.rs", "src/shapes.rs", "horizon", "horizon", 5, 5, 0),
+            ("kept", "src/cycle_a.rs", "src/cycle_b.rs", "horizon", "horizon", 1, 1, 0),
+            ("kept", "src/cycle_b.rs", "src/lib.rs", "horizon", "horizon", 1, 1, 0),
+            ("kept", "src/rectangle.rs", "src/shapes.rs", "horizon", "horizon", 1, 1, 0),
+            ("kept", "src/shapes.rs::tests", "src/shapes.rs", "horizon", "horizon", 3, 3, 0),
+            ("kept", "tests/area.rs", "src/lib.rs", "horizon", "horizon", 1, 1, 0)], graph
+        cycles = rows(con, query_sql("compare_cycles"))
+        assert cycles == [("disappeared", False, "src/cycle_a.rs", None, 2, None, 0, 2, None,
+                           ["src/cycle_a.rs", "src/cycle_b.rs"], None, 0)], cycles
+        moved = compare_rows(con, "status = 'moved'")
+        assert sorted((r[2], r[4], r[5], r[7]) for r in moved) == [
+            ("src/rect.rs", n, "src/rectangle.rs", n) for n in ("Rect", "Shape for Rect", "Shape for Rect.area")], moved
+
+        # The same through the persistent cache.
+        live = [rows(con, query_sql(q)) for q in ("compare_units", "compare_graph", "compare_cycles")]
+        read_refresh(con)
+        assert [rows(con, query_sql(q)) for q in ("compare_units", "compare_graph", "compare_cycles")] == live
+        con.close()
+    print("compare graph fixture: ok")
+
+
 def cached_rows_by_path(con, path_filter):
     """Rows of the cache's per-file tables for the paths matching path_filter (SQL)."""
     return {t: sorted(rows(con, f"SELECT * FROM cache.{t} WHERE {path_filter}"), key=repr)
@@ -2580,7 +2891,8 @@ def check_cli(repo, reports):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["fixture", "scip-fixture", "graph-fixture", "counting-fixture", "repo",
+    parser.add_argument("command", choices=["fixture", "scip-fixture", "graph-fixture", "counting-fixture",
+                                            "compare-fixture", "repo",
                                             "refresh", "measure",
                                             "measure-refresh", "explain", "cli", "step"])
     parser.add_argument("repo", nargs="?")
@@ -2610,6 +2922,10 @@ def main():
         return
     if args.command == "counting-fixture":
         check_counting_fixture()
+        return
+    if args.command == "compare-fixture":
+        check_compare_fixture()
+        check_compare_graph_fixture()
         return
     if not args.repo:
         parser.error("REPO is required")

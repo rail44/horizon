@@ -623,6 +623,107 @@ the edges' symbols, each neighbor's churn and fan-in), `module_graph`,
 `module_cycles` (the inner edges of each cycle, weakest first), `unit_cochange`,
 `cochange_without_reference`.
 
+## Before/after comparison
+
+An earlier commit's units and module graph, read from the cache without a checkout,
+matched to the current ones through the lineage (owner approval 2026-10-27;
+`docs/research/code-db-compare-2026-10-28.md`). The after side is the checkout's HEAD
+(the views above); the before side is the tree of `compare_before`.
+
+```sh
+duckdb-ext/sql/run.sh query REPO compare_units compare_before=REV [scip_before=PATH]
+duckdb-ext/sql/run.sh query REPO compare_graph compare_before=REV scip_before=PATH
+duckdb-ext/sql/run.sh query REPO compare_cycles compare_before=REV scip_before=PATH
+```
+
+`scip_before` is a SCIP index of `compare_before`'s tree, made as the current one is,
+in a clone checked out at that commit (nothing needs building, though rust-analyzer
+writes build-script output under the clone's `target/debug`, about 2.7 GB here, which
+can be deleted afterwards):
+
+```sh
+git clone --no-checkout REPO CLONE
+git -C CLONE checkout REV
+duckdb-ext/sql/run.sh index CLONE                 # writes CLONE/target/code-db/index.scip
+duckdb-ext/sql/run.sh query REPO compare_graph compare_before=REV scip_before=CLONE/target/code-db/index.scip
+```
+
+`views/snapshot.sql` (read after `views/lineage.sql`):
+
+- **`compare_commit(sha, ord)`**: `compare_before` resolved to a commit of `commits`
+  with its `commit_order` position (the commit `compare_before^..HEAD` lists and
+  `compare_before..HEAD` does not). Unset, or not a commit of `commits` (not an
+  ancestor of HEAD, older than `since`, a merge without `include_merges`), it stops
+  the query with a message; a root commit (no `^`) fails when the view is bound.
+  `compare_range(sha)` is `compare_before..HEAD`, merges included.
+- **`snapshot_files(file_id, path, language, mode, blob_id)`**: `git_tree(repo,
+  compare_before)` scoped by the rule of the current files (`is_source_file`,
+  `00_load.sql`: regular files, `languages`, `exclude_patterns`).
+- **`snapshot_units`**: the columns of `units`, nesting included, plus `blob_id`:
+  `snapshot_files` joined to `blob_units`, numbered as `units` are.
+- **`snapshot_missing(path, mode, blob_id)`**: the files of `snapshot_files` whose
+  blob is not in the blob layer. Never dropped silently: every comparison query
+  carries the count (`snapshot_missing`), and `compare_units` lists them as rows.
+  The layer holds the blobs of the changes of `since..HEAD` (merges included, see
+  Historical blobs), so a file unchanged since before `since` is missing: compare
+  with the whole history cached.
+- **`unit_at_before(unit_id, path, kind, qualified_name, depth, link, sha)`**: each
+  current unit's identities at `compare_before`: the identities of its lineage
+  (`unit_lineage_segments`) whose commit interval contains `compare_before`'s position
+  and that are units of the before tree. Depth 0 is the unit's own identity when it
+  reaches back that far. On the September 2026 sweep it equals the walk of
+  `retro/lineage.sql` started from every current unit (6,703 pairs, none on one side
+  only; `retro/compare.sql`).
+- `snapshot_nodes`, `snapshot_impl_parts` (the language rule `impl_parts_over` over the
+  blob nodes) and `snapshot_tags` (empty: blobs have no tags) are the graph's inputs.
+
+The graph of the before side is `views/graph.sql`'s derivation applied to these inputs
+and to `snapshot_scip_occurrences` (`scip_before` shaped by
+`scip_document_occurrences_of`, `views/scip.sql`): the views from `unit_occurrences` to
+`module_cycles` are table macros `graph_<view>_over(files_t, units_t, tags_t,
+impl_parts_t, occurrences_t)` (each taking the inputs it reads) over named relations,
+as `rust_units_over` is for units. The current views apply them to `files`, `units`,
+`tags`, `impl_parts` and `scip_occurrences`; `snapshot_unit_module`,
+`snapshot_unit_fan_in`, `snapshot_module_edges` and `snapshot_module_cycles` apply them
+to the before side. On this repository the before side at e223bc20, from the cache of
+a checkout of 46c37290, equals the current views of a checkout of e223bc20 with its own
+index (units, module edges, cycles, fan-in, modules). `unit_fan_in(unit_id,
+fan_in_files, reference_occurrences)` is `unit_fan_in_churn`'s fan-in as a view.
+`module_renames(module_before, module)` names each before module as at HEAD through
+the file renames of `compare_before..HEAD`.
+
+Queries (each needs `views/graph.sql`, i.e. the current index, and is meant for the
+persistent cache: live, the before side parses every blob):
+
+- **`compare_units`**: one row per pair of a HEAD identity and the before identity it
+  continues, per HEAD identity that continues none, per before identity no current unit
+  continues, and per missing file. `status`: `kept` (same identity), `renamed` (linked,
+  same path, another kind or name), `moved` (linked, another path), `added` (no
+  identity at `compare_before`; the stub that kept a name after its body moved away is
+  added, since history follows the body), `removed` (no current unit continues it),
+  `missing`; `ambiguous` when the pair is one of several for either identity (a split or
+  a merge) or the HEAD unit's lineage passes an ambiguous link inside the range. With
+  both identities, `loc_before`/`loc_after` (summed over the units of one identity),
+  `commits` and `move_commits` (the HEAD unit's lineage in `compare_before..HEAD`, as
+  `unit_churn` counts them), `fan_in_before`/`fan_in_after` (NULL before without
+  `scip_before`), `module_before`/`module_after`.
+- **`compare_graph`**: module edges `added`/`removed`/`kept` with `unit_edges_before`
+  and `unit_edges_after`, before modules renamed as at HEAD (`crate` filters either end).
+- **`compare_cycles`**: module cycles of each side, a before and a HEAD cycle
+  corresponding when they share a member: `kept` (one row per such pair, with both
+  sizes and the shared members), `appeared`, `disappeared`; `ambiguous` when a cycle
+  shares members with several on the other side.
+
+Limits: the after side is always HEAD; the before commit must be an ancestor of HEAD
+within `since..HEAD` (and not a merge, unless `include_merges`); the snapshot needs
+the blobs merges produced (`blob_include_merges`, the default); the correspondence
+compares `commit_order` positions, which are a linear order only along a linear
+history (a commit on a side branch merged after `compare_before` but dated before it
+counts as before it); blobs have no tags, so the before side has no test or macro
+flags (the queries do not compare them); an inline module renamed in place is not
+followed by `module_renames`; the before index must describe the before tree, which
+nothing checks.
+
 ## Cache
 
 Two ways to stop recomputing the expensive layers (`nodes`, `units`,
@@ -863,6 +964,7 @@ uv run --locked --script duckdb-ext/sql/check.py fixture          # assertions o
 uv run --locked --script duckdb-ext/sql/check.py scip-fixture     # only the SCIP fixture
 uv run --locked --script duckdb-ext/sql/check.py graph-fixture    # only the graph fixture
 uv run --locked --script duckdb-ext/sql/check.py counting-fixture # only the counting-rules fixture
+uv run --locked --script duckdb-ext/sql/check.py compare-fixture  # only the two comparison fixtures
 uv run --locked --script duckdb-ext/sql/check.py repo .           # counts and every query on a repository
 uv run --locked --script duckdb-ext/sql/check.py refresh .        # refresh.sql twice, every view compared with live
 uv run --locked --script duckdb-ext/sql/check.py cli .            # the same files through the CLI's .read, live and refreshed
@@ -990,6 +1092,26 @@ calling each other (`nested_modules` and `same_type_unit_edges` set, no cycle; b
 cycles with `cycle_edges := 'raw'`), beside two sibling modules whose cycle stays; and
 the same rows through `cache.sql`.
 
+Two comparison fixtures (`check.py compare-fixture`; indexed the same way, and each
+earlier commit's tree indexed from `git archive`) cover the before/after comparison.
+On the lineage fixture, `compare_units` against three earlier commits: `snapshot_files`
+equal to the commit's tree and nothing missing; from the commit that added `volume`,
+the integration test `moved` with its file, `volume` `removed`, every unit of the files
+created later `added`; from the commit that added `src/ops.rs`, every non-kept row (the
+file rename, the rename in place, the move, the split and the merge `moved` and
+`ambiguous`, the moved body `moved` and its stub `added`, with their commits and move
+commits); from the commit that added `src/meters.rs`, the renames inside one file
+`renamed` (inherited links included) and the added method; the fan-in of two units on
+both sides, NULL before without `scip_before`; the same rows through `refresh.sql`; the
+two errors (no `compare_before`, a commit HEAD does not reach); and with `since` set,
+the files no commit of the range touched listed as `missing`. On the graph fixture's
+commits, the before side (units, module edges, cycles, fan-in, modules) equal to the
+current views of the earlier commit with its own index; `compare_graph` and
+`compare_cycles` for the commit adding the module cycle (four edges added, the cycle
+appeared) and for the next one, which renames `src/rect.rs` and breaks the cycle (the
+renamed module's edge kept, one edge removed, the cycle disappeared); the errors
+without `scip_before`; and the same rows through `refresh.sql`.
+
 On a third fixture it reads `refresh.sql` after each of these steps and
 asserts every refreshed view equal to live row for row (the blob layer,
 `unit_changes` and the lineage views included, and the lineage statistics: the
@@ -1022,15 +1144,16 @@ files reset it to live). It needs `git` and rust-analyzer but no jscpd.
 | `views/history.sql` | `commits`, `file_changes`, `hunks` |
 | `views/unit_changes.sql` | `unit_change_sides`, `unit_changes` |
 | `views/lineage.sql` | `commit_order`, `lineage_sources`, `derived_unit_successions`, `unit_successions`, `unit_lineage_segments`, `unit_lineage`, `unit_history`, `unit_lineage_counts` (see Lineage) |
+| `views/snapshot.sql` | `compare_commit`, `compare_range`, `snapshot_files`, `snapshot_missing`, `snapshot_units`, `snapshot_nodes`, `snapshot_impl_parts`, `snapshot_tags`, `unit_at_before` (see Before/after comparison) |
 | `views/clones.sql` | `clone_pairs(pair_id, source, file_a, start_line_a, end_line_a, file_b, start_line_b, end_line_b, tokens, lines)` |
 | `views/scip.sql` (optional) | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (see SCIP) |
-| `views/graph.sql` (optional) | `unit_occurrences`, `unit_tests`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impl_targets`, `impl_for`, `implements`, `file_crate`, `modules`, `unit_module`, `module_edges`, `crate_edges`, `module_cycle_edges`, `module_cycles`, `crate_cycles`, `unit_commits`, `unit_cochange`, `edge_cochange`, `cochange_without_reference` (see Graph) |
-| `queries/*.sql` | one statement each: `file_cochange`, `file_cochange_thresholds`, `clone_site_tags`, `clone_site_tags_summary`, `unit_churn`, `clone_change_consistency`, `unit_fan_in_churn` (needs `views/scip.sql`), `unit_dependencies`, `module_graph`, `module_cycles`, `unit_cochange`, `cochange_without_reference` (need `views/graph.sql`); the header states the question, the parameters and the evidence |
+| `views/graph.sql` (optional) | `unit_occurrences`, `unit_tests`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impl_targets`, `impl_for`, `implements`, `file_crate`, `modules`, `unit_module`, `module_edges`, `crate_edges`, `module_cycle_edges`, `module_cycles`, `crate_cycles`, `unit_commits`, `unit_cochange`, `edge_cochange`, `cochange_without_reference` (see Graph); the table macros `graph_*_over` behind the views from `unit_occurrences` to `module_cycles`; `unit_fan_in`; the before side `snapshot_scip_occurrences`, `snapshot_unit_module`, `snapshot_unit_fan_in`, `snapshot_module_edges`, `snapshot_module_cycles`, `module_renames` (see Before/after comparison) |
+| `queries/*.sql` | one statement each: `file_cochange`, `file_cochange_thresholds`, `clone_site_tags`, `clone_site_tags_summary`, `unit_churn`, `clone_change_consistency`, `unit_fan_in_churn` (needs `views/scip.sql`), `unit_dependencies`, `module_graph`, `module_cycles`, `unit_cochange`, `cochange_without_reference`, `compare_units`, `compare_graph`, `compare_cycles` (need `views/graph.sql`); the header states the question, the parameters and the evidence |
 | `jscpd.sh` | the two jscpd reports `clones.sql` reads |
 | `cache.sql` | the session cache (above) |
 | `refresh.sql` | the persistent cache (above) |
 | `run.sh` | the launcher (Running) |
-| `retro/` | the retrospective check: `changes.sql` (the unit changes of a range, to Parquet), `lineage.sql` (the baseline identities each change and preserve source reaches through lineage, to Parquet), `signals.sql` (rankings and ground truth at a baseline), `signals_by_name.sql` (the same with history counted by identity), `september-2026-record-preserves.csv` (the preserve rows taken from the September 2026 records) |
+| `retro/` | the retrospective check: `changes.sql` (the unit changes of a range, to Parquet), `lineage.sql` (the baseline identities each change and preserve source reaches through lineage, to Parquet), `signals.sql` (rankings and ground truth at a baseline), `signals_by_name.sql` (the same with history counted by identity), `compare.sql` (`compare_units` against the walk of `lineage.sql` and the ground truth), `september-2026-record-preserves.csv` (the preserve rows taken from the September 2026 records) |
 | `check.py` | the check above |
 
 `views/units.sql` is an addition to the layout first proposed: the union of
@@ -1120,6 +1243,8 @@ which `00_load.sql` (and `refresh.sql`) take as a snapshot.
 | `clone_before_both` | `false` (`true`: commits before the later side's first commit count) | `clone_change_consistency` |
 | `clone_sides` | `'contain'` (`'overlap'`: a side is the innermost units whose own lines overlap the fragment) | `clone_change_consistency` |
 | `cycle_edges` | `'collapsed'` (`'raw'`: every module edge) | `module_cycle_edges`, `module_cycles` and the `module_cycles` query |
+| `compare_before` | unset (the snapshot views show HEAD's tree; the comparison queries stop with a message) | `views/snapshot.sql`, `compare_units`, `compare_graph`, `compare_cycles` |
+| `scip_before` | unset (no before fan-in; `compare_graph` and `compare_cycles` stop with a message) | `snapshot_scip_occurrences` and the comparison queries |
 
 The source files are the regular files (mode `100644` or `100755`) that
 `git_tracked_files` lists, with an extension in `languages`: ignored files,
@@ -1149,7 +1274,8 @@ be parsed as a positional argument (`ignore_errors := len(x) = 0` is
 - Go and TypeScript, clone groups (the spike's `group_id`). SCIP
   relationships (`relationship_count` only; rust-analyzer 1.99.1 writes none),
   so no edge from an impl's method to the trait method it implements, and an
-  index of the historical blobs (the graph is the current tree's only).
+  index of the historical blobs (the graph is the current tree's, and an earlier
+  tree's only through an index of its checkout, `scip_before`).
 - **Per-layer choice.** Both caches hold all their layers; `clone_pairs`
   and `unit_changes` stay live in both, and `cache.sql` leaves
   `blob_nodes` live.

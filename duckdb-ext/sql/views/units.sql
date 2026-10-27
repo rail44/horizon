@@ -25,6 +25,10 @@ CREATE OR REPLACE VIEW tags AS SELECT * FROM derived_tags;
 -- head_end_column): the trait and self type parts of each impl unit's node
 -- (lang/rust.sql, rust_impl_parts), which views/graph.sql resolves to units. Read live
 -- from `nodes` (whichever nodes are in place); neither cache stores it.
+-- impl_parts_over(nodes_t): the same over a node relation named by its argument
+-- (views/snapshot.sql applies it to an earlier commit's blobs).
+CREATE OR REPLACE MACRO impl_parts_over(nodes_t) AS TABLE FROM rust_impl_parts_over(nodes_t);
+
 CREATE OR REPLACE VIEW impl_parts AS SELECT * FROM rust_impl_parts;
 
 -- blob_units(blob_id, unit_ord, parent_unit_ord, node_id, kind, name, qualified_name,
