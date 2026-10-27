@@ -402,16 +402,100 @@ session must be restarted), and before this change the layer spilled to
 DuckDB's default `.tmp` in the process's working directory, i.e. the
 Horizon checkout root.
 
+## Eleventh increment: clone-side resolution (2026-10-27)
+
+([record](research/code-db-clone-sides-2026-10-27.md))
+`clone_change_consistency` gains `clone_sides`: `overlap` resolves each
+side of a clone pair to the set of innermost units whose own lines (the
+spans of the ninth increment) overlap the fragment; `contain` is the
+previous rule (the smallest unit containing the whole fragment, none when
+the fragment spans several) and reproduces the previous output exactly
+(1,502 pairs, every column, same order). The expected effect did not
+occur. Of the ten clone candidates of the second reading check only the
+`AgentdHandle`/`TerminaldHandle` pair changed at all (its fragments split
+into four pairs, the best 3 / 0 at rank 34, not back in the top 10); the
+other nine lie inside one unit, so their sides were already that unit.
+Two causes: the attribution record's "9 / 0" for that pair had been
+counted on the impls, not the methods, so its fall to 1 / 0 was never a
+side-resolution effect and the M4 attribution was wrong for nine of ten
+candidates; and a lineage gap — renaming an impl (`SessiondHandle` →
+`AgentdHandle`) changes the identity of every method in it, but a method
+whose lines no hunk touched has neither an `added` nor a `removed` row,
+so no link is derived and its history starts at the rename (33 of 9,264
+current units had an empty history). `overlap` also admits units by one
+boundary line (670 of 5,433 side–unit correspondences overlap one line,
+533 of them impls, modules or types), and in production scope the clone
+signal's P@10 / P@50 / P@100 fell 0.8 / 0.72 / 0.66 → 0.3 / 0.38 / 0.38
+(ranked identities 154 → 379); the other signals do not read
+`clone_sides`. The default was `overlap` in this increment and is
+restored to `contain` in the next, `overlap` staying selectable. The
+method error: the record's per-candidate numbers were not re-derived on
+the cache before the rule was proposed; the next increments' rules are
+pre-checked that way first.
+
+## Twelfth increment: inherited lineage, `contain` restored (2026-10-27)
+
+([record](research/code-db-inherited-lineage-2026-10-27.md)) Pre-check
+on the cache before the rule was proposed: of the 33 units with an empty
+history, 29 had an enclosing unit with a rename or move link; inheriting
+only the enclosing unit's immediate predecessor name reconnected 8, its
+whole lineage 27 (57 commits). The rule as built is a fifth succession
+kind, `inherited`, derived per commit in `derived_unit_successions`: every
+inner unit of a `content_match` or `body_move` predecessor (qualified
+name extending the predecessor's) links to the identity with the
+successor's path and name and the same relative name, when that identity
+is a unit of the new side (nothing is fabricated), neither identity has a
+`content_match`, `body_move` or `file_rename` of its own at the commit
+(those take precedence), and neither continues as itself under the same
+path. Similarity is 1 for an inner unit no hunk touched; a link derived
+from an ambiguous link, or with several inherited links at either end,
+is ambiguous. On this repository: 143 links in 13 commits (122 with
+similarity 1, 10 ambiguous, 4 many-to-many groups where the enclosing
+types' matches crossed), empty-history units 33 → 3 — the remaining
+three have no enclosing unit or no changes under their earlier names —
+and 30 units reconnected with 65 commits, more than the pre-check
+because the full relative name reaches through several nesting levels
+and a reconnected method then follows its own earlier links. 44 further
+units with some history gained commits (`AgentdState.new` 2 → 15), 74 in
+all. The churn and fan-in × churn top 10 are unchanged; the clone query
+under the restored `contain` default changed 4 of 1,502 rows;
+retrospective P@k moved by at most 0.04 (clone P@50 0.72 → 0.76,
+co-change P@100 0.43 → 0.40, fan-in × churn P@50 0.50 → 0.48; the ground
+truth is unchanged). The lineage layer rebuilds once on an existing cache
+(`lineage_key` hashes the derivation's text); refresh times are within
+noise of the previous SQL. A first draft with correlated subqueries
+passed the fixture but exceeded the spill cap on the cold refresh;
+semi/anti joins over materialized sides fixed it.
+
+## Thirteenth increment: `git_tree` (2026-10-27)
+
+`git_history` gains its sixth function, `git_tree(repo, rev := 'HEAD')`
+→ `(path, mode, blob_id)`: one row per leaf of the tree a revision
+names, recursively, sorted by path bytes, modes `100644`/`100755`/
+`120000`/`160000` (a symlink's blob holds its target, a gitlink's id is
+the recorded commit, no directory rows), the revision resolved at bind
+time with gix's `rev_parse_single` and peeled to a tree (a tree id or
+`HEAD:src` is taken as is; an unknown revision is a bind-time error).
+Parity with `git ls-tree -r` is exact on the fixture (every entry kind,
+every revision form) and on this repository at HEAD, e223bc20 and
+46c37290 (882 / 567 / 741 rows, same order; identical to
+`git_tracked_files` on a clean tree). It is the fact the before/after
+comparison builds on: the units of an earlier commit are its tree's
+blobs joined to `blob_units`, no checkout needed. Measured precondition:
+with merges excluded, the blob directory lacks one `.rs` blob of
+e223bc20 and 21 of HEAD, all contents a conflict-resolving merge
+produced (such as the merge of main into the decision-model branch), so
+the blob layer must diff merges against their first parent to cover
+every snapshot; with `include_merges := true` nothing is missing at any
+of the three commits (6,600 → 6,630 distinct blobs).
+
 ## Open points
 
-- **Clone-side resolution (M4)**: a clone fragment that spans several
-  units resolves to the enclosing impl, so counts on impls' own lines no
-  longer represent the fragment; measuring one-sidedness on the
-  fragment's lines is the next counting fix.
 - **Lineage limits**: links are same-commit only; a body split into
   several units or moved into a new file does not cut the stub's history;
-  heavy rewrites below the threshold break the chain; short and test
-  units link easily.
+  heavy rewrites below the threshold break the chain, and so does an
+  enclosing unit's rename below the threshold (its inner units then stay
+  unlinked too); short and test units link easily.
 - **A `git://` file system** remains the target for history access. The
   C API registers none today: both v1 and v2 only let an extension *use*
   the host file system (checked against the 2.0.0 headers), and
