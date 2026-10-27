@@ -24,6 +24,9 @@
 -- views of views/files.sql) differ. History is rebuilt when `since`, `include_merges`
 -- or `languages` differ or the cached head is not among the commits since..HEAD (a
 -- rewritten or reset branch); otherwise the commits cached_head..HEAD are appended.
+-- The blob files are also rebuilt when `blob_include_merges` differs (it is the last
+-- part of meta.history_key, which the history comparison leaves out): the blobs already
+-- parsed stay, so only the blobs that become new are parsed.
 --
 -- Blobs. A blob's content never changes, so its parse (`cache.blob_nodes`), units
 -- (`cache.blob_units`) and blank lines (`cache.blob_blank_lines`) are keyed by blob_id
@@ -95,7 +98,7 @@ CREATE TABLE IF NOT EXISTS cache.meta (
     refreshed_at TIMESTAMP,
     syntax_key VARCHAR,         -- sitting_duck version
     derive_key VARCHAR,         -- md5 of the derived views' definitions
-    history_key VARCHAR,        -- since, include_merges, languages, blob_dir
+    history_key VARCHAR,        -- since, include_merges, languages, blob_dir; then blob_include_merges
     head VARCHAR,               -- HEAD when the history was cached; NULL for no commits
     -- the last refresh
     syntax VARCHAR,             -- 'rebuilt' or 'incremental'
@@ -205,6 +208,13 @@ SET VARIABLE refresh_derive_key = md5(concat_ws(chr(10),
 SET VARIABLE refresh_history_key = concat_ws(' ', 'since=' || coalesce(getvariable('since'), ''),
     'include_merges=' || getvariable('include_merges'), 'languages=' || getvariable('languages')::VARCHAR,
     'blob_dir=' || getvariable('blob_dir'));
+-- meta.history_key holds the history key followed by the blob layer's own part. A cache
+-- written before blob_include_merges existed has no such part: its history key compares
+-- equal and its blob key differs, so only the blob files are rebuilt.
+SET VARIABLE refresh_blob_key = getvariable('refresh_history_key')
+    || ' blob_include_merges=' || getvariable('blob_include_merges');
+SET VARIABLE refresh_prior_history_key = split_part(getvariable('refresh_prior').history_key,
+                                                    ' blob_include_merges=', 1);
 
 SET VARIABLE refresh_syntax_reset = getvariable('refresh_prior') IS NULL
     OR getvariable('refresh_prior').state IS DISTINCT FROM 'ok'
@@ -225,7 +235,7 @@ SET VARIABLE refresh_lineage_key = md5(concat_ws(chr(10),
 SET VARIABLE refresh_lineage_reset = getvariable('refresh_derive_reset')
     OR getvariable('refresh_prior').state IS DISTINCT FROM 'ok'
     OR getvariable('refresh_prior').repo IS DISTINCT FROM getvariable('repo')
-    OR getvariable('refresh_prior').history_key IS DISTINCT FROM getvariable('refresh_history_key')
+    OR getvariable('refresh_prior_history_key') IS DISTINCT FROM getvariable('refresh_history_key')
     OR getvariable('refresh_prior').lineage_key IS DISTINCT FROM getvariable('refresh_lineage_key');
 
 -- SCIP: whether views/scip.sql was read (scip_index_occurrences exists only then), and
@@ -358,7 +368,7 @@ JOIN files f ON f.path = t.path AND f.blob_id = c.blob_id;
 SET VARIABLE refresh_history_reset = getvariable('refresh_prior') IS NULL
     OR getvariable('refresh_prior').state IS DISTINCT FROM 'ok'
     OR getvariable('refresh_prior').repo IS DISTINCT FROM getvariable('repo')
-    OR getvariable('refresh_prior').history_key IS DISTINCT FROM getvariable('refresh_history_key')
+    OR getvariable('refresh_prior_history_key') IS DISTINCT FROM getvariable('refresh_history_key')
     OR getvariable('refresh_prior').head IS NULL
     OR NOT EXISTS (SELECT 1 FROM git_commits(getvariable('repo'), since := getvariable('since'),
                                              include_merges := getvariable('include_merges'))
@@ -400,12 +410,14 @@ CREATE OR REPLACE VIEW file_changes AS SELECT * FROM cache.file_changes;
 CREATE OR REPLACE VIEW hunks AS SELECT * FROM cache.hunks;
 CREATE OR REPLACE VIEW commit_order AS SELECT * FROM cache.commit_order;
 
--- Blob files: rebuilt with the history, or when every blob's units or every commit's
+-- Blob files: rebuilt with the history, when every blob's units or every commit's
 -- successions are derived again (that reads every blob file, and the rebuild exports the
--- missing ones); else appended with the same commits as the history. git_changed_blobs
+-- missing ones), or when blob_include_merges changed; else appended with the same
+-- commits as the history. git_changed_blobs
 -- exports what it lists.
 SET VARIABLE refresh_blob_files_reset = getvariable('refresh_history_reset') OR getvariable('refresh_derive_reset')
-    OR getvariable('refresh_lineage_reset');
+    OR getvariable('refresh_lineage_reset')
+    OR getvariable('refresh_prior').history_key IS DISTINCT FROM getvariable('refresh_blob_key');
 DELETE FROM cache.blob_files WHERE getvariable('refresh_blob_files_reset');
 SET VARIABLE refresh_blob_since = CASE WHEN getvariable('refresh_blob_files_reset')
     THEN getvariable('since') ELSE getvariable('refresh_prior').head END;
@@ -413,7 +425,7 @@ SET VARIABLE refresh_blob_rows_before = (SELECT count(*) FROM cache.blob_files);
 -- As views/blobs.sql.
 INSERT INTO cache.blob_files
 SELECT * FROM git_changed_blobs(getvariable('repo'), getvariable('blob_dir'), since := getvariable('refresh_blob_since'),
-                                include_merges := getvariable('include_merges'),
+                                include_merges := getvariable('blob_include_merges'),
                                 extensions := map_keys(getvariable('languages')));
 SET VARIABLE refresh_blob_rows_added = (SELECT count(*) FROM cache.blob_files) - getvariable('refresh_blob_rows_before');
 SET VARIABLE refresh_t_blob_files = epoch(now());
@@ -549,7 +561,7 @@ INSERT INTO cache.meta
 SELECT 5, getvariable('repo'), 'ok',
        CASE WHEN getvariable('refresh_syntax_reset') THEN now()::TIMESTAMP ELSE getvariable('refresh_prior').built_at END,
        now()::TIMESTAMP,
-       getvariable('refresh_syntax_key'), getvariable('refresh_derive_key'), getvariable('refresh_history_key'),
+       getvariable('refresh_syntax_key'), getvariable('refresh_derive_key'), getvariable('refresh_blob_key'),
        getvariable('refresh_head'),
        CASE WHEN getvariable('refresh_syntax_reset') THEN 'rebuilt' ELSE 'incremental' END,
        CASE WHEN getvariable('refresh_derive_reset') THEN 'rebuilt' ELSE 'incremental' END,

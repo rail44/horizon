@@ -199,8 +199,10 @@ chose (2026-10-25) to write historical blobs to files, so that `read_ast`,
 `read_text` and the per-language rules apply to history unchanged.
 
 - **`blob_files(sha, path, old_path, side, blob_id, mode, file)`** is
-  `git_changed_blobs(repo, blob_dir, since, include_merges, extensions)`:
-  the (commit, file change) pairs of `git_file_changes` for regular files,
+  `git_changed_blobs(repo, blob_dir, since, include_merges :=
+  blob_include_merges, extensions)`: the (commit, file change) pairs of
+  `git_file_changes` (merges against their first parent, unless
+  `blob_include_merges` is false) for regular files,
   one row per side that has a blob (`side` `old` or `new`; no `old` row for
   an addition, no `new` row for a deletion), `path`/`old_path` as in
   `file_changes`, and `file` = `<blob_dir>/<blob_id>.<ext>` (the extension
@@ -294,9 +296,16 @@ Limits:
 - **Placement**: `-U0` hunks are placed by gitoxide; where an insertion or
   deletion could sit at several lines, the unit it is attributed to follows
   that placement (`docs/research/gix-parity-2026-10-24.md` §12).
-- **Merges** follow `include_merges`; without it, content introduced by a
-  merge (a conflict resolution) is never a new side, so a current file
-  whose blob comes from a merge has no blob units.
+- **Merges**: `unit_changes` follows `include_merges`, like the history
+  views. The blob layer diffs merges against their first parent whatever
+  `include_merges` is (`blob_include_merges`, default true), so that the
+  content a conflict resolution produced, which enters history only through
+  the merge, has blob units too: every tree of `since..HEAD` is then covered
+  (the before/after comparison reads earlier trees from it). The merge
+  commits' rows have no hunks unless `include_merges`, so `unit_changes` and
+  the lineage, which join the sides to hunks, do not see them. With
+  `blob_include_merges := false` (the layer before 2026-10-28), a current
+  file whose blob comes from a merge has no blob units.
 - A blob recorded under paths with different extensions would be one key
   with two files; with one language this cannot occur.
 - Live, `blob_nodes` parses every blob of the range (on this repository
@@ -755,7 +764,7 @@ Layout of the file (schema version 5):
 
 | Table | Rows |
 | --- | --- |
-| `meta` | one: `schema_version`, `repo`, `state` (`ok`, or `refreshing` while a refresh runs), `built_at`, `refreshed_at`, `syntax_key` (sitting_duck version), `derive_key` (md5 of the derived views' text), `history_key` (`since`, `include_merges`, `languages`, `blob_dir`), `head`; the last refresh: `syntax`/`derived` (`rebuilt` or `incremental`), `history` and `blob_history` (for `blob_files`; `rebuilt` or `appended`), `files_added`, `files_changed`, `files_removed`, `files_unchanged`, `nodes_parsed`, `units_inserted`, `tags_inserted`, `commits_added`, `blob_rows_added`, `blobs_parsed`, `blob_bytes_parsed`, `blob_nodes_parsed`, `blobs_derived`, `blob_units_inserted`, `blobs_cached` (all parsed blobs in the file), `scip_key` (NULL without `views/scip.sql`), `scip_cache` (`rebuilt` or `kept`), `scip_occurrences_inserted`, `scip_symbols_inserted`, `lineage_key` (md5 of `derived_unit_successions`, `lineage_sources`, `unit_change_sides` and `unit_changes`, and `lineage_threshold`; not `attribution`), `lineage` (`rebuilt` or `appended`), `lineage_commits_derived`, `successions_inserted`, `seconds` (per layer: `files`, `nodes`, `units`, `tags`, `commits`, `file_changes`, `hunks`, `blob_files`, `blob_nodes`, `blob_units`, `lineage`, `scip`, `checkpoint`, `total`) |
+| `meta` | one: `schema_version`, `repo`, `state` (`ok`, or `refreshing` while a refresh runs), `built_at`, `refreshed_at`, `syntax_key` (sitting_duck version), `derive_key` (md5 of the derived views' text), `history_key` (`since`, `include_merges`, `languages`, `blob_dir`, then `blob_include_merges`), `head`; the last refresh: `syntax`/`derived` (`rebuilt` or `incremental`), `history` and `blob_history` (for `blob_files`; `rebuilt` or `appended`), `files_added`, `files_changed`, `files_removed`, `files_unchanged`, `nodes_parsed`, `units_inserted`, `tags_inserted`, `commits_added`, `blob_rows_added`, `blobs_parsed`, `blob_bytes_parsed`, `blob_nodes_parsed`, `blobs_derived`, `blob_units_inserted`, `blobs_cached` (all parsed blobs in the file), `scip_key` (NULL without `views/scip.sql`), `scip_cache` (`rebuilt` or `kept`), `scip_occurrences_inserted`, `scip_symbols_inserted`, `lineage_key` (md5 of `derived_unit_successions`, `lineage_sources`, `unit_change_sides` and `unit_changes`, and `lineage_threshold`; not `attribution`), `lineage` (`rebuilt` or `appended`), `lineage_commits_derived`, `successions_inserted`, `seconds` (per layer: `files`, `nodes`, `units`, `tags`, `commits`, `file_changes`, `hunks`, `blob_files`, `blob_nodes`, `blob_units`, `lineage`, `scip`, `checkpoint`, `total`) |
 | `nodes_files` | one per cached file: `path`, `blob_id`, `language` |
 | `nodes` | `path` plus `read_ast`'s columns (as in `views/nodes.sql`) |
 | `units` | `path`, `unit_ord`, `parent_unit_ord`, then the columns of `units` without the ids |
@@ -790,6 +799,9 @@ What forces a rebuild:
 - **History** (and `blob_files`): a different `since`, `include_merges`,
   `languages` or `blob_dir`; a cached head that is not among the commits of
   `since..HEAD`; no cached head (no commits).
+- **`blob_files` alone**: a different `blob_include_merges` (the history key's last
+  part; a cache written before it existed counts as different once). The parsed blobs
+  stay, so only the blobs new to the layer are parsed and derived.
 - **Successions of every commit** (and `blob_files`, which re-exports the blob files
   their texts are read from): a different history key, a re-derivation of the units
   (above), a different `lineage_key`, the first two cases of the syntax rebuild. A
@@ -1087,7 +1099,8 @@ which `00_load.sql` (and `refresh.sql`) take as a snapshot.
 | `exclude_patterns` | `[]` (GLOB operator patterns on the relative path; `*` crosses `/`) | `00_load.sql`, `refresh.sql` |
 | `languages` | `MAP {'rs': 'rust'}` (extension to language) | `00_load.sql`, `files`, `hunks`, `refresh.sql` |
 | `since` | unset (all of HEAD) | history views, `blob_files`, `refresh.sql` |
-| `include_merges` | `false` | history views, `blob_files`, co-change and history-joined queries, `refresh.sql` |
+| `include_merges` | `false` | history views, co-change and history-joined queries, `refresh.sql` |
+| `blob_include_merges` | `true` (`false`: the blob layer skips merges, as before 2026-10-28) | `blob_files`, `refresh.sql` |
 | `clone_reports` | `[repo/target/code-db/jscpd/exact/jscpd-report.json, repo/target/code-db/jscpd/normalized/jscpd-report.json]` | `clone_pairs` |
 | `cache_path` | `repo/target/code-db/cache.duckdb` | `refresh.sql` |
 | `scip_index` | `repo/target/code-db/index.scip` (must exist when `views/scip.sql` is read) | `views/scip.sql`, `refresh.sql` |

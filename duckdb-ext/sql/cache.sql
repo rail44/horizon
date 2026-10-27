@@ -68,8 +68,8 @@ DROP TABLE IF EXISTS hunks_cache;
 CREATE TEMP TABLE hunks_cache AS SELECT * FROM hunks;
 CREATE OR REPLACE VIEW hunks AS SELECT * FROM hunks_cache;
 
--- The blob layer: blob_files (for the same `since` and `include_merges` as the history
--- copies), blob_units, which parses every blob once (the live blob_nodes) to build the
+-- The blob layer: blob_files (for the same `since` as the history copies, merges as
+-- blob_include_merges says), blob_units, which parses every blob once (the live blob_nodes) to build the
 -- copy, and blob_blank_lines, which reads every blob's text once. blob_nodes itself is not copied (about 31 million rows on this repository)
 -- and stays live; unit_changes reads the copies.
 DROP TABLE IF EXISTS blob_files_cache;

@@ -9,7 +9,11 @@
 --   which the function writes when it is missing. Only extensions in `languages`; no
 --   rows for a change with the same content on both sides (a pure rename), nor for
 --   binary, symlink or submodule sides. `blob_dir` must be an absolute path.
---   `since` and `include_merges` are read at each scan, like the history views.
+--   `since` is read at each scan, like the history views; merges are diffed against
+--   their first parent unless `blob_include_merges` is false (00_load.sql: default true,
+--   whatever `include_merges` is), so the blobs of every tree of the range are here. The
+--   rows of merge commits have no hunks unless `include_merges`, and unit_changes and
+--   the lineage, which join the sides to hunks, do not see them.
 -- blob_nodes(blob_id, <read_ast's columns>): one parse per distinct blob, keyed by
 --   blob_id; the language is the one read_ast detects from the file's extension, which
 --   is the extension of the path the blob was recorded under.
@@ -30,7 +34,7 @@
 
 CREATE OR REPLACE VIEW blob_files AS
 SELECT * FROM git_changed_blobs(getvariable('repo'), getvariable('blob_dir'), since := getvariable('since'),
-                                include_merges := getvariable('include_merges'),
+                                include_merges := getvariable('blob_include_merges'),
                                 extensions := map_keys(getvariable('languages')));
 
 -- The snapshot; refresh.sql repeats these statements over its cached blob_files.

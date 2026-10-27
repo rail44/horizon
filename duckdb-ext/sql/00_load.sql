@@ -142,6 +142,12 @@ SET VARIABLE source_paths = list_transform(getvariable('source_files'),
 -- History: `since` is any revision (history is since..HEAD); unset means all of HEAD.
 -- `include_merges` also diffs merges against their first parent.
 SET VARIABLE include_merges = coalesce(getvariable('include_merges'), false);
+-- The blob layer (views/blobs.sql) diffs merges against their first parent unless
+-- `blob_include_merges` is false, so that every blob of every tree in since..HEAD is in
+-- it (a conflict resolution's content enters history only through the merge). The
+-- history views keep following include_merges, and so does everything that joins blob
+-- sides to hunks (unit_changes, the lineage).
+SET VARIABLE blob_include_merges = coalesce(getvariable('blob_include_merges'), true);
 
 -- jscpd JSON reports (duckdb-ext/sql/jscpd.sh). A report's `source` label is the name
 -- of the directory that holds it. The files must exist when clones.sql is read:
