@@ -524,13 +524,105 @@ main: 415 units added, all under `duckdb-ext/`, everything else kept. Queries ta
 3–6 s from the cache including the load; the new macros re-derive an existing cache's units once (8.9 s), cold and
 incremental refreshes are unchanged, and `check.py explain` counts are equal.
 
+## Third re-evaluation (2026-10-28)
+
+The owner asked for a third round and settled its shape proposal by
+proposal (each with the problem it answers and the alternatives —
+decision model, embeddings — considered): the reading check on the
+unjudged candidates, the tracking of the known true positives, the
+retrospective in its minimal form with a `loc` column, the comparison
+evaluated on sampled rows and on one real branch, the mechanism table
+attributed by experiment, and the owner's spot-check; no second reader
+([reading check 3](research/code-db-dogfood-reading-3-2026-10-28.md),
+[retrospective 3 and comparison evaluation](research/code-db-dogfood-retrospective-3-2026-10-28.md)).
+
+**Reading check 3** at b3b94fc1 (sources unchanged since round 2): 14
+of 45 candidates 問題あり, 30 問題なし, 1 undecided (round 2: 13 / 31 /
+1); 9 distinct causes, 6 of round 2's 10 still surfacing plus 3 new. One
+new cause is the first case where a one-sided clone count really was a
+late propagation: the list modals' open/close/cancel duplicated between
+`render.rs` and `modals.rs`, one fix applied to the palette (0a921404),
+copied to the other two modals the next day (d39ea089), and one fix
+applied four times (1c27f1ab) — reached by churn and by the clone signal,
+though the lines lie outside the jscpd fragment. Co-change's top 10 (all
+replaced by N1/M5) are all 問題なし. **Tracking** the 13 known 問題あり:
+7 are in a top 10 now; 5 return under `attribution := 'all'` (the
+`session_lifecycle.rs` and `commands.rs` impls, the `AgentdState` impl,
+the `AgentdHandle`/`TerminaldHandle` pair, `tests.real_git`) and 1 under
+`include_tests`; `overlap` alone does not restore the clone pair. By
+signal, churn and fan-in × churn reach causes inside one large unit or
+type, clones reach the copies, cycles reach only `start_approval_gate`,
+and co-change reaches none in its top. **Mechanism table** by
+experiment: 36 of 45 candidates move under some restored rule (19 by
+their own number), 9 under none; M1 with the leading-doc attribution
+explains 25, N1 8, N2 8, M5 8 (all by displacement), M6 5, M4 3; by
+reading M3 10, N3 at least 4, M2 0. Five more mechanisms were named
+(move commits counted in churn; a burst of preview iterations forming
+co-change pairs; coupling through a third unit; a `mod x;` declaration
+pairing with its file's items; an unresolved clone side never marked as
+a test). M1 and the leading-doc attribution share one variable and
+cannot be separated by toggling. Two discrepancies with the records are
+unresolved: the clone pair ranks 39th rather than the 41st recorded
+(counts equal), and restoring all five rules no longer reproduces round
+2 exactly because the inherited lineage has no restore variable.
+
+**Retrospective 3**: the final column at b3b94fc1 equals the twelfth
+increment's in every cell (the thirteenth and fourteenth increments
+touched nothing history reads; truth 778 / 92 / 30). In production
+scope at 1+ commits, P@100: churn 0.71, clone 0.66, fan-in × churn 0.47,
+co-change 0.40, fan-in 0.32 — and `loc` 0.75. Size still matches or
+beats every history signal at P@100, as in round 1.
+
+**Comparison evaluation.** Sampled rows of the sweep (seed 0.42):
+`moved` non-ambiguous 10 / 10 correct, `renamed` 10 / 10, `moved`
+ambiguous 4 / 10 — the six wrong rows are 0.5–0.6 `content_match` links
+to a sibling moved in the same commit, each beside a correct 0.8–1.0
+pair; `added` 4 / 5 and `removed` 3 / 5 (1 undecidable): a rename whose
+body shrank from 40 to 10 lines and a move where every field gained
+`pub(super)` fell below the threshold and show as added/removed. Of the
+10 renamed rows, 7 keep the old name at HEAD as a wrapper or extraction
+remainder, listed as `added`. On the decision-model range (2e6a5f32 →
+2a49dc89, 13 commits, 53 files): kept 8,668 (125 with commits), added
+174, removed 19, renamed 8, moved 1, edges added 66 / removed 3, cycles
+unchanged (one grew 2 → 3 modules, still `kept`). What the output lacks
+for a reviewer: `const`/`static` items are not units, so the range's
+main behaviour change (the judge's instruction strings, the thresholds)
+has no row; no text-changed flag — 55 kept rows have `commits` 2 with
+identical text at both ends (three files deleted in cad2cfab and
+restored in ff10f1ef) while 71 kept rows whose text changed look the
+same; 23 kept rows changed with 0 commits (impls and modules under
+innermost attribution, and one function whose only change came through
+a merge's conflict resolution); no list of the commits behind a count;
+13 tests moved across commits appear as removed + added; `run_judge` is
+paired with `run_decision_judge` (similarity 0.12) rather than
+`run_chat_judge` (0.71); parent/child module edges never form cycles;
+edges whose weight changed stay `kept`; tests are 192 of the 328
+non-trivial rows; non-Rust files (10 of 53) are out of scope.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
   several units or moved into a new file does not cut the stub's history;
-  heavy rewrites below the threshold break the chain, and so does an
-  enclosing unit's rename below the threshold (its inner units then stay
-  unlinked too); short and test units link easily.
+  heavy rewrites below the threshold break the chain (a rename whose body
+  shrank 40 → 10 lines, a move that added `pub(super)` to every field),
+  and so does an enclosing unit's rename below the threshold (its inner
+  units then stay unlinked too); short and test units link easily, and a
+  sibling moved in the same commit draws 0.5–0.6 links beside the right
+  one (6 of 10 sampled ambiguous moves); a wrapper left under the old name
+  is an `added` row.
+- **Comparison output** (third re-evaluation): a text-changed flag and
+  the commit list behind `commits`; `const`/`static` items as units;
+  edge-weight changes and parent/child edges in the graph comparison;
+  tests separated.
+- **Flag columns for M3 and N3** (contract types whose dependents change
+  with them; sweep commits that touch many units lightly) are the
+  consultation item the mechanism table leaves open: a column the reader
+  discounts by, not a rule that removes rows.
+- **Deferred consultations** from the third round: combining the signals
+  into one calibrated score with the retrospective as labels; more truth
+  sets by finding other refactoring periods with `compare_units`;
+  embeddings as a sixth signal (duplicated concerns beyond token clones)
+  or as a second correspondence to sample disagreements from.
 - **A `git://` file system** remains the target for history access. The
   C API registers none today: both v1 and v2 only let an extension *use*
   the host file system (checked against the 2.0.0 headers), and
@@ -541,9 +633,12 @@ incremental refreshes are unchanged, and `check.py explain` counts are equal.
   renames and moves start a new history. No established system solves this
   with stored identifiers; method-level history tools treat it as a
   matching problem (90–99.5 % on Java).
-- **Unit granularity**: nested units (impl blocks, modules) are credited
-  with every change inside them; the views keep the nesting (`parent`
-  columns) so the choice can be made per query.
+- **Unit granularity**: innermost attribution credits an enclosing unit
+  only with its own lines (ninth increment); the views keep the nesting
+  (`parent` columns) and `attribution := 'all'` restores the old count,
+  which is what brings 5 of the 13 known true positives back into the top
+  10 (third re-evaluation) — the reading target and the counting unit
+  still differ for impls and types.
 - **How the views are loaded** (SQL files read by the client today;
   registration by an extension is not available on the C API v2 without a
   catalog surface), and whether `duckdb-ext/` is extracted for use in
