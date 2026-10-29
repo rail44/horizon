@@ -723,6 +723,37 @@ nesting (expected to be expressible over stored SCIP), the before/after
 comparison as a diff of obstacle lists over two indexes, and the
 evaluation of the axes.
 
+## Complexity over SCIP; the comparison as obstacle lists (2026-10-29)
+
+**Complexity and nesting** ([record](research/code-db-complexity-2026-10-29.md)):
+SCIP is an index of names, so control flow does not appear in it. A local
+definition's `enclosing_range` is the binding pattern itself (29,665 of
+29,667 on one line), a reference's is a copy of its definition's, and
+closures have no symbol; nothing nests below items. Measures that are
+expressible without nesting track size closely (Spearman with `loc` over
+3,425 functions: reference occurrences 0.86, vocabulary 0.84, locals
+0.76, most locals alive at once 0.70; text indentation depth 0.81, which
+also counts rustfmt's wrapping). Nothing was built. Branch counts are not
+in SCIP, but the unit's range text has the keywords; counting them with
+one pattern was offered to the owner as a light text rule, undecided.
+
+**Before/after comparison** ([record](research/code-db-obstacle-diff-2026-10-29.md)):
+`code-db compare AFTER BEFORE [QUERY]` loads BEFORE with the running SQL,
+copies its per-side rows (`compare/sides.sql`) into a temporary database,
+attaches it to AFTER and runs `compare/queries/` (`summary`, `units`,
+`unit_axes`, `clones`, `edges`, `cycles`, `layer_violations`). Identity is
+`(crate, kind, SCIP descriptor)`; a move across modules is disappeared +
+appeared. Every `unit_quality` column is compared before and after, with
+`text_changed` (md5 of the range text), production and tests separate,
+edge-weight changes reported. The September sweep (e223bc20 → 46c37290,
+production): units 3,980 → 4,503 (718 of 3,538 kept with changed text,
+965 appeared, 442 disappeared), clone pairs 489 → 376, module edges
+1,558 → 2,152, cycles 17 → 21; six rows checked against git agree. The
+decision-model range now shows what the third re-evaluation found
+missing: the judge's instruction strings and thresholds as appeared
+constants, text-changed versus unchanged kept units, and 13 module edges
+with changed weight. A whole compare takes 3.4–5.7 s with both caches.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
