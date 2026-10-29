@@ -599,6 +599,64 @@ paired with `run_decision_judge` (similarity 0.12) rather than
 edges whose weight changed stay `kept`; tests are 192 of the 328
 non-trivial rows; non-Rust files (10 of 53) are out of scope.
 
+## Quality axes, settings and the launcher (2026-10-28/29)
+
+After the third round the owner restated what quality means here: not
+taste but 「継続的にメンテナンスをする上での障害の少なさや機能の足しやすさ」,
+with size, reusability and clarity of intent as the axes they named;
+duplication and placement are structural properties; and 「人間の判断で
+あったりプロジェクトの方向性で左右されるものは…設定やデータのような変更の
+効くライフサイクルの短い部分で担うべき」. A survey of derivable axes
+([record](research/code-quality-axes-2026-10-29.md)) lists 18, with
+evidence strength and derivability, and classifies the parameters into
+mechanism and judgment. Consultation then reduced the settings to what
+cannot be decided from language structure or analysis: paths outside
+maintenance (`scope.exclude`), test files and attributes a language's own
+rules do not define (`tests.paths`, `tests.extra_attributes`), and the
+intended layering (`[[layers]]` with `may_depend_on`); contract types and
+intended duplications are to be derived (propagation share; conversion
+impls with exhaustive matches) rather than listed, every entry carries a
+`reason`, and the file is `.code-db.toml` in the analysed repository.
+Reading that file with DuckDB was rejected as inverting the dependency
+(「duckdbを用いることへの違和感が強い」), and the owner chose a Rust launcher
+(「Bで」).
+
+**Launcher** ([record](research/code-db-launcher-2026-10-29.md)):
+`duckdb-ext/code-db/`, a workspace of its own linked to the machine's
+libduckdb like `host-check`, replaces `run.sh` with the same subcommands
+(`index`, `query`, `sql`, `shell`) plus `limits`. It reads
+`.code-db.toml` (`toml`, strict: unknown keys and missing `reason` are
+errors), derives the resource limits (moved out of `00_load.sql`, which
+now leaves DuckDB's defaults when nothing is passed; `check.py` takes them
+from `code-db limits --json`), and passes values as variables and the
+layers as tables. New: `queries/layer_violations.sql` and a
+`violating_edges` column on `module_cycles`. Output is byte-identical to
+`run.sh` for every query (markdown, defaults). On the `board_flow`
+question, with temporary settings in a clone: if the entry points belong
+in `session/` there are no violations; if `board_flow/` is the only
+place, the two edges `session/board.rs` and `session/connection.rs` →
+`board_flow/operations.rs` are violations, and without them a 6-module
+cycle inside `session/` remains (confirmed in SQL). No settings file is
+committed: the layering is the owner's open decision.
+
+**SCIP as the primary source for the current tree** (owner, 2026-10-29:
+「SCIPが主でいいと想いますね。treesitter由来の木に残る役割をむしろ探した上で残すかどうかを判断したい」).
+The roles of the tree-sitter tree were inventoried and measured
+([record](research/code-db-tree-sitter-roles-2026-10-29.md)): 7,732 of
+8,816 units match a SCIP definition one-to-one with the same kind;
+`enclosing_range` starts at `lead_start_line` in all of them; 7,680
+qualified names agree after normalisation; the misses are impls (551, not
+symbols in SCIP), `mod x;` declarations (474), attribute-macro methods
+(28), inactive-cfg code (19) and associated types (12); SCIP adds 611
+`const`/`static` items. Tests are found without the tree by a path rule
+and a text pattern over SCIP ranges (3,598 of 3,600). Only syntax gives
+impl ranges, the extent of macro invocations (`via_macro`) and impl
+header positions. History is the main constraint: one index costs
+167–169 s and 2.5–2.7 GB of build output, so past blobs keep needing a
+syntax parser. The decisions (unit set and kinds, ranges, naming, files
+outside the index, test rule, `via_macro`, the history form, future
+syntax-based axes, other languages' indexers) are open with the owner.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
