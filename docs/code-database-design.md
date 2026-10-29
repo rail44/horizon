@@ -1,5 +1,13 @@
 # Code database — design
 
+**Current state (2026-10-29):** the layer describes the current tree only,
+from one SCIP index per Cargo workspace, with the quality axes of the
+owner's definition as views (see "Rebuilt on SCIP" near the end). The
+sections from "First increment" to "Fourteenth increment" and the three
+re-evaluations describe the history-based layer that was removed; they
+stay as the record of what was built and measured. The paragraph below is
+the starting idea.
+
 A repository's structure and history as DuckDB tables, queried in SQL, to
 locate refactoring candidates with the signals the literature supports
 (function-level change history, clone pairs that changed inconsistently,
@@ -681,6 +689,39 @@ the comparison and the retrospective's truth become comparisons of two
 snapshots. History is added back, at the granularity a concrete question
 needs, when such a question appears. The increments 4, 7, 8, 11 and 12
 and most of 9 remain as records of what was measured.
+
+## Rebuilt on SCIP (2026-10-29)
+
+([record](research/code-db-scip-rebuild-2026-10-29.md)) The pre-check
+reproduced the tree-sitter-roles numbers exactly (7,732 of 8,816 units
+one-to-one, kinds, ranges, 7,680 names). Units now come from SCIP
+definitions in the form the owner accepted: no impl units (methods carry
+`impl_type`/`impl_trait` from descriptors, resolved through the impl's
+header line: 565 of 571 impl types), no `mod x;` units, `const`/`static`
+and associated types as units, ranges with leading docs, descriptor-based
+names, the crate from the SCIP package, tests by path rule and lead text
+(3,797 tests, no disagreement with the old tags on 8,243 matched units),
+one index per Cargo workspace (5 here; `code-db index` 326 s cold). On
+the af0d26a7 tree: 9,497 units in 538 of 543 files. The graph is rebased
+on these units; 3,516 of the old 3,517 module edges survive and 264 are
+new (file-level `pub use` and impl headers now belong to the file module,
+and references to constants count), which grows the largest cycle from 25
+to 40 modules — whether that count fits the purpose is not yet judged.
+Axes as queries: `size` (unit, file, crate), `duplication` (jscpd pairs on
+the innermost units, a `conversion_pair` flag; jscpd now scans `files`, so
+`scope.exclude` applies), `coupling` (fan-in/out by files, crates and
+units, `contract_candidate` at ≥ `min_crates` crates), `module_cycles`
+with `violating_edges`, `layer_violations`, `interface`, `public_surface`,
+`intent` (documentation presence, TODO/FIXME), `unreferenced` (with
+structurally unreferenced trait items and crate roots), and the per-unit
+view `unit_quality` with no composite score. The persistent cache is
+rebuilt whole per input state (1–2 s; queries from it ≤ 0.25 s). Removed:
+the blob layer, unit changes, lineage, history queries, the comparison,
+`retro/`, sitting_duck and `lang/rust.sql`, and every git table function
+but `git_tracked_files` (about 12,600 lines). Deferred: complexity and
+nesting (expected to be expressible over stored SCIP), the before/after
+comparison as a diff of obstacle lists over two indexes, and the
+evaluation of the axes.
 
 ## Open points
 
