@@ -3,6 +3,9 @@
 /preview-plugin/target/
 # So are the DuckDB extensions.
 /duckdb-ext/target/
+# And its two host workspaces.
+/duckdb-ext/host-check/target/
+/duckdb-ext/code-db/target/
 /.claude/settings.local.json
 /.claude/worktrees/
 /.claude/review-queue/

@@ -2,7 +2,7 @@
 -- docs/research/code-db-compare-2026-10-28.md). Run on a checkout of the range's end
 -- with the whole history cached (no `since`), after changes.sql and lineage.sql wrote
 -- their files for the same range:
---   duckdb-ext/sql/run.sh sql END duckdb-ext/sql/retro/compare.sql compare_before=BASE \
+--   duckdb-ext/code-db/target/release/code-db sql END duckdb-ext/sql/retro/compare.sql compare_before=BASE \
 --       scip_before=/abs/index-of-BASE.scip retro_changes=/abs/changes.parquet \
 --       retro_lineage_preserves=/abs/lineage-preserves.parquet
 -- Prints:

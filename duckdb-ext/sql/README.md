@@ -27,16 +27,21 @@ lineage and the history queries over it).
 
 ## Running
 
-`run.sh` is the way to use this layer from the shell; it does what the rest of this
-section describes (the file order, the variables, the persistent cache). From the
-root of this Horizon checkout, for any repository `REPO`:
+`code-db` is the way to use this layer from the shell; it does what the rest of this
+section describes (the settings file, the limits, the file order, the variables, the
+persistent cache). It is a Rust command in `../code-db/`, built by `duckdb-ext/build.sh`
+into `duckdb-ext/code-db/target/release/code-db` (written `code-db` below) and linked
+against the machine's libduckdb 2.0.0 as Horizon's daemon is (`../README.md`). It reads
+the SQL files and the extensions of the Horizon checkout it was built in, and works on
+any repository `REPO`:
 
 ```sh
-duckdb-ext/sql/run.sh index REPO                       # inputs: SCIP index and jscpd reports
-duckdb-ext/sql/run.sh query REPO unit_churn LIMIT=20   # queries/unit_churn.sql, as a table
-duckdb-ext/sql/run.sh query REPO cochange_without_reference min_coupling_pct=50 FORMAT=box
-duckdb-ext/sql/run.sh sql REPO my-question.sql         # any SQL file, after the same loading
-duckdb-ext/sql/run.sh shell REPO                       # an interactive duckdb2 session
+code-db index REPO                       # inputs: SCIP index and jscpd reports
+code-db query REPO unit_churn LIMIT=20   # queries/unit_churn.sql, as a table
+code-db query REPO cochange_without_reference min_coupling_pct=50 FORMAT=box
+code-db sql REPO my-question.sql         # any SQL file, after the same loading
+code-db shell REPO                       # an interactive duckdb2 session
+code-db limits REPO [--json]             # the limits the loading would set
 ```
 
 - **`index REPO`** writes `REPO/target/code-db/jscpd/{exact,normalized}` (`jscpd.sh` over
@@ -44,23 +49,38 @@ duckdb-ext/sql/run.sh shell REPO                       # an interactive duckdb2 
   `REPO/target/code-db/index.scip` (`rust-analyzer scip`, 160–280 s and about 7 GB on
   this repository; its output goes to `index.scip.log` beside it), and prints the time
   of each. Run it again after edits: nothing checks the index against the tree.
-- **`query`, `sql`, `shell`** set `repo`, read `00_load.sql` and the view files in the
-  order below (`views/scip.sql` and `views/graph.sql` when the index exists), then
-  `refresh.sql` (the persistent cache in `REPO/target/code-db/cache.duckdb`; the first
-  run builds it, about 25 s here, later runs refresh it), with the loading's own output
-  suppressed. `query QUERY` then runs `queries/QUERY.sql`, `sql FILE.sql` reads the
-  file, `shell` leaves the CLI open with everything in place.
+- **`query`, `sql`, `shell`** read `REPO/.code-db.toml` when it exists (Settings file),
+  derive the limits (Limits) and print them to stderr, set `repo`, the limits, the
+  settings' values and the command line's variables, then read `00_load.sql` and the
+  view files in the order below (`views/scip.sql` and `views/graph.sql` when the index
+  exists), then `refresh.sql` (the persistent cache in `REPO/target/code-db/cache.duckdb`;
+  the first run builds it, about 25 s here, later runs refresh it), with the loading's
+  own output suppressed. When the settings declare layers and the index exists, a
+  module that matches two layers stops the command with the modules and their layers.
+  `query QUERY` then runs `queries/QUERY.sql`, `sql FILE.sql` reads the file, `shell`
+  leaves the CLI open with everything in place.
+- **Where it runs.** In the default `FORMAT`, `markdown`, everything runs in the
+  command's own process through the `duckdb` crate, and the command prints each result
+  as the DuckDB CLI's markdown mode does (byte for byte, `docs/research/code-db-launcher-2026-10-29.md`);
+  a SQL file may use the CLI's `.print` and `.read`, and no other dot command. Any other
+  `FORMAT`, and `shell`, hand the same loading to the DuckDB 2.0.0 CLI (`DUCKDB_CLI`,
+  default `~/.local/bin/duckdb2`) as a script, because the crate has no renderer for
+  the CLI's other modes and no interactive session; `shell` writes the script to
+  `REPO/target/code-db/shell-init-PID.sql` for `-init` and removes it on exit.
 - **Variables**: `NAME=VALUE` sets a DuckDB variable before anything is read (a
   number, `true`, `false` or `NULL` as it is, anything else as a string, so
   `since=e3c619a0` and `kind=function` need no quotes); `NAME:=EXPR` passes SQL text
-  (`"exclude_patterns:=['src/*']"`). `FORMAT` is the CLI's output mode (default
+  (`"exclude_patterns:=['src/*']"`), and overrides what the settings file sets.
+  `memory_limit`, `threads` and `temp_limit` take `NAME=VALUE` only: they go into the
+  limits rather than straight to DuckDB. `FORMAT` is the CLI's output mode (default
   `markdown`; `box`, `csv`, `json`, …) and `LIMIT` the number of rows `query` prints
   (it wraps the query in `SELECT * FROM (…) LIMIT n`; the query files stay as they are).
 - **Errors** are one line saying what to do: no jscpd report or no index for a query
   that needs it (run `index`), an extension not built (`duckdb-ext/build.sh`), the
-  CLI not found (`DUCKDB_CLI`, default `~/.local/bin/duckdb2`), jscpd not installed.
+  CLI not found (`DUCKDB_CLI`), jscpd not installed, a settings file that does not
+  parse (with the line).
 - `retro/` holds a retrospective check of the signals against a past refactoring
-  sweep, run through `run.sh sql` (`retro/changes.sql` on the range's end,
+  sweep, run through `code-db sql` (`retro/changes.sql` on the range's end,
   `retro/signals.sql` on its base; see
   `docs/research/code-db-dogfood-retrospective-2026-10-26.md`). For a ground truth
   through lineage, `retro/changes.sql` and `retro/lineage.sql` run on the end with
@@ -76,17 +96,28 @@ duckdb-ext/sql/run.sh shell REPO                       # an interactive duckdb2 
 
 ## Limits
 
-`00_load.sql` sets DuckDB's memory, thread and spill limits every time it is read,
-from the machine's state at that moment, so a query cannot use up the machine's memory:
-past the limit DuckDB spills to disk or fails with an out-of-memory error instead.
-Measurements are in `docs/research/code-db-limits-2026-10-27.md`.
+`code-db` derives DuckDB's memory, thread and spill limits from the machine's state
+each time it loads the views, so a query cannot use up the machine's memory: past the
+limit DuckDB spills to disk or fails with an out-of-memory error instead. It passes the
+results as the variables `memory_limit`, `threads`, `temp_limit` and `temp_directory`,
+and `00_load.sql` applies them at every read; DuckDB computes nothing about its own
+limits. Measurements are in `docs/research/code-db-limits-2026-10-27.md`.
 
-| Setting | Derived value | Override (variable) |
+| Setting | Derived value (`code-db`) | Override |
 | --- | --- | --- |
-| `memory_limit` | 60% of what the OS can give now: `MemAvailable` from `/proc/meminfo` plus what this DuckDB instance already holds (`duckdb_memory()`); at most DuckDB's default (80% of physical memory); below 2 GB the read stops with a message. Without a readable `/proc/meminfo`, 60% of DuckDB's default | `memory_limit` (a size `SET memory_limit` accepts: `'4GB'`) |
-| `threads` | the CPU count, at most one per GB of `memory_limit` | `threads` |
-| `temp_directory` | `repo/target/code-db/tmp` | none |
-| `max_temp_directory_size` | 50% of the free space of the file system holding the spill directory, when `temp_free_bytes` says how much that is (`run.sh` and `check.py` set it from `df` and `shutil.disk_usage`); else DuckDB's default (90% of the available disk space) | `temp_limit` (`'1GB'`) |
+| `memory_limit` | 60% of what the OS can give now (`MemAvailable` from `/proc/meminfo`); at most DuckDB's default (80% of physical memory, as DuckDB reports it); below 2 GB the command stops with a message. Without a readable `/proc/meminfo`, 60% of DuckDB's default | `memory_limit=4GB` |
+| `threads` | the CPU count (DuckDB's default), at most one per GB of `memory_limit` | `threads=N` |
+| `temp_directory` | `REPO/target/code-db/tmp` | `temp_directory=PATH` |
+| `max_temp_directory_size` | 50% of the free space of the file system holding the spill directory (`statvfs`); DuckDB's default (90% of the available disk space) when that cannot be read | `temp_limit=1GB` |
+
+`00_load.sql` takes the four variables as they are and, for each one left unset, keeps
+DuckDB's default: a client that reads the SQL files without `code-db` gets DuckDB's
+defaults (its spill directory is then `.tmp` in the working directory, the Horizon
+checkout root), unless it sets the variables; `code-db limits REPO --json` prints them
+(`check.py` takes them from there). Before 2026-10-29 `00_load.sql` computed the limits
+itself from `read_text('/proc/meminfo')`; it then also counted what the DuckDB instance
+already held (`duckdb_memory()`) as available, which a fresh `code-db` process does not
+need (it holds nothing when it derives them).
 
 The 40% of available memory left outside `memory_limit` is for what DuckDB's limit does
 not account: allocations inside extensions (tree-sitter parse trees in `read_ast`,
@@ -94,17 +125,18 @@ the git and SCIP readers), the OS page cache, other processes. Those allocations
 bounded by anything here, and neither is the page cache. A repository on a `tmpfs`
 spills into memory.
 
-The last statement of `00_load.sql` returns the chosen values as one line, for example
+`code-db` prints the chosen values as one line on stderr, for example
 
 ```
 limits: memory 25.3 GB (60% of 42.2 GB available, /proc/meminfo), temp 29.1 GB (50% of 58.2 GB free), threads 24 (CPUs)
 ```
 
-`run.sh` prints it to stderr, `check.py` prints it to stderr once per connection, and
-another client sees it as the result of the `.read` (a one-row table in the CLI's
-current mode) or of the executed script. The line says which source each value came
-from: an override names its variable, `/proc/meminfo unreadable` marks the fallback,
-`temp_free_bytes unset` marks DuckDB's default spill cap.
+and passes the same line as the variable `limits`, which the last statement of
+`00_load.sql` returns (another client sees it as the result of the `.read`, or, without
+the variable, a line made of the settings in force). The line says which source each
+value came from: an override names its variable, `/proc/meminfo unreadable` marks the
+fallback, `free space unknown` marks DuckDB's default spill cap. `check.py` prints it
+once per connection.
 
 DuckDB refuses to change `temp_directory` once it has spilled into it, even to the same
 path: in a CLI session that has spilled, a second `.read` of `00_load.sql` fails with
@@ -112,9 +144,9 @@ path: in a CLI session that has spilled, a second `.read` of `00_load.sql` fails
 session). `check.py` drops that one statement when re-reading the file on a connection
 that already has the directory.
 
-**External tools.** `run.sh index` runs `jscpd.sh` and `rust-analyzer scip` under a memory
-cap of 80% of `MemAvailable` (`tool_memory_max=SIZE` overrides it: a number with an
-optional `K`, `M`, `G` or `T` suffix, base 1024). With `systemd-run --user` available
+**External tools.** `code-db index` runs `jscpd.sh` and `rust-analyzer scip` under a
+memory cap of 80% of `MemAvailable` (`tool_memory_max=SIZE` overrides it: a number with
+an optional `K`, `M`, `G` or `T` suffix, base 1024). With `systemd-run --user` available
 the cap is a cgroup (`--scope -p MemoryMax=… -p MemorySwapMax=0`): it bounds the resident
 memory of all the tool's processes together, and the kernel kills the tool at the cap.
 Otherwise it is `prlimit --as=…`, a limit on each process's address space, not its
@@ -122,10 +154,10 @@ resident memory: a process reserves more address space than it touches (rust-ana
 peak address space was 9.6 GB at 7.4 GB resident here), so the cap stops a tool earlier
 than its resident size would, and each process of a tree has its own. A tool that
 reaches it fails an allocation and aborts. Without either, the tools run unbounded and
-`run.sh` says so. `run.sh` prints the cap it chose, and a tool that fails is reported
+`code-db` says so. `code-db` prints the cap it chose, and a tool that fails is reported
 with its exit status or signal and the cap; the previous `index.scip` is kept.
 
-The rest of this section is what `run.sh` does, for other clients. Every client needs DuckDB **2.0.0** (git_history loads only into that
+The rest of this section is what `code-db` does, for other clients. Every client needs DuckDB **2.0.0** (git_history loads only into that
 version), unsigned extensions allowed, network access the first time (to
 `INSTALL sitting_duck`), and the git_history and scip_index binaries built
 (`duckdb-ext/build.sh` builds both). Run from the root of this Horizon checkout:
@@ -191,6 +223,58 @@ to an "agent mode" with Markdown tables; `-no-agent` turns it off. The CLI
 goes on after a failing statement unless started with `-bail` (or after
 `.bail on`); the checks in `cache.sql` and `refresh.sql` stop the file only
 then.
+
+## Settings file
+
+Judgment that depends on the analysed repository (what is out of scope, what counts as
+a test, which module dependencies are intended) lives in that repository's
+`.code-db.toml`, at its root, not in the views (owner decision 2026-10-29). `code-db`
+reads it with the `toml` crate and hands DuckDB the values; without the file everything
+is as before. Every entry needs a `reason`, so that a later reader knows why it is
+there; an unknown key, a missing `reason`, a layer named twice or a `may_depend_on`
+naming no declared layer is an error that names the key and the line.
+
+```toml
+[scope]
+exclude = [ { path = "experiments/**", reason = "spikes, not product code" } ]
+
+[tests]
+paths = [ { path = "**/*.test.ts", reason = "..." } ]       # extra test files
+extra_attributes = [ { name = "my_test", reason = "..." } ] # extra test attribute names
+
+[[layers]]
+name = "board"
+modules = ["crates/horizon-agentd/src/board_flow/**"]
+reason = "..."
+[[layers]]
+name = "session"
+modules = ["crates/horizon-agentd/src/session/**"]
+may_depend_on = ["board"]
+reason = "..."
+```
+
+| Key | Becomes | Read by |
+| --- | --- | --- |
+| `scope.exclude[].path` | the variable `exclude_patterns` | `00_load.sql` (`is_source_file`) |
+| `tests.paths[].path` | the variable `extra_test_paths` (GLOB operator patterns on the relative path, `*` crosses `/`), added to `lang/rust.sql`'s own path rules | `rust_tags` |
+| `tests.extra_attributes[].name` | the variable `extra_test_attributes`, added to `lang/rust.sql`'s `test`, `rstest`, `test_case`, `bench` | `rust_tags` |
+| `[[layers]]` `name`, `modules` | the table `config_layers(name, module_pattern)`, one row per pattern | `module_layer_matches`, `module_layers` (`views/graph.sql`) |
+| `[[layers]]` `may_depend_on` | the table `config_layer_deps(name, may_depend_on)` | `graph_layer_violation`, `module_layer_violations`, the queries `layer_violations` and `module_cycles` |
+
+A module (`modules.module`: a file's path, or `<path>::<name>` for a `mod` block) is in
+a layer when it matches one of the layer's patterns with the GLOB operator, so
+`src/model.rs*` covers `src/model.rs` and its `mod` blocks. A module in no layer is
+unconstrained; a module that matches two layers is an error (`code-db` reports it before
+any query, and `module_layers` fails on it). An edge goes against the layers when both
+ends are in layers, the layers differ and the source layer's `may_depend_on` does not
+name the target's (`may_depend_on` is not transitive). The query `layer_violations` lists
+those module edges (every edge of `module_edges`, nested and same-type ones included),
+with the cycle each is inside; `module_cycles` counts them per cycle in its last column,
+`violating_edges` (0 without layers). The variables and tables are set before
+`00_load.sql` is read, which creates the two tables empty when they do not exist; a
+`NAME=VALUE` on the command line overrides a variable the file sets. The persistent
+cache's derive key includes the two test variables, so a change of the test rules
+re-derives the cached units and tags.
 
 ## Historical blobs and unit changes
 
@@ -620,8 +704,9 @@ references inside `macro_rules!` bodies have none.
 
 Queries: `unit_dependencies` (a unit's references and referrers up to `depth`, with
 the edges' symbols, each neighbor's churn and fan-in), `module_graph`,
-`module_cycles` (the inner edges of each cycle, weakest first), `unit_cochange`,
-`cochange_without_reference`.
+`module_cycles` (the inner edges of each cycle, weakest first, with the cycle's
+`violating_edges`), `unit_cochange`, `cochange_without_reference`, `layer_violations`
+(the module edges that go against the settings file's layers; Settings file).
 
 ## Before/after comparison
 
@@ -631,9 +716,9 @@ matched to the current ones through the lineage (owner approval 2026-10-27;
 (the views above); the before side is the tree of `compare_before`.
 
 ```sh
-duckdb-ext/sql/run.sh query REPO compare_units compare_before=REV [scip_before=PATH]
-duckdb-ext/sql/run.sh query REPO compare_graph compare_before=REV scip_before=PATH
-duckdb-ext/sql/run.sh query REPO compare_cycles compare_before=REV scip_before=PATH
+code-db query REPO compare_units compare_before=REV [scip_before=PATH]
+code-db query REPO compare_graph compare_before=REV scip_before=PATH
+code-db query REPO compare_cycles compare_before=REV scip_before=PATH
 ```
 
 `scip_before` is a SCIP index of `compare_before`'s tree, made as the current one is,
@@ -644,8 +729,8 @@ can be deleted afterwards):
 ```sh
 git clone --no-checkout REPO CLONE
 git -C CLONE checkout REV
-duckdb-ext/sql/run.sh index CLONE                 # writes CLONE/target/code-db/index.scip
-duckdb-ext/sql/run.sh query REPO compare_graph compare_before=REV scip_before=CLONE/target/code-db/index.scip
+code-db index CLONE                 # writes CLONE/target/code-db/index.scip
+code-db query REPO compare_graph compare_before=REV scip_before=CLONE/target/code-db/index.scip
 ```
 
 `views/snapshot.sql` (read after `views/lineage.sql`):
@@ -987,6 +1072,20 @@ comparison peaked above 30 GB. `measure-refresh` edits, commits to and
 resets the repository it is given, so give it a throwaway clone (`git clone
 -q . target/code-db/clone`, and `jscpd.sh` for its reports).
 
+Every connection takes its limits from `code-db limits REPO --json` (the binary
+`duckdb-ext/code-db/target/release/code-db` that `duckdb-ext/build.sh` builds, or
+`CODE_DB`), with `--set`'s `memory_limit`, `threads` and `temp_limit` passed to it, and
+sets them as the variables `00_load.sql` applies; `check.py` computes no limit itself.
+`check.py` reads the SQL files in-process and does not read a `.code-db.toml`; a
+fixture fills `config_layers` and `config_layer_deps` itself.
+
+`code-db`'s own tests are in `../code-db/` (`cargo test`): the settings file (a valid
+file, a missing `reason`, an unknown key, a module in two layers), the limits from a
+fake `/proc/meminfo` and DuckDB's size formatting, the markdown renderer and the
+statement splitter, and an end-to-end run on a fixture repository whose
+`.code-db.toml` declares two layers and the test rules (the `layer_violations` row,
+the cycle's `violating_edges`, the extra test tags). `duckdb-ext/check.sh` runs them.
+
 `fixture` builds a git repository in a temporary directory (a trait, two
 trait impls, an inline test module, an integration test, an untracked file,
 a build output and a hidden directory that `.gitignore` excludes, four
@@ -1061,8 +1160,11 @@ declaration), `module_edges`, one module cycle of two, no crate edges or cycles,
 `unit_cochange`, `edge_cochange` and `cochange_without_reference` with
 `min_shared := 2` (the clone pair's two `area` methods, changed together without
 referencing each other), the thresholds, every graph query's rows (`depth := 2`,
-`direction`, `crate`, the error without a unit), and the same rows through
-`cache.sql` with no source or index scan in the queries' plans. Its co-change rows are
+`direction`, `crate`, the error without a unit), the layers (`config_layers` and
+`config_layer_deps` filled as `code-db` fills them: one violation and the cycle's
+`violating_edges`, then two, a module in two layers as an error, and no rows again once
+emptied), and the same rows through `cache.sql` with no source or index scan in the
+queries' plans. Its co-change rows are
 counted with `attribution := 'all'`. The refresh
 fixture's SCIP steps read `views/graph.sql` too, so the graph views and queries are
 compared with live after each refresh.
@@ -1135,7 +1237,7 @@ files reset it to live). It needs `git` and rust-analyzer but no jscpd.
 
 | File | Defines |
 | --- | --- |
-| `00_load.sql` | `INSTALL`/`LOAD` of the three extensions; the limits (Limits) and the macro `setting_bytes(s)`; parameter defaults; `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the limits line as its last result |
+| `00_load.sql` | `INSTALL`/`LOAD` of the three extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `scope_files`, `sources(file_id, content)`, `source_bytes(file_id, bytes)`, `source_lines(file_id, line, nonblank_through)` (over the table macros `source_bytes_of`, `source_lines_of`), macros `byte_slice`, `normalize_ws` |
 | `views/nodes.sql` | `nodes`: `file_id` plus every column of `read_ast(…, source := 'full', peek := 'none', context := 'none')`; `scope_nodes` (the nodes of `scope_files`) |
 | `views/blobs.sql` | `blob_files`, the snapshot `blob_snapshot`/`blob_paths`, `blob_list(blob_id, file, blob_ord)`, `blob_nodes(blob_id, …)`; the derivation inputs `blob_scope_nodes`, `blob_sources`, `blob_source_bytes`, `blob_source_lines` (keyed by `blob_ord`); `derived_blob_blank_lines`, `blob_blank_lines(blob_id, line)` |
@@ -1147,12 +1249,12 @@ files reset it to live). It needs `git` and rust-analyzer but no jscpd.
 | `views/snapshot.sql` | `compare_commit`, `compare_range`, `snapshot_files`, `snapshot_missing`, `snapshot_units`, `snapshot_nodes`, `snapshot_impl_parts`, `snapshot_tags`, `unit_at_before` (see Before/after comparison) |
 | `views/clones.sql` | `clone_pairs(pair_id, source, file_a, start_line_a, end_line_a, file_b, start_line_b, end_line_b, tokens, lines)` |
 | `views/scip.sql` (optional) | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (see SCIP) |
-| `views/graph.sql` (optional) | `unit_occurrences`, `unit_tests`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impl_targets`, `impl_for`, `implements`, `file_crate`, `modules`, `unit_module`, `module_edges`, `crate_edges`, `module_cycle_edges`, `module_cycles`, `crate_cycles`, `unit_commits`, `unit_cochange`, `edge_cochange`, `cochange_without_reference` (see Graph); the table macros `graph_*_over` behind the views from `unit_occurrences` to `module_cycles`; `unit_fan_in`; the before side `snapshot_scip_occurrences`, `snapshot_unit_module`, `snapshot_unit_fan_in`, `snapshot_module_edges`, `snapshot_module_cycles`, `module_renames` (see Before/after comparison) |
-| `queries/*.sql` | one statement each: `file_cochange`, `file_cochange_thresholds`, `clone_site_tags`, `clone_site_tags_summary`, `unit_churn`, `clone_change_consistency`, `unit_fan_in_churn` (needs `views/scip.sql`), `unit_dependencies`, `module_graph`, `module_cycles`, `unit_cochange`, `cochange_without_reference`, `compare_units`, `compare_graph`, `compare_cycles` (need `views/graph.sql`); the header states the question, the parameters and the evidence |
+| `views/graph.sql` (optional) | `unit_occurrences`, `unit_tests`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impl_targets`, `impl_for`, `implements`, `file_crate`, `modules`, `unit_module`, `module_edges`, `crate_edges`, `module_cycle_edges`, `module_cycles`, `module_layer_matches`, `module_layers`, the macro `graph_layer_violation`, `module_layer_violations` (see Settings file), `crate_cycles`, `unit_commits`, `unit_cochange`, `edge_cochange`, `cochange_without_reference` (see Graph); the table macros `graph_*_over` behind the views from `unit_occurrences` to `module_cycles`; `unit_fan_in`; the before side `snapshot_scip_occurrences`, `snapshot_unit_module`, `snapshot_unit_fan_in`, `snapshot_module_edges`, `snapshot_module_cycles`, `module_renames` (see Before/after comparison) |
+| `queries/*.sql` | one statement each: `file_cochange`, `file_cochange_thresholds`, `clone_site_tags`, `clone_site_tags_summary`, `unit_churn`, `clone_change_consistency`, `unit_fan_in_churn` (needs `views/scip.sql`), `unit_dependencies`, `module_graph`, `module_cycles`, `unit_cochange`, `cochange_without_reference`, `layer_violations`, `compare_units`, `compare_graph`, `compare_cycles` (need `views/graph.sql`); the header states the question, the parameters and the evidence |
 | `jscpd.sh` | the two jscpd reports `clones.sql` reads |
 | `cache.sql` | the session cache (above) |
 | `refresh.sql` | the persistent cache (above) |
-| `run.sh` | the launcher (Running) |
+| `../code-db/` | the launcher, `code-db` (Running): a Rust command in a workspace of its own; reads the settings file, derives the limits, runs the indexers, loads the files below in order and prints results |
 | `retro/` | the retrospective check: `changes.sql` (the unit changes of a range, to Parquet), `lineage.sql` (the baseline identities each change and preserve source reaches through lineage, to Parquet), `signals.sql` (rankings and ground truth at a baseline), `signals_by_name.sql` (the same with history counted by identity), `compare.sql` (`compare_units` against the walk of `lineage.sql` and the ground truth), `september-2026-record-preserves.csv` (the preserve rows taken from the September 2026 records) |
 | `check.py` | the check above |
 
@@ -1216,8 +1318,9 @@ which `00_load.sql` (and `refresh.sql`) take as a snapshot.
 | Variable | Default | Read by |
 | --- | --- | --- |
 | `repo` | required; an absolute path | everything |
-| `memory_limit`, `threads`, `temp_limit` | unset (derived; see Limits) | `00_load.sql` |
-| `temp_free_bytes` | unset (set by `run.sh` and `check.py` from the free space under `repo/target/code-db/tmp`) | `00_load.sql` |
+| `memory_limit`, `threads`, `temp_limit`, `temp_directory` | unset (DuckDB's defaults); `code-db` sets them to the derived limits (Limits) | `00_load.sql` |
+| `limits` | unset; `code-db` sets it to its limits line | `00_load.sql` (its last result) |
+| `extra_test_paths`, `extra_test_attributes` | `[]`; `code-db` sets them from the settings file (Settings file) | `rust_tags`, `refresh.sql` (derive key) |
 | `include_untracked` | `false` (also list untracked files that are not ignored) | `00_load.sql`, `refresh.sql` |
 | `exclude_patterns` | `[]` (GLOB operator patterns on the relative path; `*` crosses `/`) | `00_load.sql`, `refresh.sql` |
 | `languages` | `MAP {'rs': 'rust'}` (extension to language) | `00_load.sql`, `files`, `hunks`, `refresh.sql` |

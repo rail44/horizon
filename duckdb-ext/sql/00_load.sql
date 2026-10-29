@@ -21,93 +21,21 @@ SET VARIABLE repo = CASE
     ELSE error('set the variable repo to the absolute path of the repository root before reading 00_load.sql')
 END;
 
--- Limits (README.md, Limits): memory_limit, threads, temp_directory and
--- max_temp_directory_size, computed from the machine's state at every read of this file
--- unless the variables memory_limit, threads or temp_limit override them. The last
--- statement of this file returns the chosen values as one line (the variable limits).
--- setting_bytes(s): a size as current_setting() prints it or SET accepts it
--- ('49.6 GiB', '4GB', '512 bytes') in bytes; NULL for anything else.
-CREATE OR REPLACE MACRO setting_bytes(s) AS
-    TRY_CAST(regexp_extract(trim(s), '^([0-9.]+)', 1) AS DOUBLE)
-    * CASE upper(regexp_extract(trim(s), '([A-Za-z]+)$', 1))
-        WHEN 'BYTES' THEN 1 WHEN 'B' THEN 1
-        WHEN 'KB' THEN 1e3 WHEN 'MB' THEN 1e6 WHEN 'GB' THEN 1e9 WHEN 'TB' THEN 1e12
-        WHEN 'KIB' THEN 1024 WHEN 'MIB' THEN 1024 ^ 2 WHEN 'GIB' THEN 1024 ^ 3 WHEN 'TIB' THEN 1024 ^ 4
-    END;
--- DuckDB's own defaults: memory_limit is 80 % of physical memory, threads the CPU count.
+-- Limits (README.md, Limits): `code-db` derives memory_limit, threads,
+-- max_temp_directory_size and temp_directory from the machine's state and passes them as
+-- the variables memory_limit, threads, temp_limit and temp_directory (`code-db limits
+-- REPO --json` prints them for other clients); this file only applies them, at every
+-- read. A variable left unset leaves DuckDB's default. The last statement of this file
+-- returns the variable limits (code-db's one-line summary) or, without it, the settings
+-- in force.
 RESET memory_limit;
 RESET threads;
 RESET max_temp_directory_size;
-SET VARIABLE limits_default_memory = setting_bytes(current_setting('memory_limit'));
-SET VARIABLE limits_cpus = current_setting('threads');
--- What the OS can give now: MemAvailable plus what this DuckDB instance already holds
--- (a re-read in a session with large temporary tables counts them as its own). NULL when
--- /proc/meminfo is missing or has no MemAvailable line.
-SET VARIABLE limits_meminfo = coalesce((SELECT any_value(file) FROM glob('/proc/meminfo')), '/dev/null');
-SET VARIABLE limits_available = (
-    SELECT TRY_CAST(regexp_extract(content, '(?m)^MemAvailable:\s+([0-9]+) kB', 1) AS BIGINT) * 1024
-           + (SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory())
-    FROM read_text(getvariable('limits_meminfo'))
-);
--- 60 % of it (of DuckDB's default without /proc/meminfo), at most DuckDB's default, at
--- least 2 GB. The other 40 % is for allocations outside DuckDB's accounting.
-SET VARIABLE limits_derived_memory = CASE
-    WHEN getvariable('memory_limit') IS NOT NULL THEN NULL
-    WHEN least(0.6 * coalesce(getvariable('limits_available'), getvariable('limits_default_memory')),
-               getvariable('limits_default_memory')) >= 2e9
-        THEN least(0.6 * coalesce(getvariable('limits_available'), getvariable('limits_default_memory')),
-                   getvariable('limits_default_memory'))
-    ELSE error('only ' || formatReadableDecimalSize(CAST(coalesce(getvariable('limits_available'),
-                   getvariable('limits_default_memory')) AS BIGINT))
-               || ' of memory is available, and 60% of it is below the 2 GB floor: free memory, '
-               || 'or set the variable memory_limit (README.md, Limits)')
-END;
-SET memory_limit = coalesce(CAST(getvariable('memory_limit') AS VARCHAR),
-                            CAST(round(getvariable('limits_derived_memory')) AS BIGINT) || ' bytes');
-SET VARIABLE limits_memory = coalesce(getvariable('limits_derived_memory'),
-                                      setting_bytes(CAST(getvariable('memory_limit') AS VARCHAR)),
-                                      setting_bytes(current_setting('memory_limit')));
--- One thread per GB of memory_limit, at most the CPU count: each thread's operator state
--- then has a share of the limit to work in.
-SET threads = coalesce(getvariable('threads'),
-                       least(getvariable('limits_cpus'), greatest(1, floor(getvariable('limits_memory') / 1e9))));
--- Spill files go under the repository's target/code-db; their total is capped at half
--- of the free space of that file system when temp_free_bytes (run.sh, check.py) says
--- how much that is, else DuckDB's default stays.
-SET temp_directory = getvariable('repo') || '/target/code-db/tmp';
-SET max_temp_directory_size = coalesce(
-    CAST(getvariable('temp_limit') AS VARCHAR),
-    CAST(round(0.5 * getvariable('temp_free_bytes')) AS BIGINT) || ' bytes',
-    current_setting('max_temp_directory_size'));
-SET VARIABLE limits = 'limits: memory '
-    || formatReadableDecimalSize(CAST(getvariable('limits_memory') AS BIGINT)) || ' ('
-    || CASE
-        WHEN getvariable('memory_limit') IS NOT NULL THEN 'memory_limit'
-        WHEN getvariable('limits_available') IS NULL
-            THEN '60% of DuckDB''s default '
-                 || formatReadableDecimalSize(CAST(getvariable('limits_default_memory') AS BIGINT))
-                 || '; /proc/meminfo unreadable'
-        WHEN getvariable('limits_derived_memory') >= getvariable('limits_default_memory')
-            THEN 'DuckDB''s default, below 60% of '
-                 || formatReadableDecimalSize(CAST(getvariable('limits_available') AS BIGINT)) || ' available'
-        ELSE '60% of ' || formatReadableDecimalSize(CAST(getvariable('limits_available') AS BIGINT))
-             || ' available, /proc/meminfo'
-    END || '), temp '
-    || CASE
-        WHEN getvariable('temp_limit') IS NOT NULL
-            THEN coalesce(formatReadableDecimalSize(CAST(setting_bytes(CAST(getvariable('temp_limit') AS VARCHAR)) AS BIGINT)),
-                          current_setting('max_temp_directory_size')) || ' (temp_limit)'
-        WHEN getvariable('temp_free_bytes') IS NOT NULL
-            THEN formatReadableDecimalSize(CAST(round(0.5 * getvariable('temp_free_bytes')) AS BIGINT))
-                 || ' (50% of ' || formatReadableDecimalSize(CAST(getvariable('temp_free_bytes') AS BIGINT)) || ' free)'
-        ELSE 'DuckDB''s default (' || current_setting('max_temp_directory_size') || '; temp_free_bytes unset)'
-    END || ', threads ' || current_setting('threads') || ' ('
-    || CASE
-        WHEN getvariable('threads') IS NOT NULL THEN 'threads'
-        WHEN current_setting('threads') < getvariable('limits_cpus')
-            THEN '1 per GB of memory; ' || getvariable('limits_cpus') || ' CPUs'
-        ELSE 'CPUs'
-    END || ')';
+SET memory_limit = coalesce(CAST(getvariable('memory_limit') AS VARCHAR), current_setting('memory_limit'));
+SET threads = coalesce(getvariable('threads'), current_setting('threads'));
+SET max_temp_directory_size = coalesce(CAST(getvariable('temp_limit') AS VARCHAR),
+                                       current_setting('max_temp_directory_size'));
+SET temp_directory = coalesce(getvariable('temp_directory'), current_setting('temp_directory'));
 
 -- Source files are the worktree's files as git lists them (git_tracked_files: the
 -- tracked files with the content id `git add` would record now; ignored files and
@@ -174,5 +102,20 @@ SET VARIABLE scip_index = coalesce(getvariable('scip_index'), getvariable('repo'
 SET VARIABLE cache_path = coalesce(getvariable('cache_path'),
     getvariable('repo') || '/target/code-db/cache.duckdb');
 
--- The chosen limits (above), as one line.
-SELECT getvariable('limits') AS limits;
+-- The analysed repository's settings (README.md, Settings file), which code-db reads
+-- from its `.code-db.toml`. Test files and test attribute names beyond the rules of
+-- lang/rust.sql: repository-relative GLOB operator patterns (`*` crosses `/`) and
+-- attribute names.
+SET VARIABLE extra_test_paths = coalesce(getvariable('extra_test_paths'), []::VARCHAR[]);
+SET VARIABLE extra_test_attributes = coalesce(getvariable('extra_test_attributes'), []::VARCHAR[]);
+-- The intended layers (views/graph.sql, module_layers): each layer's module patterns
+-- (GLOB operator patterns over modules.module) and the layers each may depend on. Empty
+-- unless code-db filled them before this file was read.
+CREATE TABLE IF NOT EXISTS config_layers (name VARCHAR, module_pattern VARCHAR);
+CREATE TABLE IF NOT EXISTS config_layer_deps (name VARCHAR, may_depend_on VARCHAR);
+
+-- The limits (above), as one line.
+SELECT coalesce(getvariable('limits'),
+                'limits: memory ' || current_setting('memory_limit') || ', temp '
+                || current_setting('max_temp_directory_size') || ', threads ' || current_setting('threads')
+                || ' (the settings in force; code-db limits derives them)') AS limits;

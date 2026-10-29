@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build git_history.duckdb_extension and scip_index.duckdb_extension for
-# linux_amd64 / DuckDB v2.0.0 and print their paths.
+# linux_amd64 / DuckDB v2.0.0, then the code-db command, and print their paths.
 #
 # The extensions use DuckDB's unstable C API v2 (ABI type C_STRUCT_UNSTABLE),
 # so the binaries load only into exactly TARGET_DUCKDB_VERSION.
@@ -28,3 +28,8 @@ build() {
 
 build git_history git-history
 build scip_index scip-index
+
+# The entry point, code-db (sql/README.md, Running): a workspace of its own, linked
+# against the machine's libduckdb (code-db/Cargo.toml).
+nice -n 19 cargo build --release --locked -j 4 --manifest-path code-db/Cargo.toml >&2
+realpath code-db/target/release/code-db

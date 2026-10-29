@@ -385,6 +385,44 @@ GROUP BY e.cycle;
 
 CREATE OR REPLACE VIEW module_cycles AS FROM graph_module_cycles_over('files', 'units', 'tags', 'impl_parts', 'scip_occurrences');
 
+-- The intended layers, from the analysed repository's settings file (config_layers and
+-- config_layer_deps, 00_load.sql; empty without one). module_layer_matches(module, layer):
+-- each module (modules.module) with each layer one of whose module patterns it matches
+-- (GLOB operator, `*` crosses `/`). module_layers(module, layer): one layer per module; a
+-- module that matches two layers is an error (code-db reports it before any query). A
+-- module in no layer has no row.
+CREATE OR REPLACE VIEW module_layer_matches AS
+SELECT DISTINCT m.module, l.name AS layer
+FROM modules m JOIN config_layers l ON m.module GLOB l.module_pattern;
+
+CREATE OR REPLACE VIEW module_layers AS
+SELECT module,
+       CASE WHEN count(*) > 1
+            THEN error('module_layers: ' || module || ' matches the layers '
+                       || string_agg(layer, ', ' ORDER BY layer))
+            ELSE any_value(layer) END AS layer
+FROM module_layer_matches
+GROUP BY module;
+
+-- graph_layer_violation(src_layer, dst_layer): whether an edge from a module in src_layer
+-- to a module in dst_layer goes against the layers: both modules are in a layer, the
+-- layers differ, and src_layer's may_depend_on (config_layer_deps) does not name
+-- dst_layer. A module in no layer (NULL) is unconstrained either way; may_depend_on is
+-- not transitive.
+CREATE OR REPLACE MACRO graph_layer_violation(src_layer, dst_layer) AS
+    src_layer IS NOT NULL AND dst_layer IS NOT NULL AND src_layer <> dst_layer
+    AND NOT EXISTS (SELECT 1 FROM config_layer_deps d WHERE d.name = src_layer AND d.may_depend_on = dst_layer);
+
+-- module_layer_violations(src_module, dst_module, src_layer, dst_layer): the module edges
+-- (module_edges, every one: nested and same-type edges included) that go against the
+-- layers.
+CREATE OR REPLACE VIEW module_layer_violations AS
+SELECT e.src_module, e.dst_module, ls.layer AS src_layer, ld.layer AS dst_layer
+FROM module_edges e
+JOIN module_layers ls ON ls.module = e.src_module
+JOIN module_layers ld ON ld.module = e.dst_module
+WHERE graph_layer_violation(ls.layer, ld.layer);
+
 -- crate_cycles(cycle, crates, members, edges, unit_edges, occurrences): the same over
 -- crate_edges. Cargo forbids dependency cycles between crates, so a row here means
 -- either an aggregation error or a cycle Cargo allows (a dev-dependency used by test

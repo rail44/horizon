@@ -1,0 +1,29 @@
+# `code-db`: the code database's entry point (duckdb-ext/sql/README.md,
+# Running). It reads the analysed repository's `.code-db.toml`, derives
+# DuckDB's resource limits, starts the indexers, and hands DuckDB the values
+# and the SQL files in order.
+#
+# A workspace of its own for the same reason as host-check: in the
+# extensions' workspace cargo would unify libduckdb-sys's features, and
+# `loadable-extension-v2` turns off linking libduckdb, which a host needs.
+[package]
+name = "code-db"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+# The version the root Cargo.lock pins; features as in crates/horizon-agent.
+# Linked against the machine's libduckdb 2.0.0 (AGENTS.md, Build setup).
+duckdb = { version = "=1.20000.0", default-features = false }
+# statvfs (the spill file system's free space).
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+# Display width of a cell, as the DuckDB CLI's markdown mode pads it.
+unicode-width = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

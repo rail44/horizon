@@ -14,6 +14,7 @@ root quality gate does not read it; `./check.sh` is its gate.
 | `scip-index/` | `scip_index.duckdb_extension`: the DuckDB table functions `read_scip`, `read_scip_symbols`, `read_scip_metadata` over `scip-index-core` (see "`scip_index`" below) |
 | `scip-probe/` | a binary printing any SCIP function's rows of `scip-index-core` as TSV, compared with the extension by `scripts/scip_ext_parity.py` |
 | `host-check/` | no output; a test that loads both built extensions through the `duckdb` crate (a separate workspace, see below) |
+| `code-db/` | `code-db`, the code database's entry point (`sql/README.md`, Running): reads the analysed repository's `.code-db.toml`, derives DuckDB's limits, runs the indexers, and loads the extensions and the SQL views through the `duckdb` crate (a separate workspace, like `host-check/`) |
 
 ## Route and pin
 
@@ -108,8 +109,8 @@ Requires a Rust toolchain, `python3`, and a C compiler for `ring`, which
 `libduckdb-sys`'s build script uses (the extension itself links no C).
 
 ```sh
-duckdb-ext/build.sh      # builds and stamps both extensions, prints their paths
-duckdb-ext/check.sh      # fetches the scip CLI, fmt, clippy, tests of every member, build.sh, then the host check
+duckdb-ext/build.sh      # builds and stamps both extensions, then code-db; prints their paths
+duckdb-ext/check.sh      # fetches the scip CLI, fmt, clippy, tests of every member, build.sh, then the host check and code-db's
 ```
 
 Output, in `duckdb-ext/target/extension/v2.0.0/linux_amd64/`:
@@ -153,7 +154,13 @@ a workspace of its own because cargo unifies features within a workspace:
 next to `duckdb-neo`, `libduckdb-sys` would get `loadable-extension-v2`,
 which stops it from linking `libduckdb`, and the host would not link.
 Horizon's daemon could load the extension the same way; nothing in Horizon
-does so yet.
+does so yet. `code-db/` is a host too, in a workspace of its own for the
+same reason: it opens an in-memory database through the crate's C API
+(`duckdb::ffi`; the crate's `Connection` does not expose the raw connection,
+and DuckDB variables belong to one connection), and lets `00_load.sql` load
+the extensions. Its dependencies besides `duckdb` are `serde` and `toml`
+(the settings file), `libc` (`statvfs`, the spill file system's free
+space) and `unicode-width` (the markdown renderer's column widths).
 
 The DuckDB CLI: `duckdb -unsigned -c "LOAD '/abs/path/git_history.duckdb_extension'"`,
 only with a v2.0.0 CLI (`~/.local/bin/duckdb2 -unsigned -no-agent` loads
@@ -666,6 +673,10 @@ of the query after `LOAD`, bind included):
   ranges, a NULL enclosing range, the role booleans, a list column, an
   external symbol, the metadata counts) and the bind-time error for a
   missing file.
+- `code-db/`: unit tests of the settings file, the limits, the markdown
+  renderer and the statement splitter, and `tests/end_to_end.rs`, which runs
+  the built command on a fixture repository with a `.code-db.toml`
+  (`sql/README.md`, Check).
 
 ## `scip_index`
 

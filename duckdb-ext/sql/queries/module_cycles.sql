@@ -4,7 +4,10 @@
 -- module_edges); the group is named by its least member (`cycle`), with its crate and
 -- size. reverse_unit_edges is the edge in the other direction (0 when the cycle closes
 -- through other members). symbols lists up to five display names of the edge's symbols.
--- Within a group, the edges with the fewest unit edges come first. Needs views/graph.sql.
+-- Within a group, the edges with the fewest unit edges come first. violating_edges counts
+-- the group's edges that go against the declared layers (graph_layer_violation,
+-- views/graph.sql; README.md, Settings file), the same on every row of the group; 0
+-- without layers. Needs views/graph.sql.
 -- Evidence: Package Cycle is one of the six anti-patterns of Mo et al. (TSE 2021, 19
 -- projects, Java/C/C++), not one of the two with the largest contribution; Cargo
 -- forbids crate cycles, and no Rust study was found that shows module cycles to be
@@ -26,6 +29,16 @@ names AS MATERIALIZED (
 unit_mods AS MATERIALIZED (
     SELECT unit_id, module FROM unit_module
 ),
+layers AS MATERIALIZED (
+    SELECT module, layer FROM module_layers
+),
+violating AS (
+    SELECT e.cycle, count(*) FILTER (WHERE graph_layer_violation(ls.layer, ld.layer)) AS violating_edges
+    FROM edges e
+    LEFT JOIN layers ls ON ls.module = e.src_module
+    LEFT JOIN layers ld ON ld.module = e.dst_module
+    GROUP BY e.cycle
+),
 edge_symbols AS (
     SELECT ms.module AS src_module, md.module AS dst_module,
            list(DISTINCT coalesce(nullif(n.display_name, ''), r.symbol)
@@ -39,9 +52,10 @@ edge_symbols AS (
 )
 SELECT c.cycle, c.crate, c.modules, e.src_module, e.dst_module, e.unit_edges, e.occurrences,
        e.test_unit_edges, e.macro_unit_edges, e.ambiguous_unit_edges,
-       coalesce(r.unit_edges, 0) AS reverse_unit_edges, s.symbols[1:5] AS symbols
+       coalesce(r.unit_edges, 0) AS reverse_unit_edges, s.symbols[1:5] AS symbols, v.violating_edges
 FROM edges e
 JOIN cycles c USING (cycle)
+JOIN violating v USING (cycle)
 CROSS JOIN params p
 LEFT JOIN edges r ON r.cycle = e.cycle AND r.src_module = e.dst_module AND r.dst_module = e.src_module
 LEFT JOIN edge_symbols s ON s.src_module = e.src_module AND s.dst_module = e.dst_module

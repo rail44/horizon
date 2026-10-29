@@ -291,7 +291,8 @@ rust_attribute_kinds AS MATERIALIZED (
     FROM rust_nodes attr
     JOIN rust_tag_idents i ON i.file_id = attr.file_id
     WHERE attr.type = 'attribute'
-      AND i.text IN ('test', 'rstest', 'test_case', 'bench')
+      -- plus the settings file's names (00_load.sql, extra_test_attributes)
+      AND list_contains(['test', 'rstest', 'test_case', 'bench'] || getvariable('extra_test_attributes'), i.text)
       AND (i.parent_id = attr.node_id
            OR i.parent_id IN (SELECT s.node_id FROM rust_nodes s
                               WHERE s.file_id = attr.file_id AND s.parent_id = attr.node_id
@@ -356,7 +357,9 @@ tagged AS (
            f.path LIKE '%/tests/%' OR f.path LIKE 'tests/%'
         OR f.path LIKE '%/tests.rs' OR f.path = 'tests.rs'
         OR f.path LIKE '%\_tests.rs' ESCAPE '\'
-        OR f.path LIKE '%/test\_%.rs' ESCAPE '\' OR f.path LIKE 'test\_%.rs' ESCAPE '\')
+        OR f.path LIKE '%/test\_%.rs' ESCAPE '\' OR f.path LIKE 'test\_%.rs' ESCAPE '\'
+        -- plus the settings file's patterns (00_load.sql, extra_test_paths)
+        OR coalesce(list_bool_or(list_transform(getvariable('extra_test_paths'), lambda p: f.path GLOB p)), false))
     UNION
     -- (impl_item trait: (_)): an impl with a direct `for` token.
     SELECT i.file_id, i.node_id, 'trait_impl'

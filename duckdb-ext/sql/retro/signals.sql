@@ -1,5 +1,5 @@
 -- Retrospective, step 2. Run on a checkout of the baseline commit, with its SCIP index:
---   duckdb-ext/sql/run.sh sql BASE_CLONE duckdb-ext/sql/retro/signals.sql \
+--   duckdb-ext/code-db/target/release/code-db sql BASE_CLONE duckdb-ext/sql/retro/signals.sql \
 --       retro_changes=/abs/changes.parquet retro_reviews=/abs/reviews.json \
 --       retro_record_preserves=/abs/duckdb-ext/sql/retro/september-2026-record-preserves.csv \
 --       retro_record_targets=/abs/duckdb-ext/sql/retro/september-2026-record-targets.csv \

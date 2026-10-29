@@ -2,7 +2,7 @@
 -- of the range's end commit with the whole history (no `since`), so that every link the
 -- lineage views find inside the range is there (a pure file rename links only units
 -- that history has seen), and with retro_since set to the range's base:
---   duckdb-ext/sql/run.sh sql END duckdb-ext/sql/retro/lineage.sql retro_since=BASE \
+--   duckdb-ext/code-db/target/release/code-db sql END duckdb-ext/sql/retro/lineage.sql retro_since=BASE \
 --       retro_reviews=/abs/reviews.json \
 --       retro_record_preserves=/abs/duckdb-ext/sql/retro/september-2026-record-preserves.csv \
 --       retro_lineage_changes=/abs/lineage-changes.parquet \

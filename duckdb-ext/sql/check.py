@@ -68,7 +68,10 @@
 
     `repo` and `refresh` take --set NAME=EXPR (repeatable) to set a DuckDB variable on
     every connection, e.g. --set "memory_limit='4GB'" (README.md, Limits). Every
-    connection prints 00_load.sql's limits line to stderr.
+    connection takes its limits from `code-db limits REPO --json` (CODE_DB, default
+    duckdb-ext/code-db/target/release/code-db, built by duckdb-ext/build.sh), passing
+    it memory_limit, threads and temp_limit from --set, and prints its limits line to
+    stderr.
 
 The process works from the root of the Horizon checkout holding this file, because
 00_load.sql loads git_history by a path relative to it.
@@ -126,7 +129,7 @@ GRAPH_VIEWS = ["unit_occurrences", "unit_references", "unit_edges", "impl_target
                "module_edges", "crate_edges", "module_cycle_edges", "unit_cochange", "edge_cochange",
                "cochange_without_reference"]
 GRAPH_QUERIES = ["unit_dependencies", "module_graph", "module_cycles", "unit_cochange",
-                 "cochange_without_reference"]
+                 "cochange_without_reference", "layer_violations"]
 RUST_ANALYZER = os.environ.get("RUST_ANALYZER", "rust-analyzer")
 
 
@@ -154,7 +157,7 @@ def read_scip_views(con):
     con.execute((SQL_DIR / GRAPH_FILE).read_text())
 
 
-TEMP_DIRECTORY_STATEMENT = "SET temp_directory = getvariable('repo') || '/target/code-db/tmp';\n"
+TEMP_DIRECTORY_STATEMENT = "SET temp_directory = coalesce(getvariable('temp_directory'), current_setting('temp_directory'));\n"
 
 
 def without_temp_directory(con, text):
@@ -162,7 +165,8 @@ def without_temp_directory(con, text):
     has that directory: once DuckDB has spilled it refuses to set the directory again,
     even to the same path, so a re-read on this connection would fail."""
     assert TEMP_DIRECTORY_STATEMENT in text
-    same = rows(con, "SELECT current_setting('temp_directory') = getvariable('repo') || '/target/code-db/tmp'")[0][0]
+    same = rows(con, "SELECT current_setting('temp_directory') = "
+                     "coalesce(getvariable('temp_directory'), current_setting('temp_directory'))")[0][0]
     return text.replace(TEMP_DIRECTORY_STATEMENT, "") if same else text
 
 
@@ -221,30 +225,46 @@ def read_cache(con):
     con.execute((SQL_DIR / CACHE_FILE).read_text())
 
 
-# Variables from --set NAME=EXPR, set on every connection after connect()'s own (so
-# memory_limit, threads or temp_limit override 00_load.sql's limits).
+# Variables from --set NAME=EXPR, set on every connection after connect()'s own;
+# memory_limit, threads and temp_limit go to `code-db limits` instead (README.md, Limits).
 SET_VARIABLES = {}
+LIMIT_NAMES = ("memory_limit", "threads", "temp_limit")
+CODE_DB = Path(os.environ.get("CODE_DB", HORIZON_ROOT / "duckdb-ext/code-db/target/release/code-db"))
 
 
-def temp_free_bytes(repo):
-    """Free space of the file system holding REPO's spill directory, which 00_load.sql
-    reads as temp_free_bytes (README.md, Limits)."""
-    tmp = Path(repo).resolve() / "target/code-db/tmp"
-    tmp.mkdir(parents=True, exist_ok=True)
-    return shutil.disk_usage(tmp).free
+def limit_variables(repo):
+    """{name: SQL literal} of the limits `code-db limits REPO --json` derives (with the
+    --set overrides of memory_limit, threads and temp_limit), the variables 00_load.sql
+    applies; prints its limits line to stderr."""
+    if not CODE_DB.exists():
+        raise SystemExit(f"{CODE_DB} not found: run duckdb-ext/build.sh (or set CODE_DB)")
+    overrides = [f"{name}={value.strip().strip(chr(39))}" for name, value in SET_VARIABLES.items()
+                 if name in LIMIT_NAMES]
+    proc = subprocess.run([str(CODE_DB), "limits", str(Path(repo).resolve()), "--json", *overrides],
+                          capture_output=True, text=True)
+    if proc.returncode:
+        raise SystemExit(f"code-db limits failed: {proc.stderr.strip()}")
+    limits = json.loads(proc.stdout)
+    print(limits["line"], file=sys.stderr)
+    variables = {"memory_limit": sql_literal(limits["memory_limit"]), "threads": str(limits["threads"]),
+                 "temp_directory": sql_literal(limits["temp_directory"]), "limits": sql_literal(limits["line"])}
+    if limits["temp_limit"] is not None:
+        variables["temp_limit"] = sql_literal(limits["temp_limit"])
+    return variables
 
 
 def connect(repo, reports=None, variables=None, scip=False):
     os.chdir(HORIZON_ROOT)
     con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     con.execute(f"SET VARIABLE repo = {sql_literal(str(Path(repo).resolve()))}")
-    con.execute(f"SET VARIABLE temp_free_bytes = {temp_free_bytes(repo)}")
+    for name, value in limit_variables(repo).items():
+        con.execute(f"SET VARIABLE {name} = {value}")
     if reports:
         con.execute(f"SET VARIABLE clone_reports = {sql_literal([str(Path(r).resolve()) for r in reports])}")
     for name, value in {**(variables or {}), **SET_VARIABLES}.items():
-        con.execute(f"SET VARIABLE {name} = {value}")
+        if name not in LIMIT_NAMES:
+            con.execute(f"SET VARIABLE {name} = {value}")
     read_views(con, scip)
-    print(rows(con, "SELECT getvariable('limits')")[0][0], file=sys.stderr)
     return con
 
 
@@ -1587,8 +1607,33 @@ def check_graph_fixture():
         assert rows(con, query_sql("module_graph")) == [] and rows(con, query_sql("module_cycles")) == []
         con.execute("SET VARIABLE crate = NULL")
         cycles = rows(con, query_sql("module_cycles"))
-        assert cycles == [(cya, "horizon", 2, cya, cyb, 1, 1, 0, 0, 0, 1, ["pong"]),
-                          (cya, "horizon", 2, cyb, cya, 1, 1, 0, 0, 0, 1, ["ping"])], cycles
+        assert cycles == [(cya, "horizon", 2, cya, cyb, 1, 1, 0, 0, 0, 1, ["pong"], 0),
+                          (cya, "horizon", 2, cyb, cya, 1, 1, 0, 0, 0, 1, ["ping"], 0)], cycles
+
+        # Layers (README.md, Settings file), filled as code-db fills them from a
+        # .code-db.toml: cycle_a may depend on cycle_b, not the reverse; shapes is a layer
+        # of its own; convert, rect and lib are in none (unconstrained).
+        assert rows(con, query_sql("layer_violations")) == []
+        con.execute("INSERT INTO config_layers VALUES ('a', 'src/cycle_a.rs*'), ('b', 'src/cycle_b.rs*'), "
+                    "('shapes', 'src/shapes.rs*')")
+        con.execute("INSERT INTO config_layer_deps VALUES ('a', 'b')")
+        layers = rows(con, "SELECT * FROM module_layers ORDER BY ALL")
+        assert layers == [(cya, "a"), (cyb, "b"), (shapes, "shapes"), (shapes + "::tests", "shapes")], layers
+        violations = rows(con, query_sql("layer_violations"))
+        assert violations == [("b", "a", cyb, cya, 1, 1, 0, 0, 0, False, cya)], violations
+        cycles = rows(con, query_sql("module_cycles"))
+        assert [r[-1] for r in cycles] == [1, 1], cycles
+        # a may also depend on nothing: both edges of the cycle go against the layers.
+        con.execute("DELETE FROM config_layer_deps")
+        assert [r[:4] for r in rows(con, query_sql("layer_violations"))] == [
+            ("a", "b", cya, cyb), ("b", "a", cyb, cya)]
+        assert [r[-1] for r in rows(con, query_sql("module_cycles"))] == [2, 2]
+        # A module in two layers is an error.
+        con.execute("INSERT INTO config_layers VALUES ('cycles', 'src/cycle_*')")
+        assert_error(con, query_sql("layer_violations"), ", cycles")  # a or b, whichever comes first
+        con.execute("DELETE FROM config_layers")
+        assert rows(con, query_sql("layer_violations")) == []
+        assert [r[-1] for r in rows(con, query_sql("module_cycles"))] == [0, 0]
         cochange = rows(con, query_sql("unit_cochange"))
         assert [(r[0], r[2], r[3], r[5], r[6], r[11], r[12]) for r in cochange[:3]] == [
             (shapes, "Shape for Square", shapes, "Shape for Square.area", 3, True, False),
@@ -2869,7 +2914,8 @@ def check_cli(repo, reports):
     unit_vars = "".join(f"SET VARIABLE {v} = {sql_literal(rows(con, f'SELECT getvariable({sql_literal(v)})')[0][0])};\n"
                         for v in ("path", "unit_kind", "qualified_name") if scip)
     # The same counts again after refresh.sql (the persistent cache of REPO).
-    script = (f"SET VARIABLE repo = {sql_literal(str(Path(repo).resolve()))};\n"
+    limits = "".join(f"SET VARIABLE {name} = {value};\n" for name, value in limit_variables(repo).items())
+    script = (f"SET VARIABLE repo = {sql_literal(str(Path(repo).resolve()))};\n{limits}"
               f"SET VARIABLE clone_reports = {sql_literal([str(Path(r).resolve()) for r in reports])};\n"
               f"SET VARIABLE cache_path = {sql_literal(str(refresh_cache_path(repo)))};\n{unit_vars}"
               f"{reads}\n.mode csv\n.headers off\n{probe}\n{query_counts}\n"
