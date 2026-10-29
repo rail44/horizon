@@ -657,6 +657,31 @@ syntax parser. The decisions (unit set and kinds, ranges, naming, files
 outside the index, test rule, `via_macro`, the history form, future
 syntax-based axes, other languages' indexers) are open with the owner.
 
+## Direction change: the current tree only (2026-10-29)
+
+A pre-check ([record](research/code-db-line-tracking-precheck-2026-10-29.md))
+asked whether the history of current units could come from tracking
+their line ranges backward (`git log -L`) instead of the blob layer and
+the lineage: line tracking passes file renames and enclosing-unit renames,
+but loses 21.7 % of `unit_history`'s commits over all non-test functions
+and methods, almost all at moves into other files (directory splits,
+extractions; `run_session` 51 → 24, `paint_terminal` 23 → 1), at 11.6 ms a
+unit. Asked why history had to be followed at all, the coordinator could
+not name a situation the owner's purpose needs: churn did not beat size
+in the retrospective (P@100 0.71 vs `loc` 0.75), co-change without
+reference found nothing in reading check 3, clone divergence and change
+frequency only reorder obstacles the current tree already shows, and a
+question about one place is answered by running git by hand. The owner
+set the criterion — whether history is wanted as an expression inside a
+database query, joined with structure, rather than by hand — and decided:
+「はい。それでよいです。」 History leaves the mechanism: the blob layer,
+`unit_changes`, the lineage, churn, co-change and the history-based
+queries go; the core is the current tree's axes from HEAD's SCIP index;
+the comparison and the retrospective's truth become comparisons of two
+snapshots. History is added back, at the granularity a concrete question
+needs, when such a question appears. The increments 4, 7, 8, 11 and 12
+and most of 9 remain as records of what was measured.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
