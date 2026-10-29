@@ -759,6 +759,31 @@ missing: the judge's instruction strings and thresholds as appeared
 constants, text-changed versus unchanged kept units, and 13 module edges
 with changed weight. A whole compare takes 3.4–5.7 s with both caches.
 
+## Unit syntax trees (2026-10-29)
+
+([record](research/code-db-unit-ast-2026-10-29.md)) Control flow is not in
+SCIP, so each SCIP unit's range text is parsed with tree-sitter and its
+**complete** tree stored; what to count is decided in queries (owner:
+「普通に完全なツリーを全て格納すればいいのではないの？」, tool 「Aでお願いします」 —
+sitting_duck's `parse_ast_list` applied per unit inside DuckDB). Parsing a
+unit's text alone was measured first: 0 of 8,959 non-file-module units
+gave ERROR nodes, and control-node counts equalled the whole-file parse on
+every unit. `unit_ast` holds every node (type, parent, depth, lines
+relative to the unit and the file, the function's other fact columns);
+file modules are parsed as whole files (3,438,861 nodes for 9,335 units,
+46 % of them in file modules; cache 90.5 MiB). Macro arguments stay token
+trees, so an `if` inside `assert!` is a token, not an `if_expression`.
+`unit_complexity` counts own nodes (a nested unit's lines are excluded):
+ifs and else-ifs, matches, arms, guards, loops, `?`, `&&`/`||`,
+let-else, early exits, closures; `decisions` follows McCabe as
+rust-code-analysis issue #1249 expects (last arm and bare `loop` not
+counted, guards, `?` and let-else counted) and `max_nesting` counts open
+if/match/loop levels. Ten functions checked against the source agree.
+Spearman with `loc` over 3,425 non-test functions: decisions 0.69,
+nesting 0.64 — further from size than every SCIP-only measure. The cache
+build grew from 1–2 s to 43–45 s, nearly all parsing, and any input
+change rebuilds it whole.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
