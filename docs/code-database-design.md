@@ -802,6 +802,38 @@ file 1.2–1.7 s (0.1 s of parsing); nothing changed 0.1 s. The whole
 update for one changed file is dominated by `code-db index` (86.7 s with
 warm build scripts).
 
+## Reading check of the current-tree axes (2026-10-30)
+
+([A](research/code-db-axes-reading-a-2026-10-30.md),
+[B](research/code-db-axes-reading-b-2026-10-30.md)) The owner approved
+reading each axis's top 10 at HEAD under the rule "name how the
+candidate harms the axis's property and where that obstructs the next
+change or feature" (`layer_violations` out: no layers declared).
+Precision@10: size 0.2, complexity 0.0, interface 0.4, intent 0.1,
+duplication 0.2, coupling 0.1, unreferenced 0.0, module cycles 0.2 (one
+undecided) — 12 of 80. New obstacles: the reconnect state machine copied
+between `src/runtime/agent.rs` and `terminal.rs`; spawn values and rig
+turn inputs threaded through three and four signatures; an undocumented
+idempotency key on `horizon-board`'s `Comment`; a copied helper in the
+mock provider. A likely defect was found in passing (frame fold does not
+open a turn on `AutoContinue`, unlike `TurnTracker`). Of reading check
+3's 14 known obstacles, 4 appear in some default top 10. False-alarm
+mechanisms, by kind: the axis definition (line counts cannot tell data
+tables and enforced exhaustive matches from copies; McCabe counts every
+flat-match arm and `?`, 3,904 of 7,780 decision points; a parameter count
+cannot tell unpacking or constructors from values threaded through
+layers; documentation presence flags self-describing accessors; a file
+module's coupling is the sum of its contents); counting rules (duplication
+ranks repetitive tables matching themselves, 8 of 10 `same_unit`; test
+references count in fan-in; one file-level `pub use` in
+`persistence/event_log/mod.rs` joins 14 modules to the judge/tools cycle,
+which is most of the 25 → 40 growth; constants add cycle edges; split
+state across sibling files is not collapsed); thresholds
+(`contract_candidate` at three crates marks none of the contract types);
+SCIP limits (no references from format strings, serde attribute strings,
+`macro_rules!` bodies or inactive-cfg callers, which fill unreferenced's
+top 10).
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
