@@ -64,12 +64,12 @@ VIEW_FILES = [
 ]
 REFRESH_FILE = "refresh.sql"
 # The layers refresh.sql copies, in its order.
-CACHED_VIEWS = ["scip_occurrences", "scip_symbols", "units", "unit_occurrences", "symbol_units",
+CACHED_VIEWS = ["scip_occurrences", "scip_symbols", "units", "unit_ast", "unit_occurrences", "symbol_units",
                 "unit_references", "unit_edges", "unit_ancestors", "impls", "impl_targets", "unit_impl_type",
                 "modules", "unit_module", "module_edges", "unit_scope", "unit_fan_in", "unit_fan_out",
-                "unit_reference_status", "unit_debt_markers"]
+                "unit_reference_status", "unit_debt_markers", "unit_complexity"]
 QUERIES = ["size", "duplication", "coupling", "interface", "public_surface", "intent", "unreferenced",
-           "module_graph", "module_cycles", "layer_violations", "unit_dependencies"]
+           "module_graph", "module_cycles", "layer_violations", "unit_dependencies", "complexity"]
 RUST_ANALYZER = os.environ.get("RUST_ANALYZER", "rust-analyzer")
 
 
@@ -583,6 +583,7 @@ def check_fixture(print_only=False):
         if print_only:
             for title, sql in CHECKED:
                 print_rows(con, title, checked_rows(con, sql))
+            check_flow_fixture(Path(tmp), print_only)
             return
         assert_fixture(con, repo)
         # Live and cached agree; a second read keeps the file; an edit builds another.
@@ -605,7 +606,204 @@ def check_fixture(print_only=False):
         assert rows(bare, "SELECT count(*) FROM files") == [(8,)]
         for view in ("units", "unit_edges", "module_cycles", "clone_pairs", "unit_quality"):
             assert rows(bare, f"SELECT count(*) FROM {view}") == [(0,)], view
+        check_flow_fixture(Path(tmp))
         print(f"fixture: ok (refresh built in {wall:.2f} s)")
+
+
+# --- syntax-tree fixture -------------------------------------------------------------
+
+FLOW_TOML = """\
+[package]
+name = "flow"
+version = "0.1.0"
+edition = "2024"
+"""
+
+# Functions of known shapes; FLOW_EXPECTED holds their counts, read off this text.
+FLOW_LIB = """\
+pub fn nested_loop(items: &[i32]) -> i32 {
+    let mut total = 0;
+    for x in items {
+        if *x > 0 {
+            if *x > 10 {
+                total += 2;
+            } else if *x > 5 {
+                total += 1;
+            }
+        } else {
+            continue;
+        }
+    }
+    total
+}
+
+pub fn classify(v: Option<i32>, w: i32) -> &'static str {
+    match v {
+        Some(n) if n > 0 => match w {
+            0 => "zero",
+            _ => "pos",
+        },
+        Some(n) if n < 0 && w > 0 || w < -5 => "neg",
+        Some(_) => "nil",
+        None => "none",
+    }
+}
+
+pub fn chain(a: &str, b: &str) -> Result<i32, std::num::ParseIntError> {
+    let x: i32 = a.parse()?;
+    let y: i32 = b.trim().parse()?;
+    Ok(x + y)
+}
+
+pub fn closures(v: &[i32]) -> Vec<i32> {
+    let keep = |x: &i32| if *x > 1 { true } else { false };
+    v.iter()
+        .copied()
+        .filter(|x| keep(x))
+        .map(|x| match x {
+            2 => 0,
+            _ => x,
+        })
+        .collect()
+}
+
+pub fn outer(flag: bool) -> i32 {
+    fn inner(n: i32) -> i32 {
+        if n > 0 { loop { break n; } } else { 0 }
+    }
+    if flag {
+        return inner(1);
+    }
+    let Some(v) = Some(2) else { return 0; };
+    v
+}
+
+pub fn with_macro(x: i32) -> bool {
+    assert!(if x > 0 { true } else { x == 0 });
+    matches!(x, 1 | 2 if x > 0)
+}
+
+pub fn while_let(mut it: std::vec::IntoIter<i32>) -> i32 {
+    let mut s = 0;
+    while let Some(x) = it.next() {
+        if let Some(y) = x.checked_mul(2) && y > 4 {
+            s += y;
+        }
+    }
+    s
+}
+
+pub mod picks {
+    pub fn pick(a: bool) -> i32 {
+        if a { 1 } else { 2 }
+    }
+}
+"""
+
+FLOW_FILES = {
+    "Cargo.toml": FLOW_TOML,
+    "src/lib.rs": FLOW_LIB,
+    ".gitignore": "target/\n",
+}
+
+FLOW_CHECKED = [
+    ("unit_complexity", "SELECT u.qualified_name, u.kind, c.* EXCLUDE (unit_id) FROM unit_complexity c "
+                        "JOIN units u USING (unit_id) ORDER BY u.unit_id"),
+    # Each tree is whole: its root is a source_file spanning the unit's lines, nothing
+    # failed to parse, and an enclosing unit's tree holds the nodes of the units nested in
+    # it, which its own nodes (unit_own_ast) leave out.
+    ("trees", "SELECT u.qualified_name, count(*) AS nodes, "
+              "count(*) FILTER (WHERE a.node_id = 0 AND a.type = 'source_file' AND a.depth = 0 "
+              "AND a.file_start_line = u.start_line AND a.file_end_line = u.end_line) AS root, "
+              "count(*) FILTER (WHERE a.type = 'ERROR' OR a.type LIKE 'MISSING%') AS errors, "
+              "count(*) FILTER (WHERE a.type = 'if_expression') AS if_nodes, "
+              "(SELECT count(*) FROM unit_own_ast o WHERE o.unit_id = u.unit_id) AS own_nodes "
+              "FROM units u JOIN unit_ast a USING (unit_id) GROUP BY u.unit_id, u.qualified_name ORDER BY u.unit_id"),
+    # A macro's arguments are tokens: the `if` of with_macro is a keyword token in a
+    # token_tree, pick's is an if_expression; file lines are the file's.
+    ("macro_tokens", "SELECT u.qualified_name, a.type, p.type, a.file_start_line FROM unit_ast a "
+                     "JOIN units u USING (unit_id) "
+                     "JOIN unit_ast p ON p.unit_id = a.unit_id AND p.node_id = a.parent_id "
+                     "WHERE u.qualified_name IN ('with_macro', 'picks.pick') AND a.type IN ('if', 'if_expression') "
+                     "ORDER BY u.unit_id, a.node_id"),
+    ("query complexity", "complexity"),
+]
+
+
+def check_flow_fixture(root, print_only=False):
+    """A crate of known control-flow shapes (FLOW_LIB): its trees and the counts over
+    them, live and through refresh.sql."""
+    repo = root / "flow"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    for path, text in FLOW_FILES.items():
+        write(repo, path, text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "flow")
+    (repo / "target/code-db/scip").mkdir(parents=True)
+    subprocess.run([RUST_ANALYZER, "scip", ".", "--output", str(repo / "target/code-db/scip/root.scip")],
+                   check=True, capture_output=True, cwd=repo)
+    (repo / "target/code-db/cache").mkdir(parents=True)
+    con = connect(repo, {"clone_reports": "[]::VARCHAR[]"})
+    if print_only:
+        for title, sql in FLOW_CHECKED:
+            print_rows(con, title, checked_rows(con, sql))
+        return
+    for cached in (False, True):
+        if cached:
+            _, state, _ = refresh_against_live(con)
+            assert state == "built", state
+        for title, sql in FLOW_CHECKED:
+            actual = checked_rows(con, sql)
+            expected = FLOW_EXPECTED[title]
+            assert actual == expected, f"flow {title}:\n  actual   {actual}\n  expected {expected}"
+
+
+FLOW_EXPECTED = {
+    'unit_complexity': [
+        ('flow', 'module', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        ('nested_loop', 'function', 3, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 4, 3),
+        ('classify', 'function', 0, 0, 2, 6, 2, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 8, 2),
+        ('chain', 'function', 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 2, 0),
+        ('closures', 'function', 1, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 2, 1),
+        ('outer', 'function', 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 2, 1),
+        ('inner', 'function', 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 2),
+        ('with_macro', 'function', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        ('while_let', 'function', 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 3, 2),
+        ('picks', 'module', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        ('picks.pick', 'function', 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1),
+    ],
+    'trees': [
+        ('flow', 740, 1, 0, 8, 1),
+        ('nested_loop', 98, 1, 0, 3, 98),
+        ('classify', 132, 1, 0, 0, 132),
+        ('chain', 90, 1, 0, 0, 90),
+        ('closures', 133, 1, 0, 1, 133),
+        ('outer', 102, 1, 0, 2, 60),
+        ('inner', 43, 1, 0, 1, 43),
+        ('with_macro', 57, 1, 0, 0, 57),
+        ('while_let', 95, 1, 0, 1, 95),
+        ('picks', 40, 1, 0, 1, 9),
+        ('picks.pick', 32, 1, 0, 1, 32),
+    ],
+    'macro_tokens': [
+        ('with_macro', 'if', 'token_tree', 59),
+        ('with_macro', 'if', 'token_tree', 60),
+        ('picks.pick', 'if_expression', 'expression_statement', 75),
+        ('picks.pick', 'if', 'if_expression', 75),
+    ],
+    'query complexity': [
+        ('src/lib.rs', 'flow', 'function', 'classify', 17, 11, 9, 8, 2, 0, 0, 2, 6, 2, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, False),
+        ('src/lib.rs', 'flow', 'function', 'nested_loop', 1, 15, 5, 4, 3, 3, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, False),
+        ('src/lib.rs', 'flow', 'function', 'while_let', 63, 9, 4, 3, 2, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, False),
+        ('src/lib.rs', 'flow', 'function', 'closures', 35, 11, 3, 2, 1, 1, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, False),
+        ('src/lib.rs', 'flow', 'function', 'outer', 47, 10, 3, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, False),
+        ('src/lib.rs', 'flow', 'function', 'chain', 29, 5, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, False),
+        ('src/lib.rs', 'flow', 'function', 'inner', 48, 3, 2, 1, 2, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, False),
+        ('src/lib.rs', 'flow', 'function', 'picks.pick', 74, 3, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('src/lib.rs', 'flow', 'function', 'with_macro', 58, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+    ],
+}
 
 
 def assert_error(con, sql, text):
@@ -727,39 +925,39 @@ EXPECTED = {
         ('shapes/src/convert.rs', 'shapes', 2, ['shapes/src/convert.rs', 'shapes/src/rect.rs'], 2),
     ],
     'unit_quality': [
-        ('app/src/fixtures.rs', 'app', 'app/src/fixtures.rs', 'module', 'fixtures', 1, 4, True, 3, 0, 0, 0, 0, 0, 1, 1, None, None, 'private', None, False, 0, 1, 'referenced'),
-        ('app/src/fixtures.rs', 'app', 'app/src/fixtures.rs', 'function', 'sample', 1, 3, True, 3, 0, 0, 0, 0, 0, 1, 1, None, None, 'pub', 0, False, 0, 0, 'test'),
-        ('app/src/main.rs', 'app', 'app/src/main.rs', 'module', 'app', 1, 9, False, 6, 0, 0, 0, 0, 0, 2, 1, None, None, 'private', None, False, 0, 0, 'crate_root'),
-        ('app/src/main.rs', 'app', 'app/src/main.rs', 'function', 'main', 3, 6, False, 4, 0, 0, 0, 0, 0, 2, 1, None, None, 'private', 0, False, 0, 0, 'entry_point'),
-        ('app/tests/it.rs', 'app', 'app/tests/it.rs', 'module', 'app', 1, 5, True, 4, 0, 0, 0, 0, 0, 1, 1, None, None, 'private', None, False, 0, 0, 'test'),
-        ('app/tests/it.rs', 'app', 'app/tests/it.rs', 'function', 'integration', 1, 4, True, 4, 0, 0, 0, 0, 0, 1, 1, None, None, 'private', 0, False, 0, 0, 'test'),
-        ('shapes/src/convert.rs', 'shapes', 'shapes/src/convert.rs', 'module', 'convert', 1, 13, False, 10, 0, 0, 0, 1, 0, 2, 0, 'shapes/src/convert.rs', 'convert', 'pub', None, False, 0, 2, 'referenced'),
-        ('shapes/src/convert.rs', 'shapes', 'shapes/src/convert.rs', 'method', 'From<Square> for Rect.from', 5, 7, False, 3, 0, 0, 0, 0, 0, 2, 0, 'shapes/src/convert.rs', 'convert', None, 1, None, 0, 0, 'trait_impl'),
-        ('shapes/src/convert.rs', 'shapes', 'shapes/src/convert.rs', 'function', 'back', 10, 12, False, 3, 0, 0, 0, 1, 0, 1, 0, 'shapes/src/convert.rs', 'convert', 'pub', 0, False, 0, 1, 'referenced'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'module', 'shapes', 1, 68, False, 56, 0, 0, 0, 5, 1, 0, 0, None, None, 'private', None, True, 1, 16, 'referenced'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Shape', 6, 10, False, 5, 0, 0, 0, 2, 1, 0, 0, None, None, 'pub', None, True, 0, 4, 'referenced'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Shape.Unit', 8, 8, False, 1, 0, 0, 0, 0, 0, 0, 0, None, None, None, None, False, 0, 0, 'trait_item'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Shape.area', 9, 9, False, 1, 0, 0, 0, 0, 0, 0, 0, None, None, None, 1, False, 0, 0, 'trait_item'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'constant', 'UNIT', 12, 12, False, 1, 0, 0, 0, 2, 1, 0, 0, None, None, 'pub', None, False, 0, 5, 'referenced'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Square', 14, 17, False, 4, 0, 0, 0, 4, 1, 0, 0, None, None, 'pub', None, False, 0, 13, 'referenced'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Shape for Square.Unit', 20, 20, False, 1, 0, 0, 0, 0, 0, 0, 0, None, None, None, None, None, 0, 0, 'trait_impl'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Shape for Square.area', 21, 27, False, 7, 1, 1, 0, 1, 1, 0, 0, None, None, None, 1, None, 0, 2, 'referenced'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Square.new', 31, 34, False, 4, 0, 0, 0, 3, 1, 0, 0, None, None, 'pub', 1, True, 0, 5, 'referenced'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Square.scaled', 37, 39, False, 3, 1, 1, 0, 0, 0, 0, 0, None, None, 'pub(crate)', 4, False, 0, 0, 'unreferenced'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'function', 'unused_helper', 42, 44, False, 3, 0, 0, 0, 0, 0, 0, 0, None, None, 'pub', 0, False, 0, 0, 'unreferenced'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'function', 'marked', 46, 49, True, 4, 0, 0, 0, 0, 0, 0, 0, None, None, 'pub', 0, False, 0, 0, 'test'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Square.probe', 53, 55, True, 3, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', 1, False, 0, 1, 'referenced'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs::tests', 'module', 'tests', 58, 67, True, 9, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', None, False, 0, 0, 'test'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs::tests', 'function', 'tests.square_area', 62, 66, True, 5, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', 0, False, 0, 0, 'test'),
-        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'module', 'rect', 1, 25, False, 20, 0, 0, 0, 2, 1, 2, 0, 'shapes/src/convert.rs', 'rect', 'pub', None, False, 0, 4, 'referenced'),
-        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'type', 'Rect', 3, 5, False, 3, 0, 0, 0, 1, 0, 1, 0, 'shapes/src/convert.rs', 'rect', 'pub', None, False, 0, 4, 'referenced'),
-        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'type', 'Shape for Rect.Unit', 8, 8, False, 1, 0, 0, 0, 0, 0, 0, 0, 'shapes/src/convert.rs', 'rect', None, None, None, 0, 0, 'trait_impl'),
-        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'method', 'Shape for Rect.area', 9, 15, False, 7, 1, 1, 0, 0, 0, 1, 0, 'shapes/src/convert.rs', 'rect', None, 1, None, 0, 0, 'trait_impl'),
-        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'function', 'ring', 18, 20, False, 3, 0, 0, 0, 1, 1, 1, 0, 'shapes/src/convert.rs', 'rect', 'pub', 0, False, 0, 1, 'referenced'),
-        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'function', 'base', 22, 24, False, 3, 0, 0, 0, 1, 0, 0, 0, 'shapes/src/convert.rs', 'rect', 'pub(crate)', 0, False, 0, 1, 'referenced'),
-        ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'module', 'tools', 1, 8, False, 6, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', None, False, 0, 0, 'crate_root'),
-        ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'function', 'main', 1, 3, False, 3, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', 0, False, 0, 0, 'entry_point'),
-        ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'function', 'run', 5, 7, False, 3, 1, 1, 0, 0, 0, 0, 0, None, None, 'private', 2, False, 0, 1, 'referenced'),
+        ('app/src/fixtures.rs', 'app', 'app/src/fixtures.rs', 'module', 'fixtures', 1, 4, True, 3, 0, 0, 0, 0, 0, 0, 0, 1, 1, None, None, 'private', None, False, 0, 1, 'referenced'),
+        ('app/src/fixtures.rs', 'app', 'app/src/fixtures.rs', 'function', 'sample', 1, 3, True, 3, 0, 0, 0, 0, 0, 0, 0, 1, 1, None, None, 'pub', 0, False, 0, 0, 'test'),
+        ('app/src/main.rs', 'app', 'app/src/main.rs', 'module', 'app', 1, 9, False, 6, 0, 0, 0, 0, 0, 0, 0, 2, 1, None, None, 'private', None, False, 0, 0, 'crate_root'),
+        ('app/src/main.rs', 'app', 'app/src/main.rs', 'function', 'main', 3, 6, False, 4, 0, 0, 0, 0, 0, 0, 0, 2, 1, None, None, 'private', 0, False, 0, 0, 'entry_point'),
+        ('app/tests/it.rs', 'app', 'app/tests/it.rs', 'module', 'app', 1, 5, True, 4, 0, 0, 0, 0, 0, 0, 0, 1, 1, None, None, 'private', None, False, 0, 0, 'test'),
+        ('app/tests/it.rs', 'app', 'app/tests/it.rs', 'function', 'integration', 1, 4, True, 4, 0, 0, 0, 0, 0, 0, 0, 1, 1, None, None, 'private', 0, False, 0, 0, 'test'),
+        ('shapes/src/convert.rs', 'shapes', 'shapes/src/convert.rs', 'module', 'convert', 1, 13, False, 10, 0, 0, 0, 0, 0, 1, 0, 2, 0, 'shapes/src/convert.rs', 'convert', 'pub', None, False, 0, 2, 'referenced'),
+        ('shapes/src/convert.rs', 'shapes', 'shapes/src/convert.rs', 'method', 'From<Square> for Rect.from', 5, 7, False, 3, 0, 0, 0, 0, 0, 0, 0, 2, 0, 'shapes/src/convert.rs', 'convert', None, 1, None, 0, 0, 'trait_impl'),
+        ('shapes/src/convert.rs', 'shapes', 'shapes/src/convert.rs', 'function', 'back', 10, 12, False, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 'shapes/src/convert.rs', 'convert', 'pub', 0, False, 0, 1, 'referenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'module', 'shapes', 1, 68, False, 56, 0, 0, 0, 0, 0, 5, 1, 0, 0, None, None, 'private', None, True, 1, 16, 'referenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Shape', 6, 10, False, 5, 0, 0, 0, 0, 0, 2, 1, 0, 0, None, None, 'pub', None, True, 0, 4, 'referenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Shape.Unit', 8, 8, False, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None, None, False, 0, 0, 'trait_item'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Shape.area', 9, 9, False, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None, 1, False, 0, 0, 'trait_item'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'constant', 'UNIT', 12, 12, False, 1, 0, 0, 0, 0, 0, 2, 1, 0, 0, None, None, 'pub', None, False, 0, 5, 'referenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Square', 14, 17, False, 4, 0, 0, 0, 0, 0, 4, 1, 0, 0, None, None, 'pub', None, False, 0, 13, 'referenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Shape for Square.Unit', 20, 20, False, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None, None, None, 0, 0, 'trait_impl'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Shape for Square.area', 21, 27, False, 7, 0, 0, 1, 1, 0, 1, 1, 0, 0, None, None, None, 1, None, 0, 2, 'referenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Square.new', 31, 34, False, 4, 0, 0, 0, 0, 0, 3, 1, 0, 0, None, None, 'pub', 1, True, 0, 5, 'referenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Square.scaled', 37, 39, False, 3, 0, 0, 1, 1, 0, 0, 0, 0, 0, None, None, 'pub(crate)', 4, False, 0, 0, 'unreferenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'function', 'unused_helper', 42, 44, False, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'pub', 0, False, 0, 0, 'unreferenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'function', 'marked', 46, 49, True, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'pub', 0, False, 0, 0, 'test'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Square.probe', 53, 55, True, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', 1, False, 0, 1, 'referenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs::tests', 'module', 'tests', 58, 67, True, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', None, False, 0, 0, 'test'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs::tests', 'function', 'tests.square_area', 62, 66, True, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', 0, False, 0, 0, 'test'),
+        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'module', 'rect', 1, 25, False, 20, 0, 0, 0, 0, 0, 2, 1, 2, 0, 'shapes/src/convert.rs', 'rect', 'pub', None, False, 0, 4, 'referenced'),
+        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'type', 'Rect', 3, 5, False, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 'shapes/src/convert.rs', 'rect', 'pub', None, False, 0, 4, 'referenced'),
+        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'type', 'Shape for Rect.Unit', 8, 8, False, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'shapes/src/convert.rs', 'rect', None, None, None, 0, 0, 'trait_impl'),
+        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'method', 'Shape for Rect.area', 9, 15, False, 7, 0, 0, 1, 1, 0, 0, 0, 1, 0, 'shapes/src/convert.rs', 'rect', None, 1, None, 0, 0, 'trait_impl'),
+        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'function', 'ring', 18, 20, False, 3, 0, 0, 0, 0, 0, 1, 1, 1, 0, 'shapes/src/convert.rs', 'rect', 'pub', 0, False, 0, 1, 'referenced'),
+        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'function', 'base', 22, 24, False, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 'shapes/src/convert.rs', 'rect', 'pub(crate)', 0, False, 0, 1, 'referenced'),
+        ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'module', 'tools', 1, 8, False, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', None, False, 0, 0, 'crate_root'),
+        ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'function', 'main', 1, 3, False, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', 0, False, 0, 0, 'entry_point'),
+        ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'function', 'run', 5, 7, False, 3, 0, 0, 1, 1, 0, 0, 0, 0, 0, None, None, 'private', 2, False, 0, 1, 'referenced'),
     ],
     'query size': [
         ('unit', 'shapes', 'shapes/src/lib.rs', 'method', 'Shape for Square.area', 21, 7, None, False, None),
@@ -860,6 +1058,21 @@ EXPECTED = {
     'query unit_dependencies': [
         ('out', 1, 'shapes/src/convert.rs', 'function', 'back', 10, 3, 1, 1, 1, ['back'], 1),
         ('in', 1, 'app/src/main.rs', 'function', 'main', 3, 4, 1, 1, 1, ['ring'], 0),
+    ],
+    'query complexity': [
+        ('shapes/src/lib.rs', 'shapes', 'method', 'Shape for Square.area', 21, 7, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('shapes/src/rect.rs', 'shapes', 'method', 'Shape for Rect.area', 9, 7, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('app/src/main.rs', 'app', 'function', 'main', 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('shapes/src/lib.rs', 'shapes', 'method', 'Square.new', 31, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('shapes/src/convert.rs', 'shapes', 'method', 'From<Square> for Rect.from', 5, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('shapes/src/convert.rs', 'shapes', 'function', 'back', 10, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('shapes/src/lib.rs', 'shapes', 'method', 'Square.scaled', 37, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('shapes/src/lib.rs', 'shapes', 'function', 'unused_helper', 42, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('shapes/src/rect.rs', 'shapes', 'function', 'ring', 18, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('shapes/src/rect.rs', 'shapes', 'function', 'base', 22, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('tools/src/main.rs', 'tools', 'function', 'main', 1, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('tools/src/main.rs', 'tools', 'function', 'run', 5, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('shapes/src/lib.rs', 'shapes', 'method', 'Shape.area', 9, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
     ],
     'query size level=file': [
         ('file', 'shapes', 'shapes/src/lib.rs', None, None, None, 56, 14, False, None),

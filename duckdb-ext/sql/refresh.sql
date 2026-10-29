@@ -9,18 +9,18 @@
 -- Key. The inputs every cached layer derives from: `repo`, the file snapshot
 -- (source_files: paths and content ids, taken again here as 00_load.sql takes it), each
 -- SCIP index's path and content hash, the test settings (extra_test_paths,
--- extra_test_attributes), and the text of every view and macro of the view files. The
--- cache of one key is the file <cache_dir>/<md5 of the key>.duckdb, attached as `cache`;
+-- extra_test_attributes), the loaded sitting_duck version (its grammars make unit_ast),
+-- and the text of every view and macro of the view files. The cache of one key is the file <cache_dir>/<md5 of the key>.duckdb, attached as `cache`;
 -- a file that exists already holds the layers (each is created whole or not at all, so
 -- an interrupted build leaves only complete tables, and the next read creates the rest).
 -- Files of other keys are left in place; `code-db` removes them after a read.
 --
 -- Layers, in the order they are built, each from the copies before it: scip_occurrences,
--- scip_symbols (views/scip.sql); units (views/units.sql); unit_occurrences, symbol_units,
+-- scip_symbols (views/scip.sql); units, unit_ast (views/units.sql); unit_occurrences, symbol_units,
 -- unit_references, unit_edges, unit_ancestors, impls, impl_targets, unit_impl_type,
 -- modules, unit_module, module_edges (views/graph.sql); unit_scope, unit_fan_in,
--- unit_fan_out, unit_reference_status, unit_debt_markers (views/quality.sql). Views that
--- read a query variable or the settings' tables (module_cycle_edges and what reads it,
+-- unit_fan_out, unit_reference_status, unit_debt_markers, unit_complexity
+-- (views/quality.sql). Views that read a query variable or the settings' tables (module_cycle_edges and what reads it,
 -- the layers) and the clone views (jscpd's reports are not in the key) stay live, over the
 -- copies.
 --
@@ -54,6 +54,7 @@ SET VARIABLE refresh_key = concat_ws(chr(10),
     (SELECT string_agg(filename || ' ' || hash(content)::VARCHAR, ' ' ORDER BY filename)
      FROM read_blob(getvariable('scip_indexes') || ['duckdb-ext/sql/empty-jscpd-report.json'])),
     getvariable('extra_test_paths')::VARCHAR, getvariable('extra_test_attributes')::VARCHAR,
+    (SELECT 'sitting_duck ' || extension_version FROM duckdb_extensions() WHERE extension_name = 'sitting_duck' AND loaded),
     (SELECT string_agg(view_name || ' ' || sql, chr(10) ORDER BY view_name) FROM duckdb_views() WHERE NOT internal),
     (SELECT string_agg(function_name || ' ' || coalesce(macro_definition, ''), chr(10) ORDER BY function_name)
      FROM duckdb_functions() WHERE NOT internal AND function_type IN ('macro', 'table_macro')));
@@ -75,6 +76,8 @@ CREATE TABLE IF NOT EXISTS cache.scip_symbols AS SELECT * FROM scip_symbols;
 CREATE OR REPLACE VIEW scip_symbols AS SELECT * FROM cache.scip_symbols;
 CREATE TABLE IF NOT EXISTS cache.units AS SELECT * FROM units;
 CREATE OR REPLACE VIEW units AS SELECT * FROM cache.units;
+CREATE TABLE IF NOT EXISTS cache.unit_ast AS SELECT * FROM unit_ast;
+CREATE OR REPLACE VIEW unit_ast AS SELECT * FROM cache.unit_ast;
 CREATE TABLE IF NOT EXISTS cache.unit_occurrences AS SELECT * FROM unit_occurrences;
 CREATE OR REPLACE VIEW unit_occurrences AS SELECT * FROM cache.unit_occurrences;
 CREATE TABLE IF NOT EXISTS cache.symbol_units AS SELECT * FROM symbol_units;
@@ -107,6 +110,8 @@ CREATE TABLE IF NOT EXISTS cache.unit_reference_status AS SELECT * FROM unit_ref
 CREATE OR REPLACE VIEW unit_reference_status AS SELECT * FROM cache.unit_reference_status;
 CREATE TABLE IF NOT EXISTS cache.unit_debt_markers AS SELECT * FROM unit_debt_markers;
 CREATE OR REPLACE VIEW unit_debt_markers AS SELECT * FROM cache.unit_debt_markers;
+CREATE TABLE IF NOT EXISTS cache.unit_complexity AS SELECT * FROM unit_complexity;
+CREATE OR REPLACE VIEW unit_complexity AS SELECT * FROM cache.unit_complexity;
 
 INSERT INTO cache.meta
 SELECT getvariable('refresh_key'), getvariable('repo'), now()::TIMESTAMP,

@@ -6,8 +6,9 @@ one query per axis over them, and what depends on the project's own judgment com
 its settings file. The facts are read by table functions: `git_tracked_files` (the file
 set, this workspace's `git_history` extension, `../README.md`),
 `read_scip`/`read_scip_symbols`/`read_scip_metadata` (this workspace's `scip_index`, over
-rust-analyzer's indexes), `read_text` (the source text) and `read_json` (jscpd's
-reports); everything else is a view. Nothing is stored except by `refresh.sql`, a cache
+rust-analyzer's indexes), `read_text` (the source text), `read_json` (jscpd's
+reports) and the scalar `parse_ast_list` (the community extension sitting_duck: a
+unit's text as its tree-sitter syntax tree); everything else is a view. Nothing is stored except by `refresh.sql`, a cache
 of the derived layers keyed by the state of their inputs.
 
 History is not here (owner decision of 2026-10-29: history is added back only when a
@@ -327,6 +328,15 @@ the owner accepted on 2026-10-29: 「scipは推奨の形で導入しましょう
   line is led by `#[cfg(test)]` (the header: the nearest line above the member starting
   an `impl` that names `impl_type`, outside the bodies of other functions,
   `impl_header_line`); or a unit containing it is a test.
+- **`unit_ast`**: every unit's complete tree-sitter syntax tree, one row per node, from
+  sitting_duck's `parse_ast_list` over the unit's whole lines parsed alone (a file
+  module's text is the whole file, an enclosing unit's tree holds what it contains). The
+  node columns are the function's (node id in pre-order, type, parent, depth, sibling
+  index, descendant count, flags, sitting_duck's semantic readings), without `peek`;
+  lines are relative to the unit and absolute in the file, and there are no columns
+  (`parse_ast_list` gives none). Nothing is filtered: what counts is decided in the
+  queries (`unit_complexity`). Macro arguments and `macro_rules!` bodies are token trees.
+  The design and measurements are in `docs/research/code-db-unit-ast-2026-10-29.md`.
 
 ## Graph
 
@@ -395,6 +405,7 @@ settings file.
 | independence (§3.8) | `module_cycles` (`violating_edges`), `layer_violations` | module of the unit, its cycle and layer | weak |
 | interface (§3.4) | `interface` (parameters, visibility), `public_surface` (per crate) | `visibility`, `parameters` | weak |
 | intent, mechanical part (§3.15, §3.18) | `intent` | `has_doc`, `unit_debt_markers` | weak to none |
+| complexity and nesting (§3.3) | `complexity` | `unit_complexity` (`decisions`, `max_nesting`) | weak to medium |
 | unreferenced definitions (§3.16) | `unreferenced` | `unit_reference_status` | weak |
 
 - **`clone_pairs(pair_id, source, file_a, start_line_a, end_line_a, file_b, start_line_b,
@@ -417,15 +428,23 @@ settings file.
 - **`unit_debt_markers(unit_id, debt_lines)`**: lines with `TODO` or `FIXME`, each counted
   for its innermost unit.
 - **`unit_clones(unit_id, clone_pairs, exact_pairs, normalized_pairs)`**.
+- **`unit_own_ast`**: the nodes of `unit_ast` that are the unit's own, without those whose
+  lines lie inside a unit nested in it (innermost attribution, as `unit_occurrences`).
+  **`unit_complexity(unit_id, if_count, …, closure_count, decisions, max_nesting)`**:
+  counts of control-flow nodes over the own nodes (`if`/`else if`, `match`, arms,
+  guards, `for`/`while`/`loop`, `?`, `&&`/`||`, let-else, `return`/`break`/`continue`,
+  closures), `decisions` (McCabe's decision points; a function's cyclomatic number is
+  `decisions + 1`; every arm of a match but one, no bare `loop`, closures add no entry)
+  and `max_nesting` (if, match and the loops open at once; an `else if` opens no level).
+  The view's comment has the rules.
 - **`unit_quality`**: one row per unit with the per-unit columns of every axis side by
-  side (identity, `loc`, clone counts, fan-in and fan-out, the module's cycle and layer,
+  side (identity, `loc`, `decisions` and `max_nesting`, clone counts, fan-in and fan-out, the module's cycle and layer,
   visibility and parameters, `has_doc` and `debt_lines`, references and their status). It
   combines nothing: there is no score.
 
 Other queries: `unit_dependencies` (a unit's references and referrers up to `depth`).
 
-Deferred: complexity and nesting depth (a later increment, from the saved SCIP index's
-queries); an exhaustive-`match` check (needs syntax).
+Deferred: an exhaustive-`match` check.
 
 ## Cache
 
@@ -434,20 +453,22 @@ every other view and every query keeps its text. Materialization is only a cache
 views compute the same rows live (`check.py refresh` compares them).
 
 - **Key.** `repo`, the file snapshot (paths and content ids, taken again), each index's
-  path and content hash, the two test variables, and the text of every view and macro.
+  path and content hash, the two test variables, the loaded sitting_duck version, and the
+  text of every view and macro.
   The copies of one key are the file `<cache_dir>/<md5 of the key>.duckdb` (default
   `<repo>/target/code-db/cache/`, which must exist; `code-db` creates it), attached as
   `cache`. A file that exists already holds its layers (each is created whole), so a
   read with an unchanged state only attaches it; any change of the key builds a new file
   from scratch. `code-db` removes the files of other keys after a read.
 - **Layers**, in order, each built from the copies before it: `scip_occurrences`,
-  `scip_symbols`, `units`, `unit_occurrences`, `symbol_units`, `unit_references`,
+  `scip_symbols`, `units`, `unit_ast`, `unit_occurrences`, `symbol_units`, `unit_references`,
   `unit_edges`, `unit_ancestors`, `impls`, `impl_targets`, `unit_impl_type`, `modules`,
   `unit_module`, `module_edges`, `unit_scope`, `unit_fan_in`, `unit_fan_out`,
-  `unit_reference_status`, `unit_debt_markers`. Views that read a query variable or the
+  `unit_reference_status`, `unit_debt_markers`, `unit_complexity`. Views that read a query variable or the
   settings' tables (cycles, layers) and the clone views stay live, over the copies.
 - **Measured** on this repository (the record has the runs): building the copies takes
-  1.0–2.3 s; with them, `unit_quality` takes 0.13–0.15 s instead of 16–19 s live, and
+  1.0–2.3 s without `unit_ast`, 43–45 s with it (parsing 9,335 units into 3.4 M nodes,
+  peak RSS 2.6 GB; the file grows to 90 MiB, 66 MiB of it the trees); with them, `unit_quality` takes 0.13–0.15 s instead of 16–19 s live, and
   each query at most 0.25 s (live: 0.4–19 s, peak RSS up to 7.7 GB); a `code-db query`
   process spends 1–3.5 s loading
   (the file snapshot twice, the key's index hash).
@@ -481,7 +502,13 @@ levels, `coupling` with `min_crates`, `unreferenced` with the structural rows,
 `unit_dependencies` without its unit (an error). It then reads `refresh.sql` and asserts
 the copies and every query equal to live, a second read keeping the file, the refusal to
 read it twice, and an edit building another file; and that the views exist and are empty
-without indexes and reports.
+without indexes and reports. Last, a second repository, one crate `flow` of known
+control-flow shapes (a nested `if` in a loop with an `else if`, a `match` with guards, a
+nested `match` and `&&`/`||`, `?` chains, closures with branches, a fn inside a fn with
+a bare `loop` and a let-else in the outer one, macro invocations holding `if`, a `while
+let` with a let chain, an inline module), asserts `unit_complexity`, the trees' roots,
+sizes and own nodes, the macro arguments as tokens, and the `complexity` query, live and
+through `refresh.sql`.
 
 Every connection takes its limits from `code-db limits REPO --json` (the binary
 `duckdb-ext/code-db/target/release/code-db` that `duckdb-ext/build.sh` builds, or
@@ -501,14 +528,14 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 
 | File | Defines |
 | --- | --- |
-| `00_load.sql` | `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
+| `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)` |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (SCIP) |
-| `views/units.sql` | the macros `impl_base_name`, `impl_generic_arg`; `derived_units`, `units` (Units) |
+| `views/units.sql` | the macros `impl_base_name`, `impl_generic_arg`; `derived_units`, `units`, `unit_ast` (Units) |
 | `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `modules`, `unit_module`, `module_edges`, `crate_edges`, `module_cycle_edges`, `module_cycles`, `module_layer_matches`, `module_layers`, the macro `graph_layer_violation`, `module_layer_violations`, `crate_cycles` (Graph) |
 | `views/clones.sql` | `clone_pairs`, `clone_sides` |
-| `views/quality.sql` | `unit_scope`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_quality` (Axes) |
-| `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `module_graph`, `module_cycles`, `layer_violations`, `unit_dependencies`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
+| `views/quality.sql` | `unit_scope`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `unit_complexity`, `unit_quality` (Axes) |
+| `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `module_graph`, `module_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
 | `refresh.sql` | the cache (Cache) |
 | `jscpd.sh` | the two jscpd reports `views/clones.sql` reads |
 | `empty-jscpd-report.json` | a report with no duplicates, always in `clone_pairs`' list |
@@ -568,7 +595,7 @@ need at least one file, which is why `empty-jscpd-report.json` is always in thei
 - **History**: blobs, unit changes, lineage, churn, co-change and the before/after
   comparison were removed with the decision of 2026-10-29; the comparison is to come back
   as a diff of obstacle lists over two SCIP indexes.
-- **Complexity and nesting depth**, the exhaustive-`match` check (above).
+- The exhaustive-`match` check (above).
 - Go and TypeScript (their SCIP indexers and the unit mapping); SCIP relationships
   (rust-analyzer 1.99.1 writes none), so no edge from an impl's method to the trait
   method it implements.

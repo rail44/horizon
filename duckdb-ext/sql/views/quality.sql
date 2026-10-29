@@ -127,11 +127,121 @@ FROM clone_sides s JOIN clone_pairs p USING (pair_id)
 WHERE s.unit_id IS NOT NULL
 GROUP BY s.unit_id;
 
+-- unit_own_ast: the nodes of unit_ast that belong to the unit itself and not to a unit
+-- nested in it: a node whose file lines lie within the lines of a unit the unit contains
+-- (parent_unit_id) is that unit's, as unit_occurrences attributes positions to the
+-- innermost unit. Nodes that span a nested unit (the enclosing block, the root) stay.
+CREATE OR REPLACE VIEW unit_own_ast AS
+WITH nested AS MATERIALIZED (
+    SELECT parent_unit_id AS unit_id, start_line, end_line FROM units WHERE parent_unit_id IS NOT NULL
+)
+SELECT a.*
+FROM unit_ast a
+WHERE NOT EXISTS (SELECT 1 FROM nested n
+                  WHERE n.unit_id = a.unit_id AND n.start_line <= a.file_start_line AND a.file_end_line <= n.end_line);
+
+-- unit_complexity(unit_id, if_count, else_if_count, match_count, arm_count, guard_count,
+--     for_count, while_count, loop_count, try_count, and_count, or_count, let_else_count,
+--     return_count, break_count, continue_count, closure_count, decisions, max_nesting):
+-- counts over each unit's own nodes (unit_own_ast), one row per unit. Closure bodies are
+-- part of the unit that writes them; macro arguments are tokens and count nothing.
+--   if_count: if_expression nodes, `if let` and every `else if` included; else_if_count:
+--     those whose parent is an else_clause.
+--   match_count: match_expression; arm_count: match_arm; guard_count: arms whose
+--     match_pattern has an `if` token child.
+--   for_count, while_count (`while let` included), loop_count: for_expression,
+--     while_expression, loop_expression.
+--   try_count: try_expression (`?`).
+--   and_count, or_count: `&&` and `||` tokens whose parent is a binary_expression or a
+--     let_chain (`if let … && …`).
+--   let_else_count: let_declaration nodes with an `else` token child.
+--   return_count, break_count, continue_count: return_, break_, continue_expression.
+--   closure_count: closure_expression.
+--   decisions: McCabe's decision points, so that a function's cyclomatic number is
+--     decisions + 1: each if (else if included), while and for; each match's arms but one;
+--     each guard, `&&`, `||`, `?` and let-else. A bare `loop` is not a decision (its exits
+--     are breaks), as rust-code-analysis issue #1249 expects from McCabe; a closure adds
+--     its decisions but no entry of its own.
+--   max_nesting: the most control constructs open at one node: if (an `else if` continues
+--     its chain and opens no level), match, for, while and loop, counted along the
+--     ancestors (node_id ranges); 0 when the unit has none. Closures and plain blocks open
+--     no level.
+CREATE OR REPLACE VIEW unit_complexity AS
+WITH own AS MATERIALIZED (
+    SELECT unit_id, node_id, type, parent_id, descendant_count FROM unit_own_ast
+),
+typed AS MATERIALIZED (
+    SELECT o.unit_id, o.node_id, o.type, o.descendant_count, p.type AS parent_type
+    FROM own o LEFT JOIN own p ON p.unit_id = o.unit_id AND p.node_id = o.parent_id
+    WHERE o.type IN ('if_expression', 'match_expression', 'match_arm', 'for_expression', 'while_expression',
+                     'loop_expression', 'try_expression', 'return_expression', 'break_expression',
+                     'continue_expression', 'closure_expression', 'if', 'else', '&&', '||')
+),
+counts AS (
+    SELECT unit_id,
+           count(*) FILTER (WHERE type = 'if_expression') AS if_count,
+           count(*) FILTER (WHERE type = 'if_expression' AND parent_type = 'else_clause') AS else_if_count,
+           count(*) FILTER (WHERE type = 'match_expression') AS match_count,
+           count(*) FILTER (WHERE type = 'match_arm') AS arm_count,
+           count(*) FILTER (WHERE type = 'if' AND parent_type = 'match_pattern') AS guard_count,
+           count(*) FILTER (WHERE type = 'for_expression') AS for_count,
+           count(*) FILTER (WHERE type = 'while_expression') AS while_count,
+           count(*) FILTER (WHERE type = 'loop_expression') AS loop_count,
+           count(*) FILTER (WHERE type = 'try_expression') AS try_count,
+           count(*) FILTER (WHERE type = '&&' AND parent_type IN ('binary_expression', 'let_chain')) AS and_count,
+           count(*) FILTER (WHERE type = '||' AND parent_type IN ('binary_expression', 'let_chain')) AS or_count,
+           count(*) FILTER (WHERE type = 'else' AND parent_type = 'let_declaration') AS let_else_count,
+           count(*) FILTER (WHERE type = 'return_expression') AS return_count,
+           count(*) FILTER (WHERE type = 'break_expression') AS break_count,
+           count(*) FILTER (WHERE type = 'continue_expression') AS continue_count,
+           count(*) FILTER (WHERE type = 'closure_expression') AS closure_count
+    FROM typed GROUP BY unit_id
+),
+-- Matches with at least one arm: the match_block parents of the arms.
+matches AS (
+    SELECT o.unit_id, count(DISTINCT o.parent_id) AS armed_matches
+    FROM own o WHERE o.type = 'match_arm' GROUP BY o.unit_id
+),
+levels AS MATERIALIZED (
+    SELECT unit_id, node_id, descendant_count FROM typed
+    WHERE type IN ('match_expression', 'for_expression', 'while_expression', 'loop_expression')
+       OR (type = 'if_expression' AND parent_type IS DISTINCT FROM 'else_clause')
+),
+nesting AS (
+    SELECT unit_id, max(open_levels) AS max_nesting
+    FROM (
+        SELECT c.unit_id, c.node_id, count(*) AS open_levels
+        FROM levels c JOIN levels a ON a.unit_id = c.unit_id
+             AND a.node_id <= c.node_id AND c.node_id <= a.node_id + a.descendant_count
+        GROUP BY c.unit_id, c.node_id
+    )
+    GROUP BY unit_id
+)
+SELECT u.unit_id,
+       coalesce(c.if_count, 0) AS if_count, coalesce(c.else_if_count, 0) AS else_if_count,
+       coalesce(c.match_count, 0) AS match_count, coalesce(c.arm_count, 0) AS arm_count,
+       coalesce(c.guard_count, 0) AS guard_count, coalesce(c.for_count, 0) AS for_count,
+       coalesce(c.while_count, 0) AS while_count, coalesce(c.loop_count, 0) AS loop_count,
+       coalesce(c.try_count, 0) AS try_count, coalesce(c.and_count, 0) AS and_count,
+       coalesce(c.or_count, 0) AS or_count, coalesce(c.let_else_count, 0) AS let_else_count,
+       coalesce(c.return_count, 0) AS return_count, coalesce(c.break_count, 0) AS break_count,
+       coalesce(c.continue_count, 0) AS continue_count, coalesce(c.closure_count, 0) AS closure_count,
+       (coalesce(c.if_count, 0) + coalesce(c.while_count, 0) + coalesce(c.for_count, 0)
+        + coalesce(c.arm_count, 0) - coalesce(m.armed_matches, 0) + coalesce(c.guard_count, 0)
+        + coalesce(c.and_count, 0) + coalesce(c.or_count, 0) + coalesce(c.try_count, 0)
+        + coalesce(c.let_else_count, 0)) AS decisions,
+       coalesce(n.max_nesting, 0) AS max_nesting
+FROM units u
+LEFT JOIN counts c USING (unit_id)
+LEFT JOIN matches m USING (unit_id)
+LEFT JOIN nesting n USING (unit_id);
+
 -- unit_quality: one row per unit with the per-unit columns of every axis, side by side and
 -- not combined (no score):
 --   identity: unit_id, path, crate, module, kind, qualified_name, start_line, end_line,
 --     is_test;
 --   size: loc;
+--   complexity: decisions, max_nesting (unit_complexity);
 --   duplication: clone_pairs, exact_pairs, normalized_pairs;
 --   coupling: fan_in_files, fan_in_crates, fan_out_files, fan_out_crates;
 --   independence: cycle (the module cycle its module is in, module_cycle_edges), layer;
@@ -144,6 +254,7 @@ WITH cycle_members AS MATERIALIZED (
 )
 SELECT u.unit_id, u.path, u.crate, m.module, u.kind, u.qualified_name, u.start_line, u.end_line, u.is_test,
        u.loc,
+       x.decisions, x.max_nesting,
        coalesce(c.clone_pairs, 0) AS clone_pairs, coalesce(c.exact_pairs, 0) AS exact_pairs,
        coalesce(c.normalized_pairs, 0) AS normalized_pairs,
        coalesce(fi.fan_in_files, 0) AS fan_in_files, coalesce(fi.fan_in_crates, 0) AS fan_in_crates,
@@ -154,6 +265,7 @@ SELECT u.unit_id, u.path, u.crate, m.module, u.kind, u.qualified_name, u.start_l
        r.references, r.status AS reference_status
 FROM units u
 LEFT JOIN unit_module m USING (unit_id)
+LEFT JOIN unit_complexity x USING (unit_id)
 LEFT JOIN unit_clones c USING (unit_id)
 LEFT JOIN unit_fan_in fi USING (unit_id)
 LEFT JOIN unit_fan_out fo USING (unit_id)

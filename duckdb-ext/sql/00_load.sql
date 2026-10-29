@@ -10,7 +10,15 @@
 -- The git_history and scip_index paths are relative to the current directory, which must
 -- be the root of the Horizon checkout that built them (duckdb-ext/build.sh). LOAD accepts
 -- only a literal, not getvariable(). The host must allow unsigned extensions.
+--
+-- sitting_duck (a community extension: tree-sitter grammars and parse_ast_list) gives
+-- each unit its syntax tree (views/units.sql, unit_ast). INSTALL downloads it once into
+-- the DuckDB extension directory; the version is not pinned (community extensions are
+-- served at the repository's current version for this DuckDB release), so refresh.sql
+-- puts the loaded version in its cache key. Checked with v1.16.0.
 
+INSTALL sitting_duck FROM community;
+LOAD sitting_duck;
 LOAD 'duckdb-ext/target/extension/v2.0.0/linux_amd64/git_history.duckdb_extension';
 LOAD 'duckdb-ext/target/extension/v2.0.0/linux_amd64/scip_index.duckdb_extension';
 

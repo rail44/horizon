@@ -285,3 +285,60 @@ ORDER BY u.unit_id;
 
 -- units reads derived_units; refresh.sql replaces it with a view over its copy.
 CREATE OR REPLACE VIEW units AS SELECT * FROM derived_units;
+
+-- unit_ast(unit_id, node_id, type, semantic_type, flags, name, qualified_name,
+--          signature_type, parameters, modifiers, annotations, receiver, start_line,
+--          end_line, file_start_line, file_end_line, parent_id, depth, sibling_index,
+--          children_count, descendant_count, scope_current, scope_function, scope_class,
+--          scope_module, scope_stack): the complete tree-sitter syntax tree of every
+-- unit's text, one row per node, as sitting_duck's parse_ast_list(text, language) gives
+-- it (00_load.sql loads sitting_duck). Nothing is filtered out: what to count is decided
+-- by the queries (views/quality.sql, unit_complexity).
+--
+-- The text is the unit's whole lines [start_line, end_line] of its file, parsed alone
+-- with the file's language; a file module's text is therefore the whole file. A unit's
+-- tree also holds every unit nested in it (an inline module's items, a fn inside a fn),
+-- which has its own tree as well; per-unit counts drop the nodes that lie inside a
+-- nested unit's lines (unit_own_ast, views/quality.sql).
+--
+-- The node columns are parse_ast_list's, without peek (a truncated text preview),
+-- file_path (always '<inline>') and language (the file's, files.language). node_id is
+-- the node's 0-based position in a pre-order walk of the unit's tree (the root,
+-- source_file, is 0), so a node's descendants are node_id + 1 .. node_id +
+-- descendant_count. parent_id, depth (the root's is 0) and sibling_index (0-based, among
+-- all children, anonymous tokens included) place the node in the tree. type is the
+-- tree-sitter node type, of named nodes (`if_expression`) and anonymous tokens (`if`,
+-- `&&`, `?`) alike; tree-sitter's field names and is_named are not given. flags are
+-- sitting_duck's bits (is_syntax_only(flags) for keywords and punctuation,
+-- is_scope(flags), ...); semantic_type, name, qualified_name, signature_type,
+-- parameters, modifiers, annotations, receiver and the scope_* columns (the node ids of
+-- the enclosing scopes, and their stack) are sitting_duck's readings of the node.
+-- start_line and end_line are 1-based, inclusive and relative to the unit's text;
+-- file_start_line and file_end_line are the same lines in the file. parse_ast_list gives
+-- no columns or byte offsets.
+--
+-- A macro invocation's arguments are a token_tree of tokens (an `if` there is a keyword
+-- token, not an if_expression), and so is a macro_rules! body.
+CREATE OR REPLACE VIEW unit_ast AS
+WITH file_lines AS MATERIALIZED (
+    SELECT s.file_id, f.language, string_split(s.content, chr(10)) AS lines
+    FROM sources s JOIN files f USING (file_id)
+),
+bodies AS MATERIALIZED (
+    SELECT u.unit_id, u.start_line AS unit_start_line, l.language,
+           array_to_string(l.lines[u.start_line:u.end_line], chr(10)) AS body
+    FROM units u JOIN file_lines l USING (file_id)
+),
+trees AS (
+    SELECT unit_id, unit_start_line, unnest(parse_ast_list(body, language)) AS n FROM bodies
+)
+SELECT unit_id, n.node_id, n.type, n.semantic_type, n.flags, n.name, n.qualified_name, n.signature_type,
+       n.parameters, n.modifiers, n.annotations, n.receiver,
+       n.start_line::INTEGER AS start_line, n.end_line::INTEGER AS end_line,
+       (unit_start_line + n.start_line - 1)::INTEGER AS file_start_line,
+       (unit_start_line + n.end_line - 1)::INTEGER AS file_end_line,
+       n.parent_id, n.depth::INTEGER AS depth, n.sibling_index, n.children_count::INTEGER AS children_count,
+       n.descendant_count::INTEGER AS descendant_count,
+       n.scope.current AS scope_current, n.scope.function AS scope_function, n.scope.class AS scope_class,
+       n.scope.module AS scope_module, n.scope.stack AS scope_stack
+FROM trees;
