@@ -11,7 +11,8 @@
         default rust-analyzer on PATH), write a report in jscpd 5.3.1's shape and fill the
         settings' tables, then assert the rows of files, units, the graph, every axis
         query and unit_quality, live and through refresh.sql (built, then kept, then
-        rebuilt after an edit).
+        rebuilt after an edit). Then the comparison's fixture, check_compare.py (README.md,
+        Comparison).
 
     uv run --locked --script duckdb-ext/sql/check.py fixture --print
         The same fixture, printing each view's and query's rows instead of asserting.
@@ -1007,6 +1008,11 @@ def main():
         SET_VARIABLES[name] = value
     if args.command == "fixture":
         check_fixture(args.print)
+        # check_compare.py imports this file as `check`: the same module, not a second copy.
+        sys.modules.setdefault("check", sys.modules[__name__])
+        sys.dont_write_bytecode = True
+        import check_compare
+        check_compare.check_compare(args.print)
         return
     if not args.repo:
         parser.error("REPO is required")

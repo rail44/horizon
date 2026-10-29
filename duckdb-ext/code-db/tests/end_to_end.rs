@@ -55,6 +55,11 @@ pub fn helper() -> u32 {
     crate::view::width()
 }
 ";
+const UTIL_AFTER: &str = "\
+pub fn helper2() -> u32 {
+    crate::view::width()
+}
+";
 const CHECKS: &str = "pub fn probe() -> u32 {\n    3\n}\n";
 const GENERATED: &str = "pub fn generated() -> u32 {\n    4\n}\n";
 const CARGO_TOML: &str =
@@ -257,6 +262,79 @@ fn index_settings_and_queries() {
             .map(|r| (&r[8][..], &r[14][..]))
             .collect::<Vec<_>>(),
         [("width", "helper"), ("width", "helper")]
+    );
+
+    // compare: a second snapshot where util's helper is renamed. Both sides read
+    // AFTER's settings; a BEFORE without indexes is refused.
+    let after = tmp.path().join("after");
+    let after = after.as_path();
+    git(tmp.path(), &["init", "-q", "-b", "main", "after"]);
+    for (path, text) in [
+        ("Cargo.toml", CARGO_TOML),
+        (".gitignore", "target/\n"),
+        ("src/lib.rs", LIB),
+        ("src/model.rs", MODEL),
+        ("src/view.rs", VIEW),
+        ("src/util.rs", UTIL_AFTER),
+        ("src/checks_extra.rs", CHECKS),
+        ("src/generated.rs", GENERATED),
+        ("tool/Cargo.toml", TOOL_TOML),
+        ("tool/src/main.rs", TOOL_MAIN),
+    ] {
+        write(after, path, text);
+    }
+    git(after, &["add", "."]);
+    git(after, &["commit", "-q", "-m", "Rename the helper"]);
+    write(after, ".code-db.toml", SETTINGS);
+    let in_after = |args: &[&str]| {
+        let output = run(after, args, &jscpd, &log);
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(output.status.success(), "code-db {args:?}: {stderr}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    in_after(&["index"]);
+    let before = repo.to_str().unwrap();
+    let units = rows(&in_after(&["compare", before, "units"]));
+    let changed: Vec<(&str, &str, &str)> = units
+        .iter()
+        .filter(|r| r[0] != "kept")
+        .map(|r| (&r[0][..], &r[3][..], &r[4][..]))
+        .collect();
+    assert_eq!(
+        changed,
+        [
+            ("appeared", "function", "helper2"),
+            ("disappeared", "function", "helper")
+        ]
+    );
+    let mut clones: Vec<(String, String, String)> = rows(&in_after(&["compare", before, "clones"]))
+        .into_iter()
+        .map(|r| (r[0].clone(), r[3].clone(), r[5].clone()))
+        .collect();
+    clones.sort();
+    let clone = |s: &str, a: &str| (s.to_owned(), a.to_owned(), "width".to_owned());
+    assert_eq!(
+        clones,
+        [
+            clone("appeared", "helper2"),
+            clone("appeared", "helper2"),
+            clone("disappeared", "helper"),
+            clone("disappeared", "helper"),
+        ]
+    );
+    let violations = rows(&in_after(&["compare", before, "layer_violations"]));
+    assert_eq!(
+        violations.iter().map(|r| &r[0][..]).collect::<Vec<_>>(),
+        ["kept"]
+    );
+    let bare = tmp.path().join("bare");
+    std::fs::create_dir(&bare).unwrap();
+    let output = run(after, &["compare", bare.to_str().unwrap()], &jscpd, &log);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("compare (BEFORE) needs the SCIP indexes"),
+        "{stderr}"
     );
 
     // Without the reports, a query that reads no clone still runs; one that does

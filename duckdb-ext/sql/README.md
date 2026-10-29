@@ -563,6 +563,96 @@ functions inside a view, and is evaluated when the view is scanned. `LOAD` takes
 literal, so the extension paths are fixed in `00_load.sql`. `read_json` and `read_blob`
 need at least one file, which is why `empty-jscpd-report.json` is always in their lists.
 
+## Comparison
+
+Two snapshots of a repository compared as differences of their obstacle lists (owner
+decisions of 2026-10-29: the purpose of the old audit's `compare`, whether the targeted
+obstacles went down after a refactoring and whether new ones appeared; identity by
+descriptor; a rename may show as a disappeared and an appeared row; no unit-by-unit
+correspondence and no lineage). The record is
+`docs/research/code-db-obstacle-diff-2026-10-29.md`.
+
+```sh
+code-db compare AFTER BEFORE                      # compare/queries/summary.sql
+code-db compare AFTER BEFORE units kind=function  # compare/queries/units.sql
+code-db compare AFTER BEFORE ./my-question.sql    # a QUERY with a / is a SQL file
+```
+
+Each snapshot is a checkout with its own `target/code-db/` (`code-db index` run in it).
+
+- **How it loads.** `code-db` reads BEFORE as `query` reads a repository (the view files,
+  `refresh.sql`, BEFORE's cache, built when missing), reads `compare/sides.sql`, and
+  copies its `side_*` views with `compare/export.sql` into
+  `AFTER/target/code-db/tmp/compare-before-PID.duckdb`. It then reads AFTER the same way,
+  reads `compare/sides.sql` again, attaches the copy read-only as `before`, reads
+  `compare/views.sql`, runs the query and removes the copy. Both sides are derived by the
+  SQL files of the Horizon checkout `code-db` was built in, in one run, so a cache built
+  by other SQL is never read (its key differs; a new one is built). BEFORE's cache cannot
+  be attached as it is: `unit_quality`, the clone views, the cycles and the layers are not
+  in it (they read jscpd's reports, a variable or the settings), and the views read the
+  repository through global variables, so two repositories cannot be live in one session.
+- **Refusals.** The SCIP indexes and both jscpd reports must exist on both sides
+  (`compare (BEFORE) needs the SCIP indexes in …: run 'code-db index …'`): an input
+  missing on one side would show that side's whole list as appeared or disappeared.
+  AFTER and BEFORE must be different directories.
+- **Settings.** Both sides read AFTER's `.code-db.toml`: a difference is then one of the
+  code, not of the judgment. When BEFORE's file differs, a line on stderr says so.
+  `NAME=VALUE` arguments apply to both sides.
+- **Identity.** A unit is `(crate, kind, descriptor)`: the SCIP symbol without scheme,
+  manager, package and version (`workspace/run().`), its place in the crate's module tree.
+  A file moved without changing its module (`transcript.rs` to `transcript/mod.rs`, an
+  inline `mod tests` to `tests.rs`) keeps its units; an item moved to another module, or
+  renamed, is a disappeared and an appeared row. A descriptor several units share on a
+  side (a package's targets all name their root `crate/`; items in function bodies leave
+  the function out) pairs its units by path first, in line order within a file, then the
+  rest in path and line order (`ambiguous`, `paired_by`). Modules (edges, cycles,
+  violations) are `modules.module`, a path. A clone pair is its report and its two units.
+  A cycle is matched by its members: a BEFORE and an AFTER cycle that share a module.
+- **Test code** is reported separately everywhere: units by `is_test`, clone pairs when a
+  side is a test unit, edges by their unit edges with and without a test end, cycles when
+  every member is a test module.
+
+Views (`compare/views.sql`; `compare/sides.sql` holds the `side_*` views of one side):
+
+- **`compare_units(unit_key, crate, kind, qualified_name, status, is_test, text_changed,
+  ambiguous, paired_by, before_unit_id, after_unit_id, path_before, path_after,
+  module_before, module_after, start_line_before, start_line_after, loc_before,
+  loc_after, before, after)`**: one row per unit on either side, `kept`, `appeared` or
+  `disappeared`; `text_changed` compares md5 hashes of the unit's lines (start to end
+  line, each with its trailing whitespace removed); `before` and `after` are the whole
+  `side_units` rows (every `unit_quality` column) as structs.
+- **`compare_unit_axes(…, column_name, axis, rule, before_value, after_value, delta,
+  change, effect, obstacle_before, obstacle_after)`**: one row per unit and `unit_quality`
+  column, the columns read from the view at load time, so columns added to `unit_quality`
+  appear without a change here. **`compare_column_rules(column_name, axis, rule)`** says
+  how a column reads: `lower` (a size: loc, clone pairs, fan-in and fan-out, parameters,
+  debt lines), `null_is_better` (cycle), `true_is_better` (has_doc),
+  `unreferenced_is_worse` (reference_status), `none` (layer, visibility, references); an
+  unlisted column is `lower` when it is a number, `none` otherwise.
+- **`compare_clones`**, **`compare_edges`** (module and crate edges with unit edges in
+  total, production and test, and occurrences on both sides), **`compare_cycles`**
+  (sizes, members added and removed, `split`, `merged`),
+  **`compare_layer_violations`**.
+
+Queries (`compare/queries/`): `summary` (per obstacle list and scope: totals on both sides,
+kept, improved, regressed, changed, appeared, disappeared), `units`, `unit_axes`, `clones`,
+`edges`, `cycles`, `layer_violations`; each header states its rows and parameters. Nothing
+is thresholded; rows are ordered by the size of the change.
+
+Measured (the record has the runs): on the September 2026 sweep (e223bc20 → 46c37290) a
+`code-db compare` takes 3.4–5.7 s with both caches built, of which BEFORE's copy is
+1.7–2.8 s and the query 0.01–1.3 s. Without the cache (the views live) the fixture's
+queries had not finished after 4.5 minutes (where the time goes was not traced); `code-db`
+and the check always read `refresh.sql`.
+
+`check.py fixture` also runs `check_compare.py` (`uv run --no-project --with duckdb==2.0.0
+python duckdb-ext/sql/check_compare.py [--print]` runs it alone): two snapshots of one
+workspace with a known split, a rename, a duplicate removed, a cycle broken, a layer
+violation introduced (closing a new cycle), a changed constant and two targets sharing a
+root descriptor, each indexed with rust-analyzer and read through `refresh.sql`, with every
+row of the views and queries asserted. `code-db`'s end-to-end test runs `compare` on a
+renamed function and on a BEFORE without indexes.
+
 ## Deliberately not here
 
 - **History**: blobs, unit changes, lineage, churn, co-change and the before/after

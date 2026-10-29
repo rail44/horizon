@@ -30,6 +30,13 @@ Usage: code-db COMMAND REPO [ARGS...]
                                       queries/QUERY.sql and print the result
   sql REPO FILE.sql [NAME=VALUE ...]  the same loading, then FILE.sql
   shell REPO [NAME=VALUE ...]         the same loading, then an interactive session
+  compare AFTER BEFORE [QUERY] [NAME=VALUE ...]
+                                      load BEFORE, copy its side of the comparison
+                                      (compare/sides.sql) into a file, load AFTER with the
+                                      copy attached read-only as `before`, then run
+                                      compare/queries/QUERY.sql (default summary; a QUERY
+                                      with a / is a SQL file); both sides read AFTER's
+                                      settings file (README.md, Comparison)
   limits REPO [--json] [NAME=VALUE ...]
                                       print the limits the loading would set (memory_limit,
                                       threads, temp_limit override them)
@@ -66,6 +73,9 @@ const FILE_VIEW_FILES: &[&str] = &["00_load.sql", "views/files.sql"];
 const NEEDS_INDEX: &str = "Needs the SCIP indexes";
 const NEEDS_CLONES: &str = "Needs the jscpd reports";
 const SQL_DIR: &str = "duckdb-ext/sql";
+/// The comparison's SQL files and queries, under SQL_DIR (README.md, Comparison).
+const COMPARE_DIR: &str = "compare";
+const COMPARE_DEFAULT_QUERY: &str = "summary";
 const EXTENSION_DIR: &str = "duckdb-ext/target/extension/v2.0.0/linux_amd64";
 /// The variables the limits are derived from; the derived values replace them.
 const LIMIT_NAMES: &[&str] = &["memory_limit", "threads", "temp_limit"];
@@ -293,6 +303,8 @@ struct Session {
     out: PathBuf,
     settings: Settings,
     args: Arguments,
+    /// SQL text (with `.read`) run after the loading, its output dropped.
+    post_load: String,
 }
 
 impl Session {
@@ -305,6 +317,7 @@ impl Session {
             out,
             settings,
             args: parse_arguments(args),
+            post_load: String::new(),
         }
     }
 
@@ -335,14 +348,19 @@ impl Session {
     /// The inputs FILE's header says it needs (NEEDS_INDEX, NEEDS_CLONES) must
     /// exist; a query or SQL file that reads neither runs without them.
     fn check_inputs_for(&self, file: &Path, what: &str) {
-        if needs(file, NEEDS_INDEX) && !self.indexed() {
+        self.check_inputs(needs(file, NEEDS_INDEX), needs(file, NEEDS_CLONES), what);
+    }
+
+    /// The SCIP indexes (when INDEX) and the jscpd reports (when CLONES) must exist.
+    fn check_inputs(&self, index: bool, clones: bool, what: &str) {
+        if index && !self.indexed() {
             die(format!(
                 "{what} needs the SCIP indexes in {}: run 'code-db index {}'",
                 self.out.join("scip").display(),
                 self.repo.display()
             ));
         }
-        if needs(file, NEEDS_CLONES) {
+        if clones {
             for mode in ["exact", "normalized"] {
                 let report = self.out.join(format!("jscpd/{mode}/jscpd-report.json"));
                 if !report.is_file() {
@@ -426,6 +444,7 @@ impl Session {
             self.check_layers(&db);
         }
         self.prune_cache();
+        script::run_text(&db, &self.post_load, &mut Output::Discard).unwrap_or_else(|e| die(e));
         db
     }
 
@@ -498,6 +517,7 @@ impl Session {
             // module_layers fails when a module is in two layers.
             script.push_str("SELECT module, layer FROM module_layers;\n");
         }
+        script.push_str(&self.post_load);
         script.push_str(&format!(
             ".output\n.headers on\n.mode {}\n.maxrows -1\n.maxwidth 0\n",
             self.args.format.as_deref().unwrap_or("markdown")
@@ -508,6 +528,12 @@ impl Session {
     /// Run TEXT (a query or a `.read`) after the loading: in this process for
     /// markdown, through the DuckDB CLI for any other FORMAT.
     fn run(&self, text: &str) -> ! {
+        std::process::exit(self.run_status(text))
+    }
+
+    /// `run`, returning the exit status instead of exiting (an error in this
+    /// process is printed and is status 1).
+    fn run_status(&self, text: &str) -> i32 {
         if self.args.format.as_deref().is_none_or(|f| f == "markdown") {
             let db = self.load();
             let stdout = std::io::stdout();
@@ -515,10 +541,13 @@ impl Session {
             let result = script::run_text(&db, text, &mut Output::Markdown(&mut lock));
             let _ = lock.flush();
             drop(db);
-            match result {
-                Ok(()) => std::process::exit(0),
-                Err(e) => die(e),
-            }
+            return match result {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("code-db: {e}");
+                    1
+                }
+            };
         }
         let cli = self.cli();
         let (db, prelude) = self.start();
@@ -538,18 +567,27 @@ impl Session {
             .unwrap_or_else(|e| die(e));
         let status = child.wait().unwrap_or_else(|e| die(e));
         self.prune_cache();
-        std::process::exit(status.code().unwrap_or(1))
+        status.code().unwrap_or(1)
     }
 }
 
 fn query(session: Session, rest: &[String]) -> ! {
     let Some(name) = rest.first() else { usage() };
+    let file = query_file(&session.root.join(SQL_DIR).join("queries"), name);
     let name = name.strip_suffix(".sql").unwrap_or(name);
-    let queries = session.root.join(SQL_DIR).join("queries");
+    session.check_tools();
+    session.check_inputs_for(&file, name);
+    let text = query_text(&session, &file);
+    session.run(&text)
+}
+
+/// QUERIES/NAME.sql; when there is none, the list of the queries there, and exit.
+fn query_file(queries: &Path, name: &str) -> PathBuf {
+    let name = name.strip_suffix(".sql").unwrap_or(name);
     let file = queries.join(format!("{name}.sql"));
     if !file.is_file() {
         eprintln!("code-db: no query {name}; available:");
-        let mut names: Vec<String> = std::fs::read_dir(&queries)
+        let mut names: Vec<String> = std::fs::read_dir(queries)
             .map(|d| {
                 d.filter_map(|e| {
                     e.ok()?
@@ -567,10 +605,13 @@ fn query(session: Session, rest: &[String]) -> ! {
         }
         std::process::exit(1);
     }
-    session.check_tools();
-    session.check_inputs_for(&file, name);
-    let text = std::fs::read_to_string(&file).unwrap_or_else(|e| die(e));
-    let text = match session.args.limit {
+    file
+}
+
+/// The text of a query file, wrapped in a SELECT ... LIMIT when LIMIT is given.
+fn query_text(session: &Session, file: &Path) -> String {
+    let text = std::fs::read_to_string(file).unwrap_or_else(|e| die(e));
+    match session.args.limit {
         // run.sh's wrapping: each line's trailing `;` removed.
         Some(limit) => {
             let lines: Vec<&str> = text
@@ -583,8 +624,87 @@ fn query(session: Session, rest: &[String]) -> ! {
             format!("SELECT * FROM (\n{}\n) LIMIT {limit};\n", lines.join("\n"))
         }
         None => text,
+    }
+}
+
+/// `compare AFTER BEFORE [QUERY] [NAME=VALUE ...]` (README.md, Comparison).
+fn compare(root: PathBuf, after: PathBuf, rest: &[String]) -> ! {
+    let Some(before) = rest.first() else { usage() };
+    let before = Path::new(before);
+    if !before.is_dir() {
+        die(format!("no such directory: {}", before.display()));
+    }
+    let before = before.canonicalize().unwrap_or_else(|e| die(e));
+    if before == after {
+        die("compare: AFTER and BEFORE are the same directory");
+    }
+    let (name, args) = match rest.get(1) {
+        Some(name) if !name.contains('=') => (name.as_str(), &rest[2..]),
+        _ => (COMPARE_DEFAULT_QUERY, &rest[1..]),
     };
-    session.run(&text)
+    let compare_dir = format!("{SQL_DIR}/{COMPARE_DIR}");
+    // A QUERY with a `/` is a SQL file of one's own, as for `sql`.
+    let file = if name.contains('/') {
+        Path::new(name)
+            .canonicalize()
+            .unwrap_or_else(|_| die(format!("no such file: {name}")))
+    } else {
+        query_file(&root.join(&compare_dir).join("queries"), name)
+    };
+    let mut session = Session::new(root.clone(), after.clone(), args);
+    // Both sides read AFTER's settings: a difference is then one of the code, not of
+    // the judgment.
+    let mut before_session = Session::new(root, before.clone(), args);
+    let before_settings = std::mem::replace(
+        &mut before_session.settings,
+        Settings::load(&after).unwrap_or_else(|e| die(e)),
+    );
+    if before_settings != before_session.settings {
+        eprintln!(
+            "compare: BEFORE's settings ({}) differ from AFTER's; both sides read AFTER's ({})",
+            before.join(settings::FILE_NAME).display(),
+            after.join(settings::FILE_NAME).display()
+        );
+    }
+    session.check_tools();
+    // Every side_* view reads the units, and side_clones the reports: an input missing
+    // on one side would show its whole list as appeared or disappeared.
+    session.check_inputs(true, true, "compare (AFTER)");
+    before_session.check_inputs(true, true, "compare (BEFORE)");
+    let tmp = session.out.join("tmp");
+    std::fs::create_dir_all(&tmp).unwrap_or_else(|e| die(format!("{}: {e}", tmp.display())));
+    let snapshot = tmp.join(format!("compare-before-{}.duckdb", std::process::id()));
+    let remove_snapshot = || {
+        let _ = std::fs::remove_file(&snapshot);
+        let _ = std::fs::remove_file(snapshot.with_extension("duckdb.wal"));
+    };
+    remove_snapshot();
+    let snapshot_sql = sql_string(&snapshot.display().to_string());
+    let started = std::time::Instant::now();
+    {
+        let db = before_session.load();
+        let export = format!(
+            ".read {compare_dir}/sides.sql\nATTACH {snapshot_sql} AS snapshot;\n\
+             .read {compare_dir}/export.sql\nDETACH snapshot;\n"
+        );
+        if let Err(e) = script::run_text(&db, &export, &mut Output::Discard) {
+            remove_snapshot();
+            die(e);
+        }
+    }
+    eprintln!(
+        "compare: BEFORE {} copied in {:.1} s",
+        before.display(),
+        started.elapsed().as_secs_f64()
+    );
+    session.post_load = format!(
+        ".read {compare_dir}/sides.sql\nATTACH {snapshot_sql} AS before (READ_ONLY);\n\
+         .read {compare_dir}/views.sql\n"
+    );
+    let text = query_text(&session, &file);
+    let status = session.run_status(&text);
+    remove_snapshot();
+    std::process::exit(status)
 }
 
 fn sql_file(session: Session, rest: &[String]) -> ! {
@@ -706,6 +826,7 @@ fn main() {
             sql_file(session, rest)
         }
         "shell" => shell(Session::new(root, repo, rest)),
+        "compare" => compare(root, repo, rest),
         "limits" => print_limits(&repo, rest),
         _ => usage(),
     }
