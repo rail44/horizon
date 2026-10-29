@@ -21,9 +21,11 @@ use settings::Settings;
 
 const USAGE: &str = "\
 Usage: code-db COMMAND REPO [ARGS...]
-  index REPO [tool_memory_max=SIZE]   write REPO/target/code-db/index.scip (rust-analyzer
-                                      scip) and REPO/target/code-db/jscpd/{exact,normalized},
-                                      each tool under a memory cap (README.md, Limits)
+  index REPO [tool_memory_max=SIZE]   write REPO/target/code-db/jscpd/{exact,normalized}
+                                      (jscpd over the source files) and one SCIP index per
+                                      Cargo workspace in REPO/target/code-db/scip/
+                                      (rust-analyzer scip), each tool under a memory cap
+                                      (README.md, Running and Limits)
   query REPO QUERY [NAME=VALUE ...]   load the views and the persistent cache, then run
                                       queries/QUERY.sql and print the result
   sql REPO FILE.sql [NAME=VALUE ...]  the same loading, then FILE.sql
@@ -40,30 +42,29 @@ number of rows printed, by wrapping the query in a SELECT ... LIMIT; query only)
 REPO/.code-db.toml, when it exists, holds the repository's settings (README.md,
 Settings file); a NAME=VALUE argument overrides the variable it sets.
 
-The views are read in README.md's order; views/scip.sql and views/graph.sql only when
-the SCIP index exists. refresh.sql keeps the cache in REPO/target/code-db/cache.duckdb.
-The limits line goes to stderr. Markdown is printed by this command; any other FORMAT,
-and shell, hand the same loading to the DuckDB CLI.
+The views are read in README.md's order, then refresh.sql, which keeps the cache in
+REPO/target/code-db/cache/. A query needs the SCIP indexes, and the jscpd reports when its
+header says so. The limits line goes to stderr. Markdown is printed by this command; any
+other FORMAT, and shell, hand the same loading to the DuckDB CLI.
 Environment: DUCKDB_CLI (default ~/.local/bin/duckdb2), RUST_ANALYZER (default
-rust-analyzer), JSCPD_PATHS (directories jscpd scans, default the ones of src, crates
-and preview-plugin/src that exist).
+rust-analyzer), JSCPD (default the refactor audit's pinned jscpd).
 ";
 
 /// The view files, in the order every client reads them (README.md, Running).
 const VIEW_FILES: &[&str] = &[
     "00_load.sql",
     "views/files.sql",
-    "views/nodes.sql",
-    "views/blobs.sql",
-    "lang/rust.sql",
+    "views/scip.sql",
     "views/units.sql",
-    "views/history.sql",
-    "views/unit_changes.sql",
-    "views/lineage.sql",
-    "views/snapshot.sql",
+    "views/graph.sql",
     "views/clones.sql",
+    "views/quality.sql",
 ];
-const INDEX_FILES: &[&str] = &["views/scip.sql", "views/graph.sql"];
+/// The view files `index` reads to list the source files.
+const FILE_VIEW_FILES: &[&str] = &["00_load.sql", "views/files.sql"];
+/// What a query's header says when it needs an input `index` writes.
+const NEEDS_INDEX: &str = "Needs the SCIP indexes";
+const NEEDS_CLONES: &str = "Needs the jscpd reports";
 const SQL_DIR: &str = "duckdb-ext/sql";
 const EXTENSION_DIR: &str = "duckdb-ext/target/extension/v2.0.0/linux_amd64";
 /// The variables the limits are derived from; the derived values replace them.
@@ -275,19 +276,15 @@ fn prelude(
 }
 
 /// The SQL files to read, relative to the Horizon root.
-fn load_files(indexed: bool) -> Vec<String> {
+fn load_files() -> Vec<String> {
     let mut files: Vec<&str> = VIEW_FILES.to_vec();
-    if indexed {
-        files.extend(INDEX_FILES);
-    }
     files.push("refresh.sql");
     files.iter().map(|f| format!("{SQL_DIR}/{f}")).collect()
 }
 
-/// Whether FILE says it needs the SCIP or graph views.
-fn needs_index(file: &Path) -> bool {
-    std::fs::read_to_string(file)
-        .is_ok_and(|t| t.contains("Needs views/scip.sql") || t.contains("Needs views/graph.sql"))
+/// Whether FILE's text says it needs WHAT (NEEDS_INDEX, NEEDS_CLONES).
+fn needs(file: &Path, what: &str) -> bool {
+    std::fs::read_to_string(file).is_ok_and(|t| t.contains(what))
 }
 
 struct Session {
@@ -311,8 +308,12 @@ impl Session {
         }
     }
 
+    /// Whether `index` has written at least one SCIP index.
     fn indexed(&self) -> bool {
-        self.out.join("index.scip").is_file()
+        std::fs::read_dir(self.out.join("scip")).is_ok_and(|d| {
+            d.filter_map(Result::ok)
+                .any(|e| e.file_name().to_string_lossy().ends_with(".scip"))
+        })
     }
 
     fn check_tools(&self) {
@@ -331,26 +332,47 @@ impl Session {
         }
     }
 
-    fn check_inputs(&self) {
-        for mode in ["exact", "normalized"] {
-            let report = self.out.join(format!("jscpd/{mode}/jscpd-report.json"));
-            if !report.is_file() {
-                die(format!(
-                    "no jscpd report at {}: run 'code-db index {}'",
-                    report.display(),
-                    self.repo.display()
-                ));
+    /// The inputs FILE's header says it needs (NEEDS_INDEX, NEEDS_CLONES) must
+    /// exist; a query or SQL file that reads neither runs without them.
+    fn check_inputs_for(&self, file: &Path, what: &str) {
+        if needs(file, NEEDS_INDEX) && !self.indexed() {
+            die(format!(
+                "{what} needs the SCIP indexes in {}: run 'code-db index {}'",
+                self.out.join("scip").display(),
+                self.repo.display()
+            ));
+        }
+        if needs(file, NEEDS_CLONES) {
+            for mode in ["exact", "normalized"] {
+                let report = self.out.join(format!("jscpd/{mode}/jscpd-report.json"));
+                if !report.is_file() {
+                    die(format!(
+                        "{what} needs the jscpd report {}: run 'code-db index {}'",
+                        report.display(),
+                        self.repo.display()
+                    ));
+                }
             }
         }
     }
 
-    fn check_index_for(&self, file: &Path, what: &str) {
-        if needs_index(file) && !self.indexed() {
-            die(format!(
-                "{what} needs the SCIP index {}: run 'code-db index {}'",
-                self.out.join("index.scip").display(),
-                self.repo.display()
-            ));
+    /// Remove the cache files of other states of the inputs (refresh.sql writes
+    /// one file per state), keeping the most recently modified one: the file the
+    /// last read used.
+    fn prune_cache(&self) {
+        let Ok(dir) = std::fs::read_dir(self.out.join("cache")) else {
+            return;
+        };
+        let mut files: Vec<(std::time::SystemTime, PathBuf)> = dir
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".duckdb"))
+            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+            .collect();
+        files.sort();
+        files.pop();
+        for (_, path) in files {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(path.with_extension("duckdb.wal"));
         }
     }
 
@@ -371,12 +393,12 @@ impl Session {
     }
 
     fn layered(&self) -> bool {
-        !self.settings.layers.is_empty() && self.indexed()
+        !self.settings.layers.is_empty()
     }
 
     /// Open DuckDB, derive the limits and print them; the prelude SQL.
     fn start(&self) -> (Db, String) {
-        std::fs::create_dir_all(&self.out)
+        std::fs::create_dir_all(self.out.join("cache"))
             .unwrap_or_else(|e| die(format!("{}: {e}", self.out.display())));
         std::env::set_current_dir(&self.root).unwrap_or_else(|e| die(e));
         let db = Db::open().unwrap_or_else(|e| die(e));
@@ -396,14 +418,44 @@ impl Session {
     fn load(&self) -> Db {
         let (db, prelude) = self.start();
         script::run_text(&db, &prelude, &mut Output::Discard).unwrap_or_else(|e| die(e));
-        for file in load_files(self.indexed()) {
+        for file in load_files() {
             script::run_file(&db, Path::new(&file), &mut Output::Discard)
                 .unwrap_or_else(|e| die(e));
         }
         if self.layered() {
             self.check_layers(&db);
         }
+        self.prune_cache();
         db
+    }
+
+    /// The source files and the workspaces to index (index::Inputs), from the
+    /// views: 00_load.sql and views/files.sql read in this process.
+    fn index_inputs(&self) -> index::Inputs {
+        let (db, prelude) = self.start();
+        script::run_text(&db, &prelude, &mut Output::Discard).unwrap_or_else(|e| die(e));
+        for file in FILE_VIEW_FILES {
+            script::run_file(
+                &db,
+                Path::new(&format!("{SQL_DIR}/{file}")),
+                &mut Output::Discard,
+            )
+            .unwrap_or_else(|e| die(e));
+        }
+        let column = |sql: &str| -> Vec<String> {
+            db.query(sql)
+                .unwrap_or_else(|e| die(e))
+                .into_iter()
+                .filter_map(|r| r.into_iter().next().flatten())
+                .collect()
+        };
+        let files = column("SELECT path FROM files ORDER BY path");
+        let manifests = column(
+            "SELECT path FROM git_tracked_files(getvariable('repo')) \
+             WHERE path = 'Cargo.toml' OR path LIKE '%/Cargo.toml' ORDER BY path",
+        );
+        let workspaces = index::workspaces(&self.repo, &manifests, &files);
+        index::Inputs { files, workspaces }
     }
 
     /// A module may belong to one layer only.
@@ -439,7 +491,7 @@ impl Session {
     fn cli_script(&self, prelude: &str) -> String {
         let mut script = String::from(prelude);
         script.push_str(".output /dev/null\n");
-        for file in load_files(self.indexed()) {
+        for file in load_files() {
             script.push_str(&format!(".read {file}\n"));
         }
         if self.layered() {
@@ -485,6 +537,7 @@ impl Session {
             .write_all(script.as_bytes())
             .unwrap_or_else(|e| die(e));
         let status = child.wait().unwrap_or_else(|e| die(e));
+        self.prune_cache();
         std::process::exit(status.code().unwrap_or(1))
     }
 }
@@ -515,8 +568,7 @@ fn query(session: Session, rest: &[String]) -> ! {
         std::process::exit(1);
     }
     session.check_tools();
-    session.check_inputs();
-    session.check_index_for(&file, name);
+    session.check_inputs_for(&file, name);
     let text = std::fs::read_to_string(&file).unwrap_or_else(|e| die(e));
     let text = match session.args.limit {
         // run.sh's wrapping: each line's trailing `;` removed.
@@ -544,18 +596,16 @@ fn sql_file(session: Session, rest: &[String]) -> ! {
         die("LIMIT applies to query only");
     }
     session.check_tools();
-    session.check_inputs();
-    session.check_index_for(&file, &file.display().to_string());
+    session.check_inputs_for(&file, &file.display().to_string());
     session.run(&format!(".read {}\n", file.display()))
 }
 
 fn shell(session: Session) -> ! {
     session.check_tools();
-    session.check_inputs();
     if !session.indexed() {
         eprintln!(
-            "code-db: no SCIP index at {}; loading without views/scip.sql and views/graph.sql",
-            session.out.join("index.scip").display()
+            "code-db: no SCIP index in {}; the units and graph views are empty (run 'code-db index')",
+            session.out.join("scip").display()
         );
     }
     let cli = session.cli();
@@ -573,6 +623,7 @@ fn shell(session: Session) -> ! {
         .current_dir(&session.root)
         .status();
     let _ = std::fs::remove_file(&path);
+    session.prune_cache();
     let status = status.unwrap_or_else(|e| die(format!("{}: {e}", cli.display())));
     std::process::exit(status.code().unwrap_or(1))
 }
@@ -640,7 +691,11 @@ fn main() {
                     None => usage(),
                 }
             }
-            index::index(&root, &repo, tool_memory_max.as_deref()).unwrap_or_else(|e| die(e));
+            let session = Session::new(root.clone(), repo.clone(), &[]);
+            session.check_tools();
+            let inputs = session.index_inputs();
+            index::index(&root, &repo, &inputs, tool_memory_max.as_deref())
+                .unwrap_or_else(|e| die(e));
         }
         "query" => {
             let session = Session::new(root, repo, rest.get(1..).unwrap_or_default());

@@ -1,22 +1,19 @@
 -- Question: what does a unit reference, and what references it, up to a few steps away?
--- The unit is given by its file and identity; every current unit with that identity
--- is a starting point (two `impl Foo` blocks of one file are both). Steps follow
+-- The unit is given by its file, kind and qualified name; every unit with that identity
+-- is a starting point (two items of one name inside different functions of a file are
+-- both). Steps follow
 -- unit_edges (views/graph.sql) without self edges: `out` from a unit to the units
 -- defining the symbols it references (callees, used types), `in` the other way
 -- (callers, users). A neighbor is reported at its least distance in each direction,
 -- with the edges that reach it from the units one step nearer: their symbols (display
--- names), unit edges and occurrences. churn is the neighbor's commits in unit_history
--- (as unit_churn); fan_in_files the files other than its own holding a unit with an
--- edge into it (unit_edges; unlike unit_fan_in_churn, references outside every unit,
--- such as `use` declarations, and the symbols of the units it contains are not
--- counted). Needs views/graph.sql.
+-- names), unit edges and occurrences, and the neighbor's fan_in_files (unit_fan_in,
+-- views/quality.sql). Needs the SCIP indexes.
 -- Evidence: none for the walk itself; it is a reading aid. Edges inherit the limits of
 -- views/graph.sql (local symbols excluded, calls through a trait reach the trait's
 -- method, macro call sites as rust-analyzer resolves them).
 -- Parameters (DuckDB variables; default when unset):
---   path, unit_kind, qualified_name (required: the unit, as in unit_churn's rows),
---   depth 1, direction 'both' ('in', 'out' or 'both');
---   include_merges (00_load.sql, false) also counts merges in churn.
+--   path, unit_kind, qualified_name (required: the unit, as units lists it),
+--   depth 1, direction 'both' ('in', 'out' or 'both').
 WITH RECURSIVE params AS (
     SELECT CAST(getvariable('path') AS VARCHAR) AS path,
            CAST(getvariable('unit_kind') AS VARCHAR) AS unit_kind,
@@ -38,8 +35,8 @@ edges AS MATERIALIZED (
 ),
 roots AS MATERIALIZED (
     SELECT u.unit_id
-    FROM units u JOIN files f USING (file_id) CROSS JOIN params p CROSS JOIN checked
-    WHERE f.path = p.path AND u.kind = p.unit_kind AND u.qualified_name = p.qualified_name AND checked.ok
+    FROM units u CROSS JOIN params p CROSS JOIN checked
+    WHERE u.path = p.path AND u.kind = p.unit_kind AND u.qualified_name = p.qualified_name AND checked.ok
 ),
 -- (direction, unit, distance): set semantics, so each iteration adds only new rows.
 walk(direction, unit_id, distance) AS (
@@ -86,33 +83,12 @@ step_counts AS (
            sum(occurrences) AS occurrences
     FROM steps
     GROUP BY ALL
-),
-churn AS (
-    SELECT h.unit_id, count(DISTINCT h.sha) AS commits
-    FROM unit_history h
-    JOIN commits c USING (sha)
-    WHERE NOT c.is_merge OR getvariable('include_merges')
-    GROUP BY h.unit_id
-),
-unit_files AS MATERIALIZED (
-    SELECT unit_id, file_id FROM units
-),
-fan_in AS (
-    SELECT e.dst_unit_id AS unit_id, count(DISTINCT us.file_id) AS fan_in_files
-    FROM edges e
-    JOIN unit_files us ON us.unit_id = e.src_unit_id
-    JOIN unit_files ud ON ud.unit_id = e.dst_unit_id
-    WHERE us.file_id <> ud.file_id
-    GROUP BY ALL
 )
-SELECT n.direction, n.distance, f.path, u.kind, u.qualified_name, u.start_line, u.loc,
-       c.from_units, c.unit_edges, c.occurrences, s.symbols,
-       coalesce(ch.commits, 0) AS churn, coalesce(fi.fan_in_files, 0) AS fan_in_files
+SELECT n.direction, n.distance, u.path, u.kind, u.qualified_name, u.start_line, u.loc,
+       c.from_units, c.unit_edges, c.occurrences, s.symbols, coalesce(fi.fan_in_files, 0) AS fan_in_files
 FROM reached n
 JOIN step_counts c USING (direction, unit_id)
 JOIN step_symbols s USING (direction, unit_id)
 JOIN units u ON u.unit_id = n.unit_id
-JOIN files f ON f.file_id = u.file_id
-LEFT JOIN churn ch ON ch.unit_id = n.unit_id
-LEFT JOIN fan_in fi ON fi.unit_id = n.unit_id
-ORDER BY n.direction DESC, n.distance, c.occurrences DESC, f.path, u.start_line, u.unit_id;
+LEFT JOIN unit_fan_in fi ON fi.unit_id = n.unit_id
+ORDER BY n.direction DESC, n.distance, c.occurrences DESC, u.path, u.start_line, u.unit_id;

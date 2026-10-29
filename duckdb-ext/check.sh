@@ -1,7 +1,7 @@
 #!/bin/sh
 # The sub-workspace's whole check: format, lints and tests of every member
-# (both extensions, git-history-core, scip-index-core, gix-probe,
-# scip-probe), a release build of both extensions with the metadata footer,
+# (both extensions, git-history-core, scip-index-core, scip-probe), a release
+# build of both extensions with the metadata footer,
 # the host check that LOADs them through the `duckdb` crate and the
 # machine's libduckdb, and code-db's format, lints and tests (its end-to-end test
 # needs the extensions build.sh just built).

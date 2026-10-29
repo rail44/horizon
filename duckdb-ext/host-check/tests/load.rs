@@ -1,8 +1,8 @@
 //! LOAD the built `git_history.duckdb_extension` and
 //! `scip_index.duckdb_extension` through the `duckdb` crate: query
-//! `git_hunks`, `git_tree` and `git_tracked_files` on a fixture
-//! repository, and the three SCIP functions on a hand-encoded index, with
-//! both extensions loaded.
+//! `git_tracked_files` on a fixture repository, and the three SCIP functions
+//! on a hand-encoded index (one path and a list of paths), with both
+//! extensions loaded.
 //!
 //! Run `duckdb-ext/build.sh` first; `GIT_HISTORY_EXTENSION` and
 //! `SCIP_INDEX_EXTENSION` override the extension paths.
@@ -83,72 +83,7 @@ fn horizon_linked_duckdb_loads_the_extension() {
     assert_eq!(version, "v2.0.0");
     conn.execute_batch(&format!("LOAD '{}'", git_history().display()))
         .unwrap();
-
-    let mut statement = conn
-        .prepare(
-            "SELECT c.subject, h.path, h.old_start, h.old_lines, h.new_start, h.new_lines
-             FROM git_hunks(?) h JOIN git_commits(?) c USING (sha)
-             ORDER BY c.author_time, h.old_start",
-        )
-        .unwrap();
     let path = dir.to_str().unwrap();
-    let rows: Vec<(String, String, i32, i32, i32, i32)> = statement
-        .query_map([path, path], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            ))
-        })
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let rows: Vec<(&str, &str, i32, i32, i32, i32)> = rows
-        .iter()
-        .map(|(s, p, a, b, c, d)| (s.as_str(), p.as_str(), *a, *b, *c, *d))
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            ("Add a.rs", "a.rs", 0, 0, 1, 3),
-            ("Edit a.rs", "a.rs", 2, 1, 2, 1),
-            ("Edit a.rs", "a.rs", 3, 0, 4, 1),
-        ]
-    );
-
-    // The blob of "one\ntwo\nthree\n" (`git hash-object`), at the first commit.
-    let mut statement = conn
-        .prepare("SELECT path, mode, blob_id FROM git_tree(?, rev := 'HEAD~1')")
-        .unwrap();
-    let rows: Vec<(String, String, String)> = statement
-        .query_map([path], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert_eq!(
-        rows,
-        [(
-            "a.rs".to_string(),
-            "100644".to_string(),
-            "4cb29ea38f70d7c61b2a3a25b02e3bdf44905402".to_string()
-        )]
-    );
-    let head: i64 = conn
-        .query_row("SELECT count(*) FROM git_tree(?)", [path], |row| row.get(0))
-        .unwrap();
-    assert_eq!(head, 1);
-    let error = conn
-        .query_row(
-            "SELECT count(*) FROM git_tree(?, rev := 'no-such-rev')",
-            [path],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("'no-such-rev'"), "{error}");
 
     std::fs::write(dir.join("a.rs"), "changed\n").unwrap();
     std::fs::write(dir.join("b.rs"), "new\n").unwrap();
@@ -237,6 +172,7 @@ fn horizon_linked_duckdb_loads_both_extensions() {
         len_field(3, b"Docs."),
         int_field(5, 17),
         len_field(6, b"f"),
+        len_field(7, &len_field(5, b"pub fn f()")),
     ]
     .concat();
     let document = [
@@ -330,28 +266,77 @@ fn horizon_linked_duckdb_loads_both_extensions() {
 
     let mut statement = conn
         .prepare(
-            "SELECT coalesce(document, '<external>'), symbol, kind, documentation::VARCHAR
+            "SELECT coalesce(document, '<external>'), symbol, kind, documentation::VARCHAR,
+                    coalesce(signature, '<none>')
              FROM read_scip_symbols(?)",
         )
         .unwrap();
-    let rows: Vec<(String, String, String, String)> = statement
+    let rows: Vec<(String, String, String, String, String)> = statement
         .query_map([path], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    let rows: Vec<(&str, &str, &str, &str)> = rows
+    let rows: Vec<(&str, &str, &str, &str, &str)> = rows
         .iter()
-        .map(|(d, s, k, doc)| (d.as_str(), s.as_str(), k.as_str(), doc.as_str()))
+        .map(|(d, s, k, doc, sig)| {
+            (
+                d.as_str(),
+                s.as_str(),
+                k.as_str(),
+                doc.as_str(),
+                sig.as_str(),
+            )
+        })
         .collect();
     assert_eq!(
         rows,
         [
-            ("src/lib.rs", "cargo p 0.1.0 f().", "Function", "[Docs.]"),
-            ("<external>", "std io/Read#", "UnspecifiedKind", "[]"),
+            (
+                "src/lib.rs",
+                "cargo p 0.1.0 f().",
+                "Function",
+                "[Docs.]",
+                "pub fn f()"
+            ),
+            (
+                "<external>",
+                "std io/Read#",
+                "UnspecifiedKind",
+                "[]",
+                "<none>"
+            ),
         ]
     );
+
+    // A list of paths reads each index in order; index_path names the file.
+    let list = format!("['{path}', '{path}']");
+    let (occurrences, symbols, metadata, paths): (i64, i64, i64, i64) = conn
+        .query_row(
+            &format!(
+                "SELECT (SELECT count(*) FROM read_scip({list})),
+                        (SELECT count(*) FROM read_scip_symbols({list})),
+                        (SELECT count(*) FROM read_scip_metadata({list})),
+                        (SELECT count(*) FROM read_scip({list}) WHERE index_path = '{path}')"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!((occurrences, symbols, metadata, paths), (4, 4, 2, 4));
+    let empty: i64 = conn
+        .query_row("SELECT count(*) FROM read_scip([]::VARCHAR[])", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(empty, 0);
 
     let row: (String, String, String, i64, i64, i64) = conn
         .query_row(

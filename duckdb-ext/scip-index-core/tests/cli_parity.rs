@@ -123,7 +123,14 @@ struct JsonSymbol {
     relationships: Vec<serde::de::IgnoredAny>,
     kind: i32,
     display_name: String,
+    signature_documentation: Option<JsonSignature>,
     enclosing_symbol: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct JsonSignature {
+    text: String,
 }
 
 fn typed(single: Option<JsonSingle>, multi: Option<JsonMulti>) -> Option<Range> {
@@ -172,6 +179,11 @@ fn symbol_row(symbol: JsonSymbol, document: Option<&Arc<str>>) -> SymbolRow {
         enclosing_symbol: symbol.enclosing_symbol,
         documentation: symbol.documentation,
         relationship_count: symbol.relationships.len() as i32,
+        // protobuf's JSON omits an empty text, which the decoder reads as absent.
+        signature: symbol
+            .signature_documentation
+            .map(|s| s.text)
+            .filter(|t| !t.is_empty()),
     }
 }
 
@@ -439,6 +451,11 @@ fn rust_analyzer_fixture_matches_scip_print() {
             .any(|s| s.documentation.iter().any(|d| d.contains('\n')))
     );
     assert!(rows.symbols.iter().any(|s| s.documentation.is_empty()));
+    assert!(rows.symbols.iter().any(|s| {
+        s.signature
+            .as_deref()
+            .is_some_and(|t| t.starts_with("pub fn"))
+    }));
     // rust-analyzer 1.99.1 writes no relationships; the hand-encoded index covers them.
     assert_eq!(rows.metadata.tool_name, "rust-analyzer");
     assert_eq!(rows.metadata.document_count, 2);

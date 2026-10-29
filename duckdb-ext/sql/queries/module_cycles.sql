@@ -7,13 +7,19 @@
 -- Within a group, the edges with the fewest unit edges come first. violating_edges counts
 -- the group's edges that go against the declared layers (graph_layer_violation,
 -- views/graph.sql; README.md, Settings file), the same on every row of the group; 0
--- without layers. Needs views/graph.sql.
--- Evidence: Package Cycle is one of the six anti-patterns of Mo et al. (TSE 2021, 19
+-- without layers. Structural edges (a module and its ancestor or descendant, and edges
+-- whose every unit edge joins impls of one type) are left out unless cycle_edges = 'raw'
+-- (views/graph.sql, module_cycle_edges).
+-- Axis: independence (docs/research/code-quality-axes-2026-10-29.md §3.8).
+-- Judgment from the settings file: the intended layers ([[layers]], may_depend_on) behind
+-- violating_edges; scope and tests (scope.exclude, tests.*). Needs the SCIP indexes.
+-- Evidence: weak. SIG's component independence is not significant (0.16, p = 0.201);
+-- Package Cycle is one of the six anti-patterns of Mo et al. (TSE 2021, 19
 -- projects, Java/C/C++), not one of the two with the largest contribution; Cargo
 -- forbids crate cycles, and no Rust study was found that shows module cycles to be
 -- harmful (see the survey).
 -- Parameters (DuckDB variables; default when unset):
---   crate NULL (all cycles; or a crate name).
+--   crate NULL (all cycles; or a crate name); cycle_edges 'collapsed' ('raw').
 WITH params AS (
     SELECT CAST(getvariable('crate') AS VARCHAR) AS crate
 ),
@@ -51,7 +57,7 @@ edge_symbols AS (
     GROUP BY ALL
 )
 SELECT c.cycle, c.crate, c.modules, e.src_module, e.dst_module, e.unit_edges, e.occurrences,
-       e.test_unit_edges, e.macro_unit_edges, e.ambiguous_unit_edges,
+       e.test_unit_edges, e.ambiguous_unit_edges,
        coalesce(r.unit_edges, 0) AS reverse_unit_edges, s.symbols[1:5] AS symbols, v.violating_edges
 FROM edges e
 JOIN cycles c USING (cycle)

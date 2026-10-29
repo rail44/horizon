@@ -1,5 +1,6 @@
-//! `code-db index`: jscpd's two reports and rust-analyzer's SCIP index, each
-//! tool under a memory cap (duckdb-ext/sql/README.md, Limits).
+//! `code-db index`: jscpd's two reports over the source files and one
+//! rust-analyzer SCIP index per Cargo workspace, each tool under a memory cap
+//! (duckdb-ext/sql/README.md, Running and Limits).
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -174,24 +175,74 @@ fn run_logged(mut command: Command, stdout: Stdio, log: File) -> Result<ExitStat
         .map_err(|e| e.to_string())
 }
 
-pub fn index(root: &Path, repo: &Path, tool_memory_max: Option<&str>) -> Result<(), String> {
+/// What `index` works on: the source files (`files`, as the views list them:
+/// the settings' scope applied) and the Cargo workspaces to index, as
+/// repository-relative paths; a workspace is a directory whose tracked
+/// Cargo.toml has a `[workspace]` table and that holds at least one source
+/// file ("" for the repository root).
+pub struct Inputs {
+    pub files: Vec<String>,
+    pub workspaces: Vec<String>,
+}
+
+/// Whether a Cargo.toml's text declares a workspace (`[workspace]` or one of
+/// its subtables such as `[workspace.package]`).
+pub fn declares_workspace(manifest: &str) -> bool {
+    manifest.lines().any(|line| {
+        let line = line.trim();
+        line == "[workspace]" || line.starts_with("[workspace.")
+    })
+}
+
+/// The index file of a workspace, under `target/code-db/scip/`: `root.scip`
+/// for the repository root, else `ws-<path with / as +>.scip`.
+pub fn index_name(workspace: &str) -> String {
+    if workspace.is_empty() {
+        "root.scip".to_owned()
+    } else {
+        format!("ws-{}.scip", workspace.replace('/', "+"))
+    }
+}
+
+fn under(path: &str, dir: &str) -> bool {
+    dir.is_empty()
+        || path
+            .strip_prefix(dir)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// The workspaces among the tracked manifests that hold a source file.
+pub fn workspaces(repo: &Path, manifests: &[String], files: &[String]) -> Vec<String> {
+    let mut found: Vec<String> = manifests
+        .iter()
+        .filter(|m| {
+            std::fs::read_to_string(repo.join(m)).is_ok_and(|text| declares_workspace(&text))
+        })
+        .map(|m| {
+            m.strip_suffix("Cargo.toml")
+                .unwrap_or_default()
+                .trim_end_matches('/')
+                .to_owned()
+        })
+        .filter(|dir| files.iter().any(|f| under(f, dir)))
+        .collect();
+    found.sort();
+    found
+}
+
+pub fn index(
+    root: &Path,
+    repo: &Path,
+    inputs: &Inputs,
+    tool_memory_max: Option<&str>,
+) -> Result<(), String> {
     let out = repo.join("target/code-db");
-    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    let logs = out.join("logs");
+    std::fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
     let cap = choose_cap(tool_memory_max)?;
 
-    let scan: Vec<String> = match std::env::var("JSCPD_PATHS") {
-        Ok(paths) if !paths.is_empty() => paths.split_whitespace().map(str::to_owned).collect(),
-        _ => ["src", "crates", "preview-plugin/src"]
-            .into_iter()
-            .filter(|d| repo.join(d).is_dir())
-            .map(str::to_owned)
-            .collect(),
-    };
-    if scan.is_empty() {
-        return Err(format!(
-            "no directory to scan in {} (set JSCPD_PATHS)",
-            repo.display()
-        ));
+    if inputs.files.is_empty() {
+        return Err(format!("no source file in {}", repo.display()));
     }
     if !root.join("target/refactor-audit/tools/jscpd").exists()
         && std::env::var_os("JSCPD").is_none()
@@ -202,12 +253,12 @@ pub fn index(root: &Path, repo: &Path, tool_memory_max: Option<&str>) -> Result<
         ));
     }
     let start = Instant::now();
-    let log = out.join("jscpd.log");
+    let log = logs.join("jscpd.log");
     let mut args = vec![
         repo.display().to_string(),
         out.join("jscpd").display().to_string(),
     ];
-    args.extend(scan.iter().cloned());
+    args.extend(inputs.files.iter().cloned());
     let jscpd = root.join("duckdb-ext/sql/jscpd.sh");
     let log_file = File::create(&log).map_err(|e| e.to_string())?;
     let status = run_logged(capped(&cap, &jscpd, &args), Stdio::null(), log_file)?;
@@ -215,8 +266,8 @@ pub fn index(root: &Path, repo: &Path, tool_memory_max: Option<&str>) -> Result<
         return Err(failed("jscpd", status, &cap, &log));
     }
     eprintln!(
-        "jscpd ({}): {:.1} s -> {} (log {})",
-        scan.join(" "),
+        "jscpd ({} files): {:.1} s -> {} (log {})",
+        inputs.files.len(),
         start.elapsed().as_secs_f64(),
         out.join("jscpd").display(),
         log.display()
@@ -227,31 +278,51 @@ pub fn index(root: &Path, repo: &Path, tool_memory_max: Option<&str>) -> Result<
     if !(ra.contains('/') && ra_path.is_file() || on_path(&ra)) {
         return Err("rust-analyzer not found (set RUST_ANALYZER)".to_owned());
     }
-    let start = Instant::now();
-    let log = out.join("index.scip.log");
-    let tmp = out.join("index.scip.tmp");
-    let args = vec![
-        "scip".to_owned(),
-        ".".to_owned(),
-        "--output".to_owned(),
-        tmp.display().to_string(),
-    ];
-    let log_file = File::create(&log).map_err(|e| e.to_string())?;
-    let stdout = Stdio::from(log_file.try_clone().map_err(|e| e.to_string())?);
-    let mut command = capped(&cap, &ra_path, &args);
-    command.current_dir(repo);
-    let status = run_logged(command, stdout, log_file)?;
-    if !status.success() {
-        return Err(failed("rust-analyzer scip", status, &cap, &log));
+    let scip = out.join("scip");
+    std::fs::create_dir_all(&scip).map_err(|e| e.to_string())?;
+    let names: Vec<String> = inputs.workspaces.iter().map(|w| index_name(w)).collect();
+    for (workspace, name) in inputs.workspaces.iter().zip(&names) {
+        let start = Instant::now();
+        let log = logs.join(format!("{name}.log"));
+        let tmp = scip.join(format!("{name}.tmp"));
+        let args = vec![
+            "scip".to_owned(),
+            ".".to_owned(),
+            "--output".to_owned(),
+            tmp.display().to_string(),
+        ];
+        let log_file = File::create(&log).map_err(|e| e.to_string())?;
+        let stdout = Stdio::from(log_file.try_clone().map_err(|e| e.to_string())?);
+        let mut command = capped(&cap, &ra_path, &args);
+        command.current_dir(repo.join(workspace));
+        let status = run_logged(command, stdout, log_file)?;
+        let shown = if workspace.is_empty() { "." } else { workspace };
+        if !status.success() {
+            return Err(failed(
+                &format!("rust-analyzer scip in {shown}"),
+                status,
+                &cap,
+                &log,
+            ));
+        }
+        let index = scip.join(name);
+        std::fs::rename(&tmp, &index).map_err(|e| e.to_string())?;
+        eprintln!(
+            "rust-analyzer scip ({shown}): {:.1} s -> {} (log {})",
+            start.elapsed().as_secs_f64(),
+            index.display(),
+            log.display()
+        );
     }
-    let index = out.join("index.scip");
-    std::fs::rename(&tmp, &index).map_err(|e| e.to_string())?;
-    eprintln!(
-        "rust-analyzer scip: {:.1} s -> {} (log {})",
-        start.elapsed().as_secs_f64(),
-        index.display(),
-        log.display()
-    );
+    // The indexes of workspaces that are gone (or no longer hold a source file).
+    for entry in std::fs::read_dir(&scip).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let file = entry.file_name().to_string_lossy().into_owned();
+        if file.ends_with(".scip") && !names.contains(&file) {
+            std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+            eprintln!("removed {}", entry.path().display());
+        }
+    }
     Ok(())
 }
 
@@ -266,5 +337,26 @@ mod tests {
         assert_eq!(to_bytes("1.5k"), Some(1536));
         assert_eq!(to_bytes("8 GB"), None);
         assert_eq!(to_bytes("G"), None);
+    }
+
+    #[test]
+    fn workspaces_and_their_index_names() {
+        assert!(declares_workspace(
+            "[package]\nname = \"a\"\n\n[workspace]\n"
+        ));
+        assert!(declares_workspace(
+            "[workspace.package]\nedition = \"2024\"\n"
+        ));
+        assert!(!declares_workspace(
+            "[package]\nname = \"a\"\n# [workspace]\n"
+        ));
+        assert_eq!(index_name(""), "root.scip");
+        assert_eq!(
+            index_name("duckdb-ext/code-db"),
+            "ws-duckdb-ext+code-db.scip"
+        );
+        assert!(under("src/lib.rs", ""));
+        assert!(under("tools/a/src/lib.rs", "tools/a"));
+        assert!(!under("tools/ab/src/lib.rs", "tools/a"));
     }
 }

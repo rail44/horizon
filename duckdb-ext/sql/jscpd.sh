@@ -1,16 +1,17 @@
 #!/bin/sh
-# Produce the two jscpd reports clones.sql reads, for the Rust files of a repository.
+# Produce the two jscpd reports views/clones.sql reads, for the given files of a repository.
 #
-# Usage: duckdb-ext/sql/jscpd.sh REPO OUT_DIR [SCAN_PATH...]
-#   REPO       the repository root (scan paths are relative to it)
-#   OUT_DIR    receives exact/jscpd-report.json and normalized/jscpd-report.json
-#   SCAN_PATH  directories to scan (default: .)
+# Usage: duckdb-ext/sql/jscpd.sh REPO OUT_DIR [PATH...]
+#   REPO     the repository root (paths are relative to it)
+#   OUT_DIR  receives exact/jscpd-report.json and normalized/jscpd-report.json
+#   PATH     files (or directories) to scan; `code-db index` passes the files of the
+#            view `files`, so the settings' scope applies (default: .)
 #
 # Uses the pinned jscpd 5.3.1 of the refactor audit (run
-# `uv run --locked --script scripts/refactor-audit/run.py setup` first) with the
-# audit's settings, once preserving and once normalizing identifiers and literals.
-# --absolute is load-bearing: with several scan paths jscpd 5.3.1 reports names
-# relative to each scan path, which clones.sql cannot map back to the repository.
+# `uv run --locked --script scripts/refactor-audit/run.py setup` first; JSCPD overrides
+# the binary) with the audit's settings, once preserving and once normalizing identifiers
+# and literals. --absolute is load-bearing: with several scan paths jscpd 5.3.1 reports
+# names relative to each scan path, which clones.sql cannot map back to the repository.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)

@@ -4,7 +4,8 @@
 //!
 //! Usage: scip-probe INDEX occurrences|symbols|metadata [--stats]
 //!
-//! Columns are the extension's, in its order. NULL is `\N`; booleans are
+//! Columns are the extension's, in its order, without the trailing
+//! `index_path`. NULL is `\N`; booleans are
 //! `true`/`false`; every string is escaped as the content of a JSON string
 //! (so tabs and newlines cannot split a row), and a list is a JSON array of
 //! strings with no spaces.
@@ -121,7 +122,11 @@ fn main() -> Result<()> {
                 escape(&mut line, &row.enclosing_symbol);
                 line.push('\t');
                 list(&mut line, &row.documentation);
-                line += &format!("\t{}", row.relationship_count);
+                line += &format!("\t{}\t", row.relationship_count);
+                match &row.signature {
+                    Some(signature) => escape(&mut line, signature),
+                    None => line.push_str("\\N"),
+                }
                 writeln!(out, "{line}")?;
                 count += 1;
             }

@@ -329,9 +329,11 @@ fn symbols_of_documents_and_external_symbols() {
     assert_eq!(s.relationship_count, 2);
     assert_eq!(s.display_name, "S");
     assert_eq!(s.enclosing_symbol, "p m/");
+    assert_eq!(s.signature.as_deref(), Some("struct S"));
     assert_eq!(rows[2].symbol, "local 3");
     assert_eq!(kind_name(rows[2].kind), "Variable");
     assert!(rows[2].documentation.is_empty());
+    assert_eq!(rows[2].signature, None);
     let bare = &rows[3];
     assert_eq!(bare.document, None);
     assert_eq!(kind_name(bare.kind), "UnspecifiedKind");

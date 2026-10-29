@@ -3,16 +3,14 @@
 -- Set `repo` (an absolute path to the repository root) before reading this file;
 -- every other parameter has a default and can be set before or after it. Views read
 -- the variables when they are scanned, so changing a variable changes the next query,
--- except `source_files`/`source_paths`, which this file computes once from
--- git_tracked_files: re-read this file (or refresh.sql) to pick up added or removed
--- files and new content ids. File contents are always read live.
+-- except `source_files`/`source_paths` and `scip_indexes`, which this file computes
+-- once: re-read this file (or refresh.sql) to pick up added or removed files, new
+-- content ids and new indexes. File contents are always read live.
 --
 -- The git_history and scip_index paths are relative to the current directory, which must
 -- be the root of the Horizon checkout that built them (duckdb-ext/build.sh). LOAD accepts
 -- only a literal, not getvariable(). The host must allow unsigned extensions.
 
-INSTALL sitting_duck FROM community;
-LOAD sitting_duck;
 LOAD 'duckdb-ext/target/extension/v2.0.0/linux_amd64/git_history.duckdb_extension';
 LOAD 'duckdb-ext/target/extension/v2.0.0/linux_amd64/scip_index.duckdb_extension';
 
@@ -44,15 +42,12 @@ SET temp_directory = coalesce(getvariable('temp_directory'), current_setting('te
 SET VARIABLE include_untracked = coalesce(getvariable('include_untracked'), false);
 -- Optional repository-relative paths to drop, as GLOB operator patterns (`*` crosses `/`).
 SET VARIABLE exclude_patterns = coalesce(getvariable('exclude_patterns'), []::VARCHAR[]);
--- File extension -> language. A file is a source file only when its extension is here;
--- hunks are restricted to the same extensions.
+-- File extension -> language. A file is a source file only when its extension is here.
 SET VARIABLE languages = coalesce(getvariable('languages'), MAP {'rs': 'rust'});
 
--- is_source_file(path, mode): whether a tree entry is a source file: a regular file
+-- is_source_file(path, mode): whether a worktree entry is a source file: a regular file
 -- (mode 100644 or 100755; a symlink's blob is its target path and a submodule's id is a
--- commit, neither the content read_ast parses) with an extension in `languages` and no
--- match in `exclude_patterns`. The current files and an earlier commit's tree
--- (views/snapshot.sql) are scoped by this one rule.
+-- commit) with an extension in `languages` and no match in `exclude_patterns`.
 CREATE OR REPLACE MACRO is_source_file(path, mode) AS
     mode IN ('100644', '100755')
     AND getvariable('languages')[regexp_extract(path, '\.([^./]+)$', 1)] IS NOT NULL
@@ -74,38 +69,33 @@ SET VARIABLE source_files = (
 SET VARIABLE source_paths = list_transform(getvariable('source_files'),
                                            lambda f: getvariable('repo') || '/' || f.path);
 
--- History: `since` is any revision (history is since..HEAD); unset means all of HEAD.
--- `include_merges` also diffs merges against their first parent.
-SET VARIABLE include_merges = coalesce(getvariable('include_merges'), false);
--- The blob layer (views/blobs.sql) diffs merges against their first parent unless
--- `blob_include_merges` is false, so that every blob of every tree in since..HEAD is in
--- it (a conflict resolution's content enters history only through the merge). The
--- history views keep following include_merges, and so does everything that joins blob
--- sides to hunks (unit_changes, the lineage).
-SET VARIABLE blob_include_merges = coalesce(getvariable('blob_include_merges'), true);
+-- SCIP indexes (views/scip.sql): one per Cargo workspace, written by `code-db index` into
+-- <repo>/target/code-db/scip/. Unset, the list is every *.scip file there, sorted, taken
+-- when this file is read; an empty list leaves the SCIP views empty (every file is then
+-- listed with no units).
+SET VARIABLE scip_indexes = coalesce(getvariable('scip_indexes'), (
+    SELECT coalesce(list(file ORDER BY file), []::VARCHAR[])
+    FROM glob(getvariable('repo') || '/target/code-db/scip/*.scip')
+));
 
--- jscpd JSON reports (duckdb-ext/sql/jscpd.sh). A report's `source` label is the name
--- of the directory that holds it. The files must exist when clones.sql is read:
--- read_json reads them to type the view.
-SET VARIABLE clone_reports = coalesce(getvariable('clone_reports'), [
-    getvariable('repo') || '/target/code-db/jscpd/exact/jscpd-report.json',
-    getvariable('repo') || '/target/code-db/jscpd/normalized/jscpd-report.json']);
+-- jscpd JSON reports (duckdb-ext/sql/jscpd.sh, views/clones.sql). A report's `source`
+-- label is the name of the directory that holds it. Unset, the list is the reports
+-- `code-db index` writes (<repo>/target/code-db/jscpd/{exact,normalized}) that exist when
+-- this file is read; empty, views/clones.sql has no pairs. A listed file must exist.
+SET VARIABLE clone_reports = coalesce(getvariable('clone_reports'), (
+    SELECT coalesce(list(file ORDER BY file), []::VARCHAR[])
+    FROM glob(getvariable('repo') || '/target/code-db/jscpd/*/jscpd-report.json')
+    WHERE regexp_extract(file, '([^/]+)/[^/]+$', 1) IN ('exact', 'normalized')
+));
 
--- Historical blobs (views/blobs.sql): git_changed_blobs writes each changed file's old
--- and new content here, once per blob, as <blob_id>.<extension>.
-SET VARIABLE blob_dir = coalesce(getvariable('blob_dir'), getvariable('repo') || '/target/code-db/blobs');
-
--- SCIP index (views/scip.sql, optional): must exist when views/scip.sql is read.
-SET VARIABLE scip_index = coalesce(getvariable('scip_index'), getvariable('repo') || '/target/code-db/index.scip');
-
--- Persistent cache (refresh.sql): the database file, created when missing.
-SET VARIABLE cache_path = coalesce(getvariable('cache_path'),
-    getvariable('repo') || '/target/code-db/cache.duckdb');
+-- Persistent cache (refresh.sql): the directory of its files, one per state of the
+-- inputs; it must exist when refresh.sql is read.
+SET VARIABLE cache_dir = coalesce(getvariable('cache_dir'), getvariable('repo') || '/target/code-db/cache');
 
 -- The analysed repository's settings (README.md, Settings file), which code-db reads
--- from its `.code-db.toml`. Test files and test attribute names beyond the rules of
--- lang/rust.sql: repository-relative GLOB operator patterns (`*` crosses `/`) and
--- attribute names.
+-- from its `.code-db.toml`. Test files and test attribute names beyond the language's
+-- own rules (views/units.sql): repository-relative GLOB operator patterns (`*` crosses
+-- `/`) and attribute names.
 SET VARIABLE extra_test_paths = coalesce(getvariable('extra_test_paths'), []::VARCHAR[]);
 SET VARIABLE extra_test_attributes = coalesce(getvariable('extra_test_attributes'), []::VARCHAR[]);
 -- The intended layers (views/graph.sql, module_layers): each layer's module patterns

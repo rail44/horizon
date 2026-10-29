@@ -15,7 +15,7 @@
 //! | `Occurrence` | `range = 1` (repeated int32, deprecated), `symbol = 2`, `symbol_roles = 3`, `enclosing_range = 7` (repeated int32, deprecated), oneof `typed_range` { `single_line_range = 8`, `multi_line_range = 9` }, oneof `typed_enclosing_range` { `single_line_enclosing_range = 10`, `multi_line_enclosing_range = 11` } |
 //! | `SingleLineRange` | `line = 1`, `start_character = 2`, `end_character = 3` |
 //! | `MultiLineRange` | `start_line = 1`, `start_character = 2`, `end_line = 3`, `end_character = 4` |
-//! | `SymbolInformation` | `symbol = 1`, `documentation = 3` (repeated), `relationships = 4` (repeated, counted), `kind = 5` (enum `Kind`), `display_name = 6`, `enclosing_symbol = 8` |
+//! | `SymbolInformation` | `symbol = 1`, `documentation = 3` (repeated), `relationships = 4` (repeated, counted), `kind = 5` (enum `Kind`), `display_name = 6`, `signature_documentation = 7` (a `Document`, of which only `text = 5` is read), `enclosing_symbol = 8` |
 //!
 //! Decoding follows protobuf's rules where they matter here: unknown fields,
 //! and known fields with an unexpected wire type, are skipped; a `repeated
@@ -118,6 +118,9 @@ pub struct SymbolRow {
     pub enclosing_symbol: String,
     pub documentation: Vec<String>,
     pub relationship_count: i32,
+    /// The `text` of `signature_documentation`; `None` when the field or its
+    /// text is absent.
+    pub signature: Option<String>,
 }
 
 /// The index's `Metadata` and the counts of its top-level parts.
@@ -524,6 +527,7 @@ fn symbol_information(bytes: &[u8], document: Option<&Arc<str>>) -> Result<Symbo
         enclosing_symbol: String::new(),
         documentation: Vec::new(),
         relationship_count: 0,
+        signature: None,
     };
     for field in Fields::new(bytes) {
         match field? {
@@ -532,6 +536,15 @@ fn symbol_information(bytes: &[u8], document: Option<&Arc<str>>) -> Result<Symbo
             (4, Value::Len(_)) => row.relationship_count += 1,
             (5, Value::Varint(value)) => row.kind = wire::int32(value),
             (6, Value::Len(value)) => row.display_name = wire::string(value)?,
+            // A singular message field seen more than once is merged: a later
+            // text replaces an earlier one, a later message without one keeps it.
+            (7, Value::Len(document)) => {
+                for field in Fields::new(document) {
+                    if let (5, Value::Len(text)) = field? {
+                        row.signature = Some(wire::string(text)?);
+                    }
+                }
+            }
             (8, Value::Len(value)) => row.enclosing_symbol = wire::string(value)?,
             _ => {}
         }

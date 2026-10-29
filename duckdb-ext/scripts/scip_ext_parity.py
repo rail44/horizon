@@ -2,7 +2,8 @@
 
 uv run --with duckdb==2.0.0 python duckdb-ext/scripts/scip_ext_parity.py EXTENSION PROBE INDEX
 
-The rows are formatted as scip-probe prints them (see its module doc).
+The rows are formatted as scip-probe prints them (see its module doc), without the
+extension's trailing index_path.
 """
 
 import json
@@ -39,7 +40,8 @@ def main():
         expected = subprocess.run(
             [probe, index, row_set], check=True, capture_output=True, text=True
         ).stdout.splitlines()
-        result = con.execute(f"SELECT * FROM {function}(?)", [index])
+        literal = "'" + index.replace("'", "''") + "'"
+        result = con.execute(f"SELECT * EXCLUDE (index_path) FROM {function}({literal})")
         actual = []
         while batch := result.fetchmany(100_000):
             actual.extend("\t".join(cell(value) for value in row) for row in batch)

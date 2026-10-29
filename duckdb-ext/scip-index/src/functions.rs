@@ -1,13 +1,16 @@
 //! The DuckDB table functions over [`scip_index_core`].
 //!
-//! `read_scip` and `read_scip_symbols` stream: the global state holds the
-//! core's iterator, which keeps one document of the index in memory, and each
-//! call emits the next chunk of rows, from a single thread so rows keep file
-//! order. `read_scip_metadata` reads the whole file in its global init and
-//! emits its one row.
+//! Each function takes one index path or a list of them and reads the
+//! indexes in list order; every row ends with the path it came from
+//! (`index_path`). `read_scip` and `read_scip_symbols` stream: the global
+//! state holds the core's iterator over the current index, which keeps one
+//! document in memory, and each call emits the next chunk of rows, from a
+//! single thread so rows keep file order. `read_scip_metadata` reads each
+//! whole file when the scan reaches it and emits one row per index.
 
+use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use duckdb_neo::{
     DuckDBType, Error, Result,
@@ -15,13 +18,13 @@ use duckdb_neo::{
     connection::Context,
     data_chunk::DataChunkRef,
     extension::Extension,
-    logical_type::LogicalType,
+    logical_type::{LogicalType, LogicalTypeID},
     signature::{FunctionDocumentationBuilder, FunctionParameter, SignatureBuilder},
     table_function::{
         BindFunctionHandle, ExecColumnInfo, InitColumnData, TableFunctionBuilder,
         TableFunctionCallbacks,
     },
-    types::List,
+    types::{Any, List},
     vector::{Unknown, Vector},
 };
 
@@ -34,7 +37,9 @@ fn scip_error(error: scip::Error) -> Error {
     Error::invalid_input(error.to_string())
 }
 
-/// One table function: its columns, its rows, and how to write a chunk of them.
+/// One table function: its columns, its rows, and how to write a chunk of
+/// them. `columns` lists every column but the trailing `index_path`, which
+/// [`Function`] adds and writes; `write` fills the others.
 trait ScipTable: Send + Sync + 'static {
     type Row: Send + 'static;
     type Rows: Iterator<Item = scip::Result<Self::Row>> + Send + 'static;
@@ -43,20 +48,68 @@ trait ScipTable: Send + Sync + 'static {
 
     fn columns(context: &Context) -> Result<Vec<(&'static str, LogicalType)>>;
     fn rows(path: &Path) -> scip::Result<Self::Rows>;
-    fn write(rows: &[Self::Row], output: &mut DataChunkRef<'_>) -> Result<()>;
+    fn write(rows: &[(Arc<str>, Self::Row)], output: &mut DataChunkRef<'_>) -> Result<()>;
 }
 
 struct Function<T>(std::marker::PhantomData<T>);
 
-/// The index path, resolved at bind time.
+/// The index paths, resolved at bind time.
 pub(crate) struct Params {
-    path: String,
+    paths: Vec<String>,
+}
+
+/// The rows of the indexes still to read, one index at a time.
+struct Scan<T: ScipTable> {
+    pending: VecDeque<String>,
+    current: Option<(Arc<str>, T::Rows)>,
+}
+
+impl<T: ScipTable> Iterator for Scan<T> {
+    type Item = scip::Result<(Arc<str>, T::Row)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some((path, rows)) = &mut self.current {
+                match rows.next() {
+                    Some(row) => return Some(row.map(|row| (path.clone(), row))),
+                    None => self.current = None,
+                }
+            }
+            let path = self.pending.pop_front()?;
+            match T::rows(Path::new(&path)) {
+                Ok(rows) => self.current = Some((path.into(), rows)),
+                Err(error) => return Some(Err(error)),
+            }
+        }
+    }
+}
+
+/// The paths of the first argument: a VARCHAR, or a list of VARCHAR read in
+/// order.
+fn paths_argument(name: &str, argument: Option<&BindArgument>) -> Result<Vec<String>> {
+    let invalid = || {
+        Error::invalid_input(format!(
+            "{name}: path must be a constant, non-NULL path or list of paths"
+        ))
+    };
+    let argument = argument.ok_or_else(invalid)?;
+    let value = argument.value.as_ref().ok_or_else(invalid)?;
+    if argument.logical_type.id()? == LogicalTypeID::DUCKDB_V2_LOGICAL_TYPE_ID_LIST {
+        value
+            .get::<Vec<Option<String>>>()?
+            .ok_or_else(invalid)?
+            .into_iter()
+            .map(|path| path.ok_or_else(invalid))
+            .collect()
+    } else {
+        Ok(vec![value.get::<String>()?.ok_or_else(invalid)?])
+    }
 }
 
 impl<T: ScipTable> TableFunctionCallbacks for Function<T> {
     type BindData = Params;
     type LocalState = ();
-    type GlobalState = Mutex<T::Rows>;
+    type GlobalState = Mutex<Scan<T>>;
 
     fn bind(
         &self,
@@ -64,25 +117,17 @@ impl<T: ScipTable> TableFunctionCallbacks for Function<T> {
         arguments: Vec<BindArgument>,
         bind: BindFunctionHandle<'_>,
     ) -> Result<Params> {
-        let path = arguments
-            .first()
-            .and_then(|argument| argument.value.as_ref())
-            .map(|value| value.get::<String>())
-            .transpose()?
-            .flatten()
-            .ok_or_else(|| {
-                Error::invalid_input(format!(
-                    "{}: path must be a constant, non-NULL path",
-                    T::NAME
-                ))
-            })?;
+        let paths = paths_argument(T::NAME, arguments.first())?;
         // Fail at bind time on a missing or unreadable file.
-        std::fs::File::open(&path)
-            .map_err(|error| Error::invalid_input(format!("{}: {path}: {error}", T::NAME)))?;
+        for path in &paths {
+            std::fs::File::open(path)
+                .map_err(|error| Error::invalid_input(format!("{}: {path}: {error}", T::NAME)))?;
+        }
         for (name, logical_type) in T::columns(context)? {
             bind.add_result_column(name, &logical_type)?;
         }
-        Ok(Params { path })
+        bind.add_result_column("index_path", &varchar(context)?)?;
+        Ok(Params { paths })
     }
 
     fn init_global_state(
@@ -91,8 +136,11 @@ impl<T: ScipTable> TableFunctionCallbacks for Function<T> {
         _context: &Context,
         _columns: InitColumnData<'_>,
     ) -> Result<(Option<Self::GlobalState>, Option<usize>)> {
-        let rows = T::rows(Path::new(&params.path)).map_err(scip_error)?;
-        Ok((Some(Mutex::new(rows)), Some(1)))
+        let scan = Scan::<T> {
+            pending: params.paths.iter().cloned().collect(),
+            current: None,
+        };
+        Ok((Some(Mutex::new(scan)), Some(1)))
     }
 
     fn exec(
@@ -114,6 +162,9 @@ impl<T: ScipTable> TableFunctionCallbacks for Function<T> {
             .take(capacity)
             .collect::<scip::Result<Vec<_>>>()
             .map_err(scip_error)?;
+        let last = output.col_count() - 1;
+        let [index_path] = output.get_vector_array_mut([last])?;
+        strings(index_path, chunk.len(), |i| Some(&*chunk[i].0))?;
         T::write(&chunk, &mut output)
     }
 }
@@ -231,9 +282,9 @@ impl ScipTable for Occurrences {
     type Row = OccurrenceRow;
     type Rows = scip::Occurrences<std::io::BufReader<std::fs::File>>;
     const NAME: &'static str = "read_scip";
-    const DESCRIPTION: &'static str = "One row per occurrence of a SCIP index, in file order: the document's \
-        relative_path, the raw symbol (`local N` for document-local symbols), the 0-based half-open range, \
-        the raw symbol_roles bitmask and one boolean per role, and the enclosing range (NULL when absent).";
+    const DESCRIPTION: &'static str = "One row per occurrence of a SCIP index (or of each index of a list, in \
+        order), in file order: the document's relative_path, the raw symbol (`local N` for document-local symbols), the 0-based half-open range, \
+        the raw symbol_roles bitmask and one boolean per role, and the enclosing range (NULL when absent), and the index's path.";
 
     fn columns(context: &Context) -> Result<Vec<(&'static str, LogicalType)>> {
         let mut columns = vec![
@@ -261,8 +312,8 @@ impl ScipTable for Occurrences {
         scip::occurrences(path)
     }
 
-    fn write(rows: &[OccurrenceRow], output: &mut DataChunkRef<'_>) -> Result<()> {
-        check_columns(output, 18)?;
+    fn write(rows: &[(Arc<str>, OccurrenceRow)], output: &mut DataChunkRef<'_>) -> Result<()> {
+        check_columns(output, 19)?;
         let [
             document,
             symbol,
@@ -284,6 +335,7 @@ impl ScipTable for Occurrences {
             enclosing_end_char,
         ] = output.get_vector_array_mut(std::array::from_fn(|index| index))?;
         let n = rows.len();
+        let rows: Vec<&OccurrenceRow> = rows.iter().map(|(_, row)| row).collect();
         strings(document, n, |i| Some(&*rows[i].document))?;
         strings(symbol, n, |i| Some(rows[i].symbol.as_str()))?;
         ints(start_line, n, |i| Some(rows[i].range.start_line))?;
@@ -326,9 +378,10 @@ impl ScipTable for Symbols {
     type Row = SymbolRow;
     type Rows = scip::Symbols<std::io::BufReader<std::fs::File>>;
     const NAME: &'static str = "read_scip_symbols";
-    const DESCRIPTION: &'static str = "One row per SymbolInformation of a SCIP index, in file order: those of \
-        each document (document is its relative_path) and the external symbols (document is NULL); kind is \
-        the Kind enum's name.";
+    const DESCRIPTION: &'static str = "One row per SymbolInformation of a SCIP index (or of each index of a \
+        list, in order), in file order: those of each document (document is its relative_path) and the external \
+        symbols (document is NULL); kind is the Kind enum's name, signature the text of signature_documentation \
+        (NULL when absent), index_path the index's path.";
 
     fn columns(context: &Context) -> Result<Vec<(&'static str, LogicalType)>> {
         Ok(vec![
@@ -339,6 +392,7 @@ impl ScipTable for Symbols {
             ("enclosing_symbol", varchar(context)?),
             ("documentation", Vec::<String>::logical_type(context)?),
             ("relationship_count", integer(context)?),
+            ("signature", varchar(context)?),
         ])
     }
 
@@ -346,8 +400,8 @@ impl ScipTable for Symbols {
         scip::symbols(path)
     }
 
-    fn write(rows: &[SymbolRow], output: &mut DataChunkRef<'_>) -> Result<()> {
-        check_columns(output, 7)?;
+    fn write(rows: &[(Arc<str>, SymbolRow)], output: &mut DataChunkRef<'_>) -> Result<()> {
+        check_columns(output, 9)?;
         let [
             document,
             symbol,
@@ -356,8 +410,10 @@ impl ScipTable for Symbols {
             enclosing_symbol,
             documentation,
             relationship_count,
-        ] = output.get_vector_array_mut([0, 1, 2, 3, 4, 5, 6])?;
+            signature,
+        ] = output.get_vector_array_mut([0, 1, 2, 3, 4, 5, 6, 7])?;
         let n = rows.len();
+        let rows: Vec<&SymbolRow> = rows.iter().map(|(_, row)| row).collect();
         let kinds: Vec<_> = rows.iter().map(|row| scip::kind_name(row.kind)).collect();
         strings(document, n, |i| rows[i].document.as_deref())?;
         strings(symbol, n, |i| Some(rows[i].symbol.as_str()))?;
@@ -367,7 +423,8 @@ impl ScipTable for Symbols {
             Some(rows[i].enclosing_symbol.as_str())
         })?;
         string_lists(documentation, n, |i| &rows[i].documentation)?;
-        ints(relationship_count, n, |i| Some(rows[i].relationship_count))
+        ints(relationship_count, n, |i| Some(rows[i].relationship_count))?;
+        strings(signature, n, |i| rows[i].signature.as_deref())
     }
 }
 
@@ -377,9 +434,9 @@ impl ScipTable for Metadata {
     type Row = MetadataRow;
     type Rows = std::iter::Once<scip::Result<MetadataRow>>;
     const NAME: &'static str = "read_scip_metadata";
-    const DESCRIPTION: &'static str = "One row: the Metadata of a SCIP index (version is the raw \
+    const DESCRIPTION: &'static str = "One row per index (a path or each path of a list): the Metadata of a SCIP index (version is the raw \
         ProtocolVersion value, text_document_encoding the TextEncoding enum's name) and the counts of its \
-        documents, occurrences and external symbols; reads the whole file.";
+        documents, occurrences and external symbols, and the index's path; reads the whole file.";
 
     fn columns(context: &Context) -> Result<Vec<(&'static str, LogicalType)>> {
         let bigint = || i64::logical_type(context);
@@ -400,8 +457,8 @@ impl ScipTable for Metadata {
         Ok(std::iter::once(Ok(scip::metadata(path)?)))
     }
 
-    fn write(rows: &[MetadataRow], output: &mut DataChunkRef<'_>) -> Result<()> {
-        check_columns(output, 9)?;
+    fn write(rows: &[(Arc<str>, MetadataRow)], output: &mut DataChunkRef<'_>) -> Result<()> {
+        check_columns(output, 10)?;
         let [
             version,
             tool_name,
@@ -414,6 +471,7 @@ impl ScipTable for Metadata {
             external_symbol_count,
         ] = output.get_vector_array_mut([0, 1, 2, 3, 4, 5, 6, 7, 8])?;
         let n = rows.len();
+        let rows: Vec<&MetadataRow> = rows.iter().map(|(_, row)| row).collect();
         let encodings: Vec<_> = rows
             .iter()
             .map(|row| scip::text_encoding_name(row.text_document_encoding))
@@ -435,14 +493,15 @@ impl ScipTable for Metadata {
 
 fn register_one<T: ScipTable>(extension: &Extension) -> Result<()> {
     let signature = SignatureBuilder::new()
-        .param(FunctionParameter::new::<String>("path"))
+        // A VARCHAR or a list of VARCHAR (paths_argument).
+        .param(FunctionParameter::new::<Any>("path"))
         .documentation(
             FunctionDocumentationBuilder::new()
                 .add_category("scip")
                 .description(T::DESCRIPTION)
                 .add_example(
                     "an index written by `rust-analyzer scip`",
-                    format!("SELECT * FROM {}('target/code-db/index.scip')", T::NAME),
+                    format!("SELECT * FROM {}('target/code-db/scip/root.scip')", T::NAME),
                 ),
         );
     TableFunctionBuilder::new(T::NAME, signature, Function::<T>(std::marker::PhantomData))

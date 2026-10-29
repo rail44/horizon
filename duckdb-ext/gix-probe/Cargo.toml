@@ -1,8 +1,0 @@
-[package]
-name = "gix-probe"
-version = "0.1.0"
-edition.workspace = true
-publish = false
-
-[dependencies]
-git_history_core = { path = "../git-history-core" }
