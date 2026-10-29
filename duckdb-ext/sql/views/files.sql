@@ -46,3 +46,34 @@ SELECT file_id, line::INTEGER AS line, text,
        sum(CASE WHEN regexp_full_match(text, '[ \t\r\x0b\x0c]*') THEN 0 ELSE 1 END)
            OVER (PARTITION BY file_id ORDER BY line) AS nonblank_through
 FROM lines;
+
+-- file_ast(file_id, node_id, type, semantic_type, flags, name, qualified_name,
+--          signature_type, parameters, modifiers, annotations, receiver, language,
+--          start_line, end_line, start_column, end_column, start_byte, end_byte, parent_id,
+--          depth, sibling_index, children_count, descendant_count, scope): the complete
+-- tree-sitter syntax tree of every source file, one row per node, as sitting_duck's
+-- read_ast gives it (00_load.sql loads sitting_duck), parsed live. Nothing is filtered:
+-- what to count is decided by the queries. refresh.sql keeps the trees per content id
+-- (blob_id) and parses only the files whose content id it does not hold.
+--
+-- The columns are read_ast's with source := 'full' (columns and byte offsets), without
+-- file_path (file_id instead) and peek. node_id is the node's 0-based position in a
+-- pre-order walk of the file's tree (the root, source_file, is 0), so its descendants are
+-- node_id + 1 .. node_id + descendant_count; parent_id, depth (the root's is 0) and
+-- sibling_index (0-based, among all children, anonymous tokens included) place it in the
+-- tree. type is the tree-sitter node type, of named nodes (`if_expression`) and anonymous
+-- tokens (`if`, `&&`, `?`) alike; tree-sitter's field names and is_named are not given.
+-- Lines are 1-based and inclusive, columns 1-based with the end the column after the last
+-- byte (UTF-8 bytes, as SCIP's positions here), bytes 0-based with the end exclusive.
+-- flags are sitting_duck's bits (is_syntax_only(flags), is_scope(flags), ...);
+-- semantic_type, name, qualified_name, signature_type, parameters, modifiers,
+-- annotations, receiver and scope (the node ids of the enclosing scopes, and their
+-- stack) are sitting_duck's readings of the node in its file. language is the grammar
+-- read_ast chose from the file's extension.
+--
+-- A macro invocation's arguments are a token_tree of tokens (an `if` there is a keyword
+-- token, not an if_expression), and so is a macro_rules! body.
+CREATE OR REPLACE VIEW file_ast AS
+SELECT f.file_id, a.* EXCLUDE (file_path)
+FROM read_ast(getvariable('source_paths'), source := 'full', peek := 'none') a
+JOIN files f ON f.path = substr(a.file_path, length(getvariable('repo')) + 2);

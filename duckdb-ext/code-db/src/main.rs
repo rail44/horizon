@@ -357,22 +357,30 @@ impl Session {
     }
 
     /// Remove the cache files of other states of the inputs (refresh.sql writes
-    /// one file per state), keeping the most recently modified one: the file the
-    /// last read used.
+    /// one file per state, and one `ast-*.duckdb` file of syntax trees per
+    /// syntax key), keeping the most recently modified one of each kind: the
+    /// files the last read used.
     fn prune_cache(&self) {
         let Ok(dir) = std::fs::read_dir(self.out.join("cache")) else {
             return;
         };
-        let mut files: Vec<(std::time::SystemTime, PathBuf)> = dir
+        let mut files: Vec<(bool, std::time::SystemTime, PathBuf)> = dir
             .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().ends_with(".duckdb"))
-            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+            .filter_map(|e| {
+                let trees = e.file_name().to_string_lossy().starts_with("ast-");
+                Some((trees, e.metadata().ok()?.modified().ok()?, e.path()))
+            })
             .collect();
         files.sort();
-        files.pop();
-        for (_, path) in files {
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_file(path.with_extension("duckdb.wal"));
+        let newest: Vec<usize> = (0..files.len())
+            .filter(|&i| files.get(i + 1).is_none_or(|next| next.0 != files[i].0))
+            .collect();
+        for (i, (_, _, path)) in files.iter().enumerate() {
+            if !newest.contains(&i) {
+                let _ = std::fs::remove_file(path);
+                let _ = std::fs::remove_file(path.with_extension("duckdb.wal"));
+            }
         }
     }
 

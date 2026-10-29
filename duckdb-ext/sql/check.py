@@ -63,8 +63,9 @@ VIEW_FILES = [
     "views/quality.sql",
 ]
 REFRESH_FILE = "refresh.sql"
-# The layers refresh.sql copies, in its order.
-CACHED_VIEWS = ["scip_occurrences", "scip_symbols", "units", "unit_ast", "unit_occurrences", "symbol_units",
+# The views refresh.sql points at its copies, in its order (file_ast at the syntax trees
+# it keeps per content id), and unit_ast, a view over file_ast compared with them.
+CACHED_VIEWS = ["file_ast", "scip_occurrences", "scip_symbols", "units", "unit_ast", "unit_occurrences", "symbol_units",
                 "unit_references", "unit_edges", "unit_ancestors", "impls", "impl_targets", "unit_impl_type",
                 "modules", "unit_module", "module_edges", "unit_scope", "unit_fan_in", "unit_fan_out",
                 "unit_reference_status", "unit_debt_markers", "unit_complexity"]
@@ -176,12 +177,13 @@ def query(con, name, **variables):
 
 
 def read_refresh(con):
-    """Read refresh.sql; return (wall seconds, 'built' or 'kept', the cache file)."""
+    """Read refresh.sql; return (wall seconds, 'built' or 'kept', the cache file, (files
+    parsed, nodes parsed, content ids dropped) of the syntax trees' refresh)."""
     start = time.perf_counter()
     result = con.execute((SQL_DIR / REFRESH_FILE).read_text()).fetchall()
     wall = time.perf_counter() - start
-    cache_file, state, _ = result[-1]
-    return wall, state, cache_file
+    cache_file, state, _, files_parsed, nodes_parsed, dropped = result[-1]
+    return wall, state, cache_file, (files_parsed, nodes_parsed, dropped)
 
 
 def snapshot_live(con):
@@ -222,13 +224,21 @@ def refresh_against_live(con):
     snapshot_live(con)
     live_queries = {q: sorted(rows(con, query_sql(q)), key=repr) for q in QUERIES}
     live_quality = sorted(rows(con, "SELECT * FROM unit_quality"), key=repr)
-    wall, state, cache_file = read_refresh(con)
+    wall, state, cache_file, ast = read_refresh(con)
     diffs = diff_from_live(con)
     assert not diffs, f"cached layers differ from live: {diffs}"
     for q in QUERIES:
         assert sorted(rows(con, query_sql(q)), key=repr) == live_queries[q], f"{q} differs after refresh"
     assert sorted(rows(con, "SELECT * FROM unit_quality"), key=repr) == live_quality, "unit_quality differs"
-    return wall, state, cache_file
+    return wall, state, cache_file, ast
+
+
+def cached_rows(con):
+    """{name: sorted rows} of every cached view, every query and unit_quality."""
+    result = {view: sorted(rows(con, f"SELECT * FROM {view}"), key=repr) for view in CACHED_VIEWS}
+    result.update({q: sorted(rows(con, query_sql(q)), key=repr) for q in QUERIES})
+    result["unit_quality"] = sorted(rows(con, "SELECT * FROM unit_quality"), key=repr)
+    return result
 
 
 # --- fixture ---------------------------------------------------------------------
@@ -587,17 +597,34 @@ def check_fixture(print_only=False):
             return
         assert_fixture(con, repo)
         # Live and cached agree; a second read keeps the file; an edit builds another.
-        wall, state, first = refresh_against_live(con)
+        wall, state, first, ast = refresh_against_live(con)
         assert state == "built", state
+        files = rows(con, "SELECT count(*) FROM files")[0][0]
+        assert (ast[0], ast[2]) == (files, 0) and ast[1] == rows(con, "SELECT count(*) FROM file_ast")[0][0], ast
         assert_fixture(con, repo)
         read_views(con)
-        _, state, again = read_refresh(con)
-        assert (state, again) == ("kept", first), (state, again, first)
+        _, state, again, ast = read_refresh(con)
+        assert (state, again, ast) == ("kept", first, (0, 0, 0)), (state, again, first, ast)
         assert_error(con, (SQL_DIR / REFRESH_FILE).read_text(), "the views read a cache already")
+        # An edit builds another cache file and parses only the edited file: its new
+        # content id is parsed, its old one dropped, and every row equals a cold build.
         write(repo, "shapes/src/rect.rs", SHAPES_RECT + "\npub fn added() {}\n")
         read_views(con)
-        _, state, edited = refresh_against_live(con)
+        _, state, edited, ast = refresh_against_live(con)
         assert state == "built" and edited != first, (state, edited, first)
+        rect_nodes = rows(con, "SELECT count(*) FROM file_ast JOIN files USING (file_id) "
+                               "WHERE path = 'shapes/src/rect.rs'")[0][0]
+        assert ast == (1, rect_nodes, 1), (ast, rect_nodes)
+        with tempfile.TemporaryDirectory(prefix="code-db-cold-") as cold_dir:
+            cold = connect(repo, {**FIXTURE_VARIABLES, "cache_dir": sql_literal(cold_dir),
+                                  "path": "'shapes/src/rect.rs'", "unit_kind": "'function'",
+                                  "qualified_name": "'ring'"}, FIXTURE_LAYERS)
+            _, state, _, ast = read_refresh(cold)
+            assert state == "built" and ast[0] == files, (state, ast)
+            refreshed = cached_rows(con)
+            for name, cold_rows in cached_rows(cold).items():
+                assert refreshed[name] == cold_rows, f"{name}: the refreshed cache differs from a cold build"
+            cold.close()
         assert rows(con, "SELECT count(*) FROM units WHERE qualified_name = 'added'") == [(0,)], \
             "the index describes the tree it was made from"
         # Without indexes and reports the views exist and are empty; the files are listed.
@@ -709,16 +736,19 @@ FLOW_FILES = {
 FLOW_CHECKED = [
     ("unit_complexity", "SELECT u.qualified_name, u.kind, c.* EXCLUDE (unit_id) FROM unit_complexity c "
                         "JOIN units u USING (unit_id) ORDER BY u.unit_id"),
-    # Each tree is whole: its root is a source_file spanning the unit's lines, nothing
-    # failed to parse, and an enclosing unit's tree holds the nodes of the units nested in
-    # it, which its own nodes (unit_own_ast) leave out.
+    # Each tree is whole: its top (depth 0) is the item's run of siblings spanning the
+    # unit's lines (the file's source_file for the file module), nothing failed to parse,
+    # and an enclosing unit's tree holds the nodes of the units nested in it, which its own
+    # nodes (unit_own_ast) leave out.
     ("trees", "SELECT u.qualified_name, count(*) AS nodes, "
-              "count(*) FILTER (WHERE a.node_id = 0 AND a.type = 'source_file' AND a.depth = 0 "
-              "AND a.file_start_line = u.start_line AND a.file_end_line = u.end_line) AS root, "
+              "string_agg(a.type, ' ' ORDER BY a.node_id) FILTER (WHERE a.depth = 0) AS top, "
+              "min(a.file_start_line) FILTER (WHERE a.depth = 0) = u.start_line "
+              "AND max(a.file_end_line) FILTER (WHERE a.depth = 0) = u.end_line AS spans, "
               "count(*) FILTER (WHERE a.type = 'ERROR' OR a.type LIKE 'MISSING%') AS errors, "
               "count(*) FILTER (WHERE a.type = 'if_expression') AS if_nodes, "
               "(SELECT count(*) FROM unit_own_ast o WHERE o.unit_id = u.unit_id) AS own_nodes "
-              "FROM units u JOIN unit_ast a USING (unit_id) GROUP BY u.unit_id, u.qualified_name ORDER BY u.unit_id"),
+              "FROM units u JOIN unit_ast a USING (unit_id) GROUP BY u.unit_id, u.qualified_name, u.start_line, u.end_line "
+              "ORDER BY u.unit_id"),
     # A macro's arguments are tokens: the `if` of with_macro is a keyword token in a
     # token_tree, pick's is an if_expression; file lines are the file's.
     ("macro_tokens", "SELECT u.qualified_name, a.type, p.type, a.file_start_line FROM unit_ast a "
@@ -751,7 +781,7 @@ def check_flow_fixture(root, print_only=False):
         return
     for cached in (False, True):
         if cached:
-            _, state, _ = refresh_against_live(con)
+            _, state, _, _ = refresh_against_live(con)
             assert state == "built", state
         for title, sql in FLOW_CHECKED:
             actual = checked_rows(con, sql)
@@ -774,17 +804,17 @@ FLOW_EXPECTED = {
         ('picks.pick', 'function', 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1),
     ],
     'trees': [
-        ('flow', 740, 1, 0, 8, 1),
-        ('nested_loop', 98, 1, 0, 3, 98),
-        ('classify', 132, 1, 0, 0, 132),
-        ('chain', 90, 1, 0, 0, 90),
-        ('closures', 133, 1, 0, 1, 133),
-        ('outer', 102, 1, 0, 2, 60),
-        ('inner', 43, 1, 0, 1, 43),
-        ('with_macro', 57, 1, 0, 0, 57),
-        ('while_let', 95, 1, 0, 1, 95),
-        ('picks', 40, 1, 0, 1, 9),
-        ('picks.pick', 32, 1, 0, 1, 32),
+        ('flow', 740, 'source_file', True, 0, 8, 1),
+        ('nested_loop', 97, 'function_item', True, 0, 3, 97),
+        ('classify', 131, 'function_item', True, 0, 0, 131),
+        ('chain', 89, 'function_item', True, 0, 0, 89),
+        ('closures', 132, 'function_item', True, 0, 1, 132),
+        ('outer', 101, 'function_item', True, 0, 2, 59),
+        ('inner', 42, 'function_item', True, 0, 1, 42),
+        ('with_macro', 56, 'function_item', True, 0, 0, 56),
+        ('while_let', 94, 'function_item', True, 0, 1, 94),
+        ('picks', 39, 'mod_item', True, 0, 1, 8),
+        ('picks.pick', 31, 'function_item', True, 0, 1, 31),
     ],
     'macro_tokens': [
         ('with_macro', 'if', 'token_tree', 59),
@@ -1156,7 +1186,7 @@ def check_repo(repo):
 
 def check_refresh_repo(repo):
     con = connect(repo)
-    wall, state, cache_file = refresh_against_live(con)
+    wall, state, cache_file, _ = refresh_against_live(con)
     print(f"refresh: {state} {cache_file} in {wall:.2f} s; every cached layer and query equals live")
 
 
@@ -1168,7 +1198,7 @@ def run_step(repo, step, mode):
     loaded = time.perf_counter()
     refresh = None
     if mode != "live":
-        refresh, _, _ = read_refresh(con)
+        refresh, _, _, _ = read_refresh(con)
     set_dependency_unit(con)
     q_start = time.perf_counter()
     n = len(rows(con, "SELECT * FROM unit_quality" if step == "unit_quality" else query_sql(step)))

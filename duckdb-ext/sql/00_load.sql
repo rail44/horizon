@@ -11,11 +11,12 @@
 -- be the root of the Horizon checkout that built them (duckdb-ext/build.sh). LOAD accepts
 -- only a literal, not getvariable(). The host must allow unsigned extensions.
 --
--- sitting_duck (a community extension: tree-sitter grammars and parse_ast_list) gives
--- each unit its syntax tree (views/units.sql, unit_ast). INSTALL downloads it once into
--- the DuckDB extension directory; the version is not pinned (community extensions are
--- served at the repository's current version for this DuckDB release), so refresh.sql
--- puts the loaded version in its cache key. Checked with v1.16.0.
+-- sitting_duck (a community extension: tree-sitter grammars and read_ast) gives each
+-- source file its syntax tree (views/files.sql, file_ast), and each unit the part of it
+-- inside its range (views/units.sql, unit_ast). INSTALL downloads it once into the DuckDB
+-- extension directory; the version is not pinned (community extensions are served at the
+-- repository's current version for this DuckDB release), so refresh.sql puts the loaded
+-- version in its cache keys. Checked with v1.16.0.
 
 INSTALL sitting_duck FROM community;
 LOAD sitting_duck;

@@ -7,9 +7,10 @@ its settings file. The facts are read by table functions: `git_tracked_files` (t
 set, this workspace's `git_history` extension, `../README.md`),
 `read_scip`/`read_scip_symbols`/`read_scip_metadata` (this workspace's `scip_index`, over
 rust-analyzer's indexes), `read_text` (the source text), `read_json` (jscpd's
-reports) and the scalar `parse_ast_list` (the community extension sitting_duck: a
-unit's text as its tree-sitter syntax tree); everything else is a view. Nothing is stored except by `refresh.sql`, a cache
-of the derived layers keyed by the state of their inputs.
+reports) and `read_ast` (the community extension sitting_duck: each source file's
+tree-sitter syntax tree); everything else is a view. Nothing is stored except by
+`refresh.sql`, a cache of the derived layers keyed by the state of their inputs and of
+the syntax trees keyed by file content.
 
 History is not here (owner decision of 2026-10-29: history is added back only when a
 concrete question needs it as an expression in a query). The rebuild around SCIP, the
@@ -247,6 +248,23 @@ across crates (`contract_candidate`, a type referenced from at least `min_crates
 crates, a query parameter) and which duplicates are intended copies
 (`conversion_pair`, two types joined by a conversion impl).
 
+## Files
+
+`views/files.sql` lists the source files (`files`) and reads their text (`sources`,
+`source_lines`) and their syntax trees:
+
+- **`file_ast(file_id, node_id, type, semantic_type, flags, name, qualified_name,
+  signature_type, parameters, modifiers, annotations, receiver, language, start_line,
+  end_line, start_column, end_column, start_byte, end_byte, parent_id, depth,
+  sibling_index, children_count, descendant_count, scope)`**: every source file's
+  complete tree-sitter tree, one row per node, as sitting_duck's `read_ast` gives it with
+  `source := 'full'` (lines, columns in UTF-8 bytes as SCIP's, byte offsets), without
+  `file_path` and `peek`. `node_id` is the pre-order position in the file's tree (the
+  root `source_file` is 0; descendants are `node_id + 1 .. node_id + descendant_count`).
+  Read live by default; `refresh.sql` keeps it per content id (Cache). sitting_duck's
+  readings are of the node in its file: `modifiers` of an item there can hold attributes
+  of the items before it (the record above has examples); no view reads them.
+
 ## SCIP
 
 `views/scip.sql` reads every index of `scip_indexes` (default: the `*.scip` files of
@@ -328,15 +346,19 @@ the owner accepted on 2026-10-29: 「scipは推奨の形で導入しましょう
   line is led by `#[cfg(test)]` (the header: the nearest line above the member starting
   an `impl` that names `impl_type`, outside the bodies of other functions,
   `impl_header_line`); or a unit containing it is a test.
-- **`unit_ast`**: every unit's complete tree-sitter syntax tree, one row per node, from
-  sitting_duck's `parse_ast_list` over the unit's whole lines parsed alone (a file
-  module's text is the whole file, an enclosing unit's tree holds what it contains). The
-  node columns are the function's (node id in pre-order, type, parent, depth, sibling
-  index, descendant count, flags, sitting_duck's semantic readings), without `peek`;
-  lines are relative to the unit and absolute in the file, and there are no columns
-  (`parse_ast_list` gives none). Nothing is filtered: what counts is decided in the
-  queries (`unit_complexity`). Macro arguments and `macro_rules!` bodies are token trees.
-  The design and measurements are in `docs/research/code-db-unit-ast-2026-10-29.md`.
+- **`unit_ast`**: every unit's syntax tree, one row per node: the nodes of its file's
+  tree (`file_ast`, Files below) inside the unit's range, compared by line and column; a
+  file module's tree is its file's whole tree, and an enclosing unit's tree holds what it
+  contains. The top of a unit's tree is the run of sibling nodes its range covers (leading
+  doc comments and attributes are siblings of the item in tree-sitter), at depth 0.
+  `node_id`, `parent_id` and the `scope_*` columns are the file tree's node ids; lines
+  are relative to the unit and absolute in the file, columns and bytes the file's.
+  Nothing is filtered: what counts is decided in the queries (`unit_complexity`). Macro
+  arguments and `macro_rules!` bodies are token trees. Parsing each unit's text alone
+  (the previous shape, `docs/research/code-db-unit-ast-2026-10-29.md`) gave the same
+  trees but for the alone parse's `source_file` root and six trailing comments on a
+  constant's line; the comparison and measurements are in
+  `docs/research/code-db-file-ast-cache-2026-10-30.md`.
 
 ## Graph
 
@@ -452,26 +474,40 @@ Deferred: an exhaustive-`match` check.
 every other view and every query keeps its text. Materialization is only a cache: the
 views compute the same rows live (`check.py refresh` compares them).
 
-- **Key.** `repo`, the file snapshot (paths and content ids, taken again), each index's
-  path and content hash, the two test variables, the loaded sitting_duck version, and the
-  text of every view and macro.
+- **Syntax trees.** `file_ast` is kept across input states, per file content:
+  `<cache_dir>/ast-<md5 of the syntax key>.duckdb` (attached as `ast_cache`, the key the
+  loaded sitting_duck version and the table's layout version) holds `read_ast`'s rows of
+  every content id (`blob_id`) parsed so far. Each read drops the rows of content ids no
+  longer in `files`, passes `read_ast` only the files whose content id it does not hold
+  (one path per content id; a new file is created from all of them), stops when a file
+  then has no tree, and points `file_ast` at the table; `unit_ast` stays a view over it.
+  `ast_cache.parses(key, parsed_at, files_parsed, nodes_parsed, blobs_dropped, seconds)`
+  records each read that parsed or dropped something, and the last result of
+  `refresh.sql` gives the same three counts of its own read.
+- **Key** of the other layers. `repo`, the file snapshot (paths and content ids, taken
+  again), each index's path and content hash, the two test variables, the loaded
+  sitting_duck version, and the text of every view and macro.
   The copies of one key are the file `<cache_dir>/<md5 of the key>.duckdb` (default
   `<repo>/target/code-db/cache/`, which must exist; `code-db` creates it), attached as
   `cache`. A file that exists already holds its layers (each is created whole), so a
   read with an unchanged state only attaches it; any change of the key builds a new file
-  from scratch. `code-db` removes the files of other keys after a read.
+  from scratch. `code-db` removes the files of other keys after a read, and the
+  `ast-*.duckdb` files of other syntax keys.
 - **Layers**, in order, each built from the copies before it: `scip_occurrences`,
-  `scip_symbols`, `units`, `unit_ast`, `unit_occurrences`, `symbol_units`, `unit_references`,
+  `scip_symbols`, `units`, `unit_occurrences`, `symbol_units`, `unit_references`,
   `unit_edges`, `unit_ancestors`, `impls`, `impl_targets`, `unit_impl_type`, `modules`,
   `unit_module`, `module_edges`, `unit_scope`, `unit_fan_in`, `unit_fan_out`,
   `unit_reference_status`, `unit_debt_markers`, `unit_complexity`. Views that read a query variable or the
   settings' tables (cycles, layers) and the clone views stay live, over the copies.
-- **Measured** on this repository (the record has the runs): building the copies takes
-  1.0–2.3 s without `unit_ast`, 43–45 s with it (parsing 9,335 units into 3.4 M nodes,
-  peak RSS 2.6 GB; the file grows to 90 MiB, 66 MiB of it the trees); with them, `unit_quality` takes 0.13–0.15 s instead of 16–19 s live, and
-  each query at most 0.25 s (live: 0.4–19 s, peak RSS up to 7.7 GB); a `code-db query`
-  process spends 1–3.5 s loading
-  (the file snapshot twice, the key's index hash).
+- **Measured** on this repository (`docs/research/code-db-file-ast-cache-2026-10-30.md`
+  has the runs): a cold build, syntax trees included, takes 2.0–2.2 s (`read_ast` over
+  537 files into 1.58 M nodes in 0.7–0.8 s of it; peak RSS 1.6 GB; the trees' file is
+  80–83 MiB on disk, 42 MiB of it in use, the other layers' 21 MiB); after an edit of one
+  file the read takes 1.2–1.7 s (0.07–0.10 s of it parsing that file, the rest the other
+  layers' new key), with nothing changed 0.12–0.17 s. With the copies, `unit_quality`
+  takes 0.13–0.15 s instead of 16–19 s live, and each query at most 0.25 s (live: 0.4–19
+  s, peak RSS up to 7.7 GB); a `code-db query` process spends 1–3.5 s loading (the file
+  snapshot twice, the key's index hash).
 - Read it once per session after the view files; reading it again needs the view files
   first (it refuses while the views read a cache).
 
@@ -506,9 +542,12 @@ without indexes and reports. Last, a second repository, one crate `flow` of know
 control-flow shapes (a nested `if` in a loop with an `else if`, a `match` with guards, a
 nested `match` and `&&`/`||`, `?` chains, closures with branches, a fn inside a fn with
 a bare `loop` and a let-else in the outer one, macro invocations holding `if`, a `while
-let` with a let chain, an inline module), asserts `unit_complexity`, the trees' roots,
+let` with a let chain, an inline module), asserts `unit_complexity`, the trees' tops,
 sizes and own nodes, the macro arguments as tokens, and the `complexity` query, live and
-through `refresh.sql`.
+through `refresh.sql`. The syntax trees' cache is checked in the first repository: the
+first read parses every file, the kept read none, and after the edit only the edited
+file is parsed (its node count inserted, its old content id dropped), with every cached
+view, query and `unit_quality` equal to a cold build in another cache directory.
 
 Every connection takes its limits from `code-db limits REPO --json` (the binary
 `duckdb-ext/code-db/target/release/code-db` that `duckdb-ext/build.sh` builds, or
@@ -529,14 +568,14 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | File | Defines |
 | --- | --- |
 | `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
-| `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)` |
+| `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (SCIP) |
 | `views/units.sql` | the macros `impl_base_name`, `impl_generic_arg`; `derived_units`, `units`, `unit_ast` (Units) |
 | `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `modules`, `unit_module`, `module_edges`, `crate_edges`, `module_cycle_edges`, `module_cycles`, `module_layer_matches`, `module_layers`, the macro `graph_layer_violation`, `module_layer_violations`, `crate_cycles` (Graph) |
 | `views/clones.sql` | `clone_pairs`, `clone_sides` |
 | `views/quality.sql` | `unit_scope`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `unit_complexity`, `unit_quality` (Axes) |
 | `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `module_graph`, `module_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
-| `refresh.sql` | the cache (Cache) |
+| `refresh.sql` | the cache, the syntax trees' included (Cache) |
 | `jscpd.sh` | the two jscpd reports `views/clones.sql` reads |
 | `empty-jscpd-report.json` | a report with no duplicates, always in `clone_pairs`' list |
 | `../code-db/` | the launcher, `code-db` (Running) |

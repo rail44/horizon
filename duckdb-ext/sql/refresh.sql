@@ -6,17 +6,29 @@
 -- live again: re-read the view files. Reading this file while the views already read a
 -- cache is an error (re-read the view files first).
 --
--- Key. The inputs every cached layer derives from: `repo`, the file snapshot
+-- Syntax trees. file_ast (views/files.sql) is kept across input states, per file content:
+-- the table ast_cache.file_ast holds read_ast's rows of each content id (blob_id) parsed
+-- so far, in the file <cache_dir>/ast-<md5 of the syntax key>.duckdb, attached as
+-- `ast_cache`; the syntax key is sitting_duck's loaded version (its grammars make the
+-- trees) and the layout's version, so a new version starts an empty file. Each read
+-- drops the rows of content ids no longer in `files`, passes read_ast only the files
+-- whose content id is not held (one path per content id), checks that every file's tree
+-- is then held, and points file_ast at the table; unit_ast (views/units.sql) stays a view
+-- over it. ast_cache.parses(key, parsed_at, files_parsed, nodes_parsed,
+-- blobs_dropped, seconds) records each read that parsed or dropped something.
+-- `code-db` removes the ast-*.duckdb files of other syntax keys after a read.
+--
+-- Key. The inputs every other cached layer derives from: `repo`, the file snapshot
 -- (source_files: paths and content ids, taken again here as 00_load.sql takes it), each
 -- SCIP index's path and content hash, the test settings (extra_test_paths,
--- extra_test_attributes), the loaded sitting_duck version (its grammars make unit_ast),
--- and the text of every view and macro of the view files. The cache of one key is the file <cache_dir>/<md5 of the key>.duckdb, attached as `cache`;
+-- extra_test_attributes), the loaded sitting_duck version (its grammars make the trees
+-- unit_complexity counts), and the text of every view and macro of the view files. The cache of one key is the file <cache_dir>/<md5 of the key>.duckdb, attached as `cache`;
 -- a file that exists already holds the layers (each is created whole or not at all, so
 -- an interrupted build leaves only complete tables, and the next read creates the rest).
 -- Files of other keys are left in place; `code-db` removes them after a read.
 --
 -- Layers, in the order they are built, each from the copies before it: scip_occurrences,
--- scip_symbols (views/scip.sql); units, unit_ast (views/units.sql); unit_occurrences, symbol_units,
+-- scip_symbols (views/scip.sql); units (views/units.sql); unit_occurrences, symbol_units,
 -- unit_references, unit_edges, unit_ancestors, impls, impl_targets, unit_impl_type,
 -- modules, unit_module, module_edges (views/graph.sql); unit_scope, unit_fan_in,
 -- unit_fan_out, unit_reference_status, unit_debt_markers, unit_complexity
@@ -69,6 +81,68 @@ CREATE TABLE IF NOT EXISTS cache.meta (key VARCHAR, repo VARCHAR, built_at TIMES
     seconds DOUBLE, layers STRUCT(name VARCHAR, row_count BIGINT)[]);
 SET VARIABLE refresh_built = (SELECT count(*) > 0 FROM cache.meta);
 
+-- Syntax trees, per content id (above).
+SET VARIABLE ast_t_start = epoch(now());
+SET VARIABLE ast_key = 'file_ast 1, sitting_duck '
+    || (SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'sitting_duck' AND loaded);
+SET VARIABLE ast_file = getvariable('cache_dir') || '/ast-' || md5(getvariable('ast_key')) || '.duckdb';
+DETACH DATABASE IF EXISTS ast_cache;
+ATTACH getvariable('ast_file') AS ast_cache;
+-- One path per content id not held: all of them for a new file, which creates the table
+-- from them, then those the table does not hold. read_ast refuses an empty list, so a
+-- path that does not exist follows them (ignore_errors: no file is read for it).
+SET VARIABLE ast_stub = getvariable('ast_file') || '.no-such-file.rs';
+SET VARIABLE ast_new = NOT EXISTS (SELECT 1 FROM duckdb_tables()
+                                   WHERE database_name = 'ast_cache' AND table_name = 'file_ast');
+SET VARIABLE ast_parse_paths = (
+    SELECT coalesce(list(getvariable('repo') || '/' || path ORDER BY path), []::VARCHAR[])
+    FROM (SELECT min(path) AS path FROM files GROUP BY blob_id)
+);
+CREATE TABLE IF NOT EXISTS ast_cache.file_ast AS
+SELECT f.blob_id, a.* EXCLUDE (file_path)
+FROM read_ast(getvariable('ast_parse_paths') || [getvariable('ast_stub')], source := 'full', peek := 'none',
+              ignore_errors := true) a
+JOIN files f ON f.path = substr(a.file_path, length(getvariable('repo')) + 2);
+CREATE TABLE IF NOT EXISTS ast_cache.parses (key VARCHAR, parsed_at TIMESTAMP, files_parsed INTEGER,
+    nodes_parsed BIGINT, blobs_dropped INTEGER, seconds DOUBLE);
+-- The trees (root nodes) and rows held before this read, after the drop, and at the end.
+SET VARIABLE ast_start = CASE WHEN getvariable('ast_new') THEN {'trees': 0, 'nodes': 0}
+    ELSE (SELECT {'trees': count(*) FILTER (WHERE node_id = 0), 'nodes': count(*)} FROM ast_cache.file_ast) END;
+DELETE FROM ast_cache.file_ast WHERE blob_id NOT IN (SELECT blob_id FROM files);
+SET VARIABLE ast_kept = CASE WHEN getvariable('ast_new') THEN {'trees': 0, 'nodes': 0}
+    ELSE (SELECT {'trees': count(*) FILTER (WHERE node_id = 0), 'nodes': count(*)} FROM ast_cache.file_ast) END;
+SET VARIABLE ast_parse_paths = (
+    SELECT coalesce(list(getvariable('repo') || '/' || path ORDER BY path), []::VARCHAR[])
+    FROM (SELECT min(path) AS path FROM files
+          WHERE blob_id NOT IN (SELECT blob_id FROM ast_cache.file_ast WHERE node_id = 0)
+          GROUP BY blob_id)
+);
+INSERT INTO ast_cache.file_ast
+SELECT f.blob_id, a.* EXCLUDE (file_path)
+FROM read_ast(getvariable('ast_parse_paths') || [getvariable('ast_stub')], source := 'full', peek := 'none',
+              ignore_errors := true) a
+JOIN files f ON f.path = substr(a.file_path, length(getvariable('repo')) + 2);
+SET VARIABLE ast_end = (SELECT {'trees': count(*) FILTER (WHERE node_id = 0), 'nodes': count(*)} FROM ast_cache.file_ast);
+SET VARIABLE ast_files_parsed = getvariable('ast_end').trees - getvariable('ast_kept').trees;
+SET VARIABLE ast_nodes_parsed = getvariable('ast_end').nodes - getvariable('ast_kept').nodes;
+SET VARIABLE ast_dropped = getvariable('ast_start').trees - getvariable('ast_kept').trees;
+-- ignore_errors also skips a file read_ast cannot read: stop instead.
+SELECT CASE WHEN EXISTS (SELECT 1 FROM files f
+                         WHERE f.blob_id NOT IN (SELECT blob_id FROM ast_cache.file_ast WHERE node_id = 0))
+    THEN error('refresh.sql: read_ast gave no tree for '
+               || (SELECT string_agg(path, ', ' ORDER BY path) FROM files
+                   WHERE blob_id NOT IN (SELECT blob_id FROM ast_cache.file_ast WHERE node_id = 0)))
+END;
+INSERT INTO ast_cache.parses
+SELECT getvariable('ast_key'), now()::TIMESTAMP, getvariable('ast_files_parsed'),
+       getvariable('ast_nodes_parsed'), getvariable('ast_dropped'),
+       round(epoch(now()) - getvariable('ast_t_start'), 3)
+WHERE getvariable('ast_files_parsed') > 0 OR getvariable('ast_dropped') > 0;
+CHECKPOINT ast_cache;
+CREATE OR REPLACE VIEW file_ast AS
+SELECT f.file_id, a.* EXCLUDE (blob_id)
+FROM ast_cache.file_ast a JOIN files f USING (blob_id);
+
 -- Each layer: copy it when the file does not hold it yet, then read the copy.
 CREATE TABLE IF NOT EXISTS cache.scip_occurrences AS SELECT * FROM scip_occurrences;
 CREATE OR REPLACE VIEW scip_occurrences AS SELECT * FROM cache.scip_occurrences;
@@ -76,8 +150,6 @@ CREATE TABLE IF NOT EXISTS cache.scip_symbols AS SELECT * FROM scip_symbols;
 CREATE OR REPLACE VIEW scip_symbols AS SELECT * FROM cache.scip_symbols;
 CREATE TABLE IF NOT EXISTS cache.units AS SELECT * FROM units;
 CREATE OR REPLACE VIEW units AS SELECT * FROM cache.units;
-CREATE TABLE IF NOT EXISTS cache.unit_ast AS SELECT * FROM unit_ast;
-CREATE OR REPLACE VIEW unit_ast AS SELECT * FROM cache.unit_ast;
 CREATE TABLE IF NOT EXISTS cache.unit_occurrences AS SELECT * FROM unit_occurrences;
 CREATE OR REPLACE VIEW unit_occurrences AS SELECT * FROM cache.unit_occurrences;
 CREATE TABLE IF NOT EXISTS cache.symbol_units AS SELECT * FROM symbol_units;
@@ -121,7 +193,11 @@ SELECT getvariable('refresh_key'), getvariable('repo'), now()::TIMESTAMP,
 WHERE NOT getvariable('refresh_built');
 CHECKPOINT cache;
 
--- The cache this read used and whether it built it.
+-- The cache this read used and whether it built it, and what the syntax trees' refresh
+-- parsed and dropped.
 SELECT getvariable('refresh_file') AS cache_file,
        CASE WHEN getvariable('refresh_built') THEN 'kept' ELSE 'built' END AS cache,
-       round(epoch(now()) - getvariable('refresh_t_start'), 3) AS seconds;
+       round(epoch(now()) - getvariable('refresh_t_start'), 3) AS seconds,
+       getvariable('ast_files_parsed') AS ast_files_parsed,
+       getvariable('ast_nodes_parsed') AS ast_nodes_parsed,
+       getvariable('ast_dropped') AS ast_blobs_dropped;
