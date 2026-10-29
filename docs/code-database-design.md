@@ -737,8 +737,13 @@ also counts rustfmt's wrapping). Nothing was built. Branch counts are not
 in SCIP, but the unit's range text has the keywords; counting them with
 one pattern was offered to the owner as a light text rule, undecided.
 
-**Before/after comparison** ([record](research/code-db-obstacle-diff-2026-10-29.md)):
-`code-db compare AFTER BEFORE [QUERY]` loads BEFORE with the running SQL,
+**Before/after comparison, built and removed** ([record](research/code-db-obstacle-diff-2026-10-29.md)):
+it was built without the owner having confirmed that it is needed — the
+owner's question about its purpose had been answered, not settled, and
+its rebuild was then carried inside a bundled go-ahead — and the owner
+decided to remove it (「前後比較、作れとは言ってない気が」, then
+「外しましょう」). The code was reverted; the record stays as measurement.
+As built, `code-db compare AFTER BEFORE [QUERY]` loaded BEFORE with the running SQL,
 copies its per-side rows (`compare/sides.sql`) into a temporary database,
 attaches it to AFTER and runs `compare/queries/` (`summary`, `units`,
 `unit_axes`, `clones`, `edges`, `cycles`, `layer_violations`). Identity is
