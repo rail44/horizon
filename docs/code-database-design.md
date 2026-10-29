@@ -784,6 +784,24 @@ nesting 0.64 — further from size than every SCIP-only measure. The cache
 build grew from 1–2 s to 43–45 s, nearly all parsing, and any input
 change rebuilds it whole.
 
+**File trees cached by blob id (2026-10-30)**
+([record](research/code-db-file-ast-cache-2026-10-30.md)). Three options
+were compared — parse files once and cut units from the file tree, reuse
+per-unit parses by `(blob_id, range)`, or by an md5 of the unit text —
+and the owner chose the first (「はい。お願いします。」). Pre-check: cut by
+(line, column) — `read_ast` gives UTF-8 byte columns, as SCIP does — the
+subtrees equal the per-unit parses in node types, structure and depth for
+8,797 of 8,803 non-file units (the 6 others: a trailing `//` comment after
+a constant that the old whole-line parse included), all 532 file modules,
+and every `unit_complexity` count. `file_ast` is `read_ast` over `files`,
+cached in its own file keyed by the sitting_duck version, rows keyed by
+`blob_id`; a refresh parses only blob ids not yet cached and drops those no
+longer present. `unit_ast` is a view over it. Results equal the previous
+increment row for row. Cold build 2.1 s instead of 26–28 s; one changed
+file 1.2–1.7 s (0.1 s of parsing); nothing changed 0.1 s. The whole
+update for one changed file is dominated by `code-db index` (86.7 s with
+warm build scripts).
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
