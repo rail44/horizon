@@ -14,7 +14,7 @@ root quality gate does not read it; `./check.sh` is its gate.
 | `scip-index/` | `scip_index.duckdb_extension`: the DuckDB table functions `read_scip`, `read_scip_symbols`, `read_scip_metadata` over `scip-index-core`, each over one index or a list (see "`scip_index`" below) |
 | `scip-probe/` | a binary printing any SCIP function's rows of `scip-index-core` as TSV, compared with the extension by `scripts/scip_ext_parity.py` |
 | `host-check/` | no output; a test that loads both built extensions through the `duckdb` crate (a separate workspace, see below) |
-| `code-db/` | `code-db`, the code database's entry point (`sql/README.md`, Running): reads the analysed repository's `.code-db.toml`, derives DuckDB's limits, runs the indexers (one SCIP index per Cargo workspace, jscpd over the files in scope), and loads the extensions and the SQL views through the `duckdb` crate (a separate workspace, like `host-check/`) |
+| `code-db/` | `code-db`, the code database's entry point (`sql/README.md`, Running): reads the analysed repository's `.code-db.toml`, derives DuckDB's limits, runs the indexers (one SCIP index per Cargo workspace and per Go module, jscpd over the files in scope), and loads the extensions and the SQL views through the `duckdb` crate (a separate workspace, like `host-check/`) |
 
 The history functions (`git_hunks`, `git_commits`, `git_file_changes`,
 `git_changed_blobs`, `git_tree`), their probe `gix-probe` and parity scripts
@@ -48,8 +48,9 @@ Pins:
 | `gix` | 0.90.0, no default features, features `sha1`, `max-performance`, `status` (resolves `gix-status` 0.37.0, `gix-dir` 0.32.0, `gix-filter` 0.36.1, `gix-odb` 0.87.0, `gix-pack` 0.77.0; `status` still pulls `gix-diff` 0.70.0 and `gix-imara-diff` 0.3.2) |
 | `duckdb` (host check only) | `=1.20000.0`, the version the root `Cargo.lock` pins |
 | `scip.proto` (field numbers cited, not vendored) | `scip-code/scip` v0.10.0, commit `1c2b6db7e560d5233c944f36e4ac1377cc6963fc` |
-| `scip` CLI (tests only, never linked) | v0.10.0 `scip-linux-amd64.tar.gz`, sha256 `eeb28ebbff443c01609fb1691809958f3f0c7a8651af689a5bc8560061cd8ab0`, fetched by `scripts/fetch-scip-cli.sh` into `target/tools/scip-v0.10.0/` |
+| `scip` CLI (tests only, never linked) | v0.10.0 `scip-<platform>.tar.gz` (linux-amd64 sha256 `eeb28ebbff443c01609fb1691809958f3f0c7a8651af689a5bc8560061cd8ab0`; the other platforms' digests, from the release's assets, are in the script), fetched by `scripts/fetch-scip-cli.sh` into `target/tools/scip-v0.10.0/` |
 | `rust-analyzer` (tests and measurements) | whatever is on `PATH`; the numbers below are from 1.99.1 (58cf8f9 2026-10-13) |
+| `scip-go` (`code-db index` and its Go test) | whatever is on `PATH` (`SCIP_GO`); checked with 0.2.7 |
 
 What was kept from the template: the `cdylib` with the
 `#[duckdb_entrypoint_c_api_v2]` entrypoint, the release profile (`lto`,
@@ -65,7 +66,8 @@ The footer is written by `append_metadata.py`, our own equivalent of
 `extension-ci-tools/scripts/append_extension_metadata.py` (that repository
 declares no license, so it is not vendored). For the same input and
 arguments it produces a byte-identical file (checked with `cmp` against the
-upstream script at the commit above). Fields: platform `linux_amd64`, DuckDB
+upstream script at the commit above). Fields: platform (the machine's, as
+`build.sh` names it: `linux_amd64`, `linux_arm64`, `osx_arm64`, `osx_amd64`), DuckDB
 version `v2.0.0`, extension version `v<crate version>`, ABI type
 `C_STRUCT_UNSTABLE`.
 
@@ -117,13 +119,25 @@ duckdb-ext/build.sh      # builds and stamps both extensions, then code-db; prin
 duckdb-ext/check.sh      # fetches the scip CLI, fmt, clippy, tests of every member, build.sh, then the host check and code-db's
 ```
 
-Output, in `duckdb-ext/target/extension/v2.0.0/linux_amd64/`:
+Output, in `duckdb-ext/target/extension/v2.0.0/<platform>/` (`linux_amd64`,
+`linux_arm64`, `osx_arm64` or `osx_amd64`, from `uname`), with
+`target/extension/v2.0.0/host` linked to it: the path `sql/00_load.sql`,
+`code-db` and the host check load from.
 `git_history.duckdb_extension` (about 4.7 MB) and
 `scip_index.duckdb_extension` (about 0.6 MB), each with its own footer
 (name, `v<crate version>`, the same platform, DuckDB version and ABI type);
-both link only `libc` and `libgcc_s` dynamically. `check.sh` also needs
-`curl` and `sha256sum` (for `scripts/fetch-scip-cli.sh`) and
-`rust-analyzer` on `PATH` (`rustup component add rust-analyzer`).
+on Linux both link only `libc` and `libgcc_s` dynamically. `check.sh` also needs
+`curl` and `sha256sum` or `shasum` (for `scripts/fetch-scip-cli.sh`) and
+`rust-analyzer` on `PATH` (`rustup component add rust-analyzer`); `scip-go`
+on `PATH` for code-db's Go test, which is skipped without it.
+
+On macOS, Homebrew's `duckdb` (2.0.0) provides both the CLI and `libduckdb`:
+build with `DUCKDB_LIB_DIR=/opt/homebrew/lib` (its library's install name is
+absolute, so no rpath is needed), and point `DUCKDB_CLI` at
+`/opt/homebrew/bin/duckdb` for `code-db`'s non-markdown formats and `shell`.
+The extensions' footer then says `osx_arm64`; the Homebrew CLI and the
+`duckdb` crate (the host check, `code-db`) load them (checked on 2026-10-30;
+`check.py` was not run there).
 
 ## Loading
 
@@ -462,7 +476,7 @@ TSVs for all three functions on all three indexes
 SCIP_INDEX=/abs/target/code-db/scip/root.scip cargo test --release -p scip_index_core \
     --test cli_parity -- --ignored --nocapture
 uv run --with duckdb==2.0.0 python duckdb-ext/scripts/scip_ext_parity.py \
-    "$PWD/duckdb-ext/target/extension/v2.0.0/linux_amd64/scip_index.duckdb_extension" \
+    "$PWD/duckdb-ext/target/extension/v2.0.0/host/scip_index.duckdb_extension" \
     duckdb-ext/target/release/scip-probe target/code-db/scip/root.scip
 ```
 

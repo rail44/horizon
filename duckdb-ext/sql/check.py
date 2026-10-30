@@ -57,6 +57,8 @@ VIEW_FILES = [
     "00_load.sql",
     "views/files.sql",
     "views/scip.sql",
+    "lang/rust.sql",
+    "lang/go.sql",
     "views/units.sql",
     "views/graph.sql",
     "views/clones.sql",

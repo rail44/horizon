@@ -13,8 +13,8 @@
 -- trees) and the layout's version, so a new version starts an empty file. Each read
 -- drops the rows of content ids no longer in `files`, passes read_ast only the files
 -- whose content id is not held (one path per content id), checks that every file's tree
--- is then held, and points file_ast at the table; unit_ast (views/units.sql) stays a view
--- over it. ast_cache.parses(key, parsed_at, files_parsed, nodes_parsed,
+-- is then held, and points file_ast (and go_file_ast, lang/go.sql: its Go files) at the
+-- table; unit_ast (views/units.sql) stays a view over it. ast_cache.parses(key, parsed_at, files_parsed, nodes_parsed,
 -- blobs_dropped, seconds) records each read that parsed or dropped something.
 -- `code-db` removes the ast-*.duckdb files of other syntax keys after a read.
 --
@@ -142,6 +142,8 @@ CHECKPOINT ast_cache;
 CREATE OR REPLACE VIEW file_ast AS
 SELECT f.file_id, a.* EXCLUDE (blob_id)
 FROM ast_cache.file_ast a JOIN files f USING (blob_id);
+CREATE OR REPLACE VIEW go_file_ast AS
+SELECT * FROM file_ast WHERE file_id IN (SELECT file_id FROM files WHERE language = 'go');
 
 -- Each layer: copy it when the file does not hold it yet, then read the copy.
 CREATE TABLE IF NOT EXISTS cache.scip_occurrences AS SELECT * FROM scip_occurrences;

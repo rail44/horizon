@@ -23,9 +23,9 @@ const USAGE: &str = "\
 Usage: code-db COMMAND REPO [ARGS...]
   index REPO [tool_memory_max=SIZE]   write REPO/target/code-db/jscpd/{exact,normalized}
                                       (jscpd over the source files) and one SCIP index per
-                                      Cargo workspace in REPO/target/code-db/scip/
-                                      (rust-analyzer scip), each tool under a memory cap
-                                      (README.md, Running and Limits)
+                                      Cargo workspace (rust-analyzer scip) and per Go module
+                                      (scip-go index) in REPO/target/code-db/scip/, each
+                                      tool under a memory cap (README.md, Running and Limits)
   query REPO QUERY [NAME=VALUE ...]   load the views and the persistent cache, then run
                                       queries/QUERY.sql and print the result
   sql REPO FILE.sql [NAME=VALUE ...]  the same loading, then FILE.sql
@@ -47,7 +47,8 @@ REPO/target/code-db/cache/. A query needs the SCIP indexes, and the jscpd report
 header says so. The limits line goes to stderr. Markdown is printed by this command; any
 other FORMAT, and shell, hand the same loading to the DuckDB CLI.
 Environment: DUCKDB_CLI (default ~/.local/bin/duckdb2), RUST_ANALYZER (default
-rust-analyzer), JSCPD (default the refactor audit's pinned jscpd).
+rust-analyzer), SCIP_GO (default scip-go), JSCPD (default the refactor audit's pinned
+jscpd).
 ";
 
 /// The view files, in the order every client reads them (README.md, Running).
@@ -55,6 +56,8 @@ const VIEW_FILES: &[&str] = &[
     "00_load.sql",
     "views/files.sql",
     "views/scip.sql",
+    "lang/rust.sql",
+    "lang/go.sql",
     "views/units.sql",
     "views/graph.sql",
     "views/clones.sql",
@@ -66,7 +69,7 @@ const FILE_VIEW_FILES: &[&str] = &["00_load.sql", "views/files.sql"];
 const NEEDS_INDEX: &str = "Needs the SCIP indexes";
 const NEEDS_CLONES: &str = "Needs the jscpd reports";
 const SQL_DIR: &str = "duckdb-ext/sql";
-const EXTENSION_DIR: &str = "duckdb-ext/target/extension/v2.0.0/linux_amd64";
+const EXTENSION_DIR: &str = "duckdb-ext/target/extension/v2.0.0/host";
 /// The variables the limits are derived from; the derived values replace them.
 const LIMIT_NAMES: &[&str] = &["memory_limit", "threads", "temp_limit"];
 
@@ -437,8 +440,9 @@ impl Session {
         db
     }
 
-    /// The source files and the workspaces to index (index::Inputs), from the
-    /// views: 00_load.sql and views/files.sql read in this process.
+    /// The source files, the workspaces and the Go modules to index
+    /// (index::Inputs), from the views: 00_load.sql and views/files.sql read
+    /// in this process.
     fn index_inputs(&self) -> index::Inputs {
         let (db, prelude) = self.start();
         script::run_text(&db, &prelude, &mut Output::Discard).unwrap_or_else(|e| die(e));
@@ -463,7 +467,16 @@ impl Session {
              WHERE path = 'Cargo.toml' OR path LIKE '%/Cargo.toml' ORDER BY path",
         );
         let workspaces = index::workspaces(&self.repo, &manifests, &files);
-        index::Inputs { files, workspaces }
+        let go_mods = column(
+            "SELECT path FROM git_tracked_files(getvariable('repo')) \
+             WHERE path = 'go.mod' OR path LIKE '%/go.mod' ORDER BY path",
+        );
+        let go_modules = index::go_modules(&go_mods, &files);
+        index::Inputs {
+            files,
+            workspaces,
+            go_modules,
+        }
     }
 
     /// A module may belong to one layer only.

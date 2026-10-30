@@ -1,6 +1,7 @@
-//! `code-db index`: jscpd's two reports over the source files and one
-//! rust-analyzer SCIP index per Cargo workspace, each tool under a memory cap
-//! (duckdb-ext/sql/README.md, Running and Limits).
+//! `code-db index`: jscpd's two reports over the source files, one
+//! rust-analyzer SCIP index per Cargo workspace and one scip-go index per Go
+//! module, each tool under a memory cap (duckdb-ext/sql/README.md, Running and
+//! Limits).
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -176,13 +177,15 @@ fn run_logged(mut command: Command, stdout: Stdio, log: File) -> Result<ExitStat
 }
 
 /// What `index` works on: the source files (`files`, as the views list them:
-/// the settings' scope applied) and the Cargo workspaces to index, as
-/// repository-relative paths; a workspace is a directory whose tracked
-/// Cargo.toml has a `[workspace]` table and that holds at least one source
-/// file ("" for the repository root).
+/// the settings' scope applied), the Cargo workspaces and the Go modules to
+/// index, as repository-relative paths; a workspace is a directory whose
+/// tracked Cargo.toml has a `[workspace]` table and that holds at least one
+/// source file, a Go module a directory with a tracked go.mod that holds at
+/// least one `.go` source file ("" for the repository root).
 pub struct Inputs {
     pub files: Vec<String>,
     pub workspaces: Vec<String>,
+    pub go_modules: Vec<String>,
 }
 
 /// Whether a Cargo.toml's text declares a workspace (`[workspace]` or one of
@@ -211,6 +214,32 @@ fn under(path: &str, dir: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// The index file of a Go module, under `target/code-db/scip/`: `go.scip` for
+/// the repository root, else `go-<path with / as +>.scip`.
+pub fn go_index_name(module: &str) -> String {
+    if module.is_empty() {
+        "go.scip".to_owned()
+    } else {
+        format!("go-{}.scip", module.replace('/', "+"))
+    }
+}
+
+/// The Go modules among the tracked go.mod files that hold a `.go` source file.
+pub fn go_modules(go_mods: &[String], files: &[String]) -> Vec<String> {
+    let mut found: Vec<String> = go_mods
+        .iter()
+        .map(|m| {
+            m.strip_suffix("go.mod")
+                .unwrap_or_default()
+                .trim_end_matches('/')
+                .to_owned()
+        })
+        .filter(|dir| files.iter().any(|f| f.ends_with(".go") && under(f, dir)))
+        .collect();
+    found.sort();
+    found
+}
+
 /// The workspaces among the tracked manifests that hold a source file.
 pub fn workspaces(repo: &Path, manifests: &[String], files: &[String]) -> Vec<String> {
     let mut found: Vec<String> = manifests
@@ -228,6 +257,68 @@ pub fn workspaces(repo: &Path, manifests: &[String], files: &[String]) -> Vec<St
         .collect();
     found.sort();
     found
+}
+
+/// A program given by the environment variable VARIABLE (a path, or a name on
+/// PATH), else DEFAULT on PATH.
+fn tool(variable: &str, default: &str) -> Result<PathBuf, String> {
+    let name = std::env::var(variable).unwrap_or_else(|_| default.to_owned());
+    let path = PathBuf::from(&name);
+    if name.contains('/') && path.is_file() || on_path(&name) {
+        Ok(path)
+    } else {
+        Err(format!("{default} not found (set {variable})"))
+    }
+}
+
+/// An indexer: its name in messages, its program and the arguments before
+/// `--output FILE`, which both indexers take.
+struct Indexer<'a> {
+    label: &'a str,
+    program: PathBuf,
+    args: &'a [&'a str],
+}
+
+/// Run INDEXER in the repository directory DIR under the cap, writing its
+/// index to `OUT/scip/NAME` through a temporary file and its output to
+/// `OUT/logs/NAME.log`.
+fn run_indexer(
+    cap: &Cap,
+    out: &Path,
+    indexer: &Indexer,
+    repo: &Path,
+    dir: &str,
+    name: &str,
+) -> Result<(), String> {
+    let start = Instant::now();
+    let shown = if dir.is_empty() { "." } else { dir };
+    let log = out.join("logs").join(format!("{name}.log"));
+    let tmp = out.join("scip").join(format!("{name}.tmp"));
+    let mut args: Vec<String> = indexer.args.iter().map(|a| (*a).to_owned()).collect();
+    args.extend(["--output".to_owned(), tmp.display().to_string()]);
+    let log_file = File::create(&log).map_err(|e| e.to_string())?;
+    let stdout = Stdio::from(log_file.try_clone().map_err(|e| e.to_string())?);
+    let mut command = capped(cap, &indexer.program, &args);
+    command.current_dir(repo.join(dir));
+    let status = run_logged(command, stdout, log_file)?;
+    if !status.success() {
+        return Err(failed(
+            &format!("{} in {shown}", indexer.label),
+            status,
+            cap,
+            &log,
+        ));
+    }
+    let index = out.join("scip").join(name);
+    std::fs::rename(&tmp, &index).map_err(|e| e.to_string())?;
+    eprintln!(
+        "{} ({shown}): {:.1} s -> {} (log {})",
+        indexer.label,
+        start.elapsed().as_secs_f64(),
+        index.display(),
+        log.display()
+    );
+    Ok(())
 }
 
 pub fn index(
@@ -273,48 +364,35 @@ pub fn index(
         log.display()
     );
 
-    let ra = std::env::var("RUST_ANALYZER").unwrap_or_else(|_| "rust-analyzer".to_owned());
-    let ra_path = PathBuf::from(&ra);
-    if !(ra.contains('/') && ra_path.is_file() || on_path(&ra)) {
-        return Err("rust-analyzer not found (set RUST_ANALYZER)".to_owned());
-    }
     let scip = out.join("scip");
     std::fs::create_dir_all(&scip).map_err(|e| e.to_string())?;
-    let names: Vec<String> = inputs.workspaces.iter().map(|w| index_name(w)).collect();
-    for (workspace, name) in inputs.workspaces.iter().zip(&names) {
-        let start = Instant::now();
-        let log = logs.join(format!("{name}.log"));
-        let tmp = scip.join(format!("{name}.tmp"));
-        let args = vec![
-            "scip".to_owned(),
-            ".".to_owned(),
-            "--output".to_owned(),
-            tmp.display().to_string(),
-        ];
-        let log_file = File::create(&log).map_err(|e| e.to_string())?;
-        let stdout = Stdio::from(log_file.try_clone().map_err(|e| e.to_string())?);
-        let mut command = capped(&cap, &ra_path, &args);
-        command.current_dir(repo.join(workspace));
-        let status = run_logged(command, stdout, log_file)?;
-        let shown = if workspace.is_empty() { "." } else { workspace };
-        if !status.success() {
-            return Err(failed(
-                &format!("rust-analyzer scip in {shown}"),
-                status,
-                &cap,
-                &log,
-            ));
+    let mut names: Vec<String> = Vec::new();
+    if !inputs.workspaces.is_empty() {
+        let indexer = Indexer {
+            label: "rust-analyzer scip",
+            program: tool("RUST_ANALYZER", "rust-analyzer")?,
+            args: &["scip", "."],
+        };
+        for workspace in &inputs.workspaces {
+            let name = index_name(workspace);
+            run_indexer(&cap, &out, &indexer, repo, workspace, &name)?;
+            names.push(name);
         }
-        let index = scip.join(name);
-        std::fs::rename(&tmp, &index).map_err(|e| e.to_string())?;
-        eprintln!(
-            "rust-analyzer scip ({shown}): {:.1} s -> {} (log {})",
-            start.elapsed().as_secs_f64(),
-            index.display(),
-            log.display()
-        );
     }
-    // The indexes of workspaces that are gone (or no longer hold a source file).
+    if !inputs.go_modules.is_empty() {
+        let indexer = Indexer {
+            label: "scip-go index",
+            program: tool("SCIP_GO", "scip-go")?,
+            args: &["index", "--quiet"],
+        };
+        for module in &inputs.go_modules {
+            let name = go_index_name(module);
+            run_indexer(&cap, &out, &indexer, repo, module, &name)?;
+            names.push(name);
+        }
+    }
+    // The indexes of workspaces and modules that are gone (or no longer hold a
+    // source file).
     for entry in std::fs::read_dir(&scip).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let file = entry.file_name().to_string_lossy().into_owned();
@@ -358,5 +436,23 @@ mod tests {
         assert!(under("src/lib.rs", ""));
         assert!(under("tools/a/src/lib.rs", "tools/a"));
         assert!(!under("tools/ab/src/lib.rs", "tools/a"));
+    }
+
+    #[test]
+    fn go_modules_and_their_index_names() {
+        let files = [
+            "cmd/main.go".to_owned(),
+            "tools/gen/main.go".to_owned(),
+            "src/lib.rs".to_owned(),
+        ];
+        let go_mods = [
+            "go.mod".to_owned(),
+            "tools/gen/go.mod".to_owned(),
+            "docs/go.mod".to_owned(),
+        ];
+        assert_eq!(go_modules(&go_mods, &files), ["", "tools/gen"]);
+        assert_eq!(go_modules(&go_mods, &files[2..]), Vec::<String>::new());
+        assert_eq!(go_index_name(""), "go.scip");
+        assert_eq!(go_index_name("tools/gen"), "go-tools+gen.scip");
     }
 }

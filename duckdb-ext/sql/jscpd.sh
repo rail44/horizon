@@ -32,7 +32,7 @@ for mode in exact normalized; do
         extra=
     fi
     # shellcheck disable=SC2086
-    "$jscpd" "$@" --config "$config" --format rust --min-tokens 70 --min-lines 5 --mode weak \
+    "$jscpd" "$@" --config "$config" --format rust,go --min-tokens 70 --min-lines 5 --mode weak \
         --reporters json --output "$out/$mode" --max-size 10mb --max-lines 100000 --no-colors \
         --workers 4 --absolute --silent $extra >&2
 done

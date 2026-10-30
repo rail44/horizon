@@ -1,12 +1,12 @@
 # Code database views
 
 The current tree of a repository as SQL views (`docs/code-database-design.md`): its units
-come from the SCIP index of each of its Cargo workspaces, its quality axes are views and
+come from the SCIP index of each of its Cargo workspaces and Go modules, its quality axes are views and
 one query per axis over them, and what depends on the project's own judgment comes from
 its settings file. The facts are read by table functions: `git_tracked_files` (the file
 set, this workspace's `git_history` extension, `../README.md`),
 `read_scip`/`read_scip_symbols`/`read_scip_metadata` (this workspace's `scip_index`, over
-rust-analyzer's indexes), `read_text` (the source text), `read_json` (jscpd's
+rust-analyzer's and scip-go's indexes), `read_text` (the source text), `read_json` (jscpd's
 reports) and `read_ast` (the community extension sitting_duck: each source file's
 tree-sitter syntax tree); everything else is a view. Nothing is stored except by
 `refresh.sql`, a cache of the derived layers keyed by the state of their inputs and of
@@ -38,16 +38,23 @@ code-db limits REPO [--json]             # the limits the loading would set
 ```
 
 - **`index REPO`** reads `00_load.sql` and `views/files.sql` to list the source files
-  (`files`: the settings' `scope.exclude` applied) and the tracked `Cargo.toml` files.
-  It runs `jscpd.sh` over exactly those source files into
+  (`files`: the settings' `scope.exclude` applied) and the tracked `Cargo.toml` and
+  `go.mod` files. It runs `jscpd.sh` over exactly those source files into
   `REPO/target/code-db/jscpd/{exact,normalized}`, then `rust-analyzer scip` once per Cargo
   workspace: every directory whose tracked `Cargo.toml` declares `[workspace]` (or a
   `[workspace.…]` table) and holds a source file, the repository root included. A
   workspace nested in another is indexed on its own (here `duckdb-ext/`,
   `duckdb-ext/code-db/`, `duckdb-ext/host-check/` and `preview-plugin/` beside the root).
-  The indexes go to `REPO/target/code-db/scip/`, `root.scip` for the root and
-  `ws-<path with / as +>.scip` for the others (`ws-duckdb-ext+code-db.scip`); the index of
-  a workspace that is gone is removed. Each tool's output is in
+  Then `scip-go index` (`SCIP_GO`, default `scip-go` on `PATH`) once per Go module: every
+  directory with a tracked `go.mod` that holds a `.go` source file; a module nested in
+  another is its own module (Go's `./...` leaves it out of the outer one), and a
+  `go.work` file is not read. scip-go loads the packages with the `go` command, which
+  may download the module's dependencies. Each tool is needed only when there is
+  something for it to index. The indexes go to `REPO/target/code-db/scip/`, `root.scip`
+  for the root workspace and `ws-<path with / as +>.scip` for the others
+  (`ws-duckdb-ext+code-db.scip`), `go.scip` for a Go module at the root and
+  `go-<path with / as +>.scip` for the others; the index of a workspace or module that
+  is gone is removed. Each tool's output is in
   `REPO/target/code-db/logs/`, and the time of each step is printed. Run it again after
   edits: nothing checks the indexes against the tree. On this repository the root takes
   about 3 minutes cold (`rust-analyzer` builds the build scripts and proc macros into
@@ -83,7 +90,7 @@ code-db limits REPO [--json]             # the limits the loading would set
   (it wraps the query in `SELECT * FROM (…) LIMIT n`; the query files stay as they are).
 - **Errors** are one line saying what to do: no index or no jscpd report for a query
   that needs it (run `index`), an extension not built (`duckdb-ext/build.sh`), the CLI
-  not found (`DUCKDB_CLI`), jscpd not installed (`JSCPD` overrides the refactor audit's
+  not found (`DUCKDB_CLI`), an indexer not found (`RUST_ANALYZER`, `SCIP_GO`), jscpd not installed (`JSCPD` overrides the refactor audit's
   pinned binary), a settings file that does not parse (with the line).
 
 `check.py` (Check, below) is the tool for assertions and measurements.
@@ -134,7 +141,7 @@ path: in a CLI session that has spilled, a second `.read` of `00_load.sql` fails
 session). `check.py` drops that one statement when re-reading the file on a connection
 that already has the directory.
 
-**External tools.** `code-db index` runs `jscpd.sh` and each `rust-analyzer scip` under a
+**External tools.** `code-db index` runs `jscpd.sh`, each `rust-analyzer scip` and each `scip-go index` under a
 memory cap of 80% of `MemAvailable` (`tool_memory_max=SIZE` overrides it: a number with
 an optional `K`, `M`, `G` or `T` suffix, base 1024). With `systemd-run --user` available
 the cap is a cgroup (`--scope -p MemoryMax=… -p MemorySwapMax=0`): it bounds the resident
@@ -143,8 +150,8 @@ Otherwise it is `prlimit --as=…`, a limit on each process's address space, not
 resident memory: a process reserves more address space than it touches (rust-analyzer's
 peak address space was 9.6 GB at 7.4 GB resident here), so the cap stops a tool earlier
 than its resident size would, and each process of a tree has its own. A tool that
-reaches it fails an allocation and aborts. Without either, the tools run unbounded and
-`code-db` says so. `code-db` prints the cap it chose, and a tool that fails is reported
+reaches it fails an allocation and aborts. Without either (macOS has neither), the
+tools run unbounded and `code-db` says so. `code-db` prints the cap it chose, and a tool that fails is reported
 with its exit status or signal and the cap; that workspace's previous index is kept.
 
 The rest of this section is what `code-db` does, for other clients. Every client needs
@@ -159,6 +166,8 @@ variable and can be anywhere. The files are executed in this order:
 duckdb-ext/sql/00_load.sql
 duckdb-ext/sql/views/files.sql
 duckdb-ext/sql/views/scip.sql
+duckdb-ext/sql/lang/rust.sql
+duckdb-ext/sql/lang/go.sql
 duckdb-ext/sql/views/units.sql
 duckdb-ext/sql/views/graph.sql
 duckdb-ext/sql/views/clones.sql
@@ -172,7 +181,7 @@ list are empty. Only `00_load.sql` (the file snapshot from `git_tracked_files` a
 lists) and `refresh.sql` read a source when they are executed.
 
 DuckDB CLI 2.0.0 (here `~/.local/bin/duckdb2`; the system `duckdb` is 1.5.0 and refuses
-the extensions):
+the extensions; on macOS, Homebrew's `duckdb` is 2.0.0):
 
 ```sh
 duckdb2 -unsigned -cmd "SET VARIABLE repo = '$PWD'"
@@ -181,6 +190,8 @@ duckdb2 -unsigned -cmd "SET VARIABLE repo = '$PWD'"
 .read duckdb-ext/sql/00_load.sql
 .read duckdb-ext/sql/views/files.sql
 .read duckdb-ext/sql/views/scip.sql
+.read duckdb-ext/sql/lang/rust.sql
+.read duckdb-ext/sql/lang/go.sql
 .read duckdb-ext/sql/views/units.sql
 .read duckdb-ext/sql/views/graph.sql
 .read duckdb-ext/sql/views/clones.sql
@@ -303,9 +314,17 @@ files).
 ## Units
 
 `views/units.sql` defines `units` from the definition occurrences (the recommended form
-the owner accepted on 2026-10-29: 「scipは推奨の形で導入しましょう」):
+the owner accepted on 2026-10-29: 「scipは推奨の形で導入しましょう」). Which definitions
+are units and what their columns hold is language knowledge, kept in one view per
+language under `lang/` (`rust_units` in `lang/rust.sql`, `go_units` in `lang/go.sql`),
+each over its language's files (`files.language`); `derived_units` takes their union and
+does what is the same for every language: `unit_id`, `parent_unit_id`, `loc` and the
+propagation of `is_test` to the units inside a test (each language's view gives
+`test_by_rule`, the units its rules make tests by themselves). A file whose language has
+no view has no units. The columns' neutral meanings are in the file's header; Rust's
+reading of them, then Go's:
 
-- **What is a unit.** One per definition occurrence of a non-local symbol in a source
+- **What is a unit (Rust).** One per definition occurrence of a non-local symbol in a source
   file whose SCIP kind maps to a unit kind: Function → `function`; Method, StaticMethod,
   TraitMethod → `method`; Struct, Enum, Union, TypeAlias, Trait, AssociatedType → `type`;
   Module → `module`; Macro → `macro`; Constant, StaticVariable → `constant`. Fields, enum
@@ -346,6 +365,32 @@ the owner accepted on 2026-10-29: 「scipは推奨の形で導入しましょう
   line is led by `#[cfg(test)]` (the header: the nearest line above the member starting
   an `impl` that names `impl_type`, outside the bodies of other functions,
   `impl_header_line`); or a unit containing it is a test.
+- **Go** (`lang/go.sql`, over scip-go 0.2.7's index;
+  `docs/research/code-db-go-2026-10-30.md`). Function → `function`; Method,
+  MethodSpecification (an interface's method) → `method`; Type, Struct, Interface,
+  TypeAlias → `type`; Package → `module`; Constant and a package-level Variable →
+  `constant`. Struct fields and everything inside a function body (scip-go's `local N`
+  symbols) are not units. Every file is a file module: scip-go defines the package at
+  each file's `package` clause, and the unit's range is the file's whole syntax tree.
+  scip-go gives only functions and methods an `enclosing_range` (from `func` to the
+  closing brace, the doc comment not included); every other range comes from the
+  syntax tree: the spec that declares the name (`type_spec`, `type_alias`, `const_spec`,
+  `var_spec`), or its whole declaration when the declaration holds that spec only, and an
+  interface's `method_elem`. A method is `member_of` `impl` with `impl_key` its receiver
+  type's symbol and `impl_type` that type's name (so a type's methods share one key
+  across its files; there is no `impl_header_line`); an interface's method is `trait`.
+  `crate` is the Go module (scip-go's package name); `qualified_name` is below the Go
+  package (`T.M`). `visibility` is `pub` for an exported name (an upper-case first
+  letter), else `private`, NULL for an interface's method and a file module.
+  `parameters` counts each name of the signature's parameter list (`a, b int` is two),
+  the receiver included as Rust's `self` is. `has_doc` is the doc comment; a package's is
+  its package comment in any file, so all its file modules have it. `is_test`: the file
+  is a `*_test.go` file or matches `extra_test_paths` (`extra_test_attributes` has no
+  Go meaning). The Go files' trees are read by `go_file_ast`, which hands `read_ast`
+  only them: a repository without Go files parses nothing for Go. What reads Rust's
+  shapes downstream has no Go reading yet: `modules`' file-module convention (a Go file
+  is a module named by its path, not its package directory) and `unit_complexity`'s node
+  types (Go's are `if_statement`, `for_statement`, …; Go units count none).
 - **`unit_ast`**: every unit's syntax tree, one row per node: the nodes of its file's
   tree (`file_ast`, Files below) inside the unit's range, compared by line and column; a
   file module's tree is its file's whole tree, and an enclosing unit's tree holds what it
@@ -573,7 +618,10 @@ fixture sets the variables and tables itself.
 
 `code-db`'s own tests are in `../code-db/` (`cargo test`): the settings file, the limits
 from a fake `/proc/meminfo` and DuckDB's size formatting, the markdown renderer and the
-statement splitter, workspace discovery and index names, and an end-to-end run on a
+statement splitter, workspace and Go module discovery and index names, an end-to-end
+run on a Go fixture (two modules indexed with scip-go and no rust-analyzer needed, the
+`.go` files handed to jscpd, every unit's row, the unit edges across files and
+packages; skipped without `scip-go`), and an end-to-end run on a Rust
 fixture repository: `index` with a stand-in jscpd (both workspaces indexed, the files in
 scope handed to jscpd), the `layer_violations` row and the cycle's `violating_edges`, the
 settings' test rules and exclusion, a duplication pair, and a query without the reports
@@ -586,7 +634,9 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (SCIP) |
-| `views/units.sql` | the macros `impl_base_name`, `impl_generic_arg`; `derived_units`, `units`, `unit_ast` (Units) |
+| `lang/rust.sql` | the macros `impl_base_name`, `impl_generic_arg`; `rust_units` (Units) |
+| `lang/go.sql` | `go_file_ast`, `go_units` (Units) |
+| `views/units.sql` | `derived_units`, `units`, `unit_ast` (Units) |
 | `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `modules`, `unit_module`, `module_edges`, `crate_edges`, `module_cycle_edges`, `module_cycles`, `module_layer_matches`, `module_layers`, the macro `graph_layer_violation`, `module_layer_violations`, `crate_cycles` (Graph) |
 | `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
 | `views/quality.sql` | `unit_scope`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `unit_complexity`, `unit_quality` (Axes) |
@@ -604,10 +654,13 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 - **Paths are repository-relative** with `/`. `files.file_id` is the position in the
   sorted file list; `units.unit_id` the position in the unit order (Units).
 - **Neutral vocabulary**: unit kinds `function`, `method`, `type`, `module`, `macro`,
-  `constant`; the SCIP kind is kept as `symbol_kind`. Language knowledge (the kind
-  mapping, the test rules, the impl descriptors, the file-module convention) lives in
-  `views/units.sql` and `views/graph.sql`, written for Rust; another language's indexer
-  would add its own mapping there.
+  `constant`; the SCIP kind is kept as `symbol_kind`. Language knowledge about units (the
+  kind mapping, the test rules, the impl descriptors, ranges the indexer does not give)
+  lives in one file per language under `lang/`, a view `<language>_units` that
+  `views/units.sql` takes into `derived_units`; another language adds its file there,
+  its view to that union, its extension to `languages` and its indexer to `code-db
+  index`. The file-module convention (`modules`) and the complexity node types
+  (`unit_complexity`) in `views/graph.sql` and `views/quality.sql` are still Rust's.
 - **A view reads each source once.** A view or common table expression that is not
   `MATERIALIZED` is expanded at every reference; the views materialize what they read
   more than once, and the cache materializes the layers.
@@ -625,7 +678,7 @@ which `00_load.sql` takes as snapshots.
 | `limits` | unset; `code-db` sets it to its limits line | `00_load.sql` (its last result) |
 | `include_untracked` | `false` (also list untracked files that are not ignored) | `00_load.sql`, `refresh.sql` |
 | `exclude_patterns` | `[]` (GLOB operator patterns on the relative path; `*` crosses `/`) | `00_load.sql`, `refresh.sql` |
-| `languages` | `MAP {'rs': 'rust'}` (extension to language) | `00_load.sql`, `files` |
+| `languages` | `MAP {'rs': 'rust', 'go': 'go'}` (extension to language) | `00_load.sql`, `files`, `go_file_ast` |
 | `scip_indexes` | the `*.scip` files of `repo/target/code-db/scip/` | `views/scip.sql`, `refresh.sql` |
 | `clone_reports` | the reports `repo/target/code-db/jscpd/{exact,normalized}/jscpd-report.json` that exist | `clone_report_pairs` |
 | `extra_test_paths`, `extra_test_attributes` | `[]`; `code-db` sets them from the settings file | `derived_units`, `refresh.sql` (key) |
@@ -651,6 +704,8 @@ need at least one file, which is why `empty-jscpd-report.json` is always in thei
   comparison were removed with the decision of 2026-10-29; the comparison is to come back
   as a diff of obstacle lists over two SCIP indexes.
 - The exhaustive-`match` check (above).
-- Go and TypeScript (their SCIP indexers and the unit mapping); SCIP relationships
-  (rust-analyzer 1.99.1 writes none), so no edge from an impl's method to the trait
-  method it implements.
+- TypeScript (its SCIP indexer and the unit mapping); for Go, the module mapping
+  (packages as modules) and the complexity node types (Units). SCIP relationships
+  (rust-analyzer 1.99.1 writes none; scip-go writes its implementations, which nothing
+  reads yet), so no edge from an impl's method to the trait method it implements, nor
+  from a Go method to the interface method it satisfies.

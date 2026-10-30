@@ -8,8 +8,9 @@
 -- content ids and new indexes. File contents are always read live.
 --
 -- The git_history and scip_index paths are relative to the current directory, which must
--- be the root of the Horizon checkout that built them (duckdb-ext/build.sh). LOAD accepts
--- only a literal, not getvariable(). The host must allow unsigned extensions.
+-- be the root of the Horizon checkout that built them (duckdb-ext/build.sh, which links
+-- `host` to the directory of the machine's platform). LOAD accepts only a literal, not
+-- getvariable(). The host must allow unsigned extensions.
 --
 -- sitting_duck (a community extension: tree-sitter grammars and read_ast) gives each
 -- source file its syntax tree (views/files.sql, file_ast), and each unit the part of it
@@ -20,8 +21,8 @@
 
 INSTALL sitting_duck FROM community;
 LOAD sitting_duck;
-LOAD 'duckdb-ext/target/extension/v2.0.0/linux_amd64/git_history.duckdb_extension';
-LOAD 'duckdb-ext/target/extension/v2.0.0/linux_amd64/scip_index.duckdb_extension';
+LOAD 'duckdb-ext/target/extension/v2.0.0/host/git_history.duckdb_extension';
+LOAD 'duckdb-ext/target/extension/v2.0.0/host/scip_index.duckdb_extension';
 
 SET VARIABLE repo = CASE
     WHEN getvariable('repo') LIKE '/%' THEN rtrim(getvariable('repo'), '/')
@@ -51,8 +52,9 @@ SET temp_directory = coalesce(getvariable('temp_directory'), current_setting('te
 SET VARIABLE include_untracked = coalesce(getvariable('include_untracked'), false);
 -- Optional repository-relative paths to drop, as GLOB operator patterns (`*` crosses `/`).
 SET VARIABLE exclude_patterns = coalesce(getvariable('exclude_patterns'), []::VARCHAR[]);
--- File extension -> language. A file is a source file only when its extension is here.
-SET VARIABLE languages = coalesce(getvariable('languages'), MAP {'rs': 'rust'});
+-- File extension -> language. A file is a source file only when its extension is here;
+-- its units come from its language's view under lang/ (views/units.sql).
+SET VARIABLE languages = coalesce(getvariable('languages'), MAP {'rs': 'rust', 'go': 'go'});
 
 -- is_source_file(path, mode): whether a worktree entry is a source file: a regular file
 -- (mode 100644 or 100755; a symlink's blob is its target path and a submodule's id is a
@@ -78,10 +80,10 @@ SET VARIABLE source_files = (
 SET VARIABLE source_paths = list_transform(getvariable('source_files'),
                                            lambda f: getvariable('repo') || '/' || f.path);
 
--- SCIP indexes (views/scip.sql): one per Cargo workspace, written by `code-db index` into
--- <repo>/target/code-db/scip/. Unset, the list is every *.scip file there, sorted, taken
--- when this file is read; an empty list leaves the SCIP views empty (every file is then
--- listed with no units).
+-- SCIP indexes (views/scip.sql): one per Cargo workspace and Go module, written by
+-- `code-db index` into <repo>/target/code-db/scip/. Unset, the list is every *.scip file
+-- there, sorted, taken when this file is read; an empty list leaves the SCIP views empty
+-- (every file is then listed with no units).
 SET VARIABLE scip_indexes = coalesce(getvariable('scip_indexes'), (
     SELECT coalesce(list(file ORDER BY file), []::VARCHAR[])
     FROM glob(getvariable('repo') || '/target/code-db/scip/*.scip')

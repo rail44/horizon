@@ -273,3 +273,357 @@ fn index_settings_and_queries() {
         "{stderr}"
     );
 }
+
+const GO_MOD: &str = "module example.com/shapes\n\ngo 1.22\n";
+const GO_SHAPES: &str = "\
+// Package shapes computes areas.
+package shapes
+
+const (
+	Small = 1
+	Large = 2
+)
+
+// Shape has an area.
+type Shape interface {
+	Area() float64
+}
+
+type Circle struct {
+	R float64
+}
+
+func (c Circle) Area() float64 {
+	return 3 * c.R * c.R
+}
+
+func (c *Circle) scale(by, min float64) {
+	c.R *= by
+}
+
+func Describe(s Shape) float64 {
+	return s.Area()
+}
+";
+const GO_SHAPES_TEST: &str = "\
+package shapes
+
+import \"testing\"
+
+func TestArea(t *testing.T) {
+	if (Circle{R: 1}).Area() <= 0 {
+		t.Fatal(\"area\")
+	}
+}
+";
+const GO_MAIN: &str = "\
+package main
+
+import \"example.com/shapes/shapes\"
+
+func main() {
+	println(shapes.Describe(shapes.Circle{R: 2}))
+}
+";
+const GO_TOOL_MOD: &str = "module example.com/gen\n\ngo 1.22\n";
+const GO_TOOL_MAIN: &str = "package main\n\nfunc main() {}\n";
+
+#[test]
+fn go_modules_index_and_units() {
+    let scip_go = std::env::var("SCIP_GO").unwrap_or_else(|_| "scip-go".to_owned());
+    if Command::new(&scip_go).arg("--version").output().is_err() {
+        eprintln!("SKIPPED: {scip_go} not found");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let repo = repo.as_path();
+    git(tmp.path(), &["init", "-q", "-b", "main", "repo"]);
+    write(repo, ".gitignore", "target/\n");
+    write(repo, "go.mod", GO_MOD);
+    write(repo, "shapes/shapes.go", GO_SHAPES);
+    write(repo, "shapes/shapes_test.go", GO_SHAPES_TEST);
+    write(repo, "cmd/app/main.go", GO_MAIN);
+    write(repo, "tools/gen/go.mod", GO_TOOL_MOD);
+    write(repo, "tools/gen/main.go", GO_TOOL_MAIN);
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-q", "-m", "Add the fixture"]);
+    let jscpd = tmp.path().join("jscpd");
+    write(tmp.path(), "jscpd", FAKE_JSCPD);
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&jscpd, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let log = tmp.path().join("jscpd.log");
+    let code_db = |args: &[&str]| {
+        // No Cargo workspace: rust-analyzer is not needed.
+        let output = Command::new(env!("CARGO_BIN_EXE_code-db"))
+            .args(args.iter().take(1))
+            .arg(repo)
+            .args(args.iter().skip(1))
+            .env("JSCPD", &jscpd)
+            .env("FAKE_JSCPD_LOG", &log)
+            .env("RUST_ANALYZER", "/nonexistent/rust-analyzer")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(output.status.success(), "code-db {args:?}: {stderr}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    code_db(&["index"]);
+    let mut indexes: Vec<String> = std::fs::read_dir(repo.join("target/code-db/scip"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    indexes.sort();
+    assert_eq!(indexes, ["go-tools+gen.scip", "go.scip"]);
+    let args = std::fs::read_to_string(&log).unwrap();
+    let scanned: Vec<&str> = args.lines().filter(|a| a.ends_with(".go")).collect();
+    let in_scope = [
+        "cmd/app/main.go",
+        "shapes/shapes.go",
+        "shapes/shapes_test.go",
+        "tools/gen/main.go",
+    ];
+    assert_eq!(scanned, [in_scope, in_scope].concat());
+
+    let probe = repo.join("target/probe.sql");
+    std::fs::write(
+        &probe,
+        "SELECT path, crate, kind, qualified_name, start_line, end_line, is_test, \
+                coalesce(visibility, '-'), coalesce(parameters::VARCHAR, '-'), \
+                coalesce(member_of, '-'), coalesce(impl_type, '-') \
+         FROM units ORDER BY unit_id;\n",
+    )
+    .unwrap();
+    let units = rows(&code_db(&["sql", probe.to_str().unwrap()]));
+    let cells: Vec<Vec<&str>> = units
+        .iter()
+        .map(|r| r.iter().map(String::as_str).collect())
+        .collect();
+    let shapes = "example.com/shapes";
+    let n = "false";
+    assert_eq!(
+        cells,
+        [
+            vec![
+                "cmd/app/main.go",
+                shapes,
+                "module",
+                "main",
+                "1",
+                "8",
+                n,
+                "-",
+                "-",
+                "-",
+                "-"
+            ],
+            vec![
+                "cmd/app/main.go",
+                shapes,
+                "function",
+                "main",
+                "5",
+                "7",
+                n,
+                "private",
+                "0",
+                "-",
+                "-"
+            ],
+            vec![
+                "shapes/shapes.go",
+                shapes,
+                "module",
+                "shapes",
+                "1",
+                "29",
+                n,
+                "-",
+                "-",
+                "-",
+                "-"
+            ],
+            vec![
+                "shapes/shapes.go",
+                shapes,
+                "constant",
+                "Small",
+                "5",
+                "5",
+                n,
+                "pub",
+                "-",
+                "-",
+                "-"
+            ],
+            vec![
+                "shapes/shapes.go",
+                shapes,
+                "constant",
+                "Large",
+                "6",
+                "6",
+                n,
+                "pub",
+                "-",
+                "-",
+                "-"
+            ],
+            vec![
+                "shapes/shapes.go",
+                shapes,
+                "type",
+                "Shape",
+                "10",
+                "12",
+                n,
+                "pub",
+                "-",
+                "-",
+                "-"
+            ],
+            vec![
+                "shapes/shapes.go",
+                shapes,
+                "method",
+                "Shape.Area",
+                "11",
+                "11",
+                n,
+                "-",
+                "1",
+                "trait",
+                "-"
+            ],
+            vec![
+                "shapes/shapes.go",
+                shapes,
+                "type",
+                "Circle",
+                "14",
+                "16",
+                n,
+                "pub",
+                "-",
+                "-",
+                "-"
+            ],
+            vec![
+                "shapes/shapes.go",
+                shapes,
+                "method",
+                "Circle.Area",
+                "18",
+                "20",
+                n,
+                "pub",
+                "1",
+                "impl",
+                "Circle"
+            ],
+            vec![
+                "shapes/shapes.go",
+                shapes,
+                "method",
+                "Circle.scale",
+                "22",
+                "24",
+                n,
+                "private",
+                "3",
+                "impl",
+                "Circle"
+            ],
+            vec![
+                "shapes/shapes.go",
+                shapes,
+                "function",
+                "Describe",
+                "26",
+                "28",
+                n,
+                "pub",
+                "1",
+                "-",
+                "-"
+            ],
+            vec![
+                "shapes/shapes_test.go",
+                shapes,
+                "module",
+                "shapes",
+                "1",
+                "10",
+                "true",
+                "-",
+                "-",
+                "-",
+                "-"
+            ],
+            vec![
+                "shapes/shapes_test.go",
+                shapes,
+                "function",
+                "TestArea",
+                "5",
+                "9",
+                "true",
+                "pub",
+                "1",
+                "-",
+                "-"
+            ],
+            vec![
+                "tools/gen/main.go",
+                "example.com/gen",
+                "module",
+                "main",
+                "1",
+                "4",
+                n,
+                "-",
+                "-",
+                "-",
+                "-"
+            ],
+            vec![
+                "tools/gen/main.go",
+                "example.com/gen",
+                "function",
+                "main",
+                "3",
+                "3",
+                n,
+                "private",
+                "0",
+                "-",
+                "-"
+            ],
+        ]
+    );
+
+    // References across files and packages become unit edges.
+    std::fs::write(
+        &probe,
+        "SELECT s.qualified_name, d.qualified_name FROM unit_edges e \
+         JOIN units s ON s.unit_id = e.src_unit_id JOIN units d ON d.unit_id = e.dst_unit_id \
+         WHERE s.kind <> 'module' AND NOT e.is_self ORDER BY ALL;\n",
+    )
+    .unwrap();
+    let edges = rows(&code_db(&["sql", probe.to_str().unwrap()]));
+    let pairs: Vec<(&str, &str)> = edges.iter().map(|r| (&r[0][..], &r[1][..])).collect();
+    assert_eq!(
+        pairs,
+        [
+            ("Circle.Area", "Circle"),
+            ("Circle.scale", "Circle"),
+            ("Describe", "Shape"),
+            ("Describe", "Shape.Area"),
+            ("TestArea", "Circle"),
+            ("TestArea", "Circle.Area"),
+            ("main", "Circle"),
+            ("main", "Describe"),
+        ]
+    );
+}

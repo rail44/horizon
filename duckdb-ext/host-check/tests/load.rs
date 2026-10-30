@@ -17,7 +17,7 @@ fn extension(name: &str, variable: &str) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-                "../target/extension/v2.0.0/linux_amd64/{name}.duckdb_extension"
+                "../target/extension/v2.0.0/host/{name}.duckdb_extension"
             ))
         });
     assert!(
