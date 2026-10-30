@@ -21,42 +21,53 @@ const PROTECTED_PREFIXES: [&str; 3] = ["/proc", "/sys", "/dev"];
 /// the config file, or a stored session grant being revalidated. Matched
 /// *exactly*: `/usr` is refused, `/usr/local/share/some-project` is not.
 /// Granting one of these as a tree would put the sandbox's whole reason for
-/// existing inside the grant.
+/// existing inside the grant. Each OS has its own list: the paths a
+/// canonical grant can name differ (macOS' `/tmp` is `/private/tmp`).
+#[cfg(not(target_os = "macos"))]
+const SYSTEM_ROOTS: &[&str] = &[
+    "/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib32", "/lib64", "/libexec", "/mnt",
+    "/opt", "/proc", "/root", "/run", "/sbin", "/srv", "/sys", "/tmp", "/usr", "/var",
+];
+
+#[cfg(target_os = "macos")]
 const SYSTEM_ROOTS: &[&str] = &[
     "/",
-    "/bin",
-    "/boot",
-    "/dev",
-    "/etc",
-    "/home",
-    "/lib",
-    "/lib32",
-    "/lib64",
-    "/libexec",
-    "/mnt",
-    "/opt",
-    "/proc",
-    "/root",
-    "/run",
-    "/sbin",
-    "/srv",
-    "/sys",
-    "/tmp",
-    "/usr",
-    "/var",
-    // macOS' own top level.
     "/Applications",
     "/Library",
     "/Network",
     "/System",
     "/Users",
     "/Volumes",
-    "/private",
+    "/bin",
     "/cores",
+    "/dev",
+    "/opt",
+    "/sbin",
+    "/usr",
+    // The firmlinks to /private and their targets, which canonical paths name.
+    "/etc",
+    "/tmp",
+    "/var",
+    "/private",
+    "/private/etc",
+    "/private/tmp",
+    "/private/var",
 ];
 
+/// macOS' per-user temporary and cache directories,
+/// `/private/var/folders/<a>/<b>/{T,C,0,X}`: each account's equivalent of
+/// `/tmp`. The directory itself and its ancestors are over-broad; what lies
+/// inside it is grantable, as below `/tmp`.
+#[cfg(target_os = "macos")]
+fn is_per_user_temp_root(path: &Path) -> bool {
+    ["/private/var/folders", "/var/folders"].iter().any(|base| {
+        path.starts_with(base) && path.components().count() <= base.matches('/').count() + 4
+    })
+}
+
 /// Whether `path` is too broad to ever be a writable directory-tree grant:
-/// the filesystem root, one of [`SYSTEM_ROOTS`], or `home` itself. A
+/// the filesystem root, one of [`SYSTEM_ROOTS`] (on macOS also a per-user
+/// temporary directory or one of its ancestors), or `home` itself. A
 /// relative path is refused too -- only canonical absolute paths are
 /// enforceable.
 ///
@@ -69,6 +80,10 @@ pub fn is_overbroad_tree(path: &Path, home: Option<&Path>) -> bool {
         return true;
     }
     if home.is_some_and(|home| !home.as_os_str().is_empty() && path == home) {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    if is_per_user_temp_root(path) {
         return true;
     }
     SYSTEM_ROOTS.iter().any(|root| path == Path::new(root))
@@ -148,7 +163,9 @@ pub(crate) fn is_writable_tree(grant: &FilesystemGrant) -> bool {
 /// Shapes one call's mediated attempts into the grants to offer an
 /// approver.
 ///
-/// Attempts that landed *inside* the session's own workspace keep their
+/// Attempts that landed *inside* the session's own workspace (by their
+/// resolved, canonical grant path, as the workspace root is canonical: an
+/// attempt through a symlink lands where the link points) keep their
 /// individually resolved grant -- the workspace is already writable, so
 /// such an attempt is an oddity rather than the toolchain-reaching-outward
 /// pattern this rule exists for. Every attempt *outside* the workspace is
@@ -171,9 +188,9 @@ pub fn suggest_grants(
     workspace_root: Option<&Path>,
     home: Option<&Path>,
 ) -> Vec<FilesystemGrant> {
-    let (outside, inside): (Vec<_>, Vec<_>) = denials.iter().partition(|denial| {
-        workspace_root.is_none_or(|root| !denial.attempted_path.starts_with(root))
-    });
+    let (outside, inside): (Vec<_>, Vec<_>) = denials
+        .iter()
+        .partition(|denial| workspace_root.is_none_or(|root| !denial.grant.path.starts_with(root)));
 
     let mut grants = Vec::new();
     if let Some(shared) = shared_tree_grant(&outside, home) {
@@ -620,22 +637,40 @@ mod tests {
     #[test]
     fn the_filesystem_root_home_and_system_roots_are_never_writable_trees() {
         let home = PathBuf::from("/home/someone");
-        for refused in [
-            "/",
-            "/home/someone",
-            "/usr",
-            "/etc",
-            "/var",
-            "/home",
-            "/tmp",
-            "/Users",
-            "/Library",
-        ] {
+        #[cfg(not(target_os = "macos"))]
+        let refused_here = ["/home", "/proc", "/run"];
+        #[cfg(target_os = "macos")]
+        let refused_here = ["/Users", "/Library", "/private/tmp"];
+        for refused in ["/", "/home/someone", "/usr", "/etc", "/var", "/tmp"]
+            .into_iter()
+            .chain(refused_here)
+        {
             assert!(
                 is_overbroad_tree(Path::new(refused), Some(&home)),
                 "{refused} must be refused as a writable tree"
             );
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_per_user_temp_directory_and_its_ancestors_are_never_writable_trees() {
+        for refused in [
+            "/private/var/folders",
+            "/private/var/folders/jw",
+            "/private/var/folders/jw/95t21_s11g5c2l_g360k4kf80000gn",
+            "/private/var/folders/jw/95t21_s11g5c2l_g360k4kf80000gn/T",
+            "/var/folders/jw/95t21_s11g5c2l_g360k4kf80000gn/T",
+        ] {
+            assert!(
+                is_overbroad_tree(Path::new(refused), None),
+                "{refused} must be refused as a writable tree"
+            );
+        }
+        assert!(!is_overbroad_tree(
+            Path::new("/private/var/folders/jw/95t21_s11g5c2l_g360k4kf80000gn/T/horizon-scratch"),
+            None
+        ));
     }
 
     #[test]

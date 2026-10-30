@@ -746,3 +746,22 @@ proposing grants exactly as before.
 Known gap, unfixed: on macOS `/tmp` canonicalizes to `/private/tmp`,
 which is not itself in `SYSTEM_ROOTS`, so the same attempt there still
 proposes a tree. The Linux path is what dogfooding runs on.
+
+## 2026-10-30 fix: system roots per OS, workspace membership by grant path
+
+Closes the gap above (owner: 「OS毎に設定が適用されるように」). `SYSTEM_ROOTS`
+is now one list per OS (`cfg(target_os)`), each naming what a canonical
+grant on that OS can be: Linux's FHS roots, and macOS' top level plus the
+targets of its firmlinks (`/private`, `/private/etc`, `/private/tmp`,
+`/private/var` beside `/etc`, `/tmp`, `/var`). macOS also refuses its
+per-user temporary directory and its ancestors
+(`/private/var/folders/<a>/<b>/T`, each account's `/tmp`): two sibling
+attempts under `std::env::temp_dir()` had their common ancestor offered
+as a writable tree there, where Linux's `/tmp` is refused. A directory
+inside it stays grantable, as below `/tmp`.
+
+`suggest_grants` now decides whether an attempt landed inside the
+workspace by its resolved grant path, not the attempted path: the
+workspace root is canonical, so an attempt spelled through a symlink
+(macOS' `/var` → `/private/var`) was counted as outside, and an attempt
+through a link out of the workspace lands where the link points.
