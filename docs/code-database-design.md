@@ -14,8 +14,8 @@ locate refactoring candidates with the signals the literature supports
 clone sites classified by their syntactic context, high fan-in combined
 with high churn — see
 [the survey](research/code-quality-analysis-trends-2026-10-24.md)). It is
-language-independent: Rust is the first language, Go and TypeScript are
-intended. The owner's starting idea (2026-10-24) was to store the syntax
+language-independent: Rust is the first language, Go the second
+(units only, 2026-10-30), TypeScript is intended. The owner's starting idea (2026-10-24) was to store the syntax
 tree and the dependency graph as they are and query them with DuckDB.
 
 ## Principle (owner decision, 2026-10-24)
@@ -849,6 +849,28 @@ owner's next direction: rather than adding fixed queries, make the schema
 simple enough for a refactoring agent to write its own queries, then
 dogfood finding refactoring targets.
 
+## Go (2026-10-30)
+
+([record](research/code-db-go-2026-10-30.md)) The owner chose the scope:
+the index and the units first, language knowledge split into
+`lang/<language>.sql`, checks on fixtures here and on a real Go repository
+in another session, and macOS included. Rust's unit knowledge moved to
+`lang/rust.sql` (`rust_units`) and Go's is `lang/go.sql` (`go_units`);
+`derived_units` takes their union and numbers, nests, sizes and propagates
+tests for both. The split changed no row of twenty derived layers on
+Horizon's root workspace (8,718 units) or on `duckdb-ext/` (252).
+`code-db index` runs `scip-go index` once per tracked `go.mod` holding a
+`.go` file. scip-go 0.2.7 gives only functions and methods a range and
+defines the package at every file's `package` clause, so the other ranges
+come from the syntax tree (specs, single-spec declarations, interface
+`method_elem`s) and each file is a file module spanning its tree. A
+method's `impl_key` is its receiver type's symbol. `go_file_ast` hands
+`read_ast` only the Go files, since it parses whatever it is given. The
+build names the platform from `uname` and links `host` to it, so the
+extensions build and load on macOS with Homebrew's DuckDB 2.0.0. Still
+Rust-only downstream: `modules`' file-module convention and
+`unit_complexity`'s node types.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
@@ -894,9 +916,11 @@ dogfood finding refactoring targets.
   catalog surface), and whether `duckdb-ext/` is extracted for use in
   other repositories. The DuckDB 2.0.0 CLI is installed as
   `~/.local/bin/duckdb2` for interactive use.
-- **Go and TypeScript** adapters exist only in the spike's record; the
-  per-language SQL (`lang/<language>.sql`) and the SCIP indexers
-  (`scip-go`, `scip-typescript`) are the pieces to add.
+- **Go** has its units (above); Go packages as modules, Go's complexity
+  node types, scip-go's implementation relationships and a reading on a
+  real Go repository are open. **TypeScript**'s adapter exists only in the
+  spike's record; `lang/typescript.sql` and `scip-typescript` are the
+  pieces to add.
 
 ## History
 
