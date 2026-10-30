@@ -371,7 +371,8 @@ mod tests {
         cmd.arg("init").arg(&dir);
         scrub_git_env(&mut cmd);
         cmd.output().expect("git init must succeed");
-        dir
+        // Canonical, as main_root resolves it (macOS' temp dir is a symlink).
+        dir.canonicalize().unwrap()
     }
 
     /// Redirects `XDG_DATA_HOME` to a fresh temp directory so tests never

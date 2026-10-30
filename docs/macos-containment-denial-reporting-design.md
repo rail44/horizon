@@ -233,12 +233,20 @@ New residual risks: the very first command after the host process starts can
 beat the subscription's attach (tens of ms); a sub-250ms-lived descendant can
 still miss every pid sample (pre-existing, unchanged); the shared buffer is
 capped drop-oldest (noise dominates). Verification recipe (owner, outside the
-sandbox): run `log stream --style compact --predicate 'sender == "kernel" AND
+sandbox): run `log stream --style compact --predicate 'process == "kernel" AND
 eventMessage CONTAINS "Sandbox:"'` writing to a *file*, fire `touch
 /Library/<probe>` from a sandboxed command, and confirm the record lands in
 the file within ~a second -- that also verifies the pipe flushes per record
 (untested from inside; the alternative if it does not is wrapping the child
 in `script -q /dev/null` to force a line-buffered tty).
+
+The predicate first matched `sender == "kernel"`. On macOS 27.0.1
+(2026-10-30) the records' sender is the Sandbox kext
+(`/System/Library/Extensions/Sandbox.kext/Contents/MacOS/Sandbox`) while
+their process is still `/kernel`, so that predicate matched nothing and every
+macOS denial went unreported (the tier-1 `/tmp` and direct-connect tests
+failed for it); the predicate now matches the process. The record's compact
+line is unchanged (`kernel[0:…] (Sandbox) Sandbox: bash(pid) deny(1) …`).
 
 ## Test plan
 

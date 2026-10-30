@@ -31,7 +31,7 @@ pub(crate) use job::{spawn_approved_host, spawn_sandboxed, BashJob, SandboxedRun
 #[cfg(test)]
 pub(crate) use registry::cancel_call;
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) use git::validated_metadata_grants;
 pub(crate) use git::{
     approved_metadata_roots, command_requires_metadata_write, git_prefilter, metadata_grants,

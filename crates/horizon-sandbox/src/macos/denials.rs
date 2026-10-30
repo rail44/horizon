@@ -77,11 +77,31 @@ const MAX_UNGRANTABLE: usize = 64;
 const MAX_NETWORK_DENIALS: usize = 128;
 const MAX_MACH_SERVICES: usize = 32;
 
-/// File operations the parser maps into filesystem denials. Everything else
-/// (`syscall-unix`, `user-preference-read`, `system-fsctl`, ...) is ignored:
-/// unmediated noise, either universal or not actionable through a grant.
-const READ_OPERATIONS: [&str; 3] = ["file-read-data", "file-read-metadata", "file-ioctl"];
-const WRITE_OPERATIONS: [&str; 3] = ["file-write-data", "file-write-metadata", "file-write-ioctl"];
+/// File operations the parser maps into filesystem denials: seatbelt's
+/// `file-read*` and `file-write*` operations on a path, but mounts. Everything
+/// else (`syscall-unix`, `user-preference-read`, `system-fsctl`, ...) is
+/// ignored: unmediated noise, either universal or not actionable through a
+/// grant. Creating a file is `file-write-create` (`echo x > new`), not
+/// `file-write-data`, which only writes to one that exists.
+const READ_OPERATIONS: [&str; 4] = [
+    "file-read-data",
+    "file-read-metadata",
+    "file-read-xattr",
+    "file-ioctl",
+];
+const WRITE_OPERATIONS: [&str; 11] = [
+    "file-write-create",
+    "file-write-data",
+    "file-write-flags",
+    "file-write-ioctl",
+    "file-write-metadata",
+    "file-write-mode",
+    "file-write-owner",
+    "file-write-setugid",
+    "file-write-times",
+    "file-write-unlink",
+    "file-write-xattr",
+];
 
 /// Recovers one sandboxed run's containment denials from the unified log.
 ///
@@ -317,6 +337,20 @@ fn apply_record(record: LogRecord, denials: &mut ContainmentDenials) {
         }
         return;
     }
+    // A direct connection the profile refuses (`network-outbound
+    // remote:*:80`): evidence of a route outside the session's proxy, as the
+    // Linux supervisor reports a refused connect -- never a grant candidate.
+    if record.operation == "network-outbound" {
+        let denial = NetworkDenial {
+            target: record.target,
+            operation: record.operation,
+            reason: "refused by the seatbelt sandbox (kernel unified-log record)".to_string(),
+        };
+        if denials.network.len() < MAX_NETWORK_DENIALS && !denials.network.contains(&denial) {
+            denials.network.push(denial);
+        }
+        return;
+    }
     if record.operation == "mach-lookup" {
         let Some(service) = record.target.split_whitespace().next() else {
             return;
@@ -409,10 +443,13 @@ struct StreamState {
     child: Option<Child>,
 }
 
-/// The live subscription's predicate: seatbelt denials from the kernel,
-/// identical to the retired `log show` query's (and to the shape
-/// [`parse_record`] anchors on, verified against live output 2026-09-10).
-const STREAM_PREDICATE: &str = "sender == \"kernel\" AND eventMessage CONTAINS \"Sandbox:\"";
+/// The live subscription's predicate: seatbelt denials from the kernel
+/// (the shape [`parse_record`] anchors on, verified against live output
+/// 2026-09-10). It matches the kernel *process*, not the sender: macOS 27
+/// attributes the records to the Sandbox kext as sender (`sender ==
+/// "kernel"` matched none of them on 27.0.1, 2026-10-30), while the
+/// process stays `kernel` as before.
+const STREAM_PREDICATE: &str = "process == \"kernel\" AND eventMessage CONTAINS \"Sandbox:\"";
 
 fn shared_stream() -> &'static SharedStream {
     static STREAM: LazyLock<SharedStream> = LazyLock::new(|| SharedStream {
@@ -615,6 +652,40 @@ mod tests {
         assert_eq!(denials.network[0].target, "com.apple.SecurityServer");
         assert_eq!(denials.network[0].operation, "mach-lookup");
         assert!(denials.filesystem.is_empty());
+    }
+
+    #[test]
+    fn refused_direct_connects_become_network_records_only() {
+        let mut denials = ContainmentDenials::default();
+        apply_record(
+            parse_record(
+                "2026-10-30 15:24:02.671 E  kernel[0:x] (Sandbox) Sandbox: bash(79173) deny(1) network-outbound remote:*:80",
+            )
+            .expect("parses"),
+            &mut denials,
+        );
+        assert_eq!(denials.network.len(), 1);
+        assert_eq!(denials.network[0].target, "remote:*:80");
+        assert_eq!(denials.network[0].operation, "network-outbound");
+        assert!(denials.mach_services.is_empty());
+        assert!(denials.filesystem.is_empty());
+    }
+
+    #[test]
+    fn creating_a_file_under_a_system_root_is_an_ungrantable_write() {
+        // Verified live 2026-10-30: `echo x > /tmp/new` is file-write-create.
+        let mut denials = ContainmentDenials::default();
+        apply_record(
+            parse_record(&format!(
+                "2026-10-30 15:20:04.108 E  kernel[0:x] (Sandbox) Sandbox: bash(77209) deny(1) file-write-create /private/tmp/horizon-denials-create-{}",
+                std::process::id()
+            ))
+            .expect("parses"),
+            &mut denials,
+        );
+        assert!(denials.filesystem.is_empty());
+        assert_eq!(denials.ungrantable.len(), 1);
+        assert!(denials.ungrantable[0].guidance.contains("$TMPDIR"));
     }
 
     #[test]

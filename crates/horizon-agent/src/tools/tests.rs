@@ -2654,11 +2654,17 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
                         result.output
                     )
                 });
+            // The report names the path as the kernel resolved it: macOS'
+            // /tmp is /private/tmp.
+            let reported_target = std::path::Path::new("/tmp")
+                .canonicalize()
+                .unwrap()
+                .join(&marker);
             let entry = ungrantable
                 .iter()
-                .find(|entry| entry["path"] == host_target.display().to_string())
+                .find(|entry| entry["path"] == reported_target.display().to_string())
                 .unwrap_or_else(|| {
-                    panic!("expected {host_target:?} among {ungrantable:?}");
+                    panic!("expected {reported_target:?} among {ungrantable:?}");
                 });
             let guidance = entry["guidance"].as_str().expect("guidance string");
             assert!(

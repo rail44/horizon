@@ -176,9 +176,10 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
 #[test]
 fn environment_rebuild_retains_additional_grants_without_granting_the_old_root() {
     let dirs = tempfile::tempdir().unwrap();
-    let old_root = dirs.path().join("consultation");
-    let new_root = dirs.path().join("implementation");
-    let dependency = dirs.path().join("dependency");
+    let base = dirs.path().canonicalize().unwrap();
+    let old_root = base.join("consultation");
+    let new_root = base.join("implementation");
+    let dependency = base.join("dependency");
     for root in [&old_root, &new_root, &dependency] {
         std::fs::create_dir(root).unwrap();
     }
