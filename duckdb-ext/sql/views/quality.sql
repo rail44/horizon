@@ -26,18 +26,55 @@ FROM impl_members m JOIN contained c ON c.unit_id = m.member_id;
 -- (symbol_units: the items, fields, variants and locals-free symbols it defines);
 -- fan_in_units the distinct units outside the scope holding one, reference_occurrences
 -- all those occurrences. Units nobody outside references have no row.
+-- A module counts only the references to its own symbol, not to what it contains (the
+-- file level of queries/coupling.sql sums a file's contents): the path segments that name
+-- it (`a` in `crate::a::f`, `use crate::a;`, an extern crate's name, an alias of it), and
+-- not the occurrences rust-analyzer also gives its symbol that name no module: the
+-- keywords `crate`, `super` and `self` (in a path and in `pub(crate)`, `pub(super)`), a
+-- segment of a `pub(in …)` path, and the `mod a;` declaration. These are told apart by
+-- the occurrence's source text. The target roots of one package share its crate root's
+-- symbol (rust-analyzer names a symbol by package): the library's root (a path ending in
+-- `src/lib.rs`), which is what a crate name in a path reaches, counts those references
+-- when the package has one, else every root sharing the symbol does.
 CREATE OR REPLACE VIEW unit_fan_in AS
 WITH unit_rows AS MATERIALIZED (
-    SELECT unit_id, file_id, crate FROM units
+    SELECT unit_id, file_id, crate, kind, symbol, path FROM units
+),
+module_symbols AS MATERIALIZED (
+    SELECT DISTINCT symbol FROM unit_rows WHERE kind = 'module'
+),
+module_owners AS (
+    SELECT unit_id, symbol FROM unit_rows
+    WHERE kind = 'module'
+    QUALIFY ends_with(path, 'src/lib.rs')
+         OR NOT bool_or(ends_with(path, 'src/lib.rs')) OVER (PARTITION BY symbol)
 ),
 owned AS MATERIALIZED (
     SELECT DISTINCT s.unit_id, su.symbol
-    FROM unit_scope s JOIN symbol_units su ON su.unit_id = s.member_unit_id
+    FROM unit_scope s
+    JOIN unit_rows u ON u.unit_id = s.unit_id AND u.kind <> 'module'
+    JOIN symbol_units su ON su.unit_id = s.member_unit_id
+    UNION
+    SELECT unit_id, symbol FROM module_owners
+),
+-- The occurrences of module symbols that name the module.
+module_refs AS MATERIALIZED (
+    SELECT o.symbol, o.file_id, o.unit_id
+    FROM unit_occurrences o
+    JOIN module_symbols m USING (symbol)
+    JOIN source_lines l ON l.file_id = o.file_id AND l.line = o.start_line
+    WHERE NOT o.is_definition
+      AND substr(l.text, o.start_column, o.end_column - o.start_column) NOT IN ('crate', 'super', 'self')
+      AND NOT regexp_matches(substr(l.text, 1, o.start_column - 1), 'pub\(in [\w:]*$')
+      AND NOT regexp_matches(l.text, '^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*;')
 ),
 refs AS MATERIALIZED (
     SELECT o.symbol, o.file_id, o.unit_id, r.crate
     FROM unit_occurrences o JOIN unit_rows r USING (unit_id)
-    WHERE NOT o.is_definition AND NOT o.is_local
+    WHERE NOT o.is_definition AND NOT o.is_local AND o.symbol NOT IN (SELECT symbol FROM module_symbols)
+    UNION ALL
+    SELECT m.symbol, m.file_id, m.unit_id, r.crate
+    FROM module_refs m JOIN unit_rows r USING (unit_id)
 ),
 scopes AS MATERIALIZED (
     SELECT * FROM unit_scope
@@ -118,11 +155,12 @@ innermost AS (
 SELECT unit_id, count(*) AS debt_lines FROM innermost GROUP BY unit_id;
 
 -- unit_clones(unit_id, clone_pairs, exact_pairs, normalized_pairs): the clone pairs with a
--- side whose innermost unit is this one (clone_sides), per report.
+-- side whose innermost unit is this one (clone_sides), and those each report found (a
+-- pair both found counts in both).
 CREATE OR REPLACE VIEW unit_clones AS
 SELECT s.unit_id, count(DISTINCT s.pair_id) AS clone_pairs,
-       count(DISTINCT s.pair_id) FILTER (WHERE p.source = 'exact') AS exact_pairs,
-       count(DISTINCT s.pair_id) FILTER (WHERE p.source = 'normalized') AS normalized_pairs
+       count(DISTINCT s.pair_id) FILTER (WHERE list_contains(p.sources, 'exact')) AS exact_pairs,
+       count(DISTINCT s.pair_id) FILTER (WHERE list_contains(p.sources, 'normalized')) AS normalized_pairs
 FROM clone_sides s JOIN clone_pairs p USING (pair_id)
 WHERE s.unit_id IS NOT NULL
 GROUP BY s.unit_id;

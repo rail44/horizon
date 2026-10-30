@@ -498,9 +498,12 @@ def line_of(text, needle):
 
 
 def fixture_report(repo):
-    """Two reports in jscpd 5.3.1's JSON shape: in `exact`, the two `area` bodies (Square's
-    and Rect's, two types a From impl joins) and a pair between `run` of tools and
-    Square.scaled; `normalized` is empty."""
+    """Two reports in jscpd 5.3.1's JSON shape. In `exact`: the two `area` bodies (Square's
+    and Rect's, two types a From impl joins), a pair between `run` of tools and
+    Square.scaled, and two fragments of lib.rs that do not overlap (a copy inside the file
+    module, kept). In `normalized`: Square's `area` body matching itself one line lower
+    (overlapping fragments of one file, dropped), and the two `area` bodies again, a line
+    longer and with the sides the other way round (merged with the exact pair)."""
     def side(path, start, end):
         return {"name": str(repo / path), "start": start, "end": end,
                 "startLoc": {"line": start, "column": 1}, "endLoc": {"line": end, "column": 1}}
@@ -516,8 +519,19 @@ def fixture_report(repo):
         {"format": "rust", "lines": 1, "tokens": 10, "fragment": "",
          "firstFile": side("shapes/src/lib.rs", scaled, scaled),
          "secondFile": side("tools/src/main.rs", run, run)},
+        {"format": "rust", "lines": 5, "tokens": 75, "fragment": "",
+         "firstFile": side("shapes/src/lib.rs", 40, 44),
+         "secondFile": side("shapes/src/lib.rs", 10, 14)},
     ]
-    for mode, dups in (("exact", duplicates), ("normalized", [])):
+    normalized = [
+        {"format": "rust", "lines": 5, "tokens": 85, "fragment": "",
+         "firstFile": side("shapes/src/lib.rs", lib_area, lib_area + 4),
+         "secondFile": side("shapes/src/lib.rs", lib_area + 1, lib_area + 5)},
+        {"format": "rust", "lines": 6, "tokens": 90, "fragment": "",
+         "firstFile": side("shapes/src/rect.rs", rect_area - 1, rect_area + 4),
+         "secondFile": side("shapes/src/lib.rs", lib_area - 1, lib_area + 4)},
+    ]
+    for mode, dups in (("exact", duplicates), ("normalized", normalized)):
         out = repo / "target/code-db/jscpd" / mode
         out.mkdir(parents=True, exist_ok=True)
         (out / "jscpd-report.json").write_text(json.dumps({"duplicates": dups, "statistics": {}}))
@@ -559,8 +573,13 @@ CHECKED = [
     ("query size level=file", ("size", {"level": "file"})),
     ("query size level=crate", ("size", {"level": "crate"})),
     ("query coupling kind=type min_crates=1", ("coupling", {"kind": "type", "min_crates": 1})),
+    ("query coupling level=file", ("coupling", {"level": "file"})),
+    ("query coupling level=crate", ("coupling", {"level": "crate"})),
+    ("clone_report_pairs", "SELECT * FROM clone_report_pairs ORDER BY report_pair_id"),
+    ("clone_pairs", "SELECT * FROM clone_pairs ORDER BY pair_id"),
     ("query unreferenced include_structural", ("unreferenced", {"include_structural": True})),
     ("query duplication include_tests source=exact", ("duplication", {"include_tests": True, "source": "exact"})),
+    ("query duplication source=normalized", ("duplication", {"source": "normalized"})),
 ]
 
 
@@ -964,14 +983,14 @@ EXPECTED = {
         ('shapes/src/convert.rs', 'shapes', 'shapes/src/convert.rs', 'module', 'convert', 1, 13, False, 10, 0, 0, 0, 0, 0, 1, 0, 2, 0, 'shapes/src/convert.rs', 'convert', 'pub', None, False, 0, 2, 'referenced'),
         ('shapes/src/convert.rs', 'shapes', 'shapes/src/convert.rs', 'method', 'From<Square> for Rect.from', 5, 7, False, 3, 0, 0, 0, 0, 0, 0, 0, 2, 0, 'shapes/src/convert.rs', 'convert', None, 1, None, 0, 0, 'trait_impl'),
         ('shapes/src/convert.rs', 'shapes', 'shapes/src/convert.rs', 'function', 'back', 10, 12, False, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 'shapes/src/convert.rs', 'convert', 'pub', 0, False, 0, 1, 'referenced'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'module', 'shapes', 1, 68, False, 56, 0, 0, 0, 0, 0, 5, 1, 0, 0, None, None, 'private', None, True, 1, 16, 'referenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'module', 'shapes', 1, 68, False, 56, 0, 0, 1, 1, 0, 3, 1, 0, 0, None, None, 'private', None, True, 1, 16, 'referenced'),
         ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Shape', 6, 10, False, 5, 0, 0, 0, 0, 0, 2, 1, 0, 0, None, None, 'pub', None, True, 0, 4, 'referenced'),
         ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Shape.Unit', 8, 8, False, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None, None, False, 0, 0, 'trait_item'),
         ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Shape.area', 9, 9, False, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None, 1, False, 0, 0, 'trait_item'),
         ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'constant', 'UNIT', 12, 12, False, 1, 0, 0, 0, 0, 0, 2, 1, 0, 0, None, None, 'pub', None, False, 0, 5, 'referenced'),
         ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Square', 14, 17, False, 4, 0, 0, 0, 0, 0, 4, 1, 0, 0, None, None, 'pub', None, False, 0, 13, 'referenced'),
         ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'type', 'Shape for Square.Unit', 20, 20, False, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None, None, None, 0, 0, 'trait_impl'),
-        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Shape for Square.area', 21, 27, False, 7, 0, 0, 1, 1, 0, 1, 1, 0, 0, None, None, None, 1, None, 0, 2, 'referenced'),
+        ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Shape for Square.area', 21, 27, False, 7, 0, 0, 1, 1, 1, 1, 1, 0, 0, None, None, None, 1, None, 0, 2, 'referenced'),
         ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Square.new', 31, 34, False, 4, 0, 0, 0, 0, 0, 3, 1, 0, 0, None, None, 'pub', 1, True, 0, 5, 'referenced'),
         ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'method', 'Square.scaled', 37, 39, False, 3, 0, 0, 1, 1, 0, 0, 0, 0, 0, None, None, 'pub(crate)', 4, False, 0, 0, 'unreferenced'),
         ('shapes/src/lib.rs', 'shapes', 'shapes/src/lib.rs', 'function', 'unused_helper', 42, 44, False, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'pub', 0, False, 0, 0, 'unreferenced'),
@@ -982,7 +1001,7 @@ EXPECTED = {
         ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'module', 'rect', 1, 25, False, 20, 0, 0, 0, 0, 0, 2, 1, 2, 0, 'shapes/src/convert.rs', 'rect', 'pub', None, False, 0, 4, 'referenced'),
         ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'type', 'Rect', 3, 5, False, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 'shapes/src/convert.rs', 'rect', 'pub', None, False, 0, 4, 'referenced'),
         ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'type', 'Shape for Rect.Unit', 8, 8, False, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'shapes/src/convert.rs', 'rect', None, None, None, 0, 0, 'trait_impl'),
-        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'method', 'Shape for Rect.area', 9, 15, False, 7, 0, 0, 1, 1, 0, 0, 0, 1, 0, 'shapes/src/convert.rs', 'rect', None, 1, None, 0, 0, 'trait_impl'),
+        ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'method', 'Shape for Rect.area', 9, 15, False, 7, 0, 0, 1, 1, 1, 0, 0, 1, 0, 'shapes/src/convert.rs', 'rect', None, 1, None, 0, 0, 'trait_impl'),
         ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'function', 'ring', 18, 20, False, 3, 0, 0, 0, 0, 0, 1, 1, 1, 0, 'shapes/src/convert.rs', 'rect', 'pub', 0, False, 0, 1, 'referenced'),
         ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'function', 'base', 22, 24, False, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 'shapes/src/convert.rs', 'rect', 'pub(crate)', 0, False, 0, 1, 'referenced'),
         ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'module', 'tools', 1, 8, False, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', None, False, 0, 0, 'crate_root'),
@@ -1012,29 +1031,30 @@ EXPECTED = {
         ('unit', 'shapes', 'shapes/src/rect.rs', 'type', 'Shape for Rect.Unit', 8, 1, None, False, None),
     ],
     'query duplication': [
-        (0, 'exact', 5, 80, 'shapes/src/lib.rs', 22, 26, 'method', 'Shape for Square.area', False, 'shapes/src/rect.rs', 10, 14, 'method', 'Shape for Rect.area', False, False, True),
-        (1, 'exact', 1, 10, 'shapes/src/lib.rs', 38, 38, 'method', 'Square.scaled', False, 'tools/src/main.rs', 6, 6, 'function', 'run', False, False, False),
+        (0, ['exact', 'normalized'], 6, 90, 'shapes/src/lib.rs', 21, 26, 'method', 'Shape for Square.area', False, 'shapes/src/rect.rs', 9, 14, 'method', 'Shape for Rect.area', False, False, True),
+        (2, ['exact'], 5, 75, 'shapes/src/lib.rs', 10, 14, 'module', 'shapes', False, 'shapes/src/lib.rs', 40, 44, 'module', 'shapes', False, True, False),
+        (1, ['exact'], 1, 10, 'shapes/src/lib.rs', 38, 38, 'method', 'Square.scaled', False, 'tools/src/main.rs', 6, 6, 'function', 'run', False, False, False),
     ],
     'query coupling': [
-        ('shapes/src/lib.rs', 'shapes', 'module', 'shapes', 1, 56, 5, 1, 8, 0, 0, 0, False),
-        ('shapes/src/lib.rs', 'shapes', 'type', 'Square', 14, 4, 4, 1, 8, 0, 0, 1, False),
-        ('shapes/src/lib.rs', 'shapes', 'method', 'Square.new', 31, 4, 3, 1, 4, 0, 0, 1, False),
-        ('shapes/src/rect.rs', 'shapes', 'module', 'rect', 1, 20, 2, 1, 4, 2, 0, 3, False),
-        ('shapes/src/lib.rs', 'shapes', 'type', 'Shape', 6, 5, 2, 1, 3, 0, 0, 0, False),
-        ('shapes/src/lib.rs', 'shapes', 'constant', 'UNIT', 12, 1, 2, 1, 3, 0, 0, 0, False),
-        ('shapes/src/rect.rs', 'shapes', 'function', 'ring', 18, 3, 1, 1, 1, 1, 0, 1, False),
-        ('shapes/src/lib.rs', 'shapes', 'method', 'Shape for Square.area', 21, 7, 1, 1, 2, 0, 0, 2, False),
-        ('shapes/src/convert.rs', 'shapes', 'module', 'convert', 1, 10, 1, 0, 1, 2, 0, 3, False),
-        ('shapes/src/convert.rs', 'shapes', 'function', 'back', 10, 3, 1, 0, 1, 1, 0, 1, False),
-        ('shapes/src/rect.rs', 'shapes', 'type', 'Rect', 3, 3, 1, 0, 2, 1, 0, 2, False),
-        ('shapes/src/rect.rs', 'shapes', 'function', 'base', 22, 3, 1, 0, 1, 0, 0, 0, False),
-        ('app/src/main.rs', 'app', 'module', 'app', 1, 6, 0, 0, 0, 2, 1, 6, False),
-        ('app/src/main.rs', 'app', 'function', 'main', 3, 4, 0, 0, 0, 2, 1, 5, False),
-        ('shapes/src/convert.rs', 'shapes', 'method', 'From<Square> for Rect.from', 5, 3, 0, 0, 0, 2, 0, 2, False),
-        ('shapes/src/rect.rs', 'shapes', 'method', 'Shape for Rect.area', 9, 7, 0, 0, 0, 1, 0, 2, False),
-        ('shapes/src/lib.rs', 'shapes', 'method', 'Square.scaled', 37, 3, 0, 0, 0, 0, 0, 1, False),
-        ('tools/src/main.rs', 'tools', 'function', 'main', 1, 3, 0, 0, 0, 0, 0, 1, False),
-        ('tools/src/main.rs', 'tools', 'function', 'run', 5, 3, 0, 0, 1, 0, 0, 0, False),
+        ('unit', 'shapes/src/lib.rs', 'shapes', 'type', 'Square', 14, 4, 4, 1, 8, 0, 0, 1, False),
+        ('unit', 'shapes/src/lib.rs', 'shapes', 'module', 'shapes', 1, 56, 3, 1, 4, 0, 0, 0, False),
+        ('unit', 'shapes/src/lib.rs', 'shapes', 'method', 'Square.new', 31, 4, 3, 1, 4, 0, 0, 1, False),
+        ('unit', 'shapes/src/rect.rs', 'shapes', 'module', 'rect', 1, 20, 2, 1, 3, 2, 0, 3, False),
+        ('unit', 'shapes/src/lib.rs', 'shapes', 'type', 'Shape', 6, 5, 2, 1, 3, 0, 0, 0, False),
+        ('unit', 'shapes/src/lib.rs', 'shapes', 'constant', 'UNIT', 12, 1, 2, 1, 3, 0, 0, 0, False),
+        ('unit', 'shapes/src/rect.rs', 'shapes', 'function', 'ring', 18, 3, 1, 1, 1, 1, 0, 1, False),
+        ('unit', 'shapes/src/lib.rs', 'shapes', 'method', 'Shape for Square.area', 21, 7, 1, 1, 2, 0, 0, 2, False),
+        ('unit', 'shapes/src/convert.rs', 'shapes', 'module', 'convert', 1, 10, 1, 0, 1, 2, 0, 3, False),
+        ('unit', 'shapes/src/convert.rs', 'shapes', 'function', 'back', 10, 3, 1, 0, 1, 1, 0, 1, False),
+        ('unit', 'shapes/src/rect.rs', 'shapes', 'type', 'Rect', 3, 3, 1, 0, 2, 1, 0, 2, False),
+        ('unit', 'shapes/src/rect.rs', 'shapes', 'function', 'base', 22, 3, 1, 0, 1, 0, 0, 0, False),
+        ('unit', 'app/src/main.rs', 'app', 'module', 'app', 1, 6, 0, 0, 0, 2, 1, 6, False),
+        ('unit', 'app/src/main.rs', 'app', 'function', 'main', 3, 4, 0, 0, 0, 2, 1, 5, False),
+        ('unit', 'shapes/src/convert.rs', 'shapes', 'method', 'From<Square> for Rect.from', 5, 3, 0, 0, 0, 2, 0, 2, False),
+        ('unit', 'shapes/src/rect.rs', 'shapes', 'method', 'Shape for Rect.area', 9, 7, 0, 0, 0, 1, 0, 2, False),
+        ('unit', 'shapes/src/lib.rs', 'shapes', 'method', 'Square.scaled', 37, 3, 0, 0, 0, 0, 0, 1, False),
+        ('unit', 'tools/src/main.rs', 'tools', 'function', 'main', 1, 3, 0, 0, 0, 0, 0, 1, False),
+        ('unit', 'tools/src/main.rs', 'tools', 'function', 'run', 5, 3, 0, 0, 1, 0, 0, 0, False),
     ],
     'query interface': [
         ('shapes/src/lib.rs', 'shapes', 'method', 'Square.scaled', 37, 4, 'pub(crate)', 0, 3, 'pub(crate) fn scaled(&self, a: u32, b: u32, c: u32) -> u32'),
@@ -1057,7 +1077,7 @@ EXPECTED = {
         ('tools', 0, 0, 0, 0),
     ],
     'query intent': [
-        ('shapes/src/lib.rs', 'shapes', 'module', 'shapes', 1, 'private', True, 1, 1, 5),
+        ('shapes/src/lib.rs', 'shapes', 'module', 'shapes', 1, 'private', True, 1, 1, 3),
         ('shapes/src/lib.rs', 'shapes', 'type', 'Square', 14, 'pub', False, 0, 1, 4),
         ('shapes/src/lib.rs', 'shapes', 'constant', 'UNIT', 12, 'pub', False, 0, 1, 2),
         ('shapes/src/rect.rs', 'shapes', 'module', 'rect', 1, 'pub', False, 0, 1, 2),
@@ -1117,9 +1137,9 @@ EXPECTED = {
         ('crate', 'tools', None, None, None, None, 6, 2, None, 0.0),
     ],
     'query coupling kind=type min_crates=1': [
-        ('shapes/src/lib.rs', 'shapes', 'type', 'Square', 14, 4, 4, 1, 8, 0, 0, 1, True),
-        ('shapes/src/lib.rs', 'shapes', 'type', 'Shape', 6, 5, 2, 1, 3, 0, 0, 0, True),
-        ('shapes/src/rect.rs', 'shapes', 'type', 'Rect', 3, 3, 1, 0, 2, 1, 0, 2, False),
+        ('unit', 'shapes/src/lib.rs', 'shapes', 'type', 'Square', 14, 4, 4, 1, 8, 0, 0, 1, True),
+        ('unit', 'shapes/src/lib.rs', 'shapes', 'type', 'Shape', 6, 5, 2, 1, 3, 0, 0, 0, True),
+        ('unit', 'shapes/src/rect.rs', 'shapes', 'type', 'Rect', 3, 3, 1, 0, 2, 1, 0, 2, False),
     ],
     'query unreferenced include_structural': [
         ('shapes/src/lib.rs', 'shapes', 'method', 'Square.scaled', 37, 3, 'pub(crate)', 'unreferenced'),
@@ -1142,10 +1162,55 @@ EXPECTED = {
         ('shapes/src/rect.rs', 'shapes', 'type', 'Shape for Rect.Unit', 8, 1, None, 'trait_impl'),
     ],
     'query duplication include_tests source=exact': [
-        (0, 'exact', 5, 80, 'shapes/src/lib.rs', 22, 26, 'method', 'Shape for Square.area', False, 'shapes/src/rect.rs', 10, 14, 'method', 'Shape for Rect.area', False, False, True),
-        (1, 'exact', 1, 10, 'shapes/src/lib.rs', 38, 38, 'method', 'Square.scaled', False, 'tools/src/main.rs', 6, 6, 'function', 'run', False, False, False),
+        (0, ['exact', 'normalized'], 6, 90, 'shapes/src/lib.rs', 21, 26, 'method', 'Shape for Square.area', False, 'shapes/src/rect.rs', 9, 14, 'method', 'Shape for Rect.area', False, False, True),
+        (2, ['exact'], 5, 75, 'shapes/src/lib.rs', 10, 14, 'module', 'shapes', False, 'shapes/src/lib.rs', 40, 44, 'module', 'shapes', False, True, False),
+        (1, ['exact'], 1, 10, 'shapes/src/lib.rs', 38, 38, 'method', 'Square.scaled', False, 'tools/src/main.rs', 6, 6, 'function', 'run', False, False, False),
+    ],
+    'query coupling level=file': [
+        ('file', 'shapes/src/lib.rs', 'shapes', None, None, None, 56, 5, 1, 8, 0, 0, 0, None),
+        ('file', 'shapes/src/rect.rs', 'shapes', None, None, None, 20, 2, 1, 4, 2, 0, 3, None),
+        ('file', 'shapes/src/convert.rs', 'shapes', None, None, None, 10, 1, 0, 1, 2, 0, 3, None),
+        ('file', 'app/src/main.rs', 'app', None, None, None, 6, 0, 0, 0, 2, 1, 6, None),
+    ],
+    'query coupling level=crate': [
+        ('crate', None, 'shapes', None, None, None, 86, 3, 1, 4, 0, 0, 0, None),
+        ('crate', None, 'app', None, None, None, 13, 0, 0, 0, 2, 1, 6, None),
+        ('crate', None, 'tools', None, None, None, 6, 0, 0, 0, 0, 0, 0, None),
+    ],
+    'clone_report_pairs': [
+        (0, 'exact', 'shapes/src/lib.rs', 22, 26, 'shapes/src/rect.rs', 10, 14, 80, 5),
+        (1, 'exact', 'shapes/src/lib.rs', 38, 38, 'tools/src/main.rs', 6, 6, 10, 1),
+        (2, 'exact', 'shapes/src/lib.rs', 40, 44, 'shapes/src/lib.rs', 10, 14, 75, 5),
+        (3, 'normalized', 'shapes/src/lib.rs', 22, 26, 'shapes/src/lib.rs', 23, 27, 85, 5),
+        (4, 'normalized', 'shapes/src/rect.rs', 9, 14, 'shapes/src/lib.rs', 21, 26, 90, 6),
+    ],
+    'clone_pairs': [
+        (0, ['exact', 'normalized'], [0, 4], 'shapes/src/lib.rs', 21, 26, 'shapes/src/rect.rs', 9, 14, 90, 6),
+        (1, ['exact'], [1], 'shapes/src/lib.rs', 38, 38, 'tools/src/main.rs', 6, 6, 10, 1),
+        (2, ['exact'], [2], 'shapes/src/lib.rs', 10, 14, 'shapes/src/lib.rs', 40, 44, 75, 5),
+    ],
+    'query duplication source=normalized': [
+        (0, ['exact', 'normalized'], 6, 90, 'shapes/src/lib.rs', 21, 26, 'method', 'Shape for Square.area', False, 'shapes/src/rect.rs', 9, 14, 'method', 'Shape for Rect.area', False, False, True),
     ],
 }
+
+
+def assert_counting_rules(con):
+    """The counting rules EXPECTED holds, named one by one (fixture_report has the pairs)."""
+    pairs = {tuple(r[0]): r[1] for r in rows(con, "SELECT report_pairs, sources FROM clone_pairs")}
+    # Square's area matching itself one line lower (report pair 3) is no pair.
+    assert all(3 not in ids for ids in pairs), pairs
+    # The two fragments of lib.rs that do not overlap stay, as a copy inside one unit.
+    same = [r[16] for r in query(con, "duplication") if r[4] == r[10]]
+    assert pairs[(2,)] == ["exact"] and same == [True], (pairs, same)
+    # The area pair both reports found, with the sides the other way round, is one pair.
+    assert pairs[(0, 4)] == ["exact", "normalized"], pairs
+    # The crate root `shapes` counts the paths naming it (main.rs, fixtures.rs, it.rs),
+    # not `crate::` nor `pub mod rect;`; its file sums what it holds (main.rs, fixtures.rs,
+    # it.rs, rect.rs, convert.rs).
+    unit = [r[7] for r in query(con, "coupling") if r[3] == "module" and r[4] == "shapes"]
+    file = [r[7] for r in query(con, "coupling", level="file") if r[1] == "shapes/src/lib.rs"]
+    assert (unit, file) == ([3], [5]), (unit, file)
 
 
 def assert_fixture(con, repo):
@@ -1153,6 +1218,7 @@ def assert_fixture(con, repo):
         actual = checked_rows(con, sql)
         expected = EXPECTED[title]
         assert actual == expected, f"{title}:\n  actual   {actual}\n  expected {expected}"
+    assert_counting_rules(con)
     # Without layers, no violation and no violating edge.
     patterns = rows(con, "SELECT * FROM config_layers")
     deps = rows(con, "SELECT * FROM config_layer_deps")

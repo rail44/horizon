@@ -249,14 +249,15 @@ fn index_settings_and_queries() {
         ]
     );
 
-    // The stand-in writes its pair into both reports.
+    // The stand-in writes its pair into both reports, which makes one pair, side a
+    // the smaller path.
     let pairs = rows(&code_db(&["query", "duplication"]));
     assert_eq!(
         pairs
             .iter()
-            .map(|r| (&r[8][..], &r[14][..]))
+            .map(|r| (&r[1][..], &r[8][..], &r[14][..]))
             .collect::<Vec<_>>(),
-        [("width", "helper"), ("width", "helper")]
+        [("[exact, normalized]", "helper", "width")]
     );
 
     // Without the reports, a query that reads no clone still runs; one that does

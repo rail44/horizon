@@ -423,24 +423,37 @@ settings file.
 | --- | --- | --- | --- |
 | size (§3.1, §3.2) | `size` (`level` unit, file, crate) | `loc` | medium |
 | duplication (§3.5) | `duplication` (pairs, `conversion_pair`) | `unit_clones` | medium |
-| coupling (§3.6) | `coupling` (`contract_candidate`, `min_crates`), `module_graph` | `unit_fan_in`, `unit_fan_out` | medium |
+| coupling (§3.6) | `coupling` (`level` unit, file, crate; `contract_candidate`, `min_crates`), `module_graph` | `unit_fan_in`, `unit_fan_out` | medium |
 | independence (§3.8) | `module_cycles` (`violating_edges`), `layer_violations` | module of the unit, its cycle and layer | weak |
 | interface (§3.4) | `interface` (parameters, visibility), `public_surface` (per crate) | `visibility`, `parameters` | weak |
 | intent, mechanical part (§3.15, §3.18) | `intent` | `has_doc`, `unit_debt_markers` | weak to none |
 | complexity and nesting (§3.3) | `complexity` | `unit_complexity` (`decisions`, `max_nesting`) | weak to medium |
 | unreferenced definitions (§3.16) | `unreferenced` | `unit_reference_status` | weak |
 
-- **`clone_pairs(pair_id, source, file_a, start_line_a, end_line_a, file_b, start_line_b,
-  end_line_b, tokens, lines)`**: jscpd's duplicates from the reports of `clone_reports`
-  (`index` runs jscpd over the files of `files`), read with a fixed schema; the list
-  always includes `empty-jscpd-report.json`, so the view exists without reports.
+- **`clone_report_pairs(report_pair_id, source, file_a, start_line_a, end_line_a, file_b,
+  start_line_b, end_line_b, tokens, lines)`**: jscpd's duplicates as the reports of
+  `clone_reports` give them (`index` runs jscpd over the files of `files`), read with a
+  fixed schema; the list always includes `empty-jscpd-report.json`, so the view exists
+  without reports. **`clone_pairs(pair_id, sources, report_pairs, file_a, start_line_a,
+  end_line_a, file_b, start_line_b, end_line_b, tokens, lines)`**: the pairs the queries
+  read. A duplicate whose two fragments lie in one file and share a line is dropped (a
+  run of similar lines matching itself a few lines lower); two fragments of one file
+  that do not overlap stay. An `exact` duplicate whose fragments overlap a `normalized`
+  one's on both sides joins the one it shares the most lines with, so that the same two
+  places are one pair; duplicates of one report are not merged with each other. A
+  merged pair has the union of the ranges on each side and the largest `tokens` and
+  `lines`; `sources` lists the reports that found it, `report_pairs` its duplicates.
   **`clone_sides(pair_id, side, file_id, start_line, end_line, unit_id)`**: each fragment
   with the innermost unit containing all its lines.
 - **`unit_scope(unit_id, member_unit_id)`**: what a unit stands for when coupling is
   counted: itself, what it contains, and for a type its impls' members.
   **`unit_fan_in(unit_id, fan_in_files, fan_in_crates, fan_in_units,
   reference_occurrences)`**: the files and crates other than its own, and the units
-  outside its scope, that reference a symbol belonging to its scope.
+  outside its scope, that reference a symbol belonging to its scope; a module, only its
+  own symbol where a path names it (not `crate`, `super`, `self`, `pub(crate)`,
+  `pub(super)`, a `pub(in …)` path or the `mod a;` declaration, told apart by the
+  source text; a package's crate-root symbol counts for its `src/lib.rs`). What a file
+  contains is summed by `coupling`'s file level.
   **`unit_fan_out(unit_id, fan_out_files, fan_out_crates, fan_out_units)`**: the same for
   what its scope references.
 - **`unit_reference_status(unit_id, references, status)`**: the reference occurrences of
@@ -449,7 +462,8 @@ settings file.
   `trait_item`.
 - **`unit_debt_markers(unit_id, debt_lines)`**: lines with `TODO` or `FIXME`, each counted
   for its innermost unit.
-- **`unit_clones(unit_id, clone_pairs, exact_pairs, normalized_pairs)`**.
+- **`unit_clones(unit_id, clone_pairs, exact_pairs, normalized_pairs)`**: a pair both
+  reports found counts in both report columns.
 - **`unit_own_ast`**: the nodes of `unit_ast` that are the unit's own, without those whose
   lines lie inside a unit nested in it (innermost attribution, as `unit_occurrences`).
   **`unit_complexity(unit_id, if_count, …, closure_count, decisions, max_nesting)`**:
@@ -529,12 +543,14 @@ impl; `app`, a binary using it, an integration test and a file the settings name
 a second workspace nested in it (`tools/`), a file outside every workspace and a file the
 settings exclude. It indexes both workspaces with rust-analyzer (`RUST_ANALYZER`; skipped
 with a message when missing), writes two jscpd-shaped reports (a pair between two types a
-conversion joins, and one that is not), fills the settings' tables as `code-db` does
-(`exclude_patterns`, `extra_test_paths`, `extra_test_attributes`, two layers), and asserts
-every row of `files` and `units`, `impl_targets`, `unit_edges`, `modules`, `crate_edges`,
+conversion joins, found by both reports with the sides swapped and merged; one that is
+not; a copy inside one unit, kept; a run matching itself one line lower, dropped), fills
+the settings' tables as `code-db` does (`exclude_patterns`, `extra_test_paths`,
+`extra_test_attributes`, two layers), and asserts every row of `files` and `units`, `impl_targets`, `unit_edges`, `modules`, `crate_edges`,
 `module_cycles`, `unit_quality`, and every query with its parameters (`size` at three
-levels, `coupling` with `min_crates`, `unreferenced` with the structural rows,
-`duplication` with tests), the layers emptied (no violation) and doubled (an error), and
+levels, `coupling` with `min_crates` and at the file and crate levels, `unreferenced`
+with the structural rows, `duplication` with tests and per report), `clone_report_pairs`
+and `clone_pairs`, the layers emptied (no violation) and doubled (an error), and
 `unit_dependencies` without its unit (an error). It then reads `refresh.sql` and asserts
 the copies and every query equal to live, a second read keeping the file, the refusal to
 read it twice, and an edit building another file; and that the views exist and are empty
@@ -572,12 +588,12 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (SCIP) |
 | `views/units.sql` | the macros `impl_base_name`, `impl_generic_arg`; `derived_units`, `units`, `unit_ast` (Units) |
 | `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `modules`, `unit_module`, `module_edges`, `crate_edges`, `module_cycle_edges`, `module_cycles`, `module_layer_matches`, `module_layers`, the macro `graph_layer_violation`, `module_layer_violations`, `crate_cycles` (Graph) |
-| `views/clones.sql` | `clone_pairs`, `clone_sides` |
+| `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
 | `views/quality.sql` | `unit_scope`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `unit_complexity`, `unit_quality` (Axes) |
 | `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `module_graph`, `module_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
 | `refresh.sql` | the cache, the syntax trees' included (Cache) |
 | `jscpd.sh` | the two jscpd reports `views/clones.sql` reads |
-| `empty-jscpd-report.json` | a report with no duplicates, always in `clone_pairs`' list |
+| `empty-jscpd-report.json` | a report with no duplicates, always in `clone_report_pairs`' list |
 | `../code-db/` | the launcher, `code-db` (Running) |
 | `check.py` | the check above |
 
@@ -611,12 +627,12 @@ which `00_load.sql` takes as snapshots.
 | `exclude_patterns` | `[]` (GLOB operator patterns on the relative path; `*` crosses `/`) | `00_load.sql`, `refresh.sql` |
 | `languages` | `MAP {'rs': 'rust'}` (extension to language) | `00_load.sql`, `files` |
 | `scip_indexes` | the `*.scip` files of `repo/target/code-db/scip/` | `views/scip.sql`, `refresh.sql` |
-| `clone_reports` | the reports `repo/target/code-db/jscpd/{exact,normalized}/jscpd-report.json` that exist | `clone_pairs` |
+| `clone_reports` | the reports `repo/target/code-db/jscpd/{exact,normalized}/jscpd-report.json` that exist | `clone_report_pairs` |
 | `extra_test_paths`, `extra_test_attributes` | `[]`; `code-db` sets them from the settings file | `derived_units`, `refresh.sql` (key) |
 | `cache_dir` | `repo/target/code-db/cache` | `refresh.sql` |
 | `cycle_edges` | `'collapsed'` (`'raw'`: every module edge) | `module_cycle_edges` and what reads it |
-| `level`, `kind`, `include_tests` | `'unit'`, NULL, `false` | `size` (`kind` and `include_tests` also other queries) |
-| `source` | NULL (both reports) | `duplication` |
+| `level`, `kind`, `include_tests` | `'unit'`, NULL, `false` | `size`, `coupling` (`kind` and `include_tests` also other queries) |
+| `source` | NULL (both reports; a report's name: the pairs it found) | `duplication` |
 | `min_crates` | 3 | `coupling` (`contract_candidate`) |
 | `min_parameters` | 0 | `interface` |
 | `include_structural` | `false` | `unreferenced` |
