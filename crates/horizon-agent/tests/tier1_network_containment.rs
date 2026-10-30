@@ -201,6 +201,11 @@ fn expect_domain_denied(
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "binds 127.0.0.2-4, which macOS' lo0 lacks until \
+              `sudo ifconfig lo0 alias 127.0.0.N up` adds them; run with --ignored then"
+)]
 fn standard_curl_denial_is_named_even_when_shell_exits_zero() {
     let runtime = test_runtime();
     let origin = start_origin(&runtime, "127.0.0.2", "MUST-NOT-REACH");
@@ -229,6 +234,11 @@ fn standard_curl_denial_is_named_even_when_shell_exits_zero() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "binds 127.0.0.2-4, which macOS' lo0 lacks until \
+              `sudo ifconfig lo0 alias 127.0.0.N up` adds them; run with --ignored then"
+)]
 fn domain_approval_is_session_scoped_and_host_narrow() {
     let runtime = test_runtime();
     let origin_x = start_origin(&runtime, "127.0.0.3", "ORIGIN-X");

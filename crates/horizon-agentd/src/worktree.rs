@@ -788,7 +788,12 @@ mod tests {
         assert_eq!(info.branch, format!("horizon/{slug}"));
         assert_eq!(
             info.path,
-            repo.path().join(".horizon").join("worktrees").join(&slug)
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .join(".horizon")
+                .join("worktrees")
+                .join(&slug)
         );
         assert!(info.path.is_dir(), "worktree directory should exist");
         assert_eq!(

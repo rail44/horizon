@@ -1393,7 +1393,12 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     .await;
     let isolated_root = resolved_root(collected.last().unwrap(), session_id).unwrap();
     assert!(
-        isolated_root.starts_with(repo.path().join(".horizon/worktrees")),
+        isolated_root.starts_with(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .join(".horizon/worktrees")
+        ),
         "resolved root should be the session-owned worktree: {}",
         isolated_root.display()
     );
@@ -1564,7 +1569,13 @@ async fn worktree_enter_records_the_spawn_source_as_parent() {
     let root = resolved.workspace_root.unwrap();
     assert_eq!(
         root.parent(),
-        Some(repo.path().join(".horizon/worktrees").as_path())
+        Some(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .join(".horizon/worktrees")
+                .as_path()
+        )
     );
     assert_eq!(fixture_git_output(&root, &["rev-parse", "HEAD"]), head);
 
@@ -1733,7 +1744,13 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
     let root = resolved_root(collected.last().unwrap(), session_id).unwrap();
     assert_eq!(
         root.parent(),
-        Some(repo.path().join(".horizon/worktrees").as_path())
+        Some(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .join(".horizon/worktrees")
+                .as_path()
+        )
     );
     assert_eq!(fixture_git_output(&root, &["rev-parse", "HEAD"]), head);
     let branch = fixture_git_output(&root, &["rev-parse", "--abbrev-ref", "HEAD"]);

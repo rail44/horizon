@@ -536,7 +536,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let workspace = plain_checkout(dir.path());
         let git_attempt = workspace.join(".git/config");
-        let ordinary = dir.path().join("outside/cache/lock");
+        let ordinary = dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("outside/cache/lock");
         std::fs::create_dir_all(ordinary.parent().unwrap()).unwrap();
         let (completion, _) = finish_with(
             with_filesystem_denials(&[&git_attempt, &ordinary]),
