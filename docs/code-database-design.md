@@ -834,6 +834,21 @@ SCIP limits (no references from format strings, serde attribute strings,
 `macro_rules!` bodies or inactive-cfg callers, which fill unreferenced's
 top 10).
 
+The owner read the low precision differently: the sweep already removed
+most size problems, so the unit measures are not wrong for this tree, and
+the structure now also makes relations between functions visible — an
+addition, not a replacement. Three counting defects were fixed
+(「1〜3は直しましょう」; [record](research/code-db-counting-fixes-2026-10-30.md)):
+clone fragments of one file whose line ranges overlap are no longer pairs
+(220 of 1,529 raw rows); a pair reported by both jscpd runs is one row
+with `sources` (235 exact rows merged into 228); a module's unit-level
+fan-in counts only references naming the module, with the file-content
+sum as `coupling`'s `level := 'file'`. Test references, comment lines,
+constant units and `pub use` edges were left as open judgments. The
+owner's next direction: rather than adding fixed queries, make the schema
+simple enough for a refactoring agent to write its own queries, then
+dogfood finding refactoring targets.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
