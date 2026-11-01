@@ -898,6 +898,17 @@ by it, so a Go package spans its files; Go file units have the kind `file` and,
 like namespaces, own no symbol and sum no contents, so a reference to a package
 counts for none of its files. Rust's twenty derived layers did not change.
 
+## Namespace fan-in and the visibility boundary (2026-11-01)
+
+([record](research/code-db-namespace-fan-in-2026-11-01.md)) Fan-in and fan-out
+count the namespaces too (`fan_in_namespaces`, `coupling`'s namespace level), and
+the queries about public use count across each language's visibility boundary,
+which each language gives in one row: Rust's `pub` opens the package's outside, a
+Go exported name the Go package's (owner: the recommended choices). The Rust
+reading of which occurrences name a module moved into `lang/rust.sql` as
+`rust_namespace_references`, built only from what the language files may read
+before the units exist; Rust's existing columns did not change.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
