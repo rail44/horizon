@@ -659,7 +659,7 @@ fn go_modules_index_and_units() {
         ]
     );
 
-    // Complexity in Go's constructs and names: two cases (a switch is not
+    // Complexity in Go's constructs and words: two cases (a switch is not
     // exhaustive, the default counts none), `&&`, the for and the if inside it.
     let complexity = code_db(&["query", "complexity"]);
     let header: Vec<String> = complexity
@@ -690,10 +690,12 @@ fn go_modules_index_and_units() {
         ("and_count", "1"),
         ("for_count", "1"),
         ("if_count", "1"),
-        ("guard_count", "NULL"),
-        ("try_count", "NULL"),
     ] {
         assert_eq!(cell(name), value, "{name}");
+    }
+    // Only Go's own constructs are columns: none of Rust's match, arm, guard or `?`.
+    for absent in ["match_count", "arm_count", "guard_count", "try_count"] {
+        assert!(!header.iter().any(|h| h == absent), "{absent}: {header:?}");
     }
 
     // References across files and packages become unit edges.

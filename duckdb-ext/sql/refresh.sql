@@ -31,7 +31,7 @@
 -- scip_symbols (views/scip.sql); units (views/units.sql); unit_occurrences, symbol_units,
 -- unit_references, unit_edges, unit_ancestors, impls, impl_targets, unit_impl_type,
 -- namespaces, unit_namespace, namespace_edges (views/graph.sql); unit_scope, unit_fan_in,
--- unit_fan_out, unit_reference_status, unit_debt_markers, unit_complexity
+-- unit_fan_out, unit_reference_status, unit_debt_markers, unit_constructs, unit_complexity
 -- (views/quality.sql). Views that read a query variable or the settings' tables (module_cycle_edges and what reads it,
 -- the layers) and the clone views (jscpd's reports are not in the key) stay live, over the
 -- copies.
@@ -184,6 +184,8 @@ CREATE TABLE IF NOT EXISTS cache.unit_reference_status AS SELECT * FROM unit_ref
 CREATE OR REPLACE VIEW unit_reference_status AS SELECT * FROM cache.unit_reference_status;
 CREATE TABLE IF NOT EXISTS cache.unit_debt_markers AS SELECT * FROM unit_debt_markers;
 CREATE OR REPLACE VIEW unit_debt_markers AS SELECT * FROM cache.unit_debt_markers;
+CREATE TABLE IF NOT EXISTS cache.unit_constructs AS SELECT * FROM unit_constructs;
+CREATE OR REPLACE VIEW unit_constructs AS SELECT * FROM cache.unit_constructs;
 CREATE TABLE IF NOT EXISTS cache.unit_complexity AS SELECT * FROM unit_complexity;
 CREATE OR REPLACE VIEW unit_complexity AS SELECT * FROM cache.unit_complexity;
 

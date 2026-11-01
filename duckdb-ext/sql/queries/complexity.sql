@@ -5,17 +5,18 @@
 -- unit_own_ast: a nested fn's or an inline module's nodes belong to that unit; closure
 -- bodies belong to the unit that writes them; macro arguments are tokens and count
 -- nothing), most decisions first, then the deepest nesting.
--- Rules (unit_complexity): decisions are McCabe's decision points, one per if (else if
--- and if let included), while (while let included), for, match arm but one per match,
--- guard, `&&`, `||`, `?` and let-else; a bare `loop` is none (as rust-code-analysis
--- issue #1249 expects from McCabe), and a closure adds no entry of its own. cyclomatic
--- is decisions + 1. max_nesting is the most of if (an else-if chain is one level), match,
--- for, while and loop open at one node.
+-- Rules (unit_complexity, lang/<language>.sql, <language>_control_nodes): decisions are
+-- McCabe's decision points (Rust: one per if, else if, while, for, match arm but one per
+-- match, guard, `&&`, `||`, `?` and let-else; Go: one per if, else if, for with a clause
+-- or a condition, case but the default, `&&` and `||`); a bare loop is none, and a
+-- closure adds no entry of its own. cyclomatic is decisions + 1. max_nesting is the most
+-- of if (an else-if chain is one level), match or switch, and the loops open at one node.
 -- Columns: path, package, kind, qualified_name, start_line, loc, cyclomatic, decisions,
--- max_nesting, if_count, else_if_count, match_count, arm_count, guard_count, for_count,
--- while_count, loop_count, try_count, and_count, or_count, let_else_count, return_count,
--- break_count, continue_count, goto_count, closure_count, is_test (a count is NULL for a
--- construct the unit's language lacks; views/quality.sql, unit_complexity).
+-- max_nesting, then one <construct>_count column per control construct the units of the
+-- result hold, in their language's words and in alphabetical order (unit_constructs:
+-- Rust's if_count, else_if_count, match_count, arm_count, guard_count, try_count,
+-- let_else_count, closure_count, …; Go's switch_count, case_count, select_count,
+-- goto_count, func_literal_count, …; if_count counts no else if), then is_test.
 -- Evidence: weak to medium. Cognitive complexity predicts understanding time (r = 0.54)
 -- but hardly correctness; SIG's unit complexity correlates 0.50 to 0.54 with defect
 -- resolution; no Rust study (survey of 2026-10-24). Over this repository's 3,425 non-test
@@ -26,13 +27,23 @@
 -- Parameters (DuckDB variables; default when unset): include_tests false.
 WITH params AS (
     SELECT coalesce(CAST(getvariable('include_tests') AS BOOLEAN), false) AS include_tests
+),
+shown AS MATERIALIZED (
+    SELECT u.* FROM units u, params p
+    WHERE u.kind IN ('function', 'method') AND (p.include_tests OR NOT u.is_test)
+),
+-- The constructs of the shown units, one column each (PIVOT reads no common table
+-- expression of its query, so it repeats shown's condition).
+counts AS (
+    PIVOT (SELECT c.unit_id, c.construct || '_count' AS construct, c.count
+           FROM unit_constructs c JOIN units u USING (unit_id)
+           WHERE u.kind IN ('function', 'method')
+             AND (coalesce(CAST(getvariable('include_tests') AS BOOLEAN), false) OR NOT u.is_test))
+    ON construct USING sum(count) GROUP BY unit_id
 )
 SELECT u.path, u.package, u.kind, u.qualified_name, u.start_line, u.loc, c.decisions + 1 AS cyclomatic,
-       c.decisions, c.max_nesting, c.if_count, c.else_if_count, c.match_count, c.arm_count, c.guard_count,
-       c.for_count, c.while_count, c.loop_count, c.try_count, c.and_count, c.or_count, c.let_else_count,
-       c.return_count, c.break_count, c.continue_count, c.goto_count, c.closure_count, u.is_test
-FROM units u
-CROSS JOIN params p
+       c.decisions, c.max_nesting, coalesce(COLUMNS(k.* EXCLUDE (unit_id)), 0)::BIGINT, u.is_test
+FROM shown u
 JOIN unit_complexity c USING (unit_id)
-WHERE u.kind IN ('function', 'method') AND (p.include_tests OR NOT u.is_test)
+LEFT JOIN counts k USING (unit_id)
 ORDER BY c.decisions DESC, c.max_nesting DESC, u.loc DESC, u.path, u.start_line;

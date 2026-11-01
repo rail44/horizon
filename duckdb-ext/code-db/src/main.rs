@@ -717,7 +717,7 @@ impl Session {
     /// Run QUERY (one SELECT) after the loading and print its result in the
     /// display language (views/terms.sql, display_select).
     fn run_query(&self, query: &str) -> ! {
-        let create = format!("CREATE OR REPLACE TEMP VIEW query_result AS\n{query}\n;\n");
+        let create = format!("CREATE OR REPLACE TEMP TABLE query_result AS\n{query}\n;\n");
         if self.args.format.as_deref().is_none_or(|f| f == "markdown") {
             let db = self.load();
             script::run_text(&db, &create, &mut Output::Discard)

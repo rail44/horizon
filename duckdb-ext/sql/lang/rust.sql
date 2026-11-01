@@ -52,17 +52,16 @@
 --     that names impl_type, outside other functions' bodies) is led by #[cfg(test)].
 
 -- rust_terms(internal, official): Rust's names for the two levels the views call package
--- and namespace (views/terms.sql): a Cargo package and a module; the control constructs
--- keep their internal names, and Rust has no goto.
+-- and namespace (views/terms.sql): a Cargo package and a module.
 CREATE OR REPLACE VIEW rust_terms AS
-SELECT * FROM (VALUES ('package', 'package'), ('namespace', 'module'), ('goto', NULL::VARCHAR))
-    t(internal, official);
+SELECT * FROM (VALUES ('package', 'package'), ('namespace', 'module')) t(internal, official);
 
 -- rust_control_nodes(file_id, node_id, construct, decisions, opens_level, group_id): the
 -- nodes of the Rust files' trees (file_ast) that are control constructs (views/quality.sql,
--- unit_complexity), with the decision points each adds to McCabe's count, whether it
--- opens a nesting level, and the group of alternatives it is one of where all but one
--- decide (a unit counts one decision fewer per group it holds):
+-- unit_complexity, unit_constructs), named in Rust's words, with the decision points each
+-- adds to McCabe's count, whether it opens a nesting level, and the group of alternatives
+-- it is one of where all but one decide (a unit counts one decision fewer per group it
+-- holds):
 --   if_expression: `if` (an `if let` included), 1, a level; `else_if` when its parent is an
 --     else_clause, 1, continuing its chain;
 --   match_expression: `match`, 0, a level; match_arm: `arm`, 1, its group its match_block

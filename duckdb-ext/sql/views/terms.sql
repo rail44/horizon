@@ -5,10 +5,9 @@
 -- vocabulary value built from them (`package_edges`, `fan_in_packages`, `namespace_cycles`,
 -- `level := 'package'`, kind 'namespace'). A reader sees them by the names of the
 -- repository's language instead: each language's file under lang/ gives its two official
--- names (<language>_terms), and this file turns one into the other. The same table names
--- the language's control constructs where its words differ from the internal ones (Go's
--- switch, case, func literal for match, arm, closure: views/quality.sql, unit_complexity),
--- and, with a NULL official name, the constructs the language lacks.
+-- names (<language>_terms), and this file turns one into the other. A language's control
+-- constructs need none: they are named in its own words throughout (views/quality.sql,
+-- unit_constructs).
 --
 -- The display language is one language: `lang` when set (00_load.sql then keeps only that
 -- language's files), else the one language of `files`; with no language or several, the
@@ -83,7 +82,7 @@ CREATE OR REPLACE MACRO display_column(c, t, lang) AS
          ELSE '"' || replace(c, '"', '""') || '"' END
     || ' AS "' || replace(display_term(c, lang), '"', '""') || '"';
 
--- display_select(v): a SELECT showing the temporary view v in the display language.
+-- display_select(v): a SELECT showing the temporary table or view v in the display language.
 CREATE OR REPLACE MACRO display_select(v) AS (
     SELECT 'SELECT ' || string_agg(display_column(column_name, data_type, display_language()), ', '
                                    ORDER BY column_index) || ' FROM temp.' || v

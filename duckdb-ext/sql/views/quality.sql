@@ -170,58 +170,42 @@ FROM unit_ast a
 WHERE NOT EXISTS (SELECT 1 FROM nested n
                   WHERE n.unit_id = a.unit_id AND n.start_line <= a.file_start_line AND a.file_end_line <= n.end_line);
 
--- unit_complexity(unit_id, if_count, else_if_count, match_count, arm_count, guard_count,
---     for_count, while_count, loop_count, try_count, and_count, or_count, let_else_count,
---     return_count, break_count, continue_count, goto_count, closure_count, decisions,
---     max_nesting): counts over each unit's own nodes (unit_own_ast), one row per unit, of
--- the control constructs its language finds in its files' trees (control_nodes, from
--- lang/<language>.sql, <language>_control_nodes, where the constructs and their McCabe
--- weights are described). Closure bodies are part of the unit that writes them.
---   if_count: if and else_if (every `else if` included); else_if_count: else_if alone.
---   match_count, arm_count, guard_count, for_count, while_count, loop_count, try_count,
---     and_count, or_count, let_else_count, return_count, break_count, continue_count,
---     goto_count, closure_count: each construct's nodes. NULL for a construct the unit's
---     language lacks (a NULL official name in lang_terms: Rust's goto, Go's guard, try and
---     let_else); a language shows the others by its own names (Go's switch_count,
---     case_count, func_literal_count; views/terms.sql).
---   decisions: McCabe's decision points, the constructs' weights summed less one per
---     group of alternatives the unit holds (a Rust match's arms but one decide), so that a
---     function's cyclomatic number is decisions + 1.
---   max_nesting: the most constructs that open a level open at one node, counted along the
---     ancestors (node_id ranges); 0 when the unit has none.
+-- control_nodes(file_id, node_id, construct, decisions, opens_level, group_id): every
+-- language's control constructs (lang/<language>.sql, <language>_control_nodes), each
+-- named in its language's words, with its McCabe weight, whether it opens a nesting level,
+-- and its group of alternatives. The language files' comments have the rules.
 CREATE OR REPLACE VIEW control_nodes AS
 SELECT * FROM rust_control_nodes
 UNION ALL
 SELECT * FROM go_control_nodes;
 
+-- unit_constructs(unit_id, construct, count): how many of each control construct each
+-- unit's own nodes (unit_own_ast) hold, in its language's words (Rust's match and arm,
+-- Go's switch and case); a construct a unit holds none of has no row. Closure bodies are
+-- part of the unit that writes them.
+--
+-- unit_complexity(unit_id, decisions, max_nesting): one row per unit.
+--   decisions: McCabe's decision points, the constructs' weights summed less one per
+--     group of alternatives the unit holds (a Rust match's arms but one decide), so that a
+--     function's cyclomatic number is decisions + 1.
+--   max_nesting: the most constructs that open a level open at one node, counted along the
+--     ancestors (node_id ranges); 0 when the unit has none.
+CREATE OR REPLACE VIEW unit_constructs AS
+SELECT o.unit_id, c.construct, count(*) AS count
+FROM unit_own_ast o
+JOIN units u USING (unit_id)
+JOIN control_nodes c ON c.file_id = u.file_id AND c.node_id = o.node_id
+GROUP BY o.unit_id, c.construct;
+
 CREATE OR REPLACE VIEW unit_complexity AS
 WITH own AS MATERIALIZED (
-    SELECT o.unit_id, o.node_id, o.descendant_count, c.construct, c.decisions, c.opens_level, c.group_id
+    SELECT o.unit_id, o.node_id, o.descendant_count, c.decisions, c.opens_level, c.group_id
     FROM unit_own_ast o
     JOIN units u USING (unit_id)
     JOIN control_nodes c ON c.file_id = u.file_id AND c.node_id = o.node_id
 ),
 counts AS (
-    SELECT unit_id,
-           count(*) FILTER (WHERE construct IN ('if', 'else_if')) AS if_count,
-           count(*) FILTER (WHERE construct = 'else_if') AS else_if_count,
-           count(*) FILTER (WHERE construct = 'match') AS match_count,
-           count(*) FILTER (WHERE construct = 'arm') AS arm_count,
-           count(*) FILTER (WHERE construct = 'guard') AS guard_count,
-           count(*) FILTER (WHERE construct = 'for') AS for_count,
-           count(*) FILTER (WHERE construct = 'while') AS while_count,
-           count(*) FILTER (WHERE construct = 'loop') AS loop_count,
-           count(*) FILTER (WHERE construct = 'try') AS try_count,
-           count(*) FILTER (WHERE construct = 'and') AS and_count,
-           count(*) FILTER (WHERE construct = 'or') AS or_count,
-           count(*) FILTER (WHERE construct = 'let_else') AS let_else_count,
-           count(*) FILTER (WHERE construct = 'return') AS return_count,
-           count(*) FILTER (WHERE construct = 'break') AS break_count,
-           count(*) FILTER (WHERE construct = 'continue') AS continue_count,
-           count(*) FILTER (WHERE construct = 'goto') AS goto_count,
-           count(*) FILTER (WHERE construct = 'closure') AS closure_count,
-           sum(decisions) - count(DISTINCT group_id) AS decisions
-    FROM own GROUP BY unit_id
+    SELECT unit_id, sum(decisions) - count(DISTINCT group_id) AS decisions FROM own GROUP BY unit_id
 ),
 levels AS MATERIALIZED (
     SELECT unit_id, node_id, descendant_count FROM own WHERE opens_level
@@ -235,34 +219,11 @@ nesting AS (
         GROUP BY c.unit_id, c.node_id
     )
     GROUP BY unit_id
-),
--- The constructs each unit's language lacks.
-lacking AS (
-    SELECT u.unit_id, list(t.internal) AS constructs
-    FROM units u JOIN files f USING (file_id)
-    JOIN lang_terms t ON t.language = f.language AND t.official IS NULL
-    GROUP BY u.unit_id
 )
-SELECT u.unit_id,
-       coalesce(c.if_count, 0) AS if_count, coalesce(c.else_if_count, 0) AS else_if_count,
-       coalesce(c.match_count, 0) AS match_count, coalesce(c.arm_count, 0) AS arm_count,
-       CASE WHEN NOT list_contains(coalesce(l.constructs, []), 'guard') THEN coalesce(c.guard_count, 0) END AS guard_count,
-       coalesce(c.for_count, 0) AS for_count,
-       coalesce(c.while_count, 0) AS while_count, coalesce(c.loop_count, 0) AS loop_count,
-       CASE WHEN NOT list_contains(coalesce(l.constructs, []), 'try') THEN coalesce(c.try_count, 0) END AS try_count,
-       coalesce(c.and_count, 0) AS and_count, coalesce(c.or_count, 0) AS or_count,
-       CASE WHEN NOT list_contains(coalesce(l.constructs, []), 'let_else') THEN coalesce(c.let_else_count, 0) END
-           AS let_else_count,
-       coalesce(c.return_count, 0) AS return_count, coalesce(c.break_count, 0) AS break_count,
-       coalesce(c.continue_count, 0) AS continue_count,
-       CASE WHEN NOT list_contains(coalesce(l.constructs, []), 'goto') THEN coalesce(c.goto_count, 0) END AS goto_count,
-       coalesce(c.closure_count, 0) AS closure_count,
-       coalesce(c.decisions, 0)::BIGINT AS decisions,
-       coalesce(n.max_nesting, 0) AS max_nesting
+SELECT u.unit_id, coalesce(c.decisions, 0)::BIGINT AS decisions, coalesce(n.max_nesting, 0) AS max_nesting
 FROM units u
 LEFT JOIN counts c USING (unit_id)
-LEFT JOIN nesting n USING (unit_id)
-LEFT JOIN lacking l USING (unit_id);
+LEFT JOIN nesting n USING (unit_id);
 
 -- unit_quality: one row per unit with the per-unit columns of every axis, side by side and
 -- not combined (no score):

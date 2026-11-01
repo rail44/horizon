@@ -111,11 +111,8 @@ names instead (owner decision, 2026-10-30), which `lang/<language>.sql` gives in
 | package | package | module |
 | namespace | module | package |
 
-The same rows name the control constructs a language calls differently (Go's `switch`,
-`case` and `func_literal` for `match`, `arm` and `closure`; `switch_count`), and, with a
-NULL official name, the constructs it lacks (Rust's `goto`; Go's `guard`, `try`,
-`let_else`), whose counts are then NULL. `views/terms.sql` replaces all of a language's
-words at once (Go's swap package and namespace), each a whole `_`-separated word or its
+A language's control constructs need no row: they are named in its own words throughout
+(`unit_constructs`, Axes). `views/terms.sql` replaces all of a language's words at once (Go's swap package and namespace), each a whole `_`-separated word or its
 plural (`try` never touches `entry_point`), in names and in the vocabulary
 columns' values (`kind`, `level`, `status`, `reference_status`, `resolved_by`,
 `unit_kind`), for one display language: `lang` when set, else the only language of
@@ -432,13 +429,11 @@ reading of them, then Go's:
   is a `*_test.go` file or matches `extra_test_paths` (`extra_test_attributes` has no
   Go meaning). The Go files' trees are read by `go_file_ast`, which hands `read_ast`
   only them: a repository without Go files parses nothing for Go. Complexity counts Go's
-  constructs (`go_control_nodes`): `if_statement` (an `else if` when its parent is one),
-  the switch and select statements as `match` and their cases as `arm` (each case one
-  decision, the default none: a switch is not exhaustive), `for_statement` as `for`
-  (with a clause), `while` (a condition only) or `loop` (`for {}`, no decision), `&&` and
-  `||`, `goto_statement` beside `return`/`break`/`continue`, `func_literal` as
-  `closure`; shown as `switch_count`, `case_count` and `func_literal_count`, and NULL for
-  the guard, `?` and let-else Go lacks.
+  constructs in Go's words (`go_control_nodes`): `if` and `else_if` (an `if_statement`
+  whose parent is one), `switch` (expression and type switches), `select`, `case` (each
+  one decision, the default none: a switch is not exhaustive), `for` (with a clause),
+  `while` (a condition only), `loop` (`for {}`, no decision), `and`, `or`, `goto`,
+  `return`, `break`, `continue`, `func_literal`.
 - **`unit_ast`**: every unit's syntax tree, one row per node: the nodes of its file's
   tree (`file_ast`, Files below) inside the unit's range, compared by line and column; a
   file module's tree is its file's whole tree, and an enclosing unit's tree holds what it
@@ -574,13 +569,15 @@ settings file.
   reports found counts in both report columns.
 - **`unit_own_ast`**: the nodes of `unit_ast` that are the unit's own, without those whose
   lines lie inside a unit nested in it (innermost attribution, as `unit_occurrences`).
-  **`unit_complexity(unit_id, if_count, …, goto_count, closure_count, decisions,
-  max_nesting)`**: counts of the control constructs among the own nodes, as each
-  language classifies its tree's nodes (`control_nodes`, from
-  `<language>_control_nodes`: the construct, its McCabe weight, whether it opens a
-  nesting level, and its group of alternatives): `if`/`else if`, `match`, arms, guards,
-  `for`/`while`/`loop`, `?`, `&&`/`||`, let-else, `return`/`break`/`continue`/`goto`,
-  closures; NULL for a construct the language lacks (`lang_terms`). `decisions` is
+  **`unit_constructs(unit_id, construct, count)`**: how many of each control construct
+  the own nodes hold, as each language classifies its tree's nodes and in its own words
+  (`control_nodes`, from `<language>_control_nodes`: the construct, its McCabe weight,
+  whether it opens a nesting level, and its group of alternatives; Rust's `match`, `arm`,
+  `guard`, `try`, `let_else`, `closure`, Go's `switch`, `select`, `case`, `goto`,
+  `func_literal`, and both languages' `if`, `else_if`, the loops, `and`, `or`, `return`,
+  `break`, `continue`). The common views know no construct's name: the `complexity`
+  query pivots these rows into one `<construct>_count` column per construct its rows
+  hold. **`unit_complexity(unit_id, decisions, max_nesting)`**: `decisions` is
   McCabe's decision points (a function's cyclomatic number is `decisions + 1`): the
   weights summed, less one per group of alternatives (a Rust match's arms but one
   decide; no bare `loop`; closures add no entry), and `max_nesting` the constructs that
@@ -624,7 +621,7 @@ views compute the same rows live (`check.py refresh` compares them).
   `scip_symbols`, `units`, `unit_occurrences`, `symbol_units`, `unit_references`,
   `unit_edges`, `unit_ancestors`, `impls`, `impl_targets`, `unit_impl_type`, `namespaces`,
   `unit_namespace`, `namespace_edges`, `unit_scope`, `unit_fan_in`, `unit_fan_out`,
-  `unit_reference_status`, `unit_debt_markers`, `unit_complexity`. Views that read a query variable or the
+  `unit_reference_status`, `unit_debt_markers`, `unit_constructs`, `unit_complexity`. Views that read a query variable or the
   settings' tables (cycles, layers) and the clone views stay live, over the copies.
 - **Measured** on this repository (`docs/research/code-db-file-ast-cache-2026-10-30.md`
   has the runs): a cold build, syntax trees included, takes 2.0–2.2 s (`read_ast` over
@@ -721,7 +718,7 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `views/units.sql` | `derived_units`, `units`, `unit_ast` (Units) |
 | `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
 | `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
-| `views/quality.sql` | `unit_scope`, `namespace_references`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `control_nodes`, `unit_complexity`, `unit_quality` (Axes) |
+| `views/quality.sql` | `unit_scope`, `namespace_references`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `control_nodes`, `unit_constructs`, `unit_complexity`, `unit_quality` (Axes) |
 | `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `namespace_graph`, `namespace_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
 | `refresh.sql` | the cache, the syntax trees' included (Cache) |
 | `jscpd.sh` | the two jscpd reports `views/clones.sql` reads |
@@ -741,7 +738,7 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
   lives in one file per language under `lang/`, a view `<language>_units` that
   `views/units.sql` takes into `derived_units`, its files' namespaces in
   `<language>_file_namespaces` (`file_namespaces`), and its two names (Names) in
-  `<language>_terms` (with its names of the control constructs and the ones it lacks),
+  `<language>_terms`,
   its visibility boundary in `<language>_visibility_boundary`, the references that name
   its namespace units in `<language>_namespace_references`, and its control constructs
   in `<language>_control_nodes`; another language adds its file there, its six views to
