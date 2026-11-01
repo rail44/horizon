@@ -922,6 +922,14 @@ current index Rust's twenty layers did not change. The live checks (`check.py`)
 take 8 minutes where they took 4.6 before the namespace work; the cache that
 `code-db` reads builds as fast as before.
 
+## Entries per language (2026-11-01)
+
+([record](research/code-db-entry-2026-11-01.md)) Why an unreferenced unit runs
+anyway is a column of each language's units, `entry`: `entry_point` (Rust's and
+Go's `main`, Go's `init`) or `root` (a Rust crate root, a file of Go's package
+main), the status `package_root` renamed `root` (owner). With it no view outside
+`lang/` holds a language's rules; a language gives six views.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
