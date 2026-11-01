@@ -887,6 +887,17 @@ repository is read one language at a time (`lang=`). The rename changed no row o
 the twenty derived layers on either Rust workspace once the renamed values are
 mapped.
 
+## Go packages as namespaces (2026-11-01)
+
+([record](research/code-db-go-packages-2026-11-01.md)) A Go namespace is the file's
+directory, the Go package, external test packages included, and its
+namespace_path is the directory too (owner: the three recommended choices). Each
+language now also gives each file's namespace (`<language>_file_namespaces`, the
+Rust file-module convention moved out of graph.sql), and `namespaces` groups files
+by it, so a Go package spans its files; Go file units have the kind `file` and,
+like namespaces, own no symbol and sum no contents, so a reference to a package
+counts for none of its files. Rust's twenty derived layers did not change.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
