@@ -1,14 +1,14 @@
 -- The code graph: which unit references which, how units nest, which type an impl is for
--- and which trait it implements, the module and crate edges folded from the unit edges,
--- the module cycles they form, and the intended layers. Every view is derived from
+-- and which trait it implements, the namespace and package edges folded from the unit edges,
+-- the namespace cycles they form, and the intended layers. Every view is derived from
 -- units (views/units.sql), scip_occurrences (views/scip.sql), source_lines
 -- (views/files.sql) and the settings' tables (00_load.sql).
 --
 -- Locating an occurrence. An occurrence belongs to the innermost unit whose range (SCIP's
 -- enclosing_range, line and column) contains its start: the containing unit with the
--- greatest unit_id. Every indexed file has its file module as a unit, so an occurrence
+-- greatest unit_id. Every indexed file has its file unit as a unit, so an occurrence
 -- outside every item (a `use` declaration, a `mod x;` declaration, a file-level macro
--- call) belongs to the file module. A symbol's definition belongs to the unit it defines
+-- call) belongs to the file unit. A symbol's definition belongs to the unit it defines
 -- when it is a unit (an item), else to the unit containing it (a field or variant to its
 -- type, a parameter or local to its function).
 --
@@ -47,10 +47,10 @@ FROM occurrences o
 LEFT JOIN located l USING (occurrence_ord);
 
 -- symbol_units(symbol, unit_id, ambiguous): the unit each non-local symbol's definitions
--- belong to (above), except that a module's own symbol has none: a reference to a module
+-- belong to (above), except that a namespace's own symbol has none: a reference to a module
 -- names a namespace (a path segment `crate::a::b::f`, a `use crate::a;`, a `mod a;`
 -- declaration), not code the referrer depends on, and would otherwise draw an edge to
--- every module a path passes through. A symbol with definitions in several units (rust-analyzer names a
+-- every namespace a path passes through. A symbol with definitions in several units (rust-analyzer names a
 -- symbol by package, not by target: one helper defined in two integration tests of a
 -- package, or a cfg'd pair of definitions) has a row for each, flagged ambiguous.
 CREATE OR REPLACE VIEW symbol_units AS
@@ -63,7 +63,7 @@ defs AS (
     LEFT JOIN own w ON w.file_id = o.file_id AND w.symbol = o.symbol
          AND w.name_line = o.start_line AND w.name_column = o.start_column
     WHERE o.is_definition AND NOT o.is_local AND coalesce(w.unit_id, o.unit_id) IS NOT NULL
-      AND w.kind IS DISTINCT FROM 'module'
+      AND w.kind IS DISTINCT FROM 'namespace'
 )
 SELECT symbol, unit_id, count(*) OVER (PARTITION BY symbol) > 1 AS ambiguous FROM defs;
 
@@ -71,7 +71,7 @@ SELECT symbol, unit_id, count(*) OVER (PARTITION BY symbol) > 1 AS ambiguous FRO
 --     dst_is_test): for each non-local symbol, the units holding a reference occurrence
 -- of it (source) and the units its definitions belong to (destination), one row per
 -- (source, destination, symbol); occurrences counts the source's reference occurrences
--- of the symbol. Symbols defined in no source file (external crates, the standard
+-- of the symbol. Symbols defined in no source file (external packages, the standard
 -- library) give no edge.
 CREATE OR REPLACE VIEW unit_references AS
 WITH refs AS (
@@ -121,13 +121,13 @@ chain(unit_id, ancestor_id, depth) AS (
 )
 SELECT * FROM chain;
 
--- impls(impl_id, file_id, crate, impl_key, impl_type, impl_trait, header_line, members):
+-- impls(impl_id, file_id, package, impl_key, impl_type, impl_trait, header_line, members):
 -- the impl blocks as their members' descriptors give them (views/units.sql): one row per
 -- impl_key, file and header line (two `impl Foo` blocks of one file are two rows; members
 -- with no header line found form one row per key and file). members lists their unit ids.
 CREATE OR REPLACE VIEW impls AS
 SELECT (row_number() OVER (ORDER BY file_id, min(unit_id)) - 1)::INTEGER AS impl_id,
-       file_id, any_value(crate) AS crate, impl_key, any_value(impl_type) AS impl_type,
+       file_id, any_value(package) AS package, impl_key, any_value(impl_type) AS impl_type,
        any_value(impl_trait) AS impl_trait, impl_header_line AS header_line,
        list(unit_id ORDER BY unit_id) AS members
 FROM units
@@ -139,20 +139,20 @@ GROUP BY file_id, impl_key, impl_header_line;
 -- the trait part): among the type units whose name is the part's bare name
 -- (impl_base_name), the one whose symbol is referenced on the impl's header line
 -- (resolved_by 'header'), else the only one in the impl's file ('file'), else the only one
--- in its crate ('crate'), else the only one anywhere ('name'). NULL target: none, or
+-- in its package ('package'), else the only one anywhere ('name'). NULL target: none, or
 -- several at the last step (an external trait such as From, a type parameter, a name
--- several crates define).
+-- several packages define).
 CREATE OR REPLACE VIEW impl_targets AS
 WITH parts AS MATERIALIZED (
-    SELECT impl_id, file_id, crate, header_line, 'type' AS part, impl_type AS written FROM impls
+    SELECT impl_id, file_id, package, header_line, 'type' AS part, impl_type AS written FROM impls
     UNION ALL
-    SELECT impl_id, file_id, crate, header_line, 'trait', impl_trait FROM impls WHERE impl_trait IS NOT NULL
+    SELECT impl_id, file_id, package, header_line, 'trait', impl_trait FROM impls WHERE impl_trait IS NOT NULL
 ),
 named AS MATERIALIZED (
     SELECT *, impl_base_name(written) AS name FROM parts
 ),
 types AS MATERIALIZED (
-    SELECT unit_id, file_id, crate, name, symbol, symbol_kind FROM units WHERE kind = 'type'
+    SELECT unit_id, file_id, package, name, symbol, symbol_kind FROM units WHERE kind = 'type'
 ),
 header_refs AS MATERIALIZED (
     SELECT DISTINCT o.file_id, o.start_line, o.symbol
@@ -160,7 +160,7 @@ header_refs AS MATERIALIZED (
     WHERE o.is_reference AND (o.file_id, o.start_line) IN (SELECT (file_id, header_line) FROM impls)
 ),
 candidates AS MATERIALIZED (
-    SELECT n.impl_id, n.part, t.unit_id, t.file_id = n.file_id AS same_file, t.crate = n.crate AS same_crate,
+    SELECT n.impl_id, n.part, t.unit_id, t.file_id = n.file_id AS same_file, t.package = n.package AS same_package,
            EXISTS (SELECT 1 FROM header_refs h
                    WHERE h.file_id = n.file_id AND h.start_line = n.header_line AND h.symbol = t.symbol) AS on_header
     FROM named n
@@ -171,20 +171,20 @@ picked AS (
            CASE WHEN count(*) FILTER (WHERE on_header) = 1 THEN 'header'
                 WHEN count(*) FILTER (WHERE on_header) = 0 AND count(*) FILTER (WHERE same_file) = 1 THEN 'file'
                 WHEN count(*) FILTER (WHERE on_header) = 0 AND count(*) FILTER (WHERE same_file) = 0
-                     AND count(*) FILTER (WHERE same_crate) = 1 THEN 'crate'
+                     AND count(*) FILTER (WHERE same_package) = 1 THEN 'package'
                 WHEN count(*) FILTER (WHERE on_header) = 0 AND count(*) FILTER (WHERE same_file) = 0
-                     AND count(*) FILTER (WHERE same_crate) = 0 AND count(*) = 1 THEN 'name'
+                     AND count(*) FILTER (WHERE same_package) = 0 AND count(*) = 1 THEN 'name'
            END AS resolved_by,
            any_value(unit_id) FILTER (WHERE on_header) AS on_header_unit,
            any_value(unit_id) FILTER (WHERE same_file) AS same_file_unit,
-           any_value(unit_id) FILTER (WHERE same_crate) AS same_crate_unit,
+           any_value(unit_id) FILTER (WHERE same_package) AS same_package_unit,
            any_value(unit_id) AS any_unit
     FROM candidates
     GROUP BY impl_id, part
 )
 SELECT n.impl_id, n.part, n.written AS name,
        CASE p.resolved_by WHEN 'header' THEN p.on_header_unit WHEN 'file' THEN p.same_file_unit
-                          WHEN 'crate' THEN p.same_crate_unit WHEN 'name' THEN p.any_unit END AS target_unit_id,
+                          WHEN 'package' THEN p.same_package_unit WHEN 'name' THEN p.any_unit END AS target_unit_id,
        p.resolved_by
 FROM named n
 LEFT JOIN picked p USING (impl_id, part);
@@ -212,206 +212,206 @@ nearest AS (
 SELECT n.unit_id, n.impl_id, f.type_unit_id
 FROM nearest n LEFT JOIN impl_for f USING (impl_id);
 
--- modules(module, file_id, module_unit_id, crate, module_path): every module unit: a file
--- module is named by its file's path, an inline module `<path>::<names>`
--- (src/shapes.rs::tests). module_path places each module in its crate's module tree by
+-- namespaces(namespace, file_id, namespace_unit_id, package, namespace_path): every namespace unit: a file
+-- namespace is named by its file's path, an inline module `<path>::<names>`
+-- (src/shapes.rs::tests). namespace_path places each namespace in its package's module tree by
 -- Rust's file-module convention, as a `/`-separated path: a crate root (`…/lib.rs`,
 -- `…/main.rs`) and a `…/mod.rs` are their directory, any other file its path without
--- `.rs`, an inline module its file's module_path followed by its names (src/shapes.rs::tests
--- is src/shapes/tests). A module is an ancestor of another when its module_path is a prefix
+-- `.rs`, an inline namespace its file's module_path followed by its names (src/shapes.rs::tests
+-- is src/shapes/tests). A namespace is an ancestor of another when its namespace_path is a prefix
 -- of the other's at a `/`. The path convention rather than the descriptors places modules
 -- because SCIP names every target of a package's crate root `crate/`: an integration
 -- test's root would otherwise be an ancestor of every module of the library. `#[path]`
 -- attributes are not read, and a binary under src/bin/ is placed under the library's root.
-CREATE OR REPLACE VIEW modules AS
-WITH module_units AS MATERIALIZED (
-    SELECT u.unit_id, u.file_id, u.crate, u.qualified_name, u.is_file_module, f.path,
+CREATE OR REPLACE VIEW namespaces AS
+WITH namespace_units AS MATERIALIZED (
+    SELECT u.unit_id, u.file_id, u.package, u.qualified_name, u.is_file_unit, f.path,
            CASE WHEN regexp_matches(f.path, '(^|/)(lib|main|mod)\.rs$')
                 THEN regexp_replace(f.path, '/?(lib|main|mod)\.rs$', '')
-                ELSE regexp_replace(f.path, '\.rs$', '') END AS file_module_path
+                ELSE regexp_replace(f.path, '\.rs$', '') END AS file_namespace_path
     FROM units u JOIN files f USING (file_id)
-    WHERE u.kind = 'module'
+    WHERE u.kind = 'namespace'
 )
-SELECT CASE WHEN is_file_module THEN path ELSE path || '::' || replace(qualified_name, '.', '::') END AS module,
-       file_id, unit_id AS module_unit_id, crate,
-       CASE WHEN is_file_module THEN file_module_path
-            ELSE file_module_path || '/' || replace(qualified_name, '.', '/') END AS module_path
-FROM module_units;
+SELECT CASE WHEN is_file_unit THEN path ELSE path || '::' || replace(qualified_name, '.', '::') END AS namespace,
+       file_id, unit_id AS namespace_unit_id, package,
+       CASE WHEN is_file_unit THEN file_namespace_path
+            ELSE file_namespace_path || '/' || replace(qualified_name, '.', '/') END AS namespace_path
+FROM namespace_units;
 
--- unit_module(unit_id, module, module_unit_id, file_id, crate, module_path): the module a
--- unit belongs to: the nearest module unit among the unit itself and its enclosing units
--- (a module unit belongs to the module it is).
-CREATE OR REPLACE VIEW unit_module AS
-WITH module_rows AS MATERIALIZED (
-    SELECT * FROM modules
+-- unit_namespace(unit_id, namespace, namespace_unit_id, file_id, package, namespace_path): the namespace a
+-- unit belongs to: the nearest namespace unit among the unit itself and its enclosing units
+-- (a namespace unit belongs to the namespace it is).
+CREATE OR REPLACE VIEW unit_namespace AS
+WITH namespace_rows AS MATERIALIZED (
+    SELECT * FROM namespaces
 ),
 nearest AS (
-    SELECT a.unit_id, arg_min(a.ancestor_id, a.depth) AS module_unit_id
-    FROM unit_ancestors a JOIN module_rows m ON m.module_unit_id = a.ancestor_id
+    SELECT a.unit_id, arg_min(a.ancestor_id, a.depth) AS namespace_unit_id
+    FROM unit_ancestors a JOIN namespace_rows m ON m.namespace_unit_id = a.ancestor_id
     GROUP BY a.unit_id
 )
-SELECT n.unit_id, m.module, n.module_unit_id, m.file_id, m.crate, m.module_path
-FROM nearest n JOIN module_rows m USING (module_unit_id);
+SELECT n.unit_id, m.namespace, n.namespace_unit_id, m.file_id, m.package, m.namespace_path
+FROM nearest n JOIN namespace_rows m USING (namespace_unit_id);
 
--- module_edges(src_module, dst_module, src_crate, dst_crate, unit_edges, occurrences,
---     test_unit_edges, ambiguous_unit_edges, nested_modules, same_type_unit_edges) and
--- crate_edges(src_crate, dst_crate, unit_edges, occurrences, test_unit_edges,
---     ambiguous_unit_edges): unit_edges between different modules (crates), self edges
+-- namespace_edges(src_namespace, dst_namespace, src_package, dst_package, unit_edges, occurrences,
+--     test_unit_edges, ambiguous_unit_edges, nested_namespaces, same_type_unit_edges) and
+-- package_edges(src_package, dst_package, unit_edges, occurrences, test_unit_edges,
+--     ambiguous_unit_edges): unit_edges between different namespaces (packages), self edges
 -- excluded. unit_edges counts the unit edges, occurrences their occurrences;
 -- test_unit_edges counts the edges with a test unit at either end, ambiguous_unit_edges
--- those that are ambiguous. nested_modules marks an edge between a module and one of its
--- ancestors or descendants (modules.module_path; in one crate), same_type_unit_edges
+-- those that are ambiguous. nested_namespaces marks an edge between a namespace and one of its
+-- ancestors or descendants (namespaces.namespace_path; in one package), same_type_unit_edges
 -- counts the unit edges whose two ends both lie in impls of one type (unit_impl_type):
 -- one type's impl blocks split over several files. module_cycle_edges leaves out the
--- edges that are nested_modules or whose every unit edge is same-type.
-CREATE OR REPLACE VIEW module_edges AS
+-- edges that are nested_namespaces or whose every unit edge is same-type.
+CREATE OR REPLACE VIEW namespace_edges AS
 WITH m AS MATERIALIZED (
-    SELECT unit_id, module, crate, module_path FROM unit_module
+    SELECT unit_id, namespace, package, namespace_path FROM unit_namespace
 ),
 impl_type AS MATERIALIZED (
     SELECT unit_id, type_unit_id FROM unit_impl_type WHERE type_unit_id IS NOT NULL
 )
-SELECT ms.module AS src_module, md.module AS dst_module, ms.crate AS src_crate, md.crate AS dst_crate,
+SELECT ms.namespace AS src_namespace, md.namespace AS dst_namespace, ms.package AS src_package, md.package AS dst_package,
        count(*) AS unit_edges, sum(e.occurrences) AS occurrences,
        count(*) FILTER (WHERE e.src_is_test OR e.dst_is_test) AS test_unit_edges,
        count(*) FILTER (WHERE e.ambiguous) AS ambiguous_unit_edges,
-       ms.crate = md.crate AND (starts_with(md.module_path || '/', ms.module_path || '/')
-                                OR starts_with(ms.module_path || '/', md.module_path || '/')) AS nested_modules,
+       ms.package = md.package AND (starts_with(md.namespace_path || '/', ms.namespace_path || '/')
+                                OR starts_with(ms.namespace_path || '/', md.namespace_path || '/')) AS nested_namespaces,
        count(*) FILTER (WHERE ts.type_unit_id = td.type_unit_id) AS same_type_unit_edges
 FROM unit_edges e
 JOIN m ms ON ms.unit_id = e.src_unit_id
 JOIN m md ON md.unit_id = e.dst_unit_id
 LEFT JOIN impl_type ts ON ts.unit_id = e.src_unit_id
 LEFT JOIN impl_type td ON td.unit_id = e.dst_unit_id
-WHERE NOT e.is_self AND ms.module <> md.module
-GROUP BY ms.module, md.module, ms.crate, md.crate, ms.module_path, md.module_path;
+WHERE NOT e.is_self AND ms.namespace <> md.namespace
+GROUP BY ms.namespace, md.namespace, ms.package, md.package, ms.namespace_path, md.namespace_path;
 
-CREATE OR REPLACE VIEW crate_edges AS
+CREATE OR REPLACE VIEW package_edges AS
 WITH c AS MATERIALIZED (
-    SELECT unit_id, crate FROM units
+    SELECT unit_id, package FROM units
 )
-SELECT cs.crate AS src_crate, cd.crate AS dst_crate,
+SELECT cs.package AS src_package, cd.package AS dst_package,
        count(*) AS unit_edges, sum(e.occurrences) AS occurrences,
        count(*) FILTER (WHERE e.src_is_test OR e.dst_is_test) AS test_unit_edges,
        count(*) FILTER (WHERE e.ambiguous) AS ambiguous_unit_edges
 FROM unit_edges e
 JOIN c cs ON cs.unit_id = e.src_unit_id
 JOIN c cd ON cd.unit_id = e.dst_unit_id
-WHERE NOT e.is_self AND cs.crate <> cd.crate
+WHERE NOT e.is_self AND cs.package <> cd.package
 GROUP BY ALL;
 
--- module_cycle_edges(cycle, src_module, dst_module, unit_edges, occurrences,
---     test_unit_edges, ambiguous_unit_edges): the module edges inside each strongly
--- connected group of modules (two modules are in one group when each reaches the other
+-- namespace_cycle_edges(cycle, src_namespace, dst_namespace, unit_edges, occurrences,
+--     test_unit_edges, ambiguous_unit_edges): the namespace edges inside each strongly
+-- connected group of namespaces (two namespaces are in one group when each reaches the other
 -- along the edges). cycle names the group by its least member.
--- module_cycles(cycle, crate, modules, members, edges, unit_edges, occurrences): one
+-- namespace_cycles(cycle, package, namespaces, members, edges, unit_edges, occurrences): one
 -- row per group, with its members and the counts of its inner edges. Reachability is
 -- the transitive closure of the edges, by a recursive common table expression that
 -- adds only new pairs (UNION).
--- The edges are module_edges without the structural ones: those between a module and its
--- ancestor or descendant (nested_modules) and those whose every unit edge joins impls of
+-- The edges are namespace_edges without the structural ones: those between a namespace and its
+-- ancestor or descendant (nested_namespaces) and those whose every unit edge joins impls of
 -- one type (same_type_unit_edges = unit_edges). Parameter (DuckDB variable; default
--- when unset): cycle_edges 'collapsed' ('raw': every module edge).
-CREATE OR REPLACE VIEW module_cycle_edges AS
+-- when unset): cycle_edges 'collapsed' ('raw': every namespace edge).
+CREATE OR REPLACE VIEW namespace_cycle_edges AS
 WITH RECURSIVE edges AS MATERIALIZED (
-    SELECT src_module, dst_module, unit_edges, occurrences, test_unit_edges, ambiguous_unit_edges
-    FROM module_edges
+    SELECT src_namespace, dst_namespace, unit_edges, occurrences, test_unit_edges, ambiguous_unit_edges
+    FROM namespace_edges
     WHERE CASE coalesce(getvariable('cycle_edges'), 'collapsed')
         WHEN 'raw' THEN true
-        WHEN 'collapsed' THEN NOT nested_modules AND same_type_unit_edges < unit_edges
-        ELSE error('module_cycle_edges: cycle_edges is collapsed or raw') END
+        WHEN 'collapsed' THEN NOT nested_namespaces AND same_type_unit_edges < unit_edges
+        ELSE error('namespace_cycle_edges: cycle_edges is collapsed or raw') END
 ),
 reach(src, dst) AS (
-    SELECT src_module, dst_module FROM edges
+    SELECT src_namespace, dst_namespace FROM edges
     UNION
-    SELECT r.src, e.dst_module FROM reach r JOIN edges e ON e.src_module = r.dst
+    SELECT r.src, e.dst_namespace FROM reach r JOIN edges e ON e.src_namespace = r.dst
 ),
 reach_rows AS MATERIALIZED (
     SELECT * FROM reach
 ),
 groups AS MATERIALIZED (
-    SELECT a.src AS module, min(a.dst) AS cycle
+    SELECT a.src AS namespace, min(a.dst) AS cycle
     FROM reach_rows a JOIN reach_rows b ON b.src = a.dst AND b.dst = a.src
     GROUP BY a.src
 )
 SELECT gs.cycle, e.*
 FROM edges e
-JOIN groups gs ON gs.module = e.src_module
-JOIN groups gd ON gd.module = e.dst_module AND gd.cycle = gs.cycle;
+JOIN groups gs ON gs.namespace = e.src_namespace
+JOIN groups gd ON gd.namespace = e.dst_namespace AND gd.cycle = gs.cycle;
 
-CREATE OR REPLACE VIEW module_cycles AS
-WITH crates AS MATERIALIZED (
-    SELECT module, crate FROM modules
+CREATE OR REPLACE VIEW namespace_cycles AS
+WITH packages AS MATERIALIZED (
+    SELECT namespace, package FROM namespaces
 )
-SELECT e.cycle, any_value(c.crate) AS crate, count(DISTINCT e.src_module) AS modules,
-       list(DISTINCT e.src_module ORDER BY e.src_module) AS members, count(*) AS edges,
+SELECT e.cycle, any_value(c.package) AS package, count(DISTINCT e.src_namespace) AS namespaces,
+       list(DISTINCT e.src_namespace ORDER BY e.src_namespace) AS members, count(*) AS edges,
        sum(e.unit_edges) AS unit_edges, sum(e.occurrences) AS occurrences
-FROM module_cycle_edges e
-JOIN crates c ON c.module = e.src_module
+FROM namespace_cycle_edges e
+JOIN packages c ON c.namespace = e.src_namespace
 GROUP BY e.cycle;
 
 -- The intended layers, from the analysed repository's settings file (config_layers and
--- config_layer_deps, 00_load.sql; empty without one). module_layer_matches(module, layer):
--- each module (modules.module) with each layer one of whose module patterns it matches
--- (GLOB operator, `*` crosses `/`). module_layers(module, layer): one layer per module; a
--- module that matches two layers is an error (code-db reports it before any query). A
--- module in no layer has no row.
-CREATE OR REPLACE VIEW module_layer_matches AS
-SELECT DISTINCT m.module, l.name AS layer
-FROM modules m JOIN config_layers l ON m.module GLOB l.module_pattern;
+-- config_layer_deps, 00_load.sql; empty without one). namespace_layer_matches(namespace, layer):
+-- each namespace (namespaces.namespace) with each layer one of whose namespace patterns it matches
+-- (GLOB operator, `*` crosses `/`). namespace_layers(namespace, layer): one layer per namespace; a
+-- namespace that matches two layers is an error (code-db reports it before any query). A
+-- namespace in no layer has no row.
+CREATE OR REPLACE VIEW namespace_layer_matches AS
+SELECT DISTINCT m.namespace, l.name AS layer
+FROM namespaces m JOIN config_layers l ON m.namespace GLOB l.namespace_pattern;
 
-CREATE OR REPLACE VIEW module_layers AS
-SELECT module,
+CREATE OR REPLACE VIEW namespace_layers AS
+SELECT namespace,
        CASE WHEN count(*) > 1
-            THEN error('module_layers: ' || module || ' matches the layers '
+            THEN error('namespace_layers: ' || namespace || ' matches the layers '
                        || string_agg(layer, ', ' ORDER BY layer))
             ELSE any_value(layer) END AS layer
-FROM module_layer_matches
-GROUP BY module;
+FROM namespace_layer_matches
+GROUP BY namespace;
 
--- graph_layer_violation(src_layer, dst_layer): whether an edge from a module in src_layer
--- to a module in dst_layer goes against the layers: both modules are in a layer, the
+-- graph_layer_violation(src_layer, dst_layer): whether an edge from a namespace in src_layer
+-- to a namespace in dst_layer goes against the layers: both namespaces are in a layer, the
 -- layers differ, and src_layer's may_depend_on (config_layer_deps) does not name
--- dst_layer. A module in no layer (NULL) is unconstrained either way; may_depend_on is
+-- dst_layer. A namespace in no layer (NULL) is unconstrained either way; may_depend_on is
 -- not transitive.
 CREATE OR REPLACE MACRO graph_layer_violation(src_layer, dst_layer) AS
     src_layer IS NOT NULL AND dst_layer IS NOT NULL AND src_layer <> dst_layer
     AND NOT EXISTS (SELECT 1 FROM config_layer_deps d WHERE d.name = src_layer AND d.may_depend_on = dst_layer);
 
--- module_layer_violations(src_module, dst_module, src_layer, dst_layer): the module edges
--- (module_edges, every one: nested and same-type edges included) that go against the
+-- namespace_layer_violations(src_namespace, dst_namespace, src_layer, dst_layer): the namespace edges
+-- (namespace_edges, every one: nested and same-type edges included) that go against the
 -- layers.
-CREATE OR REPLACE VIEW module_layer_violations AS
-SELECT e.src_module, e.dst_module, ls.layer AS src_layer, ld.layer AS dst_layer
-FROM module_edges e
-JOIN module_layers ls ON ls.module = e.src_module
-JOIN module_layers ld ON ld.module = e.dst_module
+CREATE OR REPLACE VIEW namespace_layer_violations AS
+SELECT e.src_namespace, e.dst_namespace, ls.layer AS src_layer, ld.layer AS dst_layer
+FROM namespace_edges e
+JOIN namespace_layers ls ON ls.namespace = e.src_namespace
+JOIN namespace_layers ld ON ld.namespace = e.dst_namespace
 WHERE graph_layer_violation(ls.layer, ld.layer);
 
--- crate_cycles(cycle, crates, members, edges, unit_edges, occurrences): the same over
--- crate_edges. Cargo forbids dependency cycles between crates, so a row here means
+-- package_cycles(cycle, packages, members, edges, unit_edges, occurrences): the same over
+-- package_edges. Cargo forbids dependency cycles between packages, so a row here means
 -- either an aggregation error or a cycle Cargo allows (a dev-dependency used by test
 -- code).
-CREATE OR REPLACE VIEW crate_cycles AS
+CREATE OR REPLACE VIEW package_cycles AS
 WITH RECURSIVE edges AS MATERIALIZED (
-    SELECT src_crate, dst_crate, unit_edges, occurrences FROM crate_edges
+    SELECT src_package, dst_package, unit_edges, occurrences FROM package_edges
 ),
 reach(src, dst) AS (
-    SELECT src_crate, dst_crate FROM edges
+    SELECT src_package, dst_package FROM edges
     UNION
-    SELECT r.src, e.dst_crate FROM reach r JOIN edges e ON e.src_crate = r.dst
+    SELECT r.src, e.dst_package FROM reach r JOIN edges e ON e.src_package = r.dst
 ),
 reach_rows AS MATERIALIZED (
     SELECT * FROM reach
 ),
 groups AS MATERIALIZED (
-    SELECT a.src AS crate, min(a.dst) AS cycle
+    SELECT a.src AS package, min(a.dst) AS cycle
     FROM reach_rows a JOIN reach_rows b ON b.src = a.dst AND b.dst = a.src
     GROUP BY a.src
 )
-SELECT gs.cycle, count(DISTINCT e.src_crate) AS crates, list(DISTINCT e.src_crate ORDER BY e.src_crate) AS members,
+SELECT gs.cycle, count(DISTINCT e.src_package) AS packages, list(DISTINCT e.src_package ORDER BY e.src_package) AS members,
        count(*) AS edges, sum(e.unit_edges) AS unit_edges, sum(e.occurrences) AS occurrences
 FROM edges e
-JOIN groups gs ON gs.crate = e.src_crate
-JOIN groups gd ON gd.crate = e.dst_crate AND gd.cycle = gs.cycle
+JOIN groups gs ON gs.package = e.src_package
+JOIN groups gd ON gd.package = e.dst_package AND gd.cycle = gs.cycle
 GROUP BY gs.cycle;

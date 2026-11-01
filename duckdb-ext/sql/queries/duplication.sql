@@ -5,7 +5,7 @@
 -- run of lines matching itself in one file, the same two places found by both reports
 -- merged; the `exact` report keeps identifiers and literals, `normalized` ignores them,
 -- and sources lists the reports that found the pair), with each side's innermost unit
--- (clone_sides: the innermost unit whose lines contain the whole fragment, a file module
+-- (clone_sides: the innermost unit whose lines contain the whole fragment, a file unit
 -- at worst): path, kind, qualified_name and whether it is a test. same_unit marks a pair
 -- whose two fragments lie in one unit (two copies that do not overlap). conversion_pair
 -- marks a pair whose two sides belong to two types joined by a conversion impl in either

@@ -1,10 +1,10 @@
 -- Units: the definitions of the SCIP indexes (views/scip.sql) that are items a reader
 -- reviews, with their ranges, names, nesting, size, test flag and interface.
 --
--- units(unit_id, file_id, path, crate, kind, symbol_kind, name, qualified_name, symbol,
+-- units(unit_id, file_id, path, package, kind, symbol_kind, name, qualified_name, symbol,
 --       parent_unit_id, start_line, start_column, end_line, end_column, name_line,
 --       name_column, loc, is_test, visibility, parameters, signature, has_doc,
---       is_file_module, member_of, impl_key, impl_type, impl_trait, impl_header_line)
+--       is_file_unit, member_of, impl_key, impl_type, impl_trait, impl_header_line)
 --
 -- Which definitions are units, and their kinds, ranges, names, visibility, parameters,
 -- documentation, impl membership and test rules, is language knowledge: each language's
@@ -14,9 +14,9 @@
 --
 -- One unit per definition occurrence of a non-local symbol; fields, enum variants,
 -- parameters and locals are not units, and their occurrences belong to the unit that
--- contains them. kind is the neutral kind (function, method, type, module, macro,
--- constant), symbol_kind the SCIP kind. Every indexed file has its file module
--- (is_file_module), whose range is the whole file. member_of is 'impl' (a member of an
+-- contains them. kind is the neutral kind (function, method, type, namespace, macro,
+-- constant), symbol_kind the SCIP kind. Every indexed file has its file unit
+-- (is_file_unit), whose range is the whole file. member_of is 'impl' (a member of an
 -- impl block or of a type's method set), 'trait_impl' (a member of a trait impl) or
 -- 'trait' (a trait's or interface's own item), NULL otherwise; impl_key groups the
 -- members of one impl, impl_type and impl_trait name its type and trait as written, and
@@ -30,9 +30,9 @@
 -- before what it contains and the innermost unit containing a position is the
 -- containing unit with the greatest unit_id.
 --
--- crate is the symbol's package (the Cargo package, the Go module). name is the
+-- package is the symbol's package (the Cargo package, the Go module). name is the
 -- symbol's display name. qualified_name is the symbol's descriptors below the file's own
--- module, joined with `.`. symbol is the SCIP symbol. loc counts the non-blank lines of
+-- namespace, joined with `.`. symbol is the SCIP symbol. loc counts the non-blank lines of
 -- the range. visibility is the language's (NULL where a unit takes another's);
 -- parameters counts a function's or method's parameters, its receiver included (NULL for
 -- other kinds); has_doc: the symbol has documentation.
@@ -77,13 +77,13 @@ tests AS (
          AND (t.start_line < u.start_line OR (t.start_line = u.start_line AND t.start_column <= u.start_column))
          AND (t.end_line > u.end_line OR (t.end_line = u.end_line AND t.end_column >= u.end_column))
 )
-SELECT u.unit_id, u.file_id, f.path, u.crate, u.kind, u.symbol_kind, u.name, u.qualified_name,
+SELECT u.unit_id, u.file_id, f.path, u.package, u.kind, u.symbol_kind, u.name, u.qualified_name,
        u.symbol, p.parent_unit_id, u.start_line, u.start_column, u.end_line, u.end_column, u.name_line,
        u.name_column,
        (coalesce(le.nonblank_through, fl.nonblank) - coalesce(ls.nonblank_through, 0))::INTEGER AS loc,
        t.unit_id IS NOT NULL AS is_test,
        u.visibility, u.parameters, u.signature, u.has_doc,
-       u.is_file_module, u.member_of, u.impl_key, u.impl_type, u.impl_trait, u.impl_header_line
+       u.is_file_unit, u.member_of, u.impl_key, u.impl_type, u.impl_trait, u.impl_header_line
 FROM numbered u
 JOIN files f USING (file_id)
 JOIN file_lines fl USING (file_id)
@@ -103,14 +103,14 @@ CREATE OR REPLACE VIEW units AS SELECT * FROM derived_units;
 --          scope_module, scope_stack, start_column, end_column, start_byte, end_byte):
 -- every unit's syntax tree, one row per node: the nodes of its file's tree (file_ast,
 -- views/files.sql) that lie inside the unit's range, from (start_line, start_column) to
--- (end_line, end_column); a file module's tree is its file's whole tree. Nothing is
+-- (end_line, end_column); a file unit's tree is its file's whole tree. Nothing is
 -- filtered out: what to count is decided by the queries (views/quality.sql,
 -- unit_complexity).
 --
 -- A unit's range starts at its leading doc comments and attributes, which tree-sitter
 -- makes siblings of the item, so a unit's top is the run of sibling nodes that lie
--- inside the range (a file module's top is the file's root, source_file). A unit's tree
--- also holds every unit nested in it (an inline module's items, a fn inside a fn), which
+-- inside the range (a file unit's top is the file's root, source_file). A unit's tree
+-- also holds every unit nested in it (an inline namespace's items, a fn inside a fn), which
 -- has its own tree as well; per-unit counts drop the nodes that lie inside a nested
 -- unit's lines (unit_own_ast, views/quality.sql).
 --
@@ -128,7 +128,7 @@ WITH inside AS (
     FROM units u
     JOIN file_ast a
       ON a.file_id = u.file_id
-     AND (u.is_file_module
+     AND (u.is_file_unit
           OR ((a.start_line > u.start_line OR (a.start_line = u.start_line AND a.start_column >= u.start_column))
               AND (a.end_line < u.end_line OR (a.end_line = u.end_line AND a.end_column <= u.end_column))))
 )

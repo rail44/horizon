@@ -42,6 +42,11 @@ number of rows printed, by wrapping the query in a SELECT ... LIMIT; query only)
 REPO/.code-db.toml, when it exists, holds the repository's settings (README.md,
 Settings file); a NAME=VALUE argument overrides the variable it sets.
 
+Names (README.md, Names) are the repository language's: package and module for Rust,
+module and package for Go, in query names, parameters and results, and in the views of
+the schema named after the language (go.units). A repository of several languages is
+read one at a time: lang=NAME.
+
 The views are read in README.md's order, then refresh.sql, which keeps the cache in
 REPO/target/code-db/cache/. A query needs the SCIP indexes, and the jscpd reports when its
 header says so. The limits line goes to stderr. Markdown is printed by this command; any
@@ -58,6 +63,7 @@ const VIEW_FILES: &[&str] = &[
     "views/scip.sql",
     "lang/rust.sql",
     "lang/go.sql",
+    "views/terms.sql",
     "views/units.sql",
     "views/graph.sql",
     "views/clones.sql",
@@ -65,6 +71,15 @@ const VIEW_FILES: &[&str] = &[
 ];
 /// The view files `index` reads to list the source files.
 const FILE_VIEW_FILES: &[&str] = &["00_load.sql", "views/files.sql"];
+/// The view files read to find the display language and its names (views/terms.sql).
+const TERM_VIEW_FILES: &[&str] = &[
+    "00_load.sql",
+    "views/files.sql",
+    "views/scip.sql",
+    "lang/rust.sql",
+    "lang/go.sql",
+    "views/terms.sql",
+];
 /// What a query's header says when it needs an input `index` writes.
 const NEEDS_INDEX: &str = "Needs the SCIP indexes";
 const NEEDS_CLONES: &str = "Needs the jscpd reports";
@@ -263,7 +278,7 @@ fn prelude(
     if !settings.layers.is_empty() {
         sql.push_str(&table(
             "config_layers",
-            ["name", "module_pattern"],
+            ["name", "namespace_pattern"],
             settings.layer_patterns(),
         ));
         sql.push_str(&table(
@@ -290,12 +305,59 @@ fn needs(file: &Path, what: &str) -> bool {
     std::fs::read_to_string(file).is_ok_and(|t| t.contains(what))
 }
 
+/// The display language's official names for the views' internal `package` and
+/// `namespace` (views/terms.sql); the internal names themselves without one.
+struct Terms {
+    package: String,
+    namespace: String,
+}
+
+impl Default for Terms {
+    fn default() -> Terms {
+        Terms {
+            package: "package".to_owned(),
+            namespace: "namespace".to_owned(),
+        }
+    }
+}
+
+/// TEXT with FROM's two words replaced by TO's at once (Go's names swap the
+/// internal ones), as views/terms.sql's display_term and internal_term do.
+fn swap_terms(text: &str, from: [&str; 2], to: [&str; 2]) -> String {
+    text.replace(from[0], "\u{1}")
+        .replace(from[1], "\u{2}")
+        .replace('\u{1}', to[0])
+        .replace('\u{2}', to[1])
+}
+
+impl Terms {
+    fn display(&self, text: &str) -> String {
+        swap_terms(
+            text,
+            ["namespace", "package"],
+            [&self.namespace, &self.package],
+        )
+    }
+
+    fn internal(&self, text: &str) -> String {
+        swap_terms(
+            text,
+            [&self.namespace, &self.package],
+            ["namespace", "package"],
+        )
+    }
+}
+
+/// The variables whose values are vocabulary (views/terms.sql, display_column).
+const VOCABULARY_VARIABLES: &[&str] = &["kind", "level", "unit_kind"];
+
 struct Session {
     root: PathBuf,
     repo: PathBuf,
     out: PathBuf,
     settings: Settings,
     args: Arguments,
+    terms: Terms,
 }
 
 impl Session {
@@ -308,6 +370,67 @@ impl Session {
             out,
             settings,
             args: parse_arguments(args),
+            terms: Terms::default(),
+        }
+    }
+
+    /// Find the display language (views/terms.sql) by reading the views up to
+    /// views/terms.sql, stop when the repository has several languages and
+    /// `lang` names none, and turn the command line's variable names and
+    /// vocabulary values into the views' internal names.
+    fn translate(&mut self) {
+        std::env::set_current_dir(&self.root).unwrap_or_else(|e| die(e));
+        let db = Db::open().unwrap_or_else(|e| die(e));
+        let mut sql = format!(
+            "SET VARIABLE repo = {};\n",
+            sql_string(&self.repo.display().to_string())
+        );
+        let excluded = self.settings.exclude_patterns();
+        if !excluded.is_empty() {
+            sql.push_str(&format!(
+                "SET VARIABLE exclude_patterns = {};\n",
+                sql_string_list(&excluded)
+            ));
+        }
+        for (name, value) in &self.args.variables {
+            sql.push_str(&format!("SET VARIABLE {name} = {value};\n"));
+        }
+        script::run_text(&db, &sql, &mut Output::Discard).unwrap_or_else(|e| die(e));
+        for file in TERM_VIEW_FILES {
+            script::run_file(
+                &db,
+                Path::new(&format!("{SQL_DIR}/{file}")),
+                &mut Output::Discard,
+            )
+            .unwrap_or_else(|e| die(e));
+        }
+        let row = db
+            .query(
+                "SELECT display_language(), \
+                        (SELECT string_agg(DISTINCT language, ', ' ORDER BY language) FROM files), \
+                        display_term('package', display_language()), \
+                        display_term('namespace', display_language())",
+            )
+            .unwrap_or_else(|e| die(e))
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let cell = |i: usize| row.get(i).cloned().flatten();
+        let languages = cell(1).unwrap_or_default();
+        if cell(0).is_none() && languages.contains(',') {
+            die(format!(
+                "{} holds several languages ({languages}): name the one to read with lang=NAME",
+                self.repo.display()
+            ));
+        }
+        if let (Some(package), Some(namespace)) = (cell(2), cell(3)) {
+            self.terms = Terms { package, namespace };
+        }
+        for (name, value) in &mut self.args.variables {
+            *name = self.terms.internal(name);
+            if VOCABULARY_VARIABLES.contains(&name.as_str()) {
+                *value = self.terms.internal(value);
+            }
         }
     }
 
@@ -431,10 +554,19 @@ impl Session {
         script::run_text(&db, &prelude, &mut Output::Discard).unwrap_or_else(|e| die(e));
         for file in load_files() {
             script::run_file(&db, Path::new(&file), &mut Output::Discard)
-                .unwrap_or_else(|e| die(e));
+                .unwrap_or_else(|e| die(self.terms.display(&e)));
         }
         if self.layered() {
             self.check_layers(&db);
+        }
+        let statements = db
+            .query("SELECT statement FROM display_ddl ORDER BY ord")
+            .unwrap_or_else(|e| die(e));
+        for statement in statements
+            .into_iter()
+            .filter_map(|r| r.into_iter().next().flatten())
+        {
+            db.run_statement(&statement).unwrap_or_else(|e| die(e));
         }
         self.prune_cache();
         db
@@ -479,10 +611,10 @@ impl Session {
         }
     }
 
-    /// A module may belong to one layer only.
+    /// A namespace may belong to one layer only.
     fn check_layers(&self, db: &Db) {
         let rows = db
-            .query("SELECT module, layer FROM module_layer_matches")
+            .query("SELECT namespace, layer FROM namespace_layer_matches")
             .unwrap_or_else(|e| die(e));
         let matches: Vec<(String, String)> = rows
             .into_iter()
@@ -494,21 +626,40 @@ impl Session {
                 )
             })
             .collect();
-        let several = settings::modules_in_several_layers(&matches);
+        let several = settings::namespaces_in_several_layers(&matches);
         if !several.is_empty() {
             let list: Vec<String> = several
                 .iter()
                 .map(|(m, layers)| format!("  {m}: {}", layers.join(", ")))
                 .collect();
             die(format!(
-                "{}: a module matches the patterns of more than one layer:\n{}",
+                "{}: a {} matches the patterns of more than one layer:\n{}",
                 self.repo.join(settings::FILE_NAME).display(),
+                self.terms.namespace,
                 list.join("\n")
             ));
         }
     }
 
-    /// The same loading as a DuckDB CLI script, its output dropped.
+    /// A file under the output directory for SQL the CLI writes and reads
+    /// back (`.output`, `.read`): the display statements.
+    fn generated(&self, what: &str) -> PathBuf {
+        self.out.join(format!("{what}-{}.sql", std::process::id()))
+    }
+
+    /// CLI lines that write SELECT's single text column to FILE, restore the
+    /// output mode and read the file back as SQL.
+    fn cli_generated(&self, select: &str, file: &Path) -> String {
+        format!(
+            ".mode list\n.headers off\n.output {}\n{select}\n.output\n.headers on\n.mode {}\n.read {}\n",
+            file.display(),
+            self.args.format.as_deref().unwrap_or("markdown"),
+            file.display()
+        )
+    }
+
+    /// The same loading as a DuckDB CLI script, its output dropped, with the
+    /// display language's schema.
     fn cli_script(&self, prelude: &str) -> String {
         let mut script = String::from(prelude);
         script.push_str(".output /dev/null\n");
@@ -516,14 +667,54 @@ impl Session {
             script.push_str(&format!(".read {file}\n"));
         }
         if self.layered() {
-            // module_layers fails when a module is in two layers.
-            script.push_str("SELECT module, layer FROM module_layers;\n");
+            // namespace_layers fails when a namespace is in two layers.
+            script.push_str("SELECT namespace, layer FROM namespace_layers;\n");
         }
-        script.push_str(&format!(
-            ".output\n.headers on\n.mode {}\n.maxrows -1\n.maxwidth 0\n",
-            self.args.format.as_deref().unwrap_or("markdown")
+        script.push_str(".output\n.maxrows -1\n.maxwidth 0\n");
+        script.push_str(&self.cli_generated(
+            "SELECT statement || ';' FROM display_ddl ORDER BY ord;",
+            &self.generated("display"),
         ));
         script
+    }
+
+    /// Remove the files cli_generated wrote.
+    fn remove_generated(&self) {
+        for what in ["display", "query"] {
+            let _ = std::fs::remove_file(self.generated(what));
+        }
+    }
+
+    /// Run QUERY (one SELECT) after the loading and print its result in the
+    /// display language (views/terms.sql, display_select).
+    fn run_query(&self, query: &str) -> ! {
+        let create = format!("CREATE OR REPLACE TEMP VIEW query_result AS\n{query}\n;\n");
+        if self.args.format.as_deref().is_none_or(|f| f == "markdown") {
+            let db = self.load();
+            script::run_text(&db, &create, &mut Output::Discard)
+                .unwrap_or_else(|e| die(self.terms.display(&e)));
+            let select = db
+                .value("SELECT display_select('query_result')")
+                .unwrap_or_else(|e| die(e))
+                .unwrap_or_else(|| die("the query has no columns"));
+            let stdout = std::io::stdout();
+            let mut lock = stdout.lock();
+            let result = script::run_text(&db, &select, &mut Output::Markdown(&mut lock));
+            let _ = lock.flush();
+            drop(db);
+            match result {
+                Ok(()) => std::process::exit(0),
+                Err(e) => die(self.terms.display(&e)),
+            }
+        }
+        let text = format!(
+            "{create}{}",
+            self.cli_generated(
+                "SELECT display_select('query_result') || ';';",
+                &self.generated("query")
+            )
+        );
+        self.run(&text)
     }
 
     /// Run TEXT (a query or a `.read`) after the loading: in this process for
@@ -538,7 +729,7 @@ impl Session {
             drop(db);
             match result {
                 Ok(()) => std::process::exit(0),
-                Err(e) => die(e),
+                Err(e) => die(self.terms.display(&e)),
             }
         }
         let cli = self.cli();
@@ -558,16 +749,18 @@ impl Session {
             .write_all(script.as_bytes())
             .unwrap_or_else(|e| die(e));
         let status = child.wait().unwrap_or_else(|e| die(e));
+        self.remove_generated();
         self.prune_cache();
         std::process::exit(status.code().unwrap_or(1))
     }
 }
 
-fn query(session: Session, rest: &[String]) -> ! {
+fn query(mut session: Session, rest: &[String]) -> ! {
     let Some(name) = rest.first() else { usage() };
     let name = name.strip_suffix(".sql").unwrap_or(name);
+    session.translate();
     let queries = session.root.join(SQL_DIR).join("queries");
-    let file = queries.join(format!("{name}.sql"));
+    let file = queries.join(format!("{}.sql", session.terms.internal(name)));
     if !file.is_file() {
         eprintln!("code-db: no query {name}; available:");
         let mut names: Vec<String> = std::fs::read_dir(&queries)
@@ -577,7 +770,7 @@ fn query(session: Session, rest: &[String]) -> ! {
                         .file_name()
                         .to_str()?
                         .strip_suffix(".sql")
-                        .map(str::to_owned)
+                        .map(|n| session.terms.display(n))
                 })
                 .collect()
             })
@@ -605,10 +798,10 @@ fn query(session: Session, rest: &[String]) -> ! {
         }
         None => text,
     };
-    session.run(&text)
+    session.run_query(&text)
 }
 
-fn sql_file(session: Session, rest: &[String]) -> ! {
+fn sql_file(mut session: Session, rest: &[String]) -> ! {
     let Some(file) = rest.first() else { usage() };
     let file = Path::new(file)
         .canonicalize()
@@ -616,12 +809,14 @@ fn sql_file(session: Session, rest: &[String]) -> ! {
     if session.args.limit.is_some() {
         die("LIMIT applies to query only");
     }
+    session.translate();
     session.check_tools();
     session.check_inputs_for(&file, &file.display().to_string());
     session.run(&format!(".read {}\n", file.display()))
 }
 
-fn shell(session: Session) -> ! {
+fn shell(mut session: Session) -> ! {
+    session.translate();
     session.check_tools();
     if !session.indexed() {
         eprintln!(
@@ -644,6 +839,7 @@ fn shell(session: Session) -> ! {
         .current_dir(&session.root)
         .status();
     let _ = std::fs::remove_file(&path);
+    session.remove_generated();
     session.prune_cache();
     let status = status.unwrap_or_else(|e| die(format!("{}: {e}", cli.display())));
     std::process::exit(status.code().unwrap_or(1))

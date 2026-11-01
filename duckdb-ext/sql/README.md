@@ -31,7 +31,7 @@ checkout it was built in, and works on any repository `REPO`:
 ```sh
 code-db index REPO                       # inputs: one SCIP index per workspace, jscpd reports
 code-db query REPO size LIMIT=20         # queries/size.sql, as a table
-code-db query REPO coupling min_crates=4 FORMAT=box
+code-db query REPO coupling min_packages=4 FORMAT=box
 code-db sql REPO my-question.sql         # any SQL file, after the same loading
 code-db shell REPO                       # an interactive duckdb2 session
 code-db limits REPO [--json]             # the limits the loading would set
@@ -82,7 +82,7 @@ code-db limits REPO [--json]             # the limits the loading would set
   `REPO/target/code-db/shell-init-PID.sql` for `-init` and removes it on exit.
 - **Variables**: `NAME=VALUE` sets a DuckDB variable before anything is read (a
   number, `true`, `false` or `NULL` as it is, anything else as a string, so
-  `level=crate` and `kind=function` need no quotes); `NAME:=EXPR` passes SQL text
+  `level=package` and `kind=function` need no quotes); `NAME:=EXPR` passes SQL text
   (`"exclude_patterns:=['src/*']"`), and overrides what the settings file sets.
   `memory_limit`, `threads` and `temp_limit` take `NAME=VALUE` only: they go into the
   limits rather than straight to DuckDB. `FORMAT` is the CLI's output mode (default
@@ -94,6 +94,37 @@ code-db limits REPO [--json]             # the limits the loading would set
   pinned binary), a settings file that does not parse (with the line).
 
 `check.py` (Check, below) is the tool for assertions and measurements.
+
+## Names
+
+The views name the two levels above a file by internal names: **package**, what a
+manifest declares, versions and depends by (SCIP's `<package>`: a Cargo package, a Go
+module), and **namespace**, a unit of namespacing and visibility (SCIP's Namespace
+descriptor: a Rust module, a Go package), with everything built from them
+(`package_edges`, `fan_in_packages`, `namespace_cycles`, `level := 'package'`, kind
+`namespace`, status `package_root`). A reader of one language sees that language's own
+names instead (owner decision, 2026-10-30), which `lang/<language>.sql` gives in two rows
+(`<language>_terms`):
+
+| Internal | Rust | Go |
+| --- | --- | --- |
+| package | package | module |
+| namespace | module | package |
+
+`views/terms.sql` replaces both at once (Go's swap them) in names and in the vocabulary
+columns' values (`kind`, `level`, `status`, `reference_status`, `resolved_by`,
+`unit_kind`), for one display language: `lang` when set, else the only language of
+`files`. `code-db` shows everything in it: it reads the views up to `views/terms.sql` to
+find the language, stops when a repository holds several and `lang=NAME` names none
+(`lang` then keeps only that language's files, so a mixed repository is read one language
+at a time), turns the command line's query name, parameter names and vocabulary values
+into internal names (`code-db query REPO package_graph level=module` in a Go repository
+is `namespace_graph` with `level := 'package'`), prints each query's result through
+`display_select`, and creates the schema named after the language with every view under
+its display name (`go.units` with `module` and `package` columns, `go.package_edges`,
+`rust.module_edges`): what `sql` files and `shell` sessions query to see the language's
+names. The view files themselves, read by another client, use the internal names, and so
+does a DuckDB error shown by the CLI (the other `FORMAT`s and `shell`).
 
 ## Limits
 
@@ -168,6 +199,7 @@ duckdb-ext/sql/views/files.sql
 duckdb-ext/sql/views/scip.sql
 duckdb-ext/sql/lang/rust.sql
 duckdb-ext/sql/lang/go.sql
+duckdb-ext/sql/views/terms.sql
 duckdb-ext/sql/views/units.sql
 duckdb-ext/sql/views/graph.sql
 duckdb-ext/sql/views/clones.sql
@@ -192,12 +224,13 @@ duckdb2 -unsigned -cmd "SET VARIABLE repo = '$PWD'"
 .read duckdb-ext/sql/views/scip.sql
 .read duckdb-ext/sql/lang/rust.sql
 .read duckdb-ext/sql/lang/go.sql
+.read duckdb-ext/sql/views/terms.sql
 .read duckdb-ext/sql/views/units.sql
 .read duckdb-ext/sql/views/graph.sql
 .read duckdb-ext/sql/views/clones.sql
 .read duckdb-ext/sql/views/quality.sql
 .read duckdb-ext/sql/refresh.sql
-SET VARIABLE level = 'crate';
+SET VARIABLE level = 'package';
 .read duckdb-ext/sql/queries/size.sql
 ```
 
@@ -209,7 +242,7 @@ stop the file only then.
 ## Settings file
 
 Judgment that depends on the analysed repository (what is out of scope, what counts as
-a test, which module dependencies are intended) lives in that repository's
+a test, which namespace dependencies are intended) lives in that repository's
 `.code-db.toml`, at its root, not in the views (owner decision 2026-10-29). `code-db`
 reads it with the `toml` crate and hands DuckDB the values; without the file everything
 has its default. Every entry needs a `reason`, so that a later reader knows why it is
@@ -240,14 +273,14 @@ reason = "..."
 | `scope.exclude[].path` | the variable `exclude_patterns` | `00_load.sql` (`is_source_file`): the files, so also the units, the graph and what `index` hands jscpd |
 | `tests.paths[].path` | the variable `extra_test_paths` (GLOB operator patterns on the relative path, `*` crosses `/`), added to Rust's own path rules | `derived_units` (`is_test`) |
 | `tests.extra_attributes[].name` | the variable `extra_test_attributes`, added to the attributes whose name ends in `test` and `cfg(test)` | `derived_units` (`is_test`) |
-| `[[layers]]` `name`, `modules` | the table `config_layers(name, module_pattern)`, one row per pattern | `module_layer_matches`, `module_layers` (`views/graph.sql`) |
-| `[[layers]]` `may_depend_on` | the table `config_layer_deps(name, may_depend_on)` | `graph_layer_violation`, `module_layer_violations`, the queries `layer_violations` and `module_cycles` |
+| `[[layers]]` `name`, `modules` (Rust's word; `packages` for Go) | the table `config_layers(name, namespace_pattern)`, one row per pattern | `namespace_layer_matches`, `namespace_layers` (`views/graph.sql`) |
+| `[[layers]]` `may_depend_on` | the table `config_layer_deps(name, may_depend_on)` | `graph_layer_violation`, `namespace_layer_violations`, the queries `layer_violations` and `namespace_cycles` |
 
-A module (`modules.module`: a file's path, or `<path>::<name>` for an inline `mod` block)
+A namespace (`namespaces.namespace`: a file's path, or `<path>::<name>` for an inline `mod` block)
 is in a layer when it matches one of the layer's patterns with the GLOB operator, so
-`src/model.rs*` covers `src/model.rs` and its inline modules. A module in no layer is
-unconstrained; a module that matches two layers is an error (`code-db` reports it before
-any query, and `module_layers` fails on it). An edge goes against the layers when both
+`src/model.rs*` covers `src/model.rs` and its inline modules. A namespace in no layer is
+unconstrained; a namespace that matches two layers is an error (`code-db` reports it before
+any query, and `namespace_layers` fails on it). An edge goes against the layers when both
 ends are in layers, the layers differ and the source layer's `may_depend_on` does not
 name the target's (`may_depend_on` is not transitive). The variables and tables are set
 before `00_load.sql` is read, which creates the two tables empty when they do not exist;
@@ -255,8 +288,8 @@ a `NAME=VALUE` on the command line overrides a variable the file sets. The cache
 includes the two test variables.
 
 Not settings, and derived instead (owner decisions): which types are contracts shared
-across crates (`contract_candidate`, a type referenced from at least `min_crates` other
-crates, a query parameter) and which duplicates are intended copies
+across packages (`contract_candidate`, a type referenced from at least `min_packages` other
+packages, a query parameter) and which duplicates are intended copies
 (`conversion_pair`, two types joined by a conversion impl).
 
 ## Files
@@ -327,13 +360,13 @@ reading of them, then Go's:
 - **What is a unit (Rust).** One per definition occurrence of a non-local symbol in a source
   file whose SCIP kind maps to a unit kind: Function → `function`; Method, StaticMethod,
   TraitMethod → `method`; Struct, Enum, Union, TypeAlias, Trait, AssociatedType → `type`;
-  Module → `module`; Macro → `macro`; Constant, StaticVariable → `constant`. Fields, enum
+  Module → `namespace`; Macro → `macro`; Constant, StaticVariable → `constant`. Fields, enum
   variants, parameters and locals are not units; their occurrences belong to the unit
   containing them. Impl blocks are not units (rust-analyzer gives them no symbol); their
   members carry them in their descriptors, `…impl#[Type]m().` and
   `…impl#[Type][Trait]m().`, as `impl_key`, `impl_type` and `impl_trait` (`member_of`:
   `impl`, `trait_impl`, or `trait` for a trait's own items). A `mod x;` declaration is a
-  reference, not a unit; file modules (`is_file_module`, rust-analyzer's whole-file
+  reference, not a unit; file modules (`is_file_unit`, rust-analyzer's whole-file
   definition) and inline modules are. Code rust-analyzer does not see (an inactive cfg,
   a file outside every workspace, such as a script's fixture) has no units; its file is
   still in `files`.
@@ -344,7 +377,7 @@ reading of them, then Go's:
   call defines) are siblings. `unit_id` orders units by file, then range start, the longer
   range first, so the innermost unit containing a position is the containing one with the
   greatest `unit_id`.
-- **Names.** `crate` is the SCIP package; `name` the display name (the package for a
+- **Names.** `package` is the SCIP package (the Cargo package); `name` the display name (the package for a
   crate root); `qualified_name` the descriptors below the file's own module, `.`-joined:
   `Type.m`, `Trait for Type.m`, `tests.f`. Items inside a function body do not name the
   function (SCIP's descriptors do not), so two such items of one file can share a
@@ -368,9 +401,9 @@ reading of them, then Go's:
 - **Go** (`lang/go.sql`, over scip-go 0.2.7's index;
   `docs/research/code-db-go-2026-10-30.md`). Function → `function`; Method,
   MethodSpecification (an interface's method) → `method`; Type, Struct, Interface,
-  TypeAlias → `type`; Package → `module`; Constant and a package-level Variable →
+  TypeAlias → `type`; Package → `namespace`; Constant and a package-level Variable →
   `constant`. Struct fields and everything inside a function body (scip-go's `local N`
-  symbols) are not units. Every file is a file module: scip-go defines the package at
+  symbols) are not units. Every file is a file unit: scip-go defines the package at
   each file's `package` clause, and the unit's range is the file's whole syntax tree.
   scip-go gives only functions and methods an `enclosing_range` (from `func` to the
   closing brace, the doc comment not included); every other range comes from the
@@ -379,17 +412,17 @@ reading of them, then Go's:
   interface's `method_elem`. A method is `member_of` `impl` with `impl_key` its receiver
   type's symbol and `impl_type` that type's name (so a type's methods share one key
   across its files; there is no `impl_header_line`); an interface's method is `trait`.
-  `crate` is the Go module (scip-go's package name); `qualified_name` is below the Go
+  `package` is the Go module (scip-go's package name); `qualified_name` is below the Go
   package (`T.M`). `visibility` is `pub` for an exported name (an upper-case first
-  letter), else `private`, NULL for an interface's method and a file module.
+  letter), else `private`, NULL for an interface's method and a file unit.
   `parameters` counts each name of the signature's parameter list (`a, b int` is two),
   the receiver included as Rust's `self` is. `has_doc` is the doc comment; a package's is
-  its package comment in any file, so all its file modules have it. `is_test`: the file
+  its package comment in any file, so all its file units have it. `is_test`: the file
   is a `*_test.go` file or matches `extra_test_paths` (`extra_test_attributes` has no
   Go meaning). The Go files' trees are read by `go_file_ast`, which hands `read_ast`
   only them: a repository without Go files parses nothing for Go. What reads Rust's
-  shapes downstream has no Go reading yet: `modules`' file-module convention (a Go file
-  is a module named by its path, not its package directory) and `unit_complexity`'s node
+  shapes downstream has no Go reading yet: `namespaces`' file-module convention (a Go file
+  is a namespace named by its path, not its package directory) and `unit_complexity`'s node
   types (Go's are `if_statement`, `for_statement`, …; Go units count none).
 - **`unit_ast`**: every unit's syntax tree, one row per node: the nodes of its file's
   tree (`file_ast`, Files below) inside the unit's range, compared by line and column; a
@@ -424,33 +457,33 @@ reading of them, then Go's:
   src_is_test, dst_is_test)`** and **`unit_edges(src_unit_id, dst_unit_id, symbols,
   occurrences, is_self, ambiguous, src_is_test, dst_is_test)`**.
 - **`unit_contains`, `unit_ancestors(unit_id, ancestor_id, depth)`**.
-- **`impls(impl_id, file_id, crate, impl_key, impl_type, impl_trait, header_line,
+- **`impls(impl_id, file_id, package, impl_key, impl_type, impl_trait, header_line,
   members)`**: one row per impl block as its members give it (key, file, header line).
   **`impl_targets(impl_id, part, name, target_unit_id, resolved_by)`**: the `type` and
   `trait` parts resolved to type units by their bare name: the candidate referenced on
-  the header line (`header`), else the only one in the file (`file`), the crate
-  (`crate`), the repository (`name`); NULL when none or several (external traits such as
+  the header line (`header`), else the only one in the file (`file`), the package
+  (`package`), the repository (`name`); NULL when none or several (external traits such as
   `From`). On this repository 565 of 571 impls' types resolve, 559 through the header.
   **`impl_for(impl_id, type_unit_id)`**, **`implements(impl_id, trait_unit_id)`**,
   **`unit_impl_type(unit_id, impl_id, type_unit_id)`** (the impl of a unit's nearest
   ancestor-or-self member).
-- **`modules(module, file_id, module_unit_id, crate, module_path)`** and
-  **`unit_module(unit_id, module, module_unit_id, file_id, crate, module_path)`**: every
-  module unit; a file module is named by its path, an inline module `<path>::<names>`. A
-  unit belongs to its nearest ancestor-or-self module. `module_path` places a module in
-  its crate's tree by the file-module convention (a crate root and `mod.rs` are their
+- **`namespaces(namespace, file_id, namespace_unit_id, package, namespace_path)`** and
+  **`unit_namespace(unit_id, namespace, namespace_unit_id, file_id, package, namespace_path)`**: every
+  namespace unit; a file module is named by its path, an inline module `<path>::<names>`. A
+  unit belongs to its nearest ancestor-or-self namespace. `namespace_path` places a namespace in
+  its package's tree by the file-module convention (a crate root and `mod.rs` are their
   directory, another file its path without `.rs`, an inline module its file's path plus
   its names), not by the descriptors: SCIP names every target's root `crate/`, which would
   make an integration test's root an ancestor of every library module.
-- **`module_edges(src_module, dst_module, src_crate, dst_crate, unit_edges, occurrences,
+- **`namespace_edges(src_namespace, dst_namespace, src_package, dst_package, unit_edges, occurrences,
   test_unit_edges, ambiguous_unit_edges, nested_modules, same_type_unit_edges)`**,
-  **`crate_edges`**, **`module_cycle_edges`**, **`module_cycles(cycle, crate, modules,
-  members, edges, unit_edges, occurrences)`**, **`crate_cycles`**: as before the rebuild,
-  over these units. `nested_modules` marks an edge between a module and its ancestor or
+  **`package_edges`**, **`namespace_cycle_edges`**, **`namespace_cycles(cycle, package, namespaces,
+  members, edges, unit_edges, occurrences)`**, **`package_cycles`**: as before the rebuild,
+  over these units. `nested_namespaces` marks an edge between a namespace and its ancestor or
   descendant; `same_type_unit_edges` counts the unit edges whose ends lie in impls of one
   type. Cycles leave out both kinds of structural edge unless `cycle_edges := 'raw'`.
-- **Layers**: `module_layer_matches`, `module_layers`, `graph_layer_violation`,
-  `module_layer_violations` (Settings file).
+- **Layers**: `namespace_layer_matches`, `namespace_layers`, `graph_layer_violation`,
+  `namespace_layer_violations` (Settings file).
 
 Accepted limitations: `local` symbols are excluded; a call through a generic bound or
 `dyn` resolves to the trait's method, not an impl's (a call on a concrete type reaches
@@ -466,11 +499,11 @@ settings file.
 
 | Axis (axes record) | Query | Per-unit facts | Evidence |
 | --- | --- | --- | --- |
-| size (§3.1, §3.2) | `size` (`level` unit, file, crate) | `loc` | medium |
+| size (§3.1, §3.2) | `size` (`level` unit, file, package) | `loc` | medium |
 | duplication (§3.5) | `duplication` (pairs, `conversion_pair`) | `unit_clones` | medium |
-| coupling (§3.6) | `coupling` (`level` unit, file, crate; `contract_candidate`, `min_crates`), `module_graph` | `unit_fan_in`, `unit_fan_out` | medium |
-| independence (§3.8) | `module_cycles` (`violating_edges`), `layer_violations` | module of the unit, its cycle and layer | weak |
-| interface (§3.4) | `interface` (parameters, visibility), `public_surface` (per crate) | `visibility`, `parameters` | weak |
+| coupling (§3.6) | `coupling` (`level` unit, file, package; `contract_candidate`, `min_packages`), `namespace_graph` | `unit_fan_in`, `unit_fan_out` | medium |
+| independence (§3.8) | `namespace_cycles` (`violating_edges`), `layer_violations` | namespace of the unit, its cycle and layer | weak |
+| interface (§3.4) | `interface` (parameters, visibility), `public_surface` (per package) | `visibility`, `parameters` | weak |
 | intent, mechanical part (§3.15, §3.18) | `intent` | `has_doc`, `unit_debt_markers` | weak to none |
 | complexity and nesting (§3.3) | `complexity` | `unit_complexity` (`decisions`, `max_nesting`) | weak to medium |
 | unreferenced definitions (§3.16) | `unreferenced` | `unit_reference_status` | weak |
@@ -492,18 +525,18 @@ settings file.
   with the innermost unit containing all its lines.
 - **`unit_scope(unit_id, member_unit_id)`**: what a unit stands for when coupling is
   counted: itself, what it contains, and for a type its impls' members.
-  **`unit_fan_in(unit_id, fan_in_files, fan_in_crates, fan_in_units,
-  reference_occurrences)`**: the files and crates other than its own, and the units
-  outside its scope, that reference a symbol belonging to its scope; a module, only its
+  **`unit_fan_in(unit_id, fan_in_files, fan_in_packages, fan_in_units,
+  reference_occurrences)`**: the files and packages other than its own, and the units
+  outside its scope, that reference a symbol belonging to its scope; a namespace, only its
   own symbol where a path names it (not `crate`, `super`, `self`, `pub(crate)`,
   `pub(super)`, a `pub(in …)` path or the `mod a;` declaration, told apart by the
   source text; a package's crate-root symbol counts for its `src/lib.rs`). What a file
   contains is summed by `coupling`'s file level.
-  **`unit_fan_out(unit_id, fan_out_files, fan_out_crates, fan_out_units)`**: the same for
+  **`unit_fan_out(unit_id, fan_out_files, fan_out_packages, fan_out_units)`**: the same for
   what its scope references.
 - **`unit_reference_status(unit_id, references, status)`**: the reference occurrences of
   the unit's own symbol anywhere, and `referenced`, `unreferenced`, or why it is
-  structurally unreferenced: `test`, `trait_impl`, `entry_point` (`main`), `crate_root`,
+  structurally unreferenced: `test`, `trait_impl`, `entry_point` (`main`), `package_root`,
   `trait_item`.
 - **`unit_debt_markers(unit_id, debt_lines)`**: lines with `TODO` or `FIXME`, each counted
   for its innermost unit.
@@ -519,7 +552,7 @@ settings file.
   and `max_nesting` (if, match and the loops open at once; an `else if` opens no level).
   The view's comment has the rules.
 - **`unit_quality`**: one row per unit with the per-unit columns of every axis side by
-  side (identity, `loc`, `decisions` and `max_nesting`, clone counts, fan-in and fan-out, the module's cycle and layer,
+  side (identity, `loc`, `decisions` and `max_nesting`, clone counts, fan-in and fan-out, the namespace's cycle and layer,
   visibility and parameters, `has_doc` and `debt_lines`, references and their status). It
   combines nothing: there is no score.
 
@@ -554,8 +587,8 @@ views compute the same rows live (`check.py refresh` compares them).
   `ast-*.duckdb` files of other syntax keys.
 - **Layers**, in order, each built from the copies before it: `scip_occurrences`,
   `scip_symbols`, `units`, `unit_occurrences`, `symbol_units`, `unit_references`,
-  `unit_edges`, `unit_ancestors`, `impls`, `impl_targets`, `unit_impl_type`, `modules`,
-  `unit_module`, `module_edges`, `unit_scope`, `unit_fan_in`, `unit_fan_out`,
+  `unit_edges`, `unit_ancestors`, `impls`, `impl_targets`, `unit_impl_type`, `namespaces`,
+  `unit_namespace`, `namespace_edges`, `unit_scope`, `unit_fan_in`, `unit_fan_out`,
   `unit_reference_status`, `unit_debt_markers`, `unit_complexity`. Views that read a query variable or the
   settings' tables (cycles, layers) and the clone views stay live, over the copies.
 - **Measured** on this repository (`docs/research/code-db-file-ast-cache-2026-10-30.md`
@@ -591,9 +624,9 @@ with a message when missing), writes two jscpd-shaped reports (a pair between tw
 conversion joins, found by both reports with the sides swapped and merged; one that is
 not; a copy inside one unit, kept; a run matching itself one line lower, dropped), fills
 the settings' tables as `code-db` does (`exclude_patterns`, `extra_test_paths`,
-`extra_test_attributes`, two layers), and asserts every row of `files` and `units`, `impl_targets`, `unit_edges`, `modules`, `crate_edges`,
-`module_cycles`, `unit_quality`, and every query with its parameters (`size` at three
-levels, `coupling` with `min_crates` and at the file and crate levels, `unreferenced`
+`extra_test_attributes`, two layers), and asserts every row of `files` and `units`, `impl_targets`, `unit_edges`, `namespaces`, `package_edges`,
+`namespace_cycles`, `unit_quality`, and every query with its parameters (`size` at three
+levels, `coupling` with `min_packages` and at the file and package levels, `unreferenced`
 with the structural rows, `duplication` with tests and per report), `clone_report_pairs`
 and `clone_pairs`, the layers emptied (no violation) and doubled (an error), and
 `unit_dependencies` without its unit (an error). It then reads `refresh.sql` and asserts
@@ -634,13 +667,14 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (SCIP) |
-| `lang/rust.sql` | the macros `impl_base_name`, `impl_generic_arg`; `rust_units` (Units) |
-| `lang/go.sql` | `go_file_ast`, `go_units` (Units) |
+| `lang/rust.sql` | `rust_terms`, the macros `impl_base_name`, `impl_generic_arg`; `rust_units` (Units) |
+| `lang/go.sql` | `go_terms`, `go_file_ast`, `go_units` (Units) |
+| `views/terms.sql` | `lang_terms`, the macros `display_language`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
 | `views/units.sql` | `derived_units`, `units`, `unit_ast` (Units) |
-| `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `modules`, `unit_module`, `module_edges`, `crate_edges`, `module_cycle_edges`, `module_cycles`, `module_layer_matches`, `module_layers`, the macro `graph_layer_violation`, `module_layer_violations`, `crate_cycles` (Graph) |
+| `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
 | `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
 | `views/quality.sql` | `unit_scope`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `unit_complexity`, `unit_quality` (Axes) |
-| `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `module_graph`, `module_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
+| `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `namespace_graph`, `namespace_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
 | `refresh.sql` | the cache, the syntax trees' included (Cache) |
 | `jscpd.sh` | the two jscpd reports `views/clones.sql` reads |
 | `empty-jscpd-report.json` | a report with no duplicates, always in `clone_report_pairs`' list |
@@ -653,13 +687,14 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
   jscpd; columns are 1-based, the end the column after the last character.
 - **Paths are repository-relative** with `/`. `files.file_id` is the position in the
   sorted file list; `units.unit_id` the position in the unit order (Units).
-- **Neutral vocabulary**: unit kinds `function`, `method`, `type`, `module`, `macro`,
+- **Neutral vocabulary**: unit kinds `function`, `method`, `type`, `namespace`, `macro`,
   `constant`; the SCIP kind is kept as `symbol_kind`. Language knowledge about units (the
   kind mapping, the test rules, the impl descriptors, ranges the indexer does not give)
   lives in one file per language under `lang/`, a view `<language>_units` that
-  `views/units.sql` takes into `derived_units`; another language adds its file there,
-  its view to that union, its extension to `languages` and its indexer to `code-db
-  index`. The file-module convention (`modules`) and the complexity node types
+  `views/units.sql` takes into `derived_units`, and its two names (Names) in
+  `<language>_terms`; another language adds its file there, its two views to the unions
+  in `derived_units` and `lang_terms`, its extension to `languages` and its indexer to
+  `code-db index`. The file-module convention (`namespaces`) and the complexity node types
   (`unit_complexity`) in `views/graph.sql` and `views/quality.sql` are still Rust's.
 - **A view reads each source once.** A view or common table expression that is not
   `MATERIALIZED` is expanded at every reference; the views materialize what they read
@@ -679,17 +714,18 @@ which `00_load.sql` takes as snapshots.
 | `include_untracked` | `false` (also list untracked files that are not ignored) | `00_load.sql`, `refresh.sql` |
 | `exclude_patterns` | `[]` (GLOB operator patterns on the relative path; `*` crosses `/`) | `00_load.sql`, `refresh.sql` |
 | `languages` | `MAP {'rs': 'rust', 'go': 'go'}` (extension to language) | `00_load.sql`, `files`, `go_file_ast` |
+| `lang` | NULL (every language of `languages`; a language's name: only its extensions, and it is the display language) | `00_load.sql`, `display_language` |
 | `scip_indexes` | the `*.scip` files of `repo/target/code-db/scip/` | `views/scip.sql`, `refresh.sql` |
 | `clone_reports` | the reports `repo/target/code-db/jscpd/{exact,normalized}/jscpd-report.json` that exist | `clone_report_pairs` |
 | `extra_test_paths`, `extra_test_attributes` | `[]`; `code-db` sets them from the settings file | `derived_units`, `refresh.sql` (key) |
 | `cache_dir` | `repo/target/code-db/cache` | `refresh.sql` |
-| `cycle_edges` | `'collapsed'` (`'raw'`: every module edge) | `module_cycle_edges` and what reads it |
+| `cycle_edges` | `'collapsed'` (`'raw'`: every namespace edge) | `namespace_cycle_edges` and what reads it |
 | `level`, `kind`, `include_tests` | `'unit'`, NULL, `false` | `size`, `coupling` (`kind` and `include_tests` also other queries) |
 | `source` | NULL (both reports; a report's name: the pairs it found) | `duplication` |
-| `min_crates` | 3 | `coupling` (`contract_candidate`) |
+| `min_packages` | 3 | `coupling` (`contract_candidate`) |
 | `min_parameters` | 0 | `interface` |
 | `include_structural` | `false` | `unreferenced` |
-| `crate` | NULL (all crates) | `module_graph`, `module_cycles` |
+| `package` | NULL (all packages) | `namespace_graph`, `namespace_cycles` |
 | `path`, `unit_kind`, `qualified_name`, `depth`, `direction` | required, required, required, 1, `'both'` (`'in'`, `'out'`) | `unit_dependencies` |
 
 How parameters reach the table functions: `getvariable('…')` is accepted as an argument
@@ -704,8 +740,8 @@ need at least one file, which is why `empty-jscpd-report.json` is always in thei
   comparison were removed with the decision of 2026-10-29; the comparison is to come back
   as a diff of obstacle lists over two SCIP indexes.
 - The exhaustive-`match` check (above).
-- TypeScript (its SCIP indexer and the unit mapping); for Go, the module mapping
-  (packages as modules) and the complexity node types (Units). SCIP relationships
+- TypeScript (its SCIP indexer and the unit mapping); for Go, the namespace mapping
+  (Go packages as namespaces) and the complexity node types (Units). SCIP relationships
   (rust-analyzer 1.99.1 writes none; scip-go writes its implementations, which nothing
   reads yet), so no edge from an impl's method to the trait method it implements, nor
   from a Go method to the interface method it satisfies.

@@ -228,7 +228,7 @@ fn index_settings_and_queries() {
     let probe = repo.join("target/probe.sql");
     std::fs::write(
         &probe,
-        "SELECT path, kind, qualified_name, is_test FROM units \
+        "SELECT path, kind, qualified_name, is_test FROM rust.units \
          WHERE is_test OR path IN ('src/generated.rs', 'tool/src/main.rs') ORDER BY ALL;\n",
     )
     .unwrap();
@@ -263,7 +263,7 @@ fn index_settings_and_queries() {
     // Without the reports, a query that reads no clone still runs; one that does
     // says to run index.
     std::fs::remove_dir_all(repo.join("target/code-db/jscpd")).unwrap();
-    let sizes = rows(&code_db(&["query", "size", "level=crate"]));
+    let sizes = rows(&code_db(&["query", "size", "level=package"]));
     assert_eq!(sizes.len(), 2);
     let output = run(repo, &["query", "duplication"], &jscpd, &log);
     assert!(!output.status.success());
@@ -389,10 +389,10 @@ fn go_modules_index_and_units() {
     let probe = repo.join("target/probe.sql");
     std::fs::write(
         &probe,
-        "SELECT path, crate, kind, qualified_name, start_line, end_line, is_test, \
+        "SELECT path, module, kind, qualified_name, start_line, end_line, is_test, \
                 coalesce(visibility, '-'), coalesce(parameters::VARCHAR, '-'), \
                 coalesce(member_of, '-'), coalesce(impl_type, '-') \
-         FROM units ORDER BY unit_id;\n",
+         FROM go.units ORDER BY unit_id;\n",
     )
     .unwrap();
     let units = rows(&code_db(&["sql", probe.to_str().unwrap()]));
@@ -408,7 +408,7 @@ fn go_modules_index_and_units() {
             vec![
                 "cmd/app/main.go",
                 shapes,
-                "module",
+                "package",
                 "main",
                 "1",
                 "8",
@@ -434,7 +434,7 @@ fn go_modules_index_and_units() {
             vec![
                 "shapes/shapes.go",
                 shapes,
-                "module",
+                "package",
                 "shapes",
                 "1",
                 "29",
@@ -551,7 +551,7 @@ fn go_modules_index_and_units() {
             vec![
                 "shapes/shapes_test.go",
                 shapes,
-                "module",
+                "package",
                 "shapes",
                 "1",
                 "10",
@@ -577,7 +577,7 @@ fn go_modules_index_and_units() {
             vec![
                 "tools/gen/main.go",
                 "example.com/gen",
-                "module",
+                "package",
                 "main",
                 "1",
                 "4",
@@ -607,8 +607,8 @@ fn go_modules_index_and_units() {
     std::fs::write(
         &probe,
         "SELECT s.qualified_name, d.qualified_name FROM unit_edges e \
-         JOIN units s ON s.unit_id = e.src_unit_id JOIN units d ON d.unit_id = e.dst_unit_id \
-         WHERE s.kind <> 'module' AND NOT e.is_self ORDER BY ALL;\n",
+         JOIN go.units s ON s.unit_id = e.src_unit_id JOIN go.units d ON d.unit_id = e.dst_unit_id \
+         WHERE s.kind <> 'package' AND NOT e.is_self ORDER BY ALL;\n",
     )
     .unwrap();
     let edges = rows(&code_db(&["sql", probe.to_str().unwrap()]));
@@ -626,4 +626,45 @@ fn go_modules_index_and_units() {
             ("main", "Describe"),
         ]
     );
+
+    // The queries, their parameters and their columns use Go's names: a Go
+    // module where the views say package, a Go package where they say namespace.
+    let graph = code_db(&["query", "package_graph"]);
+    let header = graph.lines().next().unwrap_or_default();
+    assert!(
+        header.contains("src_package") && header.contains("src_module"),
+        "{header}"
+    );
+    assert!(
+        !header.contains("namespace") && !header.contains("crate"),
+        "{header}"
+    );
+    let modules = rows(&code_db(&["query", "coupling", "level=module"]));
+    assert_eq!(
+        modules
+            .iter()
+            .map(|r| (&r[0][..], &r[2][..]))
+            .collect::<Vec<_>>(),
+        [
+            ("module", "example.com/gen"),
+            ("module", "example.com/shapes")
+        ]
+    );
+
+    // A second language needs lang=NAME, which reads that language only.
+    write(repo, "tools/build.rs", "fn main() {}\n");
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-q", "-m", "Add a Rust file"]);
+    let output = Command::new(env!("CARGO_BIN_EXE_code-db"))
+        .args(["query", repo.to_str().unwrap(), "size"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("several languages (go, rust)") && stderr.contains("lang="),
+        "{stderr}"
+    );
+    let sizes = rows(&code_db(&["query", "size", "level=module", "lang=go"]));
+    assert_eq!(sizes.len(), 2);
 }

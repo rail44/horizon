@@ -30,7 +30,7 @@
 -- Layers, in the order they are built, each from the copies before it: scip_occurrences,
 -- scip_symbols (views/scip.sql); units (views/units.sql); unit_occurrences, symbol_units,
 -- unit_references, unit_edges, unit_ancestors, impls, impl_targets, unit_impl_type,
--- modules, unit_module, module_edges (views/graph.sql); unit_scope, unit_fan_in,
+-- namespaces, unit_namespace, namespace_edges (views/graph.sql); unit_scope, unit_fan_in,
 -- unit_fan_out, unit_reference_status, unit_debt_markers, unit_complexity
 -- (views/quality.sql). Views that read a query variable or the settings' tables (module_cycle_edges and what reads it,
 -- the layers) and the clone views (jscpd's reports are not in the key) stay live, over the
@@ -168,12 +168,12 @@ CREATE TABLE IF NOT EXISTS cache.impl_targets AS SELECT * FROM impl_targets;
 CREATE OR REPLACE VIEW impl_targets AS SELECT * FROM cache.impl_targets;
 CREATE TABLE IF NOT EXISTS cache.unit_impl_type AS SELECT * FROM unit_impl_type;
 CREATE OR REPLACE VIEW unit_impl_type AS SELECT * FROM cache.unit_impl_type;
-CREATE TABLE IF NOT EXISTS cache.modules AS SELECT * FROM modules;
-CREATE OR REPLACE VIEW modules AS SELECT * FROM cache.modules;
-CREATE TABLE IF NOT EXISTS cache.unit_module AS SELECT * FROM unit_module;
-CREATE OR REPLACE VIEW unit_module AS SELECT * FROM cache.unit_module;
-CREATE TABLE IF NOT EXISTS cache.module_edges AS SELECT * FROM module_edges;
-CREATE OR REPLACE VIEW module_edges AS SELECT * FROM cache.module_edges;
+CREATE TABLE IF NOT EXISTS cache.namespaces AS SELECT * FROM namespaces;
+CREATE OR REPLACE VIEW namespaces AS SELECT * FROM cache.namespaces;
+CREATE TABLE IF NOT EXISTS cache.unit_namespace AS SELECT * FROM unit_namespace;
+CREATE OR REPLACE VIEW unit_namespace AS SELECT * FROM cache.unit_namespace;
+CREATE TABLE IF NOT EXISTS cache.namespace_edges AS SELECT * FROM namespace_edges;
+CREATE OR REPLACE VIEW namespace_edges AS SELECT * FROM cache.namespace_edges;
 CREATE TABLE IF NOT EXISTS cache.unit_scope AS SELECT * FROM unit_scope;
 CREATE OR REPLACE VIEW unit_scope AS SELECT * FROM cache.unit_scope;
 CREATE TABLE IF NOT EXISTS cache.unit_fan_in AS SELECT * FROM unit_fan_in;

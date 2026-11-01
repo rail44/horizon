@@ -109,7 +109,7 @@ GROUP BY group_id;
 
 -- clone_sides(pair_id, side, file_id, start_line, end_line, unit_id): each pair's two
 -- fragments (side 'a' and 'b') with the innermost unit whose lines contain the whole
--- fragment (a file module at worst; NULL in a file without units or outside `files`).
+-- fragment (a file unit at worst; NULL in a file without units or outside `files`).
 CREATE OR REPLACE VIEW clone_sides AS
 WITH sides AS MATERIALIZED (
     SELECT p.pair_id, 'a' AS side, f.file_id, p.start_line_a AS start_line, p.end_line_a AS end_line

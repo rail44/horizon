@@ -11,7 +11,7 @@
 -- issue #1249 expects from McCabe), and a closure adds no entry of its own. cyclomatic
 -- is decisions + 1. max_nesting is the most of if (an else-if chain is one level), match,
 -- for, while and loop open at one node.
--- Columns: path, crate, kind, qualified_name, start_line, loc, cyclomatic, decisions,
+-- Columns: path, package, kind, qualified_name, start_line, loc, cyclomatic, decisions,
 -- max_nesting, if_count, else_if_count, match_count, arm_count, guard_count, for_count,
 -- while_count, loop_count, try_count, and_count, or_count, let_else_count, return_count,
 -- break_count, continue_count, closure_count, is_test.
@@ -26,7 +26,7 @@
 WITH params AS (
     SELECT coalesce(CAST(getvariable('include_tests') AS BOOLEAN), false) AS include_tests
 )
-SELECT u.path, u.crate, u.kind, u.qualified_name, u.start_line, u.loc, c.decisions + 1 AS cyclomatic,
+SELECT u.path, u.package, u.kind, u.qualified_name, u.start_line, u.loc, c.decisions + 1 AS cyclomatic,
        c.decisions, c.max_nesting, c.if_count, c.else_if_count, c.match_count, c.arm_count, c.guard_count,
        c.for_count, c.while_count, c.loop_count, c.try_count, c.and_count, c.or_count, c.let_else_count,
        c.return_count, c.break_count, c.continue_count, c.closure_count, u.is_test

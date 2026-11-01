@@ -1,9 +1,9 @@
 -- Rust's units: the language knowledge views/units.sql's derived_units reads for the
 -- files whose language is 'rust', over rust-analyzer's SCIP index (views/scip.sql).
 --
--- rust_units(file_id, symbol, symbol_kind, kind, crate, name, qualified_name, start_line,
+-- rust_units(file_id, symbol, symbol_kind, kind, package, name, qualified_name, start_line,
 --            start_column, end_line, end_column, name_line, name_column, test_by_rule,
---            visibility, parameters, signature, has_doc, is_file_module, member_of,
+--            visibility, parameters, signature, has_doc, is_file_unit, member_of,
 --            impl_key, impl_type, impl_trait, impl_header_line): one row per unit, in the
 -- columns views/units.sql describes; test_by_rule is the part of is_test that Rust's
 -- rules give a unit by itself (below), before views/units.sql adds the units inside a
@@ -12,7 +12,7 @@
 -- One unit per definition occurrence of a non-local symbol in a Rust source file whose
 -- SCIP kind (symbol_kind) is one of
 --   Function -> function; Method, StaticMethod, TraitMethod -> method;
---   Struct, Enum, Union, TypeAlias, Trait, AssociatedType -> type; Module -> module;
+--   Struct, Enum, Union, TypeAlias, Trait, AssociatedType -> type; Module -> namespace;
 --   Macro -> macro; Constant, StaticVariable -> constant.
 -- An impl block is not a unit: rust-analyzer gives it no symbol, and its members'
 -- symbols carry it as a descriptor (`…impl#[Type]m().`, `…impl#[Type][Trait]m().`):
@@ -21,11 +21,11 @@
 -- impl_trait the bracketed names as written (backticks removed), impl_header_line the
 -- line of the impl's header found as for test_by_rule below (NULL when none is found: an
 -- impl a macro writes). A `mod x;` declaration is a reference to the module, not a unit;
--- the module is a unit where it is defined: a file module (is_file_module, its range the
+-- the module is a unit where it is defined: a file module (is_file_unit, its range the
 -- whole file) or an inline `mod x { … }`. Code rust-analyzer does not see (an inactive
 -- cfg, a file outside every indexed workspace) has no units.
 --
--- Ranges are SCIP's enclosing_range, leading doc comments and attributes included. crate
+-- Ranges are SCIP's enclosing_range, leading doc comments and attributes included. package
 -- is the symbol's package (the Cargo package). name is the symbol's display name (the
 -- package name for a crate root, whose display name is empty). qualified_name is the
 -- symbol's descriptors below the file's own module, joined with `.`: `f`, `Type.field`'s
@@ -50,6 +50,11 @@
 --     #[cfg(all(…test…))]; a file module, when the file has #![cfg(test)];
 --   - or it is a member of an impl whose header line (the nearest `impl` line above it
 --     that names impl_type, outside other functions' bodies) is led by #[cfg(test)].
+
+-- rust_terms(internal, official): Rust's names for the two levels the views call package
+-- and namespace (views/terms.sql): a Cargo package and a module.
+CREATE OR REPLACE VIEW rust_terms AS
+SELECT * FROM (VALUES ('package', 'package'), ('namespace', 'module')) t(internal, official);
 
 -- impl_base_name(t): the bare name of a type or trait as a descriptor or a signature
 -- writes it: backticks, a leading `&`, `mut`, `dyn`, generic arguments and a path removed
@@ -84,13 +89,13 @@ typed AS MATERIALIZED (
            CASE WHEN i.kind = 'Function' THEN 'function'
                 WHEN i.kind IN ('Method', 'StaticMethod', 'TraitMethod') THEN 'method'
                 WHEN i.kind IN ('Struct', 'Enum', 'Union', 'TypeAlias', 'Trait', 'AssociatedType') THEN 'type'
-                WHEN i.kind = 'Module' THEN 'module'
+                WHEN i.kind = 'Module' THEN 'namespace'
                 WHEN i.kind = 'Macro' THEN 'macro'
                 WHEN i.kind IN ('Constant', 'StaticVariable') THEN 'constant' END AS kind,
-           split_part(d.symbol, ' ', 3) AS crate,
+           split_part(d.symbol, ' ', 3) AS package,
            -- rust-analyzer places a file module's definition at the file's start, its range
            -- the whole file.
-           i.kind = 'Module' AND d.name_line = 1 AND d.name_column = 1 AND d.start_line = 1 AS is_file_module
+           i.kind = 'Module' AND d.name_line = 1 AND d.name_column = 1 AND d.start_line = 1 AS is_file_unit
     FROM defs d JOIN info i USING (document, symbol)
 ),
 -- unit_id here only keys this view's rows; views/units.sql numbers the units.
@@ -104,12 +109,12 @@ numbered AS MATERIALIZED (
 file_prefixes AS (
     SELECT file_id,
            any_value(CASE WHEN ends_with(symbol, ' crate/') THEN left(symbol, length(symbol) - 6) ELSE symbol END) AS prefix
-    FROM numbered WHERE is_file_module
+    FROM numbered WHERE is_file_unit
     GROUP BY file_id
 ),
 named AS MATERIALIZED (
     SELECT n.*,
-           coalesce(nullif(n.display_name, ''), n.crate) AS name,
+           coalesce(nullif(n.display_name, ''), n.package) AS name,
            -- The descriptors after the prefix, or after `scheme manager package version `.
            CASE WHEN fp.prefix IS NOT NULL AND starts_with(n.symbol, fp.prefix) THEN substr(n.symbol, length(fp.prefix) + 1)
                 ELSE regexp_extract(n.symbol, '^[^ ]+ [^ ]+ [^ ]+ [^ ]+ (.*)$', 1) END AS descriptors,
@@ -173,7 +178,7 @@ lead_tests AS (
     JOIN line_flags l ON l.file_id = u.file_id AND l.line BETWEEN u.start_line AND u.name_line AND l.test_attribute
     UNION
     SELECT u.unit_id FROM impl_named u
-    WHERE u.is_file_module AND EXISTS (SELECT 1 FROM line_flags l WHERE l.file_id = u.file_id AND l.inner_cfg_test)
+    WHERE u.is_file_unit AND EXISTS (SELECT 1 FROM line_flags l WHERE l.file_id = u.file_id AND l.inner_cfg_test)
     UNION
     SELECT unit_id FROM member_headers WHERE header_cfg_test
     UNION
@@ -221,8 +226,8 @@ parameters AS (
 trait_symbols AS MATERIALIZED (
     SELECT DISTINCT symbol FROM impl_named WHERE symbol_kind = 'Trait'
 )
-SELECT u.file_id, u.symbol, u.symbol_kind, u.kind, u.crate, u.name,
-       CASE WHEN u.is_file_module OR u.descriptors = '' THEN u.name
+SELECT u.file_id, u.symbol, u.symbol_kind, u.kind, u.package, u.name,
+       CASE WHEN u.is_file_unit OR u.descriptors = '' THEN u.name
             ELSE rtrim(replace(
                 regexp_replace(regexp_replace(regexp_replace(regexp_replace(
                     u.descriptors,
@@ -236,7 +241,7 @@ SELECT u.file_id, u.symbol, u.symbol_kind, u.kind, u.crate, u.name,
             ELSE coalesce(nullif(regexp_extract(u.signature, '^\s*(pub(?:\s*\([^)]*\))?)', 1), ''), 'private') END AS visibility,
        p.parameters, u.signature,
        CASE WHEN u.member_of = 'trait_impl' THEN NULL ELSE coalesce(len(u.documentation), 0) > 0 END AS has_doc,
-       u.is_file_module, u.member_of, u.impl_key, u.impl_type, u.impl_trait, mh.header_line AS impl_header_line
+       u.is_file_unit, u.member_of, u.impl_key, u.impl_type, u.impl_trait, mh.header_line AS impl_header_line
 FROM (
     SELECT *, CASE WHEN impl_trait IS NOT NULL THEN 'trait_impl' WHEN impl_key IS NOT NULL THEN 'impl'
                    WHEN owner_symbol IN (SELECT symbol FROM trait_symbols) THEN 'trait' END AS member_of

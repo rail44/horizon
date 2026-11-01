@@ -55,6 +55,10 @@ SET VARIABLE exclude_patterns = coalesce(getvariable('exclude_patterns'), []::VA
 -- File extension -> language. A file is a source file only when its extension is here;
 -- its units come from its language's view under lang/ (views/units.sql).
 SET VARIABLE languages = coalesce(getvariable('languages'), MAP {'rs': 'rust', 'go': 'go'});
+-- One language to read and show (views/terms.sql): only its extensions stay.
+SET VARIABLE languages = CASE WHEN getvariable('lang') IS NULL THEN getvariable('languages')
+    ELSE map_from_entries(list_filter(map_entries(getvariable('languages')),
+                                      lambda e: e.value = getvariable('lang'))) END;
 
 -- is_source_file(path, mode): whether a worktree entry is a source file: a regular file
 -- (mode 100644 or 100755; a symlink's blob is its target path and a submodule's id is a
@@ -109,10 +113,10 @@ SET VARIABLE cache_dir = coalesce(getvariable('cache_dir'), getvariable('repo') 
 -- `/`) and attribute names.
 SET VARIABLE extra_test_paths = coalesce(getvariable('extra_test_paths'), []::VARCHAR[]);
 SET VARIABLE extra_test_attributes = coalesce(getvariable('extra_test_attributes'), []::VARCHAR[]);
--- The intended layers (views/graph.sql, module_layers): each layer's module patterns
--- (GLOB operator patterns over modules.module) and the layers each may depend on. Empty
+-- The intended layers (views/graph.sql, namespace_layers): each layer's module patterns
+-- (GLOB operator patterns over namespaces.namespace) and the layers each may depend on. Empty
 -- unless code-db filled them before this file was read.
-CREATE TABLE IF NOT EXISTS config_layers (name VARCHAR, module_pattern VARCHAR);
+CREATE TABLE IF NOT EXISTS config_layers (name VARCHAR, namespace_pattern VARCHAR);
 CREATE TABLE IF NOT EXISTS config_layer_deps (name VARCHAR, may_depend_on VARCHAR);
 
 -- The limits (above), as one line.

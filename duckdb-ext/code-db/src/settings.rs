@@ -55,6 +55,9 @@ pub struct AttributeEntry {
 #[serde(deny_unknown_fields)]
 pub struct Layer {
     pub name: String,
+    /// The layer's namespace patterns, under the language's word for a
+    /// namespace (views/terms.sql): `modules` (Rust) or `packages` (Go).
+    #[serde(alias = "packages")]
     pub modules: Vec<String>,
     #[serde(default)]
     pub may_depend_on: Vec<String>,
@@ -119,7 +122,7 @@ impl Settings {
             .collect()
     }
 
-    /// (layer, module pattern) pairs, the rows of `config_layers`.
+    /// (layer, namespace pattern) pairs, the rows of `config_layers`.
     pub fn layer_patterns(&self) -> Vec<(String, String)> {
         self.layers
             .iter()
@@ -136,9 +139,9 @@ impl Settings {
     }
 }
 
-/// The modules that match the patterns of more than one layer, from
-/// (module, layer) matches: each such module with its layers, sorted.
-pub fn modules_in_several_layers(matches: &[(String, String)]) -> Vec<(String, Vec<String>)> {
+/// The namespaces that match the patterns of more than one layer, from
+/// (namespace, layer) matches: each such namespace with its layers, sorted.
+pub fn namespaces_in_several_layers(matches: &[(String, String)]) -> Vec<(String, Vec<String>)> {
     let mut by_module: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for (module, layer) in matches {
         let layers = by_module.entry(module).or_default();
@@ -245,7 +248,7 @@ reason = "sessions call into the board"
     }
 
     #[test]
-    fn a_module_in_two_layers_is_reported() {
+    fn a_namespace_in_two_layers_is_reported() {
         let m = |module: &str, layer: &str| (module.to_owned(), layer.to_owned());
         let matches = [
             m("src/a.rs", "core"),
@@ -255,7 +258,7 @@ reason = "sessions call into the board"
             m("src/c.rs", "ui"),
         ];
         assert_eq!(
-            modules_in_several_layers(&matches),
+            namespaces_in_several_layers(&matches),
             [(
                 "src/b.rs".to_owned(),
                 vec!["core".to_owned(), "ui".to_owned()]

@@ -7,7 +7,7 @@
 -- One unit per definition occurrence of a non-local symbol in a Go source file whose
 -- SCIP kind (symbol_kind) is one of
 --   Function -> function; Method, MethodSpecification -> method;
---   Type, Struct, Interface, TypeAlias -> type; Package -> module;
+--   Type, Struct, Interface, TypeAlias -> type; Package -> namespace;
 --   Constant, Variable -> constant.
 -- A Variable that is not local is a package-level `var`; struct fields (Field) and
 -- everything inside a function body (scip-go's `local N` symbols) are not units. A
@@ -24,24 +24,29 @@
 -- declaration (`type X struct { … }`, from `type`) when the declaration holds that spec
 -- only; names one spec declares together (`const a, b = 1, 2`) share its range. An
 -- interface's method is its method_elem (`Area() float64`). The file
--- module is one unit per file: the package's definition occurrence at the file's
+-- unit (is_file_unit) is one per file: the package's definition occurrence at the file's
 -- `package` clause, its range the file's whole tree (source_file).
 --
--- crate is the symbol's package, which scip-go names by the Go module (`example.com/m`).
--- name is the symbol's display name (the package name for a file module).
+-- package is the symbol's package, which scip-go names by the Go module (`example.com/m`).
+-- name is the symbol's display name (the Go package's name for a file unit).
 -- qualified_name is the symbol's descriptors below the package, joined with `.`: `F`,
--- `T`, `T.M` for a method or an interface's method; a file module's is its name.
+-- `T`, `T.M` for a method or an interface's method; a file unit's is its name.
 --
 -- visibility: 'pub' for an exported name (its first letter is upper case), else
 -- 'private'; NULL for an interface's method, which takes the interface's, and for a file
--- module. parameters counts a function's or method's parameters, the receiver included
+-- unit. parameters counts a function's or method's parameters, the receiver included
 -- (as Rust's self), from the signature's parameter list: each name of a group (`a, b
 -- int`) counts. has_doc: the symbol has documentation (its doc comment; a package's is
--- the package's doc comment in any of its files, so every file module of a documented
+-- the package's doc comment in any of its files, so every file unit of a documented
 -- package has it).
 --
 -- test_by_rule: the unit's file is a Go test file (`*_test.go`) or matches a pattern of
 -- extra_test_paths.
+-- go_terms(internal, official): Go's names for the two levels the views call package and
+-- namespace (views/terms.sql): a Go module and a Go package.
+CREATE OR REPLACE VIEW go_terms AS
+SELECT * FROM (VALUES ('package', 'module'), ('namespace', 'package')) t(internal, official);
+
 -- go_file_ast: file_ast's rows (views/files.sql) of the Go files only. read_ast parses
 -- every file it is given, whatever the query filters, so this view gives it the Go
 -- files' paths (and a path that does not exist, which keeps the list non-empty and which
@@ -79,7 +84,7 @@ typed AS MATERIALIZED (
            CASE WHEN i.kind = 'Function' THEN 'function'
                 WHEN i.kind IN ('Method', 'MethodSpecification') THEN 'method'
                 WHEN i.kind IN ('Type', 'Struct', 'Interface', 'TypeAlias') THEN 'type'
-                WHEN i.kind = 'Package' THEN 'module'
+                WHEN i.kind = 'Package' THEN 'namespace'
                 WHEN i.kind IN ('Constant', 'Variable') THEN 'constant' END AS kind
     FROM defs d JOIN info i USING (symbol)
     WHERE i.kind IN ('Function', 'Method', 'MethodSpecification', 'Type', 'Struct', 'Interface', 'TypeAlias',
@@ -129,7 +134,7 @@ roots AS (
 ),
 ranged AS MATERIALIZED (
     SELECT t.*,
-           CASE WHEN t.kind = 'module' THEN rt.r
+           CASE WHEN t.kind = 'namespace' THEN rt.r
                 WHEN t.kind IN ('function', 'method') AND t.enclosing_start_line IS NOT NULL
                     THEN struct_pack(sl := t.enclosing_start_line, sc := t.enclosing_start_column,
                                      el := t.enclosing_end_line, ec := t.enclosing_end_column)
@@ -138,9 +143,9 @@ ranged AS MATERIALIZED (
     LEFT JOIN spec_of so USING (file_id, symbol, name_line, name_column)
     LEFT JOIN roots rt USING (file_id)
 ),
--- The file module's symbol is the prefix of the file's descriptors.
+-- The file unit's symbol is the prefix of the file's descriptors.
 file_prefixes AS (
-    SELECT file_id, any_value(symbol) AS prefix FROM typed WHERE kind = 'module' GROUP BY file_id
+    SELECT file_id, any_value(symbol) AS prefix FROM typed WHERE kind = 'namespace' GROUP BY file_id
 ),
 named AS MATERIALIZED (
     SELECT r.*, fp.prefix,
@@ -192,8 +197,8 @@ parameters AS (
     WHERE b.open_pos IS NOT NULL
     GROUP BY b.symbol, b.file_id, b.name_line, b.name_column, b.is_method
 )
-SELECT n.file_id, n.symbol, n.symbol_kind, n.kind, split_part(n.symbol, ' ', 3) AS crate, n.display_name AS name,
-       CASE WHEN n.kind = 'module' OR n.descriptors = '' THEN n.display_name
+SELECT n.file_id, n.symbol, n.symbol_kind, n.kind, split_part(n.symbol, ' ', 3) AS package, n.display_name AS name,
+       CASE WHEN n.kind = 'namespace' OR n.descriptors = '' THEN n.display_name
             ELSE rtrim(replace(regexp_replace(regexp_replace(n.descriptors, '\(\)\.', '.', 'g'), '[/#!]', '.', 'g'),
                                '`', ''), '.') END AS qualified_name,
        n.r.sl::INTEGER AS start_line, n.r.sc::INTEGER AS start_column,
@@ -201,10 +206,10 @@ SELECT n.file_id, n.symbol, n.symbol_kind, n.kind, split_part(n.symbol, ' ', 3) 
        g.path LIKE '%\_test.go' ESCAPE '\'
            OR coalesce(list_bool_or(list_transform(getvariable('extra_test_paths'), lambda p: g.path GLOB p)), false)
            AS test_by_rule,
-       CASE WHEN n.kind = 'module' OR n.symbol_kind = 'MethodSpecification' THEN NULL
+       CASE WHEN n.kind = 'namespace' OR n.symbol_kind = 'MethodSpecification' THEN NULL
             WHEN regexp_matches(n.display_name, '^\p{Lu}') THEN 'pub' ELSE 'private' END AS visibility,
        p.parameters, n.signature, coalesce(len(n.documentation), 0) > 0 AS has_doc,
-       n.kind = 'module' AS is_file_module,
+       n.kind = 'namespace' AS is_file_unit,
        CASE WHEN n.symbol_kind = 'Method' THEN 'impl' WHEN n.symbol_kind = 'MethodSpecification' THEN 'trait' END AS member_of,
        n.receiver_symbol AS impl_key,
        CASE WHEN n.receiver_symbol IS NOT NULL
