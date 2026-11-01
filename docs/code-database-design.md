@@ -941,6 +941,16 @@ cached layers before it, against that layer's copy, and asserts the expected row
 once, over the cache. The fixture takes 46 seconds, and a wrongly built layer is
 caught at itself.
 
+## Control constructs in the language layer (2026-11-02)
+
+([record](research/code-db-constructs-2026-11-02.md)) A language's control
+constructs belong to its adapter (owner): each language names them in its own
+words, the common views keep only their sums (`unit_complexity`: decisions,
+max_nesting) and a long table of counts (`unit_constructs`), and the `complexity`
+query pivots it into one column per construct its rows hold. No construct name, and
+no NULL for a construct a language lacks, is left in the common views or the
+terms table.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
