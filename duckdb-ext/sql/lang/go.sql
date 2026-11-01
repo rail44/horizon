@@ -57,6 +57,18 @@ SELECT file_id, coalesce(nullif(regexp_extract(path, '^(.*)/[^/]*$', 1), ''), '.
        regexp_extract(path, '^(.*)/[^/]*$', 1) AS namespace_path
 FROM files WHERE language = 'go';
 
+-- go_visibility_boundary(level): the level whose boundary an exported name opens
+-- (views/terms.sql, visibility_boundary): the namespace, a Go package's outside.
+CREATE OR REPLACE VIEW go_visibility_boundary AS SELECT 'namespace' AS level;
+
+-- go_namespace_references: none (rust_namespace_references' columns). A Go file unit owns
+-- no symbol (views/graph.sql, symbol_units), so a reference to a package counts for none
+-- of its files; the package's fan-in is its namespace's (unit_fan_in, fan_in_namespaces).
+CREATE OR REPLACE VIEW go_namespace_references AS
+SELECT NULL::INTEGER AS owner_file_id, NULL::VARCHAR AS symbol, NULL::INTEGER AS file_id,
+       NULL::INTEGER AS start_line, NULL::INTEGER AS start_column
+WHERE false;
+
 -- go_file_ast: file_ast's rows (views/files.sql) of the Go files only. read_ast parses
 -- every file it is given, whatever the query filters, so this view gives it the Go
 -- files' paths (and a path that does not exist, which keeps the list non-empty and which

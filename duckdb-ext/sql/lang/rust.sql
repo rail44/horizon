@@ -71,6 +71,46 @@ SELECT file_id, path AS namespace,
             ELSE regexp_replace(path, '\.rs$', '') END AS namespace_path
 FROM files WHERE language = 'rust';
 
+-- rust_visibility_boundary(level): the level whose boundary `pub` opens (views/terms.sql,
+-- visibility_boundary): the package, a crate's outside.
+CREATE OR REPLACE VIEW rust_visibility_boundary AS SELECT 'package' AS level;
+
+-- rust_namespace_references(owner_file_id, symbol, file_id, start_line, start_column): the
+-- reference occurrences that name a Rust module by its own symbol, with the file of the
+-- module's definition that takes them (views/quality.sql, unit_fan_in): the path segments
+-- that name it (`a` in `crate::a::f`, `use crate::a;`, an extern crate's name, an alias of
+-- it), and not the occurrences rust-analyzer also gives its symbol that name no module:
+-- the keywords `crate`, `super` and `self` (in a path and in `pub(crate)`, `pub(super)`),
+-- a segment of a `pub(in …)` path, and the `mod a;` declaration, told apart by the
+-- occurrence's source text. The target roots of one package share its crate root's symbol
+-- (rust-analyzer names a symbol by package): the library's root (a path ending in
+-- `src/lib.rs`), which is what a package name in a path reaches, takes those references
+-- when the package has one, else every root sharing the symbol does.
+CREATE OR REPLACE VIEW rust_namespace_references AS
+WITH modules AS MATERIALIZED (
+    SELECT DISTINCT o.symbol, o.file_id, f.path
+    FROM scip_occurrences o
+    JOIN files f USING (file_id)
+    JOIN (SELECT DISTINCT document, symbol FROM scip_symbols WHERE kind = 'Module') s USING (document, symbol)
+    WHERE f.language = 'rust' AND o.is_definition AND NOT starts_with(o.symbol, 'local ')
+      AND o.enclosing_start_line IS NOT NULL
+),
+owners AS (
+    SELECT symbol, file_id FROM modules
+    QUALIFY ends_with(path, 'src/lib.rs') OR NOT bool_or(ends_with(path, 'src/lib.rs')) OVER (PARTITION BY symbol)
+),
+mentions AS (
+    SELECT o.symbol, o.file_id, o.start_line, o.start_column
+    FROM scip_occurrences o
+    JOIN source_lines l ON l.file_id = o.file_id AND l.line = o.start_line
+    WHERE NOT o.is_definition AND o.symbol IN (SELECT symbol FROM modules)
+      AND substr(l.text, o.start_column, o.end_column - o.start_column) NOT IN ('crate', 'super', 'self')
+      AND NOT regexp_matches(substr(l.text, 1, o.start_column - 1), 'pub\(in [\w:]*$')
+      AND NOT regexp_matches(l.text, '^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*;')
+)
+SELECT w.file_id AS owner_file_id, m.symbol, m.file_id, m.start_line, m.start_column
+FROM owners w JOIN mentions m USING (symbol);
+
 -- impl_base_name(t): the bare name of a type or trait as a descriptor or a signature
 -- writes it: backticks, a leading `&`, `mut`, `dyn`, generic arguments and a path removed
 -- (`Box<dyn X>` -> Box, `From<serde_json::Error>` -> From, `a::B` -> B).

@@ -20,82 +20,73 @@ UNION
 SELECT m.unit_id, c.member_unit_id
 FROM impl_members m JOIN contained c ON c.unit_id = m.member_id;
 
--- unit_fan_in(unit_id, fan_in_files, fan_in_packages, fan_in_units, reference_occurrences):
--- the files other than the unit's own, and the packages other than its own, holding a
--- reference occurrence of a symbol whose definition belongs to the unit's scope
--- (symbol_units: the items, fields, variants and locals-free symbols it defines);
--- fan_in_units the distinct units outside the scope holding one, reference_occurrences
--- all those occurrences. Units nobody outside references have no row.
+-- unit_fan_in(unit_id, fan_in_files, fan_in_namespaces, fan_in_packages, fan_in_units,
+--     reference_occurrences): the files other than the unit's own, the namespaces other
+-- than its own (unit_namespace) and the packages other than its own holding a reference
+-- occurrence of a symbol whose definition belongs to the unit's scope (symbol_units: the
+-- items, fields, variants and locals-free symbols it defines); fan_in_units the distinct
+-- units outside the scope holding one, reference_occurrences all those occurrences. Units
+-- nobody outside references have no row.
 -- A namespace counts only the references to its own symbol, not to what it contains (the
--- file level of queries/coupling.sql sums a file's contents): the path segments that name
--- it (`a` in `crate::a::f`, `use crate::a;`, an extern crate's name, an alias of it), and
--- not the occurrences rust-analyzer also gives its symbol that name no namespace: the
--- keywords `crate`, `super` and `self` (in a path and in `pub(crate)`, `pub(super)`), a
--- segment of a `pub(in …)` path, and the `mod a;` declaration. These are told apart by
--- the occurrence's source text. The target roots of one package share its crate root's
--- symbol (rust-analyzer names a symbol by package): the library's root (a path ending in
--- `src/lib.rs`), which is what a package name in a path reaches, counts those references
--- when the package has one, else every root sharing the symbol does.
+-- file and namespace levels of queries/coupling.sql sum a file's and a namespace's
+-- contents): the occurrences its language reads as naming it (namespace_references,
+-- lang/<language>.sql), taken by the definition its language names. A file unit that is
+-- no namespace (a Go file) counts none.
+CREATE OR REPLACE VIEW namespace_references AS
+SELECT * FROM rust_namespace_references
+UNION ALL
+SELECT * FROM go_namespace_references;
+
 CREATE OR REPLACE VIEW unit_fan_in AS
 WITH unit_rows AS MATERIALIZED (
-    SELECT unit_id, file_id, package, kind, symbol, path FROM units
-),
-namespace_symbols AS MATERIALIZED (
-    SELECT DISTINCT symbol FROM unit_rows WHERE kind = 'namespace'
-),
-namespace_owners AS (
-    SELECT unit_id, symbol FROM unit_rows
-    WHERE kind = 'namespace'
-    QUALIFY ends_with(path, 'src/lib.rs')
-         OR NOT bool_or(ends_with(path, 'src/lib.rs')) OVER (PARTITION BY symbol)
+    SELECT u.unit_id, u.file_id, u.package, u.kind, u.symbol, u.name_line, n.namespace
+    FROM units u LEFT JOIN unit_namespace n USING (unit_id)
 ),
 owned AS MATERIALIZED (
     SELECT DISTINCT s.unit_id, su.symbol
     FROM unit_scope s
     JOIN unit_rows u ON u.unit_id = s.unit_id AND u.kind NOT IN ('namespace', 'file')
     JOIN symbol_units su ON su.unit_id = s.member_unit_id
-    UNION
-    SELECT unit_id, symbol FROM namespace_owners
 ),
--- The occurrences of namespace symbols that name the namespace.
-namespace_refs AS MATERIALIZED (
-    SELECT o.symbol, o.file_id, o.unit_id
-    FROM unit_occurrences o
-    JOIN namespace_symbols m USING (symbol)
-    JOIN source_lines l ON l.file_id = o.file_id AND l.line = o.start_line
-    WHERE NOT o.is_definition
-      AND substr(l.text, o.start_column, o.end_column - o.start_column) NOT IN ('crate', 'super', 'self')
-      AND NOT regexp_matches(substr(l.text, 1, o.start_column - 1), 'pub\(in [\w:]*$')
-      AND NOT regexp_matches(l.text, '^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*;')
+occurrences AS MATERIALIZED (
+    SELECT symbol, file_id, start_line, start_column, unit_id
+    FROM unit_occurrences WHERE NOT is_definition AND NOT is_local AND unit_id IS NOT NULL
 ),
-refs AS MATERIALIZED (
-    SELECT o.symbol, o.file_id, o.unit_id, r.package
-    FROM unit_occurrences o JOIN unit_rows r USING (unit_id)
-    WHERE NOT o.is_definition AND NOT o.is_local AND o.symbol NOT IN (SELECT symbol FROM namespace_symbols)
+-- Every reference with the unit it counts for: an item's scope, or the namespace unit
+-- whose own symbol it names.
+referencing AS (
+    SELECT w.unit_id, o.file_id, o.unit_id AS ref_unit_id
+    FROM owned w JOIN occurrences o USING (symbol)
     UNION ALL
-    SELECT m.symbol, m.file_id, m.unit_id, r.package
-    FROM namespace_refs m JOIN unit_rows r USING (unit_id)
+    SELECT u.unit_id, o.file_id, o.unit_id
+    FROM namespace_references r
+    JOIN unit_rows u ON u.kind = 'namespace' AND u.file_id = r.owner_file_id AND u.symbol = r.symbol
+    JOIN occurrences o ON o.file_id = r.file_id AND o.symbol = r.symbol
+         AND o.start_line = r.start_line AND o.start_column = r.start_column
 ),
 scopes AS MATERIALIZED (
     SELECT * FROM unit_scope
 )
-SELECT w.unit_id,
-       count(DISTINCT r.file_id) FILTER (WHERE r.file_id <> u.file_id) AS fan_in_files,
+SELECT a.unit_id,
+       count(DISTINCT a.file_id) FILTER (WHERE a.file_id <> u.file_id) AS fan_in_files,
+       count(DISTINCT r.namespace) FILTER (WHERE r.namespace IS DISTINCT FROM u.namespace) AS fan_in_namespaces,
        count(DISTINCT r.package) FILTER (WHERE r.package <> u.package) AS fan_in_packages,
-       count(DISTINCT r.unit_id) AS fan_in_units,
+       count(DISTINCT a.ref_unit_id) AS fan_in_units,
        count(*) AS reference_occurrences
-FROM owned w
-JOIN unit_rows u USING (unit_id)
-JOIN refs r ON r.symbol = w.symbol
-WHERE NOT EXISTS (SELECT 1 FROM scopes s WHERE s.unit_id = w.unit_id AND s.member_unit_id = r.unit_id)
-GROUP BY w.unit_id;
+FROM referencing a
+JOIN unit_rows u ON u.unit_id = a.unit_id
+JOIN unit_rows r ON r.unit_id = a.ref_unit_id
+WHERE NOT EXISTS (SELECT 1 FROM scopes s WHERE s.unit_id = a.unit_id AND s.member_unit_id = a.ref_unit_id)
+GROUP BY a.unit_id;
 
--- unit_fan_out(unit_id, fan_out_files, fan_out_packages, fan_out_units): the files other
--- than the unit's own, the packages other than its own, and the units outside its scope
+-- unit_fan_out(unit_id, fan_out_files, fan_out_namespaces, fan_out_packages, fan_out_units):
+-- the files other than the unit's own, the namespaces and the packages other than its own,
+-- and the units outside its scope
 -- that the unit's scope references (unit_edges from a member to a unit outside the scope).
 CREATE OR REPLACE VIEW unit_fan_out AS
 WITH unit_rows AS MATERIALIZED (
-    SELECT unit_id, file_id, package FROM units
+    SELECT u.unit_id, u.file_id, u.package, n.namespace
+    FROM units u LEFT JOIN unit_namespace n USING (unit_id)
 ),
 scopes AS MATERIALIZED (
     SELECT * FROM unit_scope
@@ -105,6 +96,7 @@ edges AS MATERIALIZED (
 )
 SELECT s.unit_id,
        count(DISTINCT d.file_id) FILTER (WHERE d.file_id <> u.file_id) AS fan_out_files,
+       count(DISTINCT d.namespace) FILTER (WHERE d.namespace IS DISTINCT FROM u.namespace) AS fan_out_namespaces,
        count(DISTINCT d.package) FILTER (WHERE d.package <> u.package) AS fan_out_packages,
        count(DISTINCT d.unit_id) AS fan_out_units
 FROM scopes s
@@ -281,7 +273,8 @@ LEFT JOIN nesting n USING (unit_id);
 --   size: loc;
 --   complexity: decisions, max_nesting (unit_complexity);
 --   duplication: clone_pairs, exact_pairs, normalized_pairs;
---   coupling: fan_in_files, fan_in_packages, fan_out_files, fan_out_packages;
+--   coupling: fan_in_files, fan_in_namespaces, fan_in_packages, fan_out_files,
+--     fan_out_namespaces, fan_out_packages;
 --   independence: cycle (the namespace cycle its namespace is in, namespace_cycle_edges), layer;
 --   interface: visibility, parameters;
 --   intent: has_doc, debt_lines;
@@ -295,8 +288,10 @@ SELECT u.unit_id, u.path, u.package, m.namespace, u.kind, u.qualified_name, u.st
        x.decisions, x.max_nesting,
        coalesce(c.clone_pairs, 0) AS clone_pairs, coalesce(c.exact_pairs, 0) AS exact_pairs,
        coalesce(c.normalized_pairs, 0) AS normalized_pairs,
-       coalesce(fi.fan_in_files, 0) AS fan_in_files, coalesce(fi.fan_in_packages, 0) AS fan_in_packages,
-       coalesce(fo.fan_out_files, 0) AS fan_out_files, coalesce(fo.fan_out_packages, 0) AS fan_out_packages,
+       coalesce(fi.fan_in_files, 0) AS fan_in_files, coalesce(fi.fan_in_namespaces, 0) AS fan_in_namespaces,
+       coalesce(fi.fan_in_packages, 0) AS fan_in_packages,
+       coalesce(fo.fan_out_files, 0) AS fan_out_files, coalesce(fo.fan_out_namespaces, 0) AS fan_out_namespaces,
+       coalesce(fo.fan_out_packages, 0) AS fan_out_packages,
        cm.cycle, l.layer,
        u.visibility, u.parameters,
        u.has_doc, coalesce(d.debt_lines, 0) AS debt_lines,

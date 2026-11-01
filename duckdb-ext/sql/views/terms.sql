@@ -27,6 +27,19 @@ CREATE OR REPLACE MACRO display_language() AS
     coalesce(CAST(getvariable('lang') AS VARCHAR),
              (SELECT CASE WHEN count(DISTINCT language) = 1 THEN any_value(language) END FROM files));
 
+-- lang_visibility_boundaries(language, level) and visibility_boundary(): the level whose
+-- boundary each language's public names open (`pub` the package's outside in Rust, an
+-- exported name the namespace's in Go), and the display language's, else package. The
+-- queries about public use count across it (public_surface, intent, interface, coupling's
+-- contract_candidate).
+CREATE OR REPLACE VIEW lang_visibility_boundaries AS
+SELECT 'rust' AS language, level FROM rust_visibility_boundary
+UNION ALL
+SELECT 'go', level FROM go_visibility_boundary;
+
+CREATE OR REPLACE MACRO visibility_boundary() AS
+    coalesce((SELECT level FROM lang_visibility_boundaries WHERE language = display_language()), 'package');
+
 -- display_term(s, lang) and internal_term(s, lang): s with every occurrence of the two
 -- internal names replaced by lang's official names, or the reverse, both at once (Go's
 -- names swap them: package -> module and namespace -> package); s itself for a NULL or
@@ -70,7 +83,7 @@ shown AS (
     SELECT view_name FROM duckdb_views()
     WHERE NOT internal AND database_name = current_database() AND schema_name = 'main' AND NOT temporary
       AND NOT regexp_matches(view_name, '^(rust|go)_')
-      AND view_name NOT IN ('derived_units', 'lang_terms', 'display_ddl')
+      AND view_name NOT IN ('derived_units', 'lang_terms', 'lang_visibility_boundaries', 'display_ddl')
 ),
 columns AS (
     SELECT c.table_name, c.column_name, c.column_index, c.data_type

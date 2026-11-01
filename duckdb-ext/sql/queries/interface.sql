@@ -3,8 +3,10 @@
 -- Axis: interface, parameters and visibility (docs/research/code-quality-axes-2026-10-29.md §3.4).
 -- Rows: every function and method with its parameter count (self included, from the SCIP
 -- signature; views/units.sql), visibility (NULL: a trait's own member or a trait impl's,
--- which take the trait's), the packages other than its own that reference it
--- (fan_in_packages, unit_fan_in) and its signature. Most parameters first. The public
+-- which take the trait's), the namespaces and the packages other than its own that
+-- reference it (fan_in_namespaces, fan_in_packages, unit_fan_in) and its signature. Most
+-- parameters first, then the widest use across the language's visibility boundary
+-- (views/terms.sql: packages for Rust, namespaces for Go). The public
 -- surface per package is queries/public_surface.sql.
 -- Evidence: weak. SIG's unit interfacing correlated with defect resolution at 0.19
 -- (p = 0.042) in one model version and not significantly in the next (0.05), nor with
@@ -15,13 +17,17 @@
 --   min_parameters 0; include_tests false.
 WITH params AS (
     SELECT coalesce(CAST(getvariable('min_parameters') AS INTEGER), 0) AS min_parameters,
-           coalesce(CAST(getvariable('include_tests') AS BOOLEAN), false) AS include_tests
+           coalesce(CAST(getvariable('include_tests') AS BOOLEAN), false) AS include_tests,
+           visibility_boundary() AS boundary
 )
 SELECT u.path, u.package, u.kind, u.qualified_name, u.start_line, u.parameters, u.visibility,
-       coalesce(fi.fan_in_packages, 0) AS fan_in_packages, u.loc, u.signature
+       coalesce(fi.fan_in_namespaces, 0) AS fan_in_namespaces, coalesce(fi.fan_in_packages, 0) AS fan_in_packages,
+       u.loc, u.signature
 FROM units u
 CROSS JOIN params p
 LEFT JOIN unit_fan_in fi USING (unit_id)
 WHERE u.kind IN ('function', 'method') AND coalesce(u.parameters, 0) >= p.min_parameters
   AND (p.include_tests OR NOT u.is_test)
-ORDER BY u.parameters DESC NULLS LAST, fan_in_packages DESC, u.path, u.start_line;
+ORDER BY u.parameters DESC NULLS LAST,
+         coalesce(CASE p.boundary WHEN 'namespace' THEN fi.fan_in_namespaces ELSE fi.fan_in_packages END, 0) DESC,
+         u.path, u.start_line;

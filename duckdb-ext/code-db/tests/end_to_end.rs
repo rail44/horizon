@@ -653,11 +653,24 @@ fn go_modules_index_and_units() {
     assert_eq!(
         modules
             .iter()
-            .map(|r| (&r[0][..], &r[2][..]))
+            .map(|r| (&r[0][..], &r[3][..]))
             .collect::<Vec<_>>(),
         [
             ("module", "example.com/gen"),
             ("module", "example.com/shapes")
+        ]
+    );
+    // The package level (Go's namespace): the packages with an edge, and the one other
+    // package each is used by or uses (fan_in_packages, fan_out_packages).
+    let packages = rows(&code_db(&["query", "coupling", "level=package"]));
+    assert_eq!(
+        packages
+            .iter()
+            .map(|r| (&r[0][..], &r[2][..], &r[9][..], &r[13][..]))
+            .collect::<Vec<_>>(),
+        [
+            ("package", "shapes", "1", "0"),
+            ("package", "cmd/app", "0", "1"),
         ]
     );
 

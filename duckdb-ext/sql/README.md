@@ -288,8 +288,9 @@ a `NAME=VALUE` on the command line overrides a variable the file sets. The cache
 includes the two test variables.
 
 Not settings, and derived instead (owner decisions): which types are contracts shared
-across packages (`contract_candidate`, a type referenced from at least `min_packages` other
-packages, a query parameter) and which duplicates are intended copies
+across the language's visibility boundary (`contract_candidate`, a type referenced from at
+least `min_packages` other packages in Rust, `min_namespaces` other namespaces — Go
+packages — in Go, a query parameter) and which duplicates are intended copies
 (`conversion_pair`, two types joined by a conversion impl).
 
 ## Files
@@ -510,9 +511,9 @@ settings file.
 | --- | --- | --- | --- |
 | size (§3.1, §3.2) | `size` (`level` unit, file, package) | `loc` | medium |
 | duplication (§3.5) | `duplication` (pairs, `conversion_pair`) | `unit_clones` | medium |
-| coupling (§3.6) | `coupling` (`level` unit, file, package; `contract_candidate`, `min_packages`), `namespace_graph` | `unit_fan_in`, `unit_fan_out` | medium |
+| coupling (§3.6) | `coupling` (`level` unit, file, namespace, package; `contract_candidate`, `min_packages`/`min_namespaces`), `namespace_graph` | `unit_fan_in`, `unit_fan_out` | medium |
 | independence (§3.8) | `namespace_cycles` (`violating_edges`), `layer_violations` | namespace of the unit, its cycle and layer | weak |
-| interface (§3.4) | `interface` (parameters, visibility), `public_surface` (per package) | `visibility`, `parameters` | weak |
+| interface (§3.4) | `interface` (parameters, visibility), `public_surface` (per unit of the visibility boundary) | `visibility`, `parameters` | weak |
 | intent, mechanical part (§3.15, §3.18) | `intent` | `has_doc`, `unit_debt_markers` | weak to none |
 | complexity and nesting (§3.3) | `complexity` | `unit_complexity` (`decisions`, `max_nesting`) | weak to medium |
 | unreferenced definitions (§3.16) | `unreferenced` | `unit_reference_status` | weak |
@@ -534,15 +535,24 @@ settings file.
   with the innermost unit containing all its lines.
 - **`unit_scope(unit_id, member_unit_id)`**: what a unit stands for when coupling is
   counted: itself, what it contains, and for a type its impls' members.
-  **`unit_fan_in(unit_id, fan_in_files, fan_in_packages, fan_in_units,
-  reference_occurrences)`**: the files and packages other than its own, and the units
-  outside its scope, that reference a symbol belonging to its scope; a namespace, only its
-  own symbol where a path names it (not `crate`, `super`, `self`, `pub(crate)`,
-  `pub(super)`, a `pub(in …)` path or the `mod a;` declaration, told apart by the
-  source text; a package's crate-root symbol counts for its `src/lib.rs`). What a file
-  contains is summed by `coupling`'s file level.
-  **`unit_fan_out(unit_id, fan_out_files, fan_out_packages, fan_out_units)`**: the same for
-  what its scope references.
+  **`unit_fan_in(unit_id, fan_in_files, fan_in_namespaces, fan_in_packages, fan_in_units,
+  reference_occurrences)`**: the files, namespaces and packages other than its own, and the
+  units outside its scope, that reference a symbol belonging to its scope; a namespace unit,
+  only the references naming its own symbol as its language reads them
+  (`namespace_references`, from `<language>_namespace_references`: for Rust the path
+  segments, not `crate`, `super`, `self`, `pub(crate)`, `pub(super)`, a `pub(in …)` path or
+  the `mod a;` declaration, told apart by the source text, a package's crate-root symbol
+  counting for its `src/lib.rs`; none for Go, whose file units own no symbol). What a file
+  or a namespace contains is summed by `coupling`'s file and namespace levels.
+  **`unit_fan_out(unit_id, fan_out_files, fan_out_namespaces, fan_out_packages,
+  fan_out_units)`**: the same for what its scope references.
+- **The visibility boundary** (`views/terms.sql`, `visibility_boundary()`, from
+  `<language>_visibility_boundary`): the level whose outside a language's public names
+  open, Rust's `pub` the package's, Go's exported names the namespace's (the Go package's).
+  `public_surface` groups by it (`namespace` is NULL at the package boundary; `used_outside`,
+  `pub_unused_outside` and `outside_users` count across it), `intent` and `interface`
+  filter and order by the fan-in across it (both fan-ins are shown), and `coupling`'s
+  `contract_candidate` takes its threshold from `min_packages` or `min_namespaces`.
 - **`unit_reference_status(unit_id, references, status)`**: the reference occurrences of
   the unit's own symbol anywhere, and `referenced`, `unreferenced`, or why it is
   structurally unreferenced: `test`, `trait_impl`, `entry_point` (`main`), `package_root`,
@@ -676,13 +686,13 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (SCIP) |
-| `lang/rust.sql` | `rust_terms`, `rust_file_namespaces`, the macros `impl_base_name`, `impl_generic_arg`; `rust_units` (Units) |
-| `lang/go.sql` | `go_terms`, `go_file_namespaces`, `go_file_ast`, `go_units` (Units) |
-| `views/terms.sql` | `lang_terms`, the macros `display_language`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
+| `lang/rust.sql` | `rust_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, the macros `impl_base_name`, `impl_generic_arg`; `rust_units` (Units) |
+| `lang/go.sql` | `go_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_units` (Units) |
+| `views/terms.sql` | `lang_terms`, `lang_visibility_boundaries`, the macros `visibility_boundary`, `display_language`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
 | `views/units.sql` | `derived_units`, `units`, `unit_ast` (Units) |
 | `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
 | `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
-| `views/quality.sql` | `unit_scope`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `unit_complexity`, `unit_quality` (Axes) |
+| `views/quality.sql` | `unit_scope`, `namespace_references`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `unit_complexity`, `unit_quality` (Axes) |
 | `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `namespace_graph`, `namespace_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
 | `refresh.sql` | the cache, the syntax trees' included (Cache) |
 | `jscpd.sh` | the two jscpd reports `views/clones.sql` reads |
@@ -702,11 +712,13 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
   lives in one file per language under `lang/`, a view `<language>_units` that
   `views/units.sql` takes into `derived_units`, its files' namespaces in
   `<language>_file_namespaces` (`file_namespaces`), and its two names (Names) in
-  `<language>_terms`; another language adds its file there, its three views to the
-  unions in `derived_units`, `file_namespaces` and `lang_terms`, its extension to
-  `languages` and its indexer to `code-db index`. The complexity node types
-  (`unit_complexity`, `views/quality.sql`) and the namespace references `unit_fan_in`
-  reads from the text (`crate`, `super`, `self`, `src/lib.rs`) are still Rust's.
+  `<language>_terms`, its visibility boundary in `<language>_visibility_boundary`, and the
+  references that name its namespace units in `<language>_namespace_references`; another
+  language adds its file there, its five views to the unions in `derived_units`,
+  `file_namespaces`, `lang_terms`, `lang_visibility_boundaries` and `namespace_references`,
+  its extension to `languages` and its indexer to `code-db index`. The complexity node
+  types (`unit_complexity`, `views/quality.sql`) and the `package_root` status
+  (`unit_reference_status`: a symbol ending in ` crate/`) are still Rust's.
 - **A view reads each source once.** A view or common table expression that is not
   `MATERIALIZED` is expanded at every reference; the views materialize what they read
   more than once, and the cache materializes the layers.
@@ -733,7 +745,7 @@ which `00_load.sql` takes as snapshots.
 | `cycle_edges` | `'collapsed'` (`'raw'`: every namespace edge) | `namespace_cycle_edges` and what reads it |
 | `level`, `kind`, `include_tests` | `'unit'`, NULL, `false` | `size`, `coupling` (`kind` and `include_tests` also other queries) |
 | `source` | NULL (both reports; a report's name: the pairs it found) | `duplication` |
-| `min_packages` | 3 | `coupling` (`contract_candidate`) |
+| `min_packages`, `min_namespaces` | 3 (the one of the visibility boundary) | `coupling` (`contract_candidate`) |
 | `min_parameters` | 0 | `interface` |
 | `include_structural` | `false` | `unreferenced` |
 | `package` | NULL (all packages) | `namespace_graph`, `namespace_cycles` |
