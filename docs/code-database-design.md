@@ -871,6 +871,22 @@ extensions build and load on macOS with Homebrew's DuckDB 2.0.0. Still
 Rust-only downstream: `modules`' file-module convention and
 `unit_complexity`'s node types.
 
+## Names per language (2026-10-30)
+
+([record](research/code-db-terms-2026-10-30.md)) `crate` is Rust's own word, and a
+Go reader must never see it (owner). The two levels above a file are what a manifest
+declares and versions (a Cargo package, a Go module) and a unit of namespacing and
+visibility (a Rust module, a Go package); Go's names for them are Rust's swapped, so
+no neutral pair of their words works. The owner chose official names per language
+over one neutral vocabulary: the views use internal names, SCIP's own `package` and
+`namespace`, and each language gives its two official names in two rows
+(`lang/<language>.sql`); `views/terms.sql` and `code-db` show every view, query,
+parameter and vocabulary value in the repository's language (`go.units`,
+`go.package_edges`, `code-db query REPO package_graph level=module`), and a mixed
+repository is read one language at a time (`lang=`). The rename changed no row of
+the twenty derived layers on either Rust workspace once the renamed values are
+mapped.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
