@@ -21,7 +21,7 @@ SELECT m.unit_id, c.member_unit_id
 FROM impl_members m JOIN contained c ON c.unit_id = m.member_id;
 
 -- unit_fan_in(unit_id, fan_in_files, fan_in_packages, fan_in_units, reference_occurrences):
--- the files other than the unit's own, and the crates other than its own, holding a
+-- the files other than the unit's own, and the packages other than its own, holding a
 -- reference occurrence of a symbol whose definition belongs to the unit's scope
 -- (symbol_units: the items, fields, variants and locals-free symbols it defines);
 -- fan_in_units the distinct units outside the scope holding one, reference_occurrences
@@ -91,7 +91,7 @@ WHERE NOT EXISTS (SELECT 1 FROM scopes s WHERE s.unit_id = w.unit_id AND s.membe
 GROUP BY w.unit_id;
 
 -- unit_fan_out(unit_id, fan_out_files, fan_out_packages, fan_out_units): the files other
--- than the unit's own, the crates other than its own, and the units outside its scope
+-- than the unit's own, the packages other than its own, and the units outside its scope
 -- that the unit's scope references (unit_edges from a member to a unit outside the scope).
 CREATE OR REPLACE VIEW unit_fan_out AS
 WITH unit_rows AS MATERIALIZED (

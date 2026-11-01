@@ -3,7 +3,7 @@
 -- Axis: interface, parameters and visibility (docs/research/code-quality-axes-2026-10-29.md §3.4).
 -- Rows: every function and method with its parameter count (self included, from the SCIP
 -- signature; views/units.sql), visibility (NULL: a trait's own member or a trait impl's,
--- which take the trait's), the crates other than its own that reference it
+-- which take the trait's), the packages other than its own that reference it
 -- (fan_in_packages, unit_fan_in) and its signature. Most parameters first. The public
 -- surface per package is queries/public_surface.sql.
 -- Evidence: weak. SIG's unit interfacing correlated with defect resolution at 0.19

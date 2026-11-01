@@ -3,7 +3,7 @@
 -- layer that may not depend on the target namespace's layer (module_layer_violations: the
 -- layers and their may_depend_on come from the settings file's [[layers]], README.md,
 -- Settings file; a namespace in no layer is unconstrained). The edge's counts are
--- namespace_edges'; nested_modules marks an edge between a module and its ancestor or
+-- namespace_edges'; nested_namespaces marks an edge between a namespace and its ancestor or
 -- descendant; cycle is the namespace cycle (namespace_cycle_edges) the edge is inside, NULL
 -- when it is in none. No layers, no rows.
 -- Axis: independence (docs/research/code-quality-axes-2026-10-29.md §3.8).

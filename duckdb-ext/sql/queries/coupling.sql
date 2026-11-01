@@ -5,11 +5,11 @@
 --   'unit' (default): every unit with a fan-in or a fan-out (views/quality.sql):
 --     fan_in_files and fan_in_packages count the other files and packages referencing
 --     anything the unit stands for (unit_scope: the unit, what it contains, and for a type
---     its impls' members), fan_in_units the units outside it doing so; a module counts
+--     its impls' members), fan_in_units the units outside it doing so; a namespace counts
 --     only the references to its own symbol (a path naming it), not those to what it
 --     contains, which the file level sums. fan_out_files, fan_out_packages and
 --     fan_out_units the same for what it references (a namespace's: what it and its contents
---     reference). contract_candidate marks a type referenced from at least `min_crates`
+--     reference). contract_candidate marks a type referenced from at least `min_packages`
 --     other packages: a type many packages use and whose changes the compiler propagates to
 --     them (wire messages, identifiers, events), which the reading checks judged no
 --     obstacle when the old fan-in x churn ranked them high; it is a flag to read rows
@@ -51,8 +51,8 @@ checked AS (
 unit_rows AS MATERIALIZED (
     SELECT unit_id, file_id, package FROM units
 ),
--- The unit edges between two files with both ends' file and crate (file and crate
--- levels only).
+-- The unit edges between two files with both ends' file and package (file and
+-- package levels only).
 edges AS MATERIALIZED (
     SELECT s.unit_id AS src_unit_id, s.file_id AS src_file_id, s.package AS src_package,
            d.unit_id AS dst_unit_id, d.file_id AS dst_file_id, d.package AS dst_package

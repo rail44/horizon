@@ -1,4 +1,4 @@
--- Question: how large is each package's surface as other crates actually use it, against
+-- Question: how large is each package's surface as other packages actually use it, against
 -- what it declares public?
 -- Axis: interface, the public surface (docs/research/code-quality-axes-2026-10-29.md §3.4).
 -- Rows: one per package (SCIP package) with units: pub_units, its units declared `pub`

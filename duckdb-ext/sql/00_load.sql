@@ -113,7 +113,7 @@ SET VARIABLE cache_dir = coalesce(getvariable('cache_dir'), getvariable('repo') 
 -- `/`) and attribute names.
 SET VARIABLE extra_test_paths = coalesce(getvariable('extra_test_paths'), []::VARCHAR[]);
 SET VARIABLE extra_test_attributes = coalesce(getvariable('extra_test_attributes'), []::VARCHAR[]);
--- The intended layers (views/graph.sql, namespace_layers): each layer's module patterns
+-- The intended layers (views/graph.sql, namespace_layers): each layer's namespace patterns
 -- (GLOB operator patterns over namespaces.namespace) and the layers each may depend on. Empty
 -- unless code-db filled them before this file was read.
 CREATE TABLE IF NOT EXISTS config_layers (name VARCHAR, namespace_pattern VARCHAR);

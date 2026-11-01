@@ -7,7 +7,7 @@
 --   'file': every source file with units: its file unit's loc and its unit count;
 --   'package': every package (SCIP package): loc (the sum of its file units'), units, and
 --     test_loc_pct, the share of that loc inside test units (the outermost ones: a test
---     file's module, a `mod tests`, a test function in a non-test module).
+--     file's file unit, a `mod tests`, a test function in a non-test namespace).
 -- Columns: level, package, path, kind, qualified_name, start_line, loc, units, is_test,
 -- test_loc_pct (NULL where a level has none).
 -- Evidence: medium. Unit size is SIG's most stable property (correlation 0.53 with defect
@@ -33,7 +33,7 @@ checked AS (
 unit_rows AS MATERIALIZED (
     SELECT * FROM units
 ),
--- The outermost test units: a test whose parent is not one (a test file's module, a
+-- The outermost test units: a test whose parent is not one (a test file's file unit, a
 -- `mod tests`, a test function in a non-test namespace).
 test_roots AS MATERIALIZED (
     SELECT u.package, u.loc
