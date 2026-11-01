@@ -7,7 +7,7 @@
 -- One unit per definition occurrence of a non-local symbol in a Go source file whose
 -- SCIP kind (symbol_kind) is one of
 --   Function -> function; Method, MethodSpecification -> method;
---   Type, Struct, Interface, TypeAlias -> type; Package -> namespace;
+--   Type, Struct, Interface, TypeAlias -> type; Package -> file;
 --   Constant, Variable -> constant.
 -- A Variable that is not local is a package-level `var`; struct fields (Field) and
 -- everything inside a function body (scip-go's `local N` symbols) are not units. A
@@ -47,6 +47,16 @@
 CREATE OR REPLACE VIEW go_terms AS
 SELECT * FROM (VALUES ('package', 'module'), ('namespace', 'package')) t(internal, official);
 
+-- go_file_namespaces(file_id, namespace, namespace_path): a Go file belongs to its
+-- directory's package (views/graph.sql, file_namespaces): the namespace is the directory
+-- (`.` for the repository root), an external test package (`package x_test`) included, and
+-- its namespace_path the directory too ('' for the root, as a Rust crate root at the
+-- repository root), so a directory's package is an ancestor of those below it.
+CREATE OR REPLACE VIEW go_file_namespaces AS
+SELECT file_id, coalesce(nullif(regexp_extract(path, '^(.*)/[^/]*$', 1), ''), '.') AS namespace,
+       regexp_extract(path, '^(.*)/[^/]*$', 1) AS namespace_path
+FROM files WHERE language = 'go';
+
 -- go_file_ast: file_ast's rows (views/files.sql) of the Go files only. read_ast parses
 -- every file it is given, whatever the query filters, so this view gives it the Go
 -- files' paths (and a path that does not exist, which keeps the list non-empty and which
@@ -84,7 +94,7 @@ typed AS MATERIALIZED (
            CASE WHEN i.kind = 'Function' THEN 'function'
                 WHEN i.kind IN ('Method', 'MethodSpecification') THEN 'method'
                 WHEN i.kind IN ('Type', 'Struct', 'Interface', 'TypeAlias') THEN 'type'
-                WHEN i.kind = 'Package' THEN 'namespace'
+                WHEN i.kind = 'Package' THEN 'file'
                 WHEN i.kind IN ('Constant', 'Variable') THEN 'constant' END AS kind
     FROM defs d JOIN info i USING (symbol)
     WHERE i.kind IN ('Function', 'Method', 'MethodSpecification', 'Type', 'Struct', 'Interface', 'TypeAlias',
@@ -134,7 +144,7 @@ roots AS (
 ),
 ranged AS MATERIALIZED (
     SELECT t.*,
-           CASE WHEN t.kind = 'namespace' THEN rt.r
+           CASE WHEN t.kind = 'file' THEN rt.r
                 WHEN t.kind IN ('function', 'method') AND t.enclosing_start_line IS NOT NULL
                     THEN struct_pack(sl := t.enclosing_start_line, sc := t.enclosing_start_column,
                                      el := t.enclosing_end_line, ec := t.enclosing_end_column)
@@ -145,7 +155,7 @@ ranged AS MATERIALIZED (
 ),
 -- The file unit's symbol is the prefix of the file's descriptors.
 file_prefixes AS (
-    SELECT file_id, any_value(symbol) AS prefix FROM typed WHERE kind = 'namespace' GROUP BY file_id
+    SELECT file_id, any_value(symbol) AS prefix FROM typed WHERE kind = 'file' GROUP BY file_id
 ),
 named AS MATERIALIZED (
     SELECT r.*, fp.prefix,
@@ -198,7 +208,7 @@ parameters AS (
     GROUP BY b.symbol, b.file_id, b.name_line, b.name_column, b.is_method
 )
 SELECT n.file_id, n.symbol, n.symbol_kind, n.kind, split_part(n.symbol, ' ', 3) AS package, n.display_name AS name,
-       CASE WHEN n.kind = 'namespace' OR n.descriptors = '' THEN n.display_name
+       CASE WHEN n.kind = 'file' OR n.descriptors = '' THEN n.display_name
             ELSE rtrim(replace(regexp_replace(regexp_replace(n.descriptors, '\(\)\.', '.', 'g'), '[/#!]', '.', 'g'),
                                '`', ''), '.') END AS qualified_name,
        n.r.sl::INTEGER AS start_line, n.r.sc::INTEGER AS start_column,
@@ -206,10 +216,10 @@ SELECT n.file_id, n.symbol, n.symbol_kind, n.kind, split_part(n.symbol, ' ', 3) 
        g.path LIKE '%\_test.go' ESCAPE '\'
            OR coalesce(list_bool_or(list_transform(getvariable('extra_test_paths'), lambda p: g.path GLOB p)), false)
            AS test_by_rule,
-       CASE WHEN n.kind = 'namespace' OR n.symbol_kind = 'MethodSpecification' THEN NULL
+       CASE WHEN n.kind = 'file' OR n.symbol_kind = 'MethodSpecification' THEN NULL
             WHEN regexp_matches(n.display_name, '^\p{Lu}') THEN 'pub' ELSE 'private' END AS visibility,
        p.parameters, n.signature, coalesce(len(n.documentation), 0) > 0 AS has_doc,
-       n.kind = 'namespace' AS is_file_unit,
+       n.kind = 'file' AS is_file_unit,
        CASE WHEN n.symbol_kind = 'Method' THEN 'impl' WHEN n.symbol_kind = 'MethodSpecification' THEN 'trait' END AS member_of,
        n.receiver_symbol AS impl_key,
        CASE WHEN n.receiver_symbol IS NOT NULL

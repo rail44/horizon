@@ -51,7 +51,7 @@ package_rows AS (
 SELECT 'unit' AS level, u.package, u.path, u.kind, u.qualified_name, u.start_line, u.loc, NULL::BIGINT AS units,
        u.is_test, NULL::DOUBLE AS test_loc_pct
 FROM unit_rows u, checked c
-WHERE c.level = 'unit' AND u.kind <> 'namespace' AND (c.kind IS NULL OR u.kind = c.kind)
+WHERE c.level = 'unit' AND u.kind NOT IN ('namespace', 'file') AND (c.kind IS NULL OR u.kind = c.kind)
   AND (c.include_tests OR NOT u.is_test)
 UNION ALL
 SELECT 'file', f.package, f.path, NULL, NULL, NULL, f.loc,

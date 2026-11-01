@@ -47,7 +47,8 @@ FROM occurrences o
 LEFT JOIN located l USING (occurrence_ord);
 
 -- symbol_units(symbol, unit_id, ambiguous): the unit each non-local symbol's definitions
--- belong to (above), except that a namespace's own symbol has none: a reference to a module
+-- belong to (above), except that a namespace's own symbol has none, nor a file unit's (a Go
+-- file's package symbol, which every file of the package defines): a reference to a module
 -- names a namespace (a path segment `crate::a::b::f`, a `use crate::a;`, a `mod a;`
 -- declaration), not code the referrer depends on, and would otherwise draw an edge to
 -- every namespace a path passes through. A symbol with definitions in several units (rust-analyzer names a
@@ -63,7 +64,7 @@ defs AS (
     LEFT JOIN own w ON w.file_id = o.file_id AND w.symbol = o.symbol
          AND w.name_line = o.start_line AND w.name_column = o.start_column
     WHERE o.is_definition AND NOT o.is_local AND coalesce(w.unit_id, o.unit_id) IS NOT NULL
-      AND w.kind IS DISTINCT FROM 'namespace'
+      AND coalesce(w.kind, '') NOT IN ('namespace', 'file')
 )
 SELECT symbol, unit_id, count(*) OVER (PARTITION BY symbol) > 1 AS ambiguous FROM defs;
 
@@ -212,35 +213,48 @@ nearest AS (
 SELECT n.unit_id, n.impl_id, f.type_unit_id
 FROM nearest n LEFT JOIN impl_for f USING (impl_id);
 
--- namespaces(namespace, file_id, namespace_unit_id, package, namespace_path): every namespace unit: a file
--- namespace is named by its file's path, an inline module `<path>::<names>`
--- (src/shapes.rs::tests). namespace_path places each namespace in its package's module tree by
--- Rust's file-module convention, as a `/`-separated path: a crate root (`…/lib.rs`,
--- `…/main.rs`) and a `…/mod.rs` are their directory, any other file its path without
--- `.rs`, an inline namespace its file's module_path followed by its names (src/shapes.rs::tests
--- is src/shapes/tests). A namespace is an ancestor of another when its namespace_path is a prefix
--- of the other's at a `/`. The path convention rather than the descriptors places modules
--- because SCIP names every target of a package's crate root `crate/`: an integration
--- test's root would otherwise be an ancestor of every module of the library. `#[path]`
--- attributes are not read, and a binary under src/bin/ is placed under the library's root.
+-- file_namespaces(file_id, namespace, namespace_path): the namespace each source file
+-- belongs to, as its language places it (lang/<language>.sql, <language>_file_namespaces):
+-- a Rust file is its own namespace (its file module), a Go file belongs to its directory's
+-- package. namespace_path places the namespace among the others as a `/`-separated path.
+CREATE OR REPLACE VIEW file_namespaces AS
+SELECT * FROM rust_file_namespaces
+UNION ALL
+SELECT * FROM go_file_namespaces;
+
+-- namespaces(namespace, file_id, namespace_unit_id, package, namespace_path): every
+-- namespace: each namespace of file_namespaces that holds a file with a file unit (an
+-- indexed file), and each namespace unit inside a file (an inline module `mod x { … }`,
+-- named `<file's namespace>::<names>`, src/shapes.rs::tests, and placed below its file's
+-- namespace_path, src/shapes/tests). file_id and namespace_unit_id are the file and its
+-- file unit when the namespace is one file (every Rust file module, a one-file Go
+-- package), NULL when it spans several (a Go package). A namespace is an ancestor of
+-- another when its namespace_path is a prefix of the other's at a `/`.
 CREATE OR REPLACE VIEW namespaces AS
-WITH namespace_units AS MATERIALIZED (
-    SELECT u.unit_id, u.file_id, u.package, u.qualified_name, u.is_file_unit, f.path,
-           CASE WHEN regexp_matches(f.path, '(^|/)(lib|main|mod)\.rs$')
-                THEN regexp_replace(f.path, '/?(lib|main|mod)\.rs$', '')
-                ELSE regexp_replace(f.path, '\.rs$', '') END AS file_namespace_path
-    FROM units u JOIN files f USING (file_id)
-    WHERE u.kind = 'namespace'
+WITH file_units AS MATERIALIZED (
+    SELECT u.unit_id, u.file_id, u.package, n.namespace, n.namespace_path
+    FROM units u JOIN file_namespaces n USING (file_id)
+    WHERE u.is_file_unit
+),
+file_level AS (
+    SELECT namespace,
+           CASE WHEN count(*) = 1 THEN any_value(file_id) END AS file_id,
+           CASE WHEN count(*) = 1 THEN any_value(unit_id) END AS namespace_unit_id,
+           any_value(package) AS package, any_value(namespace_path) AS namespace_path
+    FROM file_units
+    GROUP BY namespace
 )
-SELECT CASE WHEN is_file_unit THEN path ELSE path || '::' || replace(qualified_name, '.', '::') END AS namespace,
-       file_id, unit_id AS namespace_unit_id, package,
-       CASE WHEN is_file_unit THEN file_namespace_path
-            ELSE file_namespace_path || '/' || replace(qualified_name, '.', '/') END AS namespace_path
-FROM namespace_units;
+SELECT * FROM file_level
+UNION ALL
+SELECT f.namespace || '::' || replace(u.qualified_name, '.', '::'), u.file_id, u.unit_id, u.package,
+       f.namespace_path || '/' || replace(u.qualified_name, '.', '/')
+FROM units u JOIN file_units f USING (file_id)
+WHERE u.kind = 'namespace' AND NOT u.is_file_unit;
 
 -- unit_namespace(unit_id, namespace, namespace_unit_id, file_id, package, namespace_path): the namespace a
--- unit belongs to: the nearest namespace unit among the unit itself and its enclosing units
--- (a namespace unit belongs to the namespace it is).
+-- unit belongs to: the nearest namespace with a unit among the unit itself and its
+-- enclosing units (a namespace unit belongs to the namespace it is), else its file's
+-- namespace (a Go package's units); the namespace's columns follow.
 CREATE OR REPLACE VIEW unit_namespace AS
 WITH namespace_rows AS MATERIALIZED (
     SELECT * FROM namespaces
@@ -249,9 +263,17 @@ nearest AS (
     SELECT a.unit_id, arg_min(a.ancestor_id, a.depth) AS namespace_unit_id
     FROM unit_ancestors a JOIN namespace_rows m ON m.namespace_unit_id = a.ancestor_id
     GROUP BY a.unit_id
+),
+by_file AS (
+    SELECT u.unit_id, n.namespace
+    FROM units u JOIN file_namespaces n USING (file_id)
+    WHERE u.unit_id NOT IN (SELECT unit_id FROM nearest)
 )
-SELECT n.unit_id, m.namespace, n.namespace_unit_id, m.file_id, m.package, m.namespace_path
-FROM nearest n JOIN namespace_rows m USING (namespace_unit_id);
+SELECT n.unit_id, m.namespace, m.namespace_unit_id, m.file_id, m.package, m.namespace_path
+FROM nearest n JOIN namespace_rows m USING (namespace_unit_id)
+UNION ALL
+SELECT b.unit_id, m.namespace, m.namespace_unit_id, m.file_id, m.package, m.namespace_path
+FROM by_file b JOIN namespace_rows m USING (namespace);
 
 -- namespace_edges(src_namespace, dst_namespace, src_package, dst_package, unit_edges, occurrences,
 --     test_unit_edges, ambiguous_unit_edges, nested_namespaces, same_type_unit_edges) and

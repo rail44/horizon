@@ -56,6 +56,21 @@
 CREATE OR REPLACE VIEW rust_terms AS
 SELECT * FROM (VALUES ('package', 'package'), ('namespace', 'module')) t(internal, official);
 
+-- rust_file_namespaces(file_id, namespace, namespace_path): each Rust file is its own
+-- namespace, its file module (views/graph.sql, file_namespaces), named by the file's path
+-- and placed by Rust's file-module convention: a crate root (`…/lib.rs`, `…/main.rs`) and
+-- a `…/mod.rs` are their directory, any other file its path without `.rs`. The path
+-- convention rather than the descriptors places modules because SCIP names every target
+-- of a package's crate root `crate/`: an integration test's root would otherwise be an
+-- ancestor of every module of the library. `#[path]` attributes are not read, and a
+-- binary under src/bin/ is placed under the library's root.
+CREATE OR REPLACE VIEW rust_file_namespaces AS
+SELECT file_id, path AS namespace,
+       CASE WHEN regexp_matches(path, '(^|/)(lib|main|mod)\.rs$')
+            THEN regexp_replace(path, '/?(lib|main|mod)\.rs$', '')
+            ELSE regexp_replace(path, '\.rs$', '') END AS namespace_path
+FROM files WHERE language = 'rust';
+
 -- impl_base_name(t): the bare name of a type or trait as a descriptor or a signature
 -- writes it: backticks, a leading `&`, `mut`, `dyn`, generic arguments and a path removed
 -- (`Box<dyn X>` -> Box, `From<serde_json::Error>` -> From, `a::B` -> B).

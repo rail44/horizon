@@ -15,8 +15,9 @@
 -- One unit per definition occurrence of a non-local symbol; fields, enum variants,
 -- parameters and locals are not units, and their occurrences belong to the unit that
 -- contains them. kind is the neutral kind (function, method, type, namespace, macro,
--- constant), symbol_kind the SCIP kind. Every indexed file has its file unit
--- (is_file_unit), whose range is the whole file. member_of is 'impl' (a member of an
+-- constant, file), symbol_kind the SCIP kind. Every indexed file has its file unit
+-- (is_file_unit), whose range is the whole file: a namespace when the file is one (a Rust
+-- file module), else kind 'file' (a Go file, one of its package's files). member_of is 'impl' (a member of an
 -- impl block or of a type's method set), 'trait_impl' (a member of a trait impl) or
 -- 'trait' (a trait's or interface's own item), NULL otherwise; impl_key groups the
 -- members of one impl, impl_type and impl_trait name its type and trait as written, and

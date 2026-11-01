@@ -52,7 +52,7 @@ namespace_owners AS (
 owned AS MATERIALIZED (
     SELECT DISTINCT s.unit_id, su.symbol
     FROM unit_scope s
-    JOIN unit_rows u ON u.unit_id = s.unit_id AND u.kind <> 'namespace'
+    JOIN unit_rows u ON u.unit_id = s.unit_id AND u.kind NOT IN ('namespace', 'file')
     JOIN symbol_units su ON su.unit_id = s.member_unit_id
     UNION
     SELECT unit_id, symbol FROM namespace_owners

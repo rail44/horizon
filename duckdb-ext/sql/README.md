@@ -401,10 +401,15 @@ reading of them, then Go's:
 - **Go** (`lang/go.sql`, over scip-go 0.2.7's index;
   `docs/research/code-db-go-2026-10-30.md`). Function → `function`; Method,
   MethodSpecification (an interface's method) → `method`; Type, Struct, Interface,
-  TypeAlias → `type`; Package → `namespace`; Constant and a package-level Variable →
+  TypeAlias → `type`; Package → `file`; Constant and a package-level Variable →
   `constant`. Struct fields and everything inside a function body (scip-go's `local N`
-  symbols) are not units. Every file is a file unit: scip-go defines the package at
-  each file's `package` clause, and the unit's range is the file's whole syntax tree.
+  symbols) are not units. Every file is a file unit of kind `file`, not a namespace:
+  scip-go defines the package at each file's `package` clause, and the unit's range is the
+  file's whole syntax tree. The namespace is the file's directory, the Go package
+  (`go_file_namespaces`: `.` for the root, an external `x_test` package included), which
+  spans its files; `namespace_path` is the directory, so a package is an ancestor of the
+  packages below it. A file unit's own symbol, the package's, belongs to no unit
+  (`symbol_units`), so a reference to the package counts for none of its files.
   scip-go gives only functions and methods an `enclosing_range` (from `func` to the
   closing brace, the doc comment not included); every other range comes from the
   syntax tree: the spec that declares the name (`type_spec`, `type_alias`, `const_spec`,
@@ -421,9 +426,8 @@ reading of them, then Go's:
   is a `*_test.go` file or matches `extra_test_paths` (`extra_test_attributes` has no
   Go meaning). The Go files' trees are read by `go_file_ast`, which hands `read_ast`
   only them: a repository without Go files parses nothing for Go. What reads Rust's
-  shapes downstream has no Go reading yet: `namespaces`' file-module convention (a Go file
-  is a namespace named by its path, not its package directory) and `unit_complexity`'s node
-  types (Go's are `if_statement`, `for_statement`, …; Go units count none).
+  shapes downstream has no Go reading yet: `unit_complexity`'s node types (Go's are
+  `if_statement`, `for_statement`, …; Go units count none).
 - **`unit_ast`**: every unit's syntax tree, one row per node: the nodes of its file's
   tree (`file_ast`, Files below) inside the unit's range, compared by line and column; a
   file module's tree is its file's whole tree, and an enclosing unit's tree holds what it
@@ -467,16 +471,21 @@ reading of them, then Go's:
   **`impl_for(impl_id, type_unit_id)`**, **`implements(impl_id, trait_unit_id)`**,
   **`unit_impl_type(unit_id, impl_id, type_unit_id)`** (the impl of a unit's nearest
   ancestor-or-self member).
+- **`file_namespaces(file_id, namespace, namespace_path)`**: each source file's
+  namespace as its language places it (`<language>_file_namespaces`): a Rust file is its
+  own, named by its path and placed by the file-module convention (a crate root and
+  `mod.rs` are their directory, another file its path without `.rs`; not by the
+  descriptors: SCIP names every target's root `crate/`, which would make an integration
+  test's root an ancestor of every library module); a Go file belongs to its directory's
+  package.
 - **`namespaces(namespace, file_id, namespace_unit_id, package, namespace_path)`** and
   **`unit_namespace(unit_id, namespace, namespace_unit_id, file_id, package, namespace_path)`**: every
-  namespace unit; a file module is named by its path, an inline module `<path>::<names>`. A
-  unit belongs to its nearest ancestor-or-self namespace. `namespace_path` places a namespace in
-  its package's tree by the file-module convention (a crate root and `mod.rs` are their
-  directory, another file its path without `.rs`, an inline module its file's path plus
-  its names), not by the descriptors: SCIP names every target's root `crate/`, which would
-  make an integration test's root an ancestor of every library module.
+  namespace of an indexed file, and every namespace unit inside a file (an inline module
+  `<file's namespace>::<names>`, below its file's `namespace_path`); `file_id` and
+  `namespace_unit_id` are NULL for a namespace of several files (a Go package). A unit
+  belongs to its nearest ancestor-or-self namespace unit, else its file's namespace.
 - **`namespace_edges(src_namespace, dst_namespace, src_package, dst_package, unit_edges, occurrences,
-  test_unit_edges, ambiguous_unit_edges, nested_modules, same_type_unit_edges)`**,
+  test_unit_edges, ambiguous_unit_edges, nested_namespaces, same_type_unit_edges)`**,
   **`package_edges`**, **`namespace_cycle_edges`**, **`namespace_cycles(cycle, package, namespaces,
   members, edges, unit_edges, occurrences)`**, **`package_cycles`**: as before the rebuild,
   over these units. `nested_namespaces` marks an edge between a namespace and its ancestor or
@@ -667,11 +676,11 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (SCIP) |
-| `lang/rust.sql` | `rust_terms`, the macros `impl_base_name`, `impl_generic_arg`; `rust_units` (Units) |
-| `lang/go.sql` | `go_terms`, `go_file_ast`, `go_units` (Units) |
+| `lang/rust.sql` | `rust_terms`, `rust_file_namespaces`, the macros `impl_base_name`, `impl_generic_arg`; `rust_units` (Units) |
+| `lang/go.sql` | `go_terms`, `go_file_namespaces`, `go_file_ast`, `go_units` (Units) |
 | `views/terms.sql` | `lang_terms`, the macros `display_language`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
 | `views/units.sql` | `derived_units`, `units`, `unit_ast` (Units) |
-| `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
+| `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
 | `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
 | `views/quality.sql` | `unit_scope`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `unit_complexity`, `unit_quality` (Axes) |
 | `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `namespace_graph`, `namespace_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
@@ -688,14 +697,16 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 - **Paths are repository-relative** with `/`. `files.file_id` is the position in the
   sorted file list; `units.unit_id` the position in the unit order (Units).
 - **Neutral vocabulary**: unit kinds `function`, `method`, `type`, `namespace`, `macro`,
-  `constant`; the SCIP kind is kept as `symbol_kind`. Language knowledge about units (the
+  `constant`, `file`; the SCIP kind is kept as `symbol_kind`. Language knowledge about units (the
   kind mapping, the test rules, the impl descriptors, ranges the indexer does not give)
   lives in one file per language under `lang/`, a view `<language>_units` that
-  `views/units.sql` takes into `derived_units`, and its two names (Names) in
-  `<language>_terms`; another language adds its file there, its two views to the unions
-  in `derived_units` and `lang_terms`, its extension to `languages` and its indexer to
-  `code-db index`. The file-module convention (`namespaces`) and the complexity node types
-  (`unit_complexity`) in `views/graph.sql` and `views/quality.sql` are still Rust's.
+  `views/units.sql` takes into `derived_units`, its files' namespaces in
+  `<language>_file_namespaces` (`file_namespaces`), and its two names (Names) in
+  `<language>_terms`; another language adds its file there, its three views to the
+  unions in `derived_units`, `file_namespaces` and `lang_terms`, its extension to
+  `languages` and its indexer to `code-db index`. The complexity node types
+  (`unit_complexity`, `views/quality.sql`) and the namespace references `unit_fan_in`
+  reads from the text (`crate`, `super`, `self`, `src/lib.rs`) are still Rust's.
 - **A view reads each source once.** A view or common table expression that is not
   `MATERIALIZED` is expanded at every reference; the views materialize what they read
   more than once, and the cache materializes the layers.
@@ -740,8 +751,8 @@ need at least one file, which is why `empty-jscpd-report.json` is always in thei
   comparison were removed with the decision of 2026-10-29; the comparison is to come back
   as a diff of obstacle lists over two SCIP indexes.
 - The exhaustive-`match` check (above).
-- TypeScript (its SCIP indexer and the unit mapping); for Go, the namespace mapping
-  (Go packages as namespaces) and the complexity node types (Units). SCIP relationships
+- TypeScript (its SCIP indexer and the unit mapping); for Go, the complexity node types
+  (Units). SCIP relationships
   (rust-analyzer 1.99.1 writes none; scip-go writes its implementations, which nothing
   reads yet), so no edge from an impl's method to the trait method it implements, nor
   from a Go method to the interface method it satisfies.

@@ -408,7 +408,7 @@ fn go_modules_index_and_units() {
             vec![
                 "cmd/app/main.go",
                 shapes,
-                "package",
+                "file",
                 "main",
                 "1",
                 "8",
@@ -434,7 +434,7 @@ fn go_modules_index_and_units() {
             vec![
                 "shapes/shapes.go",
                 shapes,
-                "package",
+                "file",
                 "shapes",
                 "1",
                 "29",
@@ -551,7 +551,7 @@ fn go_modules_index_and_units() {
             vec![
                 "shapes/shapes_test.go",
                 shapes,
-                "package",
+                "file",
                 "shapes",
                 "1",
                 "10",
@@ -577,7 +577,7 @@ fn go_modules_index_and_units() {
             vec![
                 "tools/gen/main.go",
                 "example.com/gen",
-                "package",
+                "file",
                 "main",
                 "1",
                 "4",
@@ -608,7 +608,7 @@ fn go_modules_index_and_units() {
         &probe,
         "SELECT s.qualified_name, d.qualified_name FROM unit_edges e \
          JOIN go.units s ON s.unit_id = e.src_unit_id JOIN go.units d ON d.unit_id = e.dst_unit_id \
-         WHERE s.kind <> 'package' AND NOT e.is_self ORDER BY ALL;\n",
+         WHERE s.kind <> 'file' AND NOT e.is_self ORDER BY ALL;\n",
     )
     .unwrap();
     let edges = rows(&code_db(&["sql", probe.to_str().unwrap()]));
@@ -638,6 +638,16 @@ fn go_modules_index_and_units() {
     assert!(
         !header.contains("namespace") && !header.contains("crate"),
         "{header}"
+    );
+    // Namespaces are Go packages (directories): the files of a package are one
+    // namespace, and the one edge left is between the module's two packages.
+    let edges = rows(&graph);
+    assert_eq!(
+        edges
+            .iter()
+            .map(|r| (&r[0][..], &r[1][..]))
+            .collect::<Vec<_>>(),
+        [("cmd/app", "shapes")]
     );
     let modules = rows(&code_db(&["query", "coupling", "level=module"]));
     assert_eq!(
