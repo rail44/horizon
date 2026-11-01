@@ -14,7 +14,8 @@
 -- Columns: path, package, kind, qualified_name, start_line, loc, cyclomatic, decisions,
 -- max_nesting, if_count, else_if_count, match_count, arm_count, guard_count, for_count,
 -- while_count, loop_count, try_count, and_count, or_count, let_else_count, return_count,
--- break_count, continue_count, closure_count, is_test.
+-- break_count, continue_count, goto_count, closure_count, is_test (a count is NULL for a
+-- construct the unit's language lacks; views/quality.sql, unit_complexity).
 -- Evidence: weak to medium. Cognitive complexity predicts understanding time (r = 0.54)
 -- but hardly correctness; SIG's unit complexity correlates 0.50 to 0.54 with defect
 -- resolution; no Rust study (survey of 2026-10-24). Over this repository's 3,425 non-test
@@ -29,7 +30,7 @@ WITH params AS (
 SELECT u.path, u.package, u.kind, u.qualified_name, u.start_line, u.loc, c.decisions + 1 AS cyclomatic,
        c.decisions, c.max_nesting, c.if_count, c.else_if_count, c.match_count, c.arm_count, c.guard_count,
        c.for_count, c.while_count, c.loop_count, c.try_count, c.and_count, c.or_count, c.let_else_count,
-       c.return_count, c.break_count, c.continue_count, c.closure_count, u.is_test
+       c.return_count, c.break_count, c.continue_count, c.goto_count, c.closure_count, u.is_test
 FROM units u
 CROSS JOIN params p
 JOIN unit_complexity c USING (unit_id)

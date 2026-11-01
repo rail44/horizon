@@ -52,9 +52,73 @@
 --     that names impl_type, outside other functions' bodies) is led by #[cfg(test)].
 
 -- rust_terms(internal, official): Rust's names for the two levels the views call package
--- and namespace (views/terms.sql): a Cargo package and a module.
+-- and namespace (views/terms.sql): a Cargo package and a module; the control constructs
+-- keep their internal names, and Rust has no goto.
 CREATE OR REPLACE VIEW rust_terms AS
-SELECT * FROM (VALUES ('package', 'package'), ('namespace', 'module')) t(internal, official);
+SELECT * FROM (VALUES ('package', 'package'), ('namespace', 'module'), ('goto', NULL::VARCHAR))
+    t(internal, official);
+
+-- rust_control_nodes(file_id, node_id, construct, decisions, opens_level, group_id): the
+-- nodes of the Rust files' trees (file_ast) that are control constructs (views/quality.sql,
+-- unit_complexity), with the decision points each adds to McCabe's count, whether it
+-- opens a nesting level, and the group of alternatives it is one of where all but one
+-- decide (a unit counts one decision fewer per group it holds):
+--   if_expression: `if` (an `if let` included), 1, a level; `else_if` when its parent is an
+--     else_clause, 1, continuing its chain;
+--   match_expression: `match`, 0, a level; match_arm: `arm`, 1, its group its match_block
+--     (a match is exhaustive: its arms but one decide);
+--   an `if` token whose parent is a match_pattern: `guard`, 1;
+--   for_expression, while_expression (`while let` included): `for`, `while`, 1, a level;
+--     loop_expression: `loop`, 0 (its exits are breaks, as rust-code-analysis issue #1249
+--     expects from McCabe), a level;
+--   try_expression (`?`): `try`, 1;
+--   `&&` and `||` tokens whose parent is a binary_expression or a let_chain (`if let … &&
+--     …`): `and`, `or`, 1;
+--   an `else` token whose parent is a let_declaration: `let_else`, 1;
+--   return_, break_, continue_expression: `return`, `break`, `continue`, 0;
+--   closure_expression: `closure`, 0 (its body's constructs count for the unit that
+--     writes it; it adds no entry of its own).
+-- A macro invocation's arguments are tokens and hold none.
+CREATE OR REPLACE VIEW rust_control_nodes AS
+WITH nodes AS MATERIALIZED (
+    SELECT a.file_id, a.node_id, a.type, a.parent_id
+    FROM file_ast a JOIN files f USING (file_id)
+    WHERE f.language = 'rust'
+),
+typed AS MATERIALIZED (
+    SELECT n.file_id, n.node_id, n.type, n.parent_id, p.type AS parent_type
+    FROM nodes n LEFT JOIN nodes p ON p.file_id = n.file_id AND p.node_id = n.parent_id
+    WHERE n.type IN ('if_expression', 'match_expression', 'match_arm', 'for_expression', 'while_expression',
+                     'loop_expression', 'try_expression', 'return_expression', 'break_expression',
+                     'continue_expression', 'closure_expression', 'if', 'else', '&&', '||')
+),
+classified AS (
+    SELECT file_id, node_id,
+           CASE WHEN type = 'if_expression' AND parent_type = 'else_clause' THEN 'else_if'
+                WHEN type = 'if_expression' THEN 'if'
+                WHEN type = 'match_expression' THEN 'match'
+                WHEN type = 'match_arm' THEN 'arm'
+                WHEN type = 'if' AND parent_type = 'match_pattern' THEN 'guard'
+                WHEN type = 'for_expression' THEN 'for'
+                WHEN type = 'while_expression' THEN 'while'
+                WHEN type = 'loop_expression' THEN 'loop'
+                WHEN type = 'try_expression' THEN 'try'
+                WHEN type = '&&' AND parent_type IN ('binary_expression', 'let_chain') THEN 'and'
+                WHEN type = '||' AND parent_type IN ('binary_expression', 'let_chain') THEN 'or'
+                WHEN type = 'else' AND parent_type = 'let_declaration' THEN 'let_else'
+                WHEN type = 'return_expression' THEN 'return'
+                WHEN type = 'break_expression' THEN 'break'
+                WHEN type = 'continue_expression' THEN 'continue'
+                WHEN type = 'closure_expression' THEN 'closure' END AS construct,
+           CASE WHEN type = 'match_arm' THEN parent_id END AS group_id
+    FROM typed
+)
+SELECT file_id, node_id, construct,
+       CASE WHEN construct IN ('if', 'else_if', 'arm', 'guard', 'for', 'while', 'try', 'and', 'or', 'let_else')
+            THEN 1 ELSE 0 END AS decisions,
+       construct IN ('if', 'match', 'for', 'while', 'loop') AS opens_level, group_id
+FROM classified
+WHERE construct IS NOT NULL;
 
 -- rust_file_namespaces(file_id, namespace, namespace_path): each Rust file is its own
 -- namespace, its file module (views/graph.sql, file_namespaces), named by the file's path

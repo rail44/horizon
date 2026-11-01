@@ -43,9 +43,13 @@
 -- test_by_rule: the unit's file is a Go test file (`*_test.go`) or matches a pattern of
 -- extra_test_paths.
 -- go_terms(internal, official): Go's names for the two levels the views call package and
--- namespace (views/terms.sql): a Go module and a Go package.
+-- namespace (views/terms.sql): a Go module and a Go package; its names of the control
+-- constructs that differ (go_control_nodes): switch, case and func literal for match, arm
+-- and closure; and the constructs Go lacks, a match guard, `?` and let-else.
 CREATE OR REPLACE VIEW go_terms AS
-SELECT * FROM (VALUES ('package', 'module'), ('namespace', 'package')) t(internal, official);
+SELECT * FROM (VALUES ('package', 'module'), ('namespace', 'package'), ('match', 'switch'), ('arm', 'case'),
+                      ('closure', 'func_literal'), ('guard', NULL::VARCHAR), ('try', NULL::VARCHAR),
+                      ('let_else', NULL::VARCHAR)) t(internal, official);
 
 -- go_file_namespaces(file_id, namespace, namespace_path): a Go file belongs to its
 -- directory's package (views/graph.sql, file_namespaces): the namespace is the directory
@@ -81,6 +85,63 @@ FROM read_ast(list_filter(getvariable('source_paths'),
               || [getvariable('repo') || '/target/code-db/.no-such-file.go'],
               source := 'full', peek := 'none', ignore_errors := true) a
 JOIN files f ON f.path = substr(a.file_path, length(getvariable('repo')) + 2);
+
+-- go_control_nodes(file_id, node_id, construct, decisions, opens_level, group_id):
+-- rust_control_nodes'
+-- columns, for the Go files' trees (go_file_ast), counted as McCabe does:
+--   if_statement: `if`, 1, a level; `else_if` when its parent is an if_statement (an
+--     `else if`), 1, continuing its chain;
+--   expression_switch_statement, type_switch_statement, select_statement: `match` (Go's
+--     switch), 0, a level; expression_case, type_case, communication_case: `arm` (a case),
+--     1 each (a switch is not exhaustive), a default_case none;
+--   for_statement: `for` with a for_clause or range_clause, `while` with a condition only,
+--     both 1 and a level; `loop` with neither (`for {}`), 0, a level;
+--   `&&` and `||` tokens of a binary_expression: `and`, `or`, 1;
+--   return_, break_, continue_, goto_statement: `return`, `break`, `continue`, `goto`, 0;
+--   func_literal: `closure`, 0.
+CREATE OR REPLACE VIEW go_control_nodes AS
+WITH nodes AS MATERIALIZED (
+    SELECT file_id, node_id, type, parent_id FROM go_file_ast
+),
+typed AS MATERIALIZED (
+    SELECT n.file_id, n.node_id, n.type, p.type AS parent_type
+    FROM nodes n LEFT JOIN nodes p ON p.file_id = n.file_id AND p.node_id = n.parent_id
+    WHERE n.type IN ('if_statement', 'expression_switch_statement', 'type_switch_statement', 'select_statement',
+                     'expression_case', 'type_case', 'communication_case', 'for_statement', '&&', '||',
+                     'return_statement', 'break_statement', 'continue_statement', 'goto_statement',
+                     'func_literal')
+),
+-- Each for_statement's kind from its children: a clause, a condition, or nothing.
+loops AS (
+    SELECT f.file_id, f.node_id,
+           CASE WHEN bool_or(c.type IN ('for_clause', 'range_clause')) THEN 'for'
+                WHEN bool_or(c.type NOT IN ('for', 'block', 'comment')) THEN 'while'
+                ELSE 'loop' END AS construct
+    FROM typed f JOIN nodes c ON c.file_id = f.file_id AND c.parent_id = f.node_id
+    WHERE f.type = 'for_statement'
+    GROUP BY f.file_id, f.node_id
+),
+classified AS (
+    SELECT t.file_id, t.node_id,
+           CASE WHEN t.type = 'if_statement' AND t.parent_type = 'if_statement' THEN 'else_if'
+                WHEN t.type = 'if_statement' THEN 'if'
+                WHEN t.type IN ('expression_switch_statement', 'type_switch_statement', 'select_statement') THEN 'match'
+                WHEN t.type IN ('expression_case', 'type_case', 'communication_case') THEN 'arm'
+                WHEN t.type = 'for_statement' THEN l.construct
+                WHEN t.type = '&&' AND t.parent_type = 'binary_expression' THEN 'and'
+                WHEN t.type = '||' AND t.parent_type = 'binary_expression' THEN 'or'
+                WHEN t.type = 'return_statement' THEN 'return'
+                WHEN t.type = 'break_statement' THEN 'break'
+                WHEN t.type = 'continue_statement' THEN 'continue'
+                WHEN t.type = 'goto_statement' THEN 'goto'
+                WHEN t.type = 'func_literal' THEN 'closure' END AS construct
+    FROM typed t LEFT JOIN loops l USING (file_id, node_id)
+)
+SELECT file_id, node_id, construct,
+       CASE WHEN construct IN ('if', 'else_if', 'arm', 'for', 'while', 'and', 'or') THEN 1 ELSE 0 END AS decisions,
+       construct IN ('if', 'match', 'for', 'while', 'loop') AS opens_level, NULL::BIGINT AS group_id
+FROM classified
+WHERE construct IS NOT NULL;
 
 CREATE OR REPLACE VIEW go_units AS
 WITH go_files AS MATERIALIZED (

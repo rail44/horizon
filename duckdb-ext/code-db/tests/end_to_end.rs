@@ -326,7 +326,27 @@ func main() {
 }
 ";
 const GO_TOOL_MOD: &str = "module example.com/gen\n\ngo 1.22\n";
-const GO_TOOL_MAIN: &str = "package main\n\nfunc main() {}\n";
+const GO_TOOL_MAIN: &str = "\
+package main
+
+func main() {}
+
+func grade(n int) string {
+	switch {
+	case n > 90:
+		return \"a\"
+	case n > 50 && n < 60:
+		return \"b\"
+	default:
+	}
+	for i := 0; i < n; i++ {
+		if i == 3 {
+			break
+		}
+	}
+	return \"c\"
+}
+";
 
 #[test]
 fn go_modules_index_and_units() {
@@ -580,7 +600,7 @@ fn go_modules_index_and_units() {
                 "file",
                 "main",
                 "1",
-                "4",
+                "20",
                 n,
                 "-",
                 "-",
@@ -600,8 +620,58 @@ fn go_modules_index_and_units() {
                 "-",
                 "-"
             ],
+            vec![
+                "tools/gen/main.go",
+                "example.com/gen",
+                "function",
+                "grade",
+                "5",
+                "19",
+                n,
+                "private",
+                "1",
+                "-",
+                "-"
+            ],
         ]
     );
+
+    // Complexity in Go's constructs and names: two cases (a switch is not
+    // exhaustive, the default counts none), `&&`, the for and the if inside it.
+    let complexity = code_db(&["query", "complexity"]);
+    let header: Vec<String> = complexity
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim_matches('|')
+        .split('|')
+        .map(|c| c.trim().to_owned())
+        .collect();
+    let grade = rows(&complexity)
+        .into_iter()
+        .find(|r| r[3] == "grade")
+        .expect("grade's row");
+    let cell = |name: &str| {
+        let i = header
+            .iter()
+            .position(|h| h == name)
+            .unwrap_or_else(|| panic!("no column {name}: {header:?}"));
+        grade[i].clone()
+    };
+    for (name, value) in [
+        ("cyclomatic", "6"),
+        ("decisions", "5"),
+        ("max_nesting", "2"),
+        ("switch_count", "1"),
+        ("case_count", "2"),
+        ("and_count", "1"),
+        ("for_count", "1"),
+        ("if_count", "1"),
+        ("guard_count", "NULL"),
+        ("try_count", "NULL"),
+    ] {
+        assert_eq!(cell(name), value, "{name}");
+    }
 
     // References across files and packages become unit edges.
     std::fs::write(

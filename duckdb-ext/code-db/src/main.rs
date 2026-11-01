@@ -305,46 +305,67 @@ fn needs(file: &Path, what: &str) -> bool {
     std::fs::read_to_string(file).is_ok_and(|t| t.contains(what))
 }
 
-/// The display language's official names for the views' internal `package` and
-/// `namespace` (views/terms.sql); the internal names themselves without one.
+/// The display language's official names for the views' internal words, as
+/// (internal, official) pairs (views/terms.sql, lang_terms): its two levels and
+/// the control constructs it names differently; none without a display language.
+#[derive(Default)]
 struct Terms {
-    package: String,
-    namespace: String,
+    pairs: Vec<(String, String)>,
 }
 
-impl Default for Terms {
-    fn default() -> Terms {
-        Terms {
-            package: "package".to_owned(),
-            namespace: "namespace".to_owned(),
+/// TEXT with each word of PAIRS (from, to) replaced by its counterpart, all at
+/// once (Go's names swap package and namespace), a word being a whole run
+/// between non-alphanumeric characters (`_` included) or its plural, as
+/// views/terms.sql's term_swap does.
+fn swap_words(text: &str, pairs: &[(&str, &str)]) -> String {
+    let bytes = text.as_bytes();
+    let boundary = |i: usize| i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+    let ends = |i: usize| i >= bytes.len() || !bytes[i].is_ascii_alphanumeric();
+    let mut out = String::new();
+    let mut i = 0;
+    'scan: while i < text.len() {
+        if boundary(i) {
+            for (from, to) in pairs {
+                if text[i..].starts_with(from) {
+                    let end = i + from.len();
+                    if ends(end) {
+                        out.push_str(to);
+                        i = end;
+                        continue 'scan;
+                    }
+                    if bytes.get(end) == Some(&b's') && ends(end + 1) {
+                        out.push_str(to);
+                        out.push('s');
+                        i = end + 1;
+                        continue 'scan;
+                    }
+                }
+            }
         }
+        let c = text[i..].chars().next().expect("in bounds");
+        out.push(c);
+        i += c.len_utf8();
     }
-}
-
-/// TEXT with FROM's two words replaced by TO's at once (Go's names swap the
-/// internal ones), as views/terms.sql's display_term and internal_term do.
-fn swap_terms(text: &str, from: [&str; 2], to: [&str; 2]) -> String {
-    text.replace(from[0], "\u{1}")
-        .replace(from[1], "\u{2}")
-        .replace('\u{1}', to[0])
-        .replace('\u{2}', to[1])
+    out
 }
 
 impl Terms {
     fn display(&self, text: &str) -> String {
-        swap_terms(
-            text,
-            ["namespace", "package"],
-            [&self.namespace, &self.package],
-        )
+        let pairs: Vec<(&str, &str)> = self
+            .pairs
+            .iter()
+            .map(|(i, o)| (i.as_str(), o.as_str()))
+            .collect();
+        swap_words(text, &pairs)
     }
 
     fn internal(&self, text: &str) -> String {
-        swap_terms(
-            text,
-            [&self.namespace, &self.package],
-            ["namespace", "package"],
-        )
+        let pairs: Vec<(&str, &str)> = self
+            .pairs
+            .iter()
+            .map(|(i, o)| (o.as_str(), i.as_str()))
+            .collect();
+        swap_words(text, &pairs)
     }
 }
 
@@ -407,9 +428,7 @@ impl Session {
         let row = db
             .query(
                 "SELECT display_language(), \
-                        (SELECT string_agg(DISTINCT language, ', ' ORDER BY language) FROM files), \
-                        display_term('package', display_language()), \
-                        display_term('namespace', display_language())",
+                        (SELECT string_agg(DISTINCT language, ', ' ORDER BY language) FROM files)",
             )
             .unwrap_or_else(|e| die(e))
             .into_iter()
@@ -423,9 +442,19 @@ impl Session {
                 self.repo.display()
             ));
         }
-        if let (Some(package), Some(namespace)) = (cell(2), cell(3)) {
-            self.terms = Terms { package, namespace };
-        }
+        self.terms.pairs = db
+            .query(
+                "SELECT internal, official FROM lang_terms \
+                 WHERE language = display_language() AND official IS NOT NULL AND official <> internal \
+                 ORDER BY length(official) DESC, internal",
+            )
+            .unwrap_or_else(|e| die(e))
+            .into_iter()
+            .filter_map(|r| {
+                let mut r = r.into_iter();
+                Some((r.next().flatten()?, r.next().flatten()?))
+            })
+            .collect();
         for (name, value) in &mut self.args.variables {
             *name = self.terms.internal(name);
             if VOCABULARY_VARIABLES.contains(&name.as_str()) {
@@ -635,7 +664,7 @@ impl Session {
             die(format!(
                 "{}: a {} matches the patterns of more than one layer:\n{}",
                 self.repo.join(settings::FILE_NAME).display(),
-                self.terms.namespace,
+                self.terms.display("namespace"),
                 list.join("\n")
             ));
         }
@@ -931,6 +960,25 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn words_swap_whole_and_at_once() {
+        let go = Terms {
+            pairs: vec![
+                ("package".to_owned(), "module".to_owned()),
+                ("namespace".to_owned(), "package".to_owned()),
+                ("closure".to_owned(), "func_literal".to_owned()),
+            ],
+        };
+        assert_eq!(go.display("fan_in_packages"), "fan_in_modules");
+        assert_eq!(go.display("namespace_graph"), "package_graph");
+        assert_eq!(go.internal("package_graph"), "namespace_graph");
+        assert_eq!(go.internal("min_packages"), "min_namespaces");
+        assert_eq!(go.internal("'module'"), "'package'");
+        assert_eq!(go.internal("func_literal_count"), "closure_count");
+        assert_eq!(go.display("packaged"), "packaged");
+        assert_eq!(Terms::default().display("namespace"), "namespace");
+    }
 
     #[test]
     fn literals_follow_run_sh() {

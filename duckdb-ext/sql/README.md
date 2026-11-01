@@ -111,7 +111,12 @@ names instead (owner decision, 2026-10-30), which `lang/<language>.sql` gives in
 | package | package | module |
 | namespace | module | package |
 
-`views/terms.sql` replaces both at once (Go's swap them) in names and in the vocabulary
+The same rows name the control constructs a language calls differently (Go's `switch`,
+`case` and `func_literal` for `match`, `arm` and `closure`; `switch_count`), and, with a
+NULL official name, the constructs it lacks (Rust's `goto`; Go's `guard`, `try`,
+`let_else`), whose counts are then NULL. `views/terms.sql` replaces all of a language's
+words at once (Go's swap package and namespace), each a whole `_`-separated word or its
+plural (`try` never touches `entry_point`), in names and in the vocabulary
 columns' values (`kind`, `level`, `status`, `reference_status`, `resolved_by`,
 `unit_kind`), for one display language: `lang` when set, else the only language of
 `files`. `code-db` shows everything in it: it reads the views up to `views/terms.sql` to
@@ -426,9 +431,14 @@ reading of them, then Go's:
   its package comment in any file, so all its file units have it. `is_test`: the file
   is a `*_test.go` file or matches `extra_test_paths` (`extra_test_attributes` has no
   Go meaning). The Go files' trees are read by `go_file_ast`, which hands `read_ast`
-  only them: a repository without Go files parses nothing for Go. What reads Rust's
-  shapes downstream has no Go reading yet: `unit_complexity`'s node types (Go's are
-  `if_statement`, `for_statement`, …; Go units count none).
+  only them: a repository without Go files parses nothing for Go. Complexity counts Go's
+  constructs (`go_control_nodes`): `if_statement` (an `else if` when its parent is one),
+  the switch and select statements as `match` and their cases as `arm` (each case one
+  decision, the default none: a switch is not exhaustive), `for_statement` as `for`
+  (with a clause), `while` (a condition only) or `loop` (`for {}`, no decision), `&&` and
+  `||`, `goto_statement` beside `return`/`break`/`continue`, `func_literal` as
+  `closure`; shown as `switch_count`, `case_count` and `func_literal_count`, and NULL for
+  the guard, `?` and let-else Go lacks.
 - **`unit_ast`**: every unit's syntax tree, one row per node: the nodes of its file's
   tree (`file_ast`, Files below) inside the unit's range, compared by line and column; a
   file module's tree is its file's whole tree, and an enclosing unit's tree holds what it
@@ -563,13 +573,18 @@ settings file.
   reports found counts in both report columns.
 - **`unit_own_ast`**: the nodes of `unit_ast` that are the unit's own, without those whose
   lines lie inside a unit nested in it (innermost attribution, as `unit_occurrences`).
-  **`unit_complexity(unit_id, if_count, …, closure_count, decisions, max_nesting)`**:
-  counts of control-flow nodes over the own nodes (`if`/`else if`, `match`, arms,
-  guards, `for`/`while`/`loop`, `?`, `&&`/`||`, let-else, `return`/`break`/`continue`,
-  closures), `decisions` (McCabe's decision points; a function's cyclomatic number is
-  `decisions + 1`; every arm of a match but one, no bare `loop`, closures add no entry)
-  and `max_nesting` (if, match and the loops open at once; an `else if` opens no level).
-  The view's comment has the rules.
+  **`unit_complexity(unit_id, if_count, …, goto_count, closure_count, decisions,
+  max_nesting)`**: counts of the control constructs among the own nodes, as each
+  language classifies its tree's nodes (`control_nodes`, from
+  `<language>_control_nodes`: the construct, its McCabe weight, whether it opens a
+  nesting level, and its group of alternatives): `if`/`else if`, `match`, arms, guards,
+  `for`/`while`/`loop`, `?`, `&&`/`||`, let-else, `return`/`break`/`continue`/`goto`,
+  closures; NULL for a construct the language lacks (`lang_terms`). `decisions` is
+  McCabe's decision points (a function's cyclomatic number is `decisions + 1`): the
+  weights summed, less one per group of alternatives (a Rust match's arms but one
+  decide; no bare `loop`; closures add no entry), and `max_nesting` the constructs that
+  open a level open at once (an `else if` opens none). The language files' comments
+  have the rules.
 - **`unit_quality`**: one row per unit with the per-unit columns of every axis side by
   side (identity, `loc`, `decisions` and `max_nesting`, clone counts, fan-in and fan-out, the namespace's cycle and layer,
   visibility and parameters, `has_doc` and `debt_lines`, references and their status). It
@@ -686,13 +701,13 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (SCIP) |
-| `lang/rust.sql` | `rust_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, the macros `impl_base_name`, `impl_generic_arg`; `rust_units` (Units) |
-| `lang/go.sql` | `go_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_units` (Units) |
-| `views/terms.sql` | `lang_terms`, `lang_visibility_boundaries`, the macros `visibility_boundary`, `display_language`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
+| `lang/rust.sql` | `rust_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, `rust_control_nodes`, the macros `impl_base_name`, `impl_generic_arg`; `rust_units` (Units) |
+| `lang/go.sql` | `go_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_control_nodes`, `go_units` (Units) |
+| `views/terms.sql` | `lang_terms`, `lang_visibility_boundaries`, the macros `visibility_boundary`, `display_language`, `term_swap`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
 | `views/units.sql` | `derived_units`, `units`, `unit_ast` (Units) |
 | `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
 | `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
-| `views/quality.sql` | `unit_scope`, `namespace_references`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `unit_complexity`, `unit_quality` (Axes) |
+| `views/quality.sql` | `unit_scope`, `namespace_references`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `control_nodes`, `unit_complexity`, `unit_quality` (Axes) |
 | `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `namespace_graph`, `namespace_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
 | `refresh.sql` | the cache, the syntax trees' included (Cache) |
 | `jscpd.sh` | the two jscpd reports `views/clones.sql` reads |
@@ -712,13 +727,14 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
   lives in one file per language under `lang/`, a view `<language>_units` that
   `views/units.sql` takes into `derived_units`, its files' namespaces in
   `<language>_file_namespaces` (`file_namespaces`), and its two names (Names) in
-  `<language>_terms`, its visibility boundary in `<language>_visibility_boundary`, and the
-  references that name its namespace units in `<language>_namespace_references`; another
-  language adds its file there, its five views to the unions in `derived_units`,
-  `file_namespaces`, `lang_terms`, `lang_visibility_boundaries` and `namespace_references`,
-  its extension to `languages` and its indexer to `code-db index`. The complexity node
-  types (`unit_complexity`, `views/quality.sql`) and the `package_root` status
-  (`unit_reference_status`: a symbol ending in ` crate/`) are still Rust's.
+  `<language>_terms` (with its names of the control constructs and the ones it lacks),
+  its visibility boundary in `<language>_visibility_boundary`, the references that name
+  its namespace units in `<language>_namespace_references`, and its control constructs
+  in `<language>_control_nodes`; another language adds its file there, its six views to
+  the unions in `derived_units`, `file_namespaces`, `lang_terms`,
+  `lang_visibility_boundaries`, `namespace_references` and `control_nodes`, its extension
+  to `languages` and its indexer to `code-db index`. The `package_root` status
+  (`unit_reference_status`: a symbol ending in ` crate/`) is still Rust's.
 - **A view reads each source once.** A view or common table expression that is not
   `MATERIALIZED` is expanded at every reference; the views materialize what they read
   more than once, and the cache materializes the layers.
@@ -763,8 +779,7 @@ need at least one file, which is why `empty-jscpd-report.json` is always in thei
   comparison were removed with the decision of 2026-10-29; the comparison is to come back
   as a diff of obstacle lists over two SCIP indexes.
 - The exhaustive-`match` check (above).
-- TypeScript (its SCIP indexer and the unit mapping); for Go, the complexity node types
-  (Units). SCIP relationships
+- TypeScript (its SCIP indexer and the unit mapping). SCIP relationships
   (rust-analyzer 1.99.1 writes none; scip-go writes its implementations, which nothing
   reads yet), so no edge from an impl's method to the trait method it implements, nor
   from a Go method to the interface method it satisfies.

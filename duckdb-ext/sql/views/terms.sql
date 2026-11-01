@@ -5,7 +5,10 @@
 -- vocabulary value built from them (`package_edges`, `fan_in_packages`, `namespace_cycles`,
 -- `level := 'package'`, kind 'namespace'). A reader sees them by the names of the
 -- repository's language instead: each language's file under lang/ gives its two official
--- names (<language>_terms), and this file turns one into the other.
+-- names (<language>_terms), and this file turns one into the other. The same table names
+-- the language's control constructs where its words differ from the internal ones (Go's
+-- switch, case, func literal for match, arm, closure: views/quality.sql, unit_complexity),
+-- and, with a NULL official name, the constructs the language lacks.
 --
 -- The display language is one language: `lang` when set (00_load.sql then keeps only that
 -- language's files), else the one language of `files`; with no language or several, the
@@ -40,21 +43,35 @@ SELECT 'go', level FROM go_visibility_boundary;
 CREATE OR REPLACE MACRO visibility_boundary() AS
     coalesce((SELECT level FROM lang_visibility_boundaries WHERE language = display_language()), 'package');
 
--- display_term(s, lang) and internal_term(s, lang): s with every occurrence of the two
--- internal names replaced by lang's official names, or the reverse, both at once (Go's
--- names swap them: package -> module and namespace -> package); s itself for a NULL or
--- unknown lang. Plurals follow (`namespaces` -> `packages`).
-CREATE OR REPLACE MACRO display_term(s, lang) AS coalesce((
-    SELECT replace(replace(replace(replace(s, 'namespace', chr(1)), 'package', chr(2)),
-                           chr(1), n.official), chr(2), p.official)
-    FROM lang_terms n JOIN lang_terms p ON p.language = n.language
-    WHERE n.language = lang AND n.internal = 'namespace' AND p.internal = 'package'), s);
+-- term_swap(s, pairs): s with each word of `pairs` ({f, t, i}: from, to, a distinct index)
+-- replaced by its counterpart, all at once (Go's names swap package and namespace), a word
+-- being a whole `_`-separated part of s or its plural (`namespaces`, `fan_in_packages`), so
+-- that `try` never touches `entry_point`.
+CREATE OR REPLACE MACRO term_swap(s, pairs) AS
+    CASE WHEN s IS NULL OR coalesce(len(pairs), 0) = 0 THEN s ELSE (
+        SELECT substr(swapped, 2, length(swapped) - 2)
+        FROM (SELECT list_reduce(pairs, lambda acc, p: replace(acc, chr((57344 + p.i)::INTEGER), p.t),
+                                 list_reduce(pairs, lambda acc, p:
+                                     replace(replace(replace(replace(acc,
+                                         '_' || p.f || '_', '_' || chr((57344 + p.i)::INTEGER) || '_'),
+                                         '_' || p.f || '_', '_' || chr((57344 + p.i)::INTEGER) || '_'),
+                                         '_' || p.f || 's_', '_' || chr((57344 + p.i)::INTEGER) || 's_'),
+                                         '_' || p.f || 's_', '_' || chr((57344 + p.i)::INTEGER) || 's_'),
+                                     '_' || s || '_')) AS swapped)
+    ) END;
 
-CREATE OR REPLACE MACRO internal_term(s, lang) AS coalesce((
-    SELECT replace(replace(replace(replace(s, n.official, chr(1)), p.official, chr(2)),
-                           chr(1), 'namespace'), chr(2), 'package')
-    FROM lang_terms n JOIN lang_terms p ON p.language = n.language
-    WHERE n.language = lang AND n.internal = 'namespace' AND p.internal = 'package'), s);
+-- display_term(s, lang) and internal_term(s, lang): s with lang's internal words replaced
+-- by its official names (lang_terms), or the reverse; s itself for a NULL or unknown lang.
+-- A row with a NULL official name (a construct the language lacks) renames nothing.
+CREATE OR REPLACE MACRO display_term(s, lang) AS term_swap(s, (
+    SELECT list({'f': internal, 't': official, 'i': i})
+    FROM (SELECT internal, official, row_number() OVER (ORDER BY internal) AS i
+          FROM lang_terms WHERE language = lang AND official IS NOT NULL AND official <> internal)));
+
+CREATE OR REPLACE MACRO internal_term(s, lang) AS term_swap(s, (
+    SELECT list({'f': official, 't': internal, 'i': i})
+    FROM (SELECT internal, official, row_number() OVER (ORDER BY internal) AS i
+          FROM lang_terms WHERE language = lang AND official IS NOT NULL AND official <> internal)));
 
 -- display_column(c, t, lang): the select-list item showing column c (of type t) in lang:
 -- its name translated, and for the columns holding the vocabulary (kind, level, status,
