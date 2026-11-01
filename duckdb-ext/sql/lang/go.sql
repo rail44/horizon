@@ -40,6 +40,9 @@
 -- the package's doc comment in any of its files, so every file unit of a documented
 -- package has it).
 --
+-- entry: 'entry_point' for `main` in package main and every `init` (the runtime calls
+-- them), 'root' for a file of package main (a program's root); NULL otherwise.
+--
 -- test_by_rule: the unit's file is a Go test file (`*_test.go`) or matches a pattern of
 -- extra_test_paths.
 -- go_terms(internal, official): Go's names for the two levels the views call package and
@@ -279,6 +282,10 @@ parameters AS (
          AND s.name_column = b.name_column AND s.pos > b.open_pos AND s.pos < b.close_pos
     WHERE b.open_pos IS NOT NULL
     GROUP BY b.symbol, b.file_id, b.name_line, b.name_column, b.is_method
+),
+-- Each file's package name (its file unit's).
+file_packages AS (
+    SELECT file_id, any_value(display_name) AS package_name FROM named WHERE kind = 'file' GROUP BY file_id
 )
 SELECT n.file_id, n.symbol, n.symbol_kind, n.kind, split_part(n.symbol, ' ', 3) AS package, n.display_name AS name,
        CASE WHEN n.kind = 'file' OR n.descriptors = '' THEN n.display_name
@@ -297,7 +304,13 @@ SELECT n.file_id, n.symbol, n.symbol_kind, n.kind, split_part(n.symbol, ' ', 3) 
        n.receiver_symbol AS impl_key,
        CASE WHEN n.receiver_symbol IS NOT NULL
             THEN replace(regexp_extract(n.receiver_symbol, '((?:`[^`]*`|[^/#.!\[\]`])+)#$', 1), '`', '') END AS impl_type,
-       NULL::VARCHAR AS impl_trait, NULL::INTEGER AS impl_header_line
+       NULL::VARCHAR AS impl_trait, NULL::INTEGER AS impl_header_line,
+       -- What runs it without a reference: `main` of package main and every `init`, which
+       -- the runtime calls, and the files of package main, a program's root.
+       CASE WHEN n.kind = 'function' AND (n.display_name = 'init' OR (n.display_name = 'main' AND fp.package_name = 'main'))
+                THEN 'entry_point'
+            WHEN n.kind = 'file' AND fp.package_name = 'main' THEN 'root' END AS entry
 FROM named n
 JOIN go_files g USING (file_id)
+LEFT JOIN file_packages fp USING (file_id)
 LEFT JOIN parameters p USING (symbol, file_id, name_line, name_column);

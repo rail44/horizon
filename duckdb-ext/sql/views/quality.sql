@@ -110,7 +110,8 @@ GROUP BY s.unit_id;
 -- unit's own symbol anywhere (its own file included), and status: 'referenced'; else the
 -- reason it is structurally unreferenced rather than dead: 'test' (a test unit),
 -- 'trait_impl' (a trait impl's member: calls resolve to the trait's item), 'entry_point'
--- (a function named main), 'package_root' (a package's root module), 'trait_item' (a trait's
+-- or 'root' (the unit's entry, views/units.sql: an entry function such as main, a build
+-- target's or a program's root), 'trait_item' (a trait's
 -- own item, which its impls implement; calls on a concrete type resolve to the impl's
 -- item); else 'unreferenced'.
 -- Other entry points (callbacks registered by name, FFI exports, derive-generated uses,
@@ -123,8 +124,7 @@ SELECT u.unit_id, coalesce(c.n, 0) AS references,
        CASE WHEN coalesce(c.n, 0) > 0 THEN 'referenced'
             WHEN u.is_test THEN 'test'
             WHEN u.impl_trait IS NOT NULL THEN 'trait_impl'
-            WHEN u.kind = 'function' AND u.name = 'main' THEN 'entry_point'
-            WHEN u.is_file_unit AND ends_with(u.symbol, ' crate/') THEN 'package_root'
+            WHEN u.entry IS NOT NULL THEN u.entry
             WHEN u.member_of = 'trait' THEN 'trait_item'
             ELSE 'unreferenced' END AS status
 FROM units u LEFT JOIN counts c USING (symbol);

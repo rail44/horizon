@@ -102,7 +102,7 @@ manifest declares, versions and depends by (SCIP's `<package>`: a Cargo package,
 module), and **namespace**, a unit of namespacing and visibility (SCIP's Namespace
 descriptor: a Rust module, a Go package), with everything built from them
 (`package_edges`, `fan_in_packages`, `namespace_cycles`, `level := 'package'`, kind
-`namespace`, status `package_root`). A reader of one language sees that language's own
+`namespace`). A reader of one language sees that language's own
 names instead (owner decision, 2026-10-30), which `lang/<language>.sql` gives in two rows
 (`<language>_terms`):
 
@@ -565,8 +565,9 @@ settings file.
   `contract_candidate` takes its threshold from `min_packages` or `min_namespaces`.
 - **`unit_reference_status(unit_id, references, status)`**: the reference occurrences of
   the unit's own symbol anywhere, and `referenced`, `unreferenced`, or why it is
-  structurally unreferenced: `test`, `trait_impl`, `entry_point` (`main`), `package_root`,
-  `trait_item`.
+  structurally unreferenced: `test`, `trait_impl`, the unit's `entry` as its language
+  gives it in `units` (`entry_point`: Rust's and Go's `main`, Go's `init`; `root`: a
+  Rust crate root, a file of Go's `package main`), `trait_item`.
 - **`unit_debt_markers(unit_id, debt_lines)`**: lines with `TODO` or `FIXME`, each counted
   for its innermost unit.
 - **`unit_clones(unit_id, clone_pairs, exact_pairs, normalized_pairs)`**: a pair both
@@ -733,8 +734,9 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
   in `<language>_control_nodes`; another language adds its file there, its six views to
   the unions in `derived_units`, `file_namespaces`, `lang_terms`,
   `lang_visibility_boundaries`, `namespace_references` and `control_nodes`, its extension
-  to `languages` and its indexer to `code-db index`. The `package_root` status
-  (`unit_reference_status`: a symbol ending in ` crate/`) is still Rust's.
+  to `languages` and its indexer to `code-db index`. A unit's `entry` (what runs it
+  without a reference) is a column of `<language>_units`. No view outside `lang/` holds
+  a language's rules.
 - **A view reads each source once.** A view or common table expression that is not
   `MATERIALIZED` is expanded at every reference; the views materialize what they read
   more than once, and the cache materializes the layers.

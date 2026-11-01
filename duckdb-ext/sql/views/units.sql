@@ -4,7 +4,7 @@
 -- units(unit_id, file_id, path, package, kind, symbol_kind, name, qualified_name, symbol,
 --       parent_unit_id, start_line, start_column, end_line, end_column, name_line,
 --       name_column, loc, is_test, visibility, parameters, signature, has_doc,
---       is_file_unit, member_of, impl_key, impl_type, impl_trait, impl_header_line)
+--       is_file_unit, member_of, impl_key, impl_type, impl_trait, impl_header_line, entry)
 --
 -- Which definitions are units, and their kinds, ranges, names, visibility, parameters,
 -- documentation, impl membership and test rules, is language knowledge: each language's
@@ -37,6 +37,11 @@
 -- the range. visibility is the language's (NULL where a unit takes another's);
 -- parameters counts a function's or method's parameters, its receiver included (NULL for
 -- other kinds); has_doc: the symbol has documentation.
+--
+-- entry is what runs the unit without a reference to it, as its language sees it:
+-- 'entry_point' (a program's or the runtime's entry function: Rust's and Go's main, Go's
+-- init), 'root' (a build target's or a program's root: a Rust crate root, a file of Go's
+-- package main), NULL otherwise (views/quality.sql, unit_reference_status).
 --
 -- is_test: the language's rules make the unit a test by itself (test_by_rule in its
 -- view), or a unit whose range contains it is one.
@@ -84,7 +89,7 @@ SELECT u.unit_id, u.file_id, f.path, u.package, u.kind, u.symbol_kind, u.name, u
        (coalesce(le.nonblank_through, fl.nonblank) - coalesce(ls.nonblank_through, 0))::INTEGER AS loc,
        t.unit_id IS NOT NULL AS is_test,
        u.visibility, u.parameters, u.signature, u.has_doc,
-       u.is_file_unit, u.member_of, u.impl_key, u.impl_type, u.impl_trait, u.impl_header_line
+       u.is_file_unit, u.member_of, u.impl_key, u.impl_type, u.impl_trait, u.impl_header_line, u.entry
 FROM numbered u
 JOIN files f USING (file_id)
 JOIN file_lines fl USING (file_id)

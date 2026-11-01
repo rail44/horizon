@@ -4,8 +4,8 @@
 -- rust_units(file_id, symbol, symbol_kind, kind, package, name, qualified_name, start_line,
 --            start_column, end_line, end_column, name_line, name_column, test_by_rule,
 --            visibility, parameters, signature, has_doc, is_file_unit, member_of,
---            impl_key, impl_type, impl_trait, impl_header_line): one row per unit, in the
--- columns views/units.sql describes; test_by_rule is the part of is_test that Rust's
+--            impl_key, impl_type, impl_trait, impl_header_line, entry): one row per unit, in
+-- the columns views/units.sql describes; test_by_rule is the part of is_test that Rust's
 -- rules give a unit by itself (below), before views/units.sql adds the units inside a
 -- test.
 --
@@ -360,7 +360,11 @@ SELECT u.file_id, u.symbol, u.symbol_kind, u.kind, u.package, u.name,
             ELSE coalesce(nullif(regexp_extract(u.signature, '^\s*(pub(?:\s*\([^)]*\))?)', 1), ''), 'private') END AS visibility,
        p.parameters, u.signature,
        CASE WHEN u.member_of = 'trait_impl' THEN NULL ELSE coalesce(len(u.documentation), 0) > 0 END AS has_doc,
-       u.is_file_unit, u.member_of, u.impl_key, u.impl_type, u.impl_trait, mh.header_line AS impl_header_line
+       u.is_file_unit, u.member_of, u.impl_key, u.impl_type, u.impl_trait, mh.header_line AS impl_header_line,
+       -- What runs it without a reference: a function named main, and a target's root
+       -- (a file module whose symbol is its package's `crate/`).
+       CASE WHEN u.kind = 'function' AND u.name = 'main' THEN 'entry_point'
+            WHEN u.is_file_unit AND ends_with(u.symbol, ' crate/') THEN 'root' END AS entry
 FROM (
     SELECT *, CASE WHEN impl_trait IS NOT NULL THEN 'trait_impl' WHEN impl_key IS NOT NULL THEN 'impl'
                    WHEN owner_symbol IN (SELECT symbol FROM trait_symbols) THEN 'trait' END AS member_of

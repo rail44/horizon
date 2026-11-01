@@ -636,6 +636,29 @@ fn go_modules_index_and_units() {
         ]
     );
 
+    // What runs a Go unit without a reference: package main's files are roots, its
+    // main an entry point.
+    let structural = rows(&code_db(&[
+        "query",
+        "unreferenced",
+        "include_structural=true",
+    ]));
+    let mut entries: Vec<(&str, &str, &str, &str)> = structural
+        .iter()
+        .filter(|r| r[7] == "root" || r[7] == "entry_point")
+        .map(|r| (&r[0][..], &r[2][..], &r[3][..], &r[7][..]))
+        .collect();
+    entries.sort();
+    assert_eq!(
+        entries,
+        [
+            ("cmd/app/main.go", "file", "main", "root"),
+            ("cmd/app/main.go", "function", "main", "entry_point"),
+            ("tools/gen/main.go", "file", "main", "root"),
+            ("tools/gen/main.go", "function", "main", "entry_point"),
+        ]
+    );
+
     // Complexity in Go's constructs and names: two cases (a switch is not
     // exhaustive, the default counts none), `&&`, the for and the if inside it.
     let complexity = code_db(&["query", "complexity"]);
