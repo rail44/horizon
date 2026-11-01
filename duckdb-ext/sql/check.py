@@ -9,9 +9,10 @@
         a second workspace nested in it, a file outside every workspace, an excluded file,
         tests in the usual places), index each workspace with rust-analyzer (RUST_ANALYZER,
         default rust-analyzer on PATH), write a report in jscpd 5.3.1's shape and fill the
-        settings' tables, then assert the rows of files, units, the graph, every axis
-        query and unit_quality, live and through refresh.sql (built, then kept, then
-        rebuilt after an edit).
+        settings' tables, read refresh.sql and check every cached layer against its view's
+        definition (computed over the cached layers before it), then assert the rows of
+        files, units, the graph, every axis query and unit_quality over the cache (built,
+        then kept, then rebuilt after an edit).
 
     uv run --locked --script duckdb-ext/sql/check.py fixture --print
         The same fixture, printing each view's and query's rows instead of asserting.
@@ -22,7 +23,7 @@
         first rows with its time.
 
     uv run --locked --script duckdb-ext/sql/check.py refresh REPO
-        Read refresh.sql and compare every cached layer and every query with live.
+        Read refresh.sql and check every cached layer against its view's definition.
 
     uv run --locked --script duckdb-ext/sql/check.py measure REPO [--runs 3]
         Time each query in a fresh process per run, live and through refresh.sql (its
@@ -41,6 +42,7 @@ The process works from the root of the Horizon checkout holding this file, becau
 import argparse
 import json
 import os
+import re
 import resource
 import shutil
 import subprocess
@@ -66,9 +68,10 @@ VIEW_FILES = [
     "views/quality.sql",
 ]
 REFRESH_FILE = "refresh.sql"
-# The views refresh.sql points at its copies, in its order (file_ast at the syntax trees
-# it keeps per content id), and unit_ast, a view over file_ast compared with them.
-CACHED_VIEWS = ["file_ast", "scip_occurrences", "scip_symbols", "units", "unit_ast", "unit_occurrences", "symbol_units",
+# The views refresh.sql points at its copies, in its order (file_ast and go_file_ast at the
+# syntax trees it keeps per content id), and unit_ast, a view over file_ast compared with
+# them.
+CACHED_VIEWS = ["file_ast", "go_file_ast", "scip_occurrences", "scip_symbols", "units", "unit_ast", "unit_occurrences", "symbol_units",
                 "unit_references", "unit_edges", "unit_ancestors", "impls", "impl_targets", "unit_impl_type",
                 "namespaces", "unit_namespace", "namespace_edges", "unit_scope", "unit_fan_in", "unit_fan_out",
                 "unit_reference_status", "unit_debt_markers", "unit_complexity"]
@@ -189,20 +192,30 @@ def read_refresh(con):
     return wall, state, cache_file, (files_parsed, nodes_parsed, dropped)
 
 
-def snapshot_live(con):
-    """Copy every layer refresh.sql caches, read live, into temp tables live_<view>."""
+def view_definitions(con):
+    """{view: the SELECT the view files define it by}, for every view refresh.sql replaces."""
+    definitions = {}
     for view in CACHED_VIEWS:
-        con.execute(f"CREATE OR REPLACE TEMP TABLE live_{view} AS SELECT * FROM {view}")
+        sql = con.execute("SELECT sql FROM duckdb_views() WHERE view_name = ? AND database_name = current_database() "
+                          "AND schema_name = 'main' AND NOT temporary", [view]).fetchone()[0]
+        body = re.sub(r"^\s*CREATE\s+(OR\s+REPLACE\s+)?VIEW\s+\S+\s+AS\s+", "", sql, flags=re.I)
+        definitions[view] = body.rstrip().rstrip(";")
+    return definitions
 
 
-def diff_from_live(con):
-    """{view: (live rows missing from the view, view rows missing from live)}, nonzero only."""
+def diff_from_definitions(con, definitions):
+    """{view: (rows of its definition missing from the view, view rows missing from it)},
+    nonzero only. Each definition is computed as it stands after refresh.sql: the views it
+    reads are the cached layers before it, so each layer is checked on its own instead of
+    expanding every view below it again."""
     diffs = {}
     for view in CACHED_VIEWS:
-        counts = rows(con, f"SELECT (SELECT count(*) FROM (FROM live_{view} EXCEPT ALL FROM {view})), "
-                           f"(SELECT count(*) FROM (FROM {view} EXCEPT ALL FROM live_{view}))")[0]
+        con.execute(f"CREATE OR REPLACE TEMP TABLE layer_check AS {definitions[view]}")
+        counts = rows(con, f"SELECT (SELECT count(*) FROM (FROM layer_check EXCEPT ALL FROM {view})), "
+                           f"(SELECT count(*) FROM (FROM {view} EXCEPT ALL FROM layer_check))")[0]
         if counts != (0, 0):
             diffs[view] = counts
+    con.execute("DROP TABLE IF EXISTS layer_check")
     return diffs
 
 
@@ -221,18 +234,12 @@ def set_dependency_unit(con):
             con.execute(f"SET VARIABLE {var} = {sql_literal(value)}")
 
 
-def refresh_against_live(con):
-    """Copy the live layers and the queries' rows, read refresh.sql, compare."""
-    set_dependency_unit(con)
-    snapshot_live(con)
-    live_queries = {q: sorted(rows(con, query_sql(q)), key=repr) for q in QUERIES}
-    live_quality = sorted(rows(con, "SELECT * FROM unit_quality"), key=repr)
+def refresh_against_definitions(con):
+    """Read refresh.sql and check every cached layer against its view's definition."""
+    definitions = view_definitions(con)
     wall, state, cache_file, ast = read_refresh(con)
-    diffs = diff_from_live(con)
-    assert not diffs, f"cached layers differ from live: {diffs}"
-    for q in QUERIES:
-        assert sorted(rows(con, query_sql(q)), key=repr) == live_queries[q], f"{q} differs after refresh"
-    assert sorted(rows(con, "SELECT * FROM unit_quality"), key=repr) == live_quality, "unit_quality differs"
+    diffs = diff_from_definitions(con, definitions)
+    assert not diffs, f"cached layers differ from their definitions: {diffs}"
     return wall, state, cache_file, ast
 
 
@@ -618,9 +625,9 @@ def check_fixture(print_only=False):
                 print_rows(con, title, checked_rows(con, sql))
             check_flow_fixture(Path(tmp), print_only)
             return
-        assert_fixture(con, repo)
-        # Live and cached agree; a second read keeps the file; an edit builds another.
-        wall, state, first, ast = refresh_against_live(con)
+        # Each cached layer agrees with its definition; a second read keeps the file; an
+        # edit builds another.
+        wall, state, first, ast = refresh_against_definitions(con)
         assert state == "built", state
         files = rows(con, "SELECT count(*) FROM files")[0][0]
         assert (ast[0], ast[2]) == (files, 0) and ast[1] == rows(con, "SELECT count(*) FROM file_ast")[0][0], ast
@@ -633,7 +640,7 @@ def check_fixture(print_only=False):
         # content id is parsed, its old one dropped, and every row equals a cold build.
         write(repo, "shapes/src/rect.rs", SHAPES_RECT + "\npub fn added() {}\n")
         read_views(con)
-        _, state, edited, ast = refresh_against_live(con)
+        _, state, edited, ast = refresh_against_definitions(con)
         assert state == "built" and edited != first, (state, edited, first)
         rect_nodes = rows(con, "SELECT count(*) FROM file_ast JOIN files USING (file_id) "
                                "WHERE path = 'shapes/src/rect.rs'")[0][0]
@@ -785,7 +792,7 @@ FLOW_CHECKED = [
 
 def check_flow_fixture(root, print_only=False):
     """A crate of known control-flow shapes (FLOW_LIB): its trees and the counts over
-    them, live and through refresh.sql."""
+    them, through refresh.sql with every cached layer checked against its definition."""
     repo = root / "flow"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
@@ -802,14 +809,12 @@ def check_flow_fixture(root, print_only=False):
         for title, sql in FLOW_CHECKED:
             print_rows(con, title, checked_rows(con, sql))
         return
-    for cached in (False, True):
-        if cached:
-            _, state, _, _ = refresh_against_live(con)
-            assert state == "built", state
-        for title, sql in FLOW_CHECKED:
-            actual = checked_rows(con, sql)
-            expected = FLOW_EXPECTED[title]
-            assert actual == expected, f"flow {title}:\n  actual   {actual}\n  expected {expected}"
+    _, state, _, _ = refresh_against_definitions(con)
+    assert state == "built", state
+    for title, sql in FLOW_CHECKED:
+        actual = checked_rows(con, sql)
+        expected = FLOW_EXPECTED[title]
+        assert actual == expected, f"flow {title}:\n  actual   {actual}\n  expected {expected}"
 
 
 FLOW_EXPECTED = {
@@ -1256,8 +1261,8 @@ def check_repo(repo):
 
 def check_refresh_repo(repo):
     con = connect(repo)
-    wall, state, cache_file, _ = refresh_against_live(con)
-    print(f"refresh: {state} {cache_file} in {wall:.2f} s; every cached layer and query equals live")
+    wall, state, cache_file, _ = refresh_against_definitions(con)
+    print(f"refresh: {state} {cache_file} in {wall:.2f} s; every cached layer equals its definition")
 
 
 def run_step(repo, step, mode):

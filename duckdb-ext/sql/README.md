@@ -644,7 +644,7 @@ views compute the same rows live (`check.py refresh` compares them).
 uv run --locked --script duckdb-ext/sql/check.py fixture          # assertions on a generated fixture
 uv run --locked --script duckdb-ext/sql/check.py fixture --print  # the same rows, printed
 uv run --locked --script duckdb-ext/sql/check.py repo REPO        # counts and every query's first rows
-uv run --locked --script duckdb-ext/sql/check.py refresh REPO     # the cache compared with live
+uv run --locked --script duckdb-ext/sql/check.py refresh REPO     # each cached layer against its definition
 uv run --locked --script duckdb-ext/sql/check.py measure REPO --runs 3  # each query live, building and with the cache
 ```
 
@@ -659,24 +659,37 @@ with a message when missing), writes two jscpd-shaped reports (a pair between tw
 conversion joins, found by both reports with the sides swapped and merged; one that is
 not; a copy inside one unit, kept; a run matching itself one line lower, dropped), fills
 the settings' tables as `code-db` does (`exclude_patterns`, `extra_test_paths`,
-`extra_test_attributes`, two layers), and asserts every row of `files` and `units`, `impl_targets`, `unit_edges`, `namespaces`, `package_edges`,
+`extra_test_attributes`, two layers), reads `refresh.sql` and checks every cached
+layer against its view's definition (below), and asserts over the cache every row of
+`files` and `units`, `impl_targets`, `unit_edges`, `namespaces`, `package_edges`,
 `namespace_cycles`, `unit_quality`, and every query with its parameters (`size` at three
 levels, `coupling` with `min_packages` and at the file and package levels, `unreferenced`
 with the structural rows, `duplication` with tests and per report), `clone_report_pairs`
 and `clone_pairs`, the layers emptied (no violation) and doubled (an error), and
-`unit_dependencies` without its unit (an error). It then reads `refresh.sql` and asserts
-the copies and every query equal to live, a second read keeping the file, the refusal to
-read it twice, and an edit building another file; and that the views exist and are empty
+`unit_dependencies` without its unit (an error). It then asserts a second read keeping
+the file, the refusal to read it twice, and an edit building another file (checked the
+same way); and that the views exist and are empty
 without indexes and reports. Last, a second repository, one crate `flow` of known
 control-flow shapes (a nested `if` in a loop with an `else if`, a `match` with guards, a
 nested `match` and `&&`/`||`, `?` chains, closures with branches, a fn inside a fn with
 a bare `loop` and a let-else in the outer one, macro invocations holding `if`, a `while
 let` with a let chain, an inline module), asserts `unit_complexity`, the trees' tops,
-sizes and own nodes, the macro arguments as tokens, and the `complexity` query, live and
-through `refresh.sql`. The syntax trees' cache is checked in the first repository: the
+sizes and own nodes, the macro arguments as tokens, and the `complexity` query, through
+`refresh.sql` with its layers checked. The syntax trees' cache is checked in the first repository: the
 first read parses every file, the kept read none, and after the edit only the edited
 file is parsed (its node count inserted, its old content id dropped), with every cached
 view, query and `unit_quality` equal to a cold build in another cache directory.
+
+**Each layer against its definition.** Before `refresh.sql`, `check.py` records the
+SELECT the view files define each replaced view by (`duckdb_views()`); after it, it
+computes each one as it then stands, so that the views it reads are the cached layers
+before it, and compares it with that layer's copy. Each layer's definition is checked on
+its own, and by induction the cache equals the views read live. Reading every view live
+instead expands every view below it again at each reference (`unit_quality`'s plan read
+the SCIP indexes 141 times on the fixture): the fixture took 8 minutes that way, 46
+seconds this way (2026-11-02, `docs/research/code-db-live-checks-2026-11-02.md`). A
+cache built wrongly is caught at its layer (`unit_edges` copied with `LIMIT 1`: 32 rows
+missing).
 
 Every connection takes its limits from `code-db limits REPO --json` (the binary
 `duckdb-ext/code-db/target/release/code-db` that `duckdb-ext/build.sh` builds, or
