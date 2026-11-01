@@ -909,6 +909,19 @@ reading of which occurrences name a module moved into `lang/rust.sql` as
 `rust_namespace_references`, built only from what the language files may read
 before the units exist; Rust's existing columns did not change.
 
+## Complexity per language (2026-11-01)
+
+([record](research/code-db-go-complexity-2026-11-01.md)) Each language classifies
+its tree's nodes into neutral control constructs with their McCabe weights,
+nesting and groups of alternatives (`<language>_control_nodes`), and
+`unit_complexity` only sums them, so Go units count their if, switch cases (each
+but the default, a switch not being exhaustive), loops, `&&`/`||` and goto. The
+language's names reach the constructs too (Go's `switch_count`, `case_count`), and
+a construct the language lacks shows NULL (owner: the recommended choices). On a
+current index Rust's twenty layers did not change. The live checks (`check.py`)
+take 8 minutes where they took 4.6 before the namespace work; the cache that
+`code-db` reads builds as fast as before.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
