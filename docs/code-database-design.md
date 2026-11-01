@@ -930,6 +930,17 @@ Go's `main`, Go's `init`) or `root` (a Rust crate root, a file of Go's package
 main), the status `package_root` renamed `root` (owner). With it no view outside
 `lang/` holds a language's rules; a language gives six views.
 
+## Layer checks (2026-11-02)
+
+([record](research/code-db-live-checks-2026-11-02.md)) Read live, a view expands
+every view below it again at each reference (`unit_quality`'s plan read the SCIP
+indexes 141 times on the fixture), which had grown `check.py fixture` to 8 minutes.
+The owner chose to change the check rather than the views: `check.py` records each
+replaced view's definition before `refresh.sql` and computes it after, over the
+cached layers before it, against that layer's copy, and asserts the expected rows
+once, over the cache. The fixture takes 46 seconds, and a wrongly built layer is
+caught at itself.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
