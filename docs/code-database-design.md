@@ -951,6 +951,18 @@ query pivots it into one column per construct its rows hold. No construct name, 
 no NULL for a construct a language lacks, is left in the common views or the
 terms table.
 
+## Type facts in the language layer (2026-11-02)
+
+([record](research/code-db-type-facts-2026-11-02.md)) Impl blocks left the common
+views (owner): each language derives neutral facts about types in
+`<language>_type_facts` — `member`, `implements`, `implements_member`, `converts` —
+keyed by definition occurrence, since the language files load before `units`, and the
+common views put units at both ends (`type_fact_units`, `unit_owner_types`,
+`type_interfaces`, `member_implementations`, `type_conversions`). Rust's impl
+descriptors and their name resolution stay in `lang/rust.sql`; `member_of` and the
+structural statuses take neutral names (`implementation`, `interface_item`). Go gives
+only `member` until the SCIP relationships are read.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
