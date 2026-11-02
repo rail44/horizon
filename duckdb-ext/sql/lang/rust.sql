@@ -58,6 +58,14 @@
 CREATE OR REPLACE VIEW rust_terms AS
 SELECT * FROM (VALUES ('package', 'package'), ('namespace', 'module')) t(internal, official);
 
+-- rust_value_terms(vocabulary, internal, official): Rust's names for vocabulary values
+-- (views/terms.sql, lang_value_terms): an inherent impl's member, a trait impl's, a
+-- trait's own item.
+CREATE OR REPLACE VIEW rust_value_terms AS
+SELECT * FROM (VALUES ('member_of', 'member', 'impl'), ('member_of', 'implementation', 'trait_impl'),
+                      ('member_of', 'interface_member', 'trait'), ('status', 'implementation', 'trait_impl'),
+                      ('status', 'interface_item', 'trait_item')) t(vocabulary, internal, official);
+
 -- rust_control_nodes(file_id, node_id, construct, decisions, opens_level, group_id): the
 -- nodes of the Rust files' trees (file_ast) that are control constructs (views/quality.sql,
 -- unit_complexity, unit_constructs), named in Rust's words, with the decision points each

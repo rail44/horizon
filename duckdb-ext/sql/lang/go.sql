@@ -49,6 +49,10 @@
 CREATE OR REPLACE VIEW go_terms AS
 SELECT * FROM (VALUES ('package', 'module'), ('namespace', 'package')) t(internal, official);
 
+-- go_value_terms: none (rust_value_terms' columns): Go's own words are the internal ones.
+CREATE OR REPLACE VIEW go_value_terms AS
+SELECT NULL::VARCHAR AS vocabulary, NULL::VARCHAR AS internal, NULL::VARCHAR AS official WHERE false;
+
 -- go_file_namespaces(file_id, namespace, namespace_path): a Go file belongs to its
 -- directory's package (views/graph.sql, file_namespaces): the namespace is the directory
 -- (`.` for the repository root), an external test package (`package x_test`) included, and

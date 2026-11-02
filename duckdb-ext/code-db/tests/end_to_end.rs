@@ -31,8 +31,7 @@ may_depend_on = ["model"]
 reason = "the view reads the model"
 "#;
 
-const LIB: &str =
-    "pub mod checks_extra;\npub mod generated;\npub mod model;\npub mod util;\npub mod view;\n";
+const LIB: &str = "pub mod checks_extra;\npub mod generated;\npub mod model;\npub mod shape;\npub mod util;\npub mod view;\n";
 const MODEL: &str = "\
 pub fn base() -> u32 {
     crate::view::width() + 1
@@ -48,6 +47,25 @@ pub fn width() -> u32 {
 
 pub fn draw() -> u32 {
     crate::model::base()
+}
+";
+const SHAPE: &str = "\
+pub trait Area {
+    fn area(&self) -> u32;
+}
+
+pub struct Square;
+
+impl Square {
+    pub fn new() -> Square {
+        Square
+    }
+}
+
+impl Area for Square {
+    fn area(&self) -> u32 {
+        1
+    }
 }
 ";
 const UTIL: &str = "\
@@ -144,6 +162,7 @@ fn index_settings_and_queries() {
     write(repo, "src/lib.rs", LIB);
     write(repo, "src/model.rs", MODEL);
     write(repo, "src/view.rs", VIEW);
+    write(repo, "src/shape.rs", SHAPE);
     write(repo, "src/util.rs", UTIL);
     write(repo, "src/checks_extra.rs", CHECKS);
     write(repo, "src/generated.rs", GENERATED);
@@ -180,6 +199,7 @@ fn index_settings_and_queries() {
         "src/checks_extra.rs",
         "src/lib.rs",
         "src/model.rs",
+        "src/shape.rs",
         "src/util.rs",
         "src/view.rs",
         "tool/src/main.rs",
@@ -248,6 +268,26 @@ fn index_settings_and_queries() {
             vec!["tool/src/main.rs", "module", "tool", "false"],
         ]
     );
+
+    // Rust's names for the vocabulary values, in their columns only: the query
+    // `interface` keeps its name.
+    std::fs::write(
+        &probe,
+        "SELECT u.qualified_name, coalesce(u.member_of, '-'), r.status \
+         FROM rust.units u JOIN rust.unit_reference_status r USING (unit_id) \
+         WHERE u.path = 'src/shape.rs' AND u.kind = 'method' ORDER BY ALL;\n",
+    )
+    .unwrap();
+    let members = rows(&code_db(&["sql", probe.to_str().unwrap()]));
+    assert_eq!(
+        members,
+        [
+            ["Area for Square.area", "trait_impl", "trait_impl"],
+            ["Area.area", "trait", "trait_item"],
+            ["Square.new", "impl", "unreferenced"],
+        ]
+    );
+    assert!(!rows(&code_db(&["query", "interface"])).is_empty());
 
     // The stand-in writes its pair into both reports, which makes one pair, side a
     // the smaller path.

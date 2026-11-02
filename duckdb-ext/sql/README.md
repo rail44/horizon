@@ -114,8 +114,23 @@ names instead (owner decision, 2026-10-30), which `lang/<language>.sql` gives in
 A language's control constructs need no row: they are named in its own words throughout
 (`unit_constructs`, Axes). `views/terms.sql` replaces all of a language's words at once (Go's swap package and namespace), each a whole `_`-separated word or its
 plural (`try` never touches `entry_point`), in names and in the vocabulary
-columns' values (`kind`, `level`, `status`, `reference_status`, `resolved_by`,
-`unit_kind`), for one display language: `lang` when set, else the only language of
+columns' values (`kind`, `level`, `status`, `reference_status`, `member_of`,
+`unit_kind`). A vocabulary value whose word means something else elsewhere is not such a
+word: Rust's `interface_member` is a trait's item, while the query `interface` is about
+signatures. A language names those values by vocabulary instead
+(`<language>_value_terms(vocabulary, internal, official)`, each value matched whole), and
+only the columns holding that vocabulary show them (`member_of`; `status` for
+`unit_reference_status.status` and `unit_quality.reference_status`):
+
+| Vocabulary | Internal | Rust |
+| --- | --- | --- |
+| member_of | member | impl |
+| member_of | implementation | trait_impl |
+| member_of | interface_member | trait |
+| status | implementation | trait_impl |
+| status | interface_item | trait_item |
+
+Go gives none: its own words are the internal ones. All of it is for one display language: `lang` when set, else the only language of
 `files`. `code-db` shows everything in it: it reads the views up to `views/terms.sql` to
 find the language, stops when a repository holds several and `lang=NAME` names none
 (`lang` then keeps only that language's files, so a mixed repository is read one language
@@ -728,9 +743,9 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (SCIP) |
-| `lang/rust.sql` | `rust_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, `rust_control_nodes`, the macros `impl_base_name`, `impl_generic_arg`; `rust_unit_rows`, `rust_units` (Units), `rust_type_facts` (Types) |
-| `lang/go.sql` | `go_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_control_nodes`, `go_units` (Units), `go_type_facts` (Types) |
-| `views/terms.sql` | `lang_terms`, `lang_visibility_boundaries`, the macros `visibility_boundary`, `display_language`, `term_swap`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
+| `lang/rust.sql` | `rust_terms`, `rust_value_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, `rust_control_nodes`, the macros `impl_base_name`, `impl_generic_arg`; `rust_unit_rows`, `rust_units` (Units), `rust_type_facts` (Types) |
+| `lang/go.sql` | `go_terms`, `go_value_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_control_nodes`, `go_units` (Units), `go_type_facts` (Types) |
+| `views/terms.sql` | `lang_terms`, `lang_value_terms`, `lang_visibility_boundaries`, the macros `visibility_boundary`, `display_language`, `term_swap`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
 | `views/units.sql` | `derived_units`, `units`, `unit_ast` (Units) |
 | `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `type_facts`, `type_fact_units`, `unit_owner_types`, `type_interfaces`, `member_implementations`, `type_conversions`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
 | `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
@@ -753,14 +768,15 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
   kind mapping, the test rules, ranges the indexer does not give)
   lives in one file per language under `lang/`, a view `<language>_units` that
   `views/units.sql` takes into `derived_units`, its files' namespaces in
-  `<language>_file_namespaces` (`file_namespaces`), and its two names (Names) in
-  `<language>_terms`,
+  `<language>_file_namespaces` (`file_namespaces`), its two names (Names) in
+  `<language>_terms` and its names for vocabulary values in `<language>_value_terms`,
   its visibility boundary in `<language>_visibility_boundary`, the references that name
   its namespace units in `<language>_namespace_references`, its control constructs
   in `<language>_control_nodes`, and what it says about types (members, implementations,
-  conversions) in `<language>_type_facts`; another language adds its file there, its seven
+  conversions) in `<language>_type_facts`; another language adds its file there, its eight
   views to the unions in `derived_units`, `file_namespaces`, `lang_terms`,
-  `lang_visibility_boundaries`, `namespace_references`, `control_nodes` and `type_facts`, its extension
+  `lang_value_terms`, `lang_visibility_boundaries`, `namespace_references`,
+  `control_nodes` and `type_facts`, its extension
   to `languages` and its indexer to `code-db index`. A unit's `entry` (what runs it
   without a reference) is a column of `<language>_units`. No view outside `lang/` holds
   a language's rules.

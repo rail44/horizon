@@ -306,8 +306,8 @@ fn needs(file: &Path, what: &str) -> bool {
 }
 
 /// The display language's official names for the views' internal words, as
-/// (internal, official) pairs (views/terms.sql, lang_terms): its two levels and
-/// the control constructs it names differently; none without a display language.
+/// (internal, official) pairs (views/terms.sql, lang_terms): its two levels;
+/// none without a display language.
 #[derive(Default)]
 struct Terms {
     pairs: Vec<(String, String)>,

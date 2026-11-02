@@ -5,7 +5,11 @@
 -- vocabulary value built from them (`package_edges`, `fan_in_packages`, `namespace_cycles`,
 -- `level := 'package'`, kind 'namespace'). A reader sees them by the names of the
 -- repository's language instead: each language's file under lang/ gives its two official
--- names (<language>_terms), and this file turns one into the other. A language's control
+-- names (<language>_terms), and this file turns one into the other. A vocabulary value
+-- whose word means something else elsewhere (an interface's member, a trait's in Rust,
+-- while the query `interface` is about signatures) is not a word to replace everywhere:
+-- a language names such values by the vocabulary they belong to (<language>_value_terms),
+-- and only the columns holding that vocabulary show them. A language's control
 -- constructs need none: they are named in its own words throughout (views/quality.sql,
 -- unit_constructs).
 --
@@ -23,6 +27,14 @@ CREATE OR REPLACE VIEW lang_terms AS
 SELECT 'rust' AS language, internal, official FROM rust_terms
 UNION ALL
 SELECT 'go', internal, official FROM go_terms;
+
+-- lang_value_terms(language, vocabulary, internal, official): every language's names for
+-- the values of a vocabulary (member_of: units.member_of; status: unit_reference_status's
+-- status, unit_quality's reference_status), each matched whole.
+CREATE OR REPLACE VIEW lang_value_terms AS
+SELECT 'rust' AS language, vocabulary, internal, official FROM rust_value_terms
+UNION ALL
+SELECT 'go', vocabulary, internal, official FROM go_value_terms;
 
 -- display_language(): the display language (above), or NULL.
 CREATE OR REPLACE MACRO display_language() AS
@@ -61,7 +73,6 @@ CREATE OR REPLACE MACRO term_swap(s, pairs) AS
 
 -- display_term(s, lang) and internal_term(s, lang): s with lang's internal words replaced
 -- by its official names (lang_terms), or the reverse; s itself for a NULL or unknown lang.
--- A row with a NULL official name (a construct the language lacks) renames nothing.
 CREATE OR REPLACE MACRO display_term(s, lang) AS term_swap(s, (
     SELECT list({'f': internal, 't': official, 'i': i})
     FROM (SELECT internal, official, row_number() OVER (ORDER BY internal) AS i
@@ -74,11 +85,19 @@ CREATE OR REPLACE MACRO internal_term(s, lang) AS term_swap(s, (
 
 -- display_column(c, t, lang): the select-list item showing column c (of type t) in lang:
 -- its name translated, and for the columns holding the vocabulary (kind, level, status,
--- reference_status, resolved_by, unit_kind) its text values too.
+-- reference_status, member_of, unit_kind) its text values too: a value lang names in the
+-- column's vocabulary (lang_value_terms) by that name, any other by display_term.
 CREATE OR REPLACE MACRO display_column(c, t, lang) AS
-    CASE WHEN c IN ('kind', 'level', 'status', 'reference_status', 'resolved_by', 'unit_kind')
+    CASE WHEN c IN ('kind', 'level', 'status', 'reference_status', 'member_of', 'unit_kind')
               AND t = 'VARCHAR'
-         THEN 'display_term("' || replace(c, '"', '""') || '", ' || coalesce('''' || lang || '''', 'NULL') || ')'
+         THEN (SELECT coalesce('CASE "' || replace(c, '"', '""') || '"' || named || ' ELSE ' || term || ' END', term)
+               FROM (SELECT 'display_term("' || replace(c, '"', '""') || '", ' || coalesce('''' || lang || '''', 'NULL')
+                            || ')' AS term,
+                            (SELECT string_agg(' WHEN ''' || replace(internal, '''', '''''') || ''' THEN '''
+                                               || replace(official, '''', '''''') || '''', '' ORDER BY internal)
+                             FROM lang_value_terms
+                             WHERE language = lang
+                               AND vocabulary = CASE c WHEN 'reference_status' THEN 'status' ELSE c END) AS named))
          ELSE '"' || replace(c, '"', '""') || '"' END
     || ' AS "' || replace(display_term(c, lang), '"', '""') || '"';
 
@@ -99,7 +118,7 @@ shown AS (
     SELECT view_name FROM duckdb_views()
     WHERE NOT internal AND database_name = current_database() AND schema_name = 'main' AND NOT temporary
       AND NOT regexp_matches(view_name, '^(rust|go)_')
-      AND view_name NOT IN ('derived_units', 'lang_terms', 'lang_visibility_boundaries', 'display_ddl')
+      AND view_name NOT IN ('derived_units', 'lang_terms', 'lang_value_terms', 'lang_visibility_boundaries', 'display_ddl')
 ),
 columns AS (
     SELECT c.table_name, c.column_name, c.column_index, c.data_type
