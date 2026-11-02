@@ -984,6 +984,17 @@ three. `go_type_facts` reads scip-go's implementation relationships as `implemen
 method, NULL for an interface outside the index such as `fmt.Stringer`), so a Go
 method that only implements an interface is `implementation`, not `unreferenced`.
 
+## go.work and cgo (2026-11-02)
+
+([record](research/code-db-go-work-cgo-2026-11-02.md)) Indexed one module at a
+time, scip-go names another workspace module's symbols with the version `.`, so no
+reference between the modules of a `go.work` resolved. `code-db index` now indexes
+the modules a tracked `go.work` uses in one run from its directory, and every other
+module on its own with `GOWORK=off`. Two limits are kept as such (owner): a cgo file
+has no units (scip-go indexes cgo's generated copy in the build cache), and modules
+joined by `replace` disagree on an interface method's descriptor (`I#M().` against
+`I#M.`).
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
@@ -1029,8 +1040,8 @@ method that only implements an interface is `implementation`, not `unreferenced`
   catalog surface), and whether `duckdb-ext/` is extracted for use in
   other repositories. The DuckDB 2.0.0 CLI is installed as
   `~/.local/bin/duckdb2` for interactive use.
-- **Go** has its units, packages, complexity and implementations (above);
-  `go.work`, cgo and a reading on a real Go repository are open. **TypeScript**'s adapter exists only in the
+- **Go** has its units, packages, complexity, implementations and `go.work`
+  (above); a reading on a real Go repository is open. **TypeScript**'s adapter exists only in the
   spike's record; `lang/typescript.sql` and `scip-typescript` are the
   pieces to add.
 
