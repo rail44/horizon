@@ -8,10 +8,10 @@
 -- (clone_sides: the innermost unit whose lines contain the whole fragment, a file unit
 -- at worst): path, kind, qualified_name and whether it is a test. same_unit marks a pair
 -- whose two fragments lie in one unit (two copies that do not overlap). conversion_pair
--- marks a pair whose two sides belong to two types joined by a conversion impl in either
--- direction (`impl From<B> for A`, `Into`, `TryFrom`, `TryInto`; the impl's descriptor
--- `impl#[A][From<B>]`): a side belongs to a type when it is the type or lies in one of
--- its impls (unit_impl_type), and B is matched by its bare name. Such pairs are the
+-- marks a pair whose two sides belong to two types joined by a conversion in either
+-- direction (type_conversions, from each language's type facts: Rust's `impl From<B> for
+-- A`, `Into`, `TryFrom`, `TryInto`): a side belongs to a type when it is the type or a
+-- member of it (unit_owner_types), and B is matched by its name. Such pairs are the
 -- mirrored copies a conversion exists to keep apart (a persisted form of a model type, a
 -- wire form of an event), flagged rather than dropped. Largest pairs first.
 -- Evidence: medium. Inconsistent changes to clones, co-change and developer awareness are
@@ -31,16 +31,14 @@ WITH params AS (
 unit_rows AS MATERIALIZED (
     SELECT u.unit_id, u.path, u.kind, u.qualified_name, u.name, u.is_test,
            CASE WHEN u.kind = 'type' THEN u.unit_id ELSE t.type_unit_id END AS type_unit_id
-    FROM units u LEFT JOIN unit_impl_type t USING (unit_id)
+    FROM units u LEFT JOIN unit_owner_types t USING (unit_id)
 ),
 type_names AS MATERIALIZED (
     SELECT unit_id, name FROM units WHERE kind = 'type'
 ),
--- (type, the bare name of the type it converts from or into), both directions.
+-- (type, the name of the type it converts from or into), both directions.
 conversions AS MATERIALIZED (
-    SELECT DISTINCT f.type_unit_id AS a, impl_generic_arg(i.impl_trait) AS b_name
-    FROM impls i JOIN impl_for f USING (impl_id)
-    WHERE impl_base_name(i.impl_trait) IN ('From', 'Into', 'TryFrom', 'TryInto')
+    SELECT type_unit_id AS a, to_name AS b_name FROM type_conversions
 ),
 sides AS (
     SELECT s.pair_id,

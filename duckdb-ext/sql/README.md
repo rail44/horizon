@@ -367,8 +367,10 @@ reading of them, then Go's:
   variants, parameters and locals are not units; their occurrences belong to the unit
   containing them. Impl blocks are not units (rust-analyzer gives them no symbol); their
   members carry them in their descriptors, `…impl#[Type]m().` and
-  `…impl#[Type][Trait]m().`, as `impl_key`, `impl_type` and `impl_trait` (`member_of`:
-  `impl`, `trait_impl`, or `trait` for a trait's own items). A `mod x;` declaration is a
+  `…impl#[Type][Trait]m().`, which `rust_unit_rows` reads (the type's and the trait's
+  written names and the impl's header line) and `rust_type_facts` resolves (below).
+  `member_of` is `member` for an inherent impl's members, `implementation` for a trait
+  impl's, `interface_member` for a trait's own items. A `mod x;` declaration is a
   reference, not a unit; file modules (`is_file_unit`, rust-analyzer's whole-file
   definition) and inline modules are. Code rust-analyzer does not see (an inactive cfg,
   a file outside every workspace, such as a script's fixture) has no units; its file is
@@ -399,8 +401,8 @@ reading of them, then Go's:
   `extra_test_attributes`, or `#[cfg(test)]`/`#[cfg(all(…test…))]`; or, for a file
   module, the file holds `#![cfg(test)]`; or the unit is a member of an impl whose header
   line is led by `#[cfg(test)]` (the header: the nearest line above the member starting
-  an `impl` that names `impl_type`, outside the bodies of other functions,
-  `impl_header_line`); or a unit containing it is a test.
+  an `impl` that names the impl's type, outside the bodies of other functions); or a unit
+  containing it is a test.
 - **Go** (`lang/go.sql`, over scip-go 0.2.7's index;
   `docs/research/code-db-go-2026-10-30.md`). Function → `function`; Method,
   MethodSpecification (an interface's method) → `method`; Type, Struct, Interface,
@@ -417,9 +419,9 @@ reading of them, then Go's:
   closing brace, the doc comment not included); every other range comes from the
   syntax tree: the spec that declares the name (`type_spec`, `type_alias`, `const_spec`,
   `var_spec`), or its whole declaration when the declaration holds that spec only, and an
-  interface's `method_elem`. A method is `member_of` `impl` with `impl_key` its receiver
-  type's symbol and `impl_type` that type's name (so a type's methods share one key
-  across its files; there is no `impl_header_line`); an interface's method is `trait`.
+  interface's `method_elem`. A method is `member_of` `member`, and its receiver type is
+  its 'member' fact in `go_type_facts` (the method's symbol without its last
+  descriptor); an interface's method is `interface_member`.
   `package` is the Go module (scip-go's package name); `qualified_name` is below the Go
   package (`T.M`). `visibility` is `pub` for an exported name (an upper-case first
   letter), else `private`, NULL for an interface's method and a file unit.
@@ -467,16 +469,27 @@ reading of them, then Go's:
   src_is_test, dst_is_test)`** and **`unit_edges(src_unit_id, dst_unit_id, symbols,
   occurrences, is_self, ambiguous, src_is_test, dst_is_test)`**.
 - **`unit_contains`, `unit_ancestors(unit_id, ancestor_id, depth)`**.
-- **`impls(impl_id, file_id, package, impl_key, impl_type, impl_trait, header_line,
-  members)`**: one row per impl block as its members give it (key, file, header line).
-  **`impl_targets(impl_id, part, name, target_unit_id, resolved_by)`**: the `type` and
-  `trait` parts resolved to type units by their bare name: the candidate referenced on
-  the header line (`header`), else the only one in the file (`file`), the package
-  (`package`), the repository (`name`); NULL when none or several (external traits such as
-  `From`). On this repository 565 of 571 impls' types resolve, 559 through the header.
-  **`impl_for(impl_id, type_unit_id)`**, **`implements(impl_id, trait_unit_id)`**,
-  **`unit_impl_type(unit_id, impl_id, type_unit_id)`** (the impl of a unit's nearest
-  ancestor-or-self member).
+- **Types**: **`type_facts(fact, file_id, symbol, name_line, name_column, to_file_id,
+  to_symbol, to_name_line, to_name_column, to_name)`**, what each language says about
+  types (`<language>_type_facts`), each end a definition occurrence: `member` (a member
+  and its type), `implements` (a type and an interface it implements),
+  `implements_member` (a member and the interface's member it implements), `converts` (a
+  type and the name of a type it converts from or into). The language layer keys them
+  by definition occurrence because it is read before `units`.
+  **`type_fact_units(fact, unit_id, to_unit_id, to_name)`** puts units at both ends (NULL
+  where none: unresolved, external); **`unit_owner_types(unit_id, type_unit_id)`** is the
+  type of a unit's nearest ancestor-or-self member, **`type_interfaces(type_unit_id,
+  interface_unit_id)`**, **`member_implementations(unit_id, interface_member_unit_id)`**,
+  **`type_conversions(type_unit_id, to_name)`**. Rust (`rust_type_facts`): an impl is its
+  members' descriptor key, file and header line; its type and trait parts resolve to type
+  units by their bare name: the candidate referenced on the header line, else the only one
+  in the file, the package, the repository; none when there is none or several (external
+  traits such as `From`). A trait impl's member implements the trait's item of its name;
+  `converts` comes from `From`, `Into`, `TryFrom` and `TryInto` impls. On this repository
+  1,763 of 1,772 members' types resolve; 84 of 320 trait impl members reach a trait item
+  (the rest: traits outside the index or unresolved). Go (`go_type_facts`): a method's
+  receiver type (its symbol without the last descriptor); a Go type implements an
+  interface without saying so, and the other facts are not read yet.
 - **`file_namespaces(file_id, namespace, namespace_path)`**: each source file's
   namespace as its language places it (`<language>_file_namespaces`): a Rust file is its
   own, named by its path and placed by the file-module convention (a crate root and
@@ -495,8 +508,8 @@ reading of them, then Go's:
   **`package_edges`**, **`namespace_cycle_edges`**, **`namespace_cycles(cycle, package, namespaces,
   members, edges, unit_edges, occurrences)`**, **`package_cycles`**: as before the rebuild,
   over these units. `nested_namespaces` marks an edge between a namespace and its ancestor or
-  descendant; `same_type_unit_edges` counts the unit edges whose ends lie in impls of one
-  type. Cycles leave out both kinds of structural edge unless `cycle_edges := 'raw'`.
+  descendant; `same_type_unit_edges` counts the unit edges whose ends lie in members of
+  one type (`unit_owner_types`). Cycles leave out both kinds of structural edge unless `cycle_edges := 'raw'`.
 - **Layers**: `namespace_layer_matches`, `namespace_layers`, `graph_layer_violation`,
   `namespace_layer_violations` (Settings file).
 
@@ -539,7 +552,7 @@ settings file.
   **`clone_sides(pair_id, side, file_id, start_line, end_line, unit_id)`**: each fragment
   with the innermost unit containing all its lines.
 - **`unit_scope(unit_id, member_unit_id)`**: what a unit stands for when coupling is
-  counted: itself, what it contains, and for a type its impls' members.
+  counted: itself, what it contains, and for a type its members (`member` facts).
   **`unit_fan_in(unit_id, fan_in_files, fan_in_namespaces, fan_in_packages, fan_in_units,
   reference_occurrences)`**: the files, namespaces and packages other than its own, and the
   units outside its scope, that reference a symbol belonging to its scope; a namespace unit,
@@ -560,9 +573,11 @@ settings file.
   `contract_candidate` takes its threshold from `min_packages` or `min_namespaces`.
 - **`unit_reference_status(unit_id, references, status)`**: the reference occurrences of
   the unit's own symbol anywhere, and `referenced`, `unreferenced`, or why it is
-  structurally unreferenced: `test`, `trait_impl`, the unit's `entry` as its language
+  structurally unreferenced: `test`, `implementation` (a member implementing an
+  interface's, `member_implementations`), the unit's `entry` as its language
   gives it in `units` (`entry_point`: Rust's and Go's `main`, Go's `init`; `root`: a
-  Rust crate root, a file of Go's `package main`), `trait_item`.
+  Rust crate root, a file of Go's `package main`), `interface_item` (`member_of`
+  `interface_member`).
 - **`unit_debt_markers(unit_id, debt_lines)`**: lines with `TODO` or `FIXME`, each counted
   for its innermost unit.
 - **`unit_clones(unit_id, clone_pairs, exact_pairs, normalized_pairs)`**: a pair both
@@ -619,7 +634,7 @@ views compute the same rows live (`check.py refresh` compares them).
   `ast-*.duckdb` files of other syntax keys.
 - **Layers**, in order, each built from the copies before it: `scip_occurrences`,
   `scip_symbols`, `units`, `unit_occurrences`, `symbol_units`, `unit_references`,
-  `unit_edges`, `unit_ancestors`, `impls`, `impl_targets`, `unit_impl_type`, `namespaces`,
+  `unit_edges`, `unit_ancestors`, `type_fact_units`, `unit_owner_types`, `namespaces`,
   `unit_namespace`, `namespace_edges`, `unit_scope`, `unit_fan_in`, `unit_fan_out`,
   `unit_reference_status`, `unit_debt_markers`, `unit_constructs`, `unit_complexity`. Views that read a query variable or the
   settings' tables (cycles, layers) and the clone views stay live, over the copies.
@@ -658,7 +673,8 @@ not; a copy inside one unit, kept; a run matching itself one line lower, dropped
 the settings' tables as `code-db` does (`exclude_patterns`, `extra_test_paths`,
 `extra_test_attributes`, two layers), reads `refresh.sql` and checks every cached
 layer against its view's definition (below), and asserts over the cache every row of
-`files` and `units`, `impl_targets`, `unit_edges`, `namespaces`, `package_edges`,
+`files` and `units`, `unit_owner_types`, `type_interfaces`, `member_implementations`,
+`type_conversions`, `unit_edges`, `namespaces`, `package_edges`,
 `namespace_cycles`, `unit_quality`, and every query with its parameters (`size` at three
 levels, `coupling` with `min_packages` and at the file and package levels, `unreferenced`
 with the structural rows, `duplication` with tests and per report), `clone_report_pairs`
@@ -712,11 +728,11 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (SCIP) |
-| `lang/rust.sql` | `rust_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, `rust_control_nodes`, the macros `impl_base_name`, `impl_generic_arg`; `rust_units` (Units) |
-| `lang/go.sql` | `go_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_control_nodes`, `go_units` (Units) |
+| `lang/rust.sql` | `rust_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, `rust_control_nodes`, the macros `impl_base_name`, `impl_generic_arg`; `rust_unit_rows`, `rust_units` (Units), `rust_type_facts` (Types) |
+| `lang/go.sql` | `go_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_control_nodes`, `go_units` (Units), `go_type_facts` (Types) |
 | `views/terms.sql` | `lang_terms`, `lang_visibility_boundaries`, the macros `visibility_boundary`, `display_language`, `term_swap`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
 | `views/units.sql` | `derived_units`, `units`, `unit_ast` (Units) |
-| `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `impls`, `impl_targets`, `impl_for`, `implements`, `unit_impl_type`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
+| `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `type_facts`, `type_fact_units`, `unit_owner_types`, `type_interfaces`, `member_implementations`, `type_conversions`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
 | `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
 | `views/quality.sql` | `unit_scope`, `namespace_references`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `control_nodes`, `unit_constructs`, `unit_complexity`, `unit_quality` (Axes) |
 | `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `namespace_graph`, `namespace_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
@@ -734,16 +750,17 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
   sorted file list; `units.unit_id` the position in the unit order (Units).
 - **Neutral vocabulary**: unit kinds `function`, `method`, `type`, `namespace`, `macro`,
   `constant`, `file`; the SCIP kind is kept as `symbol_kind`. Language knowledge about units (the
-  kind mapping, the test rules, the impl descriptors, ranges the indexer does not give)
+  kind mapping, the test rules, ranges the indexer does not give)
   lives in one file per language under `lang/`, a view `<language>_units` that
   `views/units.sql` takes into `derived_units`, its files' namespaces in
   `<language>_file_namespaces` (`file_namespaces`), and its two names (Names) in
   `<language>_terms`,
   its visibility boundary in `<language>_visibility_boundary`, the references that name
-  its namespace units in `<language>_namespace_references`, and its control constructs
-  in `<language>_control_nodes`; another language adds its file there, its six views to
-  the unions in `derived_units`, `file_namespaces`, `lang_terms`,
-  `lang_visibility_boundaries`, `namespace_references` and `control_nodes`, its extension
+  its namespace units in `<language>_namespace_references`, its control constructs
+  in `<language>_control_nodes`, and what it says about types (members, implementations,
+  conversions) in `<language>_type_facts`; another language adds its file there, its seven
+  views to the unions in `derived_units`, `file_namespaces`, `lang_terms`,
+  `lang_visibility_boundaries`, `namespace_references`, `control_nodes` and `type_facts`, its extension
   to `languages` and its indexer to `code-db index`. A unit's `entry` (what runs it
   without a reference) is a column of `<language>_units`. No view outside `lang/` holds
   a language's rules.
@@ -793,5 +810,5 @@ need at least one file, which is why `empty-jscpd-report.json` is always in thei
 - The exhaustive-`match` check (above).
 - TypeScript (its SCIP indexer and the unit mapping). SCIP relationships
   (rust-analyzer 1.99.1 writes none; scip-go writes its implementations, which nothing
-  reads yet), so no edge from an impl's method to the trait method it implements, nor
-  from a Go method to the interface method it satisfies.
+  reads yet), so Go has no `implements` or `implements_member` facts; neither language's
+  implementations are unit edges.

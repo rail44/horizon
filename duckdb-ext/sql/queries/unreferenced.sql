@@ -2,10 +2,10 @@
 -- Axis: unreferenced definitions (docs/research/code-quality-axes-2026-10-29.md §3.16).
 -- Rows: every unit whose own symbol has no reference occurrence in any index
 -- (unit_reference_status, views/quality.sql), with status: 'unreferenced', or the reason
--- the unit is structurally unreferenced rather than dead: 'test', 'trait_impl' (calls
--- resolve to the trait's item, not the impl's), 'entry_point' (main, Go's init), 'root'
--- (a crate root, a file of Go's package main), 'trait_item' (a trait's own item: its impls
--- implement it). Other
+-- the unit is structurally unreferenced rather than dead: 'test', 'implementation' (a
+-- member implementing an interface's: calls resolve to the interface's item), 'entry_point'
+-- (main, Go's init), 'root' (a crate root, a file of Go's package main), 'interface_item'
+-- (an interface's own item: its implementations implement it). Other
 -- entry points (callbacks registered by name, FFI exports, uses a derive generates, macro
 -- bodies, a name used only inside a format string such as "{USAGE}" or an attribute's
 -- string such as serde's deserialize_with) also show as 'unreferenced': rust-analyzer

@@ -411,7 +411,7 @@ fn go_modules_index_and_units() {
         &probe,
         "SELECT path, module, kind, qualified_name, start_line, end_line, is_test, \
                 coalesce(visibility, '-'), coalesce(parameters::VARCHAR, '-'), \
-                coalesce(member_of, '-'), coalesce(impl_type, '-') \
+                coalesce(member_of, '-') \
          FROM go.units ORDER BY unit_id;\n",
     )
     .unwrap();
@@ -435,7 +435,6 @@ fn go_modules_index_and_units() {
                 n,
                 "-",
                 "-",
-                "-",
                 "-"
             ],
             vec![
@@ -448,7 +447,6 @@ fn go_modules_index_and_units() {
                 n,
                 "private",
                 "0",
-                "-",
                 "-"
             ],
             vec![
@@ -459,7 +457,6 @@ fn go_modules_index_and_units() {
                 "1",
                 "29",
                 n,
-                "-",
                 "-",
                 "-",
                 "-"
@@ -474,7 +471,6 @@ fn go_modules_index_and_units() {
                 n,
                 "pub",
                 "-",
-                "-",
                 "-"
             ],
             vec![
@@ -486,7 +482,6 @@ fn go_modules_index_and_units() {
                 "6",
                 n,
                 "pub",
-                "-",
                 "-",
                 "-"
             ],
@@ -500,7 +495,6 @@ fn go_modules_index_and_units() {
                 n,
                 "pub",
                 "-",
-                "-",
                 "-"
             ],
             vec![
@@ -513,8 +507,7 @@ fn go_modules_index_and_units() {
                 n,
                 "-",
                 "1",
-                "trait",
-                "-"
+                "interface_member"
             ],
             vec![
                 "shapes/shapes.go",
@@ -525,7 +518,6 @@ fn go_modules_index_and_units() {
                 "16",
                 n,
                 "pub",
-                "-",
                 "-",
                 "-"
             ],
@@ -539,8 +531,7 @@ fn go_modules_index_and_units() {
                 n,
                 "pub",
                 "1",
-                "impl",
-                "Circle"
+                "member"
             ],
             vec![
                 "shapes/shapes.go",
@@ -552,8 +543,7 @@ fn go_modules_index_and_units() {
                 n,
                 "private",
                 "3",
-                "impl",
-                "Circle"
+                "member"
             ],
             vec![
                 "shapes/shapes.go",
@@ -565,7 +555,6 @@ fn go_modules_index_and_units() {
                 n,
                 "pub",
                 "1",
-                "-",
                 "-"
             ],
             vec![
@@ -576,7 +565,6 @@ fn go_modules_index_and_units() {
                 "1",
                 "10",
                 "true",
-                "-",
                 "-",
                 "-",
                 "-"
@@ -591,7 +579,6 @@ fn go_modules_index_and_units() {
                 "true",
                 "pub",
                 "1",
-                "-",
                 "-"
             ],
             vec![
@@ -602,7 +589,6 @@ fn go_modules_index_and_units() {
                 "1",
                 "20",
                 n,
-                "-",
                 "-",
                 "-",
                 "-"
@@ -617,7 +603,6 @@ fn go_modules_index_and_units() {
                 n,
                 "private",
                 "0",
-                "-",
                 "-"
             ],
             vec![
@@ -630,7 +615,6 @@ fn go_modules_index_and_units() {
                 n,
                 "private",
                 "1",
-                "-",
                 "-"
             ],
         ]
@@ -697,6 +681,22 @@ fn go_modules_index_and_units() {
     for absent in ["match_count", "arm_count", "guard_count", "try_count"] {
         assert!(!header.iter().any(|h| h == absent), "{absent}: {header:?}");
     }
+
+    // A method belongs to its receiver's type, wherever the method is.
+    std::fs::write(
+        &probe,
+        "SELECT u.qualified_name, t.qualified_name FROM go.unit_owner_types o \
+         JOIN go.units u USING (unit_id) JOIN go.units t ON t.unit_id = o.type_unit_id ORDER BY ALL;\n",
+    )
+    .unwrap();
+    let owners = rows(&code_db(&["sql", probe.to_str().unwrap()]));
+    assert_eq!(
+        owners
+            .iter()
+            .map(|r| (&r[0][..], &r[1][..]))
+            .collect::<Vec<_>>(),
+        [("Circle.Area", "Circle"), ("Circle.scale", "Circle")]
+    );
 
     // References across files and packages become unit edges.
     std::fs::write(

@@ -11,10 +11,9 @@
 --   Constant, Variable -> constant.
 -- A Variable that is not local is a package-level `var`; struct fields (Field) and
 -- everything inside a function body (scip-go's `local N` symbols) are not units. A
--- function or method is in no type's range: member_of is 'impl' for a method (impl_key
--- the receiver type's symbol, impl_type its name, so a type's methods across its files
--- share one key) and 'trait' for an interface's method (MethodSpecification); impl_trait
--- and impl_header_line are NULL. Code scip-go does not see (a file whose build
+-- function or method is in no type's range: member_of is 'member' for a method (its
+-- receiver's type is in go_type_facts) and 'interface_member' for an interface's method
+-- (MethodSpecification). Code scip-go does not see (a file whose build
 -- constraints exclude it, a directory outside every indexed module) has no units.
 --
 -- Ranges. A function's or method's is SCIP's enclosing_range, from `func` to the closing
@@ -71,6 +70,30 @@ CREATE OR REPLACE VIEW go_namespace_references AS
 SELECT NULL::INTEGER AS owner_file_id, NULL::VARCHAR AS symbol, NULL::INTEGER AS file_id,
        NULL::INTEGER AS start_line, NULL::INTEGER AS start_column
 WHERE false;
+
+-- go_type_facts: rust_type_facts' columns, for Go: each method's 'member' fact, its
+-- receiver's type (the definition of the method's symbol without its last descriptor:
+-- `…/Circle#Area().` belongs to `…/Circle#`). A Go type implements an interface without
+-- saying so, and none of 'implements', 'implements_member' or 'converts' is read yet.
+CREATE OR REPLACE VIEW go_type_facts AS
+WITH defs AS MATERIALIZED (
+    SELECT o.file_id, o.symbol, o.start_line AS name_line, o.start_column AS name_column
+    FROM scip_occurrences o JOIN files f USING (file_id)
+    WHERE f.language = 'go' AND o.is_definition AND NOT starts_with(o.symbol, 'local ')
+),
+kinds AS (
+    SELECT symbol, any_value(kind) AS kind FROM scip_symbols WHERE document IS NOT NULL GROUP BY symbol
+),
+methods AS (
+    SELECT d.*, regexp_extract(d.symbol, '^(.*#)(?:`[^`]*`|[^/#.!\[\]`])+\(\)\.$', 1) AS receiver
+    FROM defs d JOIN kinds k USING (symbol) WHERE k.kind = 'Method'
+),
+types AS (
+    SELECT d.* FROM defs d JOIN kinds k USING (symbol) WHERE k.kind IN ('Type', 'Struct', 'Interface', 'TypeAlias')
+)
+SELECT 'member' AS fact, m.file_id, m.symbol, m.name_line, m.name_column, t.file_id AS to_file_id,
+       t.symbol AS to_symbol, t.name_line AS to_name_line, t.name_column AS to_name_column, NULL::VARCHAR AS to_name
+FROM methods m LEFT JOIN types t ON t.symbol = m.receiver;
 
 -- go_file_ast: file_ast's rows (views/files.sql) of the Go files only. read_ast parses
 -- every file it is given, whatever the query filters, so this view gives it the Go
@@ -233,10 +256,7 @@ file_prefixes AS (
 named AS MATERIALIZED (
     SELECT r.*, fp.prefix,
            CASE WHEN fp.prefix IS NOT NULL AND starts_with(r.symbol, fp.prefix) THEN substr(r.symbol, length(fp.prefix) + 1)
-                ELSE regexp_extract(r.symbol, '^[^ ]+ [^ ]+ [^ ]+ [^ ]+ (.*)$', 1) END AS descriptors,
-           -- A method's receiver type: its symbol without the method's descriptor.
-           CASE WHEN r.symbol_kind = 'Method'
-                THEN regexp_extract(r.symbol, '^(.*#)(?:`[^`]*`|[^/#.!\[\]`])+\(\)\.$', 1) END AS receiver_symbol
+                ELSE regexp_extract(r.symbol, '^[^ ]+ [^ ]+ [^ ]+ [^ ]+ (.*)$', 1) END AS descriptors
     FROM ranged r
     LEFT JOIN file_prefixes fp USING (file_id)
     WHERE r.r IS NOT NULL
@@ -297,11 +317,8 @@ SELECT n.file_id, n.symbol, n.symbol_kind, n.kind, split_part(n.symbol, ' ', 3) 
             WHEN regexp_matches(n.display_name, '^\p{Lu}') THEN 'pub' ELSE 'private' END AS visibility,
        p.parameters, n.signature, coalesce(len(n.documentation), 0) > 0 AS has_doc,
        n.kind = 'file' AS is_file_unit,
-       CASE WHEN n.symbol_kind = 'Method' THEN 'impl' WHEN n.symbol_kind = 'MethodSpecification' THEN 'trait' END AS member_of,
-       n.receiver_symbol AS impl_key,
-       CASE WHEN n.receiver_symbol IS NOT NULL
-            THEN replace(regexp_extract(n.receiver_symbol, '((?:`[^`]*`|[^/#.!\[\]`])+)#$', 1), '`', '') END AS impl_type,
-       NULL::VARCHAR AS impl_trait, NULL::INTEGER AS impl_header_line,
+       CASE WHEN n.symbol_kind = 'Method' THEN 'member' WHEN n.symbol_kind = 'MethodSpecification' THEN 'interface_member'
+       END AS member_of,
        -- What runs it without a reference: `main` of package main and every `init`, which
        -- the runtime calls, and the files of package main, a program's root.
        CASE WHEN n.kind = 'function' AND (n.display_name = 'init' OR (n.display_name = 'main' AND fp.package_name = 'main'))

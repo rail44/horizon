@@ -4,10 +4,10 @@
 -- units(unit_id, file_id, path, package, kind, symbol_kind, name, qualified_name, symbol,
 --       parent_unit_id, start_line, start_column, end_line, end_column, name_line,
 --       name_column, loc, is_test, visibility, parameters, signature, has_doc,
---       is_file_unit, member_of, impl_key, impl_type, impl_trait, impl_header_line, entry)
+--       is_file_unit, member_of, entry)
 --
 -- Which definitions are units, and their kinds, ranges, names, visibility, parameters,
--- documentation, impl membership and test rules, is language knowledge: each language's
+-- documentation, membership and test rules, is language knowledge: each language's
 -- view under lang/ gives its files' units (lang/rust.sql: rust_units, lang/go.sql:
 -- go_units), and this file numbers, nests and sizes them all alike. A file whose
 -- language has no view, or that no SCIP index covers, has no units.
@@ -17,11 +17,11 @@
 -- contains them. kind is the neutral kind (function, method, type, namespace, macro,
 -- constant, file), symbol_kind the SCIP kind. Every indexed file has its file unit
 -- (is_file_unit), whose range is the whole file: a namespace when the file is one (a Rust
--- file module), else kind 'file' (a Go file, one of its package's files). member_of is 'impl' (a member of an
--- impl block or of a type's method set), 'trait_impl' (a member of a trait impl) or
--- 'trait' (a trait's or interface's own item), NULL otherwise; impl_key groups the
--- members of one impl, impl_type and impl_trait name its type and trait as written, and
--- impl_header_line is the impl's header line (NULL when the language has none).
+-- file module), else kind 'file' (a Go file, one of its package's files). member_of is 'member' (a member of a
+-- type: a Rust impl's, a Go method), 'implementation' (a member implementing an
+-- interface's: a Rust trait impl's) or 'interface_member' (an interface's own item: a
+-- Rust trait's, a Go interface's method), NULL otherwise; which type and which interface
+-- are type facts (views/graph.sql, type_facts).
 --
 -- Ranges are [start_line, end_line] as the language's view gives them; name_line/
 -- name_column is where the definition occurrence (the name) is. parent_unit_id is the
@@ -89,7 +89,7 @@ SELECT u.unit_id, u.file_id, f.path, u.package, u.kind, u.symbol_kind, u.name, u
        (coalesce(le.nonblank_through, fl.nonblank) - coalesce(ls.nonblank_through, 0))::INTEGER AS loc,
        t.unit_id IS NOT NULL AS is_test,
        u.visibility, u.parameters, u.signature, u.has_doc,
-       u.is_file_unit, u.member_of, u.impl_key, u.impl_type, u.impl_trait, u.impl_header_line, u.entry
+       u.is_file_unit, u.member_of, u.entry
 FROM numbered u
 JOIN files f USING (file_id)
 JOIN file_lines fl USING (file_id)

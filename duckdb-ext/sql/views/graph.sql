@@ -1,5 +1,5 @@
--- The code graph: which unit references which, how units nest, which type an impl is for
--- and which trait it implements, the namespace and package edges folded from the unit edges,
+-- The code graph: which unit references which, how units nest, which type a member belongs
+-- to and which interfaces a type implements (type facts), the namespace and package edges folded from the unit edges,
 -- the namespace cycles they form, and the intended layers. Every view is derived from
 -- units (views/units.sql), scip_occurrences (views/scip.sql), source_lines
 -- (views/files.sql) and the settings' tables (00_load.sql).
@@ -122,96 +122,62 @@ chain(unit_id, ancestor_id, depth) AS (
 )
 SELECT * FROM chain;
 
--- impls(impl_id, file_id, package, impl_key, impl_type, impl_trait, header_line, members):
--- the impl blocks as their members' descriptors give them (views/units.sql): one row per
--- impl_key, file and header line (two `impl Foo` blocks of one file are two rows; members
--- with no header line found form one row per key and file). members lists their unit ids.
-CREATE OR REPLACE VIEW impls AS
-SELECT (row_number() OVER (ORDER BY file_id, min(unit_id)) - 1)::INTEGER AS impl_id,
-       file_id, any_value(package) AS package, impl_key, any_value(impl_type) AS impl_type,
-       any_value(impl_trait) AS impl_trait, impl_header_line AS header_line,
-       list(unit_id ORDER BY unit_id) AS members
-FROM units
-WHERE impl_key IS NOT NULL
-GROUP BY file_id, impl_key, impl_header_line;
+-- type_facts(fact, file_id, symbol, name_line, name_column, to_file_id, to_symbol,
+--     to_name_line, to_name_column, to_name): what each language says about types
+-- (lang/<language>.sql, <language>_type_facts), each end a definition occurrence: 'member'
+-- (a member and its type), 'implements' (a type and an interface it implements),
+-- 'implements_member' (a member and the interface's member it implements), 'converts' (a
+-- type and the name of a type it converts from or into). The views below put units at
+-- both ends; an end no unit has (unresolved, external) is NULL.
+CREATE OR REPLACE VIEW type_facts AS
+SELECT * FROM rust_type_facts
+UNION ALL
+SELECT * FROM go_type_facts;
 
--- impl_targets(impl_id, part, name, target_unit_id, resolved_by): each impl's `type` part
--- and, for a trait impl, its `trait` part, resolved by name to a type unit (a trait for
--- the trait part): among the type units whose name is the part's bare name
--- (impl_base_name), the one whose symbol is referenced on the impl's header line
--- (resolved_by 'header'), else the only one in the impl's file ('file'), else the only one
--- in its package ('package'), else the only one anywhere ('name'). NULL target: none, or
--- several at the last step (an external trait such as From, a type parameter, a name
--- several packages define).
-CREATE OR REPLACE VIEW impl_targets AS
-WITH parts AS MATERIALIZED (
-    SELECT impl_id, file_id, package, header_line, 'type' AS part, impl_type AS written FROM impls
-    UNION ALL
-    SELECT impl_id, file_id, package, header_line, 'trait', impl_trait FROM impls WHERE impl_trait IS NOT NULL
-),
-named AS MATERIALIZED (
-    SELECT *, impl_base_name(written) AS name FROM parts
-),
-types AS MATERIALIZED (
-    SELECT unit_id, file_id, package, name, symbol, symbol_kind FROM units WHERE kind = 'type'
-),
-header_refs AS MATERIALIZED (
-    SELECT DISTINCT o.file_id, o.start_line, o.symbol
-    FROM scip_occurrences o
-    WHERE o.is_reference AND (o.file_id, o.start_line) IN (SELECT (file_id, header_line) FROM impls)
-),
-candidates AS MATERIALIZED (
-    SELECT n.impl_id, n.part, t.unit_id, t.file_id = n.file_id AS same_file, t.package = n.package AS same_package,
-           EXISTS (SELECT 1 FROM header_refs h
-                   WHERE h.file_id = n.file_id AND h.start_line = n.header_line AND h.symbol = t.symbol) AS on_header
-    FROM named n
-    JOIN types t ON t.name = n.name AND (n.part = 'type' OR t.symbol_kind = 'Trait')
-),
-picked AS (
-    SELECT impl_id, part,
-           CASE WHEN count(*) FILTER (WHERE on_header) = 1 THEN 'header'
-                WHEN count(*) FILTER (WHERE on_header) = 0 AND count(*) FILTER (WHERE same_file) = 1 THEN 'file'
-                WHEN count(*) FILTER (WHERE on_header) = 0 AND count(*) FILTER (WHERE same_file) = 0
-                     AND count(*) FILTER (WHERE same_package) = 1 THEN 'package'
-                WHEN count(*) FILTER (WHERE on_header) = 0 AND count(*) FILTER (WHERE same_file) = 0
-                     AND count(*) FILTER (WHERE same_package) = 0 AND count(*) = 1 THEN 'name'
-           END AS resolved_by,
-           any_value(unit_id) FILTER (WHERE on_header) AS on_header_unit,
-           any_value(unit_id) FILTER (WHERE same_file) AS same_file_unit,
-           any_value(unit_id) FILTER (WHERE same_package) AS same_package_unit,
-           any_value(unit_id) AS any_unit
-    FROM candidates
-    GROUP BY impl_id, part
+-- type_fact_units(fact, unit_id, to_unit_id, to_name): type_facts with units at both ends.
+CREATE OR REPLACE VIEW type_fact_units AS
+WITH keys AS MATERIALIZED (
+    SELECT unit_id, file_id, symbol, name_line, name_column FROM units
 )
-SELECT n.impl_id, n.part, n.written AS name,
-       CASE p.resolved_by WHEN 'header' THEN p.on_header_unit WHEN 'file' THEN p.same_file_unit
-                          WHEN 'package' THEN p.same_package_unit WHEN 'name' THEN p.any_unit END AS target_unit_id,
-       p.resolved_by
-FROM named n
-LEFT JOIN picked p USING (impl_id, part);
+SELECT f.fact, u.unit_id, t.unit_id AS to_unit_id, f.to_name
+FROM type_facts f
+JOIN keys u ON u.file_id = f.file_id AND u.symbol = f.symbol
+     AND u.name_line = f.name_line AND u.name_column = f.name_column
+LEFT JOIN keys t ON t.file_id = f.to_file_id AND t.symbol = f.to_symbol
+     AND t.name_line = f.to_name_line AND t.name_column = f.to_name_column;
 
--- impl_for(impl_id, type_unit_id) and implements(impl_id, trait_unit_id): the
--- impl_targets that resolved to a unit.
-CREATE OR REPLACE VIEW impl_for AS
-SELECT impl_id, target_unit_id AS type_unit_id FROM impl_targets WHERE part = 'type' AND target_unit_id IS NOT NULL;
-
-CREATE OR REPLACE VIEW implements AS
-SELECT impl_id, target_unit_id AS trait_unit_id FROM impl_targets WHERE part = 'trait' AND target_unit_id IS NOT NULL;
-
--- unit_impl_type(unit_id, impl_id, type_unit_id): for each unit inside an impl (a member,
--- or a unit inside a member's body), the impl of its nearest ancestor-or-self member and
--- the type that impl is for (NULL when unresolved).
-CREATE OR REPLACE VIEW unit_impl_type AS
+-- unit_owner_types(unit_id, type_unit_id): for each unit that is a member of a type or
+-- lies inside one (a unit in a member's body), the type of its nearest ancestor-or-self
+-- member; none when that member's type is unresolved.
+CREATE OR REPLACE VIEW unit_owner_types AS
 WITH members AS MATERIALIZED (
-    SELECT i.impl_id, unnest(i.members) AS unit_id FROM impls i
+    SELECT unit_id AS member_unit_id, to_unit_id AS type_unit_id FROM type_fact_units WHERE fact = 'member'
 ),
 nearest AS (
-    SELECT a.unit_id, arg_min(m.impl_id, a.depth) AS impl_id
-    FROM unit_ancestors a JOIN members m ON m.unit_id = a.ancestor_id
+    SELECT a.unit_id, arg_min(m.member_unit_id, a.depth) AS member_unit_id
+    FROM unit_ancestors a JOIN members m ON m.member_unit_id = a.ancestor_id
     GROUP BY a.unit_id
 )
-SELECT n.unit_id, n.impl_id, f.type_unit_id
-FROM nearest n LEFT JOIN impl_for f USING (impl_id);
+SELECT n.unit_id, m.type_unit_id
+FROM nearest n JOIN members m USING (member_unit_id)
+WHERE m.type_unit_id IS NOT NULL;
+
+-- type_interfaces(type_unit_id, interface_unit_id): the interfaces each type implements.
+CREATE OR REPLACE VIEW type_interfaces AS
+SELECT DISTINCT unit_id AS type_unit_id, to_unit_id AS interface_unit_id
+FROM type_fact_units WHERE fact = 'implements' AND to_unit_id IS NOT NULL;
+
+-- member_implementations(unit_id, interface_member_unit_id): each member implementing an
+-- interface's member, with that member (NULL when it has no unit: an external trait's).
+CREATE OR REPLACE VIEW member_implementations AS
+SELECT DISTINCT unit_id, to_unit_id AS interface_member_unit_id
+FROM type_fact_units WHERE fact = 'implements_member';
+
+-- type_conversions(type_unit_id, to_name): the types each type converts from or into, by
+-- name (queries/duplication.sql, conversion_pair).
+CREATE OR REPLACE VIEW type_conversions AS
+SELECT DISTINCT unit_id AS type_unit_id, to_name
+FROM type_fact_units WHERE fact = 'converts';
 
 -- file_namespaces(file_id, namespace, namespace_path): the namespace each source file
 -- belongs to, as its language places it (lang/<language>.sql, <language>_file_namespaces):
@@ -283,15 +249,15 @@ FROM by_file b JOIN namespace_rows m USING (namespace);
 -- test_unit_edges counts the edges with a test unit at either end, ambiguous_unit_edges
 -- those that are ambiguous. nested_namespaces marks an edge between a namespace and one of its
 -- ancestors or descendants (namespaces.namespace_path; in one package), same_type_unit_edges
--- counts the unit edges whose two ends both lie in impls of one type (unit_impl_type):
+-- counts the unit edges whose two ends both lie in members of one type (unit_owner_types):
 -- one type's impl blocks split over several files. module_cycle_edges leaves out the
 -- edges that are nested_namespaces or whose every unit edge is same-type.
 CREATE OR REPLACE VIEW namespace_edges AS
 WITH m AS MATERIALIZED (
     SELECT unit_id, namespace, package, namespace_path FROM unit_namespace
 ),
-impl_type AS MATERIALIZED (
-    SELECT unit_id, type_unit_id FROM unit_impl_type WHERE type_unit_id IS NOT NULL
+owner_type AS MATERIALIZED (
+    SELECT unit_id, type_unit_id FROM unit_owner_types
 )
 SELECT ms.namespace AS src_namespace, md.namespace AS dst_namespace, ms.package AS src_package, md.package AS dst_package,
        count(*) AS unit_edges, sum(e.occurrences) AS occurrences,
@@ -303,8 +269,8 @@ SELECT ms.namespace AS src_namespace, md.namespace AS dst_namespace, ms.package 
 FROM unit_edges e
 JOIN m ms ON ms.unit_id = e.src_unit_id
 JOIN m md ON md.unit_id = e.dst_unit_id
-LEFT JOIN impl_type ts ON ts.unit_id = e.src_unit_id
-LEFT JOIN impl_type td ON td.unit_id = e.dst_unit_id
+LEFT JOIN owner_type ts ON ts.unit_id = e.src_unit_id
+LEFT JOIN owner_type td ON td.unit_id = e.dst_unit_id
 WHERE NOT e.is_self AND ms.namespace <> md.namespace
 GROUP BY ms.namespace, md.namespace, ms.package, md.package, ms.namespace_path, md.namespace_path;
 
@@ -331,7 +297,7 @@ GROUP BY ALL;
 -- the transitive closure of the edges, by a recursive common table expression that
 -- adds only new pairs (UNION).
 -- The edges are namespace_edges without the structural ones: those between a namespace and its
--- ancestor or descendant (nested_namespaces) and those whose every unit edge joins impls of
+-- ancestor or descendant (nested_namespaces) and those whose every unit edge joins members of
 -- one type (same_type_unit_edges = unit_edges). Parameter (DuckDB variable; default
 -- when unset): cycle_edges 'collapsed' ('raw': every namespace edge).
 CREATE OR REPLACE VIEW namespace_cycle_edges AS

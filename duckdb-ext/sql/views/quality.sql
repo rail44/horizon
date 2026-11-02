@@ -6,19 +6,19 @@
 
 -- unit_scope(unit_id, member_unit_id): what a unit stands for when its fan-in and fan-out
 -- are counted: the unit itself and every unit it contains, and for a type also the
--- members of its impls (impl_for) with everything they contain, wherever the impls are.
+-- members (unit_owner_types) with everything they contain, wherever they are.
 CREATE OR REPLACE VIEW unit_scope AS
 WITH contained AS MATERIALIZED (
     SELECT ancestor_id AS unit_id, unit_id AS member_unit_id FROM unit_ancestors
 ),
-impl_members AS MATERIALIZED (
-    SELECT f.type_unit_id AS unit_id, unnest(i.members) AS member_id
-    FROM impl_for f JOIN impls i USING (impl_id)
+type_members AS MATERIALIZED (
+    SELECT f.to_unit_id AS unit_id, f.unit_id AS member_id
+    FROM type_fact_units f WHERE f.fact = 'member' AND f.to_unit_id IS NOT NULL
 )
 SELECT unit_id, member_unit_id FROM contained
 UNION
 SELECT m.unit_id, c.member_unit_id
-FROM impl_members m JOIN contained c ON c.unit_id = m.member_id;
+FROM type_members m JOIN contained c ON c.unit_id = m.member_id;
 
 -- unit_fan_in(unit_id, fan_in_files, fan_in_namespaces, fan_in_packages, fan_in_units,
 --     reference_occurrences): the files other than the unit's own, the namespaces other
@@ -109,11 +109,11 @@ GROUP BY s.unit_id;
 -- unit_reference_status(unit_id, references, status): the reference occurrences of the
 -- unit's own symbol anywhere (its own file included), and status: 'referenced'; else the
 -- reason it is structurally unreferenced rather than dead: 'test' (a test unit),
--- 'trait_impl' (a trait impl's member: calls resolve to the trait's item), 'entry_point'
--- or 'root' (the unit's entry, views/units.sql: an entry function such as main, a build
--- target's or a program's root), 'trait_item' (a trait's
--- own item, which its impls implement; calls on a concrete type resolve to the impl's
--- item); else 'unreferenced'.
+-- 'implementation' (a member implementing an interface's member, member_implementations:
+-- calls through the interface resolve to its item), 'entry_point' or 'root' (the unit's
+-- entry, views/units.sql: an entry function such as main, a build target's or a program's
+-- root), 'interface_item' (an interface's own item, which its implementations implement;
+-- calls on a concrete type resolve to the implementation); else 'unreferenced'.
 -- Other entry points (callbacks registered by name, FFI exports, derive-generated uses,
 -- macro bodies, which SCIP does not resolve) show as 'unreferenced'.
 CREATE OR REPLACE VIEW unit_reference_status AS
@@ -123,9 +123,9 @@ WITH counts AS (
 SELECT u.unit_id, coalesce(c.n, 0) AS references,
        CASE WHEN coalesce(c.n, 0) > 0 THEN 'referenced'
             WHEN u.is_test THEN 'test'
-            WHEN u.impl_trait IS NOT NULL THEN 'trait_impl'
+            WHEN u.unit_id IN (SELECT unit_id FROM member_implementations) THEN 'implementation'
             WHEN u.entry IS NOT NULL THEN u.entry
-            WHEN u.member_of = 'trait' THEN 'trait_item'
+            WHEN u.member_of = 'interface_member' THEN 'interface_item'
             ELSE 'unreferenced' END AS status
 FROM units u LEFT JOIN counts c USING (symbol);
 

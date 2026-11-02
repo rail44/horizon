@@ -7,7 +7,7 @@
 -- pub_units, its units declared public (visibility `pub`: Rust's from the signature, Go's
 -- exported names); used_outside, its units whose own symbol is referenced from outside it
 -- (a unit counted for its own symbol, not for what it contains: a type's fields and
--- variants and its impls' members are units or symbols of their own); pub_unused_outside,
+-- variants and its members are units or symbols of their own); pub_unused_outside,
 -- the public units nothing outside references; outside_users, the distinct packages (or
 -- namespaces) referencing any of its units' symbols. Largest used surface first.
 -- Re-exports (`pub use`) are references, not declarations: a re-exported item is counted

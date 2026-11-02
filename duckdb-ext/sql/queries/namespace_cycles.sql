@@ -8,7 +8,7 @@
 -- the group's edges that go against the declared layers (graph_layer_violation,
 -- views/graph.sql; README.md, Settings file), the same on every row of the group; 0
 -- without layers. Structural edges (a namespace and its ancestor or descendant, and edges
--- whose every unit edge joins impls of one type) are left out unless cycle_edges = 'raw'
+-- whose every unit edge joins members of one type) are left out unless cycle_edges = 'raw'
 -- (views/graph.sql, namespace_cycle_edges).
 -- Axis: independence (docs/research/code-quality-axes-2026-10-29.md §3.8).
 -- Judgment from the settings file: the intended layers ([[layers]], may_depend_on) behind

@@ -3,11 +3,13 @@
 --
 -- rust_units(file_id, symbol, symbol_kind, kind, package, name, qualified_name, start_line,
 --            start_column, end_line, end_column, name_line, name_column, test_by_rule,
---            visibility, parameters, signature, has_doc, is_file_unit, member_of,
---            impl_key, impl_type, impl_trait, impl_header_line, entry): one row per unit, in
--- the columns views/units.sql describes; test_by_rule is the part of is_test that Rust's
--- rules give a unit by itself (below), before views/units.sql adds the units inside a
--- test.
+--            visibility, parameters, signature, has_doc, is_file_unit, member_of, entry):
+-- one row per unit, in the columns views/units.sql describes; test_by_rule is the part of
+-- is_test that Rust's rules give a unit by itself (below), before views/units.sql adds the
+-- units inside a test. member_of is 'member' for an impl's member, 'implementation' for a
+-- trait impl's, 'interface_member' for a trait's own item. rust_unit_rows holds the same
+-- rows with Rust's impl columns (impl_key, impl_type, impl_trait, impl_header_line, and
+-- member_of as 'impl', 'trait_impl', 'trait'), which rust_type_facts reads.
 --
 -- One unit per definition occurrence of a non-local symbol in a Rust source file whose
 -- SCIP kind (symbol_kind) is one of
@@ -16,8 +18,8 @@
 --   Macro -> macro; Constant, StaticVariable -> constant.
 -- An impl block is not a unit: rust-analyzer gives it no symbol, and its members'
 -- symbols carry it as a descriptor (`…impl#[Type]m().`, `…impl#[Type][Trait]m().`):
--- member_of is 'impl' or 'trait_impl' for such a member and 'trait' for a trait's own
--- item (NULL otherwise), impl_key is that prefix of a member's symbol, impl_type and
+-- rust_unit_rows' member_of is 'impl' or 'trait_impl' for such a member and 'trait' for a
+-- trait's own item (NULL otherwise), impl_key is that prefix of a member's symbol, impl_type and
 -- impl_trait the bracketed names as written (backticks removed), impl_header_line the
 -- line of the impl's header found as for test_by_rule below (NULL when none is found: an
 -- impl a macro writes). A `mod x;` declaration is a reference to the module, not a unit;
@@ -186,7 +188,7 @@ CREATE OR REPLACE MACRO impl_base_name(t) AS
 CREATE OR REPLACE MACRO impl_generic_arg(t) AS
     impl_base_name(regexp_extract(replace(t, '`', ''), '<\s*([^,>]+)', 1));
 
-CREATE OR REPLACE VIEW rust_units AS
+CREATE OR REPLACE VIEW rust_unit_rows AS
 WITH defs AS MATERIALIZED (
     SELECT o.file_id, o.document, o.symbol, o.start_line AS name_line, o.start_column AS name_column,
            o.enclosing_start_line AS start_line, o.enclosing_start_column AS start_column,
@@ -372,3 +374,117 @@ FROM (
 LEFT JOIN (SELECT DISTINCT unit_id FROM lead_tests) t USING (unit_id)
 LEFT JOIN parameters p USING (unit_id)
 LEFT JOIN member_headers mh USING (unit_id);
+
+CREATE OR REPLACE VIEW rust_units AS
+SELECT * EXCLUDE (impl_key, impl_type, impl_trait, impl_header_line)
+       REPLACE (CASE member_of WHEN 'impl' THEN 'member' WHEN 'trait_impl' THEN 'implementation'
+                               WHEN 'trait' THEN 'interface_member' END AS member_of)
+FROM rust_unit_rows;
+
+-- rust_type_facts(fact, file_id, symbol, name_line, name_column, to_file_id, to_symbol,
+--     to_name_line, to_name_column, to_name): what Rust's impl blocks say about types
+-- (views/graph.sql, type_facts), each end a unit's definition occurrence (its file,
+-- symbol and name position):
+--   'member': an impl's member and the type the impl is for (NULL when unresolved);
+--   'implements': a trait impl's type and the trait;
+--   'implements_member': a trait impl's member and the trait's item of its name (NULL
+--     when the trait is unresolved or external);
+--   'converts': a type and the bare name of the type it converts from or into (an `impl
+--     From<B> for A`, `Into`, `TryFrom`, `TryInto`: to_name B).
+-- An impl is its members' impl_key, file and header line (rust_unit_rows: two `impl Foo`
+-- blocks of one file are two impls; members with no header line found form one per key
+-- and file). Its `type` part and, for a trait impl, its `trait` part are resolved by name
+-- to a type unit (a trait for the trait part): among the type units whose name is the
+-- part's bare name (impl_base_name), the one whose symbol is referenced on the impl's
+-- header line, else the only one in the impl's file, else the only one in its package,
+-- else the only one anywhere; none when there is none, or several at the last step (an
+-- external trait such as From, a type parameter, a name several packages define).
+CREATE OR REPLACE VIEW rust_type_facts AS
+WITH members AS MATERIALIZED (
+    SELECT file_id, symbol, name_line, name_column, package, impl_key, impl_type, impl_trait, impl_header_line
+    FROM rust_unit_rows WHERE impl_key IS NOT NULL
+),
+impls AS MATERIALIZED (
+    SELECT (row_number() OVER (ORDER BY file_id, impl_key, impl_header_line NULLS FIRST))::INTEGER AS impl_id,
+           file_id, impl_key, impl_header_line AS header_line, any_value(package) AS package,
+           any_value(impl_type) AS impl_type, any_value(impl_trait) AS impl_trait
+    FROM members
+    GROUP BY file_id, impl_key, impl_header_line
+),
+parts AS MATERIALIZED (
+    SELECT impl_id, file_id, package, header_line, 'type' AS part, impl_type AS written FROM impls
+    UNION ALL
+    SELECT impl_id, file_id, package, header_line, 'trait', impl_trait FROM impls WHERE impl_trait IS NOT NULL
+),
+named AS MATERIALIZED (
+    SELECT *, impl_base_name(written) AS name FROM parts
+),
+types AS MATERIALIZED (
+    SELECT file_id, symbol, name_line, name_column, package, name, symbol_kind FROM rust_unit_rows WHERE kind = 'type'
+),
+header_refs AS MATERIALIZED (
+    SELECT DISTINCT o.file_id, o.start_line, o.symbol
+    FROM scip_occurrences o
+    WHERE o.is_reference AND (o.file_id, o.start_line) IN (SELECT (file_id, header_line) FROM impls)
+),
+candidates AS MATERIALIZED (
+    SELECT n.impl_id, n.part,
+           struct_pack(file_id := t.file_id, symbol := t.symbol, name_line := t.name_line,
+                       name_column := t.name_column) AS target,
+           t.file_id = n.file_id AS same_file, t.package = n.package AS same_package,
+           EXISTS (SELECT 1 FROM header_refs h
+                   WHERE h.file_id = n.file_id AND h.start_line = n.header_line AND h.symbol = t.symbol) AS on_header
+    FROM named n
+    JOIN types t ON t.name = n.name AND (n.part = 'type' OR t.symbol_kind = 'Trait')
+),
+resolved AS MATERIALIZED (
+    SELECT impl_id, part,
+           CASE WHEN count(*) FILTER (WHERE on_header) = 1 THEN any_value(target) FILTER (WHERE on_header)
+                WHEN count(*) FILTER (WHERE on_header) = 0 AND count(*) FILTER (WHERE same_file) = 1
+                    THEN any_value(target) FILTER (WHERE same_file)
+                WHEN count(*) FILTER (WHERE on_header) = 0 AND count(*) FILTER (WHERE same_file) = 0
+                     AND count(*) FILTER (WHERE same_package) = 1 THEN any_value(target) FILTER (WHERE same_package)
+                WHEN count(*) FILTER (WHERE on_header) = 0 AND count(*) FILTER (WHERE same_file) = 0
+                     AND count(*) FILTER (WHERE same_package) = 0 AND count(*) = 1 THEN any_value(target)
+           END AS target
+    FROM candidates
+    GROUP BY impl_id, part
+),
+resolved_impls AS MATERIALIZED (
+    SELECT i.*, ty.target AS type_target, tr.target AS trait_target
+    FROM impls i
+    LEFT JOIN resolved ty ON ty.impl_id = i.impl_id AND ty.part = 'type'
+    LEFT JOIN resolved tr ON tr.impl_id = i.impl_id AND tr.part = 'trait'
+),
+placed AS MATERIALIZED (
+    SELECT m.*, r.type_target, r.trait_target,
+           -- The member's own descriptor: what its trait's item ends in.
+           regexp_extract(m.symbol, '((?:`[^`]*`|[^/#.!\[\]`])+(?:\(\)\.|\.|#|!))$', 1) AS own_descriptor
+    FROM members m
+    JOIN resolved_impls r ON r.file_id = m.file_id AND r.impl_key = m.impl_key
+         AND r.header_line IS NOT DISTINCT FROM m.impl_header_line
+),
+trait_items AS MATERIALIZED (
+    SELECT symbol, any_value(struct_pack(file_id := file_id, symbol := symbol, name_line := name_line,
+                                         name_column := name_column)) AS target
+    FROM rust_unit_rows WHERE member_of = 'trait'
+    GROUP BY symbol
+)
+SELECT 'member' AS fact, file_id, symbol, name_line, name_column, type_target.file_id AS to_file_id,
+       type_target.symbol AS to_symbol, type_target.name_line AS to_name_line,
+       type_target.name_column AS to_name_column, NULL::VARCHAR AS to_name
+FROM placed
+UNION ALL
+SELECT DISTINCT 'implements', type_target.file_id, type_target.symbol, type_target.name_line, type_target.name_column,
+       trait_target.file_id, trait_target.symbol, trait_target.name_line, trait_target.name_column, NULL
+FROM resolved_impls WHERE type_target IS NOT NULL AND trait_target IS NOT NULL
+UNION ALL
+SELECT 'implements_member', p.file_id, p.symbol, p.name_line, p.name_column, i.target.file_id, i.target.symbol,
+       i.target.name_line, i.target.name_column, NULL
+FROM placed p LEFT JOIN trait_items i ON i.symbol = p.trait_target.symbol || p.own_descriptor
+WHERE p.impl_trait IS NOT NULL
+UNION ALL
+SELECT DISTINCT 'converts', type_target.file_id, type_target.symbol, type_target.name_line, type_target.name_column,
+       NULL, NULL, NULL, NULL, impl_generic_arg(impl_trait)
+FROM resolved_impls
+WHERE type_target IS NOT NULL AND impl_base_name(impl_trait) IN ('From', 'Into', 'TryFrom', 'TryInto');

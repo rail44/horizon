@@ -7,7 +7,7 @@
 --     fan_in_files, fan_in_namespaces and fan_in_packages count the other files,
 --     namespaces and packages referencing
 --     anything the unit stands for (unit_scope: the unit, what it contains, and for a type
---     its impls' members), fan_in_units the units outside it doing so; a namespace counts
+--     its members), fan_in_units the units outside it doing so; a namespace counts
 --     only the references to its own symbol (a path naming it), not those to what it
 --     contains, which the file and namespace levels sum. fan_out_files,
 --     fan_out_namespaces, fan_out_packages and fan_out_units the same for what it
