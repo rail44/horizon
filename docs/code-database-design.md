@@ -995,6 +995,19 @@ has no units (scip-go indexes cgo's generated copy in the build cache), and modu
 joined by `replace` disagree on an interface method's descriptor (`I#M().` against
 `I#M.`).
 
+## Fixes from a real Go repository (2026-11-02)
+
+([record](research/code-db-go-reading-fixes-2026-11-02.md)) A reading on a private Go
+monorepo (4,897 files, 37,277 units) found six defects, all fixed (owner): jscpd reports
+past `read_json`'s 16 MiB object limit (the limit is now the largest report's size);
+`duplication` out of memory (`clone_pairs` and `clone_sides` are cached, the reports in
+the key); Go tests `referenced` by the test main `go test` generates (document paths are
+normalized and references from outside the repository do not count); function-literal
+parameters in a package-level `var` as units (not any more); external test packages
+merged into their directory's package, making cycles (`<directory>_test` is a package of
+its own, nested in the directory's); and large results reordered by `display_select`
+(it orders by the result table's rowid).
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
