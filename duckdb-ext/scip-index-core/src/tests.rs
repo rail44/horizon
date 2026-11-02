@@ -326,7 +326,25 @@ fn symbols_of_documents_and_external_symbols() {
     assert_eq!(s.document.as_deref(), Some("a.rs"));
     assert_eq!(kind_name(s.kind), "Struct");
     assert_eq!(s.documentation, ["```rust\nstruct S\n```", "Docs."]);
-    assert_eq!(s.relationship_count, 2);
+    assert_eq!(
+        s.relationships,
+        [
+            Relationship {
+                symbol: "p m/T#".into(),
+                is_reference: false,
+                is_implementation: true,
+                is_type_definition: false,
+                is_definition: false,
+            },
+            Relationship {
+                symbol: "p m/U#".into(),
+                is_reference: true,
+                is_implementation: false,
+                is_type_definition: false,
+                is_definition: false,
+            },
+        ]
+    );
     assert_eq!(s.display_name, "S");
     assert_eq!(s.enclosing_symbol, "p m/");
     assert_eq!(s.signature.as_deref(), Some("struct S"));
@@ -341,7 +359,68 @@ fn symbols_of_documents_and_external_symbols() {
         (bare.display_name.as_str(), bare.enclosing_symbol.as_str()),
         ("", "")
     );
-    assert_eq!(bare.relationship_count, 0);
+    assert!(bare.relationships.is_empty());
+}
+
+#[test]
+fn relationships_with_their_symbols() {
+    let flags = Msg::new()
+        .str(1, "p m/T#")
+        .int(4, 1)
+        .int(5, 1)
+        .int(9, 7)
+        .int(3, 0);
+    let info = Msg::new()
+        .str(1, "p m/S#")
+        .msg(4, &flags)
+        .msg(4, &Msg::new().int(3, 1).str(1, "p m/U#"));
+    let index = Msg::new()
+        .msg(
+            2,
+            &Msg::new()
+                .str(1, "a.rs")
+                .msg(3, &info)
+                .msg(3, &Msg::new().str(1, "p m/V#")),
+        )
+        .msg(
+            3,
+            &Msg::new()
+                .str(1, "ext")
+                .msg(4, &Msg::new().str(1, "p m/S#").int(2, 1)),
+        );
+    let rows: Vec<_> = relationships_from(index.0.as_slice())
+        .collect::<Result<_>>()
+        .unwrap();
+    let flat: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            let x = &r.relationship;
+            (
+                r.document.as_deref(),
+                r.symbol.as_str(),
+                x.symbol.as_str(),
+                [
+                    x.is_reference,
+                    x.is_implementation,
+                    x.is_type_definition,
+                    x.is_definition,
+                ],
+            )
+        })
+        .collect();
+    assert_eq!(
+        flat,
+        [
+            (Some("a.rs"), "p m/S#", "p m/T#", [false, false, true, true]),
+            (
+                Some("a.rs"),
+                "p m/S#",
+                "p m/U#",
+                [false, true, false, false]
+            ),
+            (None, "ext", "p m/S#", [true, false, false, false]),
+        ]
+    );
 }
 
 #[test]

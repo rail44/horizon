@@ -173,6 +173,10 @@ fn horizon_linked_duckdb_loads_both_extensions() {
         int_field(5, 17),
         len_field(6, b"f"),
         len_field(7, &len_field(5, b"pub fn f()")),
+        len_field(
+            4,
+            &[len_field(1, b"cargo p 0.1.0 T#"), int_field(3, 1)].concat(),
+        ),
     ]
     .concat();
     let document = [
@@ -314,6 +318,36 @@ fn horizon_linked_duckdb_loads_both_extensions() {
                 "<none>"
             ),
         ]
+    );
+
+    let row: (String, String, String, bool, bool, i32) = conn
+        .query_row(
+            "SELECT document, r.symbol, related_symbol, is_implementation, is_reference,
+                    s.relationship_count
+             FROM read_scip_relationships(?) r JOIN read_scip_symbols(?) s USING (document)",
+            [path, path],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        row,
+        (
+            "src/lib.rs".into(),
+            "cargo p 0.1.0 f().".into(),
+            "cargo p 0.1.0 T#".into(),
+            true,
+            false,
+            1
+        )
     );
 
     // A list of paths reads each index in order; index_path names the file.

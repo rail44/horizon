@@ -15,6 +15,7 @@ import duckdb
 FUNCTIONS = {
     "occurrences": "read_scip",
     "symbols": "read_scip_symbols",
+    "relationships": "read_scip_relationships",
     "metadata": "read_scip_metadata",
 }
 

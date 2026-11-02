@@ -4,7 +4,8 @@
 -- table, README.md, Running). The indexes are the list `scip_indexes` (00_load.sql); they
 -- describe the trees they were generated from, which nothing checks against `files`.
 --
--- scip_index_occurrences, scip_index_symbols and scip_index_metadata are the indexes' rows
+-- scip_index_occurrences, scip_index_symbols, scip_index_relationships and
+-- scip_index_metadata are the indexes' rows
 -- as SCIP encodes them (0-based lines and characters, `local N` symbols unqualified,
 -- documents relative to each index's project root), with the index file in index_path:
 --   scip_index_occurrences(document, symbol, start_line, start_char, end_line, end_char,
@@ -14,17 +15,22 @@
 --   scip_index_symbols(document, symbol, kind, display_name, enclosing_symbol,
 --       documentation, relationship_count, signature, index_path): `document` is NULL for
 --       an external symbol; signature is the text of signature_documentation
+--   scip_index_relationships(document, symbol, related_symbol, is_reference,
+--       is_implementation, is_type_definition, is_definition, index_path): each
+--       relationship of a symbol's information, `document` NULL for an external symbol's
 --   scip_index_metadata(version, tool_name, tool_version, tool_arguments, project_root,
 --       text_document_encoding, document_count, occurrence_count, external_symbol_count,
 --       index_path)
--- They are read_scip, read_scip_symbols and read_scip_metadata of the scip_index
--- extension over the list (duckdb-ext/README.md, "scip_index").
+-- They are read_scip, read_scip_symbols, read_scip_relationships and read_scip_metadata of
+-- the scip_index extension over the list (duckdb-ext/README.md, "scip_index").
 --
 -- The views the other files read follow this layer's conventions:
 --   scip_occurrences(file_id, document, symbol, start_line, start_column, end_line,
 --       end_column, is_definition, is_reference, enclosing_start_line,
 --       enclosing_start_column, enclosing_end_line, enclosing_end_column)
 --   scip_symbols(document, symbol, kind, display_name, documentation, signature)
+--   scip_relationships(document, symbol, related_symbol, is_reference, is_implementation,
+--       is_type_definition, is_definition)
 -- `document` is repository-relative: the index's project root (scip_index_roots) joined
 -- with the document's relative path. Lines are 1-based and inclusive, columns 1-based
 -- (start_char + 1; the end is the column after the last character), counted in the unit
@@ -40,6 +46,9 @@
 CREATE OR REPLACE VIEW scip_index_occurrences AS SELECT * FROM read_scip(getvariable('scip_indexes'));
 
 CREATE OR REPLACE VIEW scip_index_symbols AS SELECT * FROM read_scip_symbols(getvariable('scip_indexes'));
+
+CREATE OR REPLACE VIEW scip_index_relationships AS
+SELECT * FROM read_scip_relationships(getvariable('scip_indexes'));
 
 CREATE OR REPLACE VIEW scip_index_metadata AS SELECT * FROM read_scip_metadata(getvariable('scip_indexes'));
 
@@ -103,3 +112,22 @@ FROM scip_document_occurrences o
 LEFT JOIN files f ON f.path = o.document;
 
 CREATE OR REPLACE VIEW scip_symbols AS SELECT * FROM scip_document_symbols;
+
+-- scip_relationships: read only while the cache is built (the language layers' type facts,
+-- which refresh.sql copies through type_fact_units), so it has no copy of its own. A
+-- local symbol at either end is qualified by the document, as in scip_symbols.
+CREATE OR REPLACE VIEW scip_relationships AS
+WITH roots AS MATERIALIZED (
+    SELECT index_path, prefix FROM scip_index_roots
+),
+relationships AS (
+    SELECT (CASE WHEN x.document IS NULL OR r.prefix = '' THEN x.document
+                 ELSE r.prefix || '/' || x.document END)::VARCHAR AS document, x.* EXCLUDE (document, index_path)
+    FROM scip_index_relationships x JOIN roots r USING (index_path)
+)
+SELECT document,
+       (CASE WHEN starts_with(symbol, 'local ') THEN symbol || ' ' || document ELSE symbol END)::VARCHAR AS symbol,
+       (CASE WHEN starts_with(related_symbol, 'local ') THEN related_symbol || ' ' || document
+             ELSE related_symbol END)::VARCHAR AS related_symbol,
+       is_reference, is_implementation, is_type_definition, is_definition
+FROM relationships;

@@ -75,10 +75,15 @@ SELECT NULL::INTEGER AS owner_file_id, NULL::VARCHAR AS symbol, NULL::INTEGER AS
        NULL::INTEGER AS start_line, NULL::INTEGER AS start_column
 WHERE false;
 
--- go_type_facts: rust_type_facts' columns, for Go: each method's 'member' fact, its
--- receiver's type (the definition of the method's symbol without its last descriptor:
--- `…/Circle#Area().` belongs to `…/Circle#`). A Go type implements an interface without
--- saying so, and none of 'implements', 'implements_member' or 'converts' is read yet.
+-- go_type_facts: rust_type_facts' columns, for Go:
+--   'member': a method and its receiver's type (the definition of the method's symbol
+--     without its last descriptor: `…/Circle#Area().` belongs to `…/Circle#`);
+--   'implements': a type and an interface it implements, and 'implements_member': a
+--     method and the interface's method it implements (NULL when the interface is not
+--     defined in the indexed code). A Go type implements an interface without saying so;
+--     scip-go writes what it finds as relationships (scip_relationships,
+--     is_implementation: `…/Circle#` → `…/Shape#`, `…/Circle#Area().` → `…/Shape#Area.`).
+-- Go has no conversions to declare, so no 'converts'.
 CREATE OR REPLACE VIEW go_type_facts AS
 WITH defs AS MATERIALIZED (
     SELECT o.file_id, o.symbol, o.start_line AS name_line, o.start_column AS name_column
@@ -88,16 +93,27 @@ WITH defs AS MATERIALIZED (
 kinds AS (
     SELECT symbol, any_value(kind) AS kind FROM scip_symbols WHERE document IS NOT NULL GROUP BY symbol
 ),
-methods AS (
+methods AS MATERIALIZED (
     SELECT d.*, regexp_extract(d.symbol, '^(.*#)(?:`[^`]*`|[^/#.!\[\]`])+\(\)\.$', 1) AS receiver
     FROM defs d JOIN kinds k USING (symbol) WHERE k.kind = 'Method'
 ),
-types AS (
+types AS MATERIALIZED (
     SELECT d.* FROM defs d JOIN kinds k USING (symbol) WHERE k.kind IN ('Type', 'Struct', 'Interface', 'TypeAlias')
+),
+implementations AS MATERIALIZED (
+    SELECT DISTINCT symbol, related_symbol FROM scip_relationships WHERE is_implementation
 )
 SELECT 'member' AS fact, m.file_id, m.symbol, m.name_line, m.name_column, t.file_id AS to_file_id,
        t.symbol AS to_symbol, t.name_line AS to_name_line, t.name_column AS to_name_column, NULL::VARCHAR AS to_name
-FROM methods m LEFT JOIN types t ON t.symbol = m.receiver;
+FROM methods m LEFT JOIN types t ON t.symbol = m.receiver
+UNION ALL
+SELECT 'implements', t.file_id, t.symbol, t.name_line, t.name_column, d.file_id, d.symbol, d.name_line,
+       d.name_column, NULL
+FROM implementations i JOIN types t ON t.symbol = i.symbol JOIN defs d ON d.symbol = i.related_symbol
+UNION ALL
+SELECT 'implements_member', m.file_id, m.symbol, m.name_line, m.name_column, d.file_id, d.symbol, d.name_line,
+       d.name_column, NULL
+FROM implementations i JOIN methods m ON m.symbol = i.symbol LEFT JOIN defs d ON d.symbol = i.related_symbol;
 
 -- go_file_ast: file_ast's rows (views/files.sql) of the Go files only. read_ast parses
 -- every file it is given, whatever the query filters, so this view gives it the Go

@@ -10,8 +10,8 @@ root quality gate does not read it; `./check.sh` is its gate.
 | --- | --- |
 | `git-history-core/` | a library: the rows of `git_tracked_files`, computed with gitoxide (`gix`) only; no DuckDB dependency, compared with the git CLI on a fixture |
 | `git-history/` | `git_history.duckdb_extension`: the DuckDB table function `git_tracked_files` over `git-history-core` |
-| `scip-index-core/` | a library: a streaming decoder of SCIP indexes (protobuf) and the rows of the three SCIP functions; no dependencies, unit-tested and compared with `scip print --json` |
-| `scip-index/` | `scip_index.duckdb_extension`: the DuckDB table functions `read_scip`, `read_scip_symbols`, `read_scip_metadata` over `scip-index-core`, each over one index or a list (see "`scip_index`" below) |
+| `scip-index-core/` | a library: a streaming decoder of SCIP indexes (protobuf) and the rows of the four SCIP functions; no dependencies, unit-tested and compared with `scip print --json` |
+| `scip-index/` | `scip_index.duckdb_extension`: the DuckDB table functions `read_scip`, `read_scip_symbols`, `read_scip_relationships`, `read_scip_metadata` over `scip-index-core`, each over one index or a list (see "`scip_index`" below) |
 | `scip-probe/` | a binary printing any SCIP function's rows of `scip-index-core` as TSV, compared with the extension by `scripts/scip_ext_parity.py` |
 | `host-check/` | no output; a test that loads both built extensions through the `duckdb` crate (a separate workspace, see below) |
 | `code-db/` | `code-db`, the code database's entry point (`sql/README.md`, Running): reads the analysed repository's `.code-db.toml`, derives DuckDB's limits, runs the indexers (one SCIP index per Cargo workspace and per Go module, jscpd over the files in scope), and loads the extensions and the SQL views through the `duckdb` crate (a separate workspace, like `host-check/`) |
@@ -305,9 +305,9 @@ racily clean), and gix runs that check on several threads.
 - `host-check/tests/load.rs`: loads the built extension into the `duckdb`
   crate with the machine's `libduckdb` 2.0.0 and checks `git_tracked_files`
   with `include_untracked` on a fixture; a second test loads both extensions
-  into one connection and checks the three SCIP functions on a hand-encoded
+  into one connection and checks the four SCIP functions on a hand-encoded
   index (packed and typed ranges, a NULL enclosing range, the role booleans,
-  a list column, the signature, an external symbol, the metadata counts),
+  a list column, the signature, a relationship, an external symbol, the metadata counts),
   the same index twice as a list (rows in order, `index_path`), an empty
   list, and the bind-time error for a missing file.
 - `code-db/`: unit tests of the settings file, the limits, the markdown
@@ -404,8 +404,18 @@ are not read), NULL when absent: rust-analyzer writes the declaration's head
 for every symbol (`pub(crate) fn spawn(…) -> T` with its `where` clause,
 `pub struct S`), attributes and doc comments left out.
 `relationship_count` is the number of `Relationship` entries
-(rust-analyzer 1.99.1 writes none; the relationships themselves are not
-returned).
+(`read_scip_relationships` returns them; rust-analyzer 1.99.1 writes none).
+
+### `read_scip_relationships(path)`
+
+`(document VARCHAR, symbol VARCHAR, related_symbol VARCHAR, is_reference BOOLEAN, is_implementation BOOLEAN, is_type_definition BOOLEAN, is_definition BOOLEAN, index_path VARCHAR)`
+
+One row per `Relationship` of a `SymbolInformation`, in file order: the
+symbol information's `document` (NULL for an external symbol) and `symbol`,
+the relationship's `symbol` as `related_symbol`, and its four flags. scip-go
+0.2.7 writes `is_implementation` from a type to each interface it implements
+and from a method to the interface's method (`…/Circle#` → `…/Shape#`,
+`…/Circle#Area().` → `…/Shape#Area.`), and nothing else on the Go fixture.
 
 ### `read_scip_metadata(path)`
 
@@ -453,13 +463,14 @@ read_scip(…)` adds 4–5 MiB to the 70 MiB of a DuckDB process after
 
 ### Parity
 
-`scip-index-core/tests/cli_parity.rs` compares the three row sets with rows
+`scip-index-core/tests/cli_parity.rs` compares the four row sets with rows
 built from `scip print --json` of the `scip` CLI v0.10.0, as multisets:
 
 | Index | `read_scip` | `read_scip_symbols` | Metadata row | Only ours / only reference |
 | --- | --- | --- | --- | --- |
 | fixture crate indexed by `rust-analyzer scip` in a temp dir (2 documents) | 85 | 27 | equal | 0 / 0 |
-| hand-encoded index (typed ranges, every role bit, negative values, unknown fields at every level, relationships, external symbols) | 5 | 4 | equal | 0 / 0 |
+| hand-encoded index (typed ranges, every role bit, negative values, unknown fields at every level, relationships, external symbols) | 5 | 4 (3 relationships) | equal | 0 / 0 |
+| the Go fixture indexed by scip-go 0.2.7 (2026-11-02) | 188 | 68 (2 relationships) | equal | 0 / 0 |
 | this repository at 20941942, 30 MB (509 documents, 9 external symbols) | 301,687 | 42,839 | equal | 0 / 0 |
 | the same tree at af0d26a7 (the signature column added), 30 MB | 301,687 | 42,839 | equal | 0 / 0 |
 
@@ -470,7 +481,8 @@ role bits other than the definition bit, relationships, and syntax-only
 occurrences; the hand-encoded index covers those against the same Go
 decoder. The extension's rows are identical, in order, to `scip-probe`'s
 TSVs for all three functions on all three indexes
-(`scripts/scip_ext_parity.py`).
+(`scripts/scip_ext_parity.py`, which now also compares
+`read_scip_relationships`).
 
 ```sh
 SCIP_INDEX=/abs/target/code-db/scip/root.scip cargo test --release -p scip_index_core \
@@ -480,7 +492,7 @@ uv run --with duckdb==2.0.0 python duckdb-ext/scripts/scip_ext_parity.py \
     duckdb-ext/target/release/scip-probe target/code-db/scip/root.scip
 ```
 
-`scip-probe INDEX occurrences|symbols|metadata [--stats]` prints the
+`scip-probe INDEX occurrences|symbols|relationships|metadata [--stats]` prints the
 extension's columns but `index_path` as TSV (NULL as `\N`, strings escaped
 as JSON string content, lists as JSON arrays).
 
@@ -517,7 +529,8 @@ writing included), 0.04 s for the symbols, at 11.5 MiB peak RSS.
   fields and wrong wire types skipped at every level, file order with the
   path after the occurrences and an empty document, `local` symbols kept
   raw, document and external symbols with documentation lists,
-  relationships and unknown kinds, metadata with merged fields and counts,
+  relationships (with their flags, and as rows of their own with their
+  symbols) and unknown kinds, metadata with merged fields and counts,
   the kind table, and truncated or invalid input.
 - `scip-index-core/tests/cli_parity.rs`: the parity above for the fixture
   crate (written to a temp dir and indexed with `rust-analyzer scip`; it

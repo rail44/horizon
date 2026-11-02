@@ -5,8 +5,8 @@ come from the SCIP index of each of its Cargo workspaces and Go modules, its qua
 one query per axis over them, and what depends on the project's own judgment comes from
 its settings file. The facts are read by table functions: `git_tracked_files` (the file
 set, this workspace's `git_history` extension, `../README.md`),
-`read_scip`/`read_scip_symbols`/`read_scip_metadata` (this workspace's `scip_index`, over
-rust-analyzer's and scip-go's indexes), `read_text` (the source text), `read_json` (jscpd's
+`read_scip`/`read_scip_symbols`/`read_scip_relationships`/`read_scip_metadata` (this
+workspace's `scip_index`, over rust-analyzer's and scip-go's indexes), `read_text` (the source text), `read_json` (jscpd's
 reports) and `read_ast` (the community extension sitting_duck: each source file's
 tree-sitter syntax tree); everything else is a view. Nothing is stored except by
 `refresh.sql`, a cache of the derived layers keyed by the state of their inputs and of
@@ -338,8 +338,9 @@ path; an index's documents are relative to its project root, which
 repository share no document (measured: each index lists only its own workspace's
 files).
 
-- **`scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`** are
-  `read_scip`, `read_scip_symbols` and `read_scip_metadata` as they come
+- **`scip_index_occurrences`, `scip_index_symbols`, `scip_index_relationships`,
+  `scip_index_metadata`** are `read_scip`, `read_scip_symbols`,
+  `read_scip_relationships` and `read_scip_metadata` as they come
   (`../README.md`): 0-based lines and characters, raw `local N` symbols, documents
   relative to the index's project root, plus `index_path`.
 - **`scip_index_roots(index_path, project_root, prefix)`**: each index's root as a
@@ -359,6 +360,10 @@ files).
   type, `where` clause; no attributes); `document` is NULL for an external symbol. A
   non-local symbol can be listed under several documents (a package's `crate/` symbol
   under each target's root file), one row per listing.
+- **`scip_relationships(document, symbol, related_symbol, is_reference,
+  is_implementation, is_type_definition, is_definition)`**: `read_scip_relationships`
+  with the same document and local naming (a local symbol at either end). Only the
+  language layers' type facts read it, while the cache is built, so it has no copy.
 - `scip_document_occurrences` and `scip_document_symbols` are the same rows without
   `file_id`.
 
@@ -503,8 +508,11 @@ reading of them, then Go's:
   `converts` comes from `From`, `Into`, `TryFrom` and `TryInto` impls. On this repository
   1,763 of 1,772 members' types resolve; 84 of 320 trait impl members reach a trait item
   (the rest: traits outside the index or unresolved). Go (`go_type_facts`): a method's
-  receiver type (its symbol without the last descriptor); a Go type implements an
-  interface without saying so, and the other facts are not read yet.
+  receiver type (its symbol without the last descriptor); `implements` and
+  `implements_member` from scip-go's implementation relationships (`scip_relationships`:
+  a type to each interface it implements, a method to the interface's method), a
+  member's interface member NULL when the interface is outside the index
+  (`fmt.Stringer`); Go declares no conversions.
 - **`file_namespaces(file_id, namespace, namespace_path)`**: each source file's
   namespace as its language places it (`<language>_file_namespaces`): a Rust file is its
   own, named by its path and placed by the file-module convention (a crate root and
@@ -742,7 +750,7 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | --- | --- |
 | `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
-| `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols` (SCIP) |
+| `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_relationships`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols`, `scip_relationships` (SCIP) |
 | `lang/rust.sql` | `rust_terms`, `rust_value_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, `rust_control_nodes`, the macros `impl_base_name`, `impl_generic_arg`; `rust_unit_rows`, `rust_units` (Units), `rust_type_facts` (Types) |
 | `lang/go.sql` | `go_terms`, `go_value_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_control_nodes`, `go_units` (Units), `go_type_facts` (Types) |
 | `views/terms.sql` | `lang_terms`, `lang_value_terms`, `lang_visibility_boundaries`, the macros `visibility_boundary`, `display_language`, `term_swap`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
@@ -824,7 +832,6 @@ need at least one file, which is why `empty-jscpd-report.json` is always in thei
   comparison were removed with the decision of 2026-10-29; the comparison is to come back
   as a diff of obstacle lists over two SCIP indexes.
 - The exhaustive-`match` check (above).
-- TypeScript (its SCIP indexer and the unit mapping). SCIP relationships
-  (rust-analyzer 1.99.1 writes none; scip-go writes its implementations, which nothing
-  reads yet), so Go has no `implements` or `implements_member` facts; neither language's
-  implementations are unit edges.
+- TypeScript (its SCIP indexer and the unit mapping). Neither language's
+  implementations are unit edges (a call through an interface reaches the interface's
+  member, not its implementations).

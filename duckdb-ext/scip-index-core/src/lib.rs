@@ -1,5 +1,5 @@
 //! A streaming reader for SCIP code-intelligence indexes (binary protobuf),
-//! producing the rows of the `scip_index` extension's three table functions.
+//! producing the rows of the `scip_index` extension's four table functions.
 //!
 //! The decoder is hand-written against the protobuf wire format (no generated
 //! code, no dependencies). Field numbers and enum values follow `scip.proto`
@@ -15,7 +15,8 @@
 //! | `Occurrence` | `range = 1` (repeated int32, deprecated), `symbol = 2`, `symbol_roles = 3`, `enclosing_range = 7` (repeated int32, deprecated), oneof `typed_range` { `single_line_range = 8`, `multi_line_range = 9` }, oneof `typed_enclosing_range` { `single_line_enclosing_range = 10`, `multi_line_enclosing_range = 11` } |
 //! | `SingleLineRange` | `line = 1`, `start_character = 2`, `end_character = 3` |
 //! | `MultiLineRange` | `start_line = 1`, `start_character = 2`, `end_line = 3`, `end_character = 4` |
-//! | `SymbolInformation` | `symbol = 1`, `documentation = 3` (repeated), `relationships = 4` (repeated, counted), `kind = 5` (enum `Kind`), `display_name = 6`, `signature_documentation = 7` (a `Document`, of which only `text = 5` is read), `enclosing_symbol = 8` |
+//! | `SymbolInformation` | `symbol = 1`, `documentation = 3` (repeated), `relationships = 4` (repeated), `kind = 5` (enum `Kind`), `display_name = 6`, `signature_documentation = 7` (a `Document`, of which only `text = 5` is read), `enclosing_symbol = 8` |
+//! | `Relationship` | `symbol = 1`, `is_reference = 2`, `is_implementation = 3`, `is_type_definition = 4`, `is_definition = 5` |
 //!
 //! Decoding follows protobuf's rules where they matter here: unknown fields,
 //! and known fields with an unexpected wire type, are skipped; a `repeated
@@ -117,10 +118,31 @@ pub struct SymbolRow {
     pub display_name: String,
     pub enclosing_symbol: String,
     pub documentation: Vec<String>,
-    pub relationship_count: i32,
+    pub relationships: Vec<Relationship>,
     /// The `text` of `signature_documentation`; `None` when the field or its
     /// text is absent.
     pub signature: Option<String>,
+}
+
+/// One `Relationship` of a `SymbolInformation`: the related symbol and how
+/// it relates.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Relationship {
+    pub symbol: String,
+    pub is_reference: bool,
+    pub is_implementation: bool,
+    pub is_type_definition: bool,
+    pub is_definition: bool,
+}
+
+/// One `Relationship` with the symbol information it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RelationshipRow {
+    /// The document's `relative_path`; `None` for an external symbol.
+    pub document: Option<Arc<str>>,
+    /// The symbol whose information holds the relationship.
+    pub symbol: String,
+    pub relationship: Relationship,
 }
 
 /// The index's `Metadata` and the counts of its top-level parts.
@@ -433,6 +455,50 @@ impl<R: Read> Iterator for Symbols<R> {
     }
 }
 
+/// The relationships of an index's symbol information, in file order.
+pub struct Relationships<R> {
+    symbols: Symbols<R>,
+    pending: std::vec::IntoIter<RelationshipRow>,
+}
+
+/// Opens `path` and iterates over its relationships.
+pub fn relationships(path: &Path) -> Result<Relationships<BufReader<File>>> {
+    Ok(relationships_from(open(path)?))
+}
+
+pub fn relationships_from<R: Read>(input: R) -> Relationships<R> {
+    Relationships {
+        symbols: symbols_from(input),
+        pending: Vec::new().into_iter(),
+    }
+}
+
+impl<R: Read> Iterator for Relationships<R> {
+    type Item = Result<RelationshipRow>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(row) = self.pending.next() {
+                return Some(Ok(row));
+            }
+            let row = match self.symbols.next()? {
+                Ok(row) => row,
+                Err(error) => return Some(Err(error)),
+            };
+            self.pending = row
+                .relationships
+                .into_iter()
+                .map(|relationship| RelationshipRow {
+                    document: row.document.clone(),
+                    symbol: row.symbol.clone(),
+                    relationship,
+                })
+                .collect::<Vec<_>>()
+                .into_iter();
+        }
+    }
+}
+
 /// Reads `path` to its end for its metadata and counts.
 pub fn metadata(path: &Path) -> Result<MetadataRow> {
     metadata_from(open(path)?)
@@ -526,14 +592,14 @@ fn symbol_information(bytes: &[u8], document: Option<&Arc<str>>) -> Result<Symbo
         display_name: String::new(),
         enclosing_symbol: String::new(),
         documentation: Vec::new(),
-        relationship_count: 0,
+        relationships: Vec::new(),
         signature: None,
     };
     for field in Fields::new(bytes) {
         match field? {
             (1, Value::Len(value)) => row.symbol = wire::string(value)?,
             (3, Value::Len(value)) => row.documentation.push(wire::string(value)?),
-            (4, Value::Len(_)) => row.relationship_count += 1,
+            (4, Value::Len(value)) => row.relationships.push(relationship(value)?),
             (5, Value::Varint(value)) => row.kind = wire::int32(value),
             (6, Value::Len(value)) => row.display_name = wire::string(value)?,
             // A singular message field seen more than once is merged: a later
@@ -546,6 +612,27 @@ fn symbol_information(bytes: &[u8], document: Option<&Arc<str>>) -> Result<Symbo
                 }
             }
             (8, Value::Len(value)) => row.enclosing_symbol = wire::string(value)?,
+            _ => {}
+        }
+    }
+    Ok(row)
+}
+
+fn relationship(bytes: &[u8]) -> Result<Relationship> {
+    let mut row = Relationship {
+        symbol: String::new(),
+        is_reference: false,
+        is_implementation: false,
+        is_type_definition: false,
+        is_definition: false,
+    };
+    for field in Fields::new(bytes) {
+        match field? {
+            (1, Value::Len(value)) => row.symbol = wire::string(value)?,
+            (2, Value::Varint(value)) => row.is_reference = value != 0,
+            (3, Value::Varint(value)) => row.is_implementation = value != 0,
+            (4, Value::Varint(value)) => row.is_type_definition = value != 0,
+            (5, Value::Varint(value)) => row.is_definition = value != 0,
             _ => {}
         }
     }

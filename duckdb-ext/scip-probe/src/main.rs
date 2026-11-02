@@ -1,8 +1,9 @@
-//! Print the rows of `read_scip`, `read_scip_symbols` or `read_scip_metadata`
+//! Print the rows of `read_scip`, `read_scip_symbols`, `read_scip_relationships`
+//! or `read_scip_metadata`
 //! as TSV, computed by `scip_index_core` without DuckDB, for comparing with
 //! the extension (`scripts/scip_ext_parity.py`).
 //!
-//! Usage: scip-probe INDEX occurrences|symbols|metadata [--stats]
+//! Usage: scip-probe INDEX occurrences|symbols|relationships|metadata [--stats]
 //!
 //! Columns are the extension's, in its order, without the trailing
 //! `index_path`. NULL is `\N`; booleans are
@@ -55,7 +56,9 @@ fn list(out: &mut String, values: &[String]) {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 2 || args.len() > 3 || (args.len() == 3 && args[2] != "--stats") {
-        return Err("usage: scip-probe INDEX occurrences|symbols|metadata [--stats]".into());
+        return Err(
+            "usage: scip-probe INDEX occurrences|symbols|relationships|metadata [--stats]".into(),
+        );
     }
     let stats = args.len() == 3;
     let path = Path::new(&args[0]);
@@ -122,10 +125,35 @@ fn main() -> Result<()> {
                 escape(&mut line, &row.enclosing_symbol);
                 line.push('\t');
                 list(&mut line, &row.documentation);
-                line += &format!("\t{}\t", row.relationship_count);
+                line += &format!("\t{}\t", row.relationships.len());
                 match &row.signature {
                     Some(signature) => escape(&mut line, signature),
                     None => line.push_str("\\N"),
+                }
+                writeln!(out, "{line}")?;
+                count += 1;
+            }
+        }
+        "relationships" => {
+            for row in scip::relationships(path)? {
+                let row = row?;
+                line.clear();
+                match &row.document {
+                    Some(document) => escape(&mut line, document),
+                    None => line.push_str("\\N"),
+                }
+                line.push('\t');
+                escape(&mut line, &row.symbol);
+                line.push('\t');
+                escape(&mut line, &row.relationship.symbol);
+                let r = &row.relationship;
+                for flag in [
+                    r.is_reference,
+                    r.is_implementation,
+                    r.is_type_definition,
+                    r.is_definition,
+                ] {
+                    line += if flag { "\ttrue" } else { "\tfalse" };
                 }
                 writeln!(out, "{line}")?;
                 count += 1;

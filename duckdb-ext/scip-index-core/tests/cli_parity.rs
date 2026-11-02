@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
-use scip_index_core::{self as scip, MetadataRow, OccurrenceRow, Range, SymbolRow};
+use scip_index_core::{
+    self as scip, MetadataRow, OccurrenceRow, Range, Relationship, RelationshipRow, SymbolRow,
+};
 use serde::Deserialize;
 
 fn scip_cli() -> PathBuf {
@@ -120,11 +122,21 @@ struct JsonMulti {
 struct JsonSymbol {
     symbol: String,
     documentation: Vec<String>,
-    relationships: Vec<serde::de::IgnoredAny>,
+    relationships: Vec<JsonRelationship>,
     kind: i32,
     display_name: String,
     signature_documentation: Option<JsonSignature>,
     enclosing_symbol: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct JsonRelationship {
+    symbol: String,
+    is_reference: bool,
+    is_implementation: bool,
+    is_type_definition: bool,
+    is_definition: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -178,7 +190,17 @@ fn symbol_row(symbol: JsonSymbol, document: Option<&Arc<str>>) -> SymbolRow {
         display_name: symbol.display_name,
         enclosing_symbol: symbol.enclosing_symbol,
         documentation: symbol.documentation,
-        relationship_count: symbol.relationships.len() as i32,
+        relationships: symbol
+            .relationships
+            .into_iter()
+            .map(|r| Relationship {
+                symbol: r.symbol,
+                is_reference: r.is_reference,
+                is_implementation: r.is_implementation,
+                is_type_definition: r.is_type_definition,
+                is_definition: r.is_definition,
+            })
+            .collect(),
         // protobuf's JSON omits an empty text, which the decoder reads as absent.
         signature: symbol
             .signature_documentation
@@ -190,10 +212,25 @@ fn symbol_row(symbol: JsonSymbol, document: Option<&Arc<str>>) -> SymbolRow {
 struct Rows {
     occurrences: Vec<OccurrenceRow>,
     symbols: Vec<SymbolRow>,
+    relationships: Vec<RelationshipRow>,
     metadata: MetadataRow,
 }
 
-/// The rows the three functions should return, from `scip print --json`.
+/// The relationships of `symbols`, each with its symbol.
+fn relationship_rows(symbols: &[SymbolRow]) -> Vec<RelationshipRow> {
+    symbols
+        .iter()
+        .flat_map(|s| {
+            s.relationships.iter().map(|relationship| RelationshipRow {
+                document: s.document.clone(),
+                symbol: s.symbol.clone(),
+                relationship: relationship.clone(),
+            })
+        })
+        .collect()
+}
+
+/// The rows the four functions should return, from `scip print --json`.
 fn reference(index: &Path) -> Rows {
     let mut child = Command::new(scip_cli())
         .args(["print", "--json"])
@@ -210,6 +247,7 @@ fn reference(index: &Path) -> Rows {
     let mut rows = Rows {
         occurrences: Vec::new(),
         symbols: Vec::new(),
+        relationships: Vec::new(),
         metadata: MetadataRow {
             version: json.metadata.version,
             tool_name: json.metadata.tool_info.name,
@@ -255,6 +293,7 @@ fn reference(index: &Path) -> Rows {
             .into_iter()
             .map(|symbol| symbol_row(symbol, None)),
     );
+    rows.relationships = relationship_rows(&rows.symbols);
     rows
 }
 
@@ -265,6 +304,10 @@ fn ours(index: &Path) -> Rows {
             .collect::<scip::Result<_>>()
             .unwrap(),
         symbols: scip::symbols(index)
+            .unwrap()
+            .collect::<scip::Result<_>>()
+            .unwrap(),
+        relationships: scip::relationships(index)
             .unwrap()
             .collect::<scip::Result<_>>()
             .unwrap(),
@@ -316,6 +359,11 @@ fn assert_parity(index: &Path) -> Rows {
     let reference = reference(index);
     assert_same("occurrences", &ours.occurrences, &reference.occurrences);
     assert_same("symbols", &ours.symbols, &reference.symbols);
+    assert_same(
+        "relationships",
+        &ours.relationships,
+        &reference.relationships,
+    );
     assert_eq!(ours.metadata, reference.metadata);
     eprintln!("metadata: {:?}", ours.metadata);
     ours
@@ -521,8 +569,8 @@ fn ints(values: &[i32]) -> Msg {
 }
 
 /// The encodings rust-analyzer does not produce: typed ranges, typed
-/// enclosing ranges, every role bit, negative values, unknown fields and
-/// external symbols, decoded by the Go reference too.
+/// enclosing ranges, every role bit, negative values, unknown fields,
+/// relationships and external symbols, decoded by the Go reference too.
 #[test]
 fn hand_encoded_index_matches_scip_print() {
     let occurrences = [
@@ -563,7 +611,16 @@ fn hand_encoded_index_matches_scip_print() {
                 .str(3, "one")
                 .str(3, "two\tlines\n")
                 .int(5, 17)
-                .str(6, "s1"),
+                .str(6, "s1")
+                .msg(
+                    4,
+                    Msg::default()
+                        .str(1, "ext a")
+                        .int(3, 1)
+                        .int(4, 1)
+                        .int(5, 1)
+                        .int(9, 2),
+                ),
         )
         .msg(3, Msg::default().str(1, "local 1").int(5, 61))
         .int(6, 1)
@@ -609,6 +666,7 @@ fn hand_encoded_index_matches_scip_print() {
     let rows = assert_parity(&path);
     assert_eq!(rows.occurrences.len(), 5);
     assert_eq!(rows.symbols.len(), 4);
+    assert_eq!(rows.relationships.len(), 3);
     assert_eq!(rows.metadata.external_symbol_count, 2);
 }
 

@@ -2,7 +2,8 @@
 //!
 //! Each function takes one index path or a list of them and reads the
 //! indexes in list order; every row ends with the path it came from
-//! (`index_path`). `read_scip` and `read_scip_symbols` stream: the global
+//! (`index_path`). `read_scip`, `read_scip_symbols` and
+//! `read_scip_relationships` stream: the global
 //! state holds the core's iterator over the current index, which keeps one
 //! document in memory, and each call emits the next chunk of rows, from a
 //! single thread so rows keep file order. `read_scip_metadata` reads each
@@ -30,7 +31,7 @@ use duckdb_neo::{
 
 use scip_index_core::{
     self as scip, DEFINITION, FORWARD_DEFINITION, GENERATED, IMPORT, MetadataRow, OccurrenceRow,
-    READ_ACCESS, SymbolRow, TEST, WRITE_ACCESS,
+    READ_ACCESS, RelationshipRow, SymbolRow, TEST, WRITE_ACCESS,
 };
 
 fn scip_error(error: scip::Error) -> Error {
@@ -423,8 +424,65 @@ impl ScipTable for Symbols {
             Some(rows[i].enclosing_symbol.as_str())
         })?;
         string_lists(documentation, n, |i| &rows[i].documentation)?;
-        ints(relationship_count, n, |i| Some(rows[i].relationship_count))?;
+        ints(relationship_count, n, |i| {
+            Some(i32::try_from(rows[i].relationships.len()).unwrap_or(i32::MAX))
+        })?;
         strings(signature, n, |i| rows[i].signature.as_deref())
+    }
+}
+
+struct Relationships;
+
+impl ScipTable for Relationships {
+    type Row = RelationshipRow;
+    type Rows = scip::Relationships<std::io::BufReader<std::fs::File>>;
+    const NAME: &'static str = "read_scip_relationships";
+    const DESCRIPTION: &'static str = "One row per Relationship of a SCIP index's SymbolInformation (or of each index \
+        of a list, in order), in file order: the symbol information's document (NULL for an external symbol) and \
+        symbol, the related symbol, its four flags, and the index's path.";
+
+    fn columns(context: &Context) -> Result<Vec<(&'static str, LogicalType)>> {
+        Ok(vec![
+            ("document", varchar(context)?),
+            ("symbol", varchar(context)?),
+            ("related_symbol", varchar(context)?),
+            ("is_reference", boolean(context)?),
+            ("is_implementation", boolean(context)?),
+            ("is_type_definition", boolean(context)?),
+            ("is_definition", boolean(context)?),
+        ])
+    }
+
+    fn rows(path: &Path) -> scip::Result<Self::Rows> {
+        scip::relationships(path)
+    }
+
+    fn write(rows: &[(Arc<str>, RelationshipRow)], output: &mut DataChunkRef<'_>) -> Result<()> {
+        check_columns(output, 8)?;
+        let [
+            document,
+            symbol,
+            related_symbol,
+            is_reference,
+            is_implementation,
+            is_type_definition,
+            is_definition,
+        ] = output.get_vector_array_mut([0, 1, 2, 3, 4, 5, 6])?;
+        let n = rows.len();
+        let rows: Vec<&RelationshipRow> = rows.iter().map(|(_, row)| row).collect();
+        strings(document, n, |i| rows[i].document.as_deref())?;
+        strings(symbol, n, |i| Some(rows[i].symbol.as_str()))?;
+        strings(related_symbol, n, |i| {
+            Some(rows[i].relationship.symbol.as_str())
+        })?;
+        bools(is_reference, n, |i| rows[i].relationship.is_reference)?;
+        bools(is_implementation, n, |i| {
+            rows[i].relationship.is_implementation
+        })?;
+        bools(is_type_definition, n, |i| {
+            rows[i].relationship.is_type_definition
+        })?;
+        bools(is_definition, n, |i| rows[i].relationship.is_definition)
     }
 }
 
@@ -511,5 +569,6 @@ fn register_one<T: ScipTable>(extension: &Extension) -> Result<()> {
 pub(crate) fn register(extension: &Extension) -> Result<()> {
     register_one::<Occurrences>(extension)?;
     register_one::<Symbols>(extension)?;
+    register_one::<Relationships>(extension)?;
     register_one::<Metadata>(extension)
 }

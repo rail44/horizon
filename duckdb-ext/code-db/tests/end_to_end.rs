@@ -738,6 +738,27 @@ fn go_modules_index_and_units() {
         [("Circle.Area", "Circle"), ("Circle.scale", "Circle")]
     );
 
+    // scip-go's implementation relationships: Circle implements Shape, and its
+    // Area implements Shape's.
+    std::fs::write(
+        &probe,
+        "SELECT t.qualified_name, i.qualified_name FROM go.type_interfaces x \
+         JOIN go.units t ON t.unit_id = x.type_unit_id JOIN go.units i ON i.unit_id = x.interface_unit_id \
+         UNION ALL \
+         SELECT u.qualified_name, i.qualified_name FROM go.member_implementations m \
+         JOIN go.units u USING (unit_id) JOIN go.units i ON i.unit_id = m.interface_member_unit_id \
+         ORDER BY ALL;\n",
+    )
+    .unwrap();
+    let implementations = rows(&code_db(&["sql", probe.to_str().unwrap()]));
+    assert_eq!(
+        implementations
+            .iter()
+            .map(|r| (&r[0][..], &r[1][..]))
+            .collect::<Vec<_>>(),
+        [("Circle", "Shape"), ("Circle.Area", "Shape.Area")]
+    );
+
     // References across files and packages become unit edges.
     std::fs::write(
         &probe,
