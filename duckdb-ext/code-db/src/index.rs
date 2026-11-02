@@ -177,15 +177,159 @@ fn run_logged(mut command: Command, stdout: Stdio, log: File) -> Result<ExitStat
 }
 
 /// What `index` works on: the source files (`files`, as the views list them:
-/// the settings' scope applied), the Cargo workspaces and the Go modules to
-/// index, as repository-relative paths; a workspace is a directory whose
-/// tracked Cargo.toml has a `[workspace]` table and that holds at least one
-/// source file, a Go module a directory with a tracked go.mod that holds at
-/// least one `.go` source file ("" for the repository root).
+/// the settings' scope applied), the Cargo workspaces and the scip-go runs, as
+/// repository-relative paths; a workspace is a directory whose tracked
+/// Cargo.toml has a `[workspace]` table and that holds at least one source
+/// file ("" for the repository root).
 pub struct Inputs {
     pub files: Vec<String>,
     pub workspaces: Vec<String>,
-    pub go_modules: Vec<String>,
+    pub go_indexes: Vec<GoIndex>,
+}
+
+/// One scip-go run: in DIR over the modules MODULES (repository-relative), with
+/// GOWORK set to WORK (the tracked go.work in DIR whose `use` lists them) or to
+/// `off` for a module no tracked go.work uses.
+#[derive(Debug, PartialEq, Eq)]
+pub struct GoIndex {
+    pub dir: String,
+    pub modules: Vec<String>,
+    pub work: Option<String>,
+}
+
+impl GoIndex {
+    /// Its index file under `target/code-db/scip/`: a module's
+    /// (go_index_name), or for a go.work `gowork.scip` at the repository root
+    /// and `gowork-<path with / as +>.scip` elsewhere.
+    pub fn name(&self) -> String {
+        match (&self.work, self.dir.is_empty()) {
+            (None, _) => go_index_name(&self.dir),
+            (Some(_), true) => "gowork.scip".to_owned(),
+            (Some(_), false) => format!("gowork-{}.scip", self.dir.replace('/', "+")),
+        }
+    }
+
+    /// The package patterns: each module's packages, relative to DIR.
+    fn patterns(&self) -> Vec<String> {
+        self.modules
+            .iter()
+            .map(|m| {
+                let rel = if self.dir.is_empty() {
+                    m.as_str()
+                } else if m == &self.dir {
+                    ""
+                } else {
+                    &m[self.dir.len() + 1..]
+                };
+                if rel.is_empty() {
+                    "./...".to_owned()
+                } else {
+                    format!("./{rel}/...")
+                }
+            })
+            .collect()
+    }
+}
+
+/// The directories a go.work's `use` directives name, as written (`use ./a`,
+/// `use ( ./a "./b" )`, comments after `//` ignored).
+pub fn work_uses(text: &str) -> Vec<String> {
+    let mut uses = Vec::new();
+    let mut in_block = false;
+    for line in text.lines() {
+        let line = line.split("//").next().unwrap_or_default().trim();
+        let path = if in_block {
+            if line.starts_with(')') {
+                in_block = false;
+                continue;
+            }
+            line
+        } else if let Some(rest) = line
+            .strip_prefix("use")
+            .filter(|r| r.starts_with([' ', '\t', '(']))
+        {
+            let rest = rest.trim();
+            match rest.strip_prefix('(') {
+                Some(inner) => match inner.strip_suffix(')') {
+                    Some(one) => one.trim(),
+                    None => {
+                        in_block = true;
+                        inner.trim()
+                    }
+                },
+                None => rest,
+            }
+        } else {
+            continue;
+        };
+        let path = path.trim_matches(|c| c == '"' || c == '`');
+        if !path.is_empty() {
+            uses.push(path.to_owned());
+        }
+    }
+    uses
+}
+
+/// DIR joined with the relative path PATH, `.` and `..` resolved; None when it
+/// leaves the repository or PATH is absolute.
+fn join_relative(dir: &str, path: &str) -> Option<String> {
+    if path.starts_with('/') {
+        return None;
+    }
+    let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// The scip-go runs for MODULES (go_modules) given the tracked go.work files
+/// WORKS as (path, text): a module a go.work uses is indexed with the others it
+/// uses, from the go.work's directory, so that their references to each other
+/// name the same symbols (indexed one by one, scip-go names another workspace
+/// module's symbols with version `.`); when several go.work files use it, the
+/// deepest one does. Every other module is indexed on its own.
+pub fn go_indexes(modules: &[String], works: &[(String, String)]) -> Vec<GoIndex> {
+    let mut indexes: Vec<GoIndex> = Vec::new();
+    for module in modules {
+        let work = works
+            .iter()
+            .filter_map(|(path, text)| {
+                let dir = path
+                    .strip_suffix("go.work")
+                    .unwrap_or_default()
+                    .trim_end_matches('/');
+                work_uses(text)
+                    .iter()
+                    .any(|u| join_relative(dir, u).as_deref() == Some(module.as_str()))
+                    .then(|| (dir.to_owned(), path.clone()))
+            })
+            .max_by_key(|(dir, _)| dir.len());
+        match work {
+            Some((dir, path)) => {
+                match indexes.iter_mut().find(|i| i.work.as_ref() == Some(&path)) {
+                    Some(index) => index.modules.push(module.clone()),
+                    None => indexes.push(GoIndex {
+                        dir,
+                        modules: vec![module.clone()],
+                        work: Some(path),
+                    }),
+                }
+            }
+            None => indexes.push(GoIndex {
+                dir: module.clone(),
+                modules: vec![module.clone()],
+                work: None,
+            }),
+        }
+    }
+    indexes
 }
 
 /// Whether a Cargo.toml's text declares a workspace (`[workspace]` or one of
@@ -279,9 +423,11 @@ struct Indexer<'a> {
     args: &'a [&'a str],
 }
 
-/// Run INDEXER in the repository directory DIR under the cap, writing its
-/// index to `OUT/scip/NAME` through a temporary file and its output to
+/// Run INDEXER in the repository directory DIR under the cap, with the
+/// arguments EXTRA after its own and the environment ENV, writing its index to
+/// `OUT/scip/NAME` through a temporary file and its output to
 /// `OUT/logs/NAME.log`.
+#[allow(clippy::too_many_arguments)]
 fn run_indexer(
     cap: &Cap,
     out: &Path,
@@ -289,17 +435,21 @@ fn run_indexer(
     repo: &Path,
     dir: &str,
     name: &str,
+    extra: &[String],
+    env: &[(&str, String)],
 ) -> Result<(), String> {
     let start = Instant::now();
     let shown = if dir.is_empty() { "." } else { dir };
     let log = out.join("logs").join(format!("{name}.log"));
     let tmp = out.join("scip").join(format!("{name}.tmp"));
     let mut args: Vec<String> = indexer.args.iter().map(|a| (*a).to_owned()).collect();
+    args.extend(extra.iter().cloned());
     args.extend(["--output".to_owned(), tmp.display().to_string()]);
     let log_file = File::create(&log).map_err(|e| e.to_string())?;
     let stdout = Stdio::from(log_file.try_clone().map_err(|e| e.to_string())?);
     let mut command = capped(cap, &indexer.program, &args);
     command.current_dir(repo.join(dir));
+    command.envs(env.iter().map(|(k, v)| (*k, v)));
     let status = run_logged(command, stdout, log_file)?;
     if !status.success() {
         return Err(failed(
@@ -375,19 +525,32 @@ pub fn index(
         };
         for workspace in &inputs.workspaces {
             let name = index_name(workspace);
-            run_indexer(&cap, &out, &indexer, repo, workspace, &name)?;
+            run_indexer(&cap, &out, &indexer, repo, workspace, &name, &[], &[])?;
             names.push(name);
         }
     }
-    if !inputs.go_modules.is_empty() {
+    if !inputs.go_indexes.is_empty() {
         let indexer = Indexer {
             label: "scip-go index",
             program: tool("SCIP_GO", "scip-go")?,
             args: &["index", "--quiet"],
         };
-        for module in &inputs.go_modules {
-            let name = go_index_name(module);
-            run_indexer(&cap, &out, &indexer, repo, module, &name)?;
+        for go in &inputs.go_indexes {
+            let name = go.name();
+            let (patterns, gowork) = match &go.work {
+                Some(work) => (go.patterns(), repo.join(work).display().to_string()),
+                None => (Vec::new(), "off".to_owned()),
+            };
+            run_indexer(
+                &cap,
+                &out,
+                &indexer,
+                repo,
+                &go.dir,
+                &name,
+                &patterns,
+                &[("GOWORK", gowork)],
+            )?;
             names.push(name);
         }
     }
@@ -454,5 +617,61 @@ mod tests {
         assert_eq!(go_modules(&go_mods, &files[2..]), Vec::<String>::new());
         assert_eq!(go_index_name(""), "go.scip");
         assert_eq!(go_index_name("tools/gen"), "go-tools+gen.scip");
+    }
+
+    #[test]
+    fn work_uses_single_block_quoted_and_commented() {
+        let text = "go 1.22\n\nuse ./a // the library\nuse (\n\t./b\n\t\"./c d\"\n\t// ./e\n\t../out\n)\nuser ./x\nreplace x => ./y\n";
+        assert_eq!(work_uses(text), ["./a", "./b", "./c d", "../out"]);
+        assert_eq!(work_uses("use (./a)\n"), ["./a"]);
+        assert_eq!(work_uses("use(\n.\n)\n"), ["."]);
+    }
+
+    #[test]
+    fn modules_a_go_work_uses_share_one_index() {
+        let modules = [
+            "".to_owned(),
+            "lib".to_owned(),
+            "svc".to_owned(),
+            "svc/inner".to_owned(),
+            "tools".to_owned(),
+        ];
+        let works = [
+            (
+                "go.work".to_owned(),
+                "use (\n\t.\n\t./lib\n\t./svc/inner\n)\n".to_owned(),
+            ),
+            (
+                "svc/go.work".to_owned(),
+                "use .\nuse ./inner\nuse ../../outside\n".to_owned(),
+            ),
+        ];
+        let indexes = go_indexes(&modules, &works);
+        assert_eq!(
+            indexes,
+            [
+                GoIndex {
+                    dir: "".into(),
+                    modules: vec!["".into(), "lib".into()],
+                    work: Some("go.work".into()),
+                },
+                GoIndex {
+                    dir: "svc".into(),
+                    modules: vec!["svc".into(), "svc/inner".into()],
+                    work: Some("svc/go.work".into()),
+                },
+                GoIndex {
+                    dir: "tools".into(),
+                    modules: vec!["tools".into()],
+                    work: None,
+                },
+            ]
+        );
+        assert_eq!(indexes[0].patterns(), ["./...", "./lib/..."]);
+        assert_eq!(indexes[1].patterns(), ["./...", "./inner/..."]);
+        assert_eq!(
+            indexes.iter().map(GoIndex::name).collect::<Vec<_>>(),
+            ["gowork.scip", "gowork-svc.scip", "go-tools.scip"]
+        );
     }
 }

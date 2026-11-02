@@ -633,10 +633,21 @@ impl Session {
              WHERE path = 'go.mod' OR path LIKE '%/go.mod' ORDER BY path",
         );
         let go_modules = index::go_modules(&go_mods, &files);
+        let works: Vec<(String, String)> = column(
+            "SELECT path FROM git_tracked_files(getvariable('repo')) \
+             WHERE path = 'go.work' OR path LIKE '%/go.work' ORDER BY path",
+        )
+        .into_iter()
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(self.repo.join(&path)).ok()?;
+            Some((path, text))
+        })
+        .collect();
+        let go_indexes = index::go_indexes(&go_modules, &works);
         index::Inputs {
             files,
             workspaces,
-            go_modules,
+            go_indexes,
         }
     }
 

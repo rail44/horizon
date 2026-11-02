@@ -39,21 +39,27 @@ code-db limits REPO [--json]             # the limits the loading would set
 
 - **`index REPO`** reads `00_load.sql` and `views/files.sql` to list the source files
   (`files`: the settings' `scope.exclude` applied) and the tracked `Cargo.toml` and
-  `go.mod` files. It runs `jscpd.sh` over exactly those source files into
+  `go.mod` and `go.work` files. It runs `jscpd.sh` over exactly those source files into
   `REPO/target/code-db/jscpd/{exact,normalized}`, then `rust-analyzer scip` once per Cargo
   workspace: every directory whose tracked `Cargo.toml` declares `[workspace]` (or a
   `[workspace.…]` table) and holds a source file, the repository root included. A
   workspace nested in another is indexed on its own (here `duckdb-ext/`,
   `duckdb-ext/code-db/`, `duckdb-ext/host-check/` and `preview-plugin/` beside the root).
-  Then `scip-go index` (`SCIP_GO`, default `scip-go` on `PATH`) once per Go module: every
-  directory with a tracked `go.mod` that holds a `.go` source file; a module nested in
-  another is its own module (Go's `./...` leaves it out of the outer one), and a
-  `go.work` file is not read. scip-go loads the packages with the `go` command, which
-  may download the module's dependencies. Each tool is needed only when there is
+  Then `scip-go index` (`SCIP_GO`, default `scip-go` on `PATH`) over the Go modules:
+  every directory with a tracked `go.mod` that holds a `.go` source file; a module nested
+  in another is its own module (Go's `./...` leaves it out of the outer one). The modules
+  a tracked `go.work` uses are indexed together, in one run from the `go.work`'s
+  directory (`GOWORK` set to it, a `./<module>/...` pattern per module; the deepest
+  `go.work` when several use one): indexed one by one, scip-go names another workspace
+  module's symbols with the version `.` instead of that module's own, so no reference
+  between them would resolve. Every other module is indexed on its own with `GOWORK=off`,
+  so a `go.work` that is not tracked is not read. scip-go loads the packages with the
+  `go` command, which may download the modules' dependencies. Each tool is needed only when there is
   something for it to index. The indexes go to `REPO/target/code-db/scip/`, `root.scip`
   for the root workspace and `ws-<path with / as +>.scip` for the others
   (`ws-duckdb-ext+code-db.scip`), `go.scip` for a Go module at the root and
-  `go-<path with / as +>.scip` for the others; the index of a workspace or module that
+  `go-<path with / as +>.scip` for the others, `gowork.scip` for a `go.work` at the root
+  and `gowork-<path with / as +>.scip` for the others; the index of a workspace or module that
   is gone is removed. Each tool's output is in
   `REPO/target/code-db/logs/`, and the time of each step is printed. Run it again after
   edits: nothing checks the indexes against the tree. On this repository the root takes
@@ -456,6 +462,16 @@ reading of them, then Go's:
   one decision, the default none: a switch is not exhaustive), `for` (with a clause),
   `while` (a condition only), `loop` (`for {}`, no decision), `and`, `or`, `goto`,
   `return`, `break`, `continue`, `func_literal`.
+  Two limits of scip-go 0.2.7 (owner decision 2026-11-02: kept as limits). A file that
+  imports `"C"` has no units: scip-go indexes cgo's generated copy in Go's build cache
+  instead (a document outside the repository, matching no file; its lines are already
+  the original's through cgo's `//line` directives, only the path differs), and with
+  `CGO_ENABLED=0` the file is left out of the build; references to its functions from
+  other files belong to no unit. Modules joined by a `replace` directive rather than a
+  `go.work` are indexed apart and agree on the version, but scip-go names an interface's
+  method from another module `I#M().`, while the defining module's index names it
+  `I#M.`, so references to it and `implements_member` facts across them resolve to no
+  unit.
 - **`unit_ast`**: every unit's syntax tree, one row per node: the nodes of its file's
   tree (`file_ast`, Files below) inside the unit's range, compared by line and column; a
   file module's tree is its file's whole tree, and an enclosing unit's tree holds what it

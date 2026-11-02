@@ -847,3 +847,112 @@ fn go_modules_index_and_units() {
     let sizes = rows(&code_db(&["query", "size", "level=module", "lang=go"]));
     assert_eq!(sizes.len(), 2);
 }
+
+const WORK: &str = "go 1.22\n\nuse (\n\t./a\n\t./b\n)\n";
+const WORK_A: &str = "\
+package geom
+
+func Area(side int) int {
+	return side * side
+}
+
+type Shape interface {
+	Size() int
+}
+";
+const WORK_B: &str = "\
+package main
+
+import \"example.com/a/geom\"
+
+type Box struct{}
+
+func (Box) Size() int { return 1 }
+
+func main() {
+	var s geom.Shape = Box{}
+	println(geom.Area(s.Size()))
+}
+";
+
+/// The modules a tracked go.work uses are indexed together, so their
+/// references to each other resolve; a module it does not use is indexed on
+/// its own, outside the workspace.
+#[test]
+fn go_work_modules_index_together() {
+    let scip_go = std::env::var("SCIP_GO").unwrap_or_else(|_| "scip-go".to_owned());
+    if Command::new(&scip_go).arg("--version").output().is_err() {
+        eprintln!("SKIPPED: {scip_go} not found");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let repo = repo.as_path();
+    git(tmp.path(), &["init", "-q", "-b", "main", "repo"]);
+    write(repo, ".gitignore", "target/\n");
+    write(repo, "go.work", WORK);
+    write(repo, "a/go.mod", "module example.com/a\n\ngo 1.22\n");
+    write(repo, "a/geom/geom.go", WORK_A);
+    write(
+        repo,
+        "b/go.mod",
+        "module example.com/b\n\ngo 1.22\n\nrequire example.com/a v0.0.0\n",
+    );
+    write(repo, "b/app/main.go", WORK_B);
+    write(repo, "c/go.mod", "module example.com/c\n\ngo 1.22\n");
+    write(repo, "c/c.go", "package c\n\nfunc C() int { return 1 }\n");
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-q", "-m", "Add the workspace"]);
+    let jscpd = tmp.path().join("jscpd");
+    write(tmp.path(), "jscpd", FAKE_JSCPD);
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&jscpd, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let log = tmp.path().join("jscpd.log");
+    let code_db = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_code-db"))
+            .args(args.iter().take(1))
+            .arg(repo)
+            .args(args.iter().skip(1))
+            .env("JSCPD", &jscpd)
+            .env("FAKE_JSCPD_LOG", &log)
+            .env("RUST_ANALYZER", "/nonexistent/rust-analyzer")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(output.status.success(), "code-db {args:?}: {stderr}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    code_db(&["index"]);
+    let mut indexes: Vec<String> = std::fs::read_dir(repo.join("target/code-db/scip"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    indexes.sort();
+    assert_eq!(indexes, ["go-c.scip", "gowork.scip"]);
+
+    let probe = repo.join("target/probe.sql");
+    let query = |sql: &str| {
+        std::fs::write(&probe, sql).unwrap();
+        rows(&code_db(&["sql", probe.to_str().unwrap()]))
+    };
+    assert_eq!(
+        query(
+            "SELECT s.qualified_name, d.qualified_name FROM unit_edges e \
+             JOIN go.units s ON s.unit_id = e.src_unit_id JOIN go.units d ON d.unit_id = e.dst_unit_id \
+             WHERE s.path <> d.path ORDER BY ALL;\n"
+        ),
+        [["main", "Area"], ["main", "Shape"], ["main", "Shape.Size"]]
+    );
+    assert_eq!(
+        query(
+            "SELECT u.qualified_name, i.qualified_name FROM go.member_implementations m \
+             JOIN go.units u USING (unit_id) JOIN go.units i ON i.unit_id = m.interface_member_unit_id;\n"
+        ),
+        [["Box.Size", "Shape.Size"]]
+    );
+    assert_eq!(
+        query("SELECT module FROM go.units WHERE path = 'c/c.go' AND kind = 'function';\n"),
+        [["example.com/c"]]
+    );
+}
