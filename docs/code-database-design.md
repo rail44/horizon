@@ -974,6 +974,16 @@ word-wise swap, and each language names vocabulary values by vocabulary in
 vocabulary (`member_of`, `status`). Rust shows impl, trait_impl, trait and
 trait_item again; names of views and columns keep the neutral words.
 
+## Go implementations from SCIP relationships (2026-11-02)
+
+([record](research/code-db-go-implementations-2026-11-02.md)) The `scip_index`
+extension gains `read_scip_relationships`, one row per `Relationship` of a symbol's
+information, compared with `scip print --json` and with `scip-probe` like the other
+three. `go_type_facts` reads scip-go's implementation relationships as `implements`
+(a type and an interface) and `implements_member` (a method and the interface's
+method, NULL for an interface outside the index such as `fmt.Stringer`), so a Go
+method that only implements an interface is `implementation`, not `unreferenced`.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
@@ -1019,9 +1029,8 @@ trait_item again; names of views and columns keep the neutral words.
   catalog surface), and whether `duckdb-ext/` is extracted for use in
   other repositories. The DuckDB 2.0.0 CLI is installed as
   `~/.local/bin/duckdb2` for interactive use.
-- **Go** has its units (above); Go packages as modules, Go's complexity
-  node types, scip-go's implementation relationships and a reading on a
-  real Go repository are open. **TypeScript**'s adapter exists only in the
+- **Go** has its units, packages, complexity and implementations (above);
+  `go.work`, cgo and a reading on a real Go repository are open. **TypeScript**'s adapter exists only in the
   spike's record; `lang/typescript.sql` and `scip-typescript` are the
   pieces to add.
 
