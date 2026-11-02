@@ -963,6 +963,17 @@ descriptors and their name resolution stay in `lang/rust.sql`; `member_of` and t
 structural statuses take neutral names (`implementation`, `interface_item`). Go gives
 only `member` until the SCIP relationships are read.
 
+## Vocabulary values per language (2026-11-02)
+
+([record](research/code-db-value-terms-2026-11-02.md)) A terms row replaces its
+word everywhere, so a vocabulary word that means something else elsewhere (Rust's
+trait for `interface_member`, while the query `interface` is about signatures)
+cannot be one. The owner chose to fix the mechanism: the level names keep the
+word-wise swap, and each language names vocabulary values by vocabulary in
+`<language>_value_terms`, applied whole and only to the columns holding that
+vocabulary (`member_of`, `status`). Rust shows impl, trait_impl, trait and
+trait_item again; names of views and columns keep the neutral words.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
