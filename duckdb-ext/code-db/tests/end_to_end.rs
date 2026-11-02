@@ -956,3 +956,125 @@ fn go_work_modules_index_together() {
         [["example.com/c"]]
     );
 }
+
+/// A module below the repository root, with an internal and an external test package
+/// and function literals in a package-level `var`: the tests stay `test` although the
+/// test main `go test` generates (a document in Go's build cache) references them, the
+/// literals' parameters are no units, and the external test is a package of its own, so
+/// it makes no cycle with a package that imports the one it tests.
+#[test]
+fn go_tests_literals_and_external_test_packages() {
+    let scip_go = std::env::var("SCIP_GO").unwrap_or_else(|_| "scip-go".to_owned());
+    if Command::new(&scip_go).arg("--version").output().is_err() {
+        eprintln!("SKIPPED: {scip_go} not found");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let repo = repo.as_path();
+    git(tmp.path(), &["init", "-q", "-b", "main", "repo"]);
+    write(repo, ".gitignore", "target/\n");
+    write(repo, "sub/go.mod", "module example.com/m\n\ngo 1.22\n");
+    write(
+        repo,
+        "sub/a/a.go",
+        "package a\n\nfunc A() int { return 1 }\n",
+    );
+    write(
+        repo,
+        "sub/a/hooks.go",
+        "package a\n\nfunc apply(f func(*int)) func(*int) { return f }\n\n\
+         var hooks = []func(*int){\n\tapply(func(n *int) { *n = 1 }),\n\tapply(func(n *int) { *n = 2 }),\n}\n",
+    );
+    write(
+        repo,
+        "sub/a/in_test.go",
+        "package a\n\nimport \"testing\"\n\nfunc TestIn(t *testing.T) { _ = A() + len(hooks) }\n",
+    );
+    write(
+        repo,
+        "sub/a/a_test.go",
+        "// The external tests.\npackage a_test\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/a\"\n\t\"example.com/m/b\"\n)\n\n\
+         func TestA(t *testing.T) { _ = a.A() + b.B() }\n",
+    );
+    write(
+        repo,
+        "sub/b/b.go",
+        "package b\n\nimport \"example.com/m/a\"\n\nfunc B() int { return a.A() }\n",
+    );
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-q", "-m", "Add the module"]);
+    let jscpd = tmp.path().join("jscpd");
+    write(tmp.path(), "jscpd", FAKE_JSCPD);
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&jscpd, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let log = tmp.path().join("jscpd.log");
+    let code_db = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_code-db"))
+            .args(args.iter().take(1))
+            .arg(repo)
+            .args(args.iter().skip(1))
+            .env("JSCPD", &jscpd)
+            .env("FAKE_JSCPD_LOG", &log)
+            .env("RUST_ANALYZER", "/nonexistent/rust-analyzer")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(output.status.success(), "code-db {args:?}: {stderr}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    code_db(&["index"]);
+    let probe = repo.join("target/probe.sql");
+    let query = |sql: &str| {
+        std::fs::write(&probe, sql).unwrap();
+        rows(&code_db(&["sql", probe.to_str().unwrap()]))
+    };
+
+    assert_eq!(
+        query(
+            "SELECT u.path, u.kind, u.qualified_name, r.status FROM go.units u \
+             JOIN go.unit_reference_status r USING (unit_id) \
+             WHERE u.path IN ('sub/a/hooks.go', 'sub/a/a_test.go', 'sub/a/in_test.go') \
+             AND u.kind <> 'file' ORDER BY ALL;\n"
+        ),
+        [
+            ["sub/a/a_test.go", "function", "TestA", "test"],
+            ["sub/a/hooks.go", "constant", "hooks", "referenced"],
+            ["sub/a/hooks.go", "function", "apply", "referenced"],
+            ["sub/a/in_test.go", "function", "TestIn", "test"],
+        ]
+    );
+    // Documents outside the repository start with ../ once their path is resolved.
+    assert_eq!(
+        query(
+            "SELECT count(*) > 0, bool_and(starts_with(document, '../')) FROM scip_occurrences \
+             WHERE file_id IS NULL;\n"
+        ),
+        [["true", "true"]]
+    );
+    assert_eq!(
+        query(
+            "SELECT path, package FROM go.files JOIN go.file_packages USING (file_id) \
+             WHERE path LIKE 'sub/a/%' ORDER BY path;\n"
+        ),
+        [
+            ["sub/a/a.go", "sub/a"],
+            ["sub/a/a_test.go", "sub/a_test"],
+            ["sub/a/hooks.go", "sub/a"],
+            ["sub/a/in_test.go", "sub/a"],
+        ]
+    );
+    assert!(rows(&code_db(&["query", "package_cycles"])).is_empty());
+    let graph = rows(&code_db(&["query", "package_graph"]));
+    assert_eq!(
+        graph
+            .iter()
+            .map(|r| (&r[0][..], &r[1][..], &r[8][..]))
+            .collect::<Vec<_>>(),
+        [
+            ("sub/a_test", "sub/a", "true"),
+            ("sub/a_test", "sub/b", "false"),
+            ("sub/b", "sub/a", "false"),
+        ]
+    );
+}

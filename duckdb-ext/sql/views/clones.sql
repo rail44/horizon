@@ -14,7 +14,9 @@
 -- inclusive start/end. Names are absolute (jscpd --absolute) and made relative to `repo`;
 -- a name outside `repo` stays absolute and matches no file. report_pair_id numbers the
 -- duplicates by source and report order, from 0. read_json reads the reports at every
--- scan.
+-- scan. A report is one JSON object, which read_json refuses when it is larger than its
+-- maximum_object_size (16 MiB by default; a repository of a million lines writes 100 MB):
+-- the limit is the largest report's size (00_load.sql, clone_report_bytes).
 CREATE OR REPLACE VIEW clone_report_pairs AS
 WITH reports AS (
     SELECT regexp_extract(filename, '([^/]+)/[^/]+$', 1) AS source,
@@ -24,7 +26,7 @@ WITH reports AS (
                    columns := {'duplicates': 'STRUCT("firstFile" STRUCT(name VARCHAR, "start" INTEGER, "end" INTEGER),
                                                      "secondFile" STRUCT(name VARCHAR, "start" INTEGER, "end" INTEGER),
                                                      tokens INTEGER, lines INTEGER)[]'},
-                   filename := true)
+                   filename := true, maximum_object_size := getvariable('clone_report_bytes'))
 ),
 relative AS (
     SELECT source, ordinal, d,

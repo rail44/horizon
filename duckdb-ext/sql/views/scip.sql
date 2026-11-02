@@ -32,7 +32,10 @@
 --   scip_relationships(document, symbol, related_symbol, is_reference, is_implementation,
 --       is_type_definition, is_definition)
 -- `document` is repository-relative: the index's project root (scip_index_roots) joined
--- with the document's relative path. Lines are 1-based and inclusive, columns 1-based
+-- with the document's relative path, `.` and `..` resolved (normalized_path), so that a
+-- document outside the repository starts with `../`: scip-go's documents in Go's build
+-- cache (the test main `go test` generates, cgo's generated copies), named relative to
+-- the module (`sub/../../…/go-build/…`). Lines are 1-based and inclusive, columns 1-based
 -- (start_char + 1; the end is the column after the last character), counted in the unit
 -- of the document's position encoding (rust-analyzer: UTF-8 bytes). `file_id` comes from
 -- joining `document` to files.path and is NULL for a document that is not a source file
@@ -42,6 +45,13 @@
 -- Occurrences without a symbol are dropped. A non-local symbol can be listed under
 -- several documents (a package's `crate/` symbol under the root file of each of its
 -- targets): scip_symbols keeps one row per listing.
+
+-- normalized_path(p): the relative path p with its empty and `.` segments dropped and
+-- each `..` taking the segment before it away; the `..` left at the start stay.
+CREATE OR REPLACE MACRO normalized_path(p) AS array_to_string(list_reduce(string_split(p, '/'), lambda acc, part:
+    CASE WHEN part = '' OR part = '.' THEN acc
+         WHEN part = '..' AND len(acc) > 0 AND acc[-1] <> '..' THEN acc[:-2]
+         ELSE list_append(acc, part) END, []::VARCHAR[]), '/');
 
 CREATE OR REPLACE VIEW scip_index_occurrences AS SELECT * FROM read_scip(getvariable('scip_indexes'));
 
@@ -75,7 +85,8 @@ WITH roots AS MATERIALIZED (
     SELECT index_path, prefix FROM scip_index_roots
 ),
 occurrences AS (
-    SELECT (CASE WHEN r.prefix = '' THEN o.document ELSE r.prefix || '/' || o.document END)::VARCHAR AS document, o.*
+    SELECT normalized_path(CASE WHEN r.prefix = '' THEN o.document ELSE r.prefix || '/' || o.document END)::VARCHAR
+               AS document, o.*
            EXCLUDE (document, index_path)
     FROM scip_index_occurrences o JOIN roots r USING (index_path)
     WHERE o.symbol <> ''
@@ -96,8 +107,9 @@ WITH roots AS MATERIALIZED (
     SELECT index_path, prefix FROM scip_index_roots
 ),
 symbols AS (
-    SELECT (CASE WHEN s.document IS NULL OR r.prefix = '' THEN s.document
-                 ELSE r.prefix || '/' || s.document END)::VARCHAR AS document, s.* EXCLUDE (document, index_path)
+    SELECT normalized_path(CASE WHEN s.document IS NULL OR r.prefix = '' THEN s.document
+                                ELSE r.prefix || '/' || s.document END)::VARCHAR AS document,
+           s.* EXCLUDE (document, index_path)
     FROM scip_index_symbols s JOIN roots r USING (index_path)
 )
 SELECT document,
@@ -121,8 +133,9 @@ WITH roots AS MATERIALIZED (
     SELECT index_path, prefix FROM scip_index_roots
 ),
 relationships AS (
-    SELECT (CASE WHEN x.document IS NULL OR r.prefix = '' THEN x.document
-                 ELSE r.prefix || '/' || x.document END)::VARCHAR AS document, x.* EXCLUDE (document, index_path)
+    SELECT normalized_path(CASE WHEN x.document IS NULL OR r.prefix = '' THEN x.document
+                                ELSE r.prefix || '/' || x.document END)::VARCHAR AS document,
+           x.* EXCLUDE (document, index_path)
     FROM scip_index_relationships x JOIN roots r USING (index_path)
 )
 SELECT document,

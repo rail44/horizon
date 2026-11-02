@@ -74,7 +74,8 @@ REFRESH_FILE = "refresh.sql"
 CACHED_VIEWS = ["file_ast", "go_file_ast", "scip_occurrences", "scip_symbols", "units", "unit_ast", "unit_occurrences", "symbol_units",
                 "unit_references", "unit_edges", "unit_ancestors", "type_fact_units", "unit_owner_types",
                 "namespaces", "unit_namespace", "namespace_edges", "unit_scope", "unit_fan_in", "unit_fan_out",
-                "unit_reference_status", "unit_debt_markers", "unit_constructs", "unit_complexity"]
+                "unit_reference_status", "unit_debt_markers", "unit_constructs", "unit_complexity",
+                "clone_pairs", "clone_sides"]
 QUERIES = ["size", "duplication", "coupling", "interface", "public_surface", "intent", "unreferenced",
            "namespace_graph", "namespace_cycles", "layer_violations", "unit_dependencies", "complexity"]
 RUST_ANALYZER = os.environ.get("RUST_ANALYZER", "rust-analyzer")
@@ -513,7 +514,9 @@ def fixture_report(repo):
     Square.scaled, and two fragments of lib.rs that do not overlap (a copy inside the file
     module, kept). In `normalized`: Square's `area` body matching itself one line lower
     (overlapping fragments of one file, dropped), and the two `area` bodies again, a line
-    longer and with the sides the other way round (merged with the exact pair)."""
+    longer and with the sides the other way round (merged with the exact pair). The
+    normalized report carries 17 MiB of statistics: read_json reads a report as one object,
+    past its default 16 MiB limit."""
     def side(path, start, end):
         # Resolved, as connect() sets `repo` (macOS' temp dir is a symlink).
         return {"name": str(repo.resolve() / path), "start": start, "end": end,
@@ -542,10 +545,11 @@ def fixture_report(repo):
          "firstFile": side("shapes/src/rect.rs", rect_area - 1, rect_area + 4),
          "secondFile": side("shapes/src/lib.rs", lib_area - 1, lib_area + 4)},
     ]
-    for mode, dups in (("exact", duplicates), ("normalized", normalized)):
+    for mode, dups, statistics in (("exact", duplicates, {}),
+                                   ("normalized", normalized, {"padding": "x" * (17 << 20)})):
         out = repo / "target/code-db/jscpd" / mode
         out.mkdir(parents=True, exist_ok=True)
-        (out / "jscpd-report.json").write_text(json.dumps({"duplicates": dups, "statistics": {}}))
+        (out / "jscpd-report.json").write_text(json.dumps({"duplicates": dups, "statistics": statistics}))
 
 
 def build_fixture(root):
@@ -639,6 +643,7 @@ def check_fixture(print_only=False):
         files = rows(con, "SELECT count(*) FROM files")[0][0]
         assert (ast[0], ast[2]) == (files, 0) and ast[1] == rows(con, "SELECT count(*) FROM file_ast")[0][0], ast
         assert_fixture(con, repo)
+        assert_display_order(con)
         read_views(con)
         _, state, again, ast = read_refresh(con)
         assert (state, again, ast) == ("kept", first, (0, 0, 0)), (state, again, first, ast)
@@ -1243,6 +1248,20 @@ def assert_counting_rules(con):
     unit = [r[8] for r in query(con, "coupling") if r[4] == "namespace" and r[5] == "shapes"]
     file = [r[8] for r in query(con, "coupling", level="file") if r[1] == "shapes/src/lib.rs"]
     assert (unit, file) == ([3], [5]), (unit, file)
+
+
+def assert_display_order(con):
+    """display_select keeps the rows' order: a vocabulary column's translation is a
+    subquery, and the joins of two of them reordered 20,000 rows before the SELECT ordered
+    by rowid."""
+    con.execute("CREATE OR REPLACE TEMP TABLE query_result AS "
+                "SELECT 'unit' AS level, (['namespace', 'function', 'type', 'method'])[i % 4 + 1] AS kind, "
+                "i AS n FROM range(20000) t(i) ORDER BY i DESC")
+    select = rows(con, "SELECT display_select('query_result')")[0][0]
+    shown = rows(con, select)
+    assert [n for _, _, n in shown] == list(range(19999, -1, -1)), "display_select reordered the rows"
+    assert shown[0] == ("unit", "method", 19999) and shown[3] == ("unit", "module", 19996), shown[:4]
+    con.execute("DROP TABLE query_result")
 
 
 def assert_fixture(con, repo):

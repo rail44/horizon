@@ -10,7 +10,10 @@
 --   Type, Struct, Interface, TypeAlias -> type; Package -> file;
 --   Constant, Variable -> constant.
 -- A Variable that is not local is a package-level `var`; struct fields (Field) and
--- everything inside a function body (scip-go's `local N` symbols) are not units. A
+-- everything inside a function body (scip-go's `local N` symbols) are not units, nor the
+-- parameters and variables of a function literal in a package-level `var`, which scip-go
+-- names after the `var` (`…/hooks:n.`, a Variable: one symbol for every `n` of the `var`,
+-- with the `var`'s range in the syntax tree). A
 -- function or method is in no type's range: member_of is 'member' for a method (its
 -- receiver's type is in go_type_facts) and 'interface_member' for an interface's method
 -- (MethodSpecification). Code scip-go does not see (a file whose build
@@ -55,11 +58,25 @@ SELECT NULL::VARCHAR AS vocabulary, NULL::VARCHAR AS internal, NULL::VARCHAR AS 
 
 -- go_file_namespaces(file_id, namespace, namespace_path): a Go file belongs to its
 -- directory's package (views/graph.sql, file_namespaces): the namespace is the directory
--- (`.` for the repository root), an external test package (`package x_test`) included, and
--- its namespace_path the directory too ('' for the root, as a Rust crate root at the
--- repository root), so a directory's package is an ancestor of those below it.
+-- (`.` for the repository root) and its namespace_path the directory too ('' for the root,
+-- as a Rust crate root at the repository root), so a directory's package is an ancestor
+-- of those below it. A `_test.go` file whose package clause names an external test
+-- package (`package x_test`) is that package, a package of its own as Go builds it: the
+-- namespace `<directory>_test`, with the directory's namespace_path, so that its edges to
+-- the package it tests are nested (structural) and an external test importing a package
+-- that imports the tested one makes no cycle.
 CREATE OR REPLACE VIEW go_file_namespaces AS
-SELECT file_id, coalesce(nullif(regexp_extract(path, '^(.*)/[^/]*$', 1), ''), '.') AS namespace,
+WITH external_tests AS (
+    SELECT l.file_id
+    FROM source_lines l JOIN files f USING (file_id)
+    WHERE f.language = 'go' AND ends_with(f.path, '_test.go') AND NOT l.is_comment
+      AND regexp_matches(l.text, '^\s*package\s')
+    QUALIFY row_number() OVER (PARTITION BY l.file_id ORDER BY l.line) = 1
+        AND regexp_matches(l.text, '^\s*package\s+[A-Za-z_][A-Za-z0-9_]*_test\b')
+)
+SELECT file_id,
+       coalesce(nullif(regexp_extract(path, '^(.*)/[^/]*$', 1), ''), '.')
+           || CASE WHEN file_id IN (SELECT file_id FROM external_tests) THEN '_test' ELSE '' END AS namespace,
        regexp_extract(path, '^(.*)/[^/]*$', 1) AS namespace_path
 FROM files WHERE language = 'go';
 
@@ -215,6 +232,7 @@ typed AS MATERIALIZED (
     FROM defs d JOIN info i USING (symbol)
     WHERE i.kind IN ('Function', 'Method', 'MethodSpecification', 'Type', 'Struct', 'Interface', 'TypeAlias',
                      'Package', 'Constant', 'Variable')
+      AND NOT (i.kind = 'Variable' AND regexp_matches(d.symbol, '[/#][^/#`]*:[^/#`]*\.$'))
 ),
 nodes AS MATERIALIZED (
     SELECT file_id, node_id, type, parent_id, start_line, start_column, end_line, end_column

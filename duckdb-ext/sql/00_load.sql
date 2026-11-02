@@ -102,6 +102,12 @@ SET VARIABLE clone_reports = coalesce(getvariable('clone_reports'), (
     FROM glob(getvariable('repo') || '/target/code-db/jscpd/*/jscpd-report.json')
     WHERE regexp_extract(file, '([^/]+)/[^/]+$', 1) IN ('exact', 'normalized')
 ));
+-- The largest report's size in bytes, at least read_json's default object limit
+-- (views/clones.sql); read_blob reads only the sizes.
+SET VARIABLE clone_report_bytes = (
+    SELECT greatest(coalesce(max(size), 0) + 1, 16777216)::UINTEGER
+    FROM read_blob(getvariable('clone_reports') || ['duckdb-ext/sql/empty-jscpd-report.json'])
+);
 
 -- Persistent cache (refresh.sql): the directory of its files, one per state of the
 -- inputs; it must exist when refresh.sql is read.

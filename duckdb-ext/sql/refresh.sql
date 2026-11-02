@@ -20,7 +20,7 @@
 --
 -- Key. The inputs every other cached layer derives from: `repo`, the file snapshot
 -- (source_files: paths and content ids, taken again here as 00_load.sql takes it), each
--- SCIP index's path and content hash, the test settings (extra_test_paths,
+-- SCIP index's and jscpd report's path and content hash, the test settings (extra_test_paths,
 -- extra_test_attributes), the loaded sitting_duck version (its grammars make the trees
 -- unit_complexity counts), and the text of every view and macro of the view files. The cache of one key is the file <cache_dir>/<md5 of the key>.duckdb, attached as `cache`;
 -- a file that exists already holds the layers (each is created whole or not at all, so
@@ -32,9 +32,11 @@
 -- unit_references, unit_edges, unit_ancestors, type_fact_units, unit_owner_types,
 -- namespaces, unit_namespace, namespace_edges (views/graph.sql); unit_scope, unit_fan_in,
 -- unit_fan_out, unit_reference_status, unit_debt_markers, unit_constructs, unit_complexity
--- (views/quality.sql). Views that read a query variable or the settings' tables (module_cycle_edges and what reads it,
--- the layers) and the clone views (jscpd's reports are not in the key) stay live, over the
--- copies.
+-- (views/quality.sql); clone_pairs, clone_sides (views/clones.sql). Views that read a query
+-- variable or the settings' tables (module_cycle_edges and what reads it, the layers) stay
+-- live, over the copies. clone_pairs is copied because a plan that reads it twice (directly
+-- and through clone_sides, as queries/duplication.sql does) ran out of memory on a
+-- repository with 58,534 pairs.
 --
 -- cache.meta(key, repo, built_at, seconds, layers) records the build: the wall time and
 -- the row count of each layer.
@@ -60,11 +62,12 @@ SET VARIABLE source_paths = list_transform(getvariable('source_files'),
 
 
 
--- The stub report keeps read_blob's list non-empty when there is no index.
+-- The stub report keeps read_blob's list non-empty when there is no index or report.
 SET VARIABLE refresh_key = concat_ws(chr(10),
     'schema 1', getvariable('repo'), getvariable('source_files')::VARCHAR,
     (SELECT string_agg(filename || ' ' || hash(content)::VARCHAR, ' ' ORDER BY filename)
-     FROM read_blob(getvariable('scip_indexes') || ['duckdb-ext/sql/empty-jscpd-report.json'])),
+     FROM read_blob(getvariable('scip_indexes') || getvariable('clone_reports')
+                    || ['duckdb-ext/sql/empty-jscpd-report.json'])),
     getvariable('extra_test_paths')::VARCHAR, getvariable('extra_test_attributes')::VARCHAR,
     (SELECT 'sitting_duck ' || extension_version FROM duckdb_extensions() WHERE extension_name = 'sitting_duck' AND loaded),
     (SELECT string_agg(view_name || ' ' || sql, chr(10) ORDER BY view_name) FROM duckdb_views() WHERE NOT internal),
@@ -186,6 +189,10 @@ CREATE TABLE IF NOT EXISTS cache.unit_constructs AS SELECT * FROM unit_construct
 CREATE OR REPLACE VIEW unit_constructs AS SELECT * FROM cache.unit_constructs;
 CREATE TABLE IF NOT EXISTS cache.unit_complexity AS SELECT * FROM unit_complexity;
 CREATE OR REPLACE VIEW unit_complexity AS SELECT * FROM cache.unit_complexity;
+CREATE TABLE IF NOT EXISTS cache.clone_pairs AS SELECT * FROM clone_pairs;
+CREATE OR REPLACE VIEW clone_pairs AS SELECT * FROM cache.clone_pairs;
+CREATE TABLE IF NOT EXISTS cache.clone_sides AS SELECT * FROM clone_sides;
+CREATE OR REPLACE VIEW clone_sides AS SELECT * FROM cache.clone_sides;
 
 INSERT INTO cache.meta
 SELECT getvariable('refresh_key'), getvariable('repo'), now()::TIMESTAMP,

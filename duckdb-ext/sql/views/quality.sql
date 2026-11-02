@@ -107,7 +107,9 @@ WHERE NOT EXISTS (SELECT 1 FROM scopes x WHERE x.unit_id = s.unit_id AND x.membe
 GROUP BY s.unit_id;
 
 -- unit_reference_status(unit_id, references, status): the reference occurrences of the
--- unit's own symbol anywhere (its own file included), and status: 'referenced'; else the
+-- unit's own symbol anywhere in the repository (its own file included; a file the settings
+-- exclude too, but not a document outside the repository, views/scip.sql: the test main
+-- `go test` generates references every test), and status: 'referenced'; else the
 -- reason it is structurally unreferenced rather than dead: 'test' (a test unit),
 -- 'implementation' (a member implementing an interface's member, member_implementations:
 -- calls through the interface resolve to its item), 'entry_point' or 'root' (the unit's
@@ -118,7 +120,9 @@ GROUP BY s.unit_id;
 -- macro bodies, which SCIP does not resolve) show as 'unreferenced'.
 CREATE OR REPLACE VIEW unit_reference_status AS
 WITH counts AS (
-    SELECT symbol, count(*) AS n FROM scip_occurrences WHERE is_reference GROUP BY symbol
+    SELECT symbol, count(*) AS n FROM scip_occurrences
+    WHERE is_reference AND NOT (document = '..' OR starts_with(document, '../'))
+    GROUP BY symbol
 )
 SELECT u.unit_id, coalesce(c.n, 0) AS references,
        CASE WHEN coalesce(c.n, 0) > 0 THEN 'referenced'

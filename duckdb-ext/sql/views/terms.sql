@@ -101,10 +101,12 @@ CREATE OR REPLACE MACRO display_column(c, t, lang) AS
          ELSE '"' || replace(c, '"', '""') || '"' END
     || ' AS "' || replace(display_term(c, lang), '"', '""') || '"';
 
--- display_select(v): a SELECT showing the temporary table or view v in the display language.
+-- display_select(v): a SELECT showing the temporary table v in the display language, in
+-- its rows' order: a vocabulary column's display_term is a subquery, whose join does not
+-- keep the order the table holds, so the SELECT orders by the table's rowid.
 CREATE OR REPLACE MACRO display_select(v) AS (
     SELECT 'SELECT ' || string_agg(display_column(column_name, data_type, display_language()), ', '
-                                   ORDER BY column_index) || ' FROM temp.' || v
+                                   ORDER BY column_index) || ' FROM temp.' || v || ' ORDER BY rowid'
     FROM duckdb_columns() WHERE database_name = 'temp' AND table_name = v);
 
 -- display_ddl(ord, statement): the statements creating the display language's schema, one

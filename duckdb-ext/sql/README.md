@@ -357,7 +357,10 @@ files).
   1-based with the end the column after the last character, in the unit of the
   document's position encoding (UTF-8 bytes for rust-analyzer). `file_id` is `document`
   joined to `files.path`, NULL for a document that is not a source file (an excluded
-  file). `local N` symbols are qualified as `local N <document>`. `is_reference` is `NOT
+  file). `document` has its `.` and `..` resolved (`normalized_path`), so a document
+  outside the repository starts with `../`: scip-go indexes the test main `go test`
+  generates and cgo's generated copies in Go's build cache, named relative to the module
+  (`sub/../../…/go-build/…`). `local N` symbols are qualified as `local N <document>`. `is_reference` is `NOT
   is_definition`: rust-analyzer 1.99.1 sets no role bit but Definition (the Test and
   Generated bits are never set, so tests are found from the text, Units).
 - **`scip_symbols(document, symbol, kind, display_name, documentation, signature)`**:
@@ -434,12 +437,16 @@ reading of them, then Go's:
   MethodSpecification (an interface's method) → `method`; Type, Struct, Interface,
   TypeAlias → `type`; Package → `file`; Constant and a package-level Variable →
   `constant`. Struct fields and everything inside a function body (scip-go's `local N`
-  symbols) are not units. Every file is a file unit of kind `file`, not a namespace:
+  symbols) are not units, nor the parameters and variables of a function literal in a
+  package-level `var` (scip-go names them after the `var`, `…/hooks:n.`, one symbol for
+  every `n` of it). Every file is a file unit of kind `file`, not a namespace:
   scip-go defines the package at each file's `package` clause, and the unit's range is the
   file's whole syntax tree. The namespace is the file's directory, the Go package
-  (`go_file_namespaces`: `.` for the root, an external `x_test` package included), which
-  spans its files; `namespace_path` is the directory, so a package is an ancestor of the
-  packages below it. A file unit's own symbol, the package's, belongs to no unit
+  (`go_file_namespaces`: `.` for the root), which spans its files; `namespace_path` is the
+  directory, so a package is an ancestor of the packages below it. A `_test.go` file of
+  an external test package (`package x_test`) is a package of its own, `<directory>_test`,
+  with the directory's `namespace_path`: its edges to the package it tests are nested, and
+  an external test importing a package that imports the tested one makes no cycle. A file unit's own symbol, the package's, belongs to no unit
   (`symbol_units`), so a reference to the package counts for none of its files.
   scip-go gives only functions and methods an `enclosing_range` (from `func` to the
   closing brace, the doc comment not included); every other range comes from the
@@ -467,7 +474,8 @@ reading of them, then Go's:
   instead (a document outside the repository, matching no file; its lines are already
   the original's through cgo's `//line` directives, only the path differs), and with
   `CGO_ENABLED=0` the file is left out of the build; references to its functions from
-  other files belong to no unit. Modules joined by a `replace` directive rather than a
+  other files belong to no unit, and its own references, being outside the repository,
+  make nothing `referenced`. Modules joined by a `replace` directive rather than a
   `go.work` are indexed apart and agree on the version, but scip-go names an interface's
   method from another module `I#M().`, while the defining module's index names it
   `I#M.`, so references to it and `implements_member` facts across them resolve to no
@@ -579,7 +587,9 @@ settings file.
   start_line_b, end_line_b, tokens, lines)`**: jscpd's duplicates as the reports of
   `clone_reports` give them (`index` runs jscpd over the files of `files`), read with a
   fixed schema; the list always includes `empty-jscpd-report.json`, so the view exists
-  without reports. **`clone_pairs(pair_id, sources, report_pairs, file_a, start_line_a,
+  without reports. A report is one JSON object, which `read_json` refuses past its
+  `maximum_object_size`; the limit is the largest report's size (`clone_report_bytes`,
+  `00_load.sql`), as a repository of a million lines writes reports of 100 MB. **`clone_pairs(pair_id, sources, report_pairs, file_a, start_line_a,
   end_line_a, file_b, start_line_b, end_line_b, tokens, lines)`**: the pairs the queries
   read. A duplicate whose two fragments lie in one file and share a line is dropped (a
   run of similar lines matching itself a few lines lower); two fragments of one file
@@ -611,7 +621,8 @@ settings file.
   filter and order by the fan-in across it (both fan-ins are shown), and `coupling`'s
   `contract_candidate` takes its threshold from `min_packages` or `min_namespaces`.
 - **`unit_reference_status(unit_id, references, status)`**: the reference occurrences of
-  the unit's own symbol anywhere, and `referenced`, `unreferenced`, or why it is
+  the unit's own symbol anywhere in the repository (an excluded file's included; not a
+  document outside it: the test main `go test` generates references every test), and `referenced`, `unreferenced`, or why it is
   structurally unreferenced: `test`, `implementation` (a member implementing an
   interface's, `member_implementations`), the unit's `entry` as its language
   gives it in `units` (`entry_point`: Rust's and Go's `main`, Go's `init`; `root`: a
@@ -663,7 +674,7 @@ views compute the same rows live (`check.py refresh` compares them).
   records each read that parsed or dropped something, and the last result of
   `refresh.sql` gives the same three counts of its own read.
 - **Key** of the other layers. `repo`, the file snapshot (paths and content ids, taken
-  again), each index's path and content hash, the two test variables, the loaded
+  again), each SCIP index's and jscpd report's path and content hash, the two test variables, the loaded
   sitting_duck version, and the text of every view and macro.
   The copies of one key are the file `<cache_dir>/<md5 of the key>.duckdb` (default
   `<repo>/target/code-db/cache/`, which must exist; `code-db` creates it), attached as
@@ -675,8 +686,11 @@ views compute the same rows live (`check.py refresh` compares them).
   `scip_symbols`, `units`, `unit_occurrences`, `symbol_units`, `unit_references`,
   `unit_edges`, `unit_ancestors`, `type_fact_units`, `unit_owner_types`, `namespaces`,
   `unit_namespace`, `namespace_edges`, `unit_scope`, `unit_fan_in`, `unit_fan_out`,
-  `unit_reference_status`, `unit_debt_markers`, `unit_constructs`, `unit_complexity`. Views that read a query variable or the
-  settings' tables (cycles, layers) and the clone views stay live, over the copies.
+  `unit_reference_status`, `unit_debt_markers`, `unit_constructs`, `unit_complexity`,
+  `clone_pairs`, `clone_sides`. Views that read a query variable or the settings' tables
+  (cycles, layers) stay live, over the copies. `clone_pairs` is copied because a plan
+  reading it twice (directly and through `clone_sides`, as `duplication` does) ran out of
+  memory on a repository with 58,534 pairs.
 - **Measured** on this repository (`docs/research/code-db-file-ast-cache-2026-10-30.md`
   has the runs): a cold build, syntax trees included, takes 2.0–2.2 s (`read_ast` over
   537 files into 1.58 M nodes in 0.7–0.8 s of it; peak RSS 1.6 GB; the trees' file is
