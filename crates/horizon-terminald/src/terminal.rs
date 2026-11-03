@@ -733,7 +733,10 @@ fn run_writer(
 
 fn sample_cwd(pid: u32) -> Option<PathBuf> {
     let sysinfo_pid = Pid::from_u32(pid);
-    let mut system = System::new();
+    // sysinfo 0.40 made the constructors fallible (`Error`), so a system
+    // whose platform probes fail simply yields no sample, like a pid that
+    // has already exited.
+    let mut system = System::new().ok()?;
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[sysinfo_pid]),
         false,
