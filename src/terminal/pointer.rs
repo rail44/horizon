@@ -164,7 +164,7 @@ impl TerminalView {
         }
     }
 
-    pub(super) fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+    pub(super) fn handle_scroll_wheel(&mut self, event: &ScrollEvent, cx: &mut Context<Self>) {
         let local_scrollback = self.session.read(cx).local_scrollback_available();
         if local_scrollback {
             // Passthrough debt is unrelated to the visible fractional

@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 # module, which compiles for this target too; this crate is only the
 # component's entry point.
 [dependencies]
-embedded_gpui = { git = "https://github.com/rail44/embedded_gpui", rev = "2083aea93302a44819b826fa5c14063c996689fe" }
+embedded_gpui = { git = "https://github.com/rail44/embedded_gpui", rev = "24b9f5ffdf27be85559df38b3f37e681a87f52b7" }
 horizon = { path = ".." }
 
 # The build profile for the edit-to-visible loop. The time from load to the

@@ -171,7 +171,7 @@ impl Render for TerminalView {
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _window, cx| {
                 view.handle_mouse_move(event, cx);
             }))
-            .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _window, cx| {
+            .on_scroll(cx.listener(|view, event: &ScrollEvent, _window, cx| {
                 view.handle_scroll_wheel(event, cx);
             }))
             .child(

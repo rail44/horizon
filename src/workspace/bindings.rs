@@ -37,15 +37,18 @@ fn list_select_binding(cx: &App, keystroke: &str, action_name: &str) -> KeyBindi
     let context_predicate = KeyBindingContextPredicate::parse("List")
         .expect("`List` is a valid key context predicate")
         .into();
-    KeyBinding::load(
-        keystroke,
-        action,
-        Some(context_predicate),
-        false,
-        None,
-        cx.keyboard_mapper().as_ref(),
-    )
-    .unwrap_or_else(|err| panic!("invalid keystroke `{keystroke}`: {err}"))
+    KeyBinding::load(keystroke, action, Some(context_predicate), false, None, cx)
+        .unwrap_or_else(|err| panic!("invalid keystroke `{keystroke}`: {err}"))
+}
+
+/// Loads a binding for a chord that only exists at runtime -- the
+/// workspace-mode override or a `[keybindings]` entry. `KeyBinding::new`
+/// takes a `'static` chord string, so a chord owned by the resolved config
+/// goes through `KeyBinding::load`, which parses it against the running
+/// app's keyboard mapper and OS (the same path `list_select_binding` uses).
+fn dynamic_binding(cx: &App, keystroke: &str, action: Box<dyn Action>) -> KeyBinding {
+    KeyBinding::load(keystroke, action, None, false, None, cx)
+        .unwrap_or_else(|err| panic!("invalid keystroke `{keystroke}`: {err}"))
 }
 
 /// Builds the full key binding set from `config`: the fixed
@@ -153,10 +156,10 @@ fn derive_bindings(cx: &App, config: &horizon_config::RawConfig) -> (Vec<KeyBind
 
     let workspace_mode_keystroke =
         keymap::workspace_mode_keystroke(config, DEFAULT_WORKSPACE_MODE_KEYSTROKE);
-    bindings.push(KeyBinding::new(
+    bindings.push(dynamic_binding(
+        cx,
         &workspace_mode_keystroke,
-        super::ToggleWorkspaceMode,
-        None,
+        Box::new(super::ToggleWorkspaceMode),
     ));
     dynamic_keystrokes.push(workspace_mode_keystroke);
 
@@ -169,17 +172,17 @@ fn derive_bindings(cx: &App, config: &horizon_config::RawConfig) -> (Vec<KeyBind
     for resolved in keymap::resolve_keybindings(config) {
         match resolved.target {
             keymap::KeybindingTarget::OpenPalette => {
-                bindings.push(KeyBinding::new(
+                bindings.push(dynamic_binding(
+                    cx,
                     &resolved.keystroke,
-                    super::OpenPalette,
-                    None,
+                    Box::new(super::OpenPalette),
                 ));
             }
             keymap::KeybindingTarget::Command(id) => {
-                bindings.push(KeyBinding::new(
+                bindings.push(dynamic_binding(
+                    cx,
                     &resolved.keystroke,
-                    RunCommand { id },
-                    None,
+                    Box::new(RunCommand { id }),
                 ));
             }
         }
@@ -271,7 +274,7 @@ pub(super) fn apply_bindings(cx: &mut App, config: &horizon_config::RawConfig) {
     if !previous.is_empty() {
         let unbinds: Vec<KeyBinding> = previous
             .into_iter()
-            .map(|keystroke| KeyBinding::new(&keystroke, NoAction, None))
+            .map(|keystroke| dynamic_binding(cx, &keystroke, Box::new(NoAction)))
             .collect();
         cx.bind_keys(unbinds);
     }
