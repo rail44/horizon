@@ -13,7 +13,7 @@
 //!   items repaint as-is; a bumped stamp re-shapes just that row.
 //! - **Per frame ([`CacheEpoch`])**: everything a cached item *bakes in*
 //!   besides row content — resolved colors, and the font metrics the
-//!   shaping ran under. Text color rides inside each `ShapedLine`'s
+//!   shaping ran under. Text color rides inside each `NormalizedLine`'s
 //!   decoration runs and each geometric glyph's `fg`, and color
 //!   resolution reads the live theme scheme plus the frame's OSC
 //!   palette overrides, so a `Reload Config` theme swap or an OSC 4/10/11
@@ -21,12 +21,15 @@
 //!   at the top of each paint; on mismatch the whole cache clears —
 //!   deliberately the simplest invalidation shape.
 //!
-//! The font size rides in the epoch too: a cached `ShapedLine` bakes in
-//! font + font size + cell metrics, and the `Increase/Decrease/Reset
-//! Font Size` commands move the live size at runtime (see
+//! The font size rides in the epoch too: a cached item bakes in font +
+//! font size + cell metrics, and the `Increase/Decrease/Reset Font Size`
+//! commands move the live size at runtime (see
 //! `crate::ui::font::font_size`), so a size change must clear every row
-//! the same way a theme swap does. (`font_family` itself is still
-//! startup-only, so it needs no axis.) Window scale factor is applied
+//! the same way a theme swap does. The cached items also bake in the row
+//! baseline (`font::RowMetrics`), but that is a function of the font
+//! family and the size — the size is already an axis here, and
+//! `font_family` is startup-only, so it needs none (make it one when a
+//! live font-family switch lands). Window scale factor is applied
 //! at paint time, not baked into shaping, so DPI changes need no axis.
 //!
 //! Memory is bounded naturally: `begin_frame` sizes the row table to the
@@ -35,8 +38,10 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::{Hsla, ShapedLine};
+use gpui::Hsla;
 use horizon_terminal_core::TerminalColorScheme;
+
+use super::shaping::NormalizedLine;
 
 /// The out-of-band stamp for a row the generation table doesn't cover
 /// (structurally impossible while the pump's `RowGenerations::apply_frame`
@@ -64,9 +69,9 @@ pub(super) struct CacheEpoch {
     pub(super) palette_overrides: Vec<(u16, [u8; 3])>,
     /// The terminal font size, in px, the cached items were shaped under
     /// (`crate::ui::font::font_size()` at paint time). A
-    /// `ShapedLine`/geometric glyph bakes in font + size + cell metrics,
-    /// so the `Increase/Decrease/Reset Font Size` commands must drop
-    /// every row at once, like a theme swap.
+    /// `NormalizedLine`/geometric glyph bakes in font + size + cell
+    /// metrics + the row baseline, so the `Increase/Decrease/Reset Font
+    /// Size` commands must drop every row at once, like a theme swap.
     pub(super) font_size: f32,
 }
 
@@ -74,10 +79,15 @@ pub(super) struct CacheEpoch {
 /// The paint side multiplies `col` by the live cell width, so cached
 /// items carry grid coordinates, never pixels.
 pub(super) enum RowItem {
-    /// A `shape_line` result for a run of ordinary text. Boxed because
-    /// `ShapedLine` is ~3 KB inline (its decoration-run `SmallVec`),
-    /// which would otherwise balloon every `RowItem`.
-    Text { col: usize, shaped: Box<ShapedLine> },
+    /// A laid-out run of ordinary text, already re-based on the row's
+    /// canonical metrics (see `shaping::NormalizedLine` and
+    /// `font::RowMetrics`). Boxed because a `LineLayout` plus its runs and
+    /// decoration runs is far larger than the enum's other variant, which
+    /// would otherwise balloon every `RowItem`.
+    Text {
+        col: usize,
+        line: Box<NormalizedLine>,
+    },
     /// A box-drawing/block/Braille character painted as cell-sized
     /// geometry (`super::glyphs`) rather than a font glyph. Cached
     /// alongside the shaped runs so a cache hit skips the whole
@@ -186,7 +196,8 @@ impl ShapedLineCache {
 #[cfg(test)]
 mod tests {
     use super::{CacheEpoch, RowItem, ShapedLineCache, NO_GENERATION, TRACE_INTERVAL};
-    use gpui::ShapedLine;
+    use crate::terminal::shaping::NormalizedLine;
+    use gpui::LineLayout;
     use horizon_terminal_core::TerminalColorScheme;
 
     fn epoch() -> CacheEpoch {
@@ -202,7 +213,10 @@ mod tests {
     fn items(col: usize) -> Vec<RowItem> {
         vec![RowItem::Text {
             col,
-            shaped: Box::new(ShapedLine::default()),
+            line: Box::new(NormalizedLine {
+                layout: LineLayout::default(),
+                decorations: Vec::new(),
+            }),
         }]
     }
 

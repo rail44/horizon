@@ -28,6 +28,8 @@ mod scrollback;
 mod session;
 mod shape_cache;
 mod shaping;
+#[cfg(test)]
+mod test_support;
 
 use crate::theme;
 use gpui::prelude::FluentBuilder as _;

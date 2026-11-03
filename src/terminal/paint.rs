@@ -2,9 +2,9 @@
 
 use super::shape_cache::{CacheEpoch, RowItem, ShapedLineCache, NO_GENERATION};
 use super::{
-    font::{font_size, line_height, resolved_font},
+    font::{font_size, line_height, resolved_font, row_metrics, RowMetrics},
     glyphs,
-    shaping::shape_row_items,
+    shaping::{normalized_layout, shape_row_items},
     TerminalView,
 };
 use crate::input_trace::input_trace;
@@ -72,6 +72,7 @@ fn paint_scrollback_window(
     font_size: Pixels,
     cell_width: Pixels,
     line_height: Pixels,
+    metrics: RowMetrics,
     text_system: &WindowTextSystem,
     shape_cache: &mut ShapedLineCache,
     window: &mut Window,
@@ -102,6 +103,7 @@ fn paint_scrollback_window(
                     font,
                     font_size,
                     cell_width,
+                    metrics,
                     text_system,
                 )
             });
@@ -133,6 +135,10 @@ pub(super) fn paint_terminal(
         cell_width,
         line_height,
     }));
+    // The row baseline, read once per paint: every text item of every row is
+    // shaped against this pair, so a row's ASCII and Japanese runs share one
+    // baseline instead of each following its own font (see `font::RowMetrics`).
+    let row_metrics = row_metrics(&text_system, font_id, font_size);
 
     let cols = (f32::from(bounds.size.width) / f32::from(cell_width)).floor() as u16;
     let rows = (f32::from(bounds.size.height) / f32::from(line_height)).floor() as u16;
@@ -202,6 +208,7 @@ pub(super) fn paint_terminal(
             font_size,
             cell_width,
             line_height,
+            row_metrics,
             &text_system,
             &mut cache,
             window,
@@ -260,6 +267,7 @@ pub(super) fn paint_terminal(
                 &font,
                 font_size,
                 cell_width,
+                row_metrics,
                 &text_system,
             )
         });
@@ -341,8 +349,27 @@ pub(super) fn paint_terminal(
                 }),
                 strikethrough: None,
             };
-            let shaped = text_system.shape_line(marked.into(), font_size, &[run], None);
-            let _ = shaped.paint(origin, line_height, TextAlign::Left, None, window, cx);
+            let shaped =
+                text_system.layout_line(&marked, font_size, std::slice::from_ref(&run), None);
+            // Same baseline as the grid underneath: the composing text is
+            // almost always CJK, so shaping it with its own font's metrics
+            // would sink it below the cell's row until IME confirm.
+            let decoration = DecorationRun {
+                len: marked.len() as u32,
+                color: fg,
+                background_color: None,
+                underline: run.underline,
+                strikethrough: None,
+            };
+            let _ = normalized_layout(&shaped, row_metrics).paint(
+                origin,
+                line_height,
+                TextAlign::Left,
+                None,
+                std::slice::from_ref(&decoration),
+                window,
+                cx,
+            );
         }
         return;
     }
@@ -434,9 +461,17 @@ fn paint_row_items(
     let scale_factor = window.scale_factor();
     for item in items {
         match item {
-            RowItem::Text { col, shaped } => {
+            RowItem::Text { col, line } => {
                 let origin = row_origin + point(cell_width * *col as f32, px(0.0));
-                let _ = shaped.paint(origin, line_height, TextAlign::Left, None, window, cx);
+                let _ = line.layout.paint(
+                    origin,
+                    line_height,
+                    TextAlign::Left,
+                    None,
+                    &line.decorations,
+                    window,
+                    cx,
+                );
             }
             RowItem::Glyph {
                 col,
