@@ -759,6 +759,22 @@ fn go_modules_index_and_units() {
         [("Circle", "Shape"), ("Circle.Area", "Shape.Area")]
     );
 
+    // A struct's fields are its parts.
+    std::fs::write(
+        &probe,
+        "SELECT t.qualified_name, p.name, p.part FROM go.type_parts p \
+         JOIN go.units t ON t.unit_id = p.type_unit_id ORDER BY ALL;\n",
+    )
+    .unwrap();
+    let parts = rows(&code_db(&["sql", probe.to_str().unwrap()]));
+    assert_eq!(
+        parts
+            .iter()
+            .map(|r| (&r[0][..], &r[1][..], &r[2][..]))
+            .collect::<Vec<_>>(),
+        [("Circle", "R", "field")]
+    );
+
     // References across files and packages become unit edges.
     std::fs::write(
         &probe,

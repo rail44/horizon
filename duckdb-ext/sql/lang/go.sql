@@ -132,6 +132,36 @@ SELECT 'implements_member', m.file_id, m.symbol, m.name_line, m.name_column, d.f
        d.name_column, NULL
 FROM implementations i JOIN methods m ON m.symbol = i.symbol LEFT JOIN defs d ON d.symbol = i.related_symbol;
 
+-- go_type_parts: rust_type_parts' columns, for Go: a struct's fields (SCIP kind Field),
+-- each with the type it is part of: the definition of the field's symbol without its
+-- last descriptor (`…/Circle#R.` belongs to `…/Circle#`) in the field's file (a Go file
+-- declares a name once; a type defined again under another build constraint is in
+-- another file); NULL when there is none (the field of a struct type written inside
+-- another declaration). Go has no enums, so no 'variant'.
+CREATE OR REPLACE VIEW go_type_parts AS
+WITH defs AS MATERIALIZED (
+    SELECT o.file_id, o.symbol, o.start_line AS name_line, o.start_column AS name_column
+    FROM scip_occurrences o JOIN files f USING (file_id)
+    WHERE f.language = 'go' AND o.is_definition AND NOT starts_with(o.symbol, 'local ')
+),
+info AS MATERIALIZED (
+    SELECT symbol, any_value(kind) AS kind, any_value(display_name) AS display_name
+    FROM scip_symbols WHERE document IS NOT NULL AND kind IN ('Field', 'Type', 'Struct', 'Interface', 'TypeAlias')
+    GROUP BY symbol
+),
+parts AS MATERIALIZED (
+    SELECT d.file_id, d.symbol, d.name_line, d.name_column, i.display_name AS name, 'field' AS part,
+           regexp_extract(d.symbol, '^(.*#)(?:`[^`]*`|[^/#.!\[\]`])+\.$', 1) AS owner
+    FROM defs d JOIN info i USING (symbol)
+    WHERE i.kind = 'Field'
+),
+types AS MATERIALIZED (
+    SELECT d.* FROM defs d JOIN info i USING (symbol) WHERE i.kind <> 'Field'
+)
+SELECT p.file_id, p.symbol, p.name_line, p.name_column, p.name, p.part, t.file_id AS to_file_id,
+       t.symbol AS to_symbol, t.name_line AS to_name_line, t.name_column AS to_name_column
+FROM parts p LEFT JOIN types t ON t.file_id = p.file_id AND t.symbol = p.owner;
+
 -- go_file_ast: file_ast's rows (views/files.sql) of the Go files only. read_ast parses
 -- every file it is given, whatever the query filters, so this view gives it the Go
 -- files' paths (and a path that does not exist, which keeps the list non-empty and which

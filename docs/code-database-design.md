@@ -1049,6 +1049,28 @@ against every other process, readers included). A command over a saved loading t
 2.6–3.1 s; every query's output equals the earlier loading's but for the order of rows
 that tie on every `ORDER BY` key, which varies between runs in both.
 
+## Type parts (2026-11-03)
+
+Two dogfooding questions, a type's cohesion (which methods use which fields, LCOM4) and
+how widely an enum's variants are taken apart, had to infer a type's fields and variants
+as the symbols that map to the type's unit without being its own, named by a regular
+expression over the SCIP symbol. They are now rows: each language derives
+`<language>_type_parts` beside its type facts, keyed the same way by definition
+occurrence (the part's and its type's), and `type_parts(type_unit_id, symbol, name,
+part)` in `views/graph.sql` puts the type's unit at the other end, cached after
+`unit_owner_types`. `part` is `field` or `variant` (SCIP's Field and EnumMember), which
+are also Rust's and Go's words, so no value-terms rows. A part stays a symbol, not a
+unit: what a unit uses of it is already in `unit_references`, whose `symbol` joins it.
+A sibling view rather than a new fact kind of `type_facts`, because a fact's ends are
+units and a part is none, and the existing layers keep their rows. Not parts: a Rust
+enum variant's own fields (they belong to the variant) and a tuple struct's positional
+fields, to which rust-analyzer gives a symbol but no definition occurrence, so their
+uses reach no unit either. On this repository: 2,405 fields of 657 types and 1,129
+variants of 261 enums. 38 more (the variants of `ToolInput` and `Body`, which a
+`macro_rules!` writes, and one field) have no row in `type_parts`: their types have no
+definition occurrence in the index, so no unit.
+Every query's output is unchanged.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into

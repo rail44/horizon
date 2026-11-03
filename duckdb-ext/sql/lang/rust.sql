@@ -496,3 +496,46 @@ SELECT DISTINCT 'converts', type_target.file_id, type_target.symbol, type_target
        NULL, NULL, NULL, NULL, impl_generic_arg(impl_trait)
 FROM resolved_impls
 WHERE type_target IS NOT NULL AND impl_base_name(impl_trait) IN ('From', 'Into', 'TryFrom', 'TryInto');
+
+-- rust_type_parts(file_id, symbol, name_line, name_column, name, part, to_file_id,
+--     to_symbol, to_name_line, to_name_column): the parts of Rust's types (views/graph.sql,
+-- type_parts): each a part's definition occurrence (its file, symbol and name position)
+-- and name, with the definition occurrence of the type it is part of:
+--   'field': a struct's or union's field (SCIP kind Field);
+--   'variant': an enum's variant (EnumMember).
+-- The type is the definition of the part's symbol without its last descriptor
+-- (`…/Square#side.` belongs to `…/Square#`) in the part's file whose range
+-- (enclosing_range) contains the part's name, so that two cfg'd definitions of one type
+-- each keep their own; NULL when there is none. A variant's own fields
+-- (`…/Enum#Variant#field.`) have no row: what they belong to is a variant, not a type.
+-- Nor do a tuple struct's positional fields (`…/Number#0.`): rust-analyzer gives them a
+-- symbol but no definition occurrence.
+CREATE OR REPLACE VIEW rust_type_parts AS
+WITH defs AS MATERIALIZED (
+    SELECT o.file_id, o.symbol, o.start_line AS name_line, o.start_column AS name_column,
+           o.enclosing_start_line, o.enclosing_start_column, o.enclosing_end_line, o.enclosing_end_column
+    FROM scip_occurrences o JOIN files f USING (file_id)
+    WHERE f.language = 'rust' AND o.is_definition AND NOT starts_with(o.symbol, 'local ')
+),
+info AS MATERIALIZED (
+    SELECT symbol, any_value(kind) AS kind, any_value(display_name) AS display_name
+    FROM scip_symbols WHERE document IS NOT NULL AND kind IN ('Field', 'EnumMember', 'Struct', 'Enum', 'Union')
+    GROUP BY symbol
+),
+parts AS MATERIALIZED (
+    SELECT d.file_id, d.symbol, d.name_line, d.name_column, i.display_name AS name,
+           CASE i.kind WHEN 'Field' THEN 'field' ELSE 'variant' END AS part,
+           regexp_extract(d.symbol, '^(.*#)(?:`[^`]*`|[^/#.!\[\]`])+[.#]$', 1) AS owner
+    FROM defs d JOIN info i USING (symbol)
+    WHERE i.kind IN ('Field', 'EnumMember')
+),
+types AS MATERIALIZED (
+    SELECT d.* FROM defs d JOIN info i USING (symbol) WHERE i.kind IN ('Struct', 'Enum', 'Union')
+)
+SELECT p.file_id, p.symbol, p.name_line, p.name_column, p.name, p.part, t.file_id AS to_file_id,
+       t.symbol AS to_symbol, t.name_line AS to_name_line, t.name_column AS to_name_column
+FROM parts p
+LEFT JOIN types t ON t.file_id = p.file_id AND t.symbol = p.owner
+     AND (t.enclosing_start_line, t.enclosing_start_column) <= (p.name_line, p.name_column)
+     AND (p.name_line, p.name_column) < (t.enclosing_end_line, t.enclosing_end_column)
+WHERE p.owner NOT IN (SELECT symbol FROM parts WHERE part = 'variant');

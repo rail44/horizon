@@ -73,7 +73,7 @@ REFRESH_FILE = "refresh.sql"
 # them.
 CACHED_VIEWS = ["file_ast", "go_file_ast", "scip_occurrences", "scip_symbols", "units", "unit_ast", "unit_occurrences", "symbol_units",
                 "unit_references", "unit_edges", "unit_ancestors", "type_fact_units", "unit_owner_types",
-                "namespaces", "unit_namespace", "namespace_edges", "unit_scope", "unit_fan_in", "unit_fan_out",
+                "type_parts", "namespaces", "unit_namespace", "namespace_edges", "unit_scope", "unit_fan_in", "unit_fan_out",
                 "unit_reference_status", "unit_debt_markers", "unit_constructs", "unit_complexity",
                 "clone_pairs", "clone_sides"]
 QUERIES = ["size", "duplication", "coupling", "interface", "public_surface", "intent", "unreferenced",
@@ -434,6 +434,18 @@ fn main() {
 fn run(a: u32, b: u32) -> u32 {
     a + b
 }
+
+enum Mode {
+    Fast,
+    Slow { factor: u32 },
+}
+
+fn pick(mode: Mode) -> u32 {
+    match mode {
+        Mode::Fast => 1,
+        Mode::Slow { factor } => factor,
+    }
+}
 """
 
 LOOSE = """\
@@ -584,6 +596,8 @@ CHECKED = [
                                "ORDER BY ALL"),
     ("type_conversions", "SELECT t.qualified_name, f.to_name FROM type_conversions f "
                          "JOIN units t ON t.unit_id = f.type_unit_id ORDER BY ALL"),
+    ("type_parts", "SELECT t.path, t.qualified_name, p.name, p.part FROM type_parts p "
+                   "JOIN units t ON t.unit_id = p.type_unit_id ORDER BY ALL"),
     ("unit_edges", "SELECT s.path, s.qualified_name, d.path, d.qualified_name, e.symbols, e.occurrences, e.is_self, "
                    "e.ambiguous, e.src_is_test, e.dst_is_test FROM unit_edges e JOIN units s ON s.unit_id = e.src_unit_id "
                    "JOIN units d ON d.unit_id = e.dst_unit_id ORDER BY ALL"),
@@ -898,7 +912,7 @@ EXPECTED = {
         ('shapes/src/convert.rs', 3),
         ('shapes/src/lib.rs', 15),
         ('shapes/src/rect.rs', 6),
-        ('tools/src/main.rs', 3),
+        ('tools/src/main.rs', 5),
     ],
     'units': [
         ('app/src/fixtures.rs', 'namespace', 'Module', 'fixtures', None, 1, 4, 1, 3, True, 'private', None, False, True, None),
@@ -931,9 +945,11 @@ EXPECTED = {
         ('shapes/src/rect.rs', 'method', 'Method', 'Shape for Rect.area', 'rect', 9, 15, 9, 7, False, None, 1, None, False, 'implementation'),
         ('shapes/src/rect.rs', 'function', 'Function', 'ring', 'rect', 18, 20, 18, 3, False, 'pub', 0, False, False, None),
         ('shapes/src/rect.rs', 'function', 'Function', 'base', 'rect', 22, 24, 22, 3, False, 'pub(crate)', 0, False, False, None),
-        ('tools/src/main.rs', 'namespace', 'Module', 'tools', None, 1, 8, 1, 6, False, 'private', None, False, True, None),
+        ('tools/src/main.rs', 'namespace', 'Module', 'tools', None, 1, 20, 1, 16, False, 'private', None, False, True, None),
         ('tools/src/main.rs', 'function', 'Function', 'main', 'tools', 1, 3, 1, 3, False, 'private', 0, False, False, None),
         ('tools/src/main.rs', 'function', 'Function', 'run', 'tools', 5, 7, 5, 3, False, 'private', 2, False, False, None),
+        ('tools/src/main.rs', 'type', 'Enum', 'Mode', 'tools', 9, 12, 9, 4, False, 'private', None, False, False, None),
+        ('tools/src/main.rs', 'function', 'Function', 'pick', 'tools', 14, 19, 14, 6, False, 'private', 1, False, False, None),
     ],
     'unit_owner_types': [
         ('shapes/src/convert.rs', 'From<Square> for Rect.from', 'Rect'),
@@ -958,6 +974,12 @@ EXPECTED = {
     ],
     'type_conversions': [
         ('Rect', 'Square'),
+    ],
+    'type_parts': [
+        ('shapes/src/lib.rs', 'Square', 'side', 'field'),
+        ('shapes/src/rect.rs', 'Rect', 'side', 'field'),
+        ('tools/src/main.rs', 'Mode', 'Fast', 'variant'),
+        ('tools/src/main.rs', 'Mode', 'Slow', 'variant'),
     ],
     'unit_edges': [
         ('app/src/fixtures.rs', 'sample', 'shapes/src/lib.rs', 'Square', 1, 2, False, False, True, False),
@@ -993,6 +1015,7 @@ EXPECTED = {
         ('shapes/src/rect.rs', 'rect', 'shapes/src/rect.rs', 'Rect', 1, 1, False, False, False, False),
         ('shapes/src/rect.rs', 'ring', 'shapes/src/convert.rs', 'back', 1, 1, False, False, False, False),
         ('tools/src/main.rs', 'main', 'tools/src/main.rs', 'run', 1, 1, False, False, False, False),
+        ('tools/src/main.rs', 'pick', 'tools/src/main.rs', 'Mode', 4, 6, False, False, False, False),
     ],
     'namespaces': [
         ('app/src/fixtures.rs', 'app', 'app/src/fixtures'),
@@ -1041,17 +1064,21 @@ EXPECTED = {
         ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'method', 'Shape for Rect.area', 9, 15, False, 7, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 0, 'shapes/src/convert.rs', 'rect', None, 1, None, 0, 0, 'implementation'),
         ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'function', 'ring', 18, 20, False, 3, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 'shapes/src/convert.rs', 'rect', 'pub', 0, False, 0, 1, 'referenced'),
         ('shapes/src/rect.rs', 'shapes', 'shapes/src/rect.rs', 'function', 'base', 22, 24, False, 3, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 'shapes/src/convert.rs', 'rect', 'pub(crate)', 0, False, 0, 1, 'referenced'),
-        ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'namespace', 'tools', 1, 8, False, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', None, False, 0, 0, 'root'),
+        ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'namespace', 'tools', 1, 20, False, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', None, False, 0, 0, 'root'),
         ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'function', 'main', 1, 3, False, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', 0, False, 0, 0, 'entry_point'),
         ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'function', 'run', 5, 7, False, 3, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', 2, False, 0, 1, 'referenced'),
+        ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'type', 'Mode', 9, 12, False, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', None, False, 0, 3, 'referenced'),
+        ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'function', 'pick', 14, 19, False, 6, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', 1, False, 0, 0, 'unreferenced'),
     ],
     'query size': [
         ('unit', 'shapes', 'shapes/src/lib.rs', 'method', 'Shape for Square.area', 21, 7, None, False, None),
         ('unit', 'shapes', 'shapes/src/rect.rs', 'method', 'Shape for Rect.area', 9, 7, None, False, None),
+        ('unit', 'tools', 'tools/src/main.rs', 'function', 'pick', 14, 6, None, False, None),
         ('unit', 'shapes', 'shapes/src/lib.rs', 'type', 'Shape', 6, 5, None, False, None),
         ('unit', 'app', 'app/src/main.rs', 'function', 'main', 3, 4, None, False, None),
         ('unit', 'shapes', 'shapes/src/lib.rs', 'type', 'Square', 14, 4, None, False, None),
         ('unit', 'shapes', 'shapes/src/lib.rs', 'method', 'Square.new', 31, 4, None, False, None),
+        ('unit', 'tools', 'tools/src/main.rs', 'type', 'Mode', 9, 4, None, False, None),
         ('unit', 'shapes', 'shapes/src/convert.rs', 'method', 'From<Square> for Rect.from', 5, 3, None, False, None),
         ('unit', 'shapes', 'shapes/src/convert.rs', 'function', 'back', 10, 3, None, False, None),
         ('unit', 'shapes', 'shapes/src/lib.rs', 'method', 'Square.scaled', 37, 3, None, False, None),
@@ -1092,6 +1119,8 @@ EXPECTED = {
         ('unit', 'shapes/src/lib.rs', 'shapes/src/lib.rs', 'shapes', 'method', 'Square.scaled', 37, 3, 0, 0, 0, 0, 0, 0, 0, 1, False),
         ('unit', 'tools/src/main.rs', 'tools/src/main.rs', 'tools', 'function', 'main', 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, False),
         ('unit', 'tools/src/main.rs', 'tools/src/main.rs', 'tools', 'function', 'run', 5, 3, 0, 0, 0, 1, 0, 0, 0, 0, False),
+        ('unit', 'tools/src/main.rs', 'tools/src/main.rs', 'tools', 'type', 'Mode', 9, 4, 0, 0, 0, 1, 0, 0, 0, 0, False),
+        ('unit', 'tools/src/main.rs', 'tools/src/main.rs', 'tools', 'function', 'pick', 14, 6, 0, 0, 0, 0, 0, 0, 0, 1, False),
     ],
     'query interface': [
         ('shapes/src/lib.rs', 'shapes', 'method', 'Square.scaled', 37, 4, 'pub(crate)', 0, 0, 3, 'pub(crate) fn scaled(&self, a: u32, b: u32, c: u32) -> u32'),
@@ -1101,6 +1130,7 @@ EXPECTED = {
         ('shapes/src/convert.rs', 'shapes', 'method', 'From<Square> for Rect.from', 5, 1, None, 0, 0, 3, 'fn from(square: Square) -> Self'),
         ('shapes/src/lib.rs', 'shapes', 'method', 'Shape.area', 9, 1, None, 0, 0, 1, 'pub fn area(&self) -> u32'),
         ('shapes/src/rect.rs', 'shapes', 'method', 'Shape for Rect.area', 9, 1, None, 0, 0, 7, 'fn area(&self) -> u32'),
+        ('tools/src/main.rs', 'tools', 'function', 'pick', 14, 1, 'private', 0, 0, 6, 'fn pick(mode: Mode) -> u32'),
         ('shapes/src/rect.rs', 'shapes', 'function', 'ring', 18, 0, 'pub', 1, 1, 3, 'pub fn ring() -> u32'),
         ('app/src/main.rs', 'app', 'function', 'main', 3, 0, 'private', 0, 0, 4, 'fn main()'),
         ('shapes/src/convert.rs', 'shapes', 'function', 'back', 10, 0, 'pub', 1, 0, 3, 'pub fn back() -> u32'),
@@ -1121,6 +1151,7 @@ EXPECTED = {
         ('shapes/src/rect.rs', 'shapes', 'function', 'ring', 18, 'pub', False, 0, 1, 1, 1),
     ],
     'query unreferenced': [
+        ('tools/src/main.rs', 'tools', 'function', 'pick', 14, 6, 'private', 'unreferenced'),
         ('shapes/src/lib.rs', 'shapes', 'method', 'Square.scaled', 37, 3, 'pub(crate)', 'unreferenced'),
         ('shapes/src/lib.rs', 'shapes', 'function', 'unused_helper', 42, 3, 'pub', 'unreferenced'),
     ],
@@ -1147,44 +1178,47 @@ EXPECTED = {
         ('in', 1, 'app/src/main.rs', 'function', 'main', 3, 4, 1, 1, 1, ['ring'], 0),
     ],
     'query complexity': [
-        ('shapes/src/lib.rs', 'shapes', 'method', 'Shape for Square.area', 21, 7, 1, 0, 0, False),
-        ('shapes/src/rect.rs', 'shapes', 'method', 'Shape for Rect.area', 9, 7, 1, 0, 0, False),
-        ('app/src/main.rs', 'app', 'function', 'main', 3, 4, 1, 0, 0, False),
-        ('shapes/src/lib.rs', 'shapes', 'method', 'Square.new', 31, 4, 1, 0, 0, False),
-        ('shapes/src/convert.rs', 'shapes', 'method', 'From<Square> for Rect.from', 5, 3, 1, 0, 0, False),
-        ('shapes/src/convert.rs', 'shapes', 'function', 'back', 10, 3, 1, 0, 0, False),
-        ('shapes/src/lib.rs', 'shapes', 'method', 'Square.scaled', 37, 3, 1, 0, 0, False),
-        ('shapes/src/lib.rs', 'shapes', 'function', 'unused_helper', 42, 3, 1, 0, 0, False),
-        ('shapes/src/rect.rs', 'shapes', 'function', 'ring', 18, 3, 1, 0, 0, False),
-        ('shapes/src/rect.rs', 'shapes', 'function', 'base', 22, 3, 1, 0, 0, False),
-        ('tools/src/main.rs', 'tools', 'function', 'main', 1, 3, 1, 0, 0, False),
-        ('tools/src/main.rs', 'tools', 'function', 'run', 5, 3, 1, 0, 0, False),
-        ('shapes/src/lib.rs', 'shapes', 'method', 'Shape.area', 9, 1, 1, 0, 0, False),
+        ('tools/src/main.rs', 'tools', 'function', 'pick', 14, 6, 2, 1, 1, 2, 1, False),
+        ('shapes/src/lib.rs', 'shapes', 'method', 'Shape for Square.area', 21, 7, 1, 0, 0, 0, 0, False),
+        ('shapes/src/rect.rs', 'shapes', 'method', 'Shape for Rect.area', 9, 7, 1, 0, 0, 0, 0, False),
+        ('app/src/main.rs', 'app', 'function', 'main', 3, 4, 1, 0, 0, 0, 0, False),
+        ('shapes/src/lib.rs', 'shapes', 'method', 'Square.new', 31, 4, 1, 0, 0, 0, 0, False),
+        ('shapes/src/convert.rs', 'shapes', 'method', 'From<Square> for Rect.from', 5, 3, 1, 0, 0, 0, 0, False),
+        ('shapes/src/convert.rs', 'shapes', 'function', 'back', 10, 3, 1, 0, 0, 0, 0, False),
+        ('shapes/src/lib.rs', 'shapes', 'method', 'Square.scaled', 37, 3, 1, 0, 0, 0, 0, False),
+        ('shapes/src/lib.rs', 'shapes', 'function', 'unused_helper', 42, 3, 1, 0, 0, 0, 0, False),
+        ('shapes/src/rect.rs', 'shapes', 'function', 'ring', 18, 3, 1, 0, 0, 0, 0, False),
+        ('shapes/src/rect.rs', 'shapes', 'function', 'base', 22, 3, 1, 0, 0, 0, 0, False),
+        ('tools/src/main.rs', 'tools', 'function', 'main', 1, 3, 1, 0, 0, 0, 0, False),
+        ('tools/src/main.rs', 'tools', 'function', 'run', 5, 3, 1, 0, 0, 0, 0, False),
+        ('shapes/src/lib.rs', 'shapes', 'method', 'Shape.area', 9, 1, 1, 0, 0, 0, 0, False),
     ],
     'query size level=file': [
         ('file', 'shapes', 'shapes/src/lib.rs', None, None, None, 56, 14, False, None),
         ('file', 'shapes', 'shapes/src/rect.rs', None, None, None, 20, 5, False, None),
+        ('file', 'tools', 'tools/src/main.rs', None, None, None, 16, 4, False, None),
         ('file', 'shapes', 'shapes/src/convert.rs', None, None, None, 10, 2, False, None),
         ('file', 'app', 'app/src/main.rs', None, None, None, 6, 1, False, None),
-        ('file', 'tools', 'tools/src/main.rs', None, None, None, 6, 2, False, None),
     ],
     'query size level=package': [
         ('package', 'shapes', None, None, None, None, 86, 21, None, 18.6),
+        ('package', 'tools', None, None, None, None, 16, 4, None, 0.0),
         ('package', 'app', None, None, None, None, 13, 3, None, 53.8),
-        ('package', 'tools', None, None, None, None, 6, 2, None, 0.0),
     ],
     'query coupling kind=type min_packages=1': [
         ('unit', 'shapes/src/lib.rs', 'shapes/src/lib.rs', 'shapes', 'type', 'Square', 14, 4, 4, 5, 1, 8, 0, 0, 0, 1, True),
         ('unit', 'shapes/src/lib.rs', 'shapes/src/lib.rs', 'shapes', 'type', 'Shape', 6, 5, 2, 2, 1, 3, 0, 0, 0, 0, True),
         ('unit', 'shapes/src/rect.rs', 'shapes/src/rect.rs', 'shapes', 'type', 'Rect', 3, 3, 1, 1, 0, 2, 1, 1, 0, 2, False),
+        ('unit', 'tools/src/main.rs', 'tools/src/main.rs', 'tools', 'type', 'Mode', 9, 4, 0, 0, 0, 1, 0, 0, 0, 0, False),
     ],
     'query unreferenced include_structural': [
+        ('tools/src/main.rs', 'tools', 'function', 'pick', 14, 6, 'private', 'unreferenced'),
         ('shapes/src/lib.rs', 'shapes', 'method', 'Square.scaled', 37, 3, 'pub(crate)', 'unreferenced'),
         ('shapes/src/lib.rs', 'shapes', 'function', 'unused_helper', 42, 3, 'pub', 'unreferenced'),
+        ('tools/src/main.rs', 'tools', 'namespace', 'tools', 1, 16, 'private', 'root'),
         ('shapes/src/lib.rs', 'shapes', 'namespace', 'tests', 58, 9, 'private', 'test'),
         ('shapes/src/rect.rs', 'shapes', 'method', 'Shape for Rect.area', 9, 7, None, 'implementation'),
         ('app/src/main.rs', 'app', 'namespace', 'app', 1, 6, 'private', 'root'),
-        ('tools/src/main.rs', 'tools', 'namespace', 'tools', 1, 6, 'private', 'root'),
         ('shapes/src/lib.rs', 'shapes', 'function', 'tests.square_area', 62, 5, 'private', 'test'),
         ('app/src/main.rs', 'app', 'function', 'main', 3, 4, 'private', 'entry_point'),
         ('app/tests/it.rs', 'app', 'namespace', 'app', 1, 4, 'private', 'test'),
@@ -1212,7 +1246,7 @@ EXPECTED = {
     'query coupling level=package': [
         ('package', None, None, 'shapes', None, None, None, 86, 3, 3, 1, 4, 0, 0, 0, 0, None),
         ('package', None, None, 'app', None, None, None, 13, 0, 0, 0, 0, 2, 2, 1, 6, None),
-        ('package', None, None, 'tools', None, None, None, 6, 0, 0, 0, 0, 0, 0, 0, 0, None),
+        ('package', None, None, 'tools', None, None, None, 16, 0, 0, 0, 0, 0, 0, 0, 0, None),
     ],
     'clone_report_pairs': [
         (0, 'exact', 'shapes/src/lib.rs', 22, 26, 'shapes/src/rect.rs', 10, 14, 80, 5),

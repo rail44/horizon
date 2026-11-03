@@ -179,6 +179,26 @@ CREATE OR REPLACE VIEW type_conversions AS
 SELECT DISTINCT unit_id AS type_unit_id, to_name
 FROM type_fact_units WHERE fact = 'converts';
 
+-- type_parts(type_unit_id, symbol, name, part): each type's parts as its language gives
+-- them (lang/<language>.sql, <language>_type_parts): a 'field' (a struct's or union's) or
+-- a 'variant' (an enum's), with its symbol and name. A part is not a unit; its symbol is
+-- what unit_references names when a unit reads or writes the field or names the variant
+-- (symbol_units puts the part at its type's unit). A part whose type has no unit is left
+-- out.
+CREATE OR REPLACE VIEW type_parts AS
+WITH parts AS (
+    SELECT * FROM rust_type_parts
+    UNION ALL
+    SELECT * FROM go_type_parts
+),
+keys AS MATERIALIZED (
+    SELECT unit_id, file_id, symbol, name_line, name_column FROM units
+)
+SELECT t.unit_id AS type_unit_id, p.symbol, p.name, p.part
+FROM parts p
+JOIN keys t ON t.file_id = p.to_file_id AND t.symbol = p.to_symbol
+     AND t.name_line = p.to_name_line AND t.name_column = p.to_name_column;
+
 -- file_namespaces(file_id, namespace, namespace_path): the namespace each source file
 -- belongs to, as its language places it (lang/<language>.sql, <language>_file_namespaces):
 -- a Rust file is its own namespace (its file module), a Go file belongs to its directory's
