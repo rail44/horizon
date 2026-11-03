@@ -57,7 +57,7 @@ isolation, or root review.
    concurrent workers edit the same files or overlapping contracts.
 5. Require each worker to run the repository gate, commit its result, and
    report the branch and commit directly to the root coordinator as specified
-   in `AGENTS.md` and `.claude/agents/worker.md`.
+   in `AGENTS.md`.
 6. Have the root review behavior, contract compatibility, gate results, and
    roadmap coherence before integration.
 7. Record durable design changes in `docs/`; do not preserve transient session
