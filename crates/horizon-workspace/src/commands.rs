@@ -1,5 +1,22 @@
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum CommandId {
+/// Declares [`CommandId`] and [`CommandId::ALL`] from one list, so that the
+/// list the palette and the keymap read holds every command: Rust has no way
+/// to enumerate an enum's variants, and a list kept beside the enum could
+/// miss one without the compiler noticing. The order is the palette's.
+macro_rules! command_ids {
+    ($($(#[$meta:meta])* $variant:ident,)*) => {
+        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+        pub enum CommandId {
+            $($(#[$meta])* $variant,)*
+        }
+
+        impl CommandId {
+            /// Every command, in the order the palette lists them.
+            pub const ALL: &'static [CommandId] = &[$(CommandId::$variant,)*];
+        }
+    };
+}
+
+command_ids! {
     SplitRight,
     SplitDown,
     NewTab,
@@ -14,8 +31,7 @@ pub enum CommandId {
     ContinueAgentTurn,
     /// Opens the provider→model picker for the active agent session
     /// (parent task #1's Phase 2). Palette-only -- no default keybinding
-    /// (see `keymap::command_for`'s `"switch-model"` entry for an optional
-    /// user binding).
+    /// (binding id `"switch-model"`).
     SwitchModel,
     ReloadAgentRuntime,
     /// Restarts `horizon-terminald` (`docs/terminald-split-design.md`
@@ -37,23 +53,12 @@ pub enum CommandId {
     /// first-party view over the `horizon-board` event store where the owner
     /// can browse the ranked task hierarchy. The pane is placed as a new
     /// tab or split via the view chooser's placement flow. Palette-only --
-    /// no default keybinding (see `keymap::command_for`'s `"open-board"`
-    /// entry for an optional user binding).
+    /// no default keybinding (binding id `"open-board"`).
     OpenBoard,
     /// Folds the selected task's children away, or opens them again.
     /// No-op unless the active pane is the board's list. Palette-only --
-    /// no default keybinding (see `keymap::command_for`'s
-    /// `"toggle-board-expansion"` entry for an optional user binding).
+    /// no default keybinding (binding id `"toggle-board-expansion"`).
     ToggleBoardExpansion,
-    /// Folds the board list's finished band -- the finished top-level
-    /// tasks gathered behind one row at the bottom -- open or shut.
-    ToggleBoardFinishedBand,
-    /// Reloads the active preview pane's plugin from the artifact on disk
-    /// (`src/preview/`). The pane also reloads on its own when the file
-    /// changes; this is the manual path. Palette-only -- no default
-    /// keybinding (see `keymap::command_for`'s `"reload-preview"` entry for
-    /// an optional user binding).
-    ReloadPreview,
     /// Moves the live terminal font size up one step (the shell crate's
     /// `terminal::FONT_SIZE_STEP` px, clamped). Affects the terminal grid
     /// and the agent transcript's base text size without a restart.
@@ -68,7 +73,9 @@ pub enum CommandId {
     /// or the built-in default), ending a zoom session. Default chord /
     /// override id: `"reset-font-size"`.
     ResetFontSize,
-    OpenBoardOrganizer,
+    /// Folds the board list's finished band -- the finished top-level
+    /// tasks gathered behind one row at the bottom -- open or shut.
+    ToggleBoardFinishedBand,
     OpenBoardTaskSession,
     /// Opens the task the board list has selected: retargets the tab's
     /// thread pane at it when there is one, otherwise splits the list pane
@@ -84,6 +91,12 @@ pub enum CommandId {
     ReorderBoardTask,
     SaveBoardState,
     ToggleBoardClosed,
+    OpenBoardOrganizer,
+    /// Reloads the active preview pane's plugin from the artifact on disk
+    /// (`src/preview/`). The pane also reloads on its own when the file
+    /// changes; this is the manual path. Palette-only -- no default
+    /// keybinding (binding id `"reload-preview"`).
+    ReloadPreview,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +108,9 @@ pub enum CommandCategory {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandSpec {
     pub id: CommandId,
+    /// The command's stable kebab-case id, which a `[keybindings]` entry
+    /// names it by (the shell's `keymap::command_for`).
+    pub name: &'static str,
     pub title: &'static str,
     pub category: CommandCategory,
     pub description: &'static str,
@@ -141,250 +157,248 @@ pub struct CommandEntry {
     pub enabled: bool,
 }
 
-pub fn core_commands() -> Vec<CommandSpec> {
-    let mut commands = vec![
-        CommandSpec {
-            id: CommandId::SplitRight,
-            title: "Split Right…",
-            category: CommandCategory::Workspace,
-            description: "Open the view chooser to split the active pane horizontally.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::SplitDown,
-            title: "Split Down…",
-            category: CommandCategory::Workspace,
-            description: "Open the view chooser to split the active pane vertically.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::NewTab,
-            title: "New Tab…",
-            category: CommandCategory::Workspace,
-            description: "Open the view chooser to open a new tab.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::FocusNextPane,
-            title: "Focus Next Pane",
-            category: CommandCategory::Workspace,
-            description: "Move focus to the next pane in the active tab.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::CloseActivePane,
-            title: "Close Active Pane",
-            category: CommandCategory::Workspace,
-            description: "Close the active pane when another pane remains.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::CloseActiveTab,
-            title: "Close Active Tab",
-            category: CommandCategory::Workspace,
-            description: "Close the active tab, detaching its sessions.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::TerminateActiveSession,
-            title: "Terminate Active Session",
-            category: CommandCategory::Workspace,
-            description: "Terminate the active session and close its panes.",
-            destructive: true,
-        },
-        CommandSpec {
-            id: CommandId::TerminateAllDetachedSessions,
-            title: "Terminate All Detached Sessions",
-            category: CommandCategory::Workspace,
-            description: "Terminate every detached session (not attached to any pane).",
-            destructive: true,
-        },
-        CommandSpec {
-            id: CommandId::ApproveToolCall,
-            title: "Approve Pending Tool Call",
-            category: CommandCategory::Agent,
-            description: "Approve the pending tool call awaiting approval.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::DenyToolCall,
-            title: "Deny Pending Tool Call",
-            category: CommandCategory::Agent,
-            description: "Deny the pending tool call awaiting approval.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::CancelAgentTurn,
-            title: "Cancel Agent Turn",
-            category: CommandCategory::Agent,
-            description: "Cancel the agent turn currently in flight.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::ContinueAgentTurn,
-            title: "Continue Agent Turn",
-            category: CommandCategory::Agent,
-            description: "Resume a turn the turn-loop guard paused, without a new message.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::SwitchModel,
-            title: "Switch Model…",
-            category: CommandCategory::Agent,
-            description: "Switch the active agent session's provider and model.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::ReloadAgentRuntime,
-            title: "Reload Agent Runtime",
-            category: CommandCategory::Agent,
-            description: "Restart horizon-agentd and reconnect every agent session. \
+impl CommandId {
+    /// The command's palette entry and keybinding name. An exhaustive match,
+    /// so a new command does not compile until it has both.
+    pub fn spec(self) -> CommandSpec {
+        let (name, title, category, description) = match self {
+            CommandId::SplitRight => (
+                "split-right",
+                "Split Right…",
+                CommandCategory::Workspace,
+                "Open the view chooser to split the active pane horizontally.",
+            ),
+            CommandId::SplitDown => (
+                "split-down",
+                "Split Down…",
+                CommandCategory::Workspace,
+                "Open the view chooser to split the active pane vertically.",
+            ),
+            CommandId::NewTab => (
+                "new-tab",
+                "New Tab…",
+                CommandCategory::Workspace,
+                "Open the view chooser to open a new tab.",
+            ),
+            CommandId::FocusNextPane => (
+                "focus-next-pane",
+                "Focus Next Pane",
+                CommandCategory::Workspace,
+                "Move focus to the next pane in the active tab.",
+            ),
+            CommandId::CloseActivePane => (
+                "close-active-pane",
+                "Close Active Pane",
+                CommandCategory::Workspace,
+                "Close the active pane when another pane remains.",
+            ),
+            CommandId::CloseActiveTab => (
+                "close-active-tab",
+                "Close Active Tab",
+                CommandCategory::Workspace,
+                "Close the active tab, detaching its sessions.",
+            ),
+            CommandId::TerminateActiveSession => (
+                "terminate-active-session",
+                "Terminate Active Session",
+                CommandCategory::Workspace,
+                "Terminate the active session and close its panes.",
+            ),
+            CommandId::TerminateAllDetachedSessions => (
+                "terminate-all-detached-sessions",
+                "Terminate All Detached Sessions",
+                CommandCategory::Workspace,
+                "Terminate every detached session (not attached to any pane).",
+            ),
+            CommandId::ApproveToolCall => (
+                "approve-tool-call",
+                "Approve Pending Tool Call",
+                CommandCategory::Agent,
+                "Approve the pending tool call awaiting approval.",
+            ),
+            CommandId::DenyToolCall => (
+                "deny-tool-call",
+                "Deny Pending Tool Call",
+                CommandCategory::Agent,
+                "Deny the pending tool call awaiting approval.",
+            ),
+            CommandId::CancelAgentTurn => (
+                "cancel-agent-turn",
+                "Cancel Agent Turn",
+                CommandCategory::Agent,
+                "Cancel the agent turn currently in flight.",
+            ),
+            CommandId::ContinueAgentTurn => (
+                "continue-agent-turn",
+                "Continue Agent Turn",
+                CommandCategory::Agent,
+                "Resume a turn the turn-loop guard paused, without a new message.",
+            ),
+            CommandId::SwitchModel => (
+                "switch-model",
+                "Switch Model…",
+                CommandCategory::Agent,
+                "Switch the active agent session's provider and model.",
+            ),
+            CommandId::ReloadAgentRuntime => (
+                "reload-agent-runtime",
+                "Reload Agent Runtime",
+                CommandCategory::Agent,
+                "Restart horizon-agentd and reconnect every agent session. \
                           Terminals are unaffected.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::ReloadTerminalRuntime,
-            title: "Reload Terminal Runtime",
-            category: CommandCategory::Workspace,
-            description: "Restart horizon-terminald. Terminates every terminal session and its \
+            ),
+            CommandId::ReloadTerminalRuntime => (
+                "reload-terminal-runtime",
+                "Reload Terminal Runtime",
+                CommandCategory::Workspace,
+                "Restart horizon-terminald. Terminates every terminal session and its \
                           shell.",
-            destructive: true,
-        },
-        CommandSpec {
-            id: CommandId::OpenSessionManager,
-            title: "Manage Sessions",
-            category: CommandCategory::Workspace,
-            description: "Open the session manager to attach or terminate sessions.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::ReloadConfig,
-            title: "Reload Config",
-            category: CommandCategory::Workspace,
-            description: "Re-read the config file and apply theme and keybindings live.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::OpenTerminalInSessionDirectory,
-            title: "Open Terminal in Session Directory",
-            category: CommandCategory::Workspace,
-            description:
+            ),
+            CommandId::OpenSessionManager => (
+                "manage-sessions",
+                "Manage Sessions",
+                CommandCategory::Workspace,
+                "Open the session manager to attach or terminate sessions.",
+            ),
+            CommandId::ReloadConfig => (
+                "reload-config",
+                "Reload Config",
+                CommandCategory::Workspace,
+                "Re-read the config file and apply theme and keybindings live.",
+            ),
+            CommandId::OpenTerminalInSessionDirectory => (
+                "open-terminal-in-session-directory",
+                "Open Terminal in Session Directory",
+                CommandCategory::Workspace,
                 "Open a new terminal whose working directory is the active session's directory.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::OpenBoard,
-            title: "Open Board",
-            category: CommandCategory::Workspace,
-            description: "Browse the task board's ranked task list.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::ToggleBoardExpansion,
-            title: "Toggle Board Expansion",
-            category: CommandCategory::Workspace,
-            description: "Fold the selected task's children away, or open them again.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::IncreaseFontSize,
-            title: "Increase Font Size",
-            category: CommandCategory::Workspace,
-            description: "Increase the terminal and agent transcript font size.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::DecreaseFontSize,
-            title: "Decrease Font Size",
-            category: CommandCategory::Workspace,
-            description: "Decrease the terminal and agent transcript font size.",
-            destructive: false,
-        },
-        CommandSpec {
-            id: CommandId::ResetFontSize,
-            title: "Reset Font Size",
-            category: CommandCategory::Workspace,
-            description: "Restore the startup-configured default font size.",
-            destructive: false,
-        },
-    ];
-    commands.extend(
-        [
-            (
-                CommandId::ToggleBoardFinishedBand,
+            ),
+            CommandId::OpenBoard => (
+                "open-board",
+                "Open Board",
+                CommandCategory::Workspace,
+                "Browse the task board's ranked task list.",
+            ),
+            CommandId::ToggleBoardExpansion => (
+                "toggle-board-expansion",
+                "Toggle Board Expansion",
+                CommandCategory::Workspace,
+                "Fold the selected task's children away, or open them again.",
+            ),
+            CommandId::IncreaseFontSize => (
+                "increase-font-size",
+                "Increase Font Size",
+                CommandCategory::Workspace,
+                "Increase the terminal and agent transcript font size.",
+            ),
+            CommandId::DecreaseFontSize => (
+                "decrease-font-size",
+                "Decrease Font Size",
+                CommandCategory::Workspace,
+                "Decrease the terminal and agent transcript font size.",
+            ),
+            CommandId::ResetFontSize => (
+                "reset-font-size",
+                "Reset Font Size",
+                CommandCategory::Workspace,
+                "Restore the startup-configured default font size.",
+            ),
+            CommandId::ToggleBoardFinishedBand => (
+                "toggle-board-finished-band",
                 "Show or Hide Finished Tasks",
+                CommandCategory::Workspace,
                 "Fold the board list's finished band open or shut.",
             ),
-            (
-                CommandId::OpenBoardTaskSession,
+            CommandId::OpenBoardTaskSession => (
+                "open-board-task-session",
                 "Open Task Working History",
+                CommandCategory::Workspace,
                 "Open the ordinary agent session associated with this task.",
             ),
-            (
-                CommandId::OpenBoardRelatedItem,
+            CommandId::OpenBoardRelatedItem => (
+                "open-board-related-item",
                 "Open Board Task",
+                CommandCategory::Workspace,
                 "Open the selected task's thread beside the board list.",
             ),
-            (
-                CommandId::BackBoardList,
+            CommandId::BackBoardList => (
+                "back-board-list",
                 "Back to Task List",
+                CommandCategory::Workspace,
                 "Move focus from this thread back to the board list beside it.",
             ),
-            (
-                CommandId::AddBoardTask,
+            CommandId::AddBoardTask => (
+                "add-board-task",
                 "Add Board Task",
+                CommandCategory::Workspace,
                 "Create a task from the name entered in the board.",
             ),
-            (
-                CommandId::PostBoardMessage,
+            CommandId::PostBoardMessage => (
+                "post-board-message",
                 "Send Board Message",
+                CommandCategory::Workspace,
                 "Send the consultation input to this task session.",
             ),
-            (
-                CommandId::MoveBoardTaskUp,
+            CommandId::MoveBoardTaskUp => (
+                "move-board-task-up",
                 "Move Board Task Up",
+                CommandCategory::Workspace,
                 "Move this task before its previous sibling.",
             ),
-            (
-                CommandId::MoveBoardTaskDown,
+            CommandId::MoveBoardTaskDown => (
+                "move-board-task-down",
                 "Move Board Task Down",
+                CommandCategory::Workspace,
                 "Move this task after its next sibling.",
             ),
-            (
-                CommandId::ReorderBoardTask,
+            CommandId::ReorderBoardTask => (
+                "reorder-board-task",
                 "Reorder Board Task",
+                CommandCategory::Workspace,
                 "Apply the dragged task position among its siblings.",
             ),
-            (
-                CommandId::SaveBoardState,
+            CommandId::SaveBoardState => (
+                "save-board-state",
                 "Save Task State",
+                CommandCategory::Workspace,
                 "Save the project-defined state entered for this task.",
             ),
-            (
-                CommandId::ToggleBoardClosed,
+            CommandId::ToggleBoardClosed => (
+                "toggle-board-closed",
                 "Close or Reopen Task",
+                CommandCategory::Workspace,
                 "Close or reopen the task independently of its project-defined state.",
             ),
-            (
-                CommandId::OpenBoardOrganizer,
+            CommandId::OpenBoardOrganizer => (
+                "open-board-organizer",
                 "Open Board Organizer",
+                CommandCategory::Workspace,
                 "Create or resume this board’s organizer and open its agent view.",
             ),
-            (
-                CommandId::ReloadPreview,
+            CommandId::ReloadPreview => (
+                "reload-preview",
                 "Reload Preview",
+                CommandCategory::Workspace,
                 "Reload the active preview pane's plugin from disk.",
             ),
-        ]
-        .map(|(id, title, description)| CommandSpec {
-            id,
+        };
+        CommandSpec {
+            id: self,
+            name,
             title,
+            category,
             description,
-            category: CommandCategory::Workspace,
-            destructive: false,
-        }),
-    );
-    commands
+            destructive: matches!(
+                self,
+                CommandId::TerminateActiveSession
+                    | CommandId::TerminateAllDetachedSessions
+                    | CommandId::ReloadTerminalRuntime
+            ),
+        }
+    }
+}
+
+pub fn core_commands() -> Vec<CommandSpec> {
+    CommandId::ALL.iter().map(|id| id.spec()).collect()
 }
 
 pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
