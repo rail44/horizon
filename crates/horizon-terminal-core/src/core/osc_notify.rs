@@ -31,11 +31,11 @@
 //! - Any OSC 777 is swallowed (alacritty would drop it either way), but
 //!   only payloads whose first token is `notify` (case-insensitively,
 //!   rxvt's spelling) become notifications.
-//! - Any OSC 9 payload is taken as the body wholesale. ConEmu's
-//!   Windows-only OSC 9 subcommands (`9;4;<state>` progress and friends)
-//!   are not discriminated — such a payload would arrive as an odd-looking
-//!   body; nothing misrenders either way, since the payload never reaches
-//!   the grid.
+//! - Any OSC 9 payload is taken as the body wholesale, except ConEmu's
+//!   progress report (`9;4;<state>;<percent>`), which is swallowed without
+//!   a notification. Progress-bar tools on every platform emit it on each
+//!   update, so taking it as a body would post one notification per tick.
+//!   ConEmu's other OSC 9 subcommands are not discriminated.
 //! - A payload that outgrows [`PAYLOAD_CAP`] before its terminator shows
 //!   up is emitted truncated once and the remainder is swallowed until a
 //!   terminator eventually arrives — bounding memory on a hostile or
@@ -306,7 +306,7 @@ fn parse_payload(kind: CaptureKind, payload: &[u8]) -> Option<TerminalNotificati
     let text = text.trim();
     match kind {
         CaptureKind::Nine => {
-            if text.is_empty() {
+            if text.is_empty() || is_conemu_progress(text) {
                 return None;
             }
             Some(TerminalNotification {
@@ -334,6 +334,13 @@ fn parse_payload(kind: CaptureKind, payload: &[u8]) -> Option<TerminalNotificati
             })
         }
     }
+}
+
+/// Whether an OSC 9 payload is ConEmu's progress report: `4` alone or
+/// `4;<state>[;<percent>]`. Matching the first `;`-separated token exactly
+/// keeps a body like `42 tests passed` a notification.
+fn is_conemu_progress(payload: &str) -> bool {
+    payload.split(';').next() == Some("4")
 }
 
 /// First index of `needle` in `hay`, or `None`. A linear scan over the
@@ -389,6 +396,24 @@ mod tests {
         let (out, notes) = scanner.feed(b"\x1b]9;hello\x1b\\world");
         assert_eq!(out, b"world");
         assert_eq!(notes, vec![body_only("hello")]);
+    }
+
+    #[test]
+    fn osc9_progress_report_is_swallowed_without_a_notification() {
+        let mut scanner = OscNotificationScanner::default();
+        let (out, notes) = scanner.feed(b"a\x1b]9;4;1;80\x07b\x1b]9;4;0\x1b\\c\x1b]9;4\x07d");
+        assert_eq!(out, b"abcd");
+        assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn osc9_body_starting_with_a_digit_four_is_still_a_notification() {
+        let mut scanner = OscNotificationScanner::default();
+        let (_, notes) = scanner.feed(b"\x1b]9;42 tests passed\x07\x1b]9;4 done\x07");
+        assert_eq!(
+            notes,
+            vec![body_only("42 tests passed"), body_only("4 done")]
+        );
     }
 
     #[test]
