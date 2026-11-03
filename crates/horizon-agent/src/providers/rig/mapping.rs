@@ -19,6 +19,35 @@ mod tests;
 pub(super) const RIG_PROVIDER_PAYLOAD_SCHEMA: &str = "horizon.rig.provider_payload";
 pub(super) const RIG_PROVIDER_PAYLOAD_VERSION: u32 = 2;
 
+/// A tool call's provider item, wrapped as rig's `Native`.
+///
+/// The fingerprint covers the provider's own item, not rig's canonical
+/// projection of the call, so rig treats the block as stale: the item keeps
+/// the call's identity keys while the encoder rebuilds the body from
+/// Horizon's canonical arguments. That is the intent — the item is persisted
+/// provider metadata, not a re-encodable copy of the call, and replaying it
+/// verbatim would resend arguments Horizon repaired (double-encoded ones, the
+/// replay-safe float normalization).
+///
+/// rig-core 0.46 gave `Native` its own edit detection, so that staleness is
+/// now recorded in the struct rather than only derived at encode time: the
+/// serializer stamps `edited = true` on any item whose fingerprint is not the
+/// block's canonical projection, which Horizon's reconstructed item never is.
+/// Horizon says so up front, so the history restored from the persisted log
+/// equals the in-memory one instead of differing by that one flag. `baseline`
+/// (a float-preserving projection of a call rig decoded itself) and
+/// `blob_slot` (a reasoning blob's JSON pointer, which a tool call does not
+/// carry) stay empty.
+pub(super) fn native_from_provider_item(item: serde_json::Value) -> rig_core::message::Native {
+    rig_core::message::Native {
+        fingerprint: rig_core::message::Fingerprint::of(&item),
+        item,
+        baseline: None,
+        edited: true,
+        blob_slot: None,
+    }
+}
+
 #[cfg(test)]
 pub(super) fn horizon_events_from_rig_message(message: Message) -> Vec<Event> {
     horizon_provider_events_from_rig_message(message)
@@ -252,17 +281,11 @@ pub(super) fn rig_multi_snapshot_calls(count: usize) -> Vec<ToolCall> {
 #[cfg(test)]
 pub(super) fn rig_workspace_snapshot_call_with_provider_metadata() -> ToolCall {
     ToolCall {
-        native: Some(rig_core::message::Native {
-            fingerprint: rig_core::message::Fingerprint::of(&serde_json::json!({
-                "call_id": "provider-call-1",
-                "signature": "signature-1",
-            })),
-            item: serde_json::json!({
-                "call_id": "provider-call-1",
-                "signature": "signature-1",
-                "additional_params": {"provider": "rig", "reasoning_ref": "reasoning-1"},
-            }),
-        }),
+        native: Some(native_from_provider_item(serde_json::json!({
+            "call_id": "provider-call-1",
+            "signature": "signature-1",
+            "additional_params": {"provider": "rig", "reasoning_ref": "reasoning-1"},
+        }))),
         ..rig_workspace_snapshot_call()
     }
 }

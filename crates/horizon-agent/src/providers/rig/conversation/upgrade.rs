@@ -169,10 +169,9 @@ fn restore_tool(request: &ToolCallRequest, payload: Option<&Value>) -> Result<To
             "signature": raw["signature"].clone(),
             "additional_params": raw["additional_params"].clone(),
         });
-        tool.native = Some(rig_core::message::Native {
-            fingerprint: rig_core::message::Fingerprint::of(&native_item),
-            item: native_item,
-        });
+        tool.native = Some(super::super::mapping::native_from_provider_item(
+            native_item,
+        ));
     }
     if provider_call_id(&tool) != request.call_id.0 {
         return Err("Provider payload disagrees with the recorded call identity".into());

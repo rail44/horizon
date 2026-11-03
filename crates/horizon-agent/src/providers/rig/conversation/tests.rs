@@ -97,10 +97,9 @@ fn exact_provider_metadata_and_parallel_result_order_survive_early_results() {
                 rig_core::message::ToolName::new("fs.read").expect("tool id"),
                 json!({"path":index.to_string()}),
             ),
-            native: Some(rig_core::message::Native {
-                fingerprint: rig_core::message::Fingerprint::of(&native_item),
-                item: native_item,
-            }),
+            native: Some(super::super::mapping::native_from_provider_item(
+                native_item,
+            )),
         };
         identities.push(ToolCallIdentity {
             call_id: ToolCallId(format!("wire-{index}")),
