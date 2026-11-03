@@ -260,6 +260,9 @@ impl SessionEnvironment<'_> {
                     },
                     &retained_grants,
                 );
+                // Domains approved for this session so far; the replacement
+                // was seeded from the project's configured domains alone.
+                replacement.retain_domains_from(tool_state);
                 let identity = worktree.identity();
                 live_state
                     .activate_context(context, Event::EnvironmentActivated(identity.clone()))?;

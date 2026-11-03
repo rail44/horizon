@@ -112,10 +112,41 @@ fn within(tool_state: &ToolSessionState, resolved: &Path, confinement: Confineme
         Confinement::WorkspaceRoot => false,
         // Only computed for a path already known to sit outside the root,
         // so an ordinary in-workspace call pays nothing for this.
-        Confinement::ReadableRoots => git_metadata_roots(tool_state)
-            .iter()
-            .any(|root| resolved.starts_with(root)),
+        Confinement::ReadableRoots => {
+            git_metadata_roots(tool_state)
+                .iter()
+                .any(|root| resolved.starts_with(root))
+                || within_filesystem_grant(tool_state, resolved)
+                || is_bash_spill_file(resolved)
+        }
     }
+}
+
+/// Whether `resolved` lies under one of the session's filesystem grants
+/// (project `[[grants.project]]` trees and grants approved during the
+/// session). A grant lets sandboxed `bash` write there, so asking before an
+/// `fs` tool merely reads it protects nothing.
+fn within_filesystem_grant(tool_state: &ToolSessionState, resolved: &Path) -> bool {
+    tool_state.effective_sandbox_grants().iter().any(|grant| {
+        let path = grant
+            .path
+            .canonicalize()
+            .unwrap_or_else(|_| grant.path.clone());
+        resolved.starts_with(path)
+    })
+}
+
+/// Whether `resolved` is a `bash` output spill file: the full output every
+/// `bash` result points the model at through its `output_file` field
+/// (`tools::bash::output`), written directly into the temp directory.
+fn is_bash_spill_file(resolved: &Path) -> bool {
+    let temp_dir = std::env::temp_dir();
+    let temp_dir = temp_dir.canonicalize().unwrap_or(temp_dir);
+    resolved.parent() == Some(temp_dir.as_path())
+        && resolved
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("horizon-bash-") && name.ends_with(".log"))
 }
 
 /// Resolves `requested` to an absolute, canonicalized path confined to
@@ -141,7 +172,8 @@ pub(super) fn resolve_path(
 }
 
 /// [`resolve_path`] for the read tools, which additionally accept this
-/// session's Git metadata roots — see [`git_metadata_roots`].
+/// session's Git metadata roots (see [`git_metadata_roots`]), its filesystem
+/// grants, and `bash` output spill files.
 pub(super) fn resolve_read_path(
     tool_state: &ToolSessionState,
     requested: &str,

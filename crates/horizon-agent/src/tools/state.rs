@@ -327,6 +327,18 @@ impl ToolSessionState {
         self.inner.domains.allow(domain);
     }
 
+    /// Copies every domain `previous` allows into this session's own store
+    /// (shared with its network proxy). `horizon-agentd` calls this when an
+    /// environment activation replaces the tool state, so a domain approved
+    /// "for this session" stays approved after the session enters its
+    /// worktree; the replacement otherwise starts from the project's
+    /// configured domains alone.
+    pub fn retain_domains_from(&self, previous: &ToolSessionState) {
+        for domain in previous.inner.domains.shared().domains() {
+            self.allow_domain(domain);
+        }
+    }
+
     pub(crate) fn is_domain_allowed(&self, domain: &str) -> bool {
         self.inner.domains.is_allowed(domain)
     }

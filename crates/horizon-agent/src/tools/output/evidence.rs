@@ -23,6 +23,13 @@ pub(crate) struct Evidence {
     pub ungrantable_filesystem_paths: Vec<UngrantablePath>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub denied_network_routes: Vec<NetworkDenial>,
+    /// What a refused network route means for the command, attached
+    /// whenever `denied_network_routes` is non-empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_guidance: Option<String>,
+    /// What approving a denied loopback host would and would not open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loopback_guidance: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain_approved: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

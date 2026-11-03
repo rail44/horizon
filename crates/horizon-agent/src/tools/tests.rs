@@ -3775,6 +3775,22 @@ fn domain_denial_retry_frame(
     (frame, prior_result)
 }
 
+#[test]
+fn a_rebuilt_tool_state_keeps_the_domains_approved_before_it() {
+    let previous = ToolSessionState::new(std::env::temp_dir());
+    previous.allow_domain("index.crates.io");
+    previous.allow_domain("github.com");
+    let replacement = ToolSessionState::new(std::env::temp_dir());
+    assert!(!replacement.is_domain_allowed("index.crates.io"));
+    replacement.retain_domains_from(&previous);
+    assert!(replacement.is_domain_allowed("index.crates.io"));
+    assert!(replacement.is_domain_allowed("github.com"));
+    // The replacement's own store, not the previous one: a later approval
+    // lands only where the session now lives.
+    replacement.allow_domain("static.crates.io");
+    assert!(!previous.is_domain_allowed("static.crates.io"));
+}
+
 fn domain_grant_frame(live_state: &LiveState, call_id: &ToolCallId, domain: &str) -> AgentFrame {
     live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),

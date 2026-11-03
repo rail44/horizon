@@ -35,10 +35,17 @@ pub(super) fn complete(
         mut denials,
         ..
     } = captured;
+    let denied_domains = dedup_denied_hosts(denied_domains);
     let git_metadata_denied = divert_git_metadata_denials(&mut denials, git_metadata);
+    let annotate = |value: &mut Response, denials: &horizon_sandbox::ContainmentDenials| {
+        annotate_common(value, denials, git_metadata_denied);
+        if denied_domains.iter().any(|host| is_loopback_host(host)) {
+            crate::tools::output::annotate_loopback_guidance(value);
+        }
+    };
     if killed {
         let mut value = timeout_output(timeout, raw_stdout, config);
-        annotate_common(&mut value, &denials, git_metadata_denied);
+        annotate(&mut value, &denials);
         if !drained {
             note_undrained(&mut value, Duration::from_secs(config.drain_grace_secs));
         }
@@ -50,13 +57,13 @@ pub(super) fn complete(
             Some(raw_stdout),
             config,
         );
-        annotate_common(&mut value, &denials, git_metadata_denied);
+        annotate(&mut value, &denials);
         // Wait failures historically carry no drain note or filesystem retry.
         return finish_or_domain_denied(identity, value, denied_domains);
     };
 
     let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
-    annotate_common(&mut value, &denials, git_metadata_denied);
+    annotate(&mut value, &denials);
     #[cfg(target_os = "macos")]
     if let Some(error) = &denial_collection_error {
         crate::tools::output::annotate_denial_collection_unavailable(&mut value, error);
@@ -249,9 +256,99 @@ fn finish_or_domain_denied(
     }
 }
 
+/// The hosts the session proxy refused, each once and in first-denial
+/// order. The proxy records every refused request, so a build that retries
+/// one registry dozens of times would otherwise carry it dozens of times
+/// into the approval kind and the judge's input.
+fn dedup_denied_hosts(hosts: Vec<String>) -> Vec<String> {
+    let mut unique = Vec::new();
+    for host in hosts {
+        if !unique.contains(&host) {
+            unique.push(host);
+        }
+    }
+    unique
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    bare.eq_ignore_ascii_case("localhost")
+        || bare
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn denied_hosts_are_deduplicated_in_first_denial_order() {
+        let hosts = [
+            "static.crates.io",
+            "index.crates.io",
+            "static.crates.io",
+            "127.0.0.1",
+            "index.crates.io",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            dedup_denied_hosts(hosts),
+            ["static.crates.io", "index.crates.io", "127.0.0.1"]
+        );
+        for host in ["127.0.0.1", "127.0.0.2", "localhost", "[::1]"] {
+            assert!(is_loopback_host(host), "{host}");
+        }
+        assert!(!is_loopback_host("index.crates.io"));
+    }
+
+    #[test]
+    fn a_loopback_denial_stays_a_domain_retry_and_explains_what_it_opens() {
+        let capture = Captured {
+            denials: ContainmentDenials::default(),
+            ..captured(Some(0), false)
+        };
+        let (completion, _) =
+            finish_with(capture, vec!["127.0.0.1".into(), "127.0.0.1".into()], &[]);
+        let BashCompletion::DomainDenied {
+            result, domains, ..
+        } = completion
+        else {
+            panic!("a loopback denial must still offer the domain retry");
+        };
+        assert_eq!(domains, ["127.0.0.1"]);
+        assert!(result.output["loopback_guidance"].is_string());
+
+        let (completion, _) = finish_with(
+            Captured {
+                denials: ContainmentDenials::default(),
+                ..captured(Some(0), false)
+            },
+            vec!["index.crates.io".into()],
+            &[],
+        );
+        let BashCompletion::DomainDenied { result, .. } = completion else {
+            panic!("expected a domain retry");
+        };
+        assert!(result.output.get("loopback_guidance").is_none());
+    }
+
+    #[test]
+    fn a_refused_network_route_carries_the_proxy_only_guidance() {
+        let (completion, _) = finish_with(captured(Some(0), false), Vec::new(), &[]);
+        let result = match completion {
+            BashCompletion::FilesystemDenied { result, .. } => result,
+            _ => panic!("the fixture's filesystem denial must yield a filesystem retry"),
+        };
+        assert!(result.output["network_guidance"]
+            .as_str()
+            .unwrap()
+            .contains("insteadOf"));
+    }
     use crate::tools::bash::BashCompletion;
     use horizon_sandbox::{
         ContainmentDenials, FilesystemDenial, FilesystemGrant, FilesystemGrantAccess,

@@ -53,6 +53,34 @@ pub(crate) fn annotate_network_denials(
             reason: d.reason.clone(),
         })
         .collect();
+    if !denials.is_empty() {
+        output.evidence_mut().network_guidance = Some(NETWORK_ROUTE_GUIDANCE.into());
+    }
+}
+
+/// Attached to every sandboxed result with a refused network route. The
+/// failure this explains reads as an ordinary name-resolution error
+/// (`ssh: Could not resolve hostname ...`), which agents have taken to mean
+/// the network is closed altogether.
+const NETWORK_ROUTE_GUIDANCE: &str = "Only HTTP(S) clients that use the session proxy \
+     (HTTP_PROXY/HTTPS_PROXY) reach the network from this sandbox; direct name lookups and \
+     non-HTTP connections such as SSH are refused, and they fail as name-resolution or \
+     connection errors. A Git remote over SSH -- including an https URL that a \
+     `url.<base>.insteadOf` entry in the user's Git config rewrites to SSH -- cannot be \
+     reached here; this does not mean HTTPS is unavailable.";
+
+/// Attached when a denied host is loopback. The observed case -- tests
+/// starting their own mock server -- was approved as a domain retry and
+/// still failed, because the refused part was the bind, which no proxy
+/// grant changes.
+const LOOPBACK_GUIDANCE: &str = "Approving a loopback host lets requests through the session \
+     proxy reach every local service on that address; a fixed endpoint can be granted \
+     narrowly instead with `127.0.0.1:<port>` in the project's `[[grants.project]] network` \
+     list. Neither lets a command start its own loopback server (for example a test with a \
+     mock server): binding is refused inside this sandbox.";
+
+pub(crate) fn annotate_loopback_guidance(output: &mut Response) {
+    output.evidence_mut().loopback_guidance = Some(LOOPBACK_GUIDANCE.into());
 }
 #[cfg(target_os = "macos")]
 pub(crate) fn annotate_denied_mach_services(output: &mut Response, services: &[String]) {
