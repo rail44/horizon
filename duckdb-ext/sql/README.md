@@ -548,6 +548,21 @@ reading of them, then Go's:
   a type to each interface it implements, a method to the interface's method), a
   member's interface member NULL when the interface is outside the index
   (`fmt.Stringer`); Go declares no conversions.
+- **`type_parts(type_unit_id, symbol, name, part)`**: each type's parts, which are not
+  units, as each language gives them (`<language>_type_parts`, keyed by definition
+  occurrence like the type facts, with the type's definition occurrence): `part` is
+  `field` (a struct's or union's field) or `variant` (an enum's variant), the words Rust
+  and Go use too, so no `<language>_value_terms` row names them. A part's `symbol` is what
+  `unit_references` names when a unit uses the field or the variant (its `dst_unit_id`
+  is the type), so a type's cohesion or a unit's reach into an enum's variants is a join
+  on it. Rust (`rust_type_parts`): SCIP's Field and EnumMember, each placed at the
+  definition of its symbol without the last descriptor, in its file and containing its
+  name; a variant's own fields have no row, nor a tuple struct's positional fields
+  (rust-analyzer gives them a symbol but no definition occurrence, so their uses reach no
+  unit either). Go (`go_type_parts`): Field, placed at the definition of its symbol
+  without the last descriptor in its file; Go has no variants. A part whose type has no
+  unit (a type a macro writes, a struct type written inside another declaration) is left
+  out.
 - **`file_namespaces(file_id, namespace, namespace_path)`**: each source file's
   namespace as its language places it (`<language>_file_namespaces`): a Rust file is its
   own, named by its path and placed by the file-module convention (a crate root and
@@ -695,7 +710,7 @@ views compute the same rows live (`check.py refresh` compares them).
   `ast-*.duckdb` files of other syntax keys.
 - **Layers**, in order, each built from the copies before it: `scip_occurrences`,
   `scip_symbols`, `units`, `unit_occurrences`, `symbol_units`, `unit_references`,
-  `unit_edges`, `unit_ancestors`, `type_fact_units`, `unit_owner_types`, `namespaces`,
+  `unit_edges`, `unit_ancestors`, `type_fact_units`, `unit_owner_types`, `type_parts`, `namespaces`,
   `unit_namespace`, `namespace_edges`, `unit_scope`, `unit_fan_in`, `unit_fan_out`,
   `unit_reference_status`, `unit_debt_markers`, `unit_constructs`, `unit_complexity`,
   `clone_pairs`, `clone_sides`. Views that read a query variable or the settings' tables
@@ -769,7 +784,8 @@ crates (`shapes`, a library with a trait, a constant, a struct, a trait impl wit
 associated type, two inherent impls one of them `#[cfg(test)]`, a `#[cfg(test)]` module,
 a TODO, an unused function and two sibling modules calling each other through a `From`
 impl; `app`, a binary using it, an integration test and a file the settings name a test),
-a second workspace nested in it (`tools/`), a file outside every workspace and a file the
+a second workspace nested in it (`tools/`, with an enum of a unit variant and a struct
+variant matched in a function), a file outside every workspace and a file the
 settings exclude. It indexes both workspaces with rust-analyzer (`RUST_ANALYZER`; skipped
 with a message when missing), writes two jscpd-shaped reports (a pair between two types a
 conversion joins, found by both reports with the sides swapped and merged; one that is
@@ -778,7 +794,7 @@ the settings' tables as `code-db` does (`exclude_patterns`, `extra_test_paths`,
 `extra_test_attributes`, two layers), reads `refresh.sql` and checks every cached
 layer against its view's definition (below), and asserts over the cache every row of
 `files` and `units`, `unit_owner_types`, `type_interfaces`, `member_implementations`,
-`type_conversions`, `unit_edges`, `namespaces`, `package_edges`,
+`type_conversions`, `type_parts`, `unit_edges`, `namespaces`, `package_edges`,
 `namespace_cycles`, `unit_quality`, and every query with its parameters (`size` at three
 levels, `coupling` with `min_packages` and at the file and package levels, `unreferenced`
 with the structural rows, `duplication` with tests and per report), `clone_report_pairs`
@@ -818,8 +834,8 @@ fixture sets the variables and tables itself.
 from a fake `/proc/meminfo` and DuckDB's size formatting, the markdown renderer and the
 statement splitter, workspace and Go module discovery and index names, an end-to-end
 run on a Go fixture (two modules indexed with scip-go and no rust-analyzer needed, the
-`.go` files handed to jscpd, every unit's row, the unit edges across files and
-packages; skipped without `scip-go`), and an end-to-end run on a Rust
+`.go` files handed to jscpd, every unit's row, a struct's field as its part, the unit edges
+across files and packages; skipped without `scip-go`), and an end-to-end run on a Rust
 fixture repository: `index` with a stand-in jscpd (both workspaces indexed, the files in
 scope handed to jscpd), the `layer_violations` row and the cycle's `violating_edges`, the
 settings' test rules and exclusion, a duplication pair, and a query without the reports
@@ -832,11 +848,11 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); the macros `path_glob_regex`, `path_glob`; `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`, `clone_report_bytes`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_relationships`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols`, `scip_relationships` (SCIP) |
-| `lang/rust.sql` | `rust_terms`, `rust_value_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, `rust_control_nodes`, the macros `impl_base_name`, `impl_generic_arg`; `rust_unit_rows`, `rust_units` (Units), `rust_type_facts` (Types) |
-| `lang/go.sql` | `go_terms`, `go_value_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_control_nodes`, `go_units` (Units), `go_type_facts` (Types) |
+| `lang/rust.sql` | `rust_terms`, `rust_value_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, `rust_control_nodes`, the macros `impl_base_name`, `impl_generic_arg`; `rust_unit_rows`, `rust_units` (Units), `rust_type_facts`, `rust_type_parts` (Types) |
+| `lang/go.sql` | `go_terms`, `go_value_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_control_nodes`, `go_units` (Units), `go_type_facts`, `go_type_parts` (Types) |
 | `views/terms.sql` | `lang_terms`, `lang_value_terms`, `lang_visibility_boundaries`, the macros `visibility_boundary`, `display_language`, `term_swap`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
 | `views/units.sql` | `derived_units`, `units`, `unit_ast` (Units) |
-| `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `type_facts`, `type_fact_units`, `unit_owner_types`, `type_interfaces`, `member_implementations`, `type_conversions`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
+| `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `type_facts`, `type_fact_units`, `unit_owner_types`, `type_interfaces`, `member_implementations`, `type_conversions`, `type_parts`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
 | `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
 | `views/quality.sql` | `unit_scope`, `namespace_references`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `control_nodes`, `unit_constructs`, `unit_complexity`, `unit_quality` (Axes) |
 | `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `namespace_graph`, `namespace_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
@@ -853,7 +869,8 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 - **Paths are repository-relative** with `/`. `files.file_id` is the position in the
   sorted file list; `units.unit_id` the position in the unit order (Units).
 - **Neutral vocabulary**: unit kinds `function`, `method`, `type`, `namespace`, `macro`,
-  `constant`, `file`; the SCIP kind is kept as `symbol_kind`. Language knowledge about units (the
+  `constant`, `file`; the SCIP kind is kept as `symbol_kind`; type parts `field`,
+  `variant`. Language knowledge about units (the
   kind mapping, the test rules, ranges the indexer does not give)
   lives in one file per language under `lang/`, a view `<language>_units` that
   `views/units.sql` takes into `derived_units`, its files' namespaces in
@@ -862,10 +879,11 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
   its visibility boundary in `<language>_visibility_boundary`, the references that name
   its namespace units in `<language>_namespace_references`, its control constructs
   in `<language>_control_nodes`, and what it says about types (members, implementations,
-  conversions) in `<language>_type_facts`; another language adds its file there, its eight
+  conversions) in `<language>_type_facts`, a type's fields and variants in
+  `<language>_type_parts`; another language adds its file there, its nine
   views to the unions in `derived_units`, `file_namespaces`, `lang_terms`,
   `lang_value_terms`, `lang_visibility_boundaries`, `namespace_references`,
-  `control_nodes` and `type_facts`, its extension
+  `control_nodes`, `type_facts` and `type_parts`, its extension
   to `languages` and its indexer to `code-db index`. A unit's `entry` (what runs it
   without a reference) is a column of `<language>_units`. No view outside `lang/` holds
   a language's rules.

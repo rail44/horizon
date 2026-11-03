@@ -30,8 +30,8 @@
 -- Layers, in the order they are built, each from the copies before it: scip_occurrences,
 -- scip_symbols (views/scip.sql); units (views/units.sql); unit_occurrences, symbol_units,
 -- unit_references, unit_edges, unit_ancestors, type_fact_units, unit_owner_types,
--- namespaces, unit_namespace, namespace_edges (views/graph.sql); unit_scope, unit_fan_in,
--- unit_fan_out, unit_reference_status, unit_debt_markers, unit_constructs, unit_complexity
+-- type_parts, namespaces, unit_namespace, namespace_edges (views/graph.sql); unit_scope,
+-- unit_fan_in, unit_fan_out, unit_reference_status, unit_debt_markers, unit_constructs, unit_complexity
 -- (views/quality.sql); clone_pairs, clone_sides (views/clones.sql). Views that read a query
 -- variable or the settings' tables (module_cycle_edges and what reads it, the layers) stay
 -- live, over the copies. clone_pairs is copied because a plan that reads it twice (directly
@@ -169,6 +169,8 @@ CREATE TABLE IF NOT EXISTS cache.type_fact_units AS SELECT * FROM type_fact_unit
 CREATE OR REPLACE VIEW type_fact_units AS SELECT * FROM cache.type_fact_units;
 CREATE TABLE IF NOT EXISTS cache.unit_owner_types AS SELECT * FROM unit_owner_types;
 CREATE OR REPLACE VIEW unit_owner_types AS SELECT * FROM cache.unit_owner_types;
+CREATE TABLE IF NOT EXISTS cache.type_parts AS SELECT * FROM type_parts;
+CREATE OR REPLACE VIEW type_parts AS SELECT * FROM cache.type_parts;
 CREATE TABLE IF NOT EXISTS cache.namespaces AS SELECT * FROM namespaces;
 CREATE OR REPLACE VIEW namespaces AS SELECT * FROM cache.namespaces;
 CREATE TABLE IF NOT EXISTS cache.unit_namespace AS SELECT * FROM unit_namespace;
