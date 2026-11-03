@@ -1250,6 +1250,24 @@ def assert_counting_rules(con):
     assert (unit, file) == ([3], [5]), (unit, file)
 
 
+def assert_path_patterns(con):
+    """The settings' patterns (path_glob, 00_load.sql): `*` and `?` within one segment,
+    `**` anything, `**/` none or more whole directories, character classes."""
+    cases = [
+        ("go/*/X/*", "go/a/X/f", True), ("go/*/X/*", "go/a/b/X/f", False),
+        ("go/**/X/*", "go/a/b/X/f", True), ("go/**/X/*", "go/X/f", True),
+        ("**/*.test.rs", "a.test.rs", True), ("**/*.test.rs", "x/y/a.test.rs", True),
+        ("experiments/**", "experiments/a/b.rs", True), ("experiments/**", "experiments", False),
+        ("src/model.rs*", "src/model.rs::inner", True), ("src/?.rs", "src/a.rs", True),
+        ("src/?.rs", "src/ab.rs", False), ("a.b", "axb", False), ("f(1)$", "f(1)$", True),
+        ("[!a]x", "bx", True), ("[!a]x", "ax", False), ("[^a]x", "ax", False), ("[ab]x", "bx", True),
+    ]
+    actual = rows(con, "SELECT p, s, path_glob(s, p) FROM (VALUES "
+                       + ", ".join(f"({sql_literal(p)}, {sql_literal(s)})" for p, s, _ in cases)
+                       + ") t(p, s)")
+    assert actual == cases, [(a, c) for a, c in zip(actual, cases) if a != c]
+
+
 def assert_display_order(con):
     """display_select keeps the rows' order: a vocabulary column's translation is a
     subquery, and the joins of two of them reordered 20,000 rows before the SELECT ordered
@@ -1276,10 +1294,15 @@ def assert_fixture(con, repo):
     set_layers(con, [], [])
     assert rows(con, query_sql("layer_violations")) == []
     assert {r[-1] for r in rows(con, query_sql("namespace_cycles"))} == {0}
-    # A namespace in two layers is an error.
+    # A namespace in two layers is an error; `*` stays within a segment, `**` does not.
     set_layers(con, [("a", "shapes/src/rect.rs"), ("b", "shapes/src/*")], [])
     assert_error(con, "SELECT * FROM namespace_layers", "namespace_layers: shapes/src/rect.rs matches the layers a, b")
+    set_layers(con, [("a", "shapes/src/rect.rs"), ("b", "shapes/*")], [])
+    assert rows(con, "SELECT count(*) FROM namespace_layers WHERE layer = 'b'") == [(0,)]
+    set_layers(con, [("a", "shapes/src/rect.rs"), ("b", "shapes/**")], [])
+    assert_error(con, "SELECT * FROM namespace_layers", "namespace_layers: shapes/src/rect.rs matches the layers a, b")
     set_layers(con, patterns, deps)
+    assert_path_patterns(con)
     # unit_dependencies stops without its unit.
     con.execute("RESET VARIABLE path")
     assert_error(con, query_sql("unit_dependencies"), "set the variables path, unit_kind and qualified_name")

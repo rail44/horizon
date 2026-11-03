@@ -291,17 +291,26 @@ may_depend_on = ["board"]
 reason = "..."
 ```
 
+Every pattern (`scope.exclude`, `tests.paths`, a layer's `modules`/`packages`) matches a
+repository-relative path, or a namespace, whole (`path_glob`, `00_load.sql`): `*` and `?`
+stay within one path segment, `**` matches anything, `**/` any number of whole directories
+(none included), `[...]` and `[!...]` a character class (owner decision 2026-11-02: with
+SQL's GLOB, `*` crossed `/`, so `go/*/X/*` also took a nested `X` directory and a layer
+had to list each module's). `src/*.rs` is the files of `src/`; `src/**` everything below
+it; `**/*.test.rs` such a file anywhere.
+
 | Key | Becomes | Read by |
 | --- | --- | --- |
 | `scope.exclude[].path` | the variable `exclude_patterns` | `00_load.sql` (`is_source_file`): the files, so also the units, the graph and what `index` hands jscpd |
-| `tests.paths[].path` | the variable `extra_test_paths` (GLOB operator patterns on the relative path, `*` crosses `/`), added to Rust's own path rules | `derived_units` (`is_test`) |
+| `tests.paths[].path` | the variable `extra_test_paths`, added to Rust's own path rules | `derived_units` (`is_test`) |
 | `tests.extra_attributes[].name` | the variable `extra_test_attributes`, added to the attributes whose name ends in `test` and `cfg(test)` | `derived_units` (`is_test`) |
 | `[[layers]]` `name`, `modules` (Rust's word; `packages` for Go) | the table `config_layers(name, namespace_pattern)`, one row per pattern | `namespace_layer_matches`, `namespace_layers` (`views/graph.sql`) |
 | `[[layers]]` `may_depend_on` | the table `config_layer_deps(name, may_depend_on)` | `graph_layer_violation`, `namespace_layer_violations`, the queries `layer_violations` and `namespace_cycles` |
 
 A namespace (`namespaces.namespace`: a file's path, or `<path>::<name>` for an inline `mod` block)
-is in a layer when it matches one of the layer's patterns with the GLOB operator, so
-`src/model.rs*` covers `src/model.rs` and its inline modules. A namespace in no layer is
+is in a layer when it matches one of the layer's patterns, so `src/model.rs*` covers
+`src/model.rs` and its inline modules (`::` is no `/`); a Go package's namespace is its
+directory. A namespace in no layer is
 unconstrained; a namespace that matches two layers is an error (`code-db` reports it before
 any query, and `namespace_layers` fails on it). An edge goes against the layers when both
 ends are in layers, the layers differ and the source layer's `may_depend_on` does not
@@ -778,7 +787,7 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 
 | File | Defines |
 | --- | --- |
-| `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`; the limits line as its last result |
+| `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); the macros `path_glob_regex`, `path_glob`; `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`, `clone_report_bytes`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_relationships`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols`, `scip_relationships` (SCIP) |
 | `lang/rust.sql` | `rust_terms`, `rust_value_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, `rust_control_nodes`, the macros `impl_base_name`, `impl_generic_arg`; `rust_unit_rows`, `rust_units` (Units), `rust_type_facts` (Types) |
@@ -834,7 +843,7 @@ which `00_load.sql` takes as snapshots.
 | `memory_limit`, `threads`, `temp_limit`, `temp_directory` | unset (DuckDB's defaults); `code-db` sets them to the derived limits (Limits) | `00_load.sql` |
 | `limits` | unset; `code-db` sets it to its limits line | `00_load.sql` (its last result) |
 | `include_untracked` | `false` (also list untracked files that are not ignored) | `00_load.sql`, `refresh.sql` |
-| `exclude_patterns` | `[]` (GLOB operator patterns on the relative path; `*` crosses `/`) | `00_load.sql`, `refresh.sql` |
+| `exclude_patterns` | `[]` (path patterns on the relative path, `path_glob`) | `00_load.sql`, `refresh.sql` |
 | `languages` | `MAP {'rs': 'rust', 'go': 'go'}` (extension to language) | `00_load.sql`, `files`, `go_file_ast` |
 | `lang` | NULL (every language of `languages`; a language's name: only its extensions, and it is the display language) | `00_load.sql`, `display_language` |
 | `scip_indexes` | the `*.scip` files of `repo/target/code-db/scip/` | `views/scip.sql`, `refresh.sql` |

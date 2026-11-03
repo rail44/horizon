@@ -50,7 +50,7 @@ SET temp_directory = coalesce(getvariable('temp_directory'), current_setting('te
 -- nested repositories never appear), plus the untracked files that are not ignored
 -- when `include_untracked` is true.
 SET VARIABLE include_untracked = coalesce(getvariable('include_untracked'), false);
--- Optional repository-relative paths to drop, as GLOB operator patterns (`*` crosses `/`).
+-- Optional repository-relative paths to drop, as path patterns (path_glob, below).
 SET VARIABLE exclude_patterns = coalesce(getvariable('exclude_patterns'), []::VARCHAR[]);
 -- File extension -> language. A file is a source file only when its extension is here;
 -- its units come from its language's view under lang/ (views/units.sql).
@@ -60,13 +60,24 @@ SET VARIABLE languages = CASE WHEN getvariable('lang') IS NULL THEN getvariable(
     ELSE map_from_entries(list_filter(map_entries(getvariable('languages')),
                                       lambda e: e.value = getvariable('lang'))) END;
 
+-- path_glob(path, pattern): whether the path matches the pattern whole, the settings'
+-- patterns (README.md, Settings file): `*` and `?` match within one path segment (no `/`),
+-- `**` anything, `**/` any number of whole directories (none included), `[...]` and
+-- `[!...]` or `[^...]` a character class; every other character itself. The patterns
+-- become a regular expression: `go/*/X/**` is `^go/[^/]*/X/.*$`.
+CREATE OR REPLACE MACRO path_glob_regex(pattern) AS
+    '^' || replace(replace(replace(replace(replace(replace(
+        regexp_replace(regexp_replace(pattern, '([.+()|^${}\\])', '\\\1', 'g'), '\[(!|\\\^)', '[^', 'g'),
+        '**/', chr(1)), '**', chr(2)), '*', '[^/]*'), '?', '[^/]'), chr(1), '(?:.*/)?'), chr(2), '.*') || '$';
+CREATE OR REPLACE MACRO path_glob(path, pattern) AS regexp_full_match(path, path_glob_regex(pattern));
+
 -- is_source_file(path, mode): whether a worktree entry is a source file: a regular file
 -- (mode 100644 or 100755; a symlink's blob is its target path and a submodule's id is a
 -- commit) with an extension in `languages` and no match in `exclude_patterns`.
 CREATE OR REPLACE MACRO is_source_file(path, mode) AS
     mode IN ('100644', '100755')
     AND getvariable('languages')[regexp_extract(path, '\.([^./]+)$', 1)] IS NOT NULL
-    AND NOT coalesce(list_bool_or(list_transform(getvariable('exclude_patterns'), lambda p: path GLOB p)), false);
+    AND NOT coalesce(list_bool_or(list_transform(getvariable('exclude_patterns'), lambda p: path_glob(path, p))), false);
 
 -- tracked_source_files(path, mode, blob_id): the source files now, computed at every
 -- scan.
@@ -115,12 +126,12 @@ SET VARIABLE cache_dir = coalesce(getvariable('cache_dir'), getvariable('repo') 
 
 -- The analysed repository's settings (README.md, Settings file), which code-db reads
 -- from its `.code-db.toml`. Test files and test attribute names beyond the language's
--- own rules (views/units.sql): repository-relative GLOB operator patterns (`*` crosses
--- `/`) and attribute names.
+-- own rules (views/units.sql): repository-relative path patterns (path_glob) and attribute
+-- names.
 SET VARIABLE extra_test_paths = coalesce(getvariable('extra_test_paths'), []::VARCHAR[]);
 SET VARIABLE extra_test_attributes = coalesce(getvariable('extra_test_attributes'), []::VARCHAR[]);
 -- The intended layers (views/graph.sql, namespace_layers): each layer's namespace patterns
--- (GLOB operator patterns over namespaces.namespace) and the layers each may depend on. Empty
+-- (path patterns over namespaces.namespace, path_glob) and the layers each may depend on. Empty
 -- unless code-db filled them before this file was read.
 CREATE TABLE IF NOT EXISTS config_layers (name VARCHAR, namespace_pattern VARCHAR);
 CREATE TABLE IF NOT EXISTS config_layer_deps (name VARCHAR, may_depend_on VARCHAR);

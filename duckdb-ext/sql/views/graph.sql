@@ -341,12 +341,12 @@ GROUP BY e.cycle;
 -- The intended layers, from the analysed repository's settings file (config_layers and
 -- config_layer_deps, 00_load.sql; empty without one). namespace_layer_matches(namespace, layer):
 -- each namespace (namespaces.namespace) with each layer one of whose namespace patterns it matches
--- (GLOB operator, `*` crosses `/`). namespace_layers(namespace, layer): one layer per namespace; a
+-- (path_glob, 00_load.sql: `*` stays within one segment). namespace_layers(namespace, layer): one layer per namespace; a
 -- namespace that matches two layers is an error (code-db reports it before any query). A
 -- namespace in no layer has no row.
 CREATE OR REPLACE VIEW namespace_layer_matches AS
 SELECT DISTINCT m.namespace, l.name AS layer
-FROM namespaces m JOIN config_layers l ON m.namespace GLOB l.namespace_pattern;
+FROM namespaces m JOIN config_layers l ON path_glob(m.namespace, l.namespace_pattern);
 
 CREATE OR REPLACE VIEW namespace_layers AS
 SELECT namespace,

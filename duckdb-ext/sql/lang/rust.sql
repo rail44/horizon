@@ -315,7 +315,7 @@ lead_tests AS (
        OR f.path LIKE '%/tests.rs' OR f.path = 'tests.rs'
        OR f.path LIKE '%\_tests.rs' ESCAPE '\'
        OR f.path LIKE '%/test\_%.rs' ESCAPE '\' OR f.path LIKE 'test\_%.rs' ESCAPE '\'
-       OR coalesce(list_bool_or(list_transform(getvariable('extra_test_paths'), lambda p: f.path GLOB p)), false)
+       OR coalesce(list_bool_or(list_transform(getvariable('extra_test_paths'), lambda p: path_glob(f.path, p))), false)
 ),
 -- Parameters: the signature's characters, with `->` and `=>` masked so that their `>`
 -- does not close a bracket, and the bracket depth before each character.

@@ -349,7 +349,7 @@ SELECT n.file_id, n.symbol, n.symbol_kind, n.kind, split_part(n.symbol, ' ', 3) 
        n.r.sl::INTEGER AS start_line, n.r.sc::INTEGER AS start_column,
        n.r.el::INTEGER AS end_line, n.r.ec::INTEGER AS end_column, n.name_line, n.name_column,
        g.path LIKE '%\_test.go' ESCAPE '\'
-           OR coalesce(list_bool_or(list_transform(getvariable('extra_test_paths'), lambda p: g.path GLOB p)), false)
+           OR coalesce(list_bool_or(list_transform(getvariable('extra_test_paths'), lambda p: path_glob(g.path, p))), false)
            AS test_by_rule,
        CASE WHEN n.kind = 'file' OR n.symbol_kind = 'MethodSpecification' THEN NULL
             WHEN regexp_matches(n.display_name, '^\p{Lu}') THEN 'pub' ELSE 'private' END AS visibility,
