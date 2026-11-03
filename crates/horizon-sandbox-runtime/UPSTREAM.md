@@ -6,7 +6,7 @@ from [nolabs-ai/nono](https://github.com/nolabs-ai/nono):
 - derivation base: release `v0.68.0`, commit `00692e8c7846c6ee00ad6239d1be3b9e9b8d5dea`
 - upstream reviewed against: `v0.76.0` (commit `c706d38b7d69bbcc1b2d9fcf7285e15c6e24fb5d`),
   see "Adoption review" below; the linked `nono` crate alone was reviewed for
-  `0.80.0`, see "Dependency review" below
+  `0.81.0`, see "Dependency review" below
 - license: Apache License 2.0
 - source files:
   - `crates/nono-cli/src/exec_strategy.rs`
@@ -138,6 +138,67 @@ links against. The derivation base above is unchanged.
 - `horizon-sandbox` and `horizon-sandbox-runtime` pass under the sandboxed
   nextest profile, including the Landlock/seccomp boundary tests that profile
   keeps.
+
+## Dependency review (`nono` 0.80.0 -> 0.81.0, 2026-11)
+
+The exact pin moved to `=0.81.0` on the basis below, and `horizon-sandbox`'s
+compatible-line requirement moved with it (`"0.80"` -> `"0.81"`). The derived
+nono-cli source files are still unpublished, so this pass covers only the
+published `nono` crate's own 0.80.0 -> 0.81.0 diff. The derivation base above is
+unchanged.
+
+- The library plumbing this crate consumes (`recv_notif`, `apply_seccomp`,
+  `SeccompOpts::external_tcp`, `notif_id_valid`, `continue_notif`,
+  `deny_notif`, `respond_notif_errno`, `read_notif_path`, `resolve_notif_path`,
+  `read_open_how`, `validate_openat2_size`, `classify_access_from_flags`,
+  `read_msghdr_dest`/`read_mmsghdr_dests`, `SupervisorSocket`,
+  `ApprovalBackend`, `supervisor::AuditEntry`) is unchanged in signature, so the
+  pin moved on that basis and the crate compiles against the new release
+  unchanged.
+- Landlock ABI detection now reports the kernel's ABI up to the newest the
+  `landlock` crate knows (V9 here, probed in `ABI_PROBE_ORDER` and bounded by
+  the new `kernel_abi_version()`), while enforcement is clamped to
+  `MAX_ENFORCED_ABI = V6` through the new `DetectedAbi::enforced_abi()`.
+  `apply_with_abi_inner` derives its handled access rights from that clamped
+  value, so a V7+ kernel gets the same V6 ruleset as before; the cap exists
+  because V9's `LANDLOCK_ACCESS_FS_RESOLVE_UNIX` would otherwise deny every
+  pathname UNIX socket `connect`, including the supervisor's own report socket.
+  `DetectedAbi` also gains `enforced_version_string()`, `has_audit_log_flags()`,
+  `has_tsync()`, and `has_resolve_unix()`; its `abi` field keeps meaning
+  "detected", not "enforced".
+- `ApprovalDecision` gains `GrantedForSession` and `DeniedForSession`, and
+  `is_granted()`/`is_denied()` include them; `without_session_scope()` collapses
+  them back. `ApprovalBackend` gains `request_approval_with_deadline()` and
+  `approval_timeout()`, both with default implementations, so
+  `RecordingDenyBackend` (which implements only `request_approval` and
+  `backend_name`) keeps the compatible behavior: an already-expired attempt
+  answers `Timeout`, a result that arrives after the deadline is downgraded to
+  `Timeout`, and the caller's outer timeout stays the backstop. This crate reads
+  the decision through `is_denied()` (`src/linux/open.rs`), so a session-scoped
+  denial counts as a denial — fail-closed, and no behavior moves because this
+  backend never returns the session-scoped variants.
+- `capability.rs` extracts `matching_unix_socket()` and makes
+  `unix_socket_allowed()` delegate to it: same covering rules, plus a lookup
+  accessor. Not adopted; nothing here reads the matched capability.
+- `sandbox/linux.rs` adds `prepare_seccomp_openat_filter()` (the openat-only
+  program with no network notifications) and denies `io_uring_enter` /
+  `io_uring_register` in its proxy filter. Neither is the filter this crate
+  builds — `src/linux/filter.rs` combines both syscall families itself and
+  already denies `io_uring_setup`. Not adopted.
+- New opt-in namespace isolation (`sandbox/linux_namespace.rs`,
+  `NamespaceSpec`/`NamespaceProbe`/`NamespaceProbeStage`, `Sandbox::
+  probe_namespaces`). Not adopted: this crate enforces through the seccomp
+  supervisor and Landlock, and its strict single-threaded pre-fork requirement
+  is precisely what upstream's namespaces let a caller bypass.
+- Dependency moves outside the library surface: `keyring` 3 -> 4 (new `v1`
+  feature, per-target `keyring` declarations dropped), `landlock` 0.4 -> 0.4.7,
+  `sigstore-verify` 0.14 -> 0.15. `nono` is linked with
+  `default-features = false`, so no keyring backend is compiled, and the trust
+  module's sigstore call is rewritten for the 0.15 API and unused here.
+- The two upstream improvements listed as not yet ported above stay unported.
+- `horizon-sandbox` and `horizon-sandbox-runtime` pass under the sandboxed
+  nextest profile (90 passed, 3 skipped), including the Landlock/seccomp
+  boundary tests that profile keeps.
 
 ## Update procedure
 
