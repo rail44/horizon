@@ -1008,6 +1008,15 @@ merged into their directory's package, making cycles (`<directory>_test` is a pa
 its own, nested in the directory's); and large results reordered by `display_select`
 (it orders by the result table's rowid).
 
+## Path patterns (2026-11-02)
+
+The same reading had to list a layer's pattern once per module: with SQL's GLOB, `*`
+crossed `/`, so `go/*/X/*` also took a nested `X` directory. Every pattern of the
+settings file (`scope.exclude`, `tests.paths`, a layer's `modules`/`packages`) now
+follows the usual path convention (owner): `*` and `?` within one segment, `**`
+anything, `**/` none or more whole directories (`path_glob`, a regular expression made
+from the pattern).
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into
