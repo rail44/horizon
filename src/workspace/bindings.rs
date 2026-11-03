@@ -34,21 +34,41 @@ fn list_select_binding(cx: &App, keystroke: &str, action_name: &str) -> KeyBindi
     let action = cx.build_action(action_name, None).unwrap_or_else(|err| {
         panic!("gpui-component action `{action_name}` not registered: {err}")
     });
-    let context_predicate = KeyBindingContextPredicate::parse("List")
-        .expect("`List` is a valid key context predicate")
-        .into();
-    KeyBinding::load(keystroke, action, Some(context_predicate), false, None, cx)
-        .unwrap_or_else(|err| panic!("invalid keystroke `{keystroke}`: {err}"))
+    load_binding(cx, keystroke, action, Some("List"))
 }
 
 /// Loads a binding for a chord that only exists at runtime -- the
 /// workspace-mode override or a `[keybindings]` entry. `KeyBinding::new`
 /// takes a `'static` chord string, so a chord owned by the resolved config
-/// goes through `KeyBinding::load`, which parses it against the running
-/// app's keyboard mapper and OS (the same path `list_select_binding` uses).
+/// goes through [`load_binding`].
 fn dynamic_binding(cx: &App, keystroke: &str, action: Box<dyn Action>) -> KeyBinding {
-    KeyBinding::load(keystroke, action, None, false, None, cx)
+    load_binding(cx, keystroke, action, None)
+}
+
+/// Builds a binding through `KeyBinding::load`, which parses the chord
+/// against the running app's keyboard mapper and OS. Every chord using
+/// gpui's `secondary-` alias (cmd on macOS, ctrl elsewhere) must come
+/// through here: `KeyBinding::new` parses without an OS and panics on
+/// `secondary-`.
+fn load_binding(
+    cx: &App,
+    keystroke: &str,
+    action: Box<dyn Action>,
+    context: Option<&str>,
+) -> KeyBinding {
+    let context_predicate = context.map(|context| {
+        KeyBindingContextPredicate::parse(context)
+            .unwrap_or_else(|err| panic!("invalid key context `{context}`: {err}"))
+            .into()
+    });
+    KeyBinding::load(keystroke, action, context_predicate, false, None, cx)
         .unwrap_or_else(|err| panic!("invalid keystroke `{keystroke}`: {err}"))
+}
+
+/// A global-context `secondary-` chord dispatching `id` through
+/// [`RunCommand`] (the built-in font-size set in [`derive_bindings`]).
+fn font_size_binding(cx: &App, keystroke: &str, id: CommandId) -> KeyBinding {
+    load_binding(cx, keystroke, Box::new(RunCommand { id }), None)
 }
 
 /// Builds the full key binding set from `config`: the fixed
@@ -94,14 +114,16 @@ fn derive_bindings(cx: &App, config: &horizon_config::RawConfig) -> (Vec<KeyBind
         // key (which the modal's own search input would otherwise consume
         // as a character). Fixed, like the `MODE_CONTEXT` bindings above --
         // never `[keybindings]`-configurable.
-        KeyBinding::new(
+        load_binding(
+            cx,
             "secondary-o",
-            super::OpenSessionDirectory,
+            Box::new(super::OpenSessionDirectory),
             Some(SESSION_MANAGER_CONTEXT),
         ),
-        KeyBinding::new(
+        load_binding(
+            cx,
             "secondary-shift-t",
-            super::TerminateSessionSubtree,
+            Box::new(super::TerminateSessionSubtree),
             Some(SESSION_MANAGER_CONTEXT),
         ),
         // Built-in default font-size chords, bound through gpui's
@@ -115,41 +137,11 @@ fn derive_bindings(cx: &App, config: &horizon_config::RawConfig) -> (Vec<KeyBind
         // mode-navigation chords above, they survive a `Reload Config`.
         // `secondary-+`/`secondary-shift-=` are the physically-distinct
         // chords users reach for zoom-in alongside the bare `=` key.
-        KeyBinding::new(
-            "secondary-=",
-            super::RunCommand {
-                id: CommandId::IncreaseFontSize,
-            },
-            None,
-        ),
-        KeyBinding::new(
-            "secondary-+",
-            super::RunCommand {
-                id: CommandId::IncreaseFontSize,
-            },
-            None,
-        ),
-        KeyBinding::new(
-            "secondary-shift-=",
-            super::RunCommand {
-                id: CommandId::IncreaseFontSize,
-            },
-            None,
-        ),
-        KeyBinding::new(
-            "secondary--",
-            super::RunCommand {
-                id: CommandId::DecreaseFontSize,
-            },
-            None,
-        ),
-        KeyBinding::new(
-            "secondary-0",
-            super::RunCommand {
-                id: CommandId::ResetFontSize,
-            },
-            None,
-        ),
+        font_size_binding(cx, "secondary-=", CommandId::IncreaseFontSize),
+        font_size_binding(cx, "secondary-+", CommandId::IncreaseFontSize),
+        font_size_binding(cx, "secondary-shift-=", CommandId::IncreaseFontSize),
+        font_size_binding(cx, "secondary--", CommandId::DecreaseFontSize),
+        font_size_binding(cx, "secondary-0", CommandId::ResetFontSize),
     ];
 
     let mut dynamic_keystrokes = Vec::new();
