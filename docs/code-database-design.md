@@ -1049,6 +1049,23 @@ against every other process, readers included). A command over a saved loading t
 2.6–3.1 s; every query's output equals the earlier loading's but for the order of rows
 that tie on every `ORDER BY` key, which varies between runs in both.
 
+## Occurrences in the syntax tree (2026-11-03)
+
+([record](research/code-db-occurrence-ast-2026-11-03.md)) Dogfooding could not tell,
+by query, an enumeration of `CommandId`'s variants the compiler checks (an exhaustive
+`match`) from one it does not (a `vec![...]` of specs, a `match` on strings), since an
+occurrence carried no syntax. `occurrence_ast` gives each `unit_occurrences` row the
+innermost `file_ast` node containing it and that node's ancestors (ids and raw node
+types, innermost first) up to the occurrence's unit. It stays live, about 3 s over the
+cache for 320,168 occurrences; no existing query's output changed. Macro arguments stay
+tokens: rust-analyzer places an occurrence inside `vec![...]` on its identifier token,
+whose ancestors are `token_tree`s up to the `macro_invocation`. The question, as SQL over
+the view (in the record), separates the four `CommandId` functions: `command_enabled` and
+`WorkspaceShell::execute` reference all 36 variants in match-arm patterns,
+`core_commands` (in `vec!` tokens) and `command_for` (call arguments in arm values) all 36
+elsewhere. Classifying node types into neutral contexts per language
+(`<language>_occurrence_contexts`) is proposed in the record, not built.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into

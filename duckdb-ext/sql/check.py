@@ -767,6 +767,25 @@ pub mod picks {
         if a { 1 } else { 2 }
     }
 }
+
+#[derive(PartialEq)]
+pub enum Dir {
+    Up,
+    Down,
+    Left,
+}
+
+pub fn dir_name(d: &Dir) -> &'static str {
+    match d {
+        Dir::Up | Dir::Down => "vertical",
+        _ if *d == Dir::Left => "left",
+        _ => "other",
+    }
+}
+
+pub fn all_dirs() -> Vec<Dir> {
+    vec![Dir::Up, Dir::Down, Dir::Left]
+}
 """
 
 FLOW_FILES = {
@@ -801,6 +820,14 @@ FLOW_CHECKED = [
                      "WHERE u.qualified_name IN ('with_macro', 'picks.pick') AND a.type IN ('if', 'if_expression') "
                      "ORDER BY u.unit_id, a.node_id"),
     ("query complexity", "complexity"),
+    # Each reference to a variant of Dir with its innermost node and its ancestors up to
+    # its unit: in a match arm's pattern (an or-pattern), in a guard (a later child of the
+    # same match_pattern), and as tokens of `vec![...]`.
+    ("occurrence_ast", "SELECT u.qualified_name, o.start_line, o.start_column, o.type, o.ancestor_types, "
+                       "len(o.ancestor_ids) = len(o.ancestor_types) "
+                       "FROM occurrence_ast o JOIN units u USING (unit_id) "
+                       "WHERE regexp_matches(o.symbol, ' Dir#[A-Za-z]+#$') AND NOT o.is_definition "
+                       "ORDER BY o.start_line, o.start_column"),
 ]
 
 
@@ -844,9 +871,12 @@ FLOW_EXPECTED = {
         ('while_let', 'function', 3, 2, ['and 1', 'if 1', 'while 1']),
         ('picks', 'namespace', 0, 0, []),
         ('picks.pick', 'function', 1, 1, ['if 1']),
+        ('Dir', 'type', 0, 0, []),
+        ('dir_name', 'function', 3, 1, ['arm 3', 'guard 1', 'match 1']),
+        ('all_dirs', 'function', 0, 0, []),
     ],
     'trees': [
-        ('flow', 740, 'source_file', True, 0, 8, 1),
+        ('flow', 879, 'source_file', True, 0, 8, 1),
         ('nested_loop', 97, 'function_item', True, 0, 3, 97),
         ('classify', 131, 'function_item', True, 0, 0, 131),
         ('chain', 89, 'function_item', True, 0, 0, 89),
@@ -857,6 +887,9 @@ FLOW_EXPECTED = {
         ('while_let', 94, 'function_item', True, 0, 1, 94),
         ('picks', 39, 'mod_item', True, 0, 1, 8),
         ('picks.pick', 31, 'function_item', True, 0, 1, 31),
+        ('Dir', 27, 'attribute_item enum_item', True, 0, 0, 27),
+        ('dir_name', 77, 'function_item', True, 0, 0, 77),
+        ('all_dirs', 35, 'function_item', True, 0, 0, 35),
     ],
     'macro_tokens': [
         ('with_macro', 'if', 'token_tree', 59),
@@ -868,12 +901,22 @@ FLOW_EXPECTED = {
         ('src/lib.rs', 'flow', 'function', 'classify', 17, 11, 9, 8, 2, 1, 6, 0, 0, 0, 0, 0, 2, 0, 0, 0, 2, 1, 0, 0, 0, False),
         ('src/lib.rs', 'flow', 'function', 'nested_loop', 1, 15, 5, 4, 3, 0, 0, 0, 0, 1, 1, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, False),
         ('src/lib.rs', 'flow', 'function', 'while_let', 63, 9, 4, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, False),
+        ('src/lib.rs', 'flow', 'function', 'dir_name', 86, 7, 4, 3, 1, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, False),
         ('src/lib.rs', 'flow', 'function', 'closures', 35, 11, 3, 2, 1, 0, 2, 0, 3, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, False),
         ('src/lib.rs', 'flow', 'function', 'outer', 47, 10, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 2, 0, 0, False),
         ('src/lib.rs', 'flow', 'function', 'chain', 29, 5, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, False),
         ('src/lib.rs', 'flow', 'function', 'inner', 48, 3, 2, 1, 2, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, False),
         ('src/lib.rs', 'flow', 'function', 'picks.pick', 74, 3, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, False),
         ('src/lib.rs', 'flow', 'function', 'with_macro', 58, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+        ('src/lib.rs', 'flow', 'function', 'all_dirs', 94, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, False),
+    ],
+    'occurrence_ast': [
+        ('dir_name', 88, 14, 'identifier', ['scoped_identifier', 'or_pattern', 'match_pattern', 'match_arm', 'match_block', 'match_expression', 'expression_statement', 'block', 'function_item'], True),
+        ('dir_name', 88, 24, 'identifier', ['scoped_identifier', 'or_pattern', 'match_pattern', 'match_arm', 'match_block', 'match_expression', 'expression_statement', 'block', 'function_item'], True),
+        ('dir_name', 89, 25, 'identifier', ['scoped_identifier', 'binary_expression', 'match_pattern', 'match_arm', 'match_block', 'match_expression', 'expression_statement', 'block', 'function_item'], True),
+        ('all_dirs', 95, 15, 'identifier', ['token_tree', 'macro_invocation', 'block', 'function_item'], True),
+        ('all_dirs', 95, 24, 'identifier', ['token_tree', 'macro_invocation', 'block', 'function_item'], True),
+        ('all_dirs', 95, 35, 'identifier', ['token_tree', 'macro_invocation', 'block', 'function_item'], True),
     ],
 }
 

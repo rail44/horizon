@@ -46,6 +46,85 @@ SELECT o.file_id, o.symbol, o.start_line, o.start_column, o.end_line, o.end_colu
 FROM occurrences o
 LEFT JOIN located l USING (occurrence_ord);
 
+-- occurrence_ast(file_id, symbol, start_line, start_column, end_line, end_column,
+--     is_definition, is_local, unit_id, node_id, type, ancestor_ids, ancestor_types): every
+-- row of unit_occurrences with its place in the file's syntax tree (file_ast): node_id and
+-- type the innermost node whose range contains the occurrence's range (an identifier
+-- token, mostly), and ancestor_ids and ancestor_types the chain of that node's ancestors
+-- from its parent outwards, up to the last one inside the occurrence's unit's range (a
+-- file unit's chain reaches the file's root). Node types are the grammar's own strings.
+-- The innermost node is the deepest node that starts where the occurrence starts and
+-- ends at or after its end; an occurrence no node starts at takes the deepest node
+-- containing it (rust-analyzer places an overloaded operator's occurrence on the space
+-- beside the operator, so its node is the binary expression). NULL node_id: the
+-- occurrence's file has no tree.
+--
+-- A match arm's pattern and its guard are children of one match_pattern, the pattern
+-- first (sibling_index 0 in file_ast): which one an occurrence is in is the
+-- match_pattern's child on its chain.
+--
+-- Macro arguments are token trees: an occurrence inside `vec![...]` or `assert!(...)` is
+-- an identifier token whose ancestors are token_tree nodes up to the macro_invocation,
+-- with no expression or pattern structure in between.
+CREATE OR REPLACE VIEW occurrence_ast AS
+WITH occurrences AS MATERIALIZED (
+    SELECT row_number() OVER () AS occurrence_ord, o.*,
+           coalesce(u.is_file_unit, false) AS is_file_unit, u.start_line AS unit_start_line,
+           u.start_column AS unit_start_column, u.end_line AS unit_end_line, u.end_column AS unit_end_column
+    FROM unit_occurrences o LEFT JOIN units u USING (unit_id)
+),
+nodes AS MATERIALIZED (
+    SELECT file_id, node_id, type, parent_id, start_line, start_column, end_line, end_column FROM file_ast
+),
+same_start AS MATERIALIZED (
+    SELECT o.occurrence_ord, o.file_id, max(n.node_id) AS node_id
+    FROM occurrences o
+    JOIN nodes n ON n.file_id = o.file_id AND n.start_line = o.start_line AND n.start_column = o.start_column
+    WHERE n.end_line > o.end_line OR (n.end_line = o.end_line AND n.end_column >= o.end_column)
+    GROUP BY o.occurrence_ord, o.file_id
+),
+containing AS MATERIALIZED (
+    SELECT o.occurrence_ord, o.file_id, max(n.node_id) AS node_id
+    FROM (SELECT * FROM occurrences WHERE occurrence_ord NOT IN (SELECT occurrence_ord FROM same_start)) o
+    JOIN nodes n ON n.file_id = o.file_id AND n.start_line <= o.start_line AND o.end_line <= n.end_line
+     AND (n.start_line < o.start_line OR n.start_column <= o.start_column)
+     AND (o.end_line < n.end_line OR o.end_column <= n.end_column)
+    GROUP BY o.occurrence_ord, o.file_id
+),
+innermost AS (
+    SELECT * FROM same_start UNION ALL SELECT * FROM containing
+),
+chain AS MATERIALIZED (
+    -- Each step carries the unit's range, so that it joins only the nodes, on their key.
+    WITH RECURSIVE walk(occurrence_ord, file_id, node_id, type, parent_id, level, is_file_unit, unit_start_line,
+                        unit_start_column, unit_end_line, unit_end_column) AS (
+        SELECT i.occurrence_ord, n.file_id, n.node_id, n.type, n.parent_id, 0, o.is_file_unit, o.unit_start_line,
+               o.unit_start_column, o.unit_end_line, o.unit_end_column
+        FROM innermost i
+        JOIN nodes n ON n.file_id = i.file_id AND n.node_id = i.node_id
+        JOIN occurrences o ON o.occurrence_ord = i.occurrence_ord
+        UNION ALL
+        SELECT w.occurrence_ord, n.file_id, n.node_id, n.type, n.parent_id, w.level + 1, w.is_file_unit,
+               w.unit_start_line, w.unit_start_column, w.unit_end_line, w.unit_end_column
+        FROM walk w
+        JOIN nodes n ON n.file_id = w.file_id AND n.node_id = w.parent_id
+        WHERE w.is_file_unit
+           OR ((n.start_line > w.unit_start_line OR (n.start_line = w.unit_start_line AND n.start_column >= w.unit_start_column))
+               AND (n.end_line < w.unit_end_line OR (n.end_line = w.unit_end_line AND n.end_column <= w.unit_end_column)))
+    )
+    SELECT occurrence_ord,
+           min(node_id) FILTER (WHERE level = 0) AS node_id,
+           min(type) FILTER (WHERE level = 0) AS type,
+           coalesce(list(node_id ORDER BY level) FILTER (WHERE level > 0), []) AS ancestor_ids,
+           coalesce(list(type ORDER BY level) FILTER (WHERE level > 0), []) AS ancestor_types
+    FROM walk
+    GROUP BY occurrence_ord
+)
+SELECT o.file_id, o.symbol, o.start_line, o.start_column, o.end_line, o.end_column,
+       o.is_definition, o.is_local, o.unit_id, c.node_id, c.type, c.ancestor_ids, c.ancestor_types
+FROM occurrences o
+LEFT JOIN chain c USING (occurrence_ord);
+
 -- symbol_units(symbol, unit_id, ambiguous): the unit each non-local symbol's definitions
 -- belong to (above), except that a namespace's own symbol has none, nor a file unit's (a Go
 -- file's package symbol, which every file of the package defines): a reference to a module
