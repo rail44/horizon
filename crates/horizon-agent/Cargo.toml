@@ -22,7 +22,7 @@ test-fixtures = []
 anyhow = "1.0"
 async-trait = "0.1"
 crossbeam-channel = "0.5"
-dom_smoothie = "0.18"
+dom_smoothie = "0.19"
 duckdb = { version = "1", default-features = false }
 # `default-features = false` keeps the build on an installed library. From
 # 1.20000.0 the crate's defaults add libduckdb-sys's `download-lib`, which
