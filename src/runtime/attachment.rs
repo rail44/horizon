@@ -15,7 +15,7 @@ use horizon_acp::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use super::routing::{attachment_end_state, cancelled_permission, AgentRoutes, RouteKey};
+use super::routing::{cancelled_permission, AgentRoutes, RouteKey};
 use crate::agent::model::{AgentEvent, Permission, PermissionDecision, ToolCallIdentity};
 
 /// How long an attachment may stay short of ready.
@@ -29,6 +29,23 @@ pub(crate) enum AttachmentState {
     Ready,
     Failed(String),
     Disconnected(String),
+}
+
+/// A session's attachment closed by the daemon, as the pane reads it.
+fn attachment_end_state(reason: AttachmentEnd) -> AttachmentState {
+    match reason {
+        AttachmentEnd::Lagged => AttachmentState::Failed(
+            "Session updates exceeded the connection buffer; reopen the session to restore its history"
+                .into(),
+        ),
+        AttachmentEnd::Replaced => {
+            AttachmentState::Disconnected("Session opened by another attachment".into())
+        }
+        AttachmentEnd::Detached => AttachmentState::Disconnected("Session detached".into()),
+        AttachmentEnd::SessionEnded => {
+            AttachmentState::Disconnected("Session runtime ended".into())
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

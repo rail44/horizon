@@ -18,8 +18,8 @@ use agent_client_protocol::schema::v2;
 use agent_client_protocol::Responder;
 use crossbeam_channel::Sender;
 use horizon_acp::{
-    read_horizon_meta, AttachmentEnd, HostToolRequest, HostToolResponse, SessionEventNotification,
-    SessionId, SessionInfoMeta,
+    read_horizon_meta, HostToolRequest, HostToolResponse, SessionEventNotification, SessionId,
+    SessionInfoMeta,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalFrame, TerminalUpdate};
 use uuid::Uuid;
@@ -431,23 +431,6 @@ impl AgentRoutes {
 
 pub(super) fn cancelled_permission() -> v2::RequestPermissionResponse {
     v2::RequestPermissionResponse::new(v2::RequestPermissionOutcome::Cancelled)
-}
-
-/// A session's attachment closed by the daemon, as the pane reads it.
-pub(super) fn attachment_end_state(reason: AttachmentEnd) -> AttachmentState {
-    match reason {
-        AttachmentEnd::Lagged => AttachmentState::Failed(
-            "Session updates exceeded the connection buffer; reopen the session to restore its history"
-                .into(),
-        ),
-        AttachmentEnd::Replaced => {
-            AttachmentState::Disconnected("Session opened by another attachment".into())
-        }
-        AttachmentEnd::Detached => AttachmentState::Disconnected("Session detached".into()),
-        AttachmentEnd::SessionEnded => {
-            AttachmentState::Disconnected("Session runtime ended".into())
-        }
-    }
 }
 
 impl TerminalRoutes {
