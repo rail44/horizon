@@ -1017,6 +1017,38 @@ follows the usual path convention (owner): `*` and `?` within one segment, `**`
 anything, `**/` none or more whole directories (`path_glob`, a regular expression made
 from the pattern).
 
+## Saved loading (2026-11-03)
+
+([record](research/code-db-saved-loading-2026-11-03.md)) Dogfooding with queries an
+agent writes itself (the owner's direction of 2026-10-30) showed every `code-db` command
+spending 12–15 s before its query: 12.5 s for `SELECT 1` over an unchanged cache, against
+the 1–3.5 s measured when the cache was built. Nearly all of it is defining the views live:
+DuckDB binds each view through every view below it (`unit_quality`'s definition took 4.2 s
+live and 25 ms over the copies), and the cache key needs the views' text as DuckDB holds
+it, so every command defined them all before it could find its cache. Three options were
+compared (key the cache by the SQL files' text and define only the uncached views over it;
+save the loaded database; a resident process). The owner asked how saving the loaded
+database with its freshness decided against the SQL files compares
+(「Bで、かつそのDBのfresh判定はSQLファイルと比較して行うのとだと、Aに比べてどうでしょうか」)
+and whether hashing everything that shapes it into the key removes its disadvantages
+(「ハッシュをキャッシュキーに足すような対応とセットならBの不利な点はなくなる？」; the
+two extensions' binaries are among them, and the existing key misses them); after the
+remaining checks, the owner took the two placement questions as recommended
+(「どちらも推奨でよいです」) and gave the go-ahead (「実装に進みましょう」): the saved
+loading lives in `code-db` alone, the view files and `refresh.sql` stay readable by any
+client as before; and saving the loaded views is within the principle's "materializing is
+a cache", the key being the state of the inputs.
+
+`code-db` keeps `load-<key>.duckdb` per state (the loading files' text, the values of the
+variables they read but the limits and `cycle_edges`, the indexes', reports' and
+extensions' content, sitting_duck's version, the layers), builds it under a lock into a
+temporary file with copies of `refresh.sql`'s two cache files beside it, and attaches all
+three read-only, with the saved schemas after the command's own database on the search
+path. Read-only is what lets commands run at once (DuckDB locks a file opened for writing
+against every other process, readers included). A command over a saved loading takes
+2.6–3.1 s; every query's output equals the earlier loading's but for the order of rows
+that tie on every `ORDER BY` key, which varies between runs in both.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into

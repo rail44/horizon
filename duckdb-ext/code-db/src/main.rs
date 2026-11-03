@@ -8,6 +8,7 @@ mod db;
 mod index;
 mod limits;
 mod render;
+mod saved;
 mod script;
 mod settings;
 
@@ -48,7 +49,8 @@ the schema named after the language (go.units). A repository of several language
 read one at a time: lang=NAME.
 
 The views are read in README.md's order, then refresh.sql, which keeps the cache in
-REPO/target/code-db/cache/. A query needs the SCIP indexes, and the jscpd reports when its
+REPO/target/code-db/cache/; the database that leaves is saved there per state of its
+inputs and attached read-only by later commands (README.md, Saved loading). A query needs the SCIP indexes, and the jscpd reports when its
 header says so. The limits line goes to stderr. Markdown is printed by this command; any
 other FORMAT, and shell, hand the same loading to the DuckDB CLI.
 Environment: DUCKDB_CLI (default ~/.local/bin/duckdb2), RUST_ANALYZER (default
@@ -87,6 +89,24 @@ const SQL_DIR: &str = "duckdb-ext/sql";
 const EXTENSION_DIR: &str = "duckdb-ext/target/extension/v2.0.0/host";
 /// The variables the limits are derived from; the derived values replace them.
 const LIMIT_NAMES: &[&str] = &["memory_limit", "threads", "temp_limit"];
+/// The file every command reads on its own connection before the saved
+/// loading is attached (saved.rs): its variables and macros belong to the
+/// connection.
+const LOAD_FILE: &str = "duckdb-ext/sql/00_load.sql";
+/// Variables the loading files read that leave what the loading saves as it
+/// is, so that they are not part of its key (saved.rs, key_sql): the limits,
+/// and `cycle_edges`, which only a view refresh.sql keeps live reads, when it
+/// is queried (views/graph.sql, namespace_cycle_edges). A variable a view file
+/// reads only when queried and that is missing here costs a rebuild of the
+/// saved loading per value, not a wrong result.
+const UNKEYED_VARIABLES: &[&str] = &[
+    "memory_limit",
+    "threads",
+    "temp_limit",
+    "temp_directory",
+    "limits",
+    "cycle_edges",
+];
 
 fn die(message: impl std::fmt::Display) -> ! {
     eprintln!("code-db: {message}");
@@ -519,22 +539,41 @@ impl Session {
         let Ok(dir) = std::fs::read_dir(self.out.join("cache")) else {
             return;
         };
-        let mut files: Vec<(bool, std::time::SystemTime, PathBuf)> = dir
+        // 0: refresh.sql's cache files, 1: its syntax-tree files, 2: saved
+        // loadings (saved.rs), each with the two copies beside it, which go
+        // with it. A file being built (`.building`) is left alone.
+        let mut files: Vec<(u8, std::time::SystemTime, PathBuf)> = dir
             .filter_map(Result::ok)
-            .filter(|e| e.file_name().to_string_lossy().ends_with(".duckdb"))
             .filter_map(|e| {
-                let trees = e.file_name().to_string_lossy().starts_with("ast-");
-                Some((trees, e.metadata().ok()?.modified().ok()?, e.path()))
+                let name = e.file_name().to_string_lossy().into_owned();
+                if !name.ends_with(".duckdb")
+                    || name.ends_with(".cache.duckdb")
+                    || name.ends_with(".ast.duckdb")
+                {
+                    return None;
+                }
+                let kind = if name.starts_with("load-") {
+                    2
+                } else if name.starts_with("ast-") {
+                    1
+                } else {
+                    0
+                };
+                Some((kind, e.metadata().ok()?.modified().ok()?, e.path()))
             })
             .collect();
         files.sort();
         let newest: Vec<usize> = (0..files.len())
             .filter(|&i| files.get(i + 1).is_none_or(|next| next.0 != files[i].0))
             .collect();
-        for (i, (_, _, path)) in files.iter().enumerate() {
+        for (i, (kind, _, path)) in files.iter().enumerate() {
             if !newest.contains(&i) {
-                let _ = std::fs::remove_file(path);
-                let _ = std::fs::remove_file(path.with_extension("duckdb.wal"));
+                saved::remove_database(path);
+                if *kind == 2 {
+                    for copy in ["cache", "ast"] {
+                        saved::remove_database(&path.with_extension(format!("{copy}.duckdb")));
+                    }
+                }
             }
         }
     }
@@ -577,28 +616,91 @@ impl Session {
         (db, prelude)
     }
 
-    /// Load everything in this process.
+    /// Load everything in this process: the prelude and 00_load.sql on this
+    /// connection, then the saved loading of their state (built first when
+    /// missing, saved.rs) attached read-only.
     fn load(&self) -> Db {
         let (db, prelude) = self.start();
-        script::run_text(&db, &prelude, &mut Output::Discard).unwrap_or_else(|e| die(e));
-        for file in load_files() {
-            script::run_file(&db, Path::new(&file), &mut Output::Discard)
+        self.prepare(&db, &prelude);
+        self.prune_cache();
+        db
+    }
+
+    /// Run the prelude and 00_load.sql on DB, build the saved loading of their
+    /// state when it is missing, and return the SQL that attaches it and sets
+    /// the search path (read on DB to find the saved schemas).
+    fn prepare(&self, db: &Db, prelude: &str) -> String {
+        script::run_text(db, prelude, &mut Output::Discard).unwrap_or_else(|e| die(e));
+        script::run_file(db, Path::new(LOAD_FILE), &mut Output::Discard)
+            .unwrap_or_else(|e| die(self.terms.display(&e)));
+        let files = load_files();
+        let texts: Vec<String> = files
+            .iter()
+            .map(|f| std::fs::read_to_string(f).unwrap_or_else(|e| die(format!("{f}: {e}"))))
+            .collect();
+        let extensions: Vec<String> = ["git_history", "scip_index"]
+            .iter()
+            .map(|e| format!("{EXTENSION_DIR}/{e}.duckdb_extension"))
+            .collect();
+        let settings = format!(
+            "layers {:?} deps {:?}",
+            self.settings.layer_patterns(),
+            self.settings.layer_deps()
+        );
+        let key = db
+            .value(&saved::key_sql(
+                &files,
+                &saved::read_variables(&texts),
+                UNKEYED_VARIABLES,
+                &extensions,
+                &settings,
+            ))
+            .unwrap_or_else(|e| die(e))
+            .unwrap_or_else(|| die("cannot compute the loading's key"));
+        let cache_dir = self.out.join("cache");
+        let saved = saved::Saved::new(&cache_dir, &key);
+        if saved.exists() {
+            // prune_cache keeps the most recently used loading.
+            let _ = std::fs::File::options()
+                .write(true)
+                .open(&saved.file)
+                .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+        } else {
+            saved::build(&cache_dir, &saved, |build| self.build(build, prelude))
                 .unwrap_or_else(|e| die(self.terms.display(&e)));
         }
-        if self.layered() {
-            self.check_layers(&db);
+        let attach = saved.attach_sql();
+        script::run_text(db, &attach, &mut Output::Discard).unwrap_or_else(|e| die(e));
+        let schemas: Vec<String> = db
+            .query(saved::SCHEMAS_SQL)
+            .unwrap_or_else(|e| die(e))
+            .into_iter()
+            .filter_map(|r| r.into_iter().next().flatten())
+            .collect();
+        let path = saved::search_path_sql(&schemas);
+        script::run_text(db, &path, &mut Output::Discard).unwrap_or_else(|e| die(e));
+        format!("{attach}{path}")
+    }
+
+    /// The loading itself, into the database a build saves: the prelude, the
+    /// view files and refresh.sql, the layer check, and the display language's
+    /// schema (views/terms.sql, display_ddl).
+    fn build(&self, db: &Db, prelude: &str) -> Result<(), String> {
+        script::run_text(db, prelude, &mut Output::Discard)?;
+        for file in load_files() {
+            script::run_file(db, Path::new(&file), &mut Output::Discard)?;
         }
-        let statements = db
-            .query("SELECT statement FROM display_ddl ORDER BY ord")
-            .unwrap_or_else(|e| die(e));
+        if self.layered() {
+            self.check_layers(db);
+        }
+        let statements = db.query("SELECT statement FROM display_ddl ORDER BY ord")?;
         for statement in statements
             .into_iter()
             .filter_map(|r| r.into_iter().next().flatten())
         {
-            db.run_statement(&statement).unwrap_or_else(|e| die(e));
+            db.run_statement(&statement)?;
         }
-        self.prune_cache();
-        db
+        Ok(())
     }
 
     /// The source files, the workspaces and the Go modules to index
@@ -698,31 +800,28 @@ impl Session {
         )
     }
 
-    /// The same loading as a DuckDB CLI script, its output dropped, with the
-    /// display language's schema.
-    fn cli_script(&self, prelude: &str) -> String {
-        let mut script = String::from(prelude);
+    /// The same loading as a DuckDB CLI script, its output dropped: the
+    /// prelude, 00_load.sql and the saved loading, which this process builds
+    /// first when it is missing (prepare).
+    fn cli_script(&self) -> String {
+        let (db, prelude) = self.start();
+        let attach = self.prepare(&db, &prelude);
+        drop(db);
+        let mut script = String::from(&prelude);
         script.push_str(".output /dev/null\n");
-        for file in load_files() {
-            script.push_str(&format!(".read {file}\n"));
-        }
-        if self.layered() {
-            // namespace_layers fails when a namespace is in two layers.
-            script.push_str("SELECT namespace, layer FROM namespace_layers;\n");
-        }
+        script.push_str(&format!(".read {LOAD_FILE}\n"));
+        script.push_str(&attach);
         script.push_str(".output\n.maxrows -1\n.maxwidth 0\n");
-        script.push_str(&self.cli_generated(
-            "SELECT statement || ';' FROM display_ddl ORDER BY ord;",
-            &self.generated("display"),
+        script.push_str(&format!(
+            ".mode {}\n",
+            self.args.format.as_deref().unwrap_or("markdown")
         ));
         script
     }
 
-    /// Remove the files cli_generated wrote.
+    /// Remove the file cli_generated wrote.
     fn remove_generated(&self) {
-        for what in ["display", "query"] {
-            let _ = std::fs::remove_file(self.generated(what));
-        }
+        let _ = std::fs::remove_file(self.generated("query"));
     }
 
     /// Run QUERY (one SELECT) after the loading and print its result in the
@@ -773,9 +872,7 @@ impl Session {
             }
         }
         let cli = self.cli();
-        let (db, prelude) = self.start();
-        drop(db);
-        let script = format!("{}{text}", self.cli_script(&prelude));
+        let script = format!("{}{text}", self.cli_script());
         let mut child = Command::new(&cli)
             .args(["-unsigned", "-bail", "-no-agent", "-batch"])
             .current_dir(&self.root)
@@ -865,9 +962,7 @@ fn shell(mut session: Session) -> ! {
         );
     }
     let cli = session.cli();
-    let (db, prelude) = session.start();
-    drop(db);
-    let mut init = session.cli_script(&prelude);
+    let mut init = session.cli_script();
     init.push_str(".bail off\n");
     let path = session
         .out
