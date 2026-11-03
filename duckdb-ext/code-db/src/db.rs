@@ -1,4 +1,4 @@
-//! One in-memory DuckDB database and one connection, through the C API the
+//! One DuckDB database (in memory, or a file) and one connection, through the C API the
 //! `duckdb` crate links (`duckdb::ffi`). The crate's `Connection` does not
 //! expose its raw handle, and every statement here must run on one connection:
 //! DuckDB variables and temporary objects belong to the connection.
@@ -41,6 +41,15 @@ fn c_string(text: &str) -> Result<CString, String> {
 impl Db {
     /// An in-memory database that accepts unsigned extensions.
     pub fn open() -> Result<Db, String> {
+        Db::open_at(None)
+    }
+
+    /// The database file PATH (created when missing), or an in-memory database
+    /// for None; either accepts unsigned extensions.
+    pub fn open_at(path: Option<&std::path::Path>) -> Result<Db, String> {
+        let path = path
+            .map(|p| c_string(&p.display().to_string()))
+            .transpose()?;
         unsafe {
             let mut config: ffi::duckdb_config = ptr::null_mut();
             if ffi::duckdb_create_config(&mut config) != ffi::DuckDBSuccess {
@@ -52,7 +61,12 @@ impl Db {
             let mut db: ffi::duckdb_database = ptr::null_mut();
             let mut error: *mut c_char = ptr::null_mut();
             let opened = if set == ffi::DuckDBSuccess {
-                ffi::duckdb_open_ext(ptr::null(), &mut db, config, &mut error)
+                ffi::duckdb_open_ext(
+                    path.as_ref().map_or(ptr::null(), |p| p.as_ptr()),
+                    &mut db,
+                    config,
+                    &mut error,
+                )
             } else {
                 ffi::DuckDBError
             };

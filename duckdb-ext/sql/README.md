@@ -68,16 +68,18 @@ code-db limits REPO [--json]             # the limits the loading would set
   numbers).
 - **`query`, `sql`, `shell`** read `REPO/.code-db.toml` when it exists (Settings file),
   derive the limits (Limits) and print them to stderr, set `repo`, the limits, the
-  settings' values and the command line's variables, then read the view files in the
-  order below and `refresh.sql` (Cache), with the loading's own output suppressed. When
-  the settings declare layers, a module that matches two layers stops the command with
-  the modules and their layers. `query QUERY` then runs `queries/QUERY.sql`, `sql
+  settings' values and the command line's variables, read `00_load.sql`, and attach the
+  saved loading of that state read-only (Saved loading, below): what reading the view
+  files in the order below and `refresh.sql` (Cache) leaves, built first when that state
+  has none. The loading's own output is suppressed. When the settings declare layers, a
+  module that matches two layers stops the build with the modules and their layers.
+  `query QUERY` then runs `queries/QUERY.sql`, `sql
   FILE.sql` reads the file, `shell` leaves the CLI open with everything in place. A query
   whose header says "Needs the SCIP indexes" stops with a message when there is none, and
   one that says "Needs the jscpd reports" when a report is missing; every other query, and
   any `sql` file without those words, runs without them (the views are then empty).
-  After the loading, `code-db` removes the cache files of other input states, keeping the
-  most recent.
+  After the loading, `code-db` removes the cache files and saved loadings of other
+  states, keeping the most recently used.
 - **Where it runs.** In the default `FORMAT`, `markdown`, everything runs in the
   command's own process through the `duckdb` crate, and the command prints each result
   as the DuckDB CLI's markdown mode does (byte for byte, `docs/research/code-db-launcher-2026-10-29.md`);
@@ -711,6 +713,46 @@ views compute the same rows live (`check.py refresh` compares them).
   snapshot twice, the key's index hash).
 - Read it once per session after the view files; reading it again needs the view files
   first (it refuses while the views read a cache).
+
+### Saved loading
+
+`code-db` does not read the view files on every command: defining them live costs
+seconds, since DuckDB binds each view through every view below it (on this repository
+`unit_quality`'s definition alone took 4.2 s live and 25 ms over the copies, and a
+command that only ran `SELECT 1` took 12.5 s, against 1–3.5 s when the measurement above
+was taken). It keeps the database the loading leaves, as a file per state of what
+shapes it, and attaches it (`../code-db/src/saved.rs`; owner decision of 2026-11-03,
+`docs/code-database-design.md`). Other clients, and `check.py`, read the view files and
+`refresh.sql` as before.
+
+- **Key**: the text of every view file and `refresh.sql`; the values of the variables
+  those files read, but the limits and `cycle_edges`, which only a live view reads when
+  queried (so the file snapshot with its content ids, the settings' patterns, `lang` and
+  `languages`); the content of each SCIP index and jscpd report and of the two
+  extensions of this workspace; the loaded sitting_duck version; and the settings'
+  layers. A variable only a query reads is not in it: the saved views read variables when
+  they are queried.
+- **Build**, when `<cache_dir>/load-<md5 of the key>.duckdb` does not exist: under the
+  lock file `load.lock`, the prelude, the view files, `refresh.sql`, the layer check and
+  the display language's schema run into a database at a temporary path; then
+  `refresh.sql`'s cache file and syntax-tree file are copied beside it
+  (`load-<key>.cache.duckdb`, `load-<key>.ast.duckdb`) and it is renamed into place.
+- **Attach**: the command's in-memory database runs the prelude and `00_load.sql` (their
+  variables and macros belong to the connection, and the key is read from them), attaches
+  the saved database as `saved` and the two copies as `cache` and `ast_cache`, all
+  `READ_ONLY`, and puts `saved.main` and the saved database's other schemas (`rust`)
+  after `memory.main` on the search path. The saved views bind inside their own database;
+  what a command creates goes to the in-memory one.
+- **Several commands at once**: a DuckDB file opened for writing locks out every other
+  process, readers included, so readers open only the copies and the saved database, and a
+  build writes only the shared cache files and its temporary file. Measured on this
+  repository: two readers and two commands needing a new state at once all return, the
+  readers in about 5 s while the build runs (about 25 s), the two builds one after the
+  other; four commands over an existing saved loading at once take 3–4.5 s each.
+- **Measured**: a command over a saved loading takes 2.6 s for `SELECT 1` and 3.1 s for
+  `size` (12.5 s and about 15 s before); a build adds 20–30 s to the command that runs it.
+  Every query's output equals the earlier loading's, but for the order of rows that tie
+  on every `ORDER BY` key, which varies from run to run in both (`size`).
 
 ## Check
 
