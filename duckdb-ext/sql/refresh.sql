@@ -28,7 +28,8 @@
 -- Files of other keys are left in place; `code-db` removes them after a read.
 --
 -- Layers, in the order they are built, each from the copies before it: scip_occurrences,
--- scip_symbols (views/scip.sql); units (views/units.sql); unit_occurrences, symbol_units,
+-- scip_symbols (views/scip.sql); units (views/units.sql); unit_occurrences, occurrence_ast,
+-- symbol_units,
 -- unit_references, unit_edges, unit_ancestors, type_fact_units, unit_owner_types,
 -- type_parts, namespaces, unit_namespace, namespace_edges (views/graph.sql); unit_scope,
 -- unit_fan_in, unit_fan_out, unit_reference_status, unit_debt_markers, unit_constructs, unit_complexity
@@ -157,6 +158,8 @@ CREATE TABLE IF NOT EXISTS cache.units AS SELECT * FROM units;
 CREATE OR REPLACE VIEW units AS SELECT * FROM cache.units;
 CREATE TABLE IF NOT EXISTS cache.unit_occurrences AS SELECT * FROM unit_occurrences;
 CREATE OR REPLACE VIEW unit_occurrences AS SELECT * FROM cache.unit_occurrences;
+CREATE TABLE IF NOT EXISTS cache.occurrence_ast AS SELECT * FROM occurrence_ast;
+CREATE OR REPLACE VIEW occurrence_ast AS SELECT * FROM cache.occurrence_ast;
 CREATE TABLE IF NOT EXISTS cache.symbol_units AS SELECT * FROM symbol_units;
 CREATE OR REPLACE VIEW symbol_units AS SELECT * FROM cache.symbol_units;
 CREATE TABLE IF NOT EXISTS cache.unit_references AS SELECT * FROM unit_references;

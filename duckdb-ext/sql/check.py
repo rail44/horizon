@@ -71,7 +71,7 @@ REFRESH_FILE = "refresh.sql"
 # The views refresh.sql points at its copies, in its order (file_ast and go_file_ast at the
 # syntax trees it keeps per content id), and unit_ast, a view over file_ast compared with
 # them.
-CACHED_VIEWS = ["file_ast", "go_file_ast", "scip_occurrences", "scip_symbols", "units", "unit_ast", "unit_occurrences", "symbol_units",
+CACHED_VIEWS = ["file_ast", "go_file_ast", "scip_occurrences", "scip_symbols", "units", "unit_ast", "unit_occurrences", "occurrence_ast", "symbol_units",
                 "unit_references", "unit_edges", "unit_ancestors", "type_fact_units", "unit_owner_types",
                 "type_parts", "namespaces", "unit_namespace", "namespace_edges", "unit_scope", "unit_fan_in", "unit_fan_out",
                 "unit_reference_status", "unit_debt_markers", "unit_constructs", "unit_complexity",

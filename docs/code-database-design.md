@@ -1078,8 +1078,8 @@ by query, an enumeration of `CommandId`'s variants the compiler checks (an exhau
 `match`) from one it does not (a `vec![...]` of specs, a `match` on strings), since an
 occurrence carried no syntax. `occurrence_ast` gives each `unit_occurrences` row the
 innermost `file_ast` node containing it and that node's ancestors (ids and raw node
-types, innermost first) up to the occurrence's unit. It stays live, about 3 s over the
-cache for 320,168 occurrences; no existing query's output changed. Macro arguments stay
+types, innermost first) up to the occurrence's unit. Built live, it took about 3 s over
+the cache for 320,168 occurrences; no existing query's output changed. Macro arguments stay
 tokens: rust-analyzer places an occurrence inside `vec![...]` on its identifier token,
 whose ancestors are `token_tree`s up to the `macro_invocation`. The question, as SQL over
 the view (in the record), separates the four `CommandId` functions: `command_enabled` and
@@ -1087,6 +1087,12 @@ the view (in the record), separates the four `CommandId` functions: `command_ena
 `core_commands` (in `vec!` tokens) and `command_for` (call arguments in arm values) all 36
 elsewhere. Classifying node types into neutral contexts per language
 (`<language>_occurrence_contexts`) is proposed in the record, not built.
+
+The owner's review of the choices the implementation made (「はい。それで問題アリません」,
+on the recommendations: name and list columns kept, the chain up to the occurrence's unit
+kept, neutral contexts not built until a second question needs them) changed one: the view
+is a cached layer of `refresh.sql` after `unit_occurrences`, since an agent re-runs
+questions over it (a full scan 0.6 s with the loading, against about 3 s live).
 
 ## Open points
 

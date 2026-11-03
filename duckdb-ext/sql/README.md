@@ -528,9 +528,9 @@ reading of them, then Go's:
   pattern its first child (`sibling_index` 0 in `file_ast`). Inside a macro invocation the
   chain is `token_tree` nodes up to the `macro_invocation`: rust-analyzer still places the
   occurrences in `vec![...]` or `assert!(...)` on their identifier tokens, but the tree has
-  no expression or pattern structure there (a `matches!` pattern is tokens too). Read live
-  (not cached): about 3 s over the cache on this repository (320,168 occurrences, 2.3 M
-  ancestor entries).
+  no expression or pattern structure there (a `matches!` pattern is tokens too). Cached
+  (Cache): computing it takes about 3 s on this repository (320,016 occurrences, 2.3 M
+  ancestor entries), a full scan of the copy 0.6 s with the loading.
 - **`symbol_units(symbol, unit_id, ambiguous)`**: the unit a symbol's definition belongs
   to: the unit it defines when it is a unit, else the unit containing the definition (a
   field to its type). A module's own symbol has none: a reference to a module is a path
@@ -726,15 +726,15 @@ views compute the same rows live (`check.py refresh` compares them).
   from scratch. `code-db` removes the files of other keys after a read, and the
   `ast-*.duckdb` files of other syntax keys.
 - **Layers**, in order, each built from the copies before it: `scip_occurrences`,
-  `scip_symbols`, `units`, `unit_occurrences`, `symbol_units`, `unit_references`,
+  `scip_symbols`, `units`, `unit_occurrences`, `occurrence_ast`, `symbol_units`, `unit_references`,
   `unit_edges`, `unit_ancestors`, `type_fact_units`, `unit_owner_types`, `type_parts`, `namespaces`,
   `unit_namespace`, `namespace_edges`, `unit_scope`, `unit_fan_in`, `unit_fan_out`,
   `unit_reference_status`, `unit_debt_markers`, `unit_constructs`, `unit_complexity`,
   `clone_pairs`, `clone_sides`. Views that read a query variable or the settings' tables
   (cycles, layers) stay live, over the copies. `clone_pairs` is copied because a plan
   reading it twice (directly and through `clone_sides`, as `duplication` does) ran out of
-  memory on a repository with 58,534 pairs. `occurrence_ast` is not a layer: no layer
-  reads it, and it computes in about 3 s over the copies (Graph).
+  memory on a repository with 58,534 pairs. `occurrence_ast` is copied because a query
+  over it took about 3 s live; no other layer reads it.
 - **Measured** on this repository (`docs/research/code-db-file-ast-cache-2026-10-30.md`
   has the runs): a cold build, syntax trees included, takes 2.0–2.2 s (`read_ast` over
   537 files into 1.58 M nodes in 0.7–0.8 s of it; peak RSS 1.6 GB; the trees' file is
