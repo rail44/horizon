@@ -728,6 +728,46 @@ Legs 2–4 deliver most of the measured pain relief (bash ≈ 76% of
 approvals) before the judge exists at all; the judge closes the
 remaining boundary-crossing tail.
 
+## Friction fixes from the 2026-10-19..11-03 log (2026-11-03)
+
+A review of the event log after the sandbox became the perimeter for every
+session (`cef5fc2e`) found 80 approval requests, all approved, mostly
+repeats of the same few causes. The owner approved fixing all of the code
+side. What changed, and why:
+
+- **fs reads follow the session's filesystem grants.** `fs.read`/`fs.grep`/
+  `fs.glob` asked before reading under a `[[grants.project]]` tree the
+  sandbox already let `bash` write (16 asks in one session reading
+  `~/.cargo/registry`), and before reading the `bash` spill file the tool
+  result itself points at. The read tools' readable roots now include the
+  effective grants and `horizon-bash-*.log` directly under the temp dir.
+- **Domains approved for a session survive environment activation.**
+  `worktree.enter` rebuilt the tool state with a fresh domain store seeded
+  from config only, so `index.crates.io` and friends were asked again after
+  every activation. The replacement now copies the previous store's
+  domains (`ToolSessionState::retain_domains_from`). They are still
+  in-memory only: an agentd restart drops them.
+- **A loopback denial explains what approving it does.** The observed case
+  — tests binding their own mock server — was approved as a domain retry
+  and still failed at the refused bind. A denial naming a loopback host now
+  carries `loopback_guidance`: approval opens every local service on that
+  address through the proxy, a fixed endpoint can be granted narrowly as
+  `127.0.0.1:<port>`, and neither makes a bind possible. Loopback stays a
+  retry candidate: excluding it was tried and rejected, since it removes the
+  only per-session way to reach a local server and the containment tests
+  use loopback origins as stand-in domains. Denied hosts are also
+  deduplicated before they reach the approval kind and the judge.
+- **A refused network route carries `network_guidance`.** SSH (including
+  an https remote a user's `url.<base>.insteadOf` rewrites to SSH) fails
+  inside the sandbox as a name-resolution error, which agents read as "the
+  network is closed". The guidance states that only proxy-using HTTP(S)
+  clients reach the network.
+- **Listing forms of dual-use Git subcommands are read-only.** `branch`
+  and `tag` in list mode, `worktree list`, `stash list|show`, `remote` /
+  `remote -v` / `remote get-url`, and `config` reads no longer route to a
+  Git metadata approval; any argument outside the known listing forms
+  still does.
+
 ## Rejected alternatives (recorded)
 
 - **birdcage / gaol / hakoniwa / srt / vendoring Codex's crates** as

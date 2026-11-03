@@ -55,6 +55,20 @@ impl Allowlist {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         domains.insert(normalize(&domain.into()));
     }
+
+    /// Every allowed host, sorted -- what a replacement allowlist is seeded
+    /// with so approvals survive the session's environment being rebuilt.
+    pub fn domains(&self) -> Vec<String> {
+        let mut domains: Vec<String> = self
+            .domains
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect();
+        domains.sort();
+        domains
+    }
 }
 
 fn normalize(host: &str) -> String {

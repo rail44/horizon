@@ -529,6 +529,52 @@ mod tests {
     }
 
     #[test]
+    fn reads_under_a_filesystem_grant_or_of_a_bash_spill_file_do_not_ask() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let granted = outside.path().canonicalize().unwrap().join("registry");
+        std::fs::create_dir_all(&granted).unwrap();
+        std::fs::write(granted.join("Cargo.toml"), "[package]").unwrap();
+        let spill = std::env::temp_dir().join(format!("horizon-bash-{}.log", uuid::Uuid::new_v4()));
+        std::fs::write(&spill, "full output").unwrap();
+        let not_spill = outside.path().join("horizon-bash-elsewhere.log");
+        std::fs::write(&not_spill, "x").unwrap();
+        let tool_state = ToolSessionState::new(root.path().canonicalize().unwrap());
+        let read = |path: &std::path::Path| {
+            plan_tool_call(
+                &tool_state,
+                &ToolCallRequest {
+                    call_id: crate::contract::ToolCallId("call-read".into()),
+                    tool_id: "fs.read".into(),
+                    input: serde_json::json!({ "path": path }).into(),
+                    occurrence_id: crate::contract::OccurrenceId("call-read".into()),
+                },
+            )
+        };
+        let target = granted.join("Cargo.toml");
+        assert!(matches!(read(&target), ToolPlan::Approval(_)));
+        assert!(matches!(read(&not_spill), ToolPlan::Approval(_)));
+        assert_eq!(
+            read(&spill),
+            ToolPlan::Automatic(AutomaticTool::Synchronous)
+        );
+
+        tool_state
+            .approve_filesystem_grants(&[horizon_sandbox::FilesystemGrant {
+                path: outside.path().to_path_buf(),
+                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+                excluded_subpaths: Vec::new(),
+            }])
+            .unwrap();
+        assert_eq!(
+            read(&target),
+            ToolPlan::Automatic(AutomaticTool::Synchronous)
+        );
+        let _ = std::fs::remove_file(spill);
+    }
+
+    #[test]
     fn fs_mutations_inside_the_plain_checkouts_gitdir_are_not_automatic() {
         let root = tempfile::tempdir().unwrap();
         let root_path = root.path().canonicalize().unwrap();

@@ -52,6 +52,166 @@ const READ_ONLY_SUBCOMMANDS: &[&str] = &[
     "whatchanged",
 ];
 
+/// Whether `subcommand` with `args` only reads repository metadata.
+///
+/// Beyond [`READ_ONLY_SUBCOMMANDS`], a few subcommands both list and write
+/// depending on their arguments; only their listing forms count here, and
+/// anything not recognized as one stays a write.
+fn is_read_only_invocation(subcommand: &str, args: &[String]) -> bool {
+    if READ_ONLY_SUBCOMMANDS.contains(&subcommand) {
+        return true;
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    match subcommand {
+        "branch" => is_listing(&args, BRANCH_LIST_FLAGS, BRANCH_VALUE_FLAGS),
+        "tag" => is_listing(&args, TAG_LIST_FLAGS, TAG_VALUE_FLAGS),
+        "worktree" => args.first() == Some(&"list"),
+        "stash" => matches!(args.first(), Some(&"list" | &"show")),
+        "remote" => match args.first() {
+            None => true,
+            Some(&"get-url") => true,
+            Some(&("-v" | "--verbose")) => args.len() == 1,
+            _ => false,
+        },
+        "config" => is_config_read(&args),
+        _ => false,
+    }
+}
+
+/// `git branch` flags that keep it in list mode.
+const BRANCH_LIST_FLAGS: &[&str] = &[
+    "--show-current",
+    "-a",
+    "--all",
+    "-r",
+    "--remotes",
+    "-l",
+    "--list",
+    "-v",
+    "-vv",
+    "--verbose",
+    "-q",
+    "--quiet",
+    "--no-color",
+    "--column",
+    "--no-column",
+    "--omit-empty",
+    "-i",
+    "--ignore-case",
+];
+
+/// `git branch` list filters whose value is the next word unless written
+/// with `=`.
+const BRANCH_VALUE_FLAGS: &[&str] = &[
+    "--contains",
+    "--no-contains",
+    "--merged",
+    "--no-merged",
+    "--points-at",
+    "--sort",
+    "--format",
+];
+
+const TAG_LIST_FLAGS: &[&str] = &[
+    "-l",
+    "--list",
+    "-n",
+    "--no-color",
+    "--column",
+    "--no-column",
+    "--omit-empty",
+    "-i",
+    "--ignore-case",
+];
+
+const TAG_VALUE_FLAGS: &[&str] = &[
+    "--contains",
+    "--no-contains",
+    "--merged",
+    "--no-merged",
+    "--points-at",
+    "--sort",
+    "--format",
+];
+
+/// Whether a `branch`/`tag` argument list stays in list mode: every option
+/// is a listing option, and positional words appear only after an explicit
+/// `-l`/`--list`, where they are patterns rather than names to create.
+fn is_listing(args: &[&str], list_flags: &[&str], value_flags: &[&str]) -> bool {
+    let explicit_list = args.iter().any(|arg| matches!(*arg, "-l" | "--list"));
+    let mut index = 0;
+    while let Some(arg) = args.get(index) {
+        if value_flags.contains(arg) {
+            index += 2;
+            continue;
+        }
+        let is_option = arg.starts_with('-');
+        let known = list_flags.contains(arg)
+            || arg.starts_with("--color")
+            || value_flags
+                .iter()
+                .any(|flag| arg.strip_prefix(flag).is_some_and(|rest| rest.starts_with('=')))
+            // `-n<num>` (tag annotation lines).
+            || (arg.starts_with("-n") && arg[2..].chars().all(|c| c.is_ascii_digit()));
+        if is_option && !known {
+            return false;
+        }
+        if !is_option && !explicit_list {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+/// Whether a `git config` argument list only reads: the `get`/`list`
+/// subcommands, or the legacy `--get*`/`--list` modes with no write mode.
+fn is_config_read(args: &[&str]) -> bool {
+    const READ_MODES: &[&str] = &[
+        "--get",
+        "--get-all",
+        "--get-regexp",
+        "--get-urlmatch",
+        "--get-color",
+        "--get-colorbool",
+        "-l",
+        "--list",
+    ];
+    const WRITE_MODES: &[&str] = &[
+        "--add",
+        "--replace-all",
+        "--unset",
+        "--unset-all",
+        "--rename-section",
+        "--remove-section",
+        "-e",
+        "--edit",
+    ];
+    // Options whose value is the next word, so that word is not the
+    // subcommand.
+    const VALUE_OPTIONS: &[&str] = &["-f", "--file", "--blob", "--type", "--default"];
+    let mut first_word = None;
+    let mut index = 0;
+    while let Some(arg) = args.get(index) {
+        if VALUE_OPTIONS.contains(arg) {
+            index += 2;
+            continue;
+        }
+        if !arg.starts_with('-') {
+            first_word = Some(arg);
+            break;
+        }
+        index += 1;
+    }
+    if args.iter().any(|arg| WRITE_MODES.contains(arg)) {
+        return false;
+    }
+    if args.iter().any(|arg| READ_MODES.contains(arg)) {
+        return true;
+    }
+    matches!(first_word, Some(&"get" | &"list"))
+}
+
 /// Whether a bash tool input contains a directly-recognizable Git invocation
 /// that may write repository metadata.
 pub(crate) fn approved_metadata_roots(output: &Value) -> Option<Vec<PathBuf>> {
@@ -104,7 +264,7 @@ fn segment_requires_metadata_write(words: &[String]) -> bool {
                 index += 1;
             }
             value if value.starts_with('-') => return true,
-            subcommand => return !READ_ONLY_SUBCOMMANDS.contains(&subcommand),
+            subcommand => return !is_read_only_invocation(subcommand, &words[index + 1..]),
         }
     }
     false
@@ -360,6 +520,61 @@ mod tests {
             "git rev-parse --show-toplevel && git status --short && git log --oneline -5",
         ] {
             assert!(!command_requires_metadata_write(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn listing_forms_of_dual_use_subcommands_are_read_only() {
+        // Forms agents ran in real sessions (2026-10-19..11-03) that were
+        // routed to a Git metadata approval although they only read.
+        for command in [
+            "git branch --show-current",
+            "git branch -a",
+            "git branch",
+            "git branch -vv --sort=-committerdate",
+            "git branch --contains HEAD -r",
+            "git branch --list 'horizon/*'",
+            "git branch --show-current; git worktree list",
+            "git worktree list --porcelain",
+            "git stash list",
+            "git stash show -p",
+            "git tag",
+            "git tag -l 'v*'",
+            "git remote -v",
+            "git remote get-url origin",
+            "git config --get-regexp 'url\\..*\\.instead'",
+            "git config --show-origin --get-regexp 'url\\..*instead'",
+            "git config --global --get-regexp 'credential|user\\.'",
+            "git config --list",
+            "git config get user.name",
+            "git config --global list",
+        ] {
+            assert!(!command_requires_metadata_write(command), "{command}");
+        }
+        for command in [
+            "git branch topic",
+            "git branch -d topic",
+            "git branch -a -D topic",
+            "git branch -m old new",
+            "git branch --set-upstream-to=origin/main",
+            "git tag v1",
+            "git tag -a v1 -m msg",
+            "git tag -d v1",
+            "git worktree add ../x",
+            "git worktree prune",
+            "git stash",
+            "git stash push -m x",
+            "git stash pop",
+            "git remote add up url",
+            "git remote set-url origin url",
+            "git remote -v add up url",
+            "git config user.name x",
+            "git config --unset user.name",
+            "git config --get user.name --add user.name x",
+            "git config set user.name x",
+            "git config --file get user.name x",
+        ] {
+            assert!(command_requires_metadata_write(command), "{command}");
         }
     }
 

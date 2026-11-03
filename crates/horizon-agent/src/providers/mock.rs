@@ -350,8 +350,10 @@ fn respond_to_user_message(
         // Test hook for a `bash` call that still needs approval in every
         // session: a Git subcommand outside the read-only list is a
         // metadata write (`GitOperation` with an engaged sandbox, the
-        // host-execution approval without one). `stash list` itself only
-        // reads, so approving it changes nothing in the repository.
+        // host-execution approval without one). Creating a tag is a real
+        // ref write, so it keeps needing approval as the read-only forms
+        // grow; its only effect is one lightweight tag in the session's
+        // repository (the e2e fixtures are throwaway repositories).
         let call_id = ToolCallId("mock-bash-1".to_string());
         let occurrence_id = OccurrenceId::new();
         *pending_tool_call = Some(ToolCallIdentity {
@@ -363,7 +365,7 @@ fn respond_to_user_message(
                 call_id,
                 tool_id: "bash".to_string(),
                 input: serde_json::json!({
-                    "command": "git stash list && echo agentd-bash-ok"
+                    "command": "git tag horizon-mock-probe && echo agentd-bash-ok"
                 })
                 .into(),
                 occurrence_id,
