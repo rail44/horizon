@@ -514,6 +514,23 @@ reading of them, then Go's:
   `use` declaration or a file-level macro call belongs to the file module.
 - **`unit_occurrences(file_id, symbol, start_line, start_column, end_line, end_column,
   is_definition, is_local, unit_id)`**.
+- **`occurrence_ast(file_id, symbol, start_line, start_column, end_line, end_column,
+  is_definition, is_local, unit_id, node_id, type, ancestor_ids, ancestor_types)`**: each
+  row of `unit_occurrences` (its columns are the key) with its place in the file's tree
+  (`file_ast`): `node_id` and `type` the innermost node containing the occurrence's range
+  (the deepest node starting where it starts and ending at or after its end, an identifier
+  token mostly; else the deepest node containing it, as for an overloaded operator, whose
+  range rust-analyzer gives as the space beside it), and `ancestor_ids`/`ancestor_types`
+  that node's ancestors from its parent outwards, up to the last one inside the
+  occurrence's unit's range (to the file's root for a file unit). Types are the grammar's
+  raw strings: what a context means (a match arm's pattern, an argument, ...) is decided
+  in the query. A match arm's pattern and its guard are both under one `match_pattern`, the
+  pattern its first child (`sibling_index` 0 in `file_ast`). Inside a macro invocation the
+  chain is `token_tree` nodes up to the `macro_invocation`: rust-analyzer still places the
+  occurrences in `vec![...]` or `assert!(...)` on their identifier tokens, but the tree has
+  no expression or pattern structure there (a `matches!` pattern is tokens too). Read live
+  (not cached): about 3 s over the cache on this repository (320,168 occurrences, 2.3 M
+  ancestor entries).
 - **`symbol_units(symbol, unit_id, ambiguous)`**: the unit a symbol's definition belongs
   to: the unit it defines when it is a unit, else the unit containing the definition (a
   field to its type). A module's own symbol has none: a reference to a module is a path
@@ -716,7 +733,8 @@ views compute the same rows live (`check.py refresh` compares them).
   `clone_pairs`, `clone_sides`. Views that read a query variable or the settings' tables
   (cycles, layers) stay live, over the copies. `clone_pairs` is copied because a plan
   reading it twice (directly and through `clone_sides`, as `duplication` does) ran out of
-  memory on a repository with 58,534 pairs.
+  memory on a repository with 58,534 pairs. `occurrence_ast` is not a layer: no layer
+  reads it, and it computes in about 3 s over the copies (Graph).
 - **Measured** on this repository (`docs/research/code-db-file-ast-cache-2026-10-30.md`
   has the runs): a cold build, syntax trees included, takes 2.0–2.2 s (`read_ast` over
   537 files into 1.58 M nodes in 0.7–0.8 s of it; peak RSS 1.6 GB; the trees' file is
@@ -806,8 +824,10 @@ without indexes and reports. Last, a second repository, one crate `flow` of know
 control-flow shapes (a nested `if` in a loop with an `else if`, a `match` with guards, a
 nested `match` and `&&`/`||`, `?` chains, closures with branches, a fn inside a fn with
 a bare `loop` and a let-else in the outer one, macro invocations holding `if`, a `while
-let` with a let chain, an inline module), asserts `unit_complexity`, the trees' tops,
-sizes and own nodes, the macro arguments as tokens, and the `complexity` query, through
+let` with a let chain, an inline module, an enum whose variants are referenced in an
+or-pattern, a guard and `vec![...]`), asserts `unit_complexity`, the trees' tops,
+sizes and own nodes, the macro arguments as tokens, the `complexity` query, and each
+variant reference's `occurrence_ast` row, through
 `refresh.sql` with its layers checked. The syntax trees' cache is checked in the first repository: the
 first read parses every file, the kept read none, and after the edit only the edited
 file is parsed (its node count inserted, its old content id dropped), with every cached
@@ -852,7 +872,7 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `lang/go.sql` | `go_terms`, `go_value_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_control_nodes`, `go_units` (Units), `go_type_facts`, `go_type_parts` (Types) |
 | `views/terms.sql` | `lang_terms`, `lang_value_terms`, `lang_visibility_boundaries`, the macros `visibility_boundary`, `display_language`, `term_swap`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
 | `views/units.sql` | `derived_units`, `units`, `unit_ast` (Units) |
-| `views/graph.sql` | `unit_occurrences`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `type_facts`, `type_fact_units`, `unit_owner_types`, `type_interfaces`, `member_implementations`, `type_conversions`, `type_parts`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
+| `views/graph.sql` | `unit_occurrences`, `occurrence_ast`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `type_facts`, `type_fact_units`, `unit_owner_types`, `type_interfaces`, `member_implementations`, `type_conversions`, `type_parts`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
 | `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
 | `views/quality.sql` | `unit_scope`, `namespace_references`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `control_nodes`, `unit_constructs`, `unit_complexity`, `unit_quality` (Axes) |
 | `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `namespace_graph`, `namespace_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
