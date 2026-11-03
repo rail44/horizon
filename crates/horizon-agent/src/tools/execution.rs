@@ -146,14 +146,14 @@ fn execute_automatic(
                     return started.complete(live, request.identity().finish(output), Vec::new());
                 }
             }
-            bash::spawn_sandboxed(
-                bash::BashJob::new(session_id, request, tool_state, runtime.async_results),
-                bash::SandboxedRun::new(
-                    tool_state,
-                    workspace_root,
-                    bash::SandboxedApprovalOrigin::Tier1Auto,
-                    None,
-                ),
+            bash::spawn_sandboxed_call(
+                session_id,
+                request,
+                tool_state,
+                runtime.async_results,
+                workspace_root,
+                bash::SandboxedApprovalOrigin::Tier1Auto,
+                None,
             );
             return Ok(started);
         }

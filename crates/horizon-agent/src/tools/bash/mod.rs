@@ -27,7 +27,7 @@ pub(super) use super::completion::BashCompletion;
 pub use exec::exclude_git_metadata;
 #[cfg(test)]
 use job::{run_job_body, spawn};
-pub(crate) use job::{spawn_approved_host, spawn_sandboxed, BashJob, SandboxedRun};
+pub(crate) use job::{spawn_approved_host, spawn_sandboxed_call, BashJob};
 #[cfg(test)]
 pub(crate) use registry::cancel_call;
 
@@ -39,7 +39,7 @@ pub(crate) use git::{
 };
 pub(crate) use recent::{find_reusable_output, guidance_output};
 
-/// What a [`spawn_sandboxed`] run's eventual `Finished` completion should be
+/// What a [`spawn_sandboxed_call`] run's eventual `Finished` completion should be
 /// annotated with, once it lands -- distinguishes a genuine tier-1
 /// auto-approval from a human's domain-denial-retry approval (`docs/
 /// agent-approval-design.md` leg 4b), so the audit trail never claims a

@@ -402,25 +402,15 @@ fn resolve_git_operation(
         }
     }
 
-    let outcome = begin_execution(runtime, request, None);
-    if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
-        return outcome;
-    }
-    bash::spawn_sandboxed(
-        bash::BashJob::new(
-            session_id,
-            request,
-            &runtime.tool_state,
-            runtime.async_results.clone(),
-        ),
-        bash::SandboxedRun::new(
-            &runtime.tool_state,
-            workspace_root,
-            SandboxedApprovalOrigin::ManualGitOperation,
-            Some(writable_roots),
-        ),
-    );
-    outcome
+    begin_sandboxed_run(
+        session_id,
+        runtime,
+        request,
+        None,
+        workspace_root,
+        || SandboxedApprovalOrigin::ManualGitOperation,
+        Some(writable_roots),
+    )
 }
 
 fn resolve_standard_bash(
@@ -535,26 +525,21 @@ fn resolve_filesystem_denial_retry(
     runtime
         .live_state
         .record_filesystem_grants(&runtime.tool_state.filesystem_grants_snapshot());
-    bash::spawn_sandboxed(
-        bash::BashJob::new(
-            session_id,
-            request,
-            &runtime.tool_state,
-            runtime.async_results.clone(),
-        ),
-        bash::SandboxedRun::new(
-            &runtime.tool_state,
-            workspace_root,
-            SandboxedApprovalOrigin::FilesystemGrant {
-                source: approval_source,
-                grants,
-                trigger_paths: denials
-                    .iter()
-                    .map(|denial| denial.attempted_path.clone())
-                    .collect(),
-            },
-            None,
-        ),
+    bash::spawn_sandboxed_call(
+        session_id,
+        request,
+        &runtime.tool_state,
+        runtime.async_results.clone(),
+        workspace_root,
+        SandboxedApprovalOrigin::FilesystemGrant {
+            source: approval_source,
+            grants,
+            trigger_paths: denials
+                .iter()
+                .map(|denial| denial.attempted_path.clone())
+                .collect(),
+        },
+        None,
     );
     ApprovalOutcome::Applied(started)
 }
@@ -571,6 +556,36 @@ fn begin_execution(
         request,
         prior_result,
     ))
+}
+
+/// Start a sandboxed run of an approved `bash` call: fold the start (closing
+/// `prior_result`'s attempt for a retry), then apply the approval's grant and
+/// enqueue the run. `authorize` runs only once the start is persisted -- a
+/// persistence failure installs nothing -- and returns the origin the run's
+/// result is annotated with.
+fn begin_sandboxed_run(
+    session_id: SessionId,
+    runtime: &SessionRuntime,
+    request: &PreparedCall<'_>,
+    prior_result: Option<&ToolCallResult>,
+    workspace_root: &std::path::Path,
+    authorize: impl FnOnce() -> SandboxedApprovalOrigin,
+    git_metadata_roots: Option<Vec<std::path::PathBuf>>,
+) -> ApprovalOutcome {
+    let outcome = begin_execution(runtime, request, prior_result);
+    if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
+        return outcome;
+    }
+    bash::spawn_sandboxed_call(
+        session_id,
+        request,
+        &runtime.tool_state,
+        runtime.async_results.clone(),
+        workspace_root,
+        authorize(),
+        git_metadata_roots,
+    );
+    outcome
 }
 
 /// The deny half of the denial-retry pair (see
@@ -619,31 +634,20 @@ fn resolve_domain_denial_retry(
             ) else {
                 return forward_prior_result(runtime, prior_result);
             };
-            let outcome = begin_execution(runtime, request, Some(&prior_result));
-            if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
-                return outcome;
-            }
-
-            for domain in &domains {
-                network.allow_domain(domain.clone());
-            }
-
-            bash::spawn_sandboxed(
-                bash::BashJob::new(
-                    session_id,
-                    request,
-                    &runtime.tool_state,
-                    runtime.async_results.clone(),
-                ),
-                bash::SandboxedRun::new(
-                    &runtime.tool_state,
-                    workspace_root,
-                    SandboxedApprovalOrigin::ManualDomainRetry { domains },
-                    git_metadata_roots,
-                ),
-            );
-
-            outcome
+            begin_sandboxed_run(
+                session_id,
+                runtime,
+                request,
+                Some(&prior_result),
+                workspace_root,
+                move || {
+                    for domain in &domains {
+                        network.allow_domain(domain.clone());
+                    }
+                    SandboxedApprovalOrigin::ManualDomainRetry { domains }
+                },
+                git_metadata_roots,
+            )
         }
     }
 }
@@ -677,29 +681,18 @@ fn resolve_mach_service_grant(
             let Some(workspace_root) = runtime.tool_state.workspace_root() else {
                 return forward_prior_result(runtime, prior_result);
             };
-            let outcome = begin_execution(runtime, request, Some(&prior_result));
-            if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
-                return outcome;
-            }
-
-            runtime.tool_state.approve_mach_services(&services);
-
-            bash::spawn_sandboxed(
-                bash::BashJob::new(
-                    session_id,
-                    request,
-                    &runtime.tool_state,
-                    runtime.async_results.clone(),
-                ),
-                bash::SandboxedRun::new(
-                    &runtime.tool_state,
-                    workspace_root,
-                    SandboxedApprovalOrigin::MachServiceGrant { services },
-                    git_metadata_roots,
-                ),
-            );
-
-            outcome
+            begin_sandboxed_run(
+                session_id,
+                runtime,
+                request,
+                Some(&prior_result),
+                workspace_root,
+                || {
+                    runtime.tool_state.approve_mach_services(&services);
+                    SandboxedApprovalOrigin::MachServiceGrant { services }
+                },
+                git_metadata_roots,
+            )
         }
     }
 }

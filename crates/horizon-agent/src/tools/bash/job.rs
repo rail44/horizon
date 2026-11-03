@@ -245,6 +245,24 @@ fn spawn_host(job: BashJob, approval: Option<HostExecutionApproval>) {
     });
 }
 
+/// Snapshot `request` and the session's current sandbox grants, then enqueue
+/// the sandboxed run. Every sandboxed call site assembles its job this way
+/// and states only its own approval origin and metadata roots.
+pub(crate) fn spawn_sandboxed_call(
+    session_id: SessionId,
+    request: &PreparedCall<'_>,
+    tools: &ToolSessionState,
+    result_tx: Sender<BashCompletion>,
+    workspace_root: &Path,
+    origin: SandboxedApprovalOrigin,
+    git_metadata_roots: Option<Vec<PathBuf>>,
+) {
+    spawn_sandboxed(
+        BashJob::new(session_id, request, tools, result_tx),
+        SandboxedRun::new(tools, workspace_root, origin, git_metadata_roots),
+    );
+}
+
 /// Enqueue a sandboxed run with its captured session grants and approval origin.
 /// The child receives the workspace root and explicitly granted paths; host
 /// output spilling does not grant the child access to the host's temp dir.
