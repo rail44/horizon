@@ -124,46 +124,10 @@ fn gpui_key_name(token: &str) -> Option<String> {
 /// [`WORKSPACE_MODE_PSEUDO_COMMAND`]) are not real commands and must be
 /// handled by the caller before falling back to this.
 pub(crate) fn command_for(id: &str) -> Option<CommandId> {
-    match id {
-        "split-right" => Some(CommandId::SplitRight),
-        "split-down" => Some(CommandId::SplitDown),
-        "new-tab" => Some(CommandId::NewTab),
-        "focus-next-pane" => Some(CommandId::FocusNextPane),
-        "close-active-pane" => Some(CommandId::CloseActivePane),
-        "close-active-tab" => Some(CommandId::CloseActiveTab),
-        "terminate-active-session" => Some(CommandId::TerminateActiveSession),
-        "terminate-all-detached-sessions" => Some(CommandId::TerminateAllDetachedSessions),
-        "approve-tool-call" => Some(CommandId::ApproveToolCall),
-        "deny-tool-call" => Some(CommandId::DenyToolCall),
-        "cancel-agent-turn" => Some(CommandId::CancelAgentTurn),
-        "continue-agent-turn" => Some(CommandId::ContinueAgentTurn),
-        "switch-model" => Some(CommandId::SwitchModel),
-        "reload-agent-runtime" => Some(CommandId::ReloadAgentRuntime),
-        "reload-terminal-runtime" => Some(CommandId::ReloadTerminalRuntime),
-        "reload-config" => Some(CommandId::ReloadConfig),
-        "manage-sessions" => Some(CommandId::OpenSessionManager),
-        "open-terminal-in-session-directory" => Some(CommandId::OpenTerminalInSessionDirectory),
-        "open-board" => Some(CommandId::OpenBoard),
-        "toggle-board-expansion" => Some(CommandId::ToggleBoardExpansion),
-        "toggle-board-finished-band" => Some(CommandId::ToggleBoardFinishedBand),
-        "open-board-organizer" => Some(CommandId::OpenBoardOrganizer),
-        "open-board-task-session" => Some(CommandId::OpenBoardTaskSession),
-        "open-board-related-item" => Some(CommandId::OpenBoardRelatedItem),
-        "back-board-list" => Some(CommandId::BackBoardList),
-        "add-board-task" => Some(CommandId::AddBoardTask),
-        "post-board-message" => Some(CommandId::PostBoardMessage),
-        "move-board-task-up" => Some(CommandId::MoveBoardTaskUp),
-        "move-board-task-down" => Some(CommandId::MoveBoardTaskDown),
-        "reorder-board-task" => Some(CommandId::ReorderBoardTask),
-        "save-board-state" => Some(CommandId::SaveBoardState),
-        "toggle-board-closed" => Some(CommandId::ToggleBoardClosed),
-        "reload-preview" => Some(CommandId::ReloadPreview),
-
-        "increase-font-size" => Some(CommandId::IncreaseFontSize),
-        "decrease-font-size" => Some(CommandId::DecreaseFontSize),
-        "reset-font-size" => Some(CommandId::ResetFontSize),
-        _ => None,
-    }
+    CommandId::ALL
+        .iter()
+        .copied()
+        .find(|command| command.spec().name == id)
 }
 
 /// What a `[keybindings]` chord dispatches to once bound — either the
@@ -299,6 +263,13 @@ mod tests {
     #[test]
     fn rejects_a_multi_character_unnamed_key() {
         assert_eq!(gpui_keystroke("ctrl+th"), None);
+    }
+
+    #[test]
+    fn every_command_resolves_from_its_own_name_only() {
+        for &command in CommandId::ALL {
+            assert_eq!(command_for(command.spec().name), Some(command));
+        }
     }
 
     #[test]
