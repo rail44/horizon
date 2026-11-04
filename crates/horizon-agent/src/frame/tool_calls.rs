@@ -5,27 +5,18 @@ use crate::contract::{OccurrenceId, ToolCallId, ToolCallRequest, ToolCallResult}
 
 pub(crate) struct ToolCallOccurrence<'a> {
     pub request: &'a ToolCallRequest,
-    pub request_index: usize,
-    pub result: Option<IndexedResult<'a>>,
+    pub result: Option<&'a ToolCallResult>,
     pub had_approval_request: bool,
     pub started: bool,
     pub approval_decision: Option<&'a crate::contract::ApprovalDecisionPayload>,
 }
 
-/// A finished result and its position refer to the same source item.
-#[derive(Clone, Copy)]
-pub(crate) struct IndexedResult<'a> {
-    pub value: &'a ToolCallResult,
-    pub index: usize,
-}
-
 pub(crate) fn tool_call_occurrences(items: &[AgentFrameItem]) -> Vec<ToolCallOccurrence<'_>> {
     let mut calls = Vec::new();
-    for (index, item) in items.iter().enumerate() {
+    for item in items {
         match item {
             AgentFrameItem::ToolCallRequested(request) => calls.push(ToolCallOccurrence {
                 request,
-                request_index: index,
                 result: None,
                 had_approval_request: false,
                 started: false,
@@ -56,10 +47,7 @@ pub(crate) fn tool_call_occurrences(items: &[AgentFrameItem]) -> Vec<ToolCallOcc
                 if let Some(call_index) =
                     matching_call(&calls, &result.call_id, &result.occurrence_id)
                 {
-                    calls[call_index].result = Some(IndexedResult {
-                        value: result,
-                        index,
-                    });
+                    calls[call_index].result = Some(result);
                 }
             }
             _ => {}

@@ -1,7 +1,7 @@
 //! The agent session's UI-facing frame: the data types
 //! ([`AgentFrame`]/[`AgentFrameItem`]), the event→frame fold
 //! ([`apply_agent_event_to_frame`] and its helpers), and the read-only
-//! query functions ([`pending_approval_call_ids_in`] et al.).
+//! query functions (`queries::pending_approval_call_ids_in` et al.).
 //!
 //! Split from the former monolithic `frame.rs` by responsibility — see
 //! the sibling modules for each concern. The re-exports below preserve
@@ -28,7 +28,6 @@ pub(crate) use fold::{
     apply_tool_call_progress_to_frame,
 };
 
-pub(crate) use queries::pending_approval_call_ids_in;
 pub use queries::{
     actionable_pending_approval_call_ids_in, actionable_pending_approval_identities_in,
     halted_awaiting_continue, state_indicates_turn_in_flight,

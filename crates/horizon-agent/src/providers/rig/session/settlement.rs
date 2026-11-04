@@ -297,9 +297,14 @@ mod tests {
                 .messages(),
             state.rig_history.messages()
         );
-        let changes = crate::transcript::aggregate_changes(
-            &crate::transcript::build_tool_call_views(&live.frame().items),
-        );
-        assert_eq!(changes.len(), 1);
+        let succeeded_edits = crate::frame::tool_call_occurrences(&live.frame().items)
+            .into_iter()
+            .filter(|call| matches!(call.request.tool_id.as_str(), "fs.edit" | "fs.write"))
+            .filter(|call| {
+                call.result
+                    .is_some_and(|result| result.outcome == crate::contract::ToolOutcome::Succeeded)
+            })
+            .count();
+        assert_eq!(succeeded_edits, 1);
     }
 }

@@ -779,7 +779,6 @@ mod tests {
     #[test]
     fn restart_closes_each_unfinished_retry_occurrence_in_durable_history() {
         use horizon_agent::contract::{OccurrenceId, ToolCallRequest, ToolCallResult};
-        use horizon_agent::transcript::build_tool_call_views;
         use serde_json::json;
 
         for first_finished in [true, false] {
@@ -820,13 +819,31 @@ mod tests {
             let retained = persisted_events(&path, session_id);
             assert_eq!(retained, events);
             let frame = agent_frame_from_events(&retained);
-            let views = build_tool_call_views(&frame.items);
-            assert_eq!(views.len(), 2);
+            let attempts = retained
+                .iter()
+                .filter(|event| matches!(event, Event::ToolCallRequested(_)))
+                .count();
+            assert_eq!(attempts, 2);
             assert!(
-                views.iter().all(|view| view.finished()),
-                "every attempt must close: {views:?}"
+                frame.unfinished_tool_calls().is_empty(),
+                "every attempt must close: {:?}",
+                frame.unfinished_tool_calls()
             );
-            assert_eq!(views[0].superseded(), first_finished);
+            let first_outcome = retained.iter().find_map(|event| match event {
+                Event::ToolCallFinished(result)
+                    if result.occurrence_id == OccurrenceId("first".into()) =>
+                {
+                    Some(&result.outcome)
+                }
+                _ => None,
+            });
+            assert_eq!(
+                matches!(
+                    first_outcome,
+                    Some(horizon_agent::contract::ToolOutcome::Superseded { .. })
+                ),
+                first_finished
+            );
             let cancelled: Vec<_> = retained
                 .iter()
                 .filter_map(|event| match event {

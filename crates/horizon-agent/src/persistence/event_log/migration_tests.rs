@@ -211,9 +211,8 @@ fn conversion_preflight_rejects_skipped_events_and_projection_failures() {
 }
 
 #[test]
-fn v2_outcomes_survive_conversion_projection_and_transcript_without_text_inference() {
+fn v2_outcomes_survive_conversion_and_projection_without_text_inference() {
     use crate::contract::ToolOutcome;
-    use crate::transcript::{aggregate_receipt, build_tool_call_views, ApprovalState};
 
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("v2.jsonl");
@@ -225,7 +224,6 @@ fn v2_outcomes_survive_conversion_projection_and_transcript_without_text_inferen
             false,
             false,
             ToolOutcome::Succeeded,
-            ApprovalState::Approved,
             "approved",
         ),
         (
@@ -233,7 +231,6 @@ fn v2_outcomes_survive_conversion_projection_and_transcript_without_text_inferen
             true,
             false,
             ToolOutcome::Failed,
-            ApprovalState::Approved,
             "approved",
         ),
         (
@@ -241,7 +238,6 @@ fn v2_outcomes_survive_conversion_projection_and_transcript_without_text_inferen
             true,
             true,
             ToolOutcome::Denied,
-            ApprovalState::Denied,
             "denied",
         ),
         (
@@ -249,7 +245,6 @@ fn v2_outcomes_survive_conversion_projection_and_transcript_without_text_inferen
             false,
             false,
             ToolOutcome::Cancelled,
-            ApprovalState::Cancelled,
             "cancelled",
         ),
         (
@@ -259,7 +254,6 @@ fn v2_outcomes_survive_conversion_projection_and_transcript_without_text_inferen
             ToolOutcome::Superseded {
                 retry_occurrence_id: crate::contract::OccurrenceId("retry".into()),
             },
-            ApprovalState::Superseded,
             "superseded",
         ),
     ];
@@ -269,7 +263,7 @@ fn v2_outcomes_survive_conversion_projection_and_transcript_without_text_inferen
         row["version"] = json!(2);
         rows.push(row);
     };
-    for (index, (body, error, denied, _, _, _)) in cases.iter().enumerate() {
+    for (index, (body, error, denied, _, _)) in cases.iter().enumerate() {
         let call = format!("call-{index}");
         let occurrence = format!("attempt-{index}");
         push(
@@ -319,23 +313,15 @@ fn v2_outcomes_survive_conversion_projection_and_transcript_without_text_inferen
         .unwrap();
     assert_eq!(imported.skipped, 0, "{:?}", imported.first_skip_error);
     let frame = store.frame_for_session(session).unwrap();
-    let views = build_tool_call_views(&frame.items);
+    let calls = crate::frame::tool_call_occurrences(&frame.items);
     let approvals = store.approvals_for_session(session).unwrap();
-    for (index, (_, _, _, outcome, approval, stored)) in cases.iter().enumerate() {
-        assert_eq!(views[index].outcome.as_ref(), Some(outcome));
-        assert_eq!(&views[index].approval, approval);
+    for (index, (_, _, _, outcome, stored)) in cases.iter().enumerate() {
+        assert_eq!(
+            calls[index].result.map(|result| &result.outcome),
+            Some(outcome)
+        );
         assert_eq!(approvals[index].outcome.as_deref(), Some(*stored));
     }
-    let receipt = aggregate_receipt(&views);
-    assert_eq!(
-        receipt.bash_count, 1,
-        "only the successful execution counts"
-    );
-    assert_eq!(
-        receipt.individual_calls.len(),
-        4,
-        "failure, denial, cancellation and pending retry remain visible"
-    );
 }
 
 #[test]

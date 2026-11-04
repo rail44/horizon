@@ -91,28 +91,3 @@ pub fn cap_lines_tail(mut lines: Vec<String>, max_lines: usize) -> (Vec<String>,
         (kept, omitted)
     }
 }
-
-/// A streaming reasoning ("thinking") block's line cap -- kept small,
-/// deliberately quieter and more compact than a tool-call body's own caps:
-/// thinking is meant to read as a quiet side-channel while it streams, not
-/// a large panel competing with assistant prose for the transcript's
-/// vertical space.
-pub const THINKING_TAIL_LINES: usize = 6;
-
-/// Caps a streaming `ReasoningDelta`'s accumulated text to its trailing
-/// [`THINKING_TAIL_LINES`]-shaped view (owner requirement 2026-07-13:
-/// height-bounded, newest content visible, so a long thinking stream can't
-/// flood the transcript while it's the only thing on screen during an
-/// otherwise-idle wait). `text` is the item's own coalesced field --
-/// `frame.rs`'s `Event::ReasoningDelta` fold appends every delta of one
-/// reasoning span into a single growing `.text`, so this runs fresh on
-/// every render of a still-streaming block, not once per delta -- splits on
-/// `\n` and reuses [`cap_lines_tail`] (the same "tail matters most" shape
-/// bash output already gets), the simplest bound consistent with the rest
-/// of this module's line-based caps. Returns the kept text rejoined with
-/// `\n`, and the count of leading lines dropped (0 when it already fits).
-pub fn cap_thinking_text(text: &str, max_lines: usize) -> (String, usize) {
-    let lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let (kept, omitted) = cap_lines_tail(lines, max_lines);
-    (kept.join("\n"), omitted)
-}

@@ -33,12 +33,12 @@ pub(super) fn settle(
             if let Some(result) = call.result {
                 if let ToolOutcome::Superseded {
                     retry_occurrence_id,
-                } = &result.value.outcome
+                } = &result.outcome
                 {
                     identity.occurrence_id = retry_occurrence_id.clone();
                     continue;
                 }
-                results.push(result.value.clone());
+                results.push(result.clone());
                 break;
             }
             // A completed denial can be held inside a pending retry offer.

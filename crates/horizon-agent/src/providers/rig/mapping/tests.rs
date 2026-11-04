@@ -187,7 +187,6 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
     use crate::live::LiveState;
     use crate::persistence::{event_log, projection::duckdb::Store};
     use crate::tools::{execute_agent_tool, Execution, HostTools, ToolSessionBuilder, ToolUpdate};
-    use crate::transcript::{aggregate_changes, build_tool_call_views};
     use serde_json::json;
 
     struct NoHost;
@@ -264,19 +263,16 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
     let saved_frame = store.frame_for_session(session).unwrap();
     assert_eq!(saved_frame, live.frame());
     for frame in [&saved_frame, &live.frame()] {
-        let views = build_tool_call_views(&frame.items);
-        let changes = aggregate_changes(&views);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].path, path.to_str().unwrap());
-        assert_eq!((changes[0].added, changes[0].removed), (2, 2));
-        assert!(views.last().unwrap().is_error());
-        assert!(views
-            .last()
-            .unwrap()
-            .result_summary
-            .as_ref()
-            .unwrap()
-            .contains("1 applied"));
+        let calls = crate::frame::tool_call_occurrences(&frame.items);
+        let last = calls.last().unwrap();
+        let finished = last.result.expect("the edit batch finished");
+        assert_eq!(finished.outcome, ToolOutcome::Failed);
+        let call = crate::transcript::classify(
+            &last.request.tool_id,
+            &last.request.input,
+            Some(&finished.output.0),
+        );
+        assert!(call.summary.as_ref().unwrap().contains("1 applied"));
     }
     let messages = rig_messages_from_horizon_events(&replay);
     assert_eq!(

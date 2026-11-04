@@ -703,8 +703,8 @@ fn unstarted_error(
     message: &str,
 ) -> ApprovalOutcome {
     // Look up the originating `ToolCallRequest`'s `occurrence_id` so the
-    // transcript's `build_tool_call_views` (which matches
-    // `ToolCallFinished` by `occurrence_id` first) attributes this denial
+    // readers that match `ToolCallFinished` by `occurrence_id` (the frame's
+    // `tool_call_occurrences`, the shell's per-call views) attribute this denial
     // to the right occurrence of the (possibly reused) `call_id`. The frame
     // already has the request -- `unstarted_error` is only called when the
     // approval gate decided to skip the start, which it could only do

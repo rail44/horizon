@@ -3567,7 +3567,6 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
 #[test]
 fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
     use crate::contract::OccurrenceId;
-    use crate::transcript::SUPERSEDED_SUMMARY;
 
     let workspace = temp_workspace("superseded-retry-workspace");
     let outside = temp_workspace("superseded-retry-outside");
@@ -3686,12 +3685,16 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
         !should_fold_completion(&frame, &call_id),
         "the live occurrence is resolved once its own result folds"
     );
-    let views = crate::transcript::build_tool_call_views(&frame.items);
-    assert_eq!(views.len(), 2);
-    assert!(views[0].finished() && views[0].superseded() && !views[0].is_error());
-    assert_eq!(views[0].result_summary.as_deref(), Some(SUPERSEDED_SUMMARY));
-    assert!(views[1].finished() && !views[1].superseded() && !views[1].is_error());
-    assert_eq!(views[1].result_summary.as_deref(), Some("exit 0"));
+    let calls = crate::frame::tool_call_occurrences(&frame.items);
+    assert_eq!(calls.len(), 2);
+    assert!(matches!(
+        calls[0].result.map(|result| &result.outcome),
+        Some(crate::contract::ToolOutcome::Superseded { .. })
+    ));
+    assert_eq!(
+        calls[1].result.map(|result| &result.outcome),
+        Some(&crate::contract::ToolOutcome::Succeeded)
+    );
 
     unregister_session_runtime(session_id);
     fs::remove_dir_all(workspace).unwrap();
