@@ -144,6 +144,12 @@ pub struct FilesystemGrant {
 }
 
 /// A mediated attempt and the smallest enforceable grant that can satisfy it.
+///
+/// Only kernel-originated evidence produces one: the Linux supervisor's
+/// seccomp notifications (`linux::SupervisorReport::containment_denials`) and the
+/// macOS collector's unified-log records (`macos::denials`), both resolved
+/// through `grant::resolve_denial`. Output the sandboxed child writes is never
+/// a source, not even for naming a grant request: the child controls it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct FilesystemDenial {
     pub attempted_path: PathBuf,

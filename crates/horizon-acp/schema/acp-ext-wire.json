@@ -206,7 +206,7 @@
       "type": "object"
     },
     "FilesystemDenial": {
-      "description": "A mediated attempt and the smallest enforceable grant that can satisfy it.",
+      "description": "A mediated attempt and the smallest enforceable grant that can satisfy it.\n\nOnly kernel-originated evidence produces one: the Linux supervisor's\nseccomp notifications (`linux::SupervisorReport::containment_denials`) and the\nmacOS collector's unified-log records (`macos::denials`), both resolved\nthrough `grant::resolve_denial`. Output the sandboxed child writes is never\na source, not even for naming a grant request: the child controls it.",
       "properties": {
         "attempted_path": {
           "type": "string"

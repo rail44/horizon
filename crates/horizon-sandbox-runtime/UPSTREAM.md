@@ -26,9 +26,7 @@ The extraction retains only:
 - the `ApprovalBackend` request/decision/audit boundary, implemented as a
   fail-closed recording backend suitable for Horizon's approve-then-retry
   lifecycle;
-- the cross-platform distinction between live Linux evidence and best-effort
-  macOS diagnostics;
-- nono-cli's Linux `SeccompPolicy` predicates and token-bucket behavior;
+- nono-cli's Linux token-bucket behavior;
 - the single-thread validation, subreaper/fork ownership, initial-capability
   fast path, notification-id validation, and reduced recording-deny
   `openat`/`openat2` event loop;

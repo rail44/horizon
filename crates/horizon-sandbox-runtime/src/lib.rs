@@ -10,7 +10,6 @@
 //! `UPSTREAM.md` next to this crate.
 
 mod approval;
-mod evidence;
 #[cfg(target_os = "linux")]
 mod execute;
 #[cfg(target_os = "linux")]
@@ -19,11 +18,8 @@ mod linux;
 mod report;
 
 pub use approval::RecordingDenyBackend;
-pub use evidence::{DenialEvidence, FilesystemDenialMode};
 #[cfg(target_os = "linux")]
 pub use execute::{execute, ExecuteError};
-#[cfg(target_os = "linux")]
-pub use linux::SeccompPolicy;
 #[cfg(target_os = "linux")]
 pub use report::{report_channel, ReportError, ReportReader, ReportWriter};
 

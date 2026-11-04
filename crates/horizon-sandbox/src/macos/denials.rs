@@ -17,10 +17,9 @@
 //!
 //! Attribution: records are accepted only when their pid is the sandboxed
 //! root (the helper `exec()`s in place, so `SandboxedChild::child`'s pid is
-//! the recorded pid) or a descendant sampled while the command ran. Every
-//! record this module produces is `DenialEvidence::SeatbeltUnifiedLog` by
-//! construction -- see `evidence.rs`'s authority criterion for what that
-//! permits. The kernel coalesces duplicate violations ("31 duplicate
+//! the recorded pid) or a descendant sampled while the command ran. These
+//! kernel-originated records may name a grant request (see
+//! [`crate::FilesystemDenial`]). The kernel coalesces duplicate violations ("31 duplicate
 //! reports for ..."), so a denial can be summarized rather than individually
 //! logged; anything still missed simply re-denies on the chained rerun.
 //!

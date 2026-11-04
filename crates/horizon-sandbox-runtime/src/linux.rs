@@ -58,45 +58,6 @@ impl SupervisionPolicy {
     }
 }
 
-/// Describes which seccomp-notify mechanisms a helper must install.
-///
-/// This mirrors nono-cli v0.68.0's policy shape. The future helper must fail
-/// closed when a requested listener cannot be installed; it may not silently
-/// fall back to opaque stderr heuristics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SeccompPolicy {
-    /// Route unrecognised `openat`/`openat2` paths to the approval backend.
-    /// (Horizon's helper also mediates path-mutating syscalls whenever a
-    /// write exclusion exists; see `SupervisionPolicy`.)
-    pub capability_elevation: bool,
-    /// Mediate connect/bind when Landlock alone cannot enforce the proxy edge.
-    pub proxy_fallback: bool,
-    /// Mediate pathname Unix-domain socket operations.
-    pub af_unix_mediation: bool,
-    /// Intercept the narrow `/proc/.../comm` compatibility write.
-    pub proc_comm_notify: bool,
-}
-
-impl SeccompPolicy {
-    /// Whether an `openat`/`openat2` notification listener is required.
-    #[must_use]
-    pub const fn needs_openat_notify(self) -> bool {
-        self.capability_elevation || self.proc_comm_notify
-    }
-
-    /// Whether a connect/bind notification listener is required.
-    #[must_use]
-    pub const fn needs_network_notify(self) -> bool {
-        self.proxy_fallback || self.af_unix_mediation
-    }
-
-    /// Whether the child must remain inspectable by its supervisor.
-    #[must_use]
-    pub const fn child_requires_dumpable(self) -> bool {
-        self.needs_openat_notify() || self.needs_network_notify()
-    }
-}
-
 /// Token-bucket limiter copied from nono-cli's Linux supervisor.
 ///
 /// It is crate-local until the helper event loop lands; keeping it here pins
@@ -145,19 +106,6 @@ impl RateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn policy_predicates_match_the_upstream_shape() {
-        let policy = SeccompPolicy {
-            capability_elevation: true,
-            proxy_fallback: false,
-            af_unix_mediation: true,
-            proc_comm_notify: false,
-        };
-        assert!(policy.needs_openat_notify());
-        assert!(policy.needs_network_notify());
-        assert!(policy.child_requires_dumpable());
-    }
 
     #[test]
     fn limiter_enforces_its_burst() {

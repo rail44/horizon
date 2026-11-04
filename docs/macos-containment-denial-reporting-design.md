@@ -183,6 +183,13 @@ because retries chain: a missed record re-denies on the rerun.
 `FilesystemDenialMode` for macOS moves from `PostHocBestEffort` to the live
 collector path.
 
+**2026-11-05:** `DenialEvidence`, `FilesystemDenialMode` and
+`SeccompPolicy` were removed from `horizon-sandbox-runtime` (owner: 「では消しましょう」).
+No production path consulted them: a `FilesystemDenial` is only ever built by
+the Linux supervisor's seccomp report and the macOS unified-log collector, so
+the criterion above holds by construction rather than by a check. The rule
+now lives on `FilesystemDenial`'s documentation (`crates/horizon-sandbox/src/policy.rs`).
+
 ### 5. Wire / UI
 
 - `ApprovalKind` gains one variant → update `crates/horizon-agent/src/contract.rs`,
