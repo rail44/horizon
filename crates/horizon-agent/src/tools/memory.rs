@@ -37,48 +37,18 @@ use crate::tools::output::*;
 /// The model-visible tool id.
 pub(crate) const TOOL_ID: &str = "memory.update";
 
-/// The seven fields of the Tier 2 template, as display labels for rendering
-/// and for the tool schema's field descriptions.
-const FIELD_LABELS: &[(MemoryField, &str, &str)] = &[
-    (
-        MemoryField::Goal,
-        "goal",
-        "The overarching goal this session is serving.",
-    ),
-    (
-        MemoryField::Decisions,
-        "decisions",
-        "Decisions made, with rationale.",
-    ),
-    (MemoryField::Completed, "completed", "Work that is done."),
-    (
-        MemoryField::InProgress,
-        "in_progress",
-        "Work currently underway.",
-    ),
-    (
-        MemoryField::Stuck,
-        "stuck",
-        "What is blocked or unresolved, and why.",
-    ),
-    (
-        MemoryField::NextStep,
-        "next_step",
-        "The single next action to take.",
-    ),
-    (
-        MemoryField::Related,
-        "related",
-        "Files, symbols, and paths relevant to the current work.",
-    ),
-];
-
+/// A field's display label, the heading `render` gives it and the name a
+/// digest summary uses.
 fn field_label(field: MemoryField) -> &'static str {
-    FIELD_LABELS
-        .iter()
-        .find(|(f, _, _)| *f == field)
-        .map(|(_, label, _)| *label)
-        .unwrap_or("unknown")
+    match field {
+        MemoryField::Goal => "goal",
+        MemoryField::Decisions => "decisions",
+        MemoryField::Completed => "completed",
+        MemoryField::InProgress => "in_progress",
+        MemoryField::Stuck => "stuck",
+        MemoryField::NextStep => "next_step",
+        MemoryField::Related => "related",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -105,13 +75,21 @@ impl MemoryDocument {
     /// document when this is true (a session that has never updated its
     /// memory sends its full history unchanged).
     pub fn is_empty(&self) -> bool {
-        self.goal.is_empty()
-            && self.decisions.is_empty()
-            && self.completed.is_empty()
-            && self.in_progress.is_empty()
-            && self.stuck.is_empty()
-            && self.next_step.is_empty()
-            && self.related.is_empty()
+        MemoryField::ALL
+            .into_iter()
+            .all(|field| self.field(field).is_empty())
+    }
+
+    fn field(&self, field: MemoryField) -> &String {
+        match field {
+            MemoryField::Goal => &self.goal,
+            MemoryField::Decisions => &self.decisions,
+            MemoryField::Completed => &self.completed,
+            MemoryField::InProgress => &self.in_progress,
+            MemoryField::Stuck => &self.stuck,
+            MemoryField::NextStep => &self.next_step,
+            MemoryField::Related => &self.related,
+        }
     }
 
     fn field_mut(&mut self, field: MemoryField) -> &mut String {
@@ -149,17 +127,9 @@ impl MemoryDocument {
     /// projection. Empty fields are omitted; if all fields are empty this
     /// returns an empty string.
     pub fn render(&self) -> String {
-        let pairs: [(MemoryField, &str); 7] = [
-            (MemoryField::Goal, &self.goal),
-            (MemoryField::Decisions, &self.decisions),
-            (MemoryField::Completed, &self.completed),
-            (MemoryField::InProgress, &self.in_progress),
-            (MemoryField::Stuck, &self.stuck),
-            (MemoryField::NextStep, &self.next_step),
-            (MemoryField::Related, &self.related),
-        ];
         let mut sections = Vec::new();
-        for (field, content) in &pairs {
+        for field in &MemoryField::ALL {
+            let content = self.field(*field);
             if content.is_empty() {
                 continue;
             }
@@ -241,6 +211,34 @@ mod tests {
     use super::*;
 
     use crate::contract::FoldedLogRange;
+
+    /// `MemoryField::ALL` is what rendering and the tool input walk; the
+    /// type's JSON schema lists every variant, so a field added to the enum
+    /// but not to `ALL` fails here.
+    #[test]
+    fn every_memory_field_is_in_all() {
+        let schema = schemars::schema_for!(MemoryField);
+        let mut variants: Vec<String> = schema.as_value()["enum"]
+            .as_array()
+            .expect("MemoryField's schema lists its variants")
+            .iter()
+            .map(|value| value.as_str().expect("a variant name").to_owned())
+            .collect();
+        let mut listed: Vec<String> = MemoryField::ALL
+            .iter()
+            .map(|field| {
+                serde_json::to_value(field)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        variants.sort();
+        listed.sort();
+        assert_eq!(listed, variants);
+    }
+
     fn execute(raw: &Value) -> Value {
         crate::tools::test_support::with_input::<crate::tools::input::MemoryUpdate>(
             raw,

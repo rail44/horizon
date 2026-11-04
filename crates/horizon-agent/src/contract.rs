@@ -455,6 +455,21 @@ pub enum MemoryField {
     Related,
 }
 
+impl MemoryField {
+    /// Every field, in the template's order: what rendering and the tool
+    /// input walk. A test checks it against the type's JSON schema, so a new
+    /// field cannot be left out.
+    pub const ALL: [MemoryField; 7] = [
+        MemoryField::Goal,
+        MemoryField::Decisions,
+        MemoryField::Completed,
+        MemoryField::InProgress,
+        MemoryField::Stuck,
+        MemoryField::NextStep,
+        MemoryField::Related,
+    ];
+}
+
 /// A field-level operation in a [`MemoryDigest`]. `Set` replaces the field's
 /// content, `Append` adds to it, and `Clear` empties it — the three operations
 /// the `memory.update` tool exposes, so the agent edits one field at a time
