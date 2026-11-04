@@ -46,10 +46,12 @@
 -- test_by_rule (Rust's rules plus the settings file's): a unit is a test when
 --   - its file matches a test path: `tests/` directories, `tests.rs`, `*_tests.rs`,
 --     `test_*.rs` (`*` crossing `/`), or a pattern of extra_test_paths;
---   - a line of its lead (from start_line to name_line, comment lines skipped) holds an
+--   - a line of its lead (from start_line to name_line, comment lines skipped; not for a
+--     file module, whose line 1 belongs to the file's first item) holds an
 --     attribute whose last path segment ends in `test` (#[test], #[tokio::test],
 --     #[rstest]), one named in extra_test_attributes, or #[cfg(test)] /
---     #[cfg(all(…test…))]; a file module, when the file has #![cfg(test)];
+--     #[cfg(all(…test…))]; a file module, when the file has #![cfg(test)] or its
+--     `mod x;` declaration's lead has #[cfg(test)] / #[cfg(all(…test…))];
 --   - or it is a member of an impl whose header line (the nearest `impl` line above it
 --     that names impl_type, outside other functions' bodies) is led by #[cfg(test)].
 
@@ -284,6 +286,19 @@ headers AS MATERIALIZED (
                      AND a.cfg_test) AS cfg_test
     FROM line_flags h WHERE h.impl_header
 ),
+-- `mod x;` declarations whose lead carries a cfg(test) attribute: the file module they
+-- declare is a test (its symbol's reference occurrence sits on the declared name, not on
+-- a `crate` inside `pub(crate)`, which names the crate root). name_column is 1-based.
+cfg_test_mod_decls AS MATERIALIZED (
+    SELECT d.file_id, d.line,
+           length(regexp_extract(d.text, '^(\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+)', 1)) + 1 AS name_column
+    FROM line_flags d
+    WHERE NOT d.is_comment
+      AND regexp_matches(d.text, '^\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*;')
+      AND EXISTS (SELECT 1 FROM line_flags a
+                  WHERE a.file_id = d.file_id AND a.line < d.line AND a.line > coalesce(d.lead_break, 0)
+                    AND a.cfg_test)
+),
 bodies AS MATERIALIZED (
     SELECT unit_id, file_id, start_line, end_line FROM impl_named WHERE kind IN ('function', 'method')
 ),
@@ -301,14 +316,23 @@ member_headers AS MATERIALIZED (
     GROUP BY m.unit_id
 ),
 lead_tests AS (
+    -- An item's lead; not a file module's, whose range starts at line 1 where an
+    -- attribute belongs to the file's first item.
     SELECT DISTINCT u.unit_id
     FROM impl_named u
     JOIN line_flags l ON l.file_id = u.file_id AND l.line BETWEEN u.start_line AND u.name_line AND l.test_attribute
+    WHERE NOT u.is_file_unit
     UNION
     SELECT u.unit_id FROM impl_named u
     WHERE u.is_file_unit AND EXISTS (SELECT 1 FROM line_flags l WHERE l.file_id = u.file_id AND l.inner_cfg_test)
     UNION
     SELECT unit_id FROM member_headers WHERE header_cfg_test
+    UNION
+    SELECT u.unit_id FROM impl_named u
+    JOIN scip_occurrences o ON o.symbol = u.symbol AND NOT o.is_definition AND o.file_id <> u.file_id
+    JOIN cfg_test_mod_decls d ON d.file_id = o.file_id AND d.line = o.start_line
+         AND d.name_column = o.start_column
+    WHERE u.is_file_unit
     UNION
     SELECT u.unit_id FROM impl_named u JOIN files f USING (file_id)
     WHERE f.path LIKE '%/tests/%' OR f.path LIKE 'tests/%'

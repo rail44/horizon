@@ -1094,6 +1094,22 @@ kept, neutral contexts not built until a second question needs them) changed one
 is a cached layer of `refresh.sql` after `unit_occurrences`, since an agent re-runs
 questions over it (a full scan 0.6 s with the loading, against about 3 s live).
 
+## Tests declared by their parent (2026-11-05)
+
+A reachability query from production entries found test code counted as production:
+`src/preview/e2e.rs` (1,138 lines) and `bench_probe.rs` (198) are declared
+`#[cfg(test)] mod x;` (or `#[cfg(all(test, …))]`) in their parent, and the Rust test rule
+knew only a file's own `#![cfg(test)]` and the path patterns. `lang/rust.sql` now also
+makes a file module a test when its symbol's reference occurrence sits on a `mod x;` line
+whose lead carries a cfg(test) attribute (owner: 「3つとも進めてもらってよいです」); the
+units inside follow as before. The occurrence must sit on the declared name: the `crate`
+of `pub(crate)` is an occurrence of the crate root, and a first draft made `horizon-agent`'s
+and `horizon-agentd`'s crate roots tests that way. Building the fixture case
+(`tools/src/sub.rs` declaring `#[cfg(test)] pub(crate) mod probe;`) also showed an older
+defect: the lead rule applied to file modules, so an attribute on a file's line 1 (its
+first item's) made the whole file a test; it no longer applies to them. On this repository
+both files' units (49 and 10) became tests and no other file's count changed.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into

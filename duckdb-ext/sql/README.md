@@ -436,10 +436,14 @@ reading of them, then Go's:
   rust-analyzer gives the trait item's documentation.
 - **`is_test`**: the file matches a test path (`tests/` directories, `tests.rs`,
   `*_tests.rs`, `test_*.rs`, or `extra_test_paths`); or a line of the unit's lead (its
-  range from the start to the name, comment lines skipped) holds an attribute whose last
+  range from the start to the name, comment lines skipped; not a file module's, whose
+  line 1 belongs to the file's first item) holds an attribute whose last
   path segment ends in `test` (`#[test]`, `#[tokio::test]`, `#[rstest]`), one named in
   `extra_test_attributes`, or `#[cfg(test)]`/`#[cfg(all(…test…))]`; or, for a file
-  module, the file holds `#![cfg(test)]`; or the unit is a member of an impl whose header
+  module, the file holds `#![cfg(test)]` or its `mod x;` declaration is led by
+  `#[cfg(test)]`/`#[cfg(all(…test…))]` (`src/preview/e2e.rs`, declared
+  `#[cfg(all(test, not(target_family = "wasm")))] mod e2e;`; the occurrence on the
+  declared name, not the crate root a `pub(crate)` names); or the unit is a member of an impl whose header
   line is led by `#[cfg(test)]` (the header: the nearest line above the member starting
   an `impl` that names the impl's type, outside the bodies of other functions); or a unit
   containing it is a test.
