@@ -96,7 +96,7 @@ impl SessionLoopState {
         self.guard.reset();
         self.continuation.begin_turn(request);
         if let Some(memory) = &mut self.memory {
-            memory.checkpoint = super::memory::MemoryCheckpoint::Pending;
+            memory.begin_interaction();
         }
         let _ = self.events_tx.send(
             crate::contract::Event::StateChanged(crate::contract::SessionState::Running).into(),

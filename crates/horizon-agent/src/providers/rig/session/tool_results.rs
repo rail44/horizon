@@ -66,11 +66,10 @@ impl SessionLoopState {
         {
             if let Some(memory) = self.memory.as_mut() {
                 if let Ok(digest) = crate::tools::parse_update(&descriptor.args) {
-                    memory.document.apply(&digest);
+                    memory.record_update(&digest);
                     let _ = self
                         .events_tx
                         .send(crate::contract::Event::MemoryDigest(digest).into());
-                    memory.checkpoint = super::memory::MemoryCheckpoint::Satisfied;
                 }
             }
         }

@@ -1,7 +1,7 @@
 //! Provider rounds, recovery, checkpoints and completion of an interaction.
 
 use super::super::conversation::Prompt;
-use super::memory::MemoryCheckpoint;
+use super::memory::CheckpointAtTurnEnd;
 use crate::contract::ConversationInputKind;
 
 use std::collections::HashMap;
@@ -374,16 +374,15 @@ impl SessionLoopState {
             let Some(memory) = &mut self.memory else {
                 return Some(outcome);
             };
-            match memory.checkpoint {
-                MemoryCheckpoint::Satisfied => return Some(outcome),
-                MemoryCheckpoint::Reminded => {
+            match memory.complete_turn() {
+                CheckpointAtTurnEnd::Satisfied => return Some(outcome),
+                CheckpointAtTurnEnd::Missed => {
                     let _ = self.events_tx.send(Event::MemoryCheckpointMissed.into());
                     return Some(outcome);
                 }
-                MemoryCheckpoint::Pending => {}
+                CheckpointAtTurnEnd::Remind => {}
             }
             // First miss: inject a reminder and re-run the turn once.
-            memory.checkpoint = MemoryCheckpoint::Reminded;
             let _ = self
                 .events_tx
                 .send(Event::StateChanged(SessionState::Running).into());

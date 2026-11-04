@@ -49,7 +49,11 @@ pub(super) fn settle(
                         ApprovalKind::DomainDenialRetry { prior_result, .. }
                         | ApprovalKind::FilesystemDenialRetry { prior_result, .. }
                         | ApprovalKind::MachServiceGrant { prior_result, .. } => prior_result,
-                        _ => return None,
+                        // Named rather than `_`, so that a new kind does not
+                        // compile until it says whether it holds a prior result.
+                        ApprovalKind::Standard
+                        | ApprovalKind::DomainGrant { .. }
+                        | ApprovalKind::GitOperation { .. } => return None,
                     };
                     (result.call_id == identity.call_id
                         && result.occurrence_id == identity.occurrence_id)

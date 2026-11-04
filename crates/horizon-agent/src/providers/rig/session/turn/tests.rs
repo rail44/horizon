@@ -1,3 +1,4 @@
+use super::super::memory::MemoryCheckpoint;
 use super::*;
 use crate::config::RigAgentConfig;
 use crate::contract::ProviderEvent;
