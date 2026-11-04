@@ -103,7 +103,7 @@ mod warnings;
 
 pub use accessors::{
     accent, background, border, danger, diff_added_surface, diff_added_text, diff_removed_surface,
-    diff_removed_text, info, on_accent, success, surface_panel, surface_raised, surface_selected,
+    diff_removed_text, info, success, surface_panel, surface_raised, surface_selected,
     terminal_selection, text_muted, text_primary, text_subtle, warning,
 };
 pub use accessors::{overlay_shadow, scrim_color, surface_chrome};

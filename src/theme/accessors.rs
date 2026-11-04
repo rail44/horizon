@@ -6,7 +6,7 @@
 
 use gpui::{hsla, point, px, BoxShadow, Hsla};
 
-use super::palette::{packed_hsla, primary_foreground_for};
+use super::palette::packed_hsla;
 use super::scheme::scheme;
 
 pub fn background() -> u32 {
@@ -23,18 +23,6 @@ pub fn text_primary() -> Hsla {
 /// terminal cursor's fallback color.
 pub fn accent() -> Hsla {
     packed_hsla(scheme().accent)
-}
-
-/// Legible text/icon color for content painted on an accent-colored
-/// surface (the composer send button's `↑`) -- the same
-/// [`primary_foreground_for`] pick `gpui_component_theme_config` already
-/// uses for gpui-component's own `primary_foreground` role, exposed here
-/// so render call sites don't duplicate the dark/light text constants.
-/// Purely a function of `accent`'s own lightness, not the app background
-/// -- a light accent wants dark text, a dark accent wants light text,
-/// regardless of scheme polarity.
-pub fn on_accent() -> Hsla {
-    packed_hsla(primary_foreground_for(scheme().accent))
 }
 
 /// Danger/error -- failed turns and tool errors.
@@ -255,20 +243,8 @@ mod tests {
     use horizon_config::RawConfig;
 
     use super::*;
-    use crate::theme::palette::{PRIMARY_FOREGROUND_DARK_TEXT, PRIMARY_FOREGROUND_LIGHT_TEXT};
     use crate::theme::scheme::reload_from;
     use crate::theme::test_support::config_with;
-
-    #[test]
-    fn on_accent_matches_primary_foreground_for_the_resolved_accent() {
-        // The built-in accent (#84dcc6, light mint) -> dark text.
-        reload_from(&RawConfig::default());
-        assert_eq!(on_accent(), packed_hsla(PRIMARY_FOREGROUND_DARK_TEXT));
-
-        // A dark accent (the owner's #0048b3) -> light text.
-        reload_from(&config_with(&[("accent", "#0048b3")]));
-        assert_eq!(on_accent(), packed_hsla(PRIMARY_FOREGROUND_LIGHT_TEXT));
-    }
 
     #[test]
     fn overlay_shadow_has_two_layers_and_a_stronger_alpha_on_dark_than_light() {

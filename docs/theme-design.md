@@ -581,7 +581,8 @@ work:
   `white()` on the accent background instead of the accent-lightness-aware
   foreground pick. Now `theme::on_accent()`, a public accessor over the
   same `primary_foreground_for` pick `gpui_component_theme_config`
-  already used internally.
+  already used internally. (`on_accent` was removed on 2026-11-05: after the
+  2026-10-14 agent view redesign nothing called it.)
 - **Fixed 2026-07-15.** Docs claimed unknown `[theme]` keys and
   unparsable hex values warn on stderr; `src/theme.rs` silently ignored
   both. Now `scheme_from` calls `warn_invalid_theme_colors` once per

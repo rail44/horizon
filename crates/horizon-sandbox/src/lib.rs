@@ -99,12 +99,6 @@ pub const KNOWN_SECURITY_SERVICES: [&str; 5] = [
     "com.apple.security.agent",
 ];
 
-/// Convenience accessor over [`KNOWN_SECURITY_SERVICES`] for callers that
-/// must exist on every platform (config validation runs on Linux too).
-pub fn known_security_services() -> &'static [&'static str] {
-    &KNOWN_SECURITY_SERVICES
-}
-
 use std::process::{Child, Command};
 
 /// Name of the TMPDIR-parity scratch directory both OS backends provision
