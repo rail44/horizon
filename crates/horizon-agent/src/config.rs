@@ -165,7 +165,7 @@ pub(crate) const DEFAULT_STREAM_FLUSH_CHARS: usize = 320;
 pub(crate) const DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS: usize = 24_000;
 /// Explicit `max_tokens` sent on every agent completion request (`rig_core`'s
 /// `CompletionRequestBuilder::max_tokens`, wired in
-/// `providers::rig::completion::rig_openai_turn_streaming`). Before the
+/// `providers::rig::completion::rig_provider_turn_streaming`). Before the
 /// 2026-07-27 audit this was left unset entirely, which on an
 /// OpenAI-compatible backend means "let the backend pick" rather than
 /// "unbounded" -- and the backend Horizon has been dogfooding against

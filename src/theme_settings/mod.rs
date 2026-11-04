@@ -10,12 +10,12 @@
 //!   `ColorPicker`/`Select`/`Slider` widgets, wires their change events to
 //!   live-apply (`theme::reload_from` + `apply_gpui_component_theme` +
 //!   `window.refresh()`, the same sequence `Reload Config` uses,
-//!   `src/workspace.rs`'s `CommandId::ReloadConfig` handling), and renders
+//!   `src/workspace/commands.rs`'s `CommandId::ReloadConfig` handling), and renders
 //!   the chip preview below.
 //!
 //! Every knob edits an in-memory [`Seed`] field directly and re-derives the
 //! whole scheme from it on every change -- there is no partial-seed state:
-//! `scheme_from` (`src/theme.rs`) treats "any seed key present" as "the
+//! `scheme_from` (`src/theme/scheme.rs`) treats "any seed key present" as "the
 //! whole seed is configured" (`seed_is_configured`), matching how a
 //! hand-edited config.toml already behaves. Nothing is written to disk
 //! until the explicit Save button.
@@ -244,7 +244,7 @@ impl ThemeSettingsView {
 
     /// Derives and applies the whole scheme from the current in-memory
     /// [`Seed`] -- the same live-apply sequence `Reload Config` uses
-    /// (`src/workspace.rs`'s `CommandId::ReloadConfig`): `theme::live::
+    /// (`src/workspace/commands.rs`'s `CommandId::ReloadConfig`): `theme::live::
     /// apply_scheme` (swap the resolved scheme, re-project it onto
     /// gpui-component's global theme, republish it to loaded preview
     /// plugins), refresh
@@ -293,10 +293,8 @@ impl ThemeSettingsView {
     }
 
     /// The Save button's handler -- a view-local action (not a `CommandId`
-    /// variant): matches the agent composer's send button
-    /// (`src/agent/view.rs`'s `render_send_button`), which is likewise a
-    /// plain `cx.listener` calling a method on the view directly rather
-    /// than riding the command model (that convention is reserved for
+    /// variant): a plain `cx.listener` calling a method on the view
+    /// directly rather than riding the command model (that convention is reserved for
     /// operations reachable from the palette/keybindings; Save is only
     /// ever reachable from this pane's own button). Writes only the seed
     /// keys via [`save::save`]; every other section of the config file is

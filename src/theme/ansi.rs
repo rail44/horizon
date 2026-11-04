@@ -113,7 +113,7 @@ mod tests {
     /// docs/tasks/backlog.md item 25 (since retired): `resolve`/`to_hsla`
     /// read `scheme()` -- a plain `RwLock` read -- with no intermediate
     /// cache of resolved RGB anywhere *in this module*. So a `Reload
-    /// Config` (`reload_from` + `window.refresh()`, `src/workspace.rs`)
+    /// Config` (`reload_from` + `window.refresh()`, `src/workspace/commands.rs`)
     /// recolors a static terminal screen with no extra invalidation step:
     /// `window.refresh()` alone is already sufficient, because there is
     /// nothing here to go stale. (The paint path has since grown a

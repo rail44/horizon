@@ -94,7 +94,7 @@ impl Workspace {
 
     /// Registers a session some other part of the system already knows
     /// about but this workspace has never created a pane for -- the seam
-    /// `WorkspaceShell::spawn_startup_resume` uses to reconcile agentd's
+    /// the shell (`src/workspace/session_lifecycle.rs`) uses to reconcile agentd's
     /// `session_list` on connect/reconnect (`docs/agent-runtime-split-
     /// design.md` step 4): a session Horizon already has a pane for is a
     /// no-op here (delegates to the same idempotent check `ensure_session`

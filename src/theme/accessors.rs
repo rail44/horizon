@@ -1,6 +1,6 @@
 //! The public color-accessor run: every `theme::role()` call site outside
-//! `src/theme/` (`src/agent/view.rs`, `src/palette.rs`,
-//! `src/session_manager.rs`, `src/view_chooser.rs`, `src/workspace.rs`,
+//! `src/theme/` (`src/agent/view/`, `src/palette.rs`,
+//! `src/session_manager.rs`, `src/view_chooser.rs`, `src/workspace/`,
 //! `src/theme_settings/`, ...) reads the live [`super::scheme::scheme`]
 //! through one of the functions below.
 
@@ -74,7 +74,8 @@ pub fn text_subtle() -> Hsla {
 /// running-turn card (`docs/agent-output-ui-amendment.md` stage C)
 /// turned out, once checked against the mock (2a/3b/7a), to have no
 /// distinct fill of its own beyond its header strip's faint accent tint
-/// (see `src/agent/view.rs`'s `accent_tint`); stage D reuses this role
+/// (the agent view's `accent_tint` before its 2026-10-14 redesign,
+/// 4a572454); stage D reuses this role
 /// for the expanded receipt's own highlighted row header (mock 6a's
 /// `#fafafa` panel tint on the expanded call's row).
 pub fn surface_panel() -> Hsla {
@@ -87,7 +88,7 @@ pub fn surface_panel() -> Hsla {
 /// those three delegates' `render_item` to contrast-snap a selected row's
 /// text roles against the surface it's actually painted on
 /// (`docs/theme-design.md`'s 2026-07-15 contrast audit, item 2), the same
-/// way `src/agent/view.rs` already does against `surface_panel`.
+/// way the other surfaces' text is floored against them.
 pub fn surface_selected() -> Hsla {
     packed_hsla(scheme().surface_selected)
 }
@@ -208,7 +209,7 @@ pub fn overlay_shadow() -> Vec<BoxShadow> {
 
 /// The workspace-mode dim scrim's color (`docs/theme-design.md`'s scrim
 /// section). Simply the resolved `background` color, opaque here --
-/// `SCRIM_DIM_ALPHA` in `src/workspace.rs` composites it over a pane at
+/// `SCRIM_DIM_ALPHA` in `src/workspace/render.rs` composites it over a pane at
 /// that alpha, which compresses every underlying pixel proportionally
 /// toward `background` (de-emphasis by *reducing contrast*, not by
 /// shifting lightness).
@@ -306,7 +307,7 @@ mod tests {
         // 2026-07-15 polarity-flipped pole scrim (pure white on a dark
         // scheme, pure black on a light one) was tried and withdrawn --
         // the scrim color is simply `background` again, opaque here
-        // (`SCRIM_DIM_ALPHA` in `src/workspace.rs` applies the alpha
+        // (`SCRIM_DIM_ALPHA` in `src/workspace/render.rs` applies the alpha
         // separately at the call site). Unlike the withdrawn pole color,
         // it does *not* flip to a fixed black/white pick by polarity --
         // it tracks whatever `background` actually resolves to on each

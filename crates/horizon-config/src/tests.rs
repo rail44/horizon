@@ -148,7 +148,7 @@ fn load_from_path_parses_a_well_formed_file() {
 fn theme_colors_accepts_arbitrary_role_keys_with_no_schema_change() {
     // `[theme].colors` is a flattened `HashMap<String, String>` (see
     // `RawThemeConfig`), so adding a new named role -- e.g. the
-    // agent-pane roles `src/theme.rs` resolves (`danger`, `warning`,
+    // agent-pane roles `src/theme/scheme.rs` resolves (`danger`, `warning`,
     // `diff_added_text`, ...) -- never needs a loader change here; this
     // guards that assumption stays true.
     let path = std::env::temp_dir().join(format!(

@@ -70,7 +70,7 @@ pub(super) fn is_light(value: u32) -> bool {
 /// module's tests). Callers decide whether to apply it to a role's
 /// derived default (as [`scheme_from`]'s `diff_added_text`/
 /// `diff_removed_text` do) or to an already-resolved value at a render
-/// call site (as [`readable_on`]/`src/agent/view.rs` do).
+/// call site (as [`readable_on`] does).
 pub(super) fn contrast_snap(candidate: u32, surface: u32) -> u32 {
     let ratio = super::oklab::contrast_ratio(
         super::oklab::relative_luminance(candidate),
@@ -85,9 +85,9 @@ pub(super) fn contrast_snap(candidate: u32, surface: u32) -> u32 {
 }
 
 /// Public face of [`contrast_snap`] for render-time call sites
-/// (`src/agent/view.rs`, and since the 2026-07-15 contrast audit's item 2
-/// also `src/palette.rs`/`src/session_manager.rs`/`src/view_chooser.rs`'s
-/// `render_item`): contrast-snaps a UI-side hue borrowing -- e.g.
+/// (`src/palette.rs`/`src/session_manager.rs`/`src/view_chooser.rs`/
+/// `src/model_picker.rs`'s `render_item` since the 2026-07-15 contrast
+/// audit's item 2, and the board's and shared parts' text): contrast-snaps a UI-side hue borrowing -- e.g.
 /// `theme::danger()` painted as text on `theme::surface_panel()` -- against
 /// the non-background surface it's actually painted on, per the UI-snap
 /// seam. Terminal output never goes through this: the terminal palette
@@ -105,8 +105,8 @@ pub fn readable_on(color: Hsla, surface: Hsla) -> Hsla {
 
 /// Alpha-composites `tint` at `alpha` over the current `background` --
 /// the on-screen surface a `.bg(tint.alpha(alpha))` layer (e.g.
-/// `src/agent/view.rs`'s `render_tool_call_row`, which paints its
-/// pending-approval row this way) actually produces, for a render call
+/// the board's bands, `src/agent/view/units.rs`'s user band and
+/// `src/ui/parts.rs`) actually produces, for a render call
 /// site that needs to [`readable_on`]-floor text against that surface
 /// rather than against plain `background` (item 5 of the 2026-07-15
 /// contrast audit). Uses this module's own [`blend`] -- the same alpha-

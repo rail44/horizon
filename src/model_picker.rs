@@ -117,8 +117,8 @@ impl PickerState {
         self.live.get(&provider).map_or(0, |live| live.ids.len())
     }
 
-    /// The id at a row index — used by the render/filter hot path instead of
-    /// [`Self::model_ids`], which would clone the whole list per call.
+    /// The id at a row index — used by the render/filter hot path, so that
+    /// no call clones the provider's whole id list.
     fn model_id_at(&self, provider: usize, model: usize) -> Option<String> {
         self.live.get(&provider)?.ids.get(model).cloned()
     }

@@ -11,7 +11,8 @@
 //! Formerly disambiguated here against `control_surface::ControlMode::
 //! Workspace`, a same-named-but-unrelated concept (the palette's
 //! Tab-switching "workspace overview" panel); that panel and its `ControlMode`
-//! type are gone (`docs/plans/application-ui/01-session-manager.md` --
+//! type are gone (the retired plan
+//! `docs/plans/application-ui/01-session-manager.md`, removed in a8839fc1 --
 //! session management moved to its own modal, `src/session_manager.rs`),
 //! so the disambiguation no longer applies.
 
@@ -145,13 +146,13 @@ impl Workspace {
     /// session, a split, or reattaching a detached session) runs from
     /// inside the mode -- `docs/workspace-mode-design.md`'s "creating
     /// operations dive" rule: the operation's own focus-follow
-    /// (`workspace::request_active_pane_focus`) already moved focus into
+    /// (`WorkspaceShell::focus_active`) already moved focus into
     /// the new pane, so the mode's job (letting the cursor roam without
     /// disturbing focus) is done. Also safe to call unconditionally from a
     /// direct keyboard shortcut path, since a keyboard shortcut can never
     /// actually fire while the mode is active in the first place (the mode
     /// swallows every key outside its own `hjkl`/Enter/Esc/`:` vocabulary
-    /// -- see `workspace::mode_input`) -- this just makes the helper
+    /// -- see the mode's key bindings in `src/workspace/bindings.rs`) -- this just makes the helper
     /// reusable across both call shapes without an extra active-check at
     /// each call site.
     pub fn exit_workspace_mode(&mut self) {
@@ -295,7 +296,7 @@ mod tests {
         // moved to the second. Exercises `commit_workspace_mode_to`
         // directly at the model level; no production caller drives it
         // from a real click today (the GPUI shell's pane click handler
-        // in `src/workspace.rs` calls `activate_pane` only).
+        // in `src/workspace/render.rs` calls `activate_pane` only).
         let mut workspace = Workspace::mvp();
         let first = workspace.visible_pane_id(0).expect("first pane");
         let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));

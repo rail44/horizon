@@ -2,7 +2,8 @@
 //! section, a tool allowlist, an optional model override, an optional
 //! turn-cap override, whether repository instructions are ingested, and the
 //! skills to advertise (see
-//! `skills`) -- nothing more. `docs/plans/agent-foundation/03-roles-and-config-agent.md`
+//! `skills`) -- nothing more. The retired plan
+//! `docs/plans/agent-foundation/03-roles-and-config-agent.md` (removed in a8839fc1)
 //! deliberately keeps this a static mapping rather than a "role framework":
 //! whether a domain agent should be an agent-defined role or a
 //! skill-specialized generic coder is an open question the owner has not
@@ -103,8 +104,9 @@ pub struct RoleDefinition {
     /// gets the `memory.update` tool, a turn-end checkpoint that forces it
     /// to update (or explicitly skip) its memory each turn, and a
     /// provider-view projection that prepends the current memory document
-    /// in place of the old turn-by-turn history. The keeper role
-    /// (`horizon_board::keeper`) is the first standing role; coding sessions
+    /// in place of the old turn-by-turn history. The board keeper (removed
+    /// in 8e057dd7) was the first standing role; today the board flow's roles
+    /// (`horizon-agentd`'s `board_flow::roles`) set it, and coding sessions
     /// are not standing. Added for the keeper, which needed exactly this
     /// one field the two prior roles didn't -- the third extension of this
     /// struct after `iteration_cap` and `summarize_on_cap`.
@@ -254,7 +256,8 @@ static EXTERNAL_ROLES: std::sync::OnceLock<Vec<RoleDefinition>> = std::sync::Onc
 /// depend on) so [`resolve`] can find them. Called once at `horizon-agentd`
 /// startup, before any session is spawned. Each `RoleDefinition`'s `&'static`
 /// fields come from `pub const` data in the providing crate (e.g.
-/// `horizon_board::keeper`), so the registration is a by-value copy of thin
+/// `horizon_board::agents`' skill texts, registered by `horizon-agentd`'s
+/// `board_flow::roles`), so the registration is a by-value copy of thin
 /// references -- no allocation, no lifetime extension. See
 /// `docs/board-keeper-design.md` §1 for why this indirection exists instead
 /// of a Cargo edge.

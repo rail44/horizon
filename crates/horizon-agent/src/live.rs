@@ -301,7 +301,7 @@ impl LiveState {
 
     /// The session's current accumulated frame. Used outside tests too:
     /// `horizon-agentd`'s `fold_bash_completion`
-    /// (`crates/horizon-agentd/src/session.rs`) reads this to check
+    /// (`crates/horizon-agentd/src/session/completion.rs`) reads this to check
     /// whether a call already has a `ToolCallFinished` before folding a late
     /// result — the async-execution analogue of `agent::tools::approval`'s
     /// `ApprovalOutcome::AlreadyResolved` guard.

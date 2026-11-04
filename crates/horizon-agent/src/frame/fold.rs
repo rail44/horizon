@@ -144,7 +144,7 @@ pub(crate) fn apply_agent_event_to_frame(
             // one `MessageCommitted` carrying the full accumulated text,
             // emitted only once the stream ends -- after any
             // `ToolCallRequested`/`Started`/`Finished` events that arrived
-            // mid-stream (see `completion::rig_openai_turn_streaming`). The
+            // mid-stream (see `completion::rig_provider_turn_streaming`). The
             // commit must promote the delta it corresponds to into a
             // `Message` at the delta's original position -- which may sit
             // *before* a tool call -- so the text renders once, before the

@@ -105,7 +105,7 @@ impl SessionLoopState {
         self.execution.reissue(identity);
     }
 
-    /// Constructs the state `run_session_loop` needs, doing the async init
+    /// Constructs the state [`Self::run`] needs, doing the async init
     /// (clearing-state discovery, command bridging, wake registration) that
     /// must happen inside the loop's own runtime.
     #[allow(clippy::too_many_arguments)]

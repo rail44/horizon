@@ -69,7 +69,7 @@ impl ListDelegate for PaletteDelegate {
         // selected()`, not the plain background every other row sits on
         // -- floor a role's text color against it when this row is the
         // selected one (item 2 of the 2026-07-15 contrast audit), the
-        // same `readable_on` treatment `src/agent/view.rs` already gives
+        // same `readable_on` treatment the other list delegates give
         // text painted on a non-background surface. `text_subtle` (the
         // disabled-command case) stays unsnapped even when selected --
         // decorative by definition, exempt from the text floor

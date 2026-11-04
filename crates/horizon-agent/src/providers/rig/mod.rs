@@ -76,8 +76,9 @@ impl AgentProvider for Provider {
     /// production sessions never reach this with one:
     /// `registry::ProviderRegistry::start_session` already refused to start
     /// them -- see that method's doc comment) and derives a per-session
-    /// [`RigAgentConfig`] from it before spawning, per
-    /// `docs/plans/agent-foundation/03-roles-and-config-agent.md`.
+    /// [`RigAgentConfig`] from it before spawning, per the retired plan
+    /// `docs/plans/agent-foundation/03-roles-and-config-agent.md` (removed in
+    /// a8839fc1).
     fn start_session(&self, request: StartSession) -> SessionHandle {
         let role = request.role_id.as_ref().and_then(crate::roles::resolve);
         let config = role_adjusted_config(&self.config, role);

@@ -524,7 +524,7 @@ fn openai_compatible_turns_explicitly_enable_parallel_tool_calls() {
 }
 
 /// Exercises the same `rig_core` builder call
-/// `rig_openai_turn_streaming` makes (`model.completion_request(..)
+/// `rig_provider_turn_streaming` makes (`model.completion_request(..)
 /// .max_tokens(config.max_output_tokens)`) with a locally-built client --
 /// pure object construction, no network I/O -- to prove the explicit
 /// `max_tokens` (`DEFAULT_AGENT_MAX_OUTPUT_TOKENS`, `agent::config`) is
@@ -1328,7 +1328,7 @@ fn streamed_tool_call(arguments: serde_json::Value) -> ToolCall {
     )
 }
 
-/// Dispatches a streamed tool call the way `rig_openai_turn_streaming`
+/// Dispatches a streamed tool call the way `rig_provider_turn_streaming`
 /// does (repair, then `rig_tool_call_request`) and returns the tool's
 /// output.
 fn dispatch_repaired_tool_call(root: &std::path::Path, mut call: ToolCall) -> serde_json::Value {

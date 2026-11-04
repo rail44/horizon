@@ -178,8 +178,8 @@ impl Store {
     /// Retrying a record in a smaller batch is not merely a retry, either:
     /// a record can fail specifically *because* of what the same
     /// transaction wrote before it (the DuckDB optimizer assertion
-    /// [`super::projection::Store::most_recent_pending_approval`]
-    /// documents needed uncommitted rows in the table to trigger), so a
+    /// `Store::most_recent_pending_approval` documented, removed in 06a52e22,
+    /// needed uncommitted rows in the table to trigger), so a
     /// narrower retry is also where such a record legitimately succeeds.
     ///
     /// Each transaction also commits the cursor of its own last record (when
