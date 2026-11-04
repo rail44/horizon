@@ -65,6 +65,30 @@ Properties this buys:
 
 The substitution happens in exactly one function, `shaping::normalized_layout`.
 
+### The descent's sign is two different conventions
+
+`RowMetrics` is fed into a `gpui::LineLayout`, and the two sources of these
+numbers disagree about the descent's sign:
+
+| source | descent for Iosevka at 13 px |
+|---|---|
+| `gpui::FontMetrics` (what `WindowTextSystem::descent` reads) | −3.705 (negative) |
+| `gpui::LineLayout` (cosmic-text's `max_descent`) | +3.705 (positive) |
+
+`gpui-pre-wgpu` builds `FontMetrics` from swash as `descent: -metrics.descent`,
+and swash already reports the positive `-hhea.descender`; cosmic-text builds a
+glyph's descent without that negation, so a layout's is positive.
+
+`font::row_metrics` therefore negates. It is not cosmetic: `LineLayout::paint`
+derives `padding_top = (line_height - ascent - descent) / 2` and
+`underline = baseline + descent * 0.618` from the substituted pair, so a
+negative descent lands the baseline 3.7 px low (descenders spilling into the
+next row) **and** lifts the underline above the baseline, drawing it through
+the glyphs. `row_metrics_use_the_layout_descent_convention` pins the
+convention against a native layout instead of a constant, and the fake text
+system in `terminal/test_support.rs` reports the negative value `FontMetrics`
+really carries — it used to report a positive one, which hid this.
+
 ## Rejected alternatives
 
 ### Merge the row into one shaped line

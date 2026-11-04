@@ -44,7 +44,11 @@ fn metrics_of(font_id: FontId) -> FontMetrics {
     FontMetrics {
         units_per_em: UPEM as u32,
         ascent: ascent * UPEM,
-        descent: descent * UPEM,
+        // `FontMetrics` carries the *negative* descent, as the real system
+        // does: `gpui-pre-wgpu` maps swash's positive `-hhea.descender` to
+        // `descent: -metrics.descent`. A fake that reported it positive
+        // would hide the sign mismatch `row_metrics` compensates for.
+        descent: -descent * UPEM,
         line_gap: 0.0,
         underline_position: -100.0,
         underline_thickness: 50.0,
@@ -142,7 +146,10 @@ impl PlatformTextSystem for TwoFonts {
             font_size,
             width: font_size * text.chars().count() as f32 * 0.5,
             ascent: font_size * (metrics.ascent / UPEM),
-            descent: font_size * (metrics.descent / UPEM),
+            // A `LineLayout`, unlike `FontMetrics`, carries the descent
+            // positive: cosmic-text's `max_descent` is a `max` over
+            // `glyph.descent`, which it builds without the negation.
+            descent: font_size * (-metrics.descent / UPEM),
             runs: vec![ShapedRun {
                 font_id,
                 glyphs: text
