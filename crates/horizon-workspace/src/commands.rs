@@ -1,102 +1,112 @@
 /// Declares [`CommandId`] and [`CommandId::ALL`] from one list, so that the
 /// list the palette and the keymap read holds every command: Rust has no way
 /// to enumerate an enum's variants, and a list kept beside the enum could
-/// miss one without the compiler noticing. The order is the palette's.
+/// miss one without the compiler noticing. The order is the palette's. The
+/// enum's declaration is written at the call, so that its name is in the
+/// source (indexers place the definition there).
 macro_rules! command_ids {
-    ($($(#[$meta:meta])* $variant:ident,)*) => {
-        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-        pub enum CommandId {
+    (
+        $(#[$enum_meta:meta])*
+        $vis:vis enum $name:ident {
+            $($(#[$meta:meta])* $variant:ident,)*
+        }
+    ) => {
+        $(#[$enum_meta])*
+        $vis enum $name {
             $($(#[$meta])* $variant,)*
         }
 
-        impl CommandId {
+        impl $name {
             /// Every command, in the order the palette lists them.
-            pub const ALL: &'static [CommandId] = &[$(CommandId::$variant,)*];
+            pub const ALL: &'static [$name] = &[$($name::$variant,)*];
         }
     };
 }
 
 command_ids! {
-    SplitRight,
-    SplitDown,
-    NewTab,
-    FocusNextPane,
-    CloseActivePane,
-    CloseActiveTab,
-    TerminateActiveSession,
-    TerminateAllDetachedSessions,
-    ApproveToolCall,
-    DenyToolCall,
-    CancelAgentTurn,
-    ContinueAgentTurn,
-    /// Opens the provider→model picker for the active agent session
-    /// (parent task #1's Phase 2). Palette-only -- no default keybinding
-    /// (binding id `"switch-model"`).
-    SwitchModel,
-    ReloadAgentRuntime,
-    /// Restarts `horizon-terminald` (`docs/terminald-split-design.md`
-    /// decision 3). Deliberately separate from
-    /// [`CommandId::ReloadAgentRuntime`] and deliberately destructive:
-    /// picking up a `horizon-terminal-core` change means replacing the
-    /// process that owns every PTY, so every terminal session -- and
-    /// whatever is running inside it -- ends. The close-vs-terminate
-    /// discipline applies to daemons too.
-    ReloadTerminalRuntime,
-    OpenSessionManager,
-    ReloadConfig,
-    /// Opens a new terminal tab whose cwd is the active session's
-    /// `directory` (`docs/session-relationship-design.md` decision
-    /// 4a) -- v1's "hunt down the agent's worktree and cd there" fix,
-    /// scoped to the active session only.
-    OpenTerminalInSessionDirectory,
-    /// Opens the board's task list (`ViewKind::BoardList`): a session-less
-    /// first-party view over the `horizon-board` event store where the owner
-    /// can browse the ranked task hierarchy. The pane is placed as a new
-    /// tab or split via the view chooser's placement flow. Palette-only --
-    /// no default keybinding (binding id `"open-board"`).
-    OpenBoard,
-    /// Folds the selected task's children away, or opens them again.
-    /// No-op unless the active pane is the board's list. Palette-only --
-    /// no default keybinding (binding id `"toggle-board-expansion"`).
-    ToggleBoardExpansion,
-    /// Moves the live terminal font size up one step (the shell crate's
-    /// `terminal::FONT_SIZE_STEP` px, clamped). Affects the terminal grid
-    /// and the agent transcript's base text size without a restart.
-    /// Bound by default to the macOS-standard zoom chords (see the shell
-    /// crate's `workspace::bindings`); a `[keybindings]` entry can
-    /// override via `"increase-font-size"`.
-    IncreaseFontSize,
-    /// The counterpart of [`CommandId::IncreaseFontSize`]: one step down,
-    /// clamped. Default chord / override id: `"decrease-font-size"`.
-    DecreaseFontSize,
-    /// Restores the startup-configured font size (`[terminal] font_size`
-    /// or the built-in default), ending a zoom session. Default chord /
-    /// override id: `"reset-font-size"`.
-    ResetFontSize,
-    /// Folds the board list's finished band -- the finished top-level
-    /// tasks gathered behind one row at the bottom -- open or shut.
-    ToggleBoardFinishedBand,
-    OpenBoardTaskSession,
-    /// Opens the task the board list has selected: retargets the tab's
-    /// thread pane at it when there is one, otherwise splits the list pane
-    /// with a fresh thread pane. Focus follows the thread either way.
-    OpenBoardRelatedItem,
-    /// From a thread pane, moves focus to the list pane in the same tab.
-    /// No-op when the tab has none.
-    BackBoardList,
-    AddBoardTask,
-    PostBoardMessage,
-    MoveBoardTaskUp,
-    MoveBoardTaskDown,
-    ReorderBoardTask,
-    SaveBoardState,
-    ToggleBoardClosed,
-    OpenBoardOrganizer,
-    /// Reloads the active preview pane's plugin from the artifact on disk
-    /// (`src/preview/`). The pane also reloads on its own when the file
-    /// changes; this is the manual path. Palette-only -- no default
-    /// keybinding (binding id `"reload-preview"`).
-    ReloadPreview,
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    pub enum CommandId {
+        SplitRight,
+        SplitDown,
+        NewTab,
+        FocusNextPane,
+        CloseActivePane,
+        CloseActiveTab,
+        TerminateActiveSession,
+        TerminateAllDetachedSessions,
+        ApproveToolCall,
+        DenyToolCall,
+        CancelAgentTurn,
+        ContinueAgentTurn,
+        /// Opens the provider→model picker for the active agent session
+        /// (parent task #1's Phase 2). Palette-only -- no default keybinding
+        /// (binding id `"switch-model"`).
+        SwitchModel,
+        ReloadAgentRuntime,
+        /// Restarts `horizon-terminald` (`docs/terminald-split-design.md`
+        /// decision 3). Deliberately separate from
+        /// [`CommandId::ReloadAgentRuntime`] and deliberately destructive:
+        /// picking up a `horizon-terminal-core` change means replacing the
+        /// process that owns every PTY, so every terminal session -- and
+        /// whatever is running inside it -- ends. The close-vs-terminate
+        /// discipline applies to daemons too.
+        ReloadTerminalRuntime,
+        OpenSessionManager,
+        ReloadConfig,
+        /// Opens a new terminal tab whose cwd is the active session's
+        /// `directory` (`docs/session-relationship-design.md` decision
+        /// 4a) -- v1's "hunt down the agent's worktree and cd there" fix,
+        /// scoped to the active session only.
+        OpenTerminalInSessionDirectory,
+        /// Opens the board's task list (`ViewKind::BoardList`): a session-less
+        /// first-party view over the `horizon-board` event store where the owner
+        /// can browse the ranked task hierarchy. The pane is placed as a new
+        /// tab or split via the view chooser's placement flow. Palette-only --
+        /// no default keybinding (binding id `"open-board"`).
+        OpenBoard,
+        /// Folds the selected task's children away, or opens them again.
+        /// No-op unless the active pane is the board's list. Palette-only --
+        /// no default keybinding (binding id `"toggle-board-expansion"`).
+        ToggleBoardExpansion,
+        /// Moves the live terminal font size up one step (the shell crate's
+        /// `terminal::FONT_SIZE_STEP` px, clamped). Affects the terminal grid
+        /// and the agent transcript's base text size without a restart.
+        /// Bound by default to the macOS-standard zoom chords (see the shell
+        /// crate's `workspace::bindings`); a `[keybindings]` entry can
+        /// override via `"increase-font-size"`.
+        IncreaseFontSize,
+        /// The counterpart of [`CommandId::IncreaseFontSize`]: one step down,
+        /// clamped. Default chord / override id: `"decrease-font-size"`.
+        DecreaseFontSize,
+        /// Restores the startup-configured font size (`[terminal] font_size`
+        /// or the built-in default), ending a zoom session. Default chord /
+        /// override id: `"reset-font-size"`.
+        ResetFontSize,
+        /// Folds the board list's finished band -- the finished top-level
+        /// tasks gathered behind one row at the bottom -- open or shut.
+        ToggleBoardFinishedBand,
+        OpenBoardTaskSession,
+        /// Opens the task the board list has selected: retargets the tab's
+        /// thread pane at it when there is one, otherwise splits the list pane
+        /// with a fresh thread pane. Focus follows the thread either way.
+        OpenBoardRelatedItem,
+        /// From a thread pane, moves focus to the list pane in the same tab.
+        /// No-op when the tab has none.
+        BackBoardList,
+        AddBoardTask,
+        PostBoardMessage,
+        MoveBoardTaskUp,
+        MoveBoardTaskDown,
+        ReorderBoardTask,
+        SaveBoardState,
+        ToggleBoardClosed,
+        OpenBoardOrganizer,
+        /// Reloads the active preview pane's plugin from the artifact on disk
+        /// (`src/preview/`). The pane also reloads on its own when the file
+        /// changes; this is the manual path. Palette-only -- no default
+        /// keybinding (binding id `"reload-preview"`).
+        ReloadPreview,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

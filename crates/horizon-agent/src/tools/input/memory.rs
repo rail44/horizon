@@ -62,18 +62,22 @@ pub(crate) struct MemoryUpdate {
 }
 
 impl MemoryUpdate {
+    fn edit(&self, field: MemoryField) -> &Option<Object<FieldEdit>> {
+        match field {
+            MemoryField::Goal => &self.goal,
+            MemoryField::Decisions => &self.decisions,
+            MemoryField::Completed => &self.completed,
+            MemoryField::InProgress => &self.in_progress,
+            MemoryField::Stuck => &self.stuck,
+            MemoryField::NextStep => &self.next_step,
+            MemoryField::Related => &self.related,
+        }
+    }
+
     pub(crate) fn digest(&self) -> Result<MemoryDigest, String> {
-        let fields = [
-            (MemoryField::Goal, &self.goal),
-            (MemoryField::Decisions, &self.decisions),
-            (MemoryField::Completed, &self.completed),
-            (MemoryField::InProgress, &self.in_progress),
-            (MemoryField::Stuck, &self.stuck),
-            (MemoryField::NextStep, &self.next_step),
-            (MemoryField::Related, &self.related),
-        ];
-        let updates: Vec<_> = fields
+        let updates: Vec<_> = MemoryField::ALL
             .into_iter()
+            .map(|field| (field, self.edit(field)))
             .filter_map(|(field, edit)| {
                 let (op, content) = match &**edit.as_ref()? {
                     FieldEdit::Set { content } => (MemoryOp::Set, content.trim().to_string()),
