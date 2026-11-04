@@ -86,7 +86,7 @@ pub fn default_logd_socket_path() -> PathBuf {
 /// for unit-testability without mutating process environment variables --
 /// `cargo test` runs tests in parallel within one process, so real env
 /// mutation in a test would race every other test reading the same
-/// variable (same rationale as `config::resolve_model` and friends).
+/// variable (same rationale as `horizon_config`'s `resolve_config_path_from`).
 fn default_agentd_socket_path_from(
     override_path: Option<String>,
     xdg_runtime_dir: Option<String>,

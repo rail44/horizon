@@ -105,7 +105,7 @@ const SESSION_MANAGER_CONTEXT: &str = "SessionManager";
 ///
 /// `pub(crate)` (stage F, `docs/agent-output-ui-amendment.md`): the agent
 /// pane's stop button/status-line stop affordance dispatch this same
-/// action from `src/agent/view.rs`, rather than reaching into
+/// action from `src/agent/view/pane.rs`, rather than reaching into
 /// `AgentSession::cancel` directly, so a pointer-driven cancel goes
 /// through the same command-model path as the palette and `[keybindings]`
 /// chords (AGENTS.md's "operations go through the command model").

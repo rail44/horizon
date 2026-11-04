@@ -164,7 +164,7 @@ fn wakers() -> &'static Mutex<HashMap<SessionId, UnboundedSender<()>>> {
 
 /// Installs `session_id`'s wake channel and hands back the receiving half.
 /// Called once by a session loop as it starts (`providers::rig::session::
-/// run_session_loop`); a second call replaces the first, so a respawned
+/// SessionLoopState::run`); a second call replaces the first, so a respawned
 /// loop for the same id never leaves a dead sender behind.
 pub(crate) fn register_wake(session_id: SessionId) -> UnboundedReceiver<()> {
     let (tx, rx) = unbounded_channel();

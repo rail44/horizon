@@ -31,9 +31,8 @@ mod render;
 /// by [`TerminalCore::new`] — the crate has no dependency on the host's
 /// config file (`docs/session-daemon-design.md` decision 9), so a real
 /// session always goes through [`TerminalCore::with_scrollback`] instead,
-/// fed from `terminal::config::TerminalConfig` on the host side. Matches
-/// the host's own built-in default (`terminal::config::
-/// DEFAULT_SCROLLBACK_LINES`) so a bare `new` — every test in this crate —
+/// fed from `[terminal].scrollback_lines` (`horizon_config::RawTerminalConfig`)
+/// on the host side. Matches the host's own built-in default so a bare `new` — every test in this crate —
 /// still exercises realistic scrollback depth.
 pub const DEFAULT_SCROLLBACK_LINES: usize = 10_000;
 
@@ -97,7 +96,7 @@ impl TerminalCore {
 
     /// Like [`Self::new`], but with an explicit scrollback depth —
     /// `TerminalSession::spawn` uses this, feeding the host's configured
-    /// `[terminal].scrollback_lines` (`terminal::config::TerminalConfig`)
+    /// `[terminal].scrollback_lines` (`horizon_config::RawTerminalConfig`)
     /// in rather than this crate's own built-in default.
     pub fn with_scrollback(size: TerminalSize, scrollback_lines: usize) -> Self {
         let size = size.normalized();

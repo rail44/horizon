@@ -435,7 +435,7 @@ impl WorkspaceShell {
         let tab_count = tabs.len();
         // `Tab`/`TabBar` colors come from `cx.theme()`, which
         // `theme::apply_gpui_component_theme` projects from Horizon's own
-        // `[theme]` scheme (see `src/theme.rs`) -- so the label text and
+        // `[theme]` scheme (see `src/theme/scheme.rs`) -- so the label text and
         // the selected tab's pill already resolve to `tab_foreground`/
         // `tab_active_foreground`/`background` without any per-tab
         // override here. `Segmented` (replacing `Underline`, 2026-07-14) is

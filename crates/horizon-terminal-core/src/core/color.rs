@@ -22,9 +22,9 @@ use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Crate-local mirror of the host's `ui::theme`-derived color roles
-/// (`terminal::config::TerminalColors`). This crate has no dependency on
-/// `ui::theme`/floem at all (`docs/session-daemon-design.md` decision 9), so
+/// Crate-local mirror of the host's theme color roles (the shell's
+/// `src/theme/`). This crate has no dependency on the shell's theme or its
+/// UI toolkit at all (`docs/session-daemon-design.md` decision 9), so
 /// the host converts its live theme into this plain-data struct and pushes
 /// it in via `TerminalCore::set_color_scheme` — the same "crate-local
 /// newtype / plain-data mirror" pattern `crates/horizon-agent` already uses

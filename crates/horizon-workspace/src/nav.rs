@@ -51,7 +51,7 @@ impl Rect {
 
 /// Every pane's rectangle in `node`, recursively subdividing `Rect::UNIT`
 /// by each `Split`'s axis and child weights (mirroring `render_node`'s
-/// `LayoutNode::Split` branch in `src/workspace.rs`, which lays children
+/// `LayoutNode::Split` branch in `src/workspace/render.rs`, which lays children
 /// out on gpui-component's `h_resizable`/`v_resizable` panel groups --
 /// `Horizontal` divides width, `Vertical` divides height). Order matches
 /// `LayoutNode::pane_ids`'s pre-order, which `nearest_in_direction` relies

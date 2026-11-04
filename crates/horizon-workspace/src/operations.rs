@@ -65,10 +65,10 @@ impl Workspace {
     /// created and pushed either way, so the session exists and is
     /// queryable/attachable immediately; `activate: false` only means
     /// [`Self::active_tab`] is restored to whatever it was before this
-    /// call, leaving the caller's own focus-follow (`workspace::
-    /// request_active_pane_focus`) with nothing to move. See
+    /// call, leaving the caller's own focus-follow
+    /// (`WorkspaceShell::focus_active`) with nothing to move. See
     /// `WorkspaceShell::create_session`/`control_plane_new_session` in
-    /// `src/workspace.rs`, its callers (`activate: true` for a human
+    /// `src/workspace/session_creation.rs`, its callers (`activate: true` for a human
     /// surface's dive, `false` for the control plane's default).
     pub fn open_tab_with_new_session_activated(
         &mut self,
@@ -171,7 +171,7 @@ impl Workspace {
     /// Test-only now: its last production caller was the pre-GPUI shell's
     /// split-active-pane action, retired by `docs/roadmap.md`'s
     /// "Placement-first session creation" -- `WorkspaceShell::create_session`
-    /// (`src/workspace.rs`) drives `split_session_with_new_session` (an
+    /// (`src/workspace/session_creation.rs`) drives `split_session_with_new_session` (an
     /// explicit target session, not "whatever kind the active pane happens
     /// to be") for every remaining split caller. Kept as a small
     /// workspace-level test fixture helper (`workspace::tests`) since

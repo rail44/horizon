@@ -12,7 +12,7 @@
 //! view; see its doc comment), and the four `diff_added_*`/
 //! `diff_removed_*` roles, each an `Hsla` resolved
 //! through the same `[theme]` scheme as everything else here.
-//! `src/agent/view.rs` is the only consumer today. Names follow
+//! The agent view (`src/agent/view/`) is the main consumer. Names follow
 //! gpui-component's own
 //! `ThemeColor` vocabulary where a matching role exists there (`accent`,
 //! `danger`, `warning`, `success`, `info`) -- but the values are Horizon's

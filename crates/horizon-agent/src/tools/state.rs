@@ -40,8 +40,7 @@ use crate::tools::ToolCompletion;
 /// Only `horizon-agentd`'s real session construction site
 /// (`session::run_session`) populates both fields. Every other
 /// `ToolSessionState` construction site -- this crate's own tests
-/// (`ToolSessionState::new`/`without_root`), and Horizon's UI-side
-/// dummy-tool-state test helper in `src/agent/host_tools.rs` -- uses
+/// (`ToolSessionState::new`/`without_root`) -- uses
 /// `RecallContext::default()` and keeps behaving exactly as it did before
 /// recall existed: no session id, and a slot already decided as unavailable.
 #[derive(Clone)]
@@ -512,7 +511,7 @@ pub(crate) struct SessionRuntime {
 thread_local! {
     // LiveState's inner Rc<RefCell<..>> is confined to a single thread, so
     // this registry is too. It bridges `horizon-agentd`'s session loop
-    // (`crates/horizon-agentd/src/session.rs`, where a session's runtime
+    // (`crates/horizon-agentd/src/session/`, where a session's runtime
     // is created via `register_session_runtime`) and the approve/deny
     // command handling on that same thread, which don't otherwise share
     // scope.

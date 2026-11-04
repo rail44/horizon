@@ -228,7 +228,7 @@ pub enum Command {
     /// HaltedByIterationCap`/`HaltedByDoomLoop`), without composing a new
     /// user message -- `docs/issues/002-agent-iteration-cap-halts-real-
     /// work.md`'s resolution, decision 3 ("Continue is one action"). The
-    /// session loop (`providers::rig::session::run_session_loop`) resets
+    /// session loop (`providers::rig::session::SessionLoopState::run`) resets
     /// the guard and re-enters the turn loop from the halted result it
     /// already recorded. A safe no-op when there is nothing halted to
     /// resume (e.g. sent to an idle session, or replayed from a persisted

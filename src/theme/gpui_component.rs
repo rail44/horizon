@@ -116,7 +116,7 @@ pub(super) fn invert_list_active_clamp(background: u32, surface_selected: u32) -
     (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
-/// Alpha `src/agent/view.rs`'s `render_tool_call_row` paints its
+/// Alpha the agent view's `render_tool_call_row` painted its
 /// waiting-row tint at (`.bg(theme::warning().alpha(0.12))`) -- the first
 /// of the two stacked translucent layers [`deny_button_fill_composite`]
 /// models to solve the row-centric Deny button's text color against (item
@@ -133,7 +133,8 @@ const DENY_BUTTON_ROW_WARNING_ALPHA: f32 = 0.12;
 const DENY_BUTTON_FILL_DANGER_ALPHA: f32 = 0.2;
 
 /// The canonical on-screen fill a row-centric Deny button (`.danger()`,
-/// `src/agent/view.rs`'s `render_tool_call_row`) actually sits on: its own
+/// the agent view's `render_tool_call_row` before its 2026-10-14 redesign,
+/// 4a572454) actually sits on: its own
 /// translucent danger fill (gpui-component's `button_danger` fallback,
 /// [`DENY_BUTTON_FILL_DANGER_ALPHA`]) painted over the waiting row's own
 /// warning tint ([`DENY_BUTTON_ROW_WARNING_ALPHA`]) painted over

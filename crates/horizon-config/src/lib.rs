@@ -508,7 +508,7 @@ pub struct RawUiConfig {
 /// tests assert about built-in defaults and must not be affected by the
 /// developer's personal config at `~/.config/horizon/config.toml`. Tests
 /// that genuinely need to parse a file use `load_from_path` directly (see
-/// `src/config/tests.rs`) or read `config.example.toml` by path (the
+/// `crates/horizon-config/src/tests.rs`) or read `config.example.toml` by path (the
 /// example-file drift guards).
 pub fn load() -> &'static RawConfig {
     static CONFIG: OnceLock<RawConfig> = OnceLock::new();

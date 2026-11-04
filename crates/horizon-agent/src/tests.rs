@@ -778,8 +778,9 @@ fn state_entry_advance_keeps_timestamp_until_state_changes() {
 
 #[test]
 fn state_entry_elapsed_grows_with_time() {
-    // Mirrors the shape of `src/agent/view.rs`'s running-card
-    // elapsed-seconds ticker (`RunningTurnClock`): `Instant::now() -
+    // Mirrors the shape of the agent view's running-card elapsed-seconds
+    // ticker before its 2026-10-14 redesign (`RunningTurnClock`, removed in
+    // 4a572454): `Instant::now() -
     // started_at`, driven by a periodic tick rather than a method on the
     // clock type itself. `StateEntry` is test-only today (see its own
     // doc comment) -- this pins the timing arithmetic in isolation.

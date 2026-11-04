@@ -33,8 +33,8 @@ fn send_host_tool_request(state: &AgentdState, request: HostToolRequest) -> bool
 /// connection-global, exactly as the JSONL envelope's receiver treated it) and blocks this
 /// session's dedicated thread on the matching `host_tool_response`. Only
 /// `workspace.snapshot` is ever routed here today (the same tool id
-/// Horizon's own `agent::host_tools::WorkspaceHostTools` answers
-/// in-process) -- everything else falls through to `None`, letting
+/// the shell answers from its own workspace model,
+/// `src/workspace/session_events.rs`) -- everything else falls through to `None`, letting
 /// `execute_agent_tool` try the crate's own `tools::fs` auto tools next.
 pub(super) struct AgentdHostTools {
     pub(super) state: Arc<AgentdState>,

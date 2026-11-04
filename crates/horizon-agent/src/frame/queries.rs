@@ -132,13 +132,13 @@ impl AgentFrame {
     /// The two readings differ for exactly one shape: a sandbox-denial
     /// retry. Approving the retry closes the abandoned first attempt with
     /// a terminal "superseded by retry" result carrying *that attempt's*
-    /// `occurrence_id` (`tools::approval::superseded_by_retry_result`), and
+    /// `occurrence_id` (`ToolCallResult::superseded_by_retry`), and
     /// that event necessarily lands *after* the reissued request — so the
     /// call_id-keyed reading would report the live retry as already
     /// finished and block its own genuine result from ever folding. Only
     /// the async-completion fold (`tools::should_fold_completion`) needs
     /// this occurrence-scoped reading; the duplicate-approve/deny guard in
-    /// `tools::approval::try_execute` deliberately keeps the call_id-keyed
+    /// `tools::completion::approval_is_unresolved` deliberately keeps the call_id-keyed
     /// one, since there a *second* decision for the same call must be a
     /// no-op no matter which occurrence answered the first.
     ///
@@ -157,11 +157,11 @@ impl AgentFrame {
     /// instant Horizon began executing it, not just once it finished. For
     /// For `fs.write`/`fs.edit`, this is equivalent to
     /// [`Self::has_tool_call_finished`] (both events are folded together,
-    /// synchronously, by `agent::tools::approval::synchronous_result`), but
+    /// synchronously, when the call runs), but
     /// `bash`'s approve path folds `ToolCallStarted` immediately and only
     /// folds `ToolCallFinished` once the child actually exits — a window
-    /// that can last the tool's whole timeout. `agent::tools::approval::
-    /// try_execute`'s idempotence guard checks this *in addition to*
+    /// that can last the tool's whole timeout. The approval's idempotence
+    /// guard (`tools::completion::approval_is_unresolved`) checks this *in addition to*
     /// `has_tool_call_finished` so a call already running can't be started a
     /// second time by a duplicate Approve arriving in that window (the
     /// 2026-07 repeated-approval OOM incident: a banner that didn't
@@ -322,10 +322,9 @@ pub(crate) fn last_turn_end_reason_in(items: &[AgentFrameItem]) -> Option<TurnEn
 
 /// The pure core of [`AgentFrame::is_turn_in_flight`], operating on just the
 /// `state` field -- see [`pending_approval_call_ids_in`]'s doc comment for
-/// why this split exists. `src/agent/view.rs`'s render and
-/// `sync_running_turn_clock` are exactly this kind of caller: each reads
-/// `frame.state` on its own, separately from `frame.items`, without going
-/// through [`AgentFrame::is_turn_in_flight`].
+/// why this split exists. The shell's `src/agent/view/adapter.rs` is this
+/// kind of caller: it reads `frame.state` on its own, separately from
+/// `frame.items`, without going through [`AgentFrame::is_turn_in_flight`].
 pub fn state_indicates_turn_in_flight(state: Option<SessionState>) -> bool {
     matches!(
         state,

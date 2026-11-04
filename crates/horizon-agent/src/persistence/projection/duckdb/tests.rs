@@ -564,7 +564,7 @@ fn rebuilds_store_from_agent_event_log_records() {
 /// several real days -- not milliseconds -- so that bug would be
 /// obvious, not just a rounding error, and reads `event_at` back out
 /// via `epoch_ms(event_at)` (DuckDB's own reverse of the `epoch_ms(?)`
-/// conversion `import::insert_event_log_record` writes with) to prove
+/// conversion `append::Store::append_record_uncommitted` writes with) to prove
 /// an exact round trip of `Record::created_at_unix_ms`.
 #[test]
 fn rebuild_projects_real_event_timestamps_into_event_at_column() {
@@ -848,8 +848,8 @@ fn approval_outcome_is_denied_when_finished_arrives_with_no_prior_started() {
                     occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
                 // A deny short-circuits: `ToolCallFinished` arrives with
-                // no `ToolCallStarted` in between (`tools::approval::
-                // synchronous_result(ran=false)`).
+                // no `ToolCallStarted` in between (a deny's synchronous
+                // result).
                 Event::ToolCallFinished(ToolCallResult::denied(
                     call_id.clone(),
                     crate::contract::OccurrenceId(call_id.0.clone()),
@@ -1374,7 +1374,7 @@ fn ungated_tool_call_started_records(
 /// vector of size 0` and aborts the whole transaction. Against the
 /// owner's real ~121k-record event log that took down every rebuild at
 /// the 530th record, blanking every session's transcript in the UI. See
-/// `projection::Store::most_recent_pending_approval`.
+/// `projection::Store::most_recent_pending_approval` (removed in 06a52e22).
 ///
 /// Driven through `append_record_uncommitted` rather than
 /// `replace_from_event_log_records` deliberately: the latter now

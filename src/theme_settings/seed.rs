@@ -53,7 +53,7 @@ pub(crate) fn u32_to_hsla(value: u32) -> Hsla {
 
 /// One of the six `[theme.ansi]` hue slots that double as the seed's own
 /// hue set -- also `accent`'s six recognized slot-name spellings
-/// (`resolve_accent` in `src/theme.rs`).
+/// (`resolve_accent` in `src/theme/scheme.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum HueSlot {
     Red,
@@ -102,7 +102,7 @@ impl HueSlot {
     }
 
     /// The inverse of [`HueSlot::config_key`] -- accepts exactly the same
-    /// spellings `resolve_accent` (`src/theme.rs`) does for `accent`'s
+    /// spellings `resolve_accent` (`src/theme/scheme.rs`) does for `accent`'s
     /// slot-name form.
     pub(crate) fn from_config_key(value: &str) -> Option<HueSlot> {
         HueSlot::ALL
@@ -113,7 +113,7 @@ impl HueSlot {
 
 /// `accent`'s value: either a reference to one of the six [`HueSlot`]s, or
 /// a direct hex color -- the same two spellings `resolve_accent`
-/// (`src/theme.rs`) accepts.
+/// (`src/theme/scheme.rs`) accepts.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum AccentValue {
     Slot(HueSlot),
@@ -133,7 +133,7 @@ impl AccentValue {
 }
 
 /// The full seed: every knob the theme settings view exposes, and the one
-/// `scheme_from` (`src/theme.rs`) derives the rest of the theme from.
+/// `scheme_from` (`src/theme/scheme.rs`) derives the rest of the theme from.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Seed {
     pub(crate) surface_base: u32,

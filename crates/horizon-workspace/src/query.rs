@@ -129,7 +129,7 @@ impl Workspace {
     /// Test-only now: `workspace::mode`'s cursor is `PaneId`-keyed directly
     /// (`docs/recursive-layout-design.md`'s slice 4), so no production call
     /// site needs to resolve a `PaneId` back to a visible index anymore --
-    /// the GPUI shell's pane click handler (`src/workspace.rs`, its last
+    /// the GPUI shell's pane click handler (`src/workspace/render.rs`, its last
     /// production caller) now targets `activate_pane` by `PaneId` directly.
     /// Kept as a small test fixture helper.
     #[cfg(test)]
@@ -139,7 +139,7 @@ impl Workspace {
 
     /// Every pane that exists anywhere in the workspace, across every tab
     /// -- not just the active tab's visible ones. Used to prune per-pane UI
-    /// state keyed by `PaneId` (`workspace::input::PaneKeyedSignals`) once
+    /// state keyed by `PaneId` (`src/workspace/session_lifecycle.rs`) once
     /// a pane is gone for good, regardless of which close/terminate path
     /// removed it.
     pub fn all_pane_ids(&self) -> std::collections::HashSet<PaneId> {
@@ -183,7 +183,7 @@ impl Workspace {
     }
 
     /// Test-only now: the GPUI shell's recursive renderer
-    /// (`src/workspace.rs`, `docs/recursive-layout-design.md`'s slice 2)
+    /// (`src/workspace/render.rs`, `docs/recursive-layout-design.md`'s slice 2)
     /// resolves a terminal pane's session by `PaneId`
     /// (`terminal_session_id`) rather than a visible index, which was
     /// this method's last production caller.
@@ -197,7 +197,7 @@ impl Workspace {
     }
 
     /// Test-only now: the GPUI shell's recursive renderer
-    /// (`src/workspace.rs`, `docs/recursive-layout-design.md`'s slice 2)
+    /// (`src/workspace/render.rs`, `docs/recursive-layout-design.md`'s slice 2)
     /// resolves an agent pane's session by `PaneId` (`agent_session_id`)
     /// rather than a visible index, which was this method's last
     /// production caller.
@@ -213,7 +213,8 @@ impl Workspace {
     /// Test-only now: the workspace overview's header text
     /// (`ws.session_count()` alongside `detached_session_count()`) was its
     /// last production caller and is gone
-    /// (`docs/plans/application-ui/01-session-manager.md` -- session
+    /// (the retired plan `docs/plans/application-ui/01-session-manager.md`,
+    /// removed in a8839fc1 -- session
     /// management moved to its own modal, which derives the same count from
     /// `control_surface::session_manager_items` instead).
     #[cfg(test)]
@@ -237,7 +238,7 @@ impl Workspace {
 
     /// The `(tab_index, pane_index)` of the visible pane currently hosting
     /// `session_id`, if any -- lets the session manager modal
-    /// (`WorkspaceShell::open_session_manager` in `src/workspace.rs`)
+    /// (`WorkspaceShell::open_session_manager` in `src/workspace/modals.rs`)
     /// resolve an *attached* row straight to `activate_pane_index` without
     /// a separate lookup table. `None` for a detached session (no pane
     /// references it).

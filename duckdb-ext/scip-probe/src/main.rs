@@ -1,7 +1,7 @@
 //! Print the rows of `read_scip`, `read_scip_symbols`, `read_scip_relationships`
 //! or `read_scip_metadata`
 //! as TSV, computed by `scip_index_core` without DuckDB, for comparing with
-//! the extension (`scripts/scip_ext_parity.py`).
+//! the extension (`duckdb-ext/scripts/scip_ext_parity.py`).
 //!
 //! Usage: scip-probe INDEX occurrences|symbols|relationships|metadata [--stats]
 //!

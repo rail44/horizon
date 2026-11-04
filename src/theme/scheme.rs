@@ -15,7 +15,8 @@ pub(super) const FOREGROUND_DEFAULT: u32 = 0xe9ecf2; // TEXT_PRIMARY_DEFAULT
 pub(super) const CURSOR_DEFAULT: u32 = 0x84dcc6; // ACCENT_DEFAULT
 
 // Agent-pane role defaults -- historically chosen to match
-// `src/agent/view.rs`'s pre-existing hardcoded hex values exactly (see the
+// the agent view's then-hardcoded hex values (`src/agent/view.rs` before
+// its split) exactly (see the
 // agent-output-ui-amendment doc's "changes plumbing, not design").
 // `danger`/`warning`/`success`/`info` happen to equal the built-in ANSI
 // red/yellow/green/blue defaults (config.example.toml's `[theme.ansi]`

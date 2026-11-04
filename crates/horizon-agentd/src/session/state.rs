@@ -292,8 +292,8 @@ impl AgentdState {
     }
 
     /// Routes a `Command` to `session_id`'s thread, reporting whether there
-    /// was a live session to route it to. [`super::connection::Connection::route_command`]
-    /// turns a miss into a log line; [`super::exploration::AgentdExplorationHost::terminate`]
+    /// was a live session to route it to. A caller decides what a miss
+    /// means: [`super::exploration::AgentdExplorationHost::terminate`]
     /// deliberately ignores one -- a task session that already
     /// ended on its own needs no shutdown.
     pub(crate) fn send_command(&self, session_id: SessionId, command: Command) -> bool {
