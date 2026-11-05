@@ -145,9 +145,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let session = SessionId::new();
-        let tools = ToolSessionBuilder::new(root.clone())
-            .with_isolated_worktree(true)
-            .build();
+        let tools = ToolSessionBuilder::new(root.clone()).build();
         let log = root.join("history.jsonl");
         let (writer, ready) = event_log::WriterHandle::open(&log);
         assert!(matches!(

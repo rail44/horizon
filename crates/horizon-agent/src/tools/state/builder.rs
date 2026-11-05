@@ -61,7 +61,6 @@ impl ToolSessionBuilder {
                 recall,
                 skills: SkillRegistry::default(),
                 config_path: None,
-                isolated_worktree: false,
                 unattended: false,
                 network: None,
                 loopback_connect: Vec::new(),
@@ -101,14 +100,6 @@ impl ToolSessionBuilder {
     /// Install the config path resolved by the host.
     pub fn with_config_path(mut self, config_path: Option<PathBuf>) -> Self {
         self.inner.config_path = config_path;
-        self
-    }
-
-    /// Record whether the session owns the worktree it runs in (entered
-    /// through activation or re-adopted on restore), never infer it from a
-    /// path.
-    pub fn with_isolated_worktree(mut self, isolated: bool) -> Self {
-        self.inner.isolated_worktree = isolated;
         self
     }
 

@@ -201,9 +201,7 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
     let untouched = root.join("untouched.txt");
     std::fs::write(&path, "old\nold\n").unwrap();
     std::fs::write(&untouched, "keep\n").unwrap();
-    let state = ToolSessionBuilder::new(root.clone())
-        .with_isolated_worktree(true)
-        .build();
+    let state = ToolSessionBuilder::new(root.clone()).build();
     let session = SessionId::new();
     let log = root.join("events.jsonl");
     let (writer, ready) = event_log::WriterHandle::open(&log);

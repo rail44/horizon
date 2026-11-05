@@ -134,16 +134,6 @@ struct Inner {
     /// `config.read`/`config.write` degrade to an actionable error instead
     /// of guessing a path.
     config_path: Option<PathBuf>,
-    /// Whether `workspace_root` is a worktree this session owns -- one it
-    /// entered through environment activation (`worktree.enter`, the
-    /// board's `implement`) or had re-adopted on restore -- as opposed to the
-    /// directory it started in. Recorded for the daemon's
-    /// persisted session context; the per-call trust predicate
-    /// (`policy::classify_input`) does not read it
-    /// (`docs/sandbox-perimeter-design.md`). Threaded in after construction
-    /// through [`ToolSessionBuilder`]; `false` everywhere except the one
-    /// production call site.
-    isolated_worktree: bool,
     /// Whether this session has no client that could answer an approval
     /// prompt: the explore role's sessions (`task` children), which are
     /// never attached to a pane and
@@ -151,7 +141,7 @@ struct Inner {
     /// call that would otherwise wait for a human resolves as a refused
     /// tool result instead, so the session keeps running
     /// (`tools::approval::unattended_refusal_result`). Threaded in after
-    /// construction the same way [`Inner::isolated_worktree`] is: only
+    /// construction through [`ToolSessionBuilder`]: only
     /// `horizon-agentd`'s `session::run_session` knows the session's role.
     /// `false` everywhere except that call site.
     unattended: bool,

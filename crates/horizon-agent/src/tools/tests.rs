@@ -2298,9 +2298,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
 #[test]
 fn fs_write_auto_executes_in_an_isolated_session_with_the_audit_marker() {
     let root = temp_workspace("tier1-fs-write-isolated");
-    let tool_state = crate::tools::ToolSessionBuilder::new(root.clone())
-        .with_isolated_worktree(true)
-        .build();
+    let tool_state = crate::tools::ToolSessionBuilder::new(root.clone()).build();
     let target = root.join("new.txt");
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
@@ -2334,9 +2332,7 @@ fn fs_edit_auto_executes_in_an_isolated_session() {
     let root = temp_workspace("tier1-fs-edit-isolated");
     let target = root.join("file.txt");
     fs::write(&target, "before").unwrap();
-    let tool_state = crate::tools::ToolSessionBuilder::new(root)
-        .with_isolated_worktree(true)
-        .build();
+    let tool_state = crate::tools::ToolSessionBuilder::new(root).build();
     // fs.edit's staleness gate needs a prior fs.read recorded -- mirrors
     // `fs_edit_success_updates_mtime_and_allows_chained_edit` above.
     sync_tools::execute_auto(
@@ -2436,9 +2432,7 @@ fn fs_write_into_the_gitdir_waits_for_approval_and_writes_nothing() {
 
 #[test]
 fn policy_plan_omits_the_approval_prompt_for_a_contained_fs_write() {
-    let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
-        .with_isolated_worktree(true)
-        .build();
+    let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir()).build();
     let events = crate::tools::test_support::policy_events(
         &Event::ToolCallRequested(ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
@@ -2490,9 +2484,7 @@ fn invalid_web_fetch_finishes_as_an_auto_boundary_error_without_network() {
 #[test]
 fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox() {
     let root = temp_workspace("tier1-bash-sandboxed");
-    let tool_state = crate::tools::ToolSessionBuilder::new(root)
-        .with_isolated_worktree(true)
-        .build();
+    let tool_state = crate::tools::ToolSessionBuilder::new(root).build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -2536,9 +2528,7 @@ fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox()
 #[test]
 fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
     let root = temp_workspace("tier1-bash-sandboxed-timeout");
-    let tool_state = crate::tools::ToolSessionBuilder::new(root)
-        .with_isolated_worktree(true)
-        .build();
+    let tool_state = crate::tools::ToolSessionBuilder::new(root).build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -2607,9 +2597,7 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
 #[test]
 fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     let root = temp_workspace("tier1-bash-sandboxed-tmp-leak");
-    let tool_state = crate::tools::ToolSessionBuilder::new(root)
-        .with_isolated_worktree(true)
-        .build();
+    let tool_state = crate::tools::ToolSessionBuilder::new(root).build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -2966,9 +2954,7 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
     let (fixture_root, worktree) = linked_git_worktree("git-operation-approval");
     fs::write(worktree.join("change.txt"), "approved change\n").unwrap();
 
-    let tool_state = crate::tools::ToolSessionBuilder::new(worktree.clone())
-        .with_isolated_worktree(true)
-        .build();
+    let tool_state = crate::tools::ToolSessionBuilder::new(worktree.clone()).build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -3104,9 +3090,7 @@ fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
         hook_path.display()
     );
 
-    let tool_state = crate::tools::ToolSessionBuilder::new(worktree.clone())
-        .with_isolated_worktree(true)
-        .build();
+    let tool_state = crate::tools::ToolSessionBuilder::new(worktree.clone()).build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -3246,9 +3230,7 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
         }]
     );
 
-    let tool_state = crate::tools::ToolSessionBuilder::new(workspace)
-        .with_isolated_worktree(true)
-        .build();
+    let tool_state = crate::tools::ToolSessionBuilder::new(workspace).build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -3362,7 +3344,6 @@ fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
     let outside = ungranted.join("written.txt");
 
     let tool_state = crate::tools::ToolSessionBuilder::new(workspace)
-        .with_isolated_worktree(true)
         .with_filesystem_grants(vec![horizon_sandbox::FilesystemGrant {
             path: granted.canonicalize().unwrap(),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
@@ -3588,9 +3569,7 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
         horizon_sandbox::home_dir().as_deref(),
     );
 
-    let tool_state = crate::tools::ToolSessionBuilder::new(workspace.clone())
-        .with_isolated_worktree(true)
-        .build();
+    let tool_state = crate::tools::ToolSessionBuilder::new(workspace.clone()).build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();

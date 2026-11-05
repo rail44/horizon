@@ -165,7 +165,6 @@ impl SessionEnvironment<'_> {
         // `tool_session_builder_for` below.
         let board = board_host_for(workspace_root.as_deref(), state.clone());
         let tool_state = tool_session_builder_for(workspace_root, agent_config.tools, recall)
-            .with_isolated_worktree(isolated)
             // An explore-role session (a `task` child) is never attached to
             // a pane, so an approval prompt raised for it would reach nobody.
             .with_unattended(role_id.is_some_and(horizon_agent::roles::is_exploration))

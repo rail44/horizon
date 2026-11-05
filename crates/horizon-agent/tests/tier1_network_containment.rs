@@ -60,7 +60,6 @@ fn isolated_session_with_network(label: &str) -> (ToolSessionState, Arc<SessionN
         AgentToolsConfig::default(),
         RecallContext::default(),
     )
-    .with_isolated_worktree(true)
     .with_network_proxy(Some(network.clone()))
     .build();
     (tool_state, network)

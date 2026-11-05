@@ -49,13 +49,6 @@ impl Appender {
         }
     }
 
-    /// Stamps the same host-authored placement metadata onto every later
-    /// record. Callers which do not know a context (legacy fixtures and
-    /// compatibility tests) keep emitting the pre-field envelope.
-    pub fn set_session_context(&mut self, context: PersistedSessionContext) {
-        self.session_context = Some(context);
-    }
-
     /// Commit an environment transition with its new placement, restoring the
     /// old placement on failure so consultation can continue coherently.
     pub fn activate_context(

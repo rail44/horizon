@@ -242,35 +242,30 @@ mod tests {
     #[test]
     fn invalid_builtin_inputs_finish_before_approval_start_or_host_dispatch() {
         let dir = tempfile::tempdir().unwrap();
-        for isolated in [false, true] {
-            let state = crate::tools::ToolSessionBuilder::new(dir.path().to_path_buf())
-                .with_isolated_worktree(isolated)
-                .build();
-            for (id, mut input) in crate::tools::input::tests::samples() {
-                input["unexpected"] = serde_json::json!(true);
-                let request = ToolCallRequest {
-                    call_id: ToolCallId(id.into()),
-                    occurrence_id: OccurrenceId::new(),
-                    tool_id: id.into(),
-                    input: input.into(),
-                };
-                let live = LiveState::with_disabled_persistence();
-                let Execution::Applied(ToolUpdate::Finished { events, result }) =
-                    execute_agent_tool(&MustNotRun, &state, SessionId::new(), &live, &request)
-                        .unwrap()
-                else {
-                    panic!("{id} must reject invalid input before asking for approval or starting");
-                };
-                assert!(result.is_error(), "{id}");
-                assert_eq!(result.occurrence_id, request.occurrence_id);
-                assert!(
-                    !events.iter().any(|event| matches!(
-                        event,
-                        Event::ToolCallStarted(_) | Event::ApprovalRequested(_)
-                    )),
-                    "{id}"
-                );
-            }
+        let state = crate::tools::ToolSessionBuilder::new(dir.path().to_path_buf()).build();
+        for (id, mut input) in crate::tools::input::tests::samples() {
+            input["unexpected"] = serde_json::json!(true);
+            let request = ToolCallRequest {
+                call_id: ToolCallId(id.into()),
+                occurrence_id: OccurrenceId::new(),
+                tool_id: id.into(),
+                input: input.into(),
+            };
+            let live = LiveState::with_disabled_persistence();
+            let Execution::Applied(ToolUpdate::Finished { events, result }) =
+                execute_agent_tool(&MustNotRun, &state, SessionId::new(), &live, &request).unwrap()
+            else {
+                panic!("{id} must reject invalid input before asking for approval or starting");
+            };
+            assert!(result.is_error(), "{id}");
+            assert_eq!(result.occurrence_id, request.occurrence_id);
+            assert!(
+                !events.iter().any(|event| matches!(
+                    event,
+                    Event::ToolCallStarted(_) | Event::ApprovalRequested(_)
+                )),
+                "{id}"
+            );
         }
     }
 
@@ -370,9 +365,7 @@ mod tests {
     fn every_automatic_dispatch_stops_before_effects_when_its_start_cannot_be_saved() {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("must-not-exist");
-        let state = crate::tools::ToolSessionBuilder::new(dir.path().to_path_buf())
-            .with_isolated_worktree(true)
-            .build();
+        let state = crate::tools::ToolSessionBuilder::new(dir.path().to_path_buf()).build();
         for (mode, tool_id, input) in [
             (
                 AutomaticTool::Synchronous,

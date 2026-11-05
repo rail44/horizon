@@ -671,9 +671,7 @@ mod tests {
         // process_agent_provider_event`) is the one place this now resolves
         // -- immediately, with a `ToolCallFinished` error result -- so this
         // seam must contribute nothing beyond the original event.
-        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
-            .with_isolated_worktree(true)
-            .build();
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir()).build();
         let events = policy_events(&requested("write"), &tool_state, SessionId::new());
 
         assert_eq!(
@@ -688,9 +686,7 @@ mod tests {
 
     #[test]
     fn mock_approval_required_always_gets_a_prompt_even_when_isolated() {
-        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
-            .with_isolated_worktree(true)
-            .build();
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir()).build();
         let events = policy_events(
             &requested("mock.approval_required"),
             &tool_state,
@@ -707,9 +703,7 @@ mod tests {
     /// returns.
     #[test]
     fn boundary_crossing_produces_the_same_events_as_always_ask() {
-        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
-            .with_isolated_worktree(true)
-            .build();
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir()).build();
         let session_id = SessionId::new();
 
         let boundary_events = policy_events(
