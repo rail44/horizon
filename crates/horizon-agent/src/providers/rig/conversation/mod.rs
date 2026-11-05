@@ -79,7 +79,6 @@ enum Content {
 struct Response {
     id: String,
     message: Option<Message>,
-    completed: bool,
     reasoning: Vec<rig_core::completion::message::Reasoning>,
     calls: Vec<Call>,
 }
@@ -159,16 +158,6 @@ impl ConversationHistory {
             Event::ToolCallFinished(result) => {
                 if let Some(location) = self.occurrences.get(&result.occurrence_id).copied() {
                     self.accept_result(location, result)?;
-                }
-                Ok(())
-            }
-            Event::TurnEnded(crate::contract::TurnEndReason::Completed) => {
-                if let Some(Entry {
-                    content: Content::Response(response),
-                    ..
-                }) = self.entries.last_mut()
-                {
-                    response.completed = true;
                 }
                 Ok(())
             }
@@ -444,7 +433,6 @@ impl ConversationHistory {
             content: Content::Response(Response {
                 id: id.into(),
                 message: None,
-                completed: false,
                 reasoning: Vec::new(),
                 calls: Vec::new(),
             }),

@@ -1192,8 +1192,6 @@ mod tests {
     fn board_inventory_retries_a_binding_before_daemon_installation() {
         let summary = crate::runtime::SessionSummary {
             session_id: horizon_agent::contract::SessionId::new(),
-            provider_id: "mock".into(),
-            role_id: None,
             parent_session_id: None,
             workspace_root: None,
         };

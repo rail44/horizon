@@ -382,14 +382,9 @@ impl AgentModel {
 
     fn apply_tool_call_progress(&mut self, progress: ToolCallProgressEvent) {
         match progress {
-            ToolCallProgressEvent::Progress {
-                key,
-                tool_id,
-                bytes,
-            } => {
+            ToolCallProgressEvent::Progress { key, bytes, .. } => {
                 let preparing = ToolCallPreparing {
                     key: key.clone(),
-                    tool_id,
                     bytes,
                 };
                 match self.preparing_index(&key) {
@@ -566,7 +561,6 @@ impl Permission {
                 call_id: meta.call_id,
                 occurrence_id: meta.occurrence_id,
             },
-            kind: meta.kind,
             reason,
             decision: None,
         })

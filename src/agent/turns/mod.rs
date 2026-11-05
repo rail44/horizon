@@ -32,7 +32,7 @@ pub(crate) fn pluralize(count: usize, singular: &str, plural: &str) -> String {
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    use horizon_acp::{ApprovalKind, ToolCallMeta, ToolOutcome};
+    use horizon_acp::{ToolCallMeta, ToolOutcome};
     use serde_json::Value;
 
     use super::super::model::{
@@ -131,7 +131,6 @@ pub(crate) mod test_support {
                 call_id: call_id.to_string(),
                 occurrence_id: call_id.to_string(),
             },
-            kind: ApprovalKind::Standard,
             reason: "writes a file".to_string(),
             decision: None,
         })

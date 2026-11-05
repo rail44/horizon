@@ -10,7 +10,7 @@ use std::time::Duration;
 use horizon_acp::{HumanDecision, ToolOutcome};
 use horizon_agent::transcript::{
     classify, edit_entries, reconstruct_line_diff, ApprovalState, DiffLineKind, FileEffect,
-    ToolCallClassification, ToolCallKind,
+    ToolCallClassification,
 };
 use serde_json::Value;
 
@@ -112,7 +112,6 @@ pub(crate) fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
                     open = Some(Burst {
                         start: index,
                         end: index + 1,
-                        closed: false,
                     });
                 }
             }
@@ -128,10 +127,7 @@ pub(crate) fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
             _ => false,
         };
         if closes_burst {
-            if let Some(mut burst) = open.take() {
-                burst.closed = true;
-                bursts.push(burst);
-            }
+            bursts.extend(open.take());
         }
     }
 
@@ -154,7 +150,6 @@ pub(crate) struct ToolCallView {
     pub(crate) verb: String,
     pub(crate) target: Option<String>,
     pub(crate) result_summary: Option<String>,
-    pub(crate) kind: ToolCallKind,
     pub(crate) affected_files: Vec<FileEffect>,
     pub(crate) outcome: Option<ToolOutcome>,
     pub(crate) approval: ApprovalState,
@@ -204,7 +199,6 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
                 verb,
                 target,
                 summary,
-                kind,
                 ..
             } = classify(&call.meta.tool_id, &call.input, output);
             let affected_files = match &outcome {
@@ -229,7 +223,6 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
                 verb,
                 target,
                 result_summary,
-                kind,
                 affected_files,
                 approval: derive_approval_state(
                     permission.map(|permission| permission.decision),

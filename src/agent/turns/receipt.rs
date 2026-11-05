@@ -228,7 +228,6 @@ mod tests {
         let bursts = segment_bursts(&items);
         assert_eq!(bursts.len(), 1);
         let burst = &bursts[0];
-        assert!(burst.closed);
         let tool_calls = build_tool_call_views(&items[burst.start..burst.end]);
         assert_eq!(receipt_summary(&tool_calls), "Read 1 file · 1 search");
     }

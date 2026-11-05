@@ -330,8 +330,6 @@ mod tests {
     fn agent(id: Uuid) -> SessionSummary {
         SessionSummary {
             session_id: AgentSessionId::from_uuid(id),
-            provider_id: "test".into(),
-            role_id: None,
             parent_session_id: None,
             workspace_root: None,
         }

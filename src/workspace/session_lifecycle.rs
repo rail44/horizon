@@ -856,8 +856,6 @@ mod tests {
         // yields its summary.
         let summary = |id: horizon_agent::contract::SessionId| crate::runtime::SessionSummary {
             session_id: id,
-            provider_id: "mock".into(),
-            role_id: None,
             parent_session_id: None,
             workspace_root: None,
         };

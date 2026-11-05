@@ -18,11 +18,4 @@
 pub struct Burst {
     pub start: usize,
     pub end: usize,
-    /// Whether this burst has permanently folded into a receipt.
-    /// `false` only for the trailing burst of a still-running turn whose
-    /// tool calls aren't all finished yet, or that has no closing
-    /// assistant text after them yet -- the one burst still eligible to
-    /// render as the running card. Every other burst -- including the
-    /// turn's very last one, once `TurnEnded` folds -- is always `true`.
-    pub closed: bool,
 }

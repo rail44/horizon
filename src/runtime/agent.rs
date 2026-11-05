@@ -43,8 +43,6 @@ const CLIENT_BINARY_ID: &str = concat!("horizon/", env!("CARGO_PKG_VERSION"));
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SessionSummary {
     pub(crate) session_id: SessionId,
-    pub(crate) provider_id: String,
-    pub(crate) role_id: Option<String>,
     pub(crate) parent_session_id: Option<SessionId>,
     pub(crate) workspace_root: Option<PathBuf>,
 }
@@ -62,8 +60,6 @@ impl SessionSummary {
             });
         Some(Self {
             session_id,
-            provider_id: meta.provider_id,
-            role_id: meta.role_id,
             parent_session_id: meta.parent_session_id,
             workspace_root: meta.workspace_root,
         })

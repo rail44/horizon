@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use horizon_acp::{ApprovalKind, MemoryDigest, ToolCallMeta, ToolOutcome};
+use horizon_acp::{MemoryDigest, ToolCallMeta, ToolOutcome};
 
 /// One execution attempt of a tool call: the provider's call id plus the
 /// daemon's occurrence id (the ACP `toolCallId`).
@@ -104,7 +104,6 @@ pub(crate) enum PermissionDecision {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Permission {
     pub(crate) identity: ToolCallIdentity,
-    pub(crate) kind: ApprovalKind,
     /// The request's `title`, with its `description` appended when present.
     pub(crate) reason: String,
     pub(crate) decision: Option<PermissionDecision>,
@@ -114,7 +113,6 @@ pub(crate) struct Permission {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ToolCallPreparing {
     pub(crate) key: String,
-    pub(crate) tool_id: Option<String>,
     pub(crate) bytes: usize,
 }
 
@@ -141,6 +139,9 @@ pub(crate) enum TurnEndReason {
     HaltedByDoomLoop,
 }
 
+// A tool call is the large side and the common item of a frame; boxing it
+// would add an allocation per call to save space on the small items.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AgentFrameItem {
     Message(Message),
