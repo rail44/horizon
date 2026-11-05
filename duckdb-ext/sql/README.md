@@ -584,6 +584,23 @@ reading of them, then Go's:
   without the last descriptor in its file; Go has no variants. A part whose type has no
   unit (a type a macro writes, a struct type written inside another declaration) is left
   out.
+- **`field_accesses(unit_id, type_unit_id, symbol, name, file_id, start_line,
+  start_column, access)`**: every reference occurrence of a type's field (`type_parts`,
+  part `field`), in the unit it sits in, with what it does to the field: `write` or
+  `construct` where its place in the syntax tree (`occurrence_ast`) matches one of its
+  language's `field_access_contexts`, else `read`; NULL for a language that gives no
+  contexts. A field no production occurrence reads is a candidate for removal; one no
+  occurrence writes is set only where its type is constructed. Not cached: about half a
+  second over this repository beyond loading.
+- **`field_access_contexts(language, access, chain, child_at)`**: each language's syntax
+  for a written or constructed field (`<language>_field_access_contexts`): `chain` is
+  the occurrence's ancestor node types from its parent outwards, and `child_at`, when
+  set, names the ancestor in `chain` (1-based) that must be its parent's first child --
+  an assignment's left side. Rust (`rust_field_access_contexts`): a field expression on
+  the left of `=` or a compound assignment is `write`, a field initializer or a
+  shorthand one in a struct expression is `construct`; a mutation through a method call
+  (`x.f.push(..)`) or a `&mut x.f` borrow reads as `read`. Go (`go_field_access_contexts`):
+  none yet.
 - **`file_namespaces(file_id, namespace, namespace_path)`**: each source file's
   namespace as its language places it (`<language>_file_namespaces`): a Rust file is its
   own, named by its path and placed by the file-module convention (a crate root and
@@ -816,7 +833,7 @@ the settings' tables as `code-db` does (`exclude_patterns`, `extra_test_paths`,
 `extra_test_attributes`, two layers), reads `refresh.sql` and checks every cached
 layer against its view's definition (below), and asserts over the cache every row of
 `files` and `units`, `unit_owner_types`, `type_interfaces`, `member_implementations`,
-`type_conversions`, `type_parts`, `unit_edges`, `namespaces`, `package_edges`,
+`type_conversions`, `type_parts`, `field_accesses`, `unit_edges`, `namespaces`, `package_edges`,
 `namespace_cycles`, `unit_quality`, and every query with its parameters (`size` at three
 levels, `coupling` with `min_packages` and at the file and package levels, `unreferenced`
 with the structural rows, `duplication` with tests and per report), `clone_report_pairs`
@@ -872,11 +889,11 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
 | `00_load.sql` | `INSTALL`/`LOAD` of sitting_duck, `LOAD` of the two extensions; the limits it is given (Limits); parameter defaults; the settings' tables `config_layers`, `config_layer_deps` (created empty when missing); the macros `path_glob_regex`, `path_glob`; `is_source_file`, `tracked_source_files(path, mode, blob_id)`; the snapshot `source_files`/`source_paths`; the lists `scip_indexes` and `clone_reports`, `clone_report_bytes`; the limits line as its last result |
 | `views/files.sql` | `files(file_id, path, language, mode, blob_id)`, `sources(file_id, content)`, `source_lines(file_id, line, text, is_blank, is_comment, nonblank_through)`, `file_ast` (Files) |
 | `views/scip.sql` | `scip_index_occurrences`, `scip_index_symbols`, `scip_index_relationships`, `scip_index_metadata`, `scip_index_roots`; `scip_document_occurrences`, `scip_document_symbols`; `scip_occurrences`, `scip_symbols`, `scip_relationships` (SCIP) |
-| `lang/rust.sql` | `rust_terms`, `rust_value_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, `rust_control_nodes`, the macros `impl_base_name`, `impl_generic_arg`; `rust_unit_rows`, `rust_units` (Units), `rust_type_facts`, `rust_type_parts` (Types) |
-| `lang/go.sql` | `go_terms`, `go_value_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_control_nodes`, `go_units` (Units), `go_type_facts`, `go_type_parts` (Types) |
+| `lang/rust.sql` | `rust_terms`, `rust_value_terms`, `rust_file_namespaces`, `rust_visibility_boundary`, `rust_namespace_references`, `rust_control_nodes`, the macros `impl_base_name`, `impl_generic_arg`; `rust_unit_rows`, `rust_units` (Units), `rust_type_facts`, `rust_type_parts` (Types), `rust_field_access_contexts` (Graph) |
+| `lang/go.sql` | `go_terms`, `go_value_terms`, `go_file_namespaces`, `go_visibility_boundary`, `go_namespace_references`, `go_file_ast`, `go_control_nodes`, `go_units` (Units), `go_type_facts`, `go_type_parts` (Types), `go_field_access_contexts` (Graph) |
 | `views/terms.sql` | `lang_terms`, `lang_value_terms`, `lang_visibility_boundaries`, the macros `visibility_boundary`, `display_language`, `term_swap`, `display_term`, `internal_term`, `display_column`, `display_select`; `display_ddl` (Names) |
 | `views/units.sql` | `derived_units`, `units`, `unit_ast` (Units) |
-| `views/graph.sql` | `unit_occurrences`, `occurrence_ast`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `type_facts`, `type_fact_units`, `unit_owner_types`, `type_interfaces`, `member_implementations`, `type_conversions`, `type_parts`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
+| `views/graph.sql` | `unit_occurrences`, `occurrence_ast`, `symbol_units`, `unit_references`, `unit_edges`, `unit_contains`, `unit_ancestors`, `type_facts`, `type_fact_units`, `unit_owner_types`, `type_interfaces`, `member_implementations`, `type_conversions`, `type_parts`, `field_access_contexts`, `field_accesses`, `file_namespaces`, `namespaces`, `unit_namespace`, `namespace_edges`, `package_edges`, `namespace_cycle_edges`, `namespace_cycles`, `namespace_layer_matches`, `namespace_layers`, the macro `graph_layer_violation`, `namespace_layer_violations`, `package_cycles` (Graph) |
 | `views/clones.sql` | `clone_report_pairs`, `clone_pairs`, `clone_sides` |
 | `views/quality.sql` | `unit_scope`, `namespace_references`, `unit_fan_in`, `unit_fan_out`, `unit_reference_status`, `unit_debt_markers`, `unit_clones`, `unit_own_ast`, `control_nodes`, `unit_constructs`, `unit_complexity`, `unit_quality` (Axes) |
 | `queries/*.sql` | one statement each: `size`, `duplication`, `coupling`, `interface`, `public_surface`, `intent`, `unreferenced`, `namespace_graph`, `namespace_cycles`, `layer_violations`, `unit_dependencies`, `complexity`; the header states the question, the axis, the evidence, the settings it reads and the parameters |
@@ -904,10 +921,11 @@ settings' test rules and exclusion, a duplication pair, and a query without the 
   its namespace units in `<language>_namespace_references`, its control constructs
   in `<language>_control_nodes`, and what it says about types (members, implementations,
   conversions) in `<language>_type_facts`, a type's fields and variants in
-  `<language>_type_parts`; another language adds its file there, its nine
+  `<language>_type_parts`, the syntax that writes or constructs a field in
+  `<language>_field_access_contexts`; another language adds its file there, its ten
   views to the unions in `derived_units`, `file_namespaces`, `lang_terms`,
   `lang_value_terms`, `lang_visibility_boundaries`, `namespace_references`,
-  `control_nodes`, `type_facts` and `type_parts`, its extension
+  `control_nodes`, `type_facts`, `type_parts` and `field_access_contexts`, its extension
   to `languages` and its indexer to `code-db index`. A unit's `entry` (what runs it
   without a reference) is a column of `<language>_units`. No view outside `lang/` holds
   a language's rules.

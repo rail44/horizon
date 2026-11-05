@@ -1110,6 +1110,24 @@ defect: the lead rule applied to file modules, so an attribute on a file's line 
 first item's) made the whole file a test; it no longer applies to them. On this repository
 both files' units (49 and 10) became tests and no other file's count changed.
 
+## Field reads and writes (2026-11-05)
+
+`unit_references` says a unit touches a field, not what it does to it, so a field that
+is only ever set looked used: `ToolSessionState`'s `isolated_worktree` (set through a
+builder, read by nothing, kept quiet by a derived `Clone`) was found only by reading each
+reference's source line. `field_accesses` classifies every reference occurrence of a
+field by its place in the syntax tree (`occurrence_ast`): `write` on an assignment's left
+side, `construct` in a struct expression, `read` otherwise (owner: 「その進め方でいきましょう」).
+Which syntax means a write is language knowledge, kept as data in
+`<language>_field_access_contexts` (ancestor-type chains plus a first-child condition for
+an assignment's left side) like the control nodes; Go has no rows yet, so its accesses
+carry no kind rather than reading as all reads. A mutation through a method call or a
+`&mut` borrow reads as `read`, so the view errs towards "used". On this repository it
+gives 12,712 reads, 665 writes and 5,889 constructions; the view stays live (about half a
+second beyond loading). Fields with no production read still need filtering by hand:
+serde, derived `PartialEq`/`Hash`, `repr(C)` structs, `_`-prefixed guards and
+wasm-only readers read fields without a reference occurrence code-db can see.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into

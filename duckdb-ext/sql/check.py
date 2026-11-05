@@ -492,7 +492,11 @@ FIXTURE_FILES = {
     # A test module declared by its parent: `probe` is a test, and the `crate` of its
     # `pub(crate)` (an occurrence of the crate root) must not make main.rs one.
     "tools/src/sub.rs": "#[cfg(test)]\npub(crate) mod probe;\n",
-    "tools/src/sub/probe.rs": "pub fn probe_helper() -> u32 {\n    7\n}\n",
+    "tools/src/sub/probe.rs": (
+        "pub struct Counter {\n    pub n: u32,\n}\n\n"
+        "pub fn probe_helper() -> u32 {\n    let mut c = Counter { n: 1 };\n    c.n += 1;\n"
+        "    c.n = c.n * 2;\n    c.n\n}\n"
+    ),
     "scripts/loose.rs": LOOSE,
     ".gitignore": "target/\n",
 }
@@ -602,6 +606,9 @@ CHECKED = [
                          "JOIN units t ON t.unit_id = f.type_unit_id ORDER BY ALL"),
     ("type_parts", "SELECT t.path, t.qualified_name, p.name, p.part FROM type_parts p "
                    "JOIN units t ON t.unit_id = p.type_unit_id ORDER BY ALL"),
+    ("field_accesses", "SELECT u.path, u.qualified_name, t.qualified_name, a.name, a.start_line, a.start_column, "
+                       "a.access FROM field_accesses a JOIN units u USING (unit_id) "
+                       "JOIN units t ON t.unit_id = a.type_unit_id ORDER BY ALL"),
     ("unit_edges", "SELECT s.path, s.qualified_name, d.path, d.qualified_name, e.symbols, e.occurrences, e.is_self, "
                    "e.ambiguous, e.src_is_test, e.dst_is_test FROM unit_edges e JOIN units s ON s.unit_id = e.src_unit_id "
                    "JOIN units d ON d.unit_id = e.dst_unit_id ORDER BY ALL"),
@@ -961,7 +968,7 @@ EXPECTED = {
         ('shapes/src/rect.rs', 6),
         ('tools/src/main.rs', 5),
         ('tools/src/sub.rs', 1),
-        ('tools/src/sub/probe.rs', 2),
+        ('tools/src/sub/probe.rs', 3),
     ],
     'units': [
         ('app/src/fixtures.rs', 'namespace', 'Module', 'fixtures', None, 1, 4, 1, 3, True, 'private', None, False, True, None),
@@ -1000,8 +1007,9 @@ EXPECTED = {
         ('tools/src/main.rs', 'type', 'Enum', 'Mode', 'tools', 9, 12, 9, 4, False, 'private', None, False, False, None),
         ('tools/src/main.rs', 'function', 'Function', 'pick', 'tools', 14, 19, 14, 6, False, 'private', 1, False, False, None),
         ('tools/src/sub.rs', 'namespace', 'Module', 'sub', None, 1, 3, 1, 2, False, 'private', None, False, True, None),
-        ('tools/src/sub/probe.rs', 'namespace', 'Module', 'probe', None, 1, 4, 1, 3, True, 'pub(crate)', None, False, True, None),
-        ('tools/src/sub/probe.rs', 'function', 'Function', 'probe_helper', 'probe', 1, 3, 1, 3, True, 'pub', 0, False, False, None),
+        ('tools/src/sub/probe.rs', 'namespace', 'Module', 'probe', None, 1, 11, 1, 9, True, 'pub(crate)', None, False, True, None),
+        ('tools/src/sub/probe.rs', 'type', 'Struct', 'Counter', 'probe', 1, 3, 1, 3, True, 'pub', None, False, False, None),
+        ('tools/src/sub/probe.rs', 'function', 'Function', 'probe_helper', 'probe', 5, 10, 5, 6, True, 'pub', 0, False, False, None),
     ],
     'unit_owner_types': [
         ('shapes/src/convert.rs', 'From<Square> for Rect.from', 'Rect'),
@@ -1032,6 +1040,22 @@ EXPECTED = {
         ('shapes/src/rect.rs', 'Rect', 'side', 'field'),
         ('tools/src/main.rs', 'Mode', 'Fast', 'variant'),
         ('tools/src/main.rs', 'Mode', 'Slow', 'variant'),
+        ('tools/src/sub/probe.rs', 'Counter', 'n', 'field'),
+    ],
+    'field_accesses': [
+        ('app/tests/it.rs', 'integration', 'Square', 'side', 3, 39, 'read'),
+        ('shapes/src/convert.rs', 'From<Square> for Rect.from', 'Rect', 'side', 6, 16, 'construct'),
+        ('shapes/src/convert.rs', 'From<Square> for Rect.from', 'Square', 'side', 6, 29, 'read'),
+        ('shapes/src/lib.rs', 'Shape for Square.area', 'Square', 'side', 22, 25, 'read'),
+        ('shapes/src/lib.rs', 'Square.new', 'Square', 'side', 33, 16, 'construct'),
+        ('shapes/src/lib.rs', 'Square.probe', 'Square', 'side', 54, 14, 'read'),
+        ('shapes/src/lib.rs', 'Square.scaled', 'Square', 'side', 38, 14, 'read'),
+        ('shapes/src/rect.rs', 'Shape for Rect.area', 'Rect', 'side', 10, 25, 'read'),
+        ('tools/src/sub/probe.rs', 'probe_helper', 'Counter', 'n', 6, 27, 'construct'),
+        ('tools/src/sub/probe.rs', 'probe_helper', 'Counter', 'n', 7, 7, 'write'),
+        ('tools/src/sub/probe.rs', 'probe_helper', 'Counter', 'n', 8, 7, 'write'),
+        ('tools/src/sub/probe.rs', 'probe_helper', 'Counter', 'n', 8, 13, 'read'),
+        ('tools/src/sub/probe.rs', 'probe_helper', 'Counter', 'n', 9, 7, 'read'),
     ],
     'unit_edges': [
         ('app/src/fixtures.rs', 'sample', 'shapes/src/lib.rs', 'Square', 1, 2, False, False, True, False),
@@ -1068,6 +1092,7 @@ EXPECTED = {
         ('shapes/src/rect.rs', 'ring', 'shapes/src/convert.rs', 'back', 1, 1, False, False, False, False),
         ('tools/src/main.rs', 'main', 'tools/src/main.rs', 'run', 1, 1, False, False, False, False),
         ('tools/src/main.rs', 'pick', 'tools/src/main.rs', 'Mode', 4, 6, False, False, False, False),
+        ('tools/src/sub/probe.rs', 'probe_helper', 'tools/src/sub/probe.rs', 'Counter', 2, 6, False, False, True, True),
     ],
     'namespaces': [
         ('app/src/fixtures.rs', 'app', 'app/src/fixtures'),
@@ -1124,8 +1149,9 @@ EXPECTED = {
         ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'type', 'Mode', 9, 12, False, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', None, False, 0, 3, 'referenced'),
         ('tools/src/main.rs', 'tools', 'tools/src/main.rs', 'function', 'pick', 14, 19, False, 6, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', 1, False, 0, 0, 'unreferenced'),
         ('tools/src/sub.rs', 'tools', 'tools/src/sub.rs', 'namespace', 'sub', 1, 3, False, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'private', None, False, 0, 1, 'referenced'),
-        ('tools/src/sub/probe.rs', 'tools', 'tools/src/sub/probe.rs', 'namespace', 'probe', 1, 4, True, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'pub(crate)', None, False, 0, 1, 'referenced'),
-        ('tools/src/sub/probe.rs', 'tools', 'tools/src/sub/probe.rs', 'function', 'probe_helper', 1, 3, True, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'pub', 0, False, 0, 0, 'test'),
+        ('tools/src/sub/probe.rs', 'tools', 'tools/src/sub/probe.rs', 'namespace', 'probe', 1, 11, True, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'pub(crate)', None, False, 0, 1, 'referenced'),
+        ('tools/src/sub/probe.rs', 'tools', 'tools/src/sub/probe.rs', 'type', 'Counter', 1, 3, True, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'pub', None, False, 0, 1, 'referenced'),
+        ('tools/src/sub/probe.rs', 'tools', 'tools/src/sub/probe.rs', 'function', 'probe_helper', 5, 10, True, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, 'pub', 0, False, 0, 0, 'test'),
     ],
     'query size': [
         ('unit', 'shapes', 'shapes/src/lib.rs', 'method', 'Shape for Square.area', 21, 7, None, False, None),
@@ -1260,7 +1286,7 @@ EXPECTED = {
     ],
     'query size level=package': [
         ('package', 'shapes', None, None, None, None, 86, 21, None, 18.6),
-        ('package', 'tools', None, None, None, None, 22, 5, None, 13.6),
+        ('package', 'tools', None, None, None, None, 28, 6, None, 32.1),
         ('package', 'app', None, None, None, None, 13, 3, None, 53.8),
     ],
     'query coupling kind=type min_packages=1': [
@@ -1278,7 +1304,7 @@ EXPECTED = {
     'query coupling level=package': [
         ('package', None, None, 'shapes', None, None, None, 86, 3, 3, 1, 4, 0, 0, 0, 0, None),
         ('package', None, None, 'app', None, None, None, 13, 0, 0, 0, 0, 2, 2, 1, 6, None),
-        ('package', None, None, 'tools', None, None, None, 22, 0, 0, 0, 0, 0, 0, 0, 0, None),
+        ('package', None, None, 'tools', None, None, None, 28, 0, 0, 0, 0, 0, 0, 0, 0, None),
     ],
     'clone_report_pairs': [
         (0, 'exact', 'shapes/src/lib.rs', 22, 26, 'shapes/src/rect.rs', 10, 14, 80, 5),
@@ -1299,6 +1325,7 @@ EXPECTED = {
         ('shapes/src/lib.rs', 'shapes', 'namespace', 'tests', 58, 9, 'private', 'test'),
         ('shapes/src/rect.rs', 'shapes', 'method', 'Shape for Rect.area', 9, 7, None, 'implementation'),
         ('app/src/main.rs', 'app', 'namespace', 'app', 1, 6, 'private', 'root'),
+        ('tools/src/sub/probe.rs', 'tools', 'function', 'probe_helper', 5, 6, 'pub', 'test'),
         ('shapes/src/lib.rs', 'shapes', 'function', 'tests.square_area', 62, 5, 'private', 'test'),
         ('app/src/main.rs', 'app', 'function', 'main', 3, 4, 'private', 'entry_point'),
         ('app/tests/it.rs', 'app', 'namespace', 'app', 1, 4, 'private', 'test'),
@@ -1307,7 +1334,6 @@ EXPECTED = {
         ('app/src/fixtures.rs', 'app', 'function', 'sample', 1, 3, 'pub', 'test'),
         ('shapes/src/convert.rs', 'shapes', 'method', 'From<Square> for Rect.from', 5, 3, None, 'implementation'),
         ('tools/src/main.rs', 'tools', 'function', 'main', 1, 3, 'private', 'entry_point'),
-        ('tools/src/sub/probe.rs', 'tools', 'function', 'probe_helper', 1, 3, 'pub', 'test'),
         ('shapes/src/lib.rs', 'shapes', 'type', 'Shape.Unit', 8, 1, None, 'interface_item'),
         ('shapes/src/lib.rs', 'shapes', 'method', 'Shape.area', 9, 1, None, 'interface_item'),
         ('shapes/src/lib.rs', 'shapes', 'type', 'Shape for Square.Unit', 20, 1, None, 'implementation'),

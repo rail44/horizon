@@ -396,3 +396,8 @@ FROM named n
 JOIN go_files g USING (file_id)
 LEFT JOIN file_packages fp USING (file_id)
 LEFT JOIN parameters p USING (symbol, file_id, name_line, name_column);
+
+-- go_field_access_contexts: rust_field_access_contexts' columns, for Go: none yet, so a Go
+-- field's accesses have no access kind (views/graph.sql, field_accesses).
+CREATE OR REPLACE VIEW go_field_access_contexts AS
+SELECT NULL::VARCHAR AS access, NULL::VARCHAR[] AS chain, NULL::INTEGER AS child_at WHERE false;

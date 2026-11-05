@@ -278,6 +278,55 @@ FROM parts p
 JOIN keys t ON t.file_id = p.to_file_id AND t.symbol = p.to_symbol
      AND t.name_line = p.to_name_line AND t.name_column = p.to_name_column;
 
+-- field_access_contexts(language, access, chain, child_at): each language's syntax for a
+-- written or constructed field (lang/<language>.sql, <language>_field_access_contexts).
+CREATE OR REPLACE VIEW field_access_contexts AS
+SELECT 'rust' AS language, * FROM rust_field_access_contexts
+UNION ALL
+SELECT 'go', * FROM go_field_access_contexts;
+
+-- field_accesses(unit_id, type_unit_id, symbol, name, file_id, start_line, start_column,
+-- access): every reference occurrence of a type's field (type_parts, part 'field'), in
+-- the unit it sits in, with what it does to the field: 'write' or 'construct' where its
+-- place in the syntax tree (occurrence_ast) matches one of its language's
+-- field_access_contexts, else 'read'; NULL for a language that gives no contexts. A field
+-- no occurrence writes is set only where its type is constructed.
+CREATE OR REPLACE VIEW field_accesses AS
+WITH occurrences AS MATERIALIZED (
+    SELECT o.unit_id, p.type_unit_id, o.symbol, p.name, o.file_id, o.start_line, o.start_column,
+           f.language, o.ancestor_ids, o.ancestor_types
+    FROM occurrence_ast o
+    JOIN type_parts p ON p.symbol = o.symbol AND p.part = 'field'
+    JOIN files f USING (file_id)
+    WHERE NOT o.is_definition
+),
+candidates AS MATERIALIZED (
+    SELECT o.file_id, o.start_line, o.start_column, o.symbol, c.access,
+           CASE WHEN c.child_at IS NOT NULL THEN o.ancestor_ids[c.child_at] END AS first_child
+    FROM occurrences o
+    JOIN field_access_contexts c
+      ON c.language = o.language AND o.ancestor_types[1:len(c.chain)] = c.chain
+),
+first_children AS MATERIALIZED (
+    SELECT s.file_id, s.node_id
+    FROM file_ast s
+    JOIN (SELECT DISTINCT file_id, first_child FROM candidates WHERE first_child IS NOT NULL) c
+      ON s.file_id = c.file_id AND s.node_id = c.first_child
+    WHERE s.sibling_index = 0
+),
+matched AS (
+    SELECT c.file_id, c.start_line, c.start_column, c.symbol, min(c.access) AS access
+    FROM candidates c
+    LEFT JOIN first_children f ON f.file_id = c.file_id AND f.node_id = c.first_child
+    WHERE c.first_child IS NULL OR f.node_id IS NOT NULL
+    GROUP BY ALL
+)
+SELECT o.unit_id, o.type_unit_id, o.symbol, o.name, o.file_id, o.start_line, o.start_column,
+       CASE WHEN m.access IS NOT NULL THEN m.access
+            WHEN o.language IN (SELECT language FROM field_access_contexts) THEN 'read' END AS access
+FROM occurrences o
+LEFT JOIN matched m USING (file_id, start_line, start_column, symbol);
+
 -- file_namespaces(file_id, namespace, namespace_path): the namespace each source file
 -- belongs to, as its language places it (lang/<language>.sql, <language>_file_namespaces):
 -- a Rust file is its own namespace (its file module), a Go file belongs to its directory's

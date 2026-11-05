@@ -563,3 +563,19 @@ LEFT JOIN types t ON t.file_id = p.file_id AND t.symbol = p.owner
      AND (t.enclosing_start_line, t.enclosing_start_column) <= (p.name_line, p.name_column)
      AND (p.name_line, p.name_column) < (t.enclosing_end_line, t.enclosing_end_column)
 WHERE p.owner NOT IN (SELECT symbol FROM parts WHERE part = 'variant');
+
+-- rust_field_access_contexts(access, chain, child_at): where in the syntax tree a field's
+-- reference occurrence means it is written ('write') or set by a struct expression
+-- ('construct'); views/graph.sql's field_accesses reads every other occurrence of a
+-- field as 'read'. chain is the occurrence's ancestor node types from its parent
+-- outwards (occurrence_ast.ancestor_types' prefix); child_at, when set, names the
+-- ancestor in chain (1-based) that must be its parent's first child -- the field
+-- expression on an assignment's left. A mutation through a method call (`x.f.push(…)`)
+-- or a `&mut x.f` borrow reads as 'read'.
+CREATE OR REPLACE VIEW rust_field_access_contexts AS
+SELECT * FROM (VALUES
+    ('write', ['field_expression', 'assignment_expression'], 1),
+    ('write', ['field_expression', 'compound_assignment_expr'], 1),
+    ('construct', ['field_initializer'], NULL::INTEGER),
+    ('construct', ['shorthand_field_initializer'], NULL::INTEGER)
+) t(access, chain, child_at);
