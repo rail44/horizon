@@ -1128,6 +1128,14 @@ second beyond loading). Fields with no production read still need filtering by h
 serde, derived `PartialEq`/`Hash`, `repr(C)` structs, `_`-prefixed guards and
 wasm-only readers read fields without a reference occurrence code-db can see.
 
+## This repository's settings file (2026-11-05)
+
+The same reachability query counted `crates/horizon-daemon-testkit` as production: it is a
+library crate that only the daemons' `[dev-dependencies]` name, which no Rust rule can
+see from its source. Whether such a crate is a test is the repository's judgment, so the
+repository's root now has a `.code-db.toml` whose one entry puts it under `tests.paths`
+(owner: 「設定の追加も、削除の確認作業もすすめてもらってよいです」); its 53 units became tests.
+
 ## Open points
 
 - **Lineage limits**: links are same-commit only; a body split into

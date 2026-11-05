@@ -1,0 +1,6 @@
+# code-db's settings for this repository (duckdb-ext/sql/README.md, Settings file).
+
+[tests]
+paths = [
+    { path = "crates/horizon-daemon-testkit/**", reason = "a dev-dependency of the daemon crates' integration tests, never linked into a shipped binary (its Cargo.toml)" },
+]
