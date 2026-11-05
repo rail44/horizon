@@ -139,14 +139,11 @@ pub(crate) enum TurnEndReason {
     HaltedByDoomLoop,
 }
 
-// A tool call is the large side and the common item of a frame; boxing it
-// would add an allocation per call to save space on the small items.
-#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AgentFrameItem {
     Message(Message),
     Thought(Thought),
-    ToolCall(ToolCall),
+    ToolCall(Box<ToolCall>),
     Permission(Permission),
     ToolCallPreparing(ToolCallPreparing),
     HistoryCleared(HistoryCleared),

@@ -83,7 +83,7 @@ pub(crate) mod test_support {
 
     /// A requested call that has not started.
     pub(crate) fn tool_requested(call_id: &str, tool_id: &str, input: Value) -> AgentFrameItem {
-        AgentFrameItem::ToolCall(call(call_id, tool_id, input))
+        AgentFrameItem::ToolCall(Box::new(call(call_id, tool_id, input)))
     }
 
     /// A finished call; an output with `is_error: true` reads as failed.
@@ -106,7 +106,7 @@ pub(crate) mod test_support {
             ToolOutcome::Succeeded
         });
         call.output = Some(output);
-        AgentFrameItem::ToolCall(call)
+        AgentFrameItem::ToolCall(Box::new(call))
     }
 
     pub(crate) fn edit_result(path: &str) -> Value {

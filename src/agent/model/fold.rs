@@ -335,20 +335,22 @@ impl AgentModel {
                     (_, MaybeUndefined::Value(title)) => title.clone(),
                     _ => String::new(),
                 };
-                self.frame.items.push(AgentFrameItem::ToolCall(ToolCall {
-                    occurrence_id: occurrence_id.clone(),
-                    meta: ToolCallMeta {
-                        call_id: occurrence_id.clone(),
-                        tool_id,
-                        outcome: None,
-                        auto_approved: None,
-                        policy_tier: None,
-                        human_decision: None,
-                    },
-                    status: ToolCallStatus::Pending,
-                    input: serde_json::Value::Null,
-                    output: None,
-                }));
+                self.frame
+                    .items
+                    .push(AgentFrameItem::ToolCall(Box::new(ToolCall {
+                        occurrence_id: occurrence_id.clone(),
+                        meta: ToolCallMeta {
+                            call_id: occurrence_id.clone(),
+                            tool_id,
+                            outcome: None,
+                            auto_approved: None,
+                            policy_tier: None,
+                            human_decision: None,
+                        },
+                        status: ToolCallStatus::Pending,
+                        input: serde_json::Value::Null,
+                        output: None,
+                    })));
                 self.frame.items.len() - 1
             }
         };
