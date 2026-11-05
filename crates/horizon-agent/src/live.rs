@@ -72,7 +72,7 @@ impl State {
             match event {
                 ProviderEvent::Event { event, .. } => {
                     apply_agent_event_to_frame(&mut self.frame, &event, &mut self.turn);
-                    self.events.push(event);
+                    self.events.push(*event);
                 }
                 ProviderEvent::ToolCallProgress(progress) => {
                     apply_tool_call_progress_to_frame(&mut self.frame, progress);

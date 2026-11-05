@@ -478,8 +478,6 @@ fn open_duckdb_store(duckdb_path: &Path) -> Option<Store> {
 }
 
 /// The incremental mode's outcome (see [`WriterHandle::open_silently`]).
-// `Ready` carries the whole startup; it is built and consumed once.
-#[allow(clippy::large_enum_variant)]
 enum IncrementalStartup {
     /// The cursor matched and the tail is projected: `Ready` may go out.
     Ready(StartedLog, Store),

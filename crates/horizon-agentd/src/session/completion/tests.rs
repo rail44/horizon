@@ -55,10 +55,10 @@ fn old_async_completions_cannot_answer_a_new_occurrence_with_the_same_call_id() 
                 occurrence_id: old.request.occurrence_id.clone(),
                 domains: vec!["example.test".into()],
             },
-            _ => ToolCompletion::ApprovalJudged(horizon_agent::tools::ApprovalJudgment {
+            _ => ToolCompletion::ApprovalJudged(Box::new(horizon_agent::tools::ApprovalJudgment {
                 candidate: old,
                 decision: JudgeDecision::Escalate,
-            }),
+            })),
         };
         fold_tool_completion(&state, &live, &commands, session, completion);
         if live.events() != history || outgoing.try_recv().is_ok() || responses.try_recv().is_ok() {
@@ -986,7 +986,7 @@ fn deliver_judgment(
         live,
         commands,
         session,
-        ToolCompletion::ApprovalJudged(judgment),
+        ToolCompletion::ApprovalJudged(Box::new(judgment)),
     );
 }
 

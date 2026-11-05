@@ -824,7 +824,7 @@ mod tests {
             panic!("unexpected completion");
         };
         assert_eq!(
-            judgment,
+            *judgment,
             ApprovalJudgment {
                 candidate: expected,
                 decision: JudgeDecision::AutoApprove,
@@ -1265,10 +1265,11 @@ mod tests {
         let result = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
         assert!(matches!(
             result,
-            crate::tools::ToolCompletion::ApprovalJudged(ApprovalJudgment {
-                decision: JudgeDecision::Escalate,
-                ..
-            })
+            crate::tools::ToolCompletion::ApprovalJudged(judgment)
+                if matches!(*judgment, ApprovalJudgment {
+                    decision: JudgeDecision::Escalate,
+                    ..
+                })
         ));
         assert!(crate::tools::drain_session_work(
             session,

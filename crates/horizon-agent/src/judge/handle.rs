@@ -245,12 +245,12 @@ impl JudgeHandle {
                 handle.backend.threshold(),
                 latency_ms,
             );
-            let _ = result_tx.send(crate::tools::ToolCompletion::ApprovalJudged(
+            let _ = result_tx.send(crate::tools::ToolCompletion::ApprovalJudged(Box::new(
                 ApprovalJudgment {
                     candidate,
                     decision: verdict.decision,
                 },
-            ));
+            )));
         });
         true
     }

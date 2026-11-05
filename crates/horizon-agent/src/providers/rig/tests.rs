@@ -658,10 +658,11 @@ fn converts_rig_tool_call_to_provider_event_with_payload() {
     assert!(matches!(
         events.as_slice(),
         [ProviderEvent::Event {
-            event: Event::ToolCallRequested(request),
+            event,
             provider_payload: Some(payload),
             ..
-        }] if request.call_id.0 == "rig-workspace-snapshot-1"
+        }] if matches!(&**event, Event::ToolCallRequested(request)
+            if request.call_id.0 == "rig-workspace-snapshot-1")
             && payload["schema"] == RIG_PROVIDER_PAYLOAD_SCHEMA
             && payload["rig"]["tool_call"]["id"] == "rig-workspace-snapshot-1"
     ));
@@ -2034,10 +2035,8 @@ fn start_fallback_rig_session_with_history(
                 let _ = commands.send(Command::ToolCallsSettled { id, results });
             } else if matches!(
                 &event,
-                ProviderEvent::Event {
-                    event: Event::ConversationRecorded(_),
-                    ..
-                }
+                ProviderEvent::Event { event, .. }
+                    if matches!(**event, Event::ConversationRecorded(_))
             ) {
                 // These tests assert coordinator/UI events. Journal replay is tested separately.
                 continue;

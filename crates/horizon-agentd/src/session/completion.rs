@@ -42,7 +42,7 @@ pub(super) fn fold_tool_completion(
     };
     match completion {
         ToolCompletion::ApprovalJudged(judgment) => {
-            fold_approval_judgment(state, live_state, commands_tx, session_id, judgment)
+            fold_approval_judgment(state, live_state, commands_tx, session_id, *judgment)
         }
         ToolCompletion::Finished(result) => publish_tool_update(
             state,

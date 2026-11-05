@@ -1009,16 +1009,6 @@ impl Eq for ContinuationVerdict {}
 /// having to sniff `ApprovalRequest::reason`'s free text (today it doesn't,
 /// but this keeps that door open).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
-// `large_enum_variant` triggered after adding `occurrence_id: OccurrenceId` to `ToolCallResult` pushed the embedded variants
-// (DomainDenied, FilesystemDenied, ...) just past the 200-byte threshold
-// the lint uses. Boxing the embedded `result` fields would propagate
-// `Box` allocations through every match site; the variants are not
-// constructed in a hot loop, and the enum is not constructed many at
-// once, so the simpler shape is preferred. `clippy::large_enum_variant`
-// is allow-listed here rather than at each variant -- the same enum
-// sits behind `BashCompletion` too, and the alternative spelling would
-// multiply without adding a real signal.
-#[allow(clippy::large_enum_variant)]
 pub enum ApprovalKind {
     /// An ordinary first-time approval request -- the only kind that
     /// existed before this leg.

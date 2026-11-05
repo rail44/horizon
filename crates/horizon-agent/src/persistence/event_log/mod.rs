@@ -127,14 +127,9 @@ struct RecordEnvelope {
 }
 
 /// One log line's decode outcome, at whatever granularity the damage goes.
-/// `Record` dwarfs the other variants (`clippy::large_enum_variant`), but
-/// this enum is constructed and consumed once per line, immediately, inside
-/// [`read`] -- not stored or passed around -- so boxing it would only add an
-/// allocation per line for no benefit.
-#[allow(clippy::large_enum_variant)]
 enum DecodedLine {
     /// A fully decodable line.
-    Record(Record),
+    Record(Box<Record>),
     /// The envelope (schema, `sequence`, session, ...) is intact but
     /// `event` this build can't decode -- this project carries no
     /// cross-build event-payload compatibility, so the line contributes no
@@ -152,7 +147,7 @@ enum DecodedLine {
 
 fn decode_record_tolerantly(line: &str) -> DecodedLine {
     if let Ok(record) = serde_json::from_str::<Record>(line) {
-        return DecodedLine::Record(record);
+        return DecodedLine::Record(Box::new(record));
     }
     match serde_json::from_str::<RecordEnvelope>(line) {
         Ok(envelope) => DecodedLine::SkippedEvent {
@@ -339,7 +334,7 @@ pub(crate) fn read_from(path: &Path, offset: u64) -> Result<ReadReport> {
                     && record.version == AGENT_EVENT_LOG_VERSION =>
             {
                 note_sequence(record.sequence, &mut max_known_sequence);
-                records.push((record, line_end));
+                records.push((*record, line_end));
             }
             DecodedLine::SkippedEvent {
                 schema,

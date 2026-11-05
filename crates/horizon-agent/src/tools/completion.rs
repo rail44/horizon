@@ -10,15 +10,9 @@ use crate::frame::AgentFrame;
 /// folding a received completion into the session's `LiveState`/`Frames`
 /// via `fold_bash_completion`.
 #[derive(Clone, Debug)]
-// Same justification as `ApprovalKind` in `contract.rs` -- adding
-// `occurrence_id: OccurrenceId` to `ToolCallResult` pushed the
-// `Finished(ToolCallResult)` variant just past the 200-byte threshold
-// the lint compares against, and the variants are not constructed in a
-// hot loop.
-#[allow(clippy::large_enum_variant)]
 pub enum ToolCompletion<R = ToolCallResult> {
     /// An enforcing judge finished evaluating an approval candidate.
-    ApprovalJudged(crate::judge::ApprovalJudgment),
+    ApprovalJudged(Box<crate::judge::ApprovalJudgment>),
     /// The call actually finished (successfully or not) -- fold
     /// `ToolCallFinished` and forward the result to the provider, exactly
     /// what every bash call did before this type grew a second variant.

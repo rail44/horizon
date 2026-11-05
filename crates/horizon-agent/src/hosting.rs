@@ -79,7 +79,7 @@ pub enum AttachmentEnd {
 impl AgentWireEvent {
     pub fn from_provider(event: &ProviderEvent) -> Option<Self> {
         Some(match event {
-            ProviderEvent::Event { event, .. } => Self::Event(event.clone()),
+            ProviderEvent::Event { event, .. } => Self::Event((**event).clone()),
             ProviderEvent::ToolCallProgress(progress) => Self::ToolCallProgress(progress.clone()),
             ProviderEvent::SessionModel(model) => Self::SessionModel(model.clone()),
             ProviderEvent::SessionSelection(selection) => Self::SessionSelection(selection.clone()),

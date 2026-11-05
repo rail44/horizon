@@ -6,13 +6,10 @@ use serde::{Deserialize, Serialize};
 use super::{Event, TaskProgress, ToolCallProgress};
 use crate::hosting::ModelSelection;
 
-// Keep frequent text deltas inline instead of allocating for every event.
-// This enum is smaller than the former envelope with its four sidecar Options.
-#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum ProviderEvent {
     Event {
-        event: Event,
+        event: Box<Event>,
         provider_payload: Option<serde_json::Value>,
     },
     ToolCallProgress(ToolCallProgress),
@@ -39,7 +36,7 @@ impl ProviderEvent {
 
     pub fn into_event(self) -> Option<Event> {
         match self {
-            Self::Event { event, .. } => Some(event),
+            Self::Event { event, .. } => Some(*event),
             _ => None,
         }
     }
@@ -58,14 +55,14 @@ impl ProviderEvent {
 
     pub(crate) fn new(event: Event) -> Self {
         Self::Event {
-            event,
+            event: Box::new(event),
             provider_payload: None,
         }
     }
 
     pub(crate) fn with_provider_payload(event: Event, provider_payload: serde_json::Value) -> Self {
         Self::Event {
-            event,
+            event: Box::new(event),
             provider_payload: Some(provider_payload),
         }
     }

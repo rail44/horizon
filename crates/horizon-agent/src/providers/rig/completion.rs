@@ -538,13 +538,10 @@ pub(super) fn provider_additional_params(kind: ProviderKind) -> serde_json::Valu
 /// rig-core 0.42 bundles both with no feature gates; the enum (rather than
 /// a trait object) is what lets `run_provider_stream` stay generic over the
 /// concrete `CompletionClient` impl without dyn-safe contortions.
-// Two provider clients that are only ever built once per turn and passed by
-// value into the stream runner; boxing them would buy nothing.
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(super) enum RigCompletionClient {
-    OpenAi(openai::OpenAI),
-    Anthropic(anthropic::Anthropic),
+    OpenAi(Box<openai::OpenAI>),
+    Anthropic(Box<anthropic::Anthropic>),
 }
 
 impl RigCompletionClient {
@@ -588,14 +585,14 @@ fn completion_client(config: &RigAgentConfig) -> anyhow::Result<RigCompletionCli
             if let Some(base_url) = &config.base_url {
                 provider = provider.with_base_url(base_url);
             }
-            Ok(RigCompletionClient::OpenAi(provider.client()))
+            Ok(RigCompletionClient::OpenAi(Box::new(provider.client())))
         }
         ProviderKind::Anthropic => {
             let mut provider = anthropic::wire::AnthropicConfig::new(api_key);
             if let Some(base_url) = &config.base_url {
                 provider = provider.with_base_url(base_url);
             }
-            Ok(RigCompletionClient::Anthropic(provider.client()))
+            Ok(RigCompletionClient::Anthropic(Box::new(provider.client())))
         }
     }
 }

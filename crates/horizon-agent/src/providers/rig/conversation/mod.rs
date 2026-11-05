@@ -67,13 +67,10 @@ struct Entry {
     turn: usize,
     content: Content,
 }
-// A conversation entry holds either the user's input or a whole response; the
-// response is the large side and the enum lives one per history entry.
-#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 enum Content {
     Input { text: String },
-    Response(Response),
+    Response(Box<Response>),
 }
 #[derive(Clone, Debug)]
 struct Response {
@@ -430,12 +427,12 @@ impl ConversationHistory {
         let index = self.entries.len();
         self.entries.push(Entry {
             turn: self.turn,
-            content: Content::Response(Response {
+            content: Content::Response(Box::new(Response {
                 id: id.into(),
                 message: None,
                 reasoning: Vec::new(),
                 calls: Vec::new(),
-            }),
+            })),
         });
         self.response_indices.insert(id.into(), index);
         index

@@ -123,7 +123,7 @@ impl Appender {
                 role_id: self.role_id.clone(),
                 session_context: self.session_context.clone(),
                 event_kind: event_kind(&event).to_string(),
-                event,
+                event: *event,
                 provider_payload,
                 created_at_unix_ms: unix_time_ms(),
             };
