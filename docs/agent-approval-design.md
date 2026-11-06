@@ -380,9 +380,9 @@ product-owned API. Decisions:
   excluded paths before sufficiency (reads are not denied — git reads
   config/hooks). macOS has no seccomp supervisor, so the field is advisory
   there (consistent with the existing Linux/macOS backend asymmetry). The
-  prefilter function is retained as a seam (returns `PassToJudge` for all
-  inputs) for a future Codex-style "safe-side widening" (all segments read-only
-  → auto, no judge needed). The judge prompt now explicitly names
+  prefilter function was first kept as a seam that returned `PassToJudge` for
+  every input; it was removed on 2026-11-07 as dead code, so no deterministic
+  step sits between a GitOperation approval and the judge any more. The judge prompt now explicitly names
   config/hook/filter-branch/filter-repo/credential, dangerous global options
   (-c/--config-env/--git-dir/--exec-path/--upload-pack/--receive-pack), URL
   schemes, pipes/redirects/command substitution, and non-git segments as

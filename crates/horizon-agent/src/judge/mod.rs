@@ -63,7 +63,7 @@ use crate::contract::{
 };
 use crate::decision::{Answer, DecisionClient};
 use crate::frame::{AgentFrame, AgentFrameItem};
-use crate::tools::{git_prefilter, GitPrefilterVerdict, ToolSessionState};
+use crate::tools::ToolSessionState;
 
 pub use handle::JudgeHandle;
 
@@ -301,30 +301,9 @@ async fn run_decision_judge(
 pub(crate) fn start_approval_gate(
     tool_state: &ToolSessionState,
     session_id: SessionId,
-    mut candidate: ApprovalCandidate,
+    candidate: ApprovalCandidate,
     result_tx: crossbeam_channel::Sender<crate::tools::ToolCompletion>,
 ) -> ApprovalGate {
-    // Deterministic prefilter for Git metadata operations (board #38): the
-    // prefilter no longer blocks any construct —
-    // every GitOperation-classified command passes to the judge in full.
-    // The HumanDirect branch is retained as a seam but is currently
-    // unreachable; the deterministic defense against host-escalation
-    // vectors moved to the sandbox grant shape (hooks/config exclusion).
-    if let ApprovalKind::GitOperation { .. } = &candidate.approval.kind {
-        let command = candidate
-            .request
-            .input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if let GitPrefilterVerdict::HumanDirect(reason) = git_prefilter(command) {
-            candidate.approval.reason = format!(
-                "{}\n\nDetected {} — this command must be approved by a human.",
-                candidate.approval.reason, reason
-            );
-            return ApprovalGate::Human(Box::new(candidate));
-        }
-    }
     let Some(judge) = tool_state.judge_handle() else {
         return ApprovalGate::Human(Box::new(candidate));
     };
@@ -1059,35 +1038,7 @@ mod tests {
     }
 
     #[test]
-    fn git_prefilter_passes_dangerous_commands_to_the_judge() {
-        // Board #38: the prefilter no longer
-        // blocks dangerous constructs. A command carrying `-c` now reaches
-        // the judge (Pending) instead of going straight to the human.
-        let path = temp_event_log("git-dangerous");
-        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
-        let client: Arc<dyn DecisionClient> = Arc::new(ScriptedClient::new(vec![ask(0.05)]));
-        let judge = JudgeHandle::for_test_decision("test-judge-model", client, writer);
-        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
-            .with_judge(Some(judge))
-            .build();
-        let candidate = git_candidate("git -c core.hooksPath=/dev/null commit -m test");
-        let (tx, rx) = crossbeam_channel::unbounded();
-        assert_eq!(
-            start_approval_gate(&tool_state, SessionId::new(), candidate, tx),
-            ApprovalGate::Pending
-        );
-        let crate::tools::ToolCompletion::ApprovalJudged(judgment) = rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("judge completion")
-        else {
-            panic!("unexpected completion");
-        };
-        assert_eq!(judgment.decision, JudgeDecision::AutoApprove);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn git_prefilter_passes_plain_commands_to_the_judge() {
+    fn git_operation_with_judge_goes_to_the_judge() {
         let path = temp_event_log("git-plain");
         let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
         let client: Arc<dyn DecisionClient> = Arc::new(ScriptedClient::new(vec![ask(0.05)]));

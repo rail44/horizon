@@ -3055,7 +3055,7 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
 /// Board #38: the GitOperation extended grant
 /// excludes `hooks` and `config` from writing. This end-to-end test verifies
 /// that a compound command containing writes to both `.git/config` and
-/// `.git/hooks/` — which now reaches the judge after the prefilter reduction —
+/// `.git/hooks/` — which reaches the judge like any other GitOperation —
 /// is denied those writes under the extended grant, while the same approved
 /// execution's normal `git commit` (objects/refs writes) succeeds. The
 /// exclusion is based on the resolved gitdir, not a literal `.git` path name.
@@ -3082,8 +3082,8 @@ fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
     // Compound command: try to write to config and hooks (denied by the
     // exclusion), then do a normal commit (objects/refs writes, allowed).
     // `;` ensures the commit runs even after the denied writes fail with
-    // EPERM — this is the scenario the prefilter reduction enables: the
-    // judge sees the full compound command, not just the git segment.
+    // EPERM. The judge sees the full compound command, not just the git
+    // segment.
     let command = format!(
         "echo evil > {}; echo '#!/bin/sh' > {}; git add -A; git commit -m horizon-exclusion-test",
         config_path.display(),
@@ -3110,8 +3110,7 @@ fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
     };
 
     // The compound command includes `git commit` → requires_metadata_write
-    // is true → GitOperation candidate. The prefilter (now always
-    // PassToJudge) lets it reach the approval path.
+    // is true → GitOperation candidate, which reaches the approval path.
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
         Execution::AwaitApproval(_)
