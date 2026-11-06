@@ -6,23 +6,20 @@
 //! an unhandled event there is simply a no-op (the views also write a
 //! notice line in the guest build, which is what a windowless check reads).
 
-// Nothing in this build reads an event's payload: the views emit them, and
-// the subscriber that acts on them is the shell's, which is not wired to
-// these two views yet.
-#![allow(dead_code)]
-
 use gpui::EventEmitter;
 use horizon_workspace::SessionId;
 
 use super::{BoardListView, BoardThreadView};
 
-/// Open task `0`'s thread. The list emits it; a thread lives in a pane of
-/// its own, so the list never renders one itself.
-pub(crate) struct OpenTaskThread(pub(crate) u64);
+/// Open the selected task's thread. The list emits it; a thread lives in a
+/// pane of its own, so the list never renders one itself. The shell reads
+/// the target back from `BoardListView::selected_task`.
+pub(crate) struct OpenTaskThread;
 
 /// Attach the agent session bound to the open task. The thread view emits
-/// it; resolving the id against the running runtime is the shell's.
-pub(crate) struct OpenTaskSession(pub(crate) SessionId);
+/// it; the shell reads the id from `BoardThreadView::task_session` and
+/// resolves it against the running runtime.
+pub(crate) struct OpenTaskSession;
 
 /// The session ids the board's tasks name, reported after a load found
 /// bindings the emitter has not reported yet. Never a request to open a

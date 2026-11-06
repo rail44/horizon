@@ -41,7 +41,7 @@ const TEST_REGISTRY: &[(&str, bool)] = &[
     ("text_input_falls_back_to_raw_utf8_without_flags", false),
 ];
 
-/// (a) Every `Compliant`/`Deviation`/`Bypassed` entry must name a real,
+/// (a) Every `Compliant`/`Deviation` entry must name a real,
 /// non-`#[ignore]`d test (it's describing verified-working behavior); every
 /// `Unimplemented` entry that names a test must point at one that actually
 /// is `#[ignore]`d (it's describing a known gap, not a regression). A test
@@ -87,7 +87,6 @@ fn print_compliance_matrix() {
             Verdict::Compliant => "COMPLIANT".to_string(),
             Verdict::Deviation(reason) => format!("DEVIATION — {reason}"),
             Verdict::Unimplemented(reason) => format!("UNIMPLEMENTED — {reason}"),
-            Verdict::Bypassed(path) => format!("BYPASSED — bypassed by `{path}`"),
         };
         println!("* {} [{}]", entry.feature, entry.key_class);
         println!("  {verdict}");

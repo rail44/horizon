@@ -325,17 +325,16 @@ impl BoardListView {
                 cx.notify();
             }
             ListCommand::OpenThread => {
-                let Some(row) = self.selected_row() else {
+                if self.selected_row().is_none() {
                     return;
-                };
-                let id = row.item.id;
+                }
                 // A preview has nothing above it to route the request, so
                 // the guest build states it on the notice line instead.
                 #[cfg(target_family = "wasm")]
-                {
+                if let Some(row) = self.selected_row() {
                     self.notice = Some(chrome::open_notice(&row.item.title));
                 }
-                cx.emit(OpenTaskThread(id));
+                cx.emit(OpenTaskThread);
                 cx.notify();
             }
             ListCommand::MoveUp | ListCommand::MoveDown => {
@@ -457,9 +456,9 @@ impl BoardListView {
 /// selection the shell opens a thread on.
 #[cfg(not(target_family = "wasm"))]
 impl BoardListView {
-    /// The task the shell opens a thread for. The same id
-    /// [`OpenTaskThread`] carries: the event announces the request and
-    /// `CommandId::OpenBoardRelatedItem` reads the target back from here,
+    /// The task the shell opens a thread for. [`OpenTaskThread`] only
+    /// announces the request; `CommandId::OpenBoardRelatedItem` reads the
+    /// target from here,
     /// so a palette invocation opens the selected row too.
     pub(crate) fn selected_task(&self) -> Option<u64> {
         self.selected

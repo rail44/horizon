@@ -899,15 +899,6 @@ pub(crate) enum Verdict {
     /// Not implemented; explains the blocker and, where estimated, the
     /// effort to close it.
     Unimplemented(&'static str),
-    /// The real UI never drives this code path at all; names what bypasses
-    /// it. No `KITTY_COMPLIANCE` row currently uses this verdict (the last
-    /// one, text keys, was fixed by routing them through
-    /// `kitty_keyboard::encode_text_key` — see `terminal_key_from_character`
-    /// in `app::keymap`), but the variant stays: it's part of this general
-    /// verdict vocabulary, not tied to any one feature, and a future gap
-    /// may well be an app-layer bypass again.
-    #[allow(dead_code)]
-    Bypassed(&'static str),
 }
 
 /// One cell of the Kitty keyboard protocol conformance matrix: a specific

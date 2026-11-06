@@ -241,8 +241,7 @@ pub(super) struct Scheme {
     /// chrome), stepped from `background` toward `foreground`
     /// (`SURFACE_RAISED_STEP`) on a seeded scheme, or plain `background`
     /// on the zero-config path (i.e. no distinct raise by default -- see
-    /// [`surface_raised`]'s own doc for why it's currently unread within
-    /// this crate regardless). Purely derived since 2026-07-16 -- no
+    /// [`surface_raised`]'s own doc for who reads it). Purely derived since 2026-07-16 -- no
     /// longer independently overridable via a `surface_raised` key.
     pub(super) surface_raised: u32,
 }

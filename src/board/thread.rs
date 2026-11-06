@@ -407,14 +407,19 @@ impl BoardThreadView {
     }
 
     fn open_task_session(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = self.item.as_ref().and_then(model::task_session_id) else {
+        if self
+            .item
+            .as_ref()
+            .and_then(model::task_session_id)
+            .is_none()
+        {
             return;
-        };
+        }
         // A preview has no shell above it to attach the session, so the
         // guest build states the request on the notice line instead.
         #[cfg(target_family = "wasm")]
         self.set_notice(chrome::SESSION_IS_THE_SHELLS.into(), cx);
-        cx.emit(OpenTaskSession(session));
+        cx.emit(OpenTaskSession);
     }
 
     // -- input ------------------------------------------------------------
@@ -483,8 +488,8 @@ impl BoardThreadView {
         cx.notify();
     }
 
-    /// The agent session bound to the open task, which is what
-    /// [`OpenTaskSession`] names.
+    /// The agent session bound to the open task: the one
+    /// [`OpenTaskSession`] asks the shell to attach.
     pub(crate) fn task_session(&self) -> Option<SessionId> {
         self.item.as_ref().and_then(model::task_session_id)
     }

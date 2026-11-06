@@ -95,19 +95,14 @@ pub fn terminal_selection() -> Hsla {
 }
 
 /// An elevated surface for floating chrome -- a derived neutral-ladder
-/// step (see `Scheme`'s own `surface_raised` field doc). Kept for other
-/// consumers
-/// and back-compat; design "C" (`docs/theme-design.md`) moved the modal
-/// surfaces (palette/view-chooser/session-manager) and gpui-component's
-/// own `popover` role in [`gpui_component_theme_config`] onto plain
-/// `background` instead, so this role no longer backs either of those.
-/// Currently unread within this crate (`#[allow(dead_code)]`, matching
-/// this codebase's existing pattern for deliberately-kept API surface,
-/// e.g. `horizon-terminal-core`'s `Verdict::Bypassed`) -- a genuine role
-/// any future floating-chrome consumer can still reach for. No longer
+/// step (see `Scheme`'s own `surface_raised` field doc). Design "C"
+/// (`docs/theme-design.md`) moved the modal surfaces
+/// (palette/view-chooser/session-manager) and gpui-component's own
+/// `popover` role in [`gpui_component_theme_config`] onto plain
+/// `background` instead, so this role no longer backs either of those;
+/// the theme settings view's swatch chips still read it. No longer
 /// independently configurable (2026-07-16, `docs/theme-design.md`) --
 /// tune [`SURFACE_RAISED_STEP`] instead of a `surface_raised` key.
-#[allow(dead_code)]
 pub fn surface_raised() -> Hsla {
     packed_hsla(scheme().surface_raised)
 }

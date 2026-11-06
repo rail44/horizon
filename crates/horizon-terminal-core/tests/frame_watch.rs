@@ -126,7 +126,6 @@ enum SenderMsg {
 /// `Deserialize` error (missing field) — the same skew skew.rs proves for
 /// mpsc, here on a watch. Only ever decoded off the wire, never constructed
 /// in Rust, so its variants/fields read as dead.
-#[allow(dead_code)]
 #[derive(Clone, Serialize, Deserialize)]
 enum ReaderMsg {
     Value(u32),
