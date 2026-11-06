@@ -5,7 +5,6 @@ use horizon_acp::{
     TaskProgressState, ToolCallMeta, ToolCallProgressEvent, ToolOutcome, MODEL_CONFIG_ID,
     STOP_REASON_DOOM_LOOP, STOP_REASON_FAILED,
 };
-use horizon_agent::transcript::ApprovalState;
 use serde_json::json;
 
 use super::*;
@@ -277,7 +276,6 @@ fn status_alone_settles_the_outcome_when_meta_carries_none() {
     );
     let views = build_tool_call_views(&model.frame.items);
     assert_eq!(views[0].outcome, Some(ToolOutcome::Cancelled));
-    assert_eq!(views[0].result_summary.as_deref(), Some("cancelled"));
 }
 
 #[test]
@@ -303,8 +301,6 @@ fn pending_approvals_are_the_unanswered_permission_requests_of_the_open_turn() {
         actionable_pending_approval_identities_in(&model.frame.items),
         [identity("call-1", "occ-1"), identity("call-2", "occ-2")]
     );
-    let views = build_tool_call_views(&model.frame.items);
-    assert_eq!(views[0].approval, ApprovalState::Waiting);
 
     // A re-sent request for the same occurrence does not duplicate it.
     model.apply(AgentEvent::PermissionRequested(permission(
@@ -323,34 +319,10 @@ fn pending_approvals_are_the_unanswered_permission_requests_of_the_open_turn() {
         actionable_pending_approval_identities_in(&model.frame.items),
         [identity("call-2", "occ-2")]
     );
-    let views = build_tool_call_views(&model.frame.items);
-    assert_eq!(views[0].approval, ApprovalState::Approved);
 
     // A turn that ended leaves nothing actionable behind it.
     apply(&mut model, idle(Some(v2::StopReason::Cancelled)));
     assert!(actionable_pending_approval_identities_in(&model.frame.items).is_empty());
-}
-
-#[test]
-fn a_denied_permission_reads_denied_before_the_result_arrives() {
-    let mut model = AgentModel::default();
-    apply(
-        &mut model,
-        v2::SessionUpdate::ToolCallUpdate(tool_update(
-            "occ-1",
-            None,
-            Some(meta("call-1", "fs.edit", None)),
-        )),
-    );
-    model.apply(AgentEvent::PermissionRequested(permission(
-        "call-1", "occ-1",
-    )));
-    model.apply(AgentEvent::PermissionResolved {
-        identity: identity("call-1", "occ-1"),
-        decision: PermissionDecision::Denied,
-    });
-    let views = build_tool_call_views(&model.frame.items);
-    assert_eq!(views[0].approval, ApprovalState::Denied);
 }
 
 #[test]
@@ -505,7 +477,6 @@ fn the_model_option_sets_the_selection() {
     assert_eq!(
         model.selection,
         Some(ModelSelection {
-            provider: "openrouter".into(),
             model: "anthropic/claude-x".into(),
         })
     );
@@ -525,7 +496,6 @@ fn the_model_option_sets_the_selection() {
     assert_eq!(
         model.selection,
         Some(ModelSelection {
-            provider: "default".into(),
             model: "gpt-5".into(),
         })
     );
@@ -545,10 +515,7 @@ fn argument_progress_is_replaced_in_place_and_removed_on_close() {
     }
     assert!(matches!(
         model.frame.items.as_slice(),
-        [AgentFrameItem::ToolCallPreparing(ToolCallPreparing {
-            bytes: 64,
-            ..
-        })]
+        [AgentFrameItem::ToolCallPreparing(ToolCallPreparing { key })] if key == "call-1"
     ));
     model.apply(AgentEvent::ToolCallProgress(
         ToolCallProgressEvent::Closed {
@@ -589,68 +556,4 @@ fn running_task_progress_upserts_in_launch_order_and_finished_retires() {
     assert_eq!(model.tasks[0].task_session_id, second);
     model.apply(progress(first, TaskProgressState::Finished, None));
     assert_eq!(model.tasks.len(), 1);
-}
-
-#[test]
-fn the_daemons_recorded_human_decision_badges_replayed_calls() {
-    let mut model = AgentModel::default();
-    let mut approved = meta("call-1", "bash", Some(ToolOutcome::Succeeded));
-    approved.human_decision = Some(horizon_acp::HumanDecision::Approved);
-    apply(
-        &mut model,
-        v2::SessionUpdate::ToolCallUpdate(tool_update(
-            "occ-1",
-            Some(v2::ToolCallStatus::Completed),
-            Some(approved),
-        )),
-    );
-    let mut denied = meta("call-2", "fs.edit", Some(ToolOutcome::Denied));
-    denied.human_decision = Some(horizon_acp::HumanDecision::Denied {
-        reason: Some("not now".into()),
-    });
-    apply(
-        &mut model,
-        v2::SessionUpdate::ToolCallUpdate(tool_update(
-            "occ-2",
-            Some(v2::ToolCallStatus::Failed),
-            Some(denied),
-        )),
-    );
-    apply(
-        &mut model,
-        v2::SessionUpdate::ToolCallUpdate(tool_update(
-            "occ-3",
-            Some(v2::ToolCallStatus::Completed),
-            Some(meta("call-3", "fs.read", Some(ToolOutcome::Succeeded))),
-        )),
-    );
-    let approvals: Vec<_> = build_tool_call_views(&model.frame.items)
-        .into_iter()
-        .map(|view| view.approval)
-        .collect();
-    assert_eq!(
-        approvals,
-        [
-            ApprovalState::Approved,
-            ApprovalState::Denied,
-            ApprovalState::None
-        ]
-    );
-}
-
-#[test]
-fn a_recorded_approval_before_the_call_starts_reads_approved() {
-    let mut model = AgentModel::default();
-    let mut recorded = meta("call-1", "bash", None);
-    recorded.human_decision = Some(horizon_acp::HumanDecision::Approved);
-    apply(
-        &mut model,
-        v2::SessionUpdate::ToolCallUpdate(tool_update(
-            "occ-1",
-            Some(v2::ToolCallStatus::Pending),
-            Some(recorded),
-        )),
-    );
-    let views = build_tool_call_views(&model.frame.items);
-    assert_eq!(views[0].approval, ApprovalState::Approved);
 }

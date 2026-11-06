@@ -80,16 +80,6 @@ impl ToolCall {
             ToolCallStatus::Cancelled => Some(ToolOutcome::Cancelled),
         }
     }
-
-    /// Whether the call ran: in progress, or finished after running.
-    /// A denied or cancelled call never started.
-    pub(crate) fn started(&self) -> bool {
-        match self.status {
-            ToolCallStatus::InProgress | ToolCallStatus::Completed => true,
-            ToolCallStatus::Failed => self.meta.outcome != Some(ToolOutcome::Denied),
-            ToolCallStatus::Pending | ToolCallStatus::Cancelled => false,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,7 +103,6 @@ pub(crate) struct Permission {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ToolCallPreparing {
     pub(crate) key: String,
-    pub(crate) bytes: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,7 +113,6 @@ pub(crate) struct HistoryCleared {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProviderRateLimited {
-    pub(crate) status: Option<u16>,
     pub(crate) attempt: u32,
     pub(crate) backoff_ms: u64,
 }
@@ -217,6 +205,5 @@ pub(crate) struct AgentFrame {
 /// option.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ModelSelection {
-    pub(crate) provider: String,
     pub(crate) model: String,
 }

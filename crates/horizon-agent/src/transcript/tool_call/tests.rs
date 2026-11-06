@@ -82,20 +82,10 @@ fn fs_edit_derives_a_diffstat_from_old_and_new_string() {
     assert_eq!(call.verb, "Edit");
     assert_eq!(call.target.as_deref(), Some("src/agent/view.rs"));
     assert_eq!(call.summary.as_deref(), Some("+2 -1"));
-    match &call.kind {
-        ToolCallKind::File {
-            file_name,
-            diffstat,
-        } => {
-            assert_eq!(file_name, "view.rs");
-            assert_eq!(*diffstat, Some((2, 1)));
-        }
-        other => panic!("expected a File chip, got {other:?}"),
-    }
 }
 
 #[test]
-fn fs_write_reports_created_vs_overwritten_with_no_diffstat() {
+fn fs_write_reports_created_vs_overwritten() {
     let call = classify(
         "fs.write",
         &json!({"path": "new.rs", "content": "fn main() {}"}),
@@ -103,10 +93,6 @@ fn fs_write_reports_created_vs_overwritten_with_no_diffstat() {
     );
     assert_eq!(call.verb, "Write");
     assert_eq!(call.summary.as_deref(), Some("created"));
-    match &call.kind {
-        ToolCallKind::File { diffstat, .. } => assert_eq!(*diffstat, None),
-        other => panic!("expected a File chip, got {other:?}"),
-    }
 }
 
 #[test]
@@ -133,9 +119,6 @@ fn an_fs_edit_batch_reads_as_its_own_cardinality_and_keeps_every_affected_file()
     // Summed across the batch: three replacements, one of which adds a
     // line.
     assert_eq!(call.summary.as_deref(), Some("+4 -3"));
-    // No single file represents a multi-file batch, so it gets no file
-    // chip.
-    assert_eq!(call.kind, ToolCallKind::Generic);
     assert_eq!(
         affected_files("fs.edit", &input, Some(&output))
             .iter()
@@ -146,7 +129,7 @@ fn an_fs_edit_batch_reads_as_its_own_cardinality_and_keeps_every_affected_file()
 }
 
 #[test]
-fn an_fs_edit_batch_within_one_file_keeps_its_file_chip() {
+fn an_fs_edit_batch_within_one_file_sums_its_planned_diffstat() {
     let call = classify(
         "fs.edit",
         &json!({
@@ -158,29 +141,16 @@ fn an_fs_edit_batch_within_one_file_keeps_its_file_chip() {
         None,
     );
     assert_eq!(call.target.as_deref(), Some("2 edits in 1 file"));
-    match &call.kind {
-        ToolCallKind::File {
-            file_name,
-            diffstat,
-        } => {
-            assert_eq!(file_name, "a.rs");
-            assert_eq!(*diffstat, Some((3, 2)));
-        }
-        other => panic!("expected a File chip, got {other:?}"),
-    }
+    assert_eq!(call.summary.as_deref(), Some("+3 -2"));
 }
 
 #[test]
-fn bash_chip_carries_a_truncated_command_head() {
+fn a_bash_call_targets_a_truncated_command_head() {
     let long_command = "cargo test --workspace --all-targets -- --nocapture and-then-some-more";
     let call = classify("bash", &json!({"command": long_command}), None);
-    match &call.kind {
-        ToolCallKind::Bash { command_head } => {
-            assert!(command_head.ends_with('…'));
-            assert!(command_head.chars().count() <= 32);
-        }
-        other => panic!("expected a Bash chip, got {other:?}"),
-    }
+    let head = call.target.expect("a bash call targets its command head");
+    assert!(head.ends_with('…'));
+    assert!(head.chars().count() <= 32);
 }
 
 #[test]

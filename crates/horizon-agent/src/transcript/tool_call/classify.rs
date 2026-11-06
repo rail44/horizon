@@ -1,10 +1,8 @@
 use crate::contract::tool_output::*;
 use serde_json::Value;
 
-use super::super::file_name;
 use super::files::{affected_files, distinct_edit_paths, edit_entries};
 use super::util::{command_head, line_diffstat, str_field};
-use super::view::ToolCallKind;
 
 /// Display data plus an explicit recognition result. Consumers must not infer
 /// whether a tool is known from its human-facing verb or summary.
@@ -14,11 +12,10 @@ pub struct ToolCallClassification {
     pub verb: String,
     pub target: Option<String>,
     pub summary: Option<String>,
-    pub kind: ToolCallKind,
 }
 
-/// Maps a tool id to its display verb, target, (would-be) result
-/// summary, and structured display data. Output decoding uses the same
+/// Maps a tool id to its display verb, target, and (would-be) result
+/// summary. Output decoding uses the same
 /// contract::tool_output definitions as execution and history. Unknown tool ids fall back to the raw id as the verb with
 /// no target/summary, so a future tool renders *something* sane rather
 /// than nothing.
@@ -31,14 +28,12 @@ pub struct ToolCallClassification {
 pub fn classify(tool_id: &str, input: &Value, output: Option<&Value>) -> ToolCallClassification {
     let classified = classify_tool(tool_id, input, output);
     let known = classified.is_some();
-    let (verb, target, summary, kind) =
-        classified.unwrap_or_else(|| (tool_id.to_string(), None, None, ToolCallKind::Generic));
+    let (verb, target, summary) = classified.unwrap_or_else(|| (tool_id.to_string(), None, None));
     ToolCallClassification {
         known,
         verb,
         target,
         summary,
-        kind,
     }
 }
 
@@ -46,7 +41,7 @@ fn classify_tool(
     tool_id: &str,
     input: &Value,
     output: Option<&Value>,
-) -> Option<(String, Option<String>, Option<String>, ToolCallKind)> {
+) -> Option<(String, Option<String>, Option<String>)> {
     Some(match tool_id {
         "fs.edit" => {
             let edits = edit_entries(input);
@@ -73,13 +68,6 @@ fn classify_tool(
                     if file_count == 1 { "file" } else { "files" }
                 )),
             };
-            let kind = match paths.as_slice() {
-                [path] => ToolCallKind::File {
-                    file_name: file_name(path),
-                    diffstat: Some(diffstat),
-                },
-                _ => ToolCallKind::Generic,
-            };
             let (added, removed) = diffstat;
             (
                 "Edit".to_string(),
@@ -92,7 +80,6 @@ fn classify_tool(
                     ),
                     _ => format!("+{added} -{removed}"),
                 }),
-                kind,
             )
         }
         "fs.write" => {
@@ -107,15 +94,7 @@ fn classify_tool(
                         "overwritten".to_string()
                     }
                 });
-            (
-                "Write".to_string(),
-                Some(path.clone()),
-                summary,
-                ToolCallKind::File {
-                    file_name: file_name(&path),
-                    diffstat: None,
-                },
-            )
+            ("Write".to_string(), Some(path.clone()), summary)
         }
         "bash" => {
             let command = str_field(input, "command").unwrap_or_default();
@@ -123,12 +102,7 @@ fn classify_tool(
             let summary = output
                 .and_then(decode::<BashOutput>)
                 .map(|result| result.summary());
-            (
-                "Bash".to_string(),
-                Some(head.clone()),
-                summary,
-                ToolCallKind::Bash { command_head: head },
-            )
+            ("Bash".to_string(), Some(head), summary)
         }
         "fs.read" => {
             let path = str_field(input, "path").unwrap_or_default().to_string();
@@ -136,12 +110,7 @@ fn classify_tool(
                 .and_then(decode::<FileRead>)
                 .map(|result| result.total_lines)
                 .map(|lines| format!("{lines} lines"));
-            (
-                "Read".to_string(),
-                Some(path),
-                summary,
-                ToolCallKind::Generic,
-            )
+            ("Read".to_string(), Some(path), summary)
         }
         "fs.grep" | "fs.glob" => {
             let pattern = str_field(input, "pattern").unwrap_or_default().to_string();
@@ -154,37 +123,17 @@ fn classify_tool(
                 })
                 .map(|count| format!("{count} matches"));
             let verb = if tool_id == "fs.grep" { "Grep" } else { "Glob" };
-            (
-                verb.to_string(),
-                Some(pattern),
-                summary,
-                ToolCallKind::Generic,
-            )
+            (verb.to_string(), Some(pattern), summary)
         }
-        "workspace.snapshot" => ("Snapshot".to_string(), None, None, ToolCallKind::Generic),
-        "worktree.enter" => (
-            "Enter Worktree".to_string(),
-            None,
-            None,
-            ToolCallKind::Generic,
-        ),
-        "config.read" => ("Config Read".to_string(), None, None, ToolCallKind::Generic),
-        "config.write" => (
-            "Config Write".to_string(),
-            None,
-            None,
-            ToolCallKind::Generic,
-        ),
-        "recall.search" => (
-            "Recall Search".to_string(),
-            None,
-            None,
-            ToolCallKind::Generic,
-        ),
-        "recall.read" => ("Recall Read".to_string(), None, None, ToolCallKind::Generic),
+        "workspace.snapshot" => ("Snapshot".to_string(), None, None),
+        "worktree.enter" => ("Enter Worktree".to_string(), None, None),
+        "config.read" => ("Config Read".to_string(), None, None),
+        "config.write" => ("Config Write".to_string(), None, None),
+        "recall.search" => ("Recall Search".to_string(), None, None),
+        "recall.read" => ("Recall Read".to_string(), None, None),
         "skill.read" => {
             let id = str_field(input, "id").unwrap_or_default().to_string();
-            ("Skill".to_string(), Some(id), None, ToolCallKind::Generic)
+            ("Skill".to_string(), Some(id), None)
         }
         // `task`'s `description` input is a short label the model writes
         // for exactly this row (`tools::catalog`) -- it is the only place a
@@ -206,12 +155,7 @@ fn classify_tool(
             let summary = output
                 .and_then(decode::<TaskOutput>)
                 .map(|result| result.status().to_string());
-            (
-                "Task".to_string(),
-                Some(description),
-                summary,
-                ToolCallKind::Generic,
-            )
+            ("Task".to_string(), Some(description), summary)
         }
         "task_output" => {
             // The label the launch recorded, echoed back by the fetch so
@@ -224,12 +168,7 @@ fn classify_tool(
             let summary = output
                 .and_then(decode::<TaskOutput>)
                 .map(|result| result.status().to_string());
-            (
-                "Task Output".to_string(),
-                Some(target),
-                summary,
-                ToolCallKind::Generic,
-            )
+            ("Task Output".to_string(), Some(target), summary)
         }
         _ => return None,
     })

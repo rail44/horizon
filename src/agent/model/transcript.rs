@@ -1,5 +1,5 @@
 //! The structural reading of a folded frame: turn spans, tool-activity
-//! bursts, per-call views with their approval lifecycle, and the receipt
+//! bursts, per-call views, and the receipt
 //! aggregation. The per-tool JSON readers
 //! (`classify`, `edit_entries`, `reconstruct_line_diff`) are
 //! `horizon_agent::transcript`'s, which take plain tool ids and JSON.
@@ -7,19 +7,15 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use horizon_acp::{HumanDecision, ToolOutcome};
+use horizon_acp::ToolOutcome;
 use horizon_agent::transcript::{
-    classify, edit_entries, reconstruct_line_diff, ApprovalState, DiffLineKind, FileEffect,
-    ToolCallClassification,
+    classify, edit_entries, reconstruct_line_diff, DiffLineKind, FileEffect, ToolCallClassification,
 };
 use serde_json::Value;
 
 use super::types::*;
 
 pub(crate) use horizon_agent::transcript::Burst;
-
-/// The summary an abandoned retry attempt's row reports.
-pub(crate) const SUPERSEDED_SUMMARY: &str = "superseded by retry";
 
 /// One turn's items, `[start, end)` into the frame's items. `ended` is
 /// `None` for the turn still in progress.
@@ -149,10 +145,8 @@ pub(crate) struct ToolCallView {
     pub(crate) tool_id: String,
     pub(crate) verb: String,
     pub(crate) target: Option<String>,
-    pub(crate) result_summary: Option<String>,
     pub(crate) affected_files: Vec<FileEffect>,
     pub(crate) outcome: Option<ToolOutcome>,
-    pub(crate) approval: ApprovalState,
 }
 
 impl ToolCallView {
@@ -187,32 +181,15 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
         })
         .map(|(index, call)| {
             let identity = call.identity();
-            let permission = items.iter().rev().find_map(|item| match item {
-                AgentFrameItem::Permission(permission) if permission.identity == identity => {
-                    Some(permission)
-                }
-                _ => None,
-            });
             let outcome = call.outcome();
             let output = call.output.as_ref().filter(|_| outcome.is_some());
-            let ToolCallClassification {
-                verb,
-                target,
-                summary,
-                ..
-            } = classify(&call.meta.tool_id, &call.input, output);
+            let ToolCallClassification { verb, target, .. } =
+                classify(&call.meta.tool_id, &call.input, output);
             let affected_files = match &outcome {
                 Some(ToolOutcome::Succeeded | ToolOutcome::Failed) => {
                     affected_files(&call.meta.tool_id, &call.input, output)
                 }
                 _ => Vec::new(),
-            };
-            let result_summary = match &outcome {
-                Some(ToolOutcome::Superseded { .. }) => Some(SUPERSEDED_SUMMARY.into()),
-                Some(ToolOutcome::Cancelled) => Some("cancelled".into()),
-                Some(ToolOutcome::Denied) => Some("denied".into()),
-                Some(ToolOutcome::Succeeded | ToolOutcome::Failed) => summary,
-                None => None,
             };
             ToolCallView {
                 call_id: identity.call_id,
@@ -222,59 +199,11 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
                 tool_id: call.meta.tool_id.clone(),
                 verb,
                 target,
-                result_summary,
                 affected_files,
-                approval: derive_approval_state(
-                    permission.map(|permission| permission.decision),
-                    call.meta.human_decision.as_ref(),
-                    call.started(),
-                    outcome.as_ref(),
-                ),
                 outcome,
             }
         })
         .collect()
-}
-
-/// `permission` is `None` for a call that never had a permission request on
-/// this attachment, `Some(decision)` otherwise; `human_decision` is the
-/// daemon's `ToolCallMeta::human_decision`, which also covers replayed
-/// calls. A started call reads as approved before its result arrives; a
-/// denied outcome wins over that.
-fn derive_approval_state(
-    permission: Option<Option<PermissionDecision>>,
-    human_decision: Option<&HumanDecision>,
-    started: bool,
-    outcome: Option<&ToolOutcome>,
-) -> ApprovalState {
-    let recorded = human_decision.map(|decision| match decision {
-        HumanDecision::Approved => PermissionDecision::Approved,
-        HumanDecision::Denied { .. } => PermissionDecision::Denied,
-    });
-    let decision = match (permission, recorded) {
-        (Some(Some(decision)), _) => Some(decision),
-        (_, Some(recorded)) => Some(recorded),
-        (Some(None), None) => None,
-        (None, None) => return ApprovalState::None,
-    };
-    if outcome == Some(&ToolOutcome::Denied) {
-        return ApprovalState::Denied;
-    }
-    if started {
-        return ApprovalState::Approved;
-    }
-    match outcome {
-        Some(ToolOutcome::Denied) => ApprovalState::Denied,
-        Some(ToolOutcome::Cancelled) => ApprovalState::Cancelled,
-        Some(ToolOutcome::Superseded { .. }) => ApprovalState::Superseded,
-        Some(_) => ApprovalState::Approved,
-        None => match decision {
-            Some(PermissionDecision::Approved) => ApprovalState::Approved,
-            Some(PermissionDecision::Denied) => ApprovalState::Denied,
-            Some(PermissionDecision::Cancelled) => ApprovalState::Cancelled,
-            None => ApprovalState::Waiting,
-        },
-    }
 }
 
 fn affected_files(tool_id: &str, input: &Value, output: Option<&Value>) -> Vec<FileEffect> {

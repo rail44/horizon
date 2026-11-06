@@ -63,7 +63,6 @@ struct RawModel {
 #[derive(Deserialize)]
 struct RawLimit {
     context: Option<u64>,
-    output: Option<u64>,
 }
 
 impl Catalog {
@@ -85,13 +84,7 @@ impl Catalog {
                 let Some(context_length) = limit.context else {
                     continue;
                 };
-                models.insert(
-                    id,
-                    ModelLimits {
-                        context_length,
-                        max_output_length: limit.output,
-                    },
-                );
+                models.insert(id, ModelLimits { context_length });
             }
         }
         Some(Self { providers })
@@ -255,7 +248,6 @@ mod tests {
             catalog.limits("https://ollama.com/v1", "deepseek-v4.1-flash"),
             Some(ModelLimits {
                 context_length: 1_048_576,
-                max_output_length: Some(384_000),
             })
         );
         // The same id under another provider is another window.

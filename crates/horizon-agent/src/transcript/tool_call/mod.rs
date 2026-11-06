@@ -1,6 +1,6 @@
 //! One tool call's reading: classification into a display verb/target/
-//! summary, the files it touched, and the types the shell's per-call view
-//! carries (kind, file effects, approval state). The expanded per-tool body
+//! summary, the files it touched, and the file effects the shell's per-call
+//! view carries. The expanded per-tool body
 //! (diff/content-preview/command/summary/raw-JSON) stayed in the `horizon`
 //! binary crate's `src/agent/turns` -- its fallback for a terse,
 //! known-but-not-specially-bodied tool leans on a wording function
@@ -18,7 +18,7 @@ mod view;
 pub use classify::{classify, ToolCallClassification};
 pub use files::{edit_entries, EditEntry};
 pub use util::{cap_lines_head, cap_lines_tail, str_field, truncate_chars};
-pub use view::{ApprovalState, FileEffect, ToolCallKind};
+pub use view::FileEffect;
 
 #[cfg(test)]
 use util::line_diffstat;

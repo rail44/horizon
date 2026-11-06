@@ -3,8 +3,7 @@
 //! files an `fs.edit`/`fs.write` call touched ([`edit_entries`]), an edit's
 //! reconstructed line diff ([`reconstruct_line_diff`]), the line-capping
 //! mechanics expanded bodies lean on, and the plain types the shell's
-//! per-call view carries ([`ToolCallKind`], [`FileEffect`],
-//! [`ApprovalState`], [`Burst`]). They live here because they know each
+//! per-call view carries ([`FileEffect`], [`Burst`]). They live here because they know each
 //! tool's input/output JSON shape, which is this crate's.
 //!
 //! `classify`'s verbs ("Edit", "Bash", ...) and summaries ("40 lines",
@@ -14,7 +13,7 @@
 //! the frontend that renders it (`src/agent/turns`).
 //!
 //! The structural reading of a frame (turn spans, tool-activity bursts,
-//! per-call views with their approval state, receipt and change
+//! per-call views, receipt and change
 //! aggregation) used to live here as well, moved from the shell's
 //! `src/agent/turns/` so that frontends would share one reading. Since the
 //! shell became an ACP client of `horizon-agentd` (8c52fe5a) it builds that
@@ -28,21 +27,9 @@ mod tool_call;
 pub use bursts::Burst;
 pub use diff::{reconstruct_line_diff, DiffLine, DiffLineKind};
 pub use tool_call::{
-    cap_lines_head, cap_lines_tail, classify, edit_entries, str_field, truncate_chars,
-    ApprovalState, EditEntry, FileEffect, ToolCallClassification, ToolCallKind,
+    cap_lines_head, cap_lines_tail, classify, edit_entries, str_field, truncate_chars, EditEntry,
+    FileEffect, ToolCallClassification,
 };
-
-use std::path::Path;
-
-/// Extracts a path's file name for chip display (`ToolCallKind::File::
-/// file_name`), as `tool_call::classify` does.
-fn file_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(path)
-        .to_string()
-}
 
 #[cfg(test)]
 pub(crate) mod test_support {

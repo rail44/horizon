@@ -384,11 +384,8 @@ impl AgentModel {
 
     fn apply_tool_call_progress(&mut self, progress: ToolCallProgressEvent) {
         match progress {
-            ToolCallProgressEvent::Progress { key, bytes, .. } => {
-                let preparing = ToolCallPreparing {
-                    key: key.clone(),
-                    bytes,
-                };
+            ToolCallProgressEvent::Progress { key, .. } => {
+                let preparing = ToolCallPreparing { key: key.clone() };
                 match self.preparing_index(&key) {
                     Some(index) => {
                         self.touched(index);
@@ -418,7 +415,6 @@ impl AgentModel {
     fn apply_session_event(&mut self, event: SessionEventNotification) {
         match event {
             SessionEventNotification::ProviderRateLimited {
-                status,
                 attempt,
                 backoff_ms,
                 ..
@@ -426,7 +422,6 @@ impl AgentModel {
                 .frame
                 .items
                 .push(AgentFrameItem::ProviderRateLimited(ProviderRateLimited {
-                    status,
                     attempt,
                     backoff_ms,
                 })),
@@ -516,12 +511,8 @@ pub(crate) fn model_selection(options: &[v2::SessionConfigOption]) -> Option<Mod
         .and_then(|entry| read_horizon_meta::<ModelOptionMeta>(entry.meta.as_ref()))
         .and_then(Result::ok);
     match from_meta {
-        Some(meta) => Some(ModelSelection {
-            provider: meta.provider,
-            model: meta.model,
-        }),
-        None => decode_model_option_id(current).map(|(provider, model)| ModelSelection {
-            provider: provider.to_owned(),
+        Some(meta) => Some(ModelSelection { model: meta.model }),
+        None => decode_model_option_id(current).map(|(_, model)| ModelSelection {
             model: model.to_owned(),
         }),
     }

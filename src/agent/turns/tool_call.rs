@@ -15,7 +15,7 @@ use super::{classify, edit_entries, str_field, DiffLine, DiffLineKind, ToolCallV
 
 /// A tool call's expanded-row body (stage D, decision 3's "each row
 /// expands further individually"), keyed off the tool id the same way
-/// `ToolCallKind` is. Every line-list variant is already height-capped
+/// `classify` is. Every line-list variant is already height-capped
 /// by [`build_tool_call_body`]; the view additionally wraps them in a
 /// scrollable, height-bounded container so one body can't swallow the
 /// transcript. Deliberately reusable beyond the receipt: stage F's
@@ -287,7 +287,6 @@ mod tests {
     use super::super::test_support::*;
     use super::super::{build_tool_call_views, DiffLineKind};
     use super::*;
-    use horizon_agent::transcript::ApprovalState;
 
     fn with_occurrence(mut item: AgentFrameItem, occurrence: &str) -> AgentFrameItem {
         match &mut item {
@@ -625,11 +624,9 @@ mod tests {
         let views = build_tool_call_views(&items);
         assert_eq!(views.len(), 2);
 
-        assert_eq!(views[0].approval, ApprovalState::Approved);
         assert!(views[0].finished());
         assert_eq!(views[0].target.as_deref(), Some("a.rs"));
 
-        assert_eq!(views[1].approval, ApprovalState::Waiting);
         assert!(!views[1].finished());
         assert_eq!(views[1].target.as_deref(), Some("b.rs"));
 
@@ -690,7 +687,6 @@ mod tests {
             approval_requested("a"),
         ];
         let views = build_tool_call_views(&items);
-        assert_eq!(views[0].approval, ApprovalState::Waiting);
         match tool_call_body(&items, &views[0]) {
             Some(ToolCallBody::Command {
                 command, exit_code, ..

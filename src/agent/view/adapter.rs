@@ -949,7 +949,6 @@ mod tests {
         let items = vec![
             user_message("q"),
             AgentFrameItem::ProviderRateLimited(ProviderRateLimited {
-                status: Some(429),
                 attempt: 2,
                 backoff_ms: 1500,
             }),
@@ -1152,7 +1151,6 @@ mod tests {
     fn the_model_tasks_and_reachability_come_from_the_session() {
         let mut session = model(SessionPhase::Idle, vec![]);
         session.selection = Some(ModelSelection {
-            provider: "openai".to_string(),
             model: "gpt-x".to_string(),
         });
         session.tasks.push(TaskProgressNotification {

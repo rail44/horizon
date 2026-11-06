@@ -1,11 +1,10 @@
 //! In-band model-limit discovery: `GET {base_url}/models`, parsed for the
-//! per-model `context_length`/`max_output_length` the configured provider
-//! declares.
+//! per-model `context_length` the configured provider declares.
 //!
 //! `docs/agent-compaction-design.md` Tier 1 derives its trigger from the
 //! model's real window. `docs/research/agent-context-memory-separation-
 //! 2026-07-20.md`'s provider-path check found that synthetic.new's `/models`
-//! returns both numbers per model, so no external catalog was needed then;
+//! returns the context length per model, so no external catalog was needed then;
 //! standard OpenAI `/models` does not carry them, and the provider in use
 //! since 2026-09 (Ollama Cloud) is that case. So the listing is read **when
 //! it declares limits**, and otherwise the model catalog
@@ -28,8 +27,7 @@
 //!
 //! Only [`ProviderKind::OpenAiCompatible`] entries are looked up: the
 //! `{base_url}/models` path, the bearer header, and the
-//! `context_length`/`max_output_length` fields are the openai-compatible
-//! listing's. [`ProviderKind::Anthropic`] returns `None` without a request
+//! `context_length` field are the openai-compatible listing's. [`ProviderKind::Anthropic`] returns `None` without a request
 //! -- rig's anthropic client authenticates with `x-api-key` plus
 //! `anthropic-version`, and an anthropic entry with no `base_url` resolves
 //! to [`DEFAULT_OPENAI_BASE_URL`] below, so a request here would carry that
@@ -60,18 +58,13 @@ const MODELS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// default is resolved by the caller), so only [`model_limits`] reads this.
 const DEFAULT_OPENAI_BASE_URL: &str = crate::config::DEFAULT_OPENAI_BASE_URL;
 
-/// What a provider declares about one model's context budget. Both numbers
-/// are as-reported; the effective window is derived by the caller
+/// What a provider declares about one model's context budget, as reported;
+/// the effective window is derived by the caller
 /// ([`Self::effective_window_tokens`]) because it depends on what Horizon
-/// actually sends as `max_tokens`, not on what the model could accept.
+/// actually sends as `max_tokens`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ModelLimits {
     pub(super) context_length: u64,
-    /// The model's declared maximum output length. Recorded for
-    /// completeness; not used to derive the effective window, which is
-    /// reduced by the output budget Horizon sends
-    /// (`RigAgentConfig::max_output_tokens`).
-    pub(super) max_output_length: Option<u64>,
 }
 
 impl ModelLimits {
@@ -170,9 +163,8 @@ pub(super) fn models_url(base_url: &str) -> String {
 
 /// Reads `model`'s entry out of an OpenAI-shaped `/models` listing.
 ///
-/// `context_length` is required (it *is* the window); `max_output_length` is
-/// optional. A listing whose entry carries neither -- standard OpenAI --
-/// yields `None`, which is the "limits unavailable" signal, not an error.
+/// `context_length` is required (it *is* the window). A listing whose entry
+/// carries none -- standard OpenAI -- yields `None`, which is the "limits unavailable" signal, not an error.
 pub(super) fn parse_model_limits(body: &serde_json::Value, model: &str) -> Option<ModelLimits> {
     let entry = body
         .get("data")?
@@ -181,9 +173,6 @@ pub(super) fn parse_model_limits(body: &serde_json::Value, model: &str) -> Optio
         .find(|entry| entry.get("id").and_then(serde_json::Value::as_str) == Some(model))?;
     Some(ModelLimits {
         context_length: entry.get("context_length")?.as_u64()?,
-        max_output_length: entry
-            .get("max_output_length")
-            .and_then(serde_json::Value::as_u64),
     })
 }
 
@@ -583,7 +572,6 @@ mod tests {
             .await
             .expect("the catalog knows the model");
         assert_eq!(limits.context_length, 1_048_576);
-        assert_eq!(limits.max_output_length, Some(384_000));
         // The listing was still asked first.
         assert_eq!(mock.recorded().len(), 1);
         // A model neither source knows stays unknown.
@@ -597,15 +585,13 @@ mod tests {
         let limits = parse_model_limits(&synthetic_listing(), "hf:moonshotai/Kimi-K2.7-Code")
             .expect("the listed model declares a context length");
         assert_eq!(limits.context_length, 262_144);
-        assert_eq!(limits.max_output_length, Some(65_536));
     }
 
     #[test]
-    fn max_output_length_is_optional() {
+    fn an_entry_without_an_output_length_still_declares_a_window() {
         let limits = parse_model_limits(&synthetic_listing(), "hf:MiniMaxAI/MiniMax-M3")
             .expect("an entry without max_output_length still declares a window");
         assert_eq!(limits.context_length, 131_072);
-        assert_eq!(limits.max_output_length, None);
     }
 
     #[test]
@@ -639,7 +625,6 @@ mod tests {
     fn effective_window_subtracts_the_output_budget_horizon_actually_sends() {
         let limits = ModelLimits {
             context_length: 262_144,
-            max_output_length: Some(65_536),
         };
         assert_eq!(
             limits.effective_window_tokens(crate::config::DEFAULT_AGENT_MAX_OUTPUT_TOKENS),
@@ -651,7 +636,6 @@ mod tests {
     fn effective_window_is_none_when_the_output_budget_swallows_the_context() {
         let limits = ModelLimits {
             context_length: 8_192,
-            max_output_length: None,
         };
         assert_eq!(limits.effective_window_tokens(32_768), None);
         assert_eq!(limits.effective_window_tokens(8_192), None);
