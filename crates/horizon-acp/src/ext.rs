@@ -279,24 +279,6 @@ pub enum AttachmentEnd {
     SessionEnded,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
-#[notification(method = "_horizon/provider_request")]
-pub struct ProviderRequestNotification {
-    pub session_id: SessionId,
-    #[serde(flatten)]
-    pub event: ProviderRequestEvent,
-}
-
-/// Mirrors `contract::Event::{ProviderRequestSent, ProviderRequestFirstToken,
-/// ProviderRequestFinished}` (crates/horizon-agent/src/contract.rs).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ProviderRequestEvent {
-    Sent { model: String },
-    FirstToken,
-    Finished,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,24 +434,15 @@ mod tests {
         ) {
             message_round_trip(&event);
         }
-        for event in [
-            ProviderRequestEvent::Sent {
-                model: "gpt-4o".into(),
-            },
-            ProviderRequestEvent::FirstToken,
-            ProviderRequestEvent::Finished,
-        ] {
-            message_round_trip(&ProviderRequestNotification { session_id, event });
-        }
     }
 
     #[test]
     fn flattened_notifications_keep_session_id_beside_the_tag() {
         let session_id = SessionId::new();
-        let encoded = serde_json::to_value(ProviderRequestNotification {
+        let encoded = serde_json::to_value(ToolCallProgressNotification {
             session_id,
-            event: ProviderRequestEvent::Sent {
-                model: "gpt-4o".into(),
+            event: ToolCallProgressEvent::Closed {
+                key: "call-1".into(),
             },
         })
         .unwrap();
@@ -477,8 +450,8 @@ mod tests {
             encoded,
             serde_json::json!({
                 "session_id": session_id,
-                "type": "sent",
-                "model": "gpt-4o",
+                "type": "closed",
+                "key": "call-1",
             })
         );
     }
@@ -538,12 +511,6 @@ mod tests {
             SessionEventNotification::SessionResumed { session_id }
                 .method()
                 .to_owned(),
-            ProviderRequestNotification {
-                session_id,
-                event: ProviderRequestEvent::Finished,
-            }
-            .method()
-            .to_owned(),
         ];
         assert_eq!(
             methods,
@@ -560,7 +527,6 @@ mod tests {
                 "_horizon/tool_call_progress",
                 "_horizon/memory",
                 "_horizon/session_event",
-                "_horizon/provider_request",
             ]
         );
     }

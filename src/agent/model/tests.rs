@@ -1,9 +1,8 @@
 use agent_client_protocol::schema::{v2, MaybeUndefined};
 use horizon_acp::{
     write_horizon_meta, ApprovalKind, ApprovalMeta, MessageMeta, ModelOptionMeta,
-    ProviderRequestEvent, SessionEventNotification, SessionId, TaskProgressNotification,
-    TaskProgressState, ToolCallMeta, ToolCallProgressEvent, ToolOutcome, MODEL_CONFIG_ID,
-    STOP_REASON_DOOM_LOOP, STOP_REASON_FAILED,
+    SessionEventNotification, SessionId, TaskProgressNotification, TaskProgressState, ToolCallMeta,
+    ToolCallProgressEvent, ToolOutcome, MODEL_CONFIG_ID, STOP_REASON_DOOM_LOOP, STOP_REASON_FAILED,
 };
 use serde_json::json;
 
@@ -61,7 +60,6 @@ fn meta(call_id: &str, tool_id: &str, outcome: Option<ToolOutcome>) -> ToolCallM
         outcome,
         auto_approved: None,
         policy_tier: None,
-        human_decision: None,
     }
 }
 
@@ -416,24 +414,6 @@ fn the_settled_revision_moves_only_when_an_ended_turns_item_changes() {
     model.restart();
     assert!(model.frame.items.is_empty());
     assert_eq!(model.frame.settled_revision, settled + 3);
-}
-
-#[test]
-fn a_turn_end_records_the_model_of_its_last_provider_request() {
-    let mut model = AgentModel::default();
-    apply(&mut model, user_message("u1", "go"));
-    apply(&mut model, running());
-    model.apply(AgentEvent::ProviderRequest(ProviderRequestEvent::Sent {
-        model: "gpt-5".into(),
-    }));
-    apply(&mut model, idle(Some(v2::StopReason::EndTurn)));
-    // A repeated idle for the same stop does not end a second turn.
-    apply(&mut model, idle(Some(v2::StopReason::EndTurn)));
-    let turns = group_into_turns(&model.frame.items);
-    assert_eq!(turns.len(), 1);
-    let end = turns[0].ended.as_ref().unwrap();
-    assert_eq!(end.reason, TurnEndReason::Completed);
-    assert_eq!(end.model.as_deref(), Some("gpt-5"));
 }
 
 #[test]

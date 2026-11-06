@@ -35,7 +35,6 @@ pub(super) enum Outgoing {
     ToolCallProgress(acp::ToolCallProgressNotification),
     Memory(acp::MemoryNotification),
     SessionEvent(acp::SessionEventNotification),
-    ProviderRequest(acp::ProviderRequestNotification),
     /// An approval the client must be asked for with
     /// `session/request_permission`.
     AskPermission(ApprovalRequest),
@@ -68,7 +67,6 @@ pub(super) struct Mapper {
     /// The id of the assistant text stream not yet committed.
     open_stream: Option<v2::MessageId>,
     tool_ids: HashMap<String, String>,
-    decisions: HashMap<String, acp::HumanDecision>,
     stop_reason: Option<v2::StopReason>,
     state: Option<StateKind>,
     pending_approvals: Vec<ApprovalRequest>,
@@ -134,7 +132,6 @@ impl Mapper {
             message_seq: 0,
             open_stream: None,
             tool_ids: HashMap::new(),
-            decisions: HashMap::new(),
             stop_reason: None,
             state: None,
             pending_approvals: Vec::new(),
@@ -328,7 +325,6 @@ impl Mapper {
                         outcome: None,
                         auto_approved: None,
                         policy_tier: None,
-                        human_decision: None,
                     }));
                 vec![Outgoing::Update(v2::SessionUpdate::ToolCallUpdate(update))]
             }
@@ -359,7 +355,6 @@ impl Mapper {
                         .get("policy_tier")
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
-                    human_decision: self.decisions.get(&occurrence).cloned(),
                 };
                 let update = v2::ToolCallUpdate::new(occurrence.clone())
                     .status(status)
@@ -377,31 +372,7 @@ impl Mapper {
                     vec![Outgoing::AskPermission(request.clone())]
                 }
             }
-            Event::ApprovalResolved(resolved) => {
-                let occurrence = resolved.occurrence_id.0.clone();
-                let decision = match &resolved.decision {
-                    contract::ApprovalDecisionPayload::Approve => acp::HumanDecision::Approved,
-                    contract::ApprovalDecisionPayload::Deny { reason } => {
-                        acp::HumanDecision::Denied {
-                            reason: reason.clone(),
-                        }
-                    }
-                };
-                self.decisions.insert(occurrence.clone(), decision.clone());
-                let meta = acp::ToolCallMeta {
-                    call_id: resolved.call_id.0.clone(),
-                    tool_id: self.tool_ids.get(&occurrence).cloned().unwrap_or_default(),
-                    outcome: None,
-                    auto_approved: None,
-                    policy_tier: None,
-                    human_decision: Some(decision),
-                };
-                let mut out = vec![Outgoing::Update(v2::SessionUpdate::ToolCallUpdate(
-                    v2::ToolCallUpdate::new(occurrence.clone()).meta(horizon_meta(&meta)),
-                ))];
-                out.extend(self.settle_approval(&occurrence));
-                out
-            }
+            Event::ApprovalResolved(resolved) => self.settle_approval(&resolved.occurrence_id.0),
             Event::TurnEnded(reason) => {
                 self.close_stream();
                 self.stop_reason = Some(stop_reason(*reason));
@@ -452,22 +423,14 @@ impl Mapper {
                 session_id,
                 event: acp::MemoryEvent::CheckpointMissed,
             })],
-            Event::ProviderRequestSent(sent) => {
+            Event::ProviderRequestSent(_) => {
+                // A retried request starts its text over.
                 self.close_stream();
-                provider_request(
-                    session_id,
-                    acp::ProviderRequestEvent::Sent {
-                        model: sent.model.clone(),
-                    },
-                )
+                Vec::new()
             }
-            Event::ProviderRequestFirstToken => {
-                provider_request(session_id, acp::ProviderRequestEvent::FirstToken)
-            }
-            Event::ProviderRequestFinished => {
-                provider_request(session_id, acp::ProviderRequestEvent::Finished)
-            }
-            Event::InputAccepted(_)
+            Event::ProviderRequestFirstToken
+            | Event::ProviderRequestFinished
+            | Event::InputAccepted(_)
             | Event::InputStarted(_)
             | Event::InputQueuePaused(_)
             | Event::InputOutcome(_)
@@ -531,12 +494,6 @@ impl Mapper {
         }
         vec![Outgoing::Update(v2::SessionUpdate::StateUpdate(update))]
     }
-}
-
-fn provider_request(session_id: SessionId, event: acp::ProviderRequestEvent) -> Vec<Outgoing> {
-    vec![Outgoing::ProviderRequest(
-        acp::ProviderRequestNotification { session_id, event },
-    )]
 }
 
 pub(super) fn tool_kind(tool_id: &str) -> v2::ToolKind {

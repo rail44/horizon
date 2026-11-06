@@ -29,7 +29,6 @@ pub(crate) struct TurnSpan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TurnEnd {
     pub(crate) reason: TurnEndReason,
-    pub(crate) model: Option<String>,
     pub(crate) elapsed: Duration,
 }
 
@@ -44,19 +43,13 @@ pub(crate) fn group_into_turns(items: &[AgentFrameItem]) -> Vec<TurnSpan> {
         if current_start.is_none() {
             current_start = Some(index);
         }
-        if let AgentFrameItem::TurnEnded {
-            reason,
-            model,
-            elapsed,
-        } = item
-        {
+        if let AgentFrameItem::TurnEnded { reason, elapsed } = item {
             let start = current_start.take().unwrap_or(index);
             spans.push(TurnSpan {
                 start,
                 end: index + 1,
                 ended: Some(TurnEnd {
                     reason: *reason,
-                    model: model.clone(),
                     elapsed: *elapsed,
                 }),
             });

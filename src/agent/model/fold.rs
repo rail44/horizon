@@ -5,9 +5,8 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::{v2, MaybeUndefined};
 use horizon_acp::{
     decode_model_option_id, read_horizon_meta, MemoryEvent, MessageMeta, ModelOptionMeta,
-    ProviderRequestEvent, SessionEventNotification, TaskProgressNotification, TaskProgressState,
-    ToolCallMeta, ToolCallProgressEvent, MODEL_CONFIG_ID, STOP_REASON_DOOM_LOOP,
-    STOP_REASON_FAILED,
+    SessionEventNotification, TaskProgressNotification, TaskProgressState, ToolCallMeta,
+    ToolCallProgressEvent, MODEL_CONFIG_ID, STOP_REASON_DOOM_LOOP, STOP_REASON_FAILED,
 };
 
 use super::types::*;
@@ -20,7 +19,6 @@ pub(crate) enum AgentEvent {
     ToolCallProgress(ToolCallProgressEvent),
     Memory(MemoryEvent),
     Session(SessionEventNotification),
-    ProviderRequest(ProviderRequestEvent),
     /// A `session/request_permission` the attachment now holds a responder for.
     PermissionRequested(Permission),
     /// The attachment answered a held permission request.
@@ -31,12 +29,10 @@ pub(crate) enum AgentEvent {
 }
 
 /// Turn bookkeeping kept beside the frame so the frame itself stays
-/// comparable: when the open turn started and the model its latest provider
-/// request used.
+/// comparable: when the open turn started.
 #[derive(Clone, Debug, Default)]
 struct TurnClock {
     started_at: Option<Instant>,
-    model: Option<String>,
 }
 
 /// Everything the pane reads from one attachment's traffic.
@@ -87,10 +83,6 @@ impl AgentModel {
                 .items
                 .push(AgentFrameItem::MemoryCheckpointMissed),
             AgentEvent::Session(event) => self.apply_session_event(event),
-            AgentEvent::ProviderRequest(ProviderRequestEvent::Sent { model }) => {
-                self.clock.model = Some(model);
-            }
-            AgentEvent::ProviderRequest(_) => {}
             AgentEvent::PermissionRequested(permission) => {
                 let existing = self.frame.items.iter().position(|item| {
                     matches!(item, AgentFrameItem::Permission(held) if held.identity == permission.identity)
@@ -172,7 +164,6 @@ impl AgentModel {
 
     fn open_turn(&mut self) {
         self.clock.started_at = Some(Instant::now());
-        self.clock.model = None;
     }
 
     fn append_message(&mut self, id: String, role: MessageRole, text: &str) {
@@ -303,11 +294,9 @@ impl AgentModel {
                     .take()
                     .map(|started| started.elapsed())
                     .unwrap_or(Duration::ZERO);
-                self.frame.items.push(AgentFrameItem::TurnEnded {
-                    reason,
-                    model: self.clock.model.take(),
-                    elapsed,
-                });
+                self.frame
+                    .items
+                    .push(AgentFrameItem::TurnEnded { reason, elapsed });
             }
             _ => {}
         }
@@ -345,7 +334,6 @@ impl AgentModel {
                             outcome: None,
                             auto_approved: None,
                             policy_tier: None,
-                            human_decision: None,
                         },
                         status: ToolCallStatus::Pending,
                         input: serde_json::Value::Null,

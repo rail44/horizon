@@ -99,7 +99,6 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
 | agent→client 通知 | `_horizon/tool_call_progress` | `ToolCallProgress` と `ToolCallProgressClosed` |
 | agent→client 通知 | `_horizon/memory` | `MemoryDigest` / `MemoryCheckpointMissed` |
 | agent→client 通知 | `_horizon/session_event` | `SessionResumed`、`ProviderRateLimited`、`HistoryCleared`、`Error`、`Exited`、`SkippedLines`（旧 `HubHello::skipped_lines`）、`AttachmentClosed{Replaced/Lagged/Detached/SessionEnded}` |
-| agent→client 通知 | `_horizon/provider_request` | `ProviderRequestSent` / `FirstToken` / `Finished`（turn receipt 用） |
 
 `ReplayStarted` / `ReplayComplete` は `session/resume` の要求と応答に対応する
 ので拡張は要らない。
@@ -111,7 +110,7 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
 | `initialize` 両方向 | `ext_version`、`binary_id` |
 | `session/new` 要求 | `session_id`（シェル発行）、`provider_id`、`role_id`、`isolate`、`spawn_source_session_id` |
 | `session/new` 応答、`SessionInfo` | `workspace_root`、`parent_session_id`、`role_id`、`provider_id` |
-| `tool_call_update` | `call_id`（toolCallId は occurrence_id）、`tool_id`、`outcome`（Succeeded / Failed / Denied / Cancelled / Superseded{retry_occurrence_id}）、`auto_approved`、`policy_tier`、`human_decision`（`ApprovalResolved` を写す。再生でも人の承認の印が残る） |
+| `tool_call_update` | `call_id`（toolCallId は occurrence_id）、`tool_id`、`outcome`（Succeeded / Failed / Denied / Cancelled / Superseded{retry_occurrence_id}）、`auto_approved`、`policy_tier` |
 | `request_permission` 要求 | `identity`（call_id、occurrence_id）、`ApprovalKind` の構造化 payload |
 | `request_permission` 応答 | deny の `reason` |
 | `user_message` / `agent_message` | 役割 `TaskNotification` / `AutoContinue` |

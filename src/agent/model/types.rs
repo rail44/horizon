@@ -141,11 +141,9 @@ pub(crate) enum AgentFrameItem {
     Error(String),
     Exited(String),
     /// Folded from an idle `state_update` carrying a stop reason, plus the
-    /// model of the turn's last `_horizon/provider_request` `Sent` and the
     /// wall-clock time since the turn opened on this attachment.
     TurnEnded {
         reason: TurnEndReason,
-        model: Option<String>,
         elapsed: Duration,
     },
 }

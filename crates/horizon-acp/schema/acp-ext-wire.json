@@ -312,42 +312,6 @@
       ],
       "type": "object"
     },
-    "HumanDecision": {
-      "description": "Mirrors `contract::ApprovalDecisionPayload` (crates/horizon-agent/src/contract.rs),\ncarried on the call's `tool_call_update` after `ApprovalResolved`.",
-      "oneOf": [
-        {
-          "properties": {
-            "type": {
-              "const": "approved",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "reason": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "const": "denied",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "InitializeMeta": {
       "description": "`initialize` request and response, both directions.",
       "properties": {
@@ -567,60 +531,6 @@
           ]
         }
       },
-      "type": "object"
-    },
-    "ProviderRequestNotification": {
-      "description": "Mirrors `contract::Event::{ProviderRequestSent, ProviderRequestFirstToken,\nProviderRequestFinished}` (crates/horizon-agent/src/contract.rs).",
-      "oneOf": [
-        {
-          "properties": {
-            "model": {
-              "type": "string"
-            },
-            "type": {
-              "const": "sent",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "model"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "first_token",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "finished",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        }
-      ],
-      "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
-        }
-      },
-      "required": [
-        "session_id"
-      ],
       "type": "object"
     },
     "ProviderSummary": {
@@ -959,18 +869,6 @@
         "call_id": {
           "type": "string"
         },
-        "human_decision": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HumanDecision"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Present once a human has decided on the call's approval."
-        },
         "outcome": {
           "anyOf": [
             {
@@ -1263,9 +1161,6 @@
     "_horizon/memory": {
       "$ref": "#/$defs/MemoryNotification"
     },
-    "_horizon/provider_request": {
-      "$ref": "#/$defs/ProviderRequestNotification"
-    },
     "_horizon/session_event": {
       "$ref": "#/$defs/SessionEventNotification"
     },
@@ -1281,5 +1176,5 @@
     "_horizon/doom_loop"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 2
+  "x-session-protocol-version": 3
 }

@@ -74,7 +74,6 @@ fn generate_wire_schema() -> Value {
         "_horizon/tool_call_progress": schema_of(sub::<ToolCallProgressNotification>),
         "_horizon/memory": schema_of(sub::<MemoryNotification>),
         "_horizon/session_event": schema_of(sub::<SessionEventNotification>),
-        "_horizon/provider_request": schema_of(sub::<ProviderRequestNotification>),
     });
 
     let meta = json!({

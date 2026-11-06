@@ -19,8 +19,8 @@ use agent_client_protocol::{
 use horizon_acp::{
     read_horizon_meta, write_horizon_meta, DrainRequest, EnsureBoardOrganizerRequest,
     HostToolRequest, InitializeMeta, ListProviderModelsRequest, ListProvidersRequest,
-    MemoryNotification, ProviderRequestNotification, ProviderSummary, ReloadProviderConfigRequest,
-    SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta, TaskProgressNotification,
+    MemoryNotification, ProviderSummary, ReloadProviderConfigRequest, SessionEventNotification,
+    SessionId, SessionInfoMeta, SessionNewMeta, TaskProgressNotification,
     ToolCallProgressNotification, WatchBoardRequest, HORIZON_ACP_EXT_VERSION, MODEL_CONFIG_ID,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -331,7 +331,6 @@ fn client(
     let progress = routes.clone();
     let memory = routes.clone();
     let session_events = routes.clone();
-    let provider_requests = routes.clone();
     let permissions = routes.clone();
     let host_tools = routes.clone();
     Client
@@ -381,17 +380,6 @@ fn client(
             async move |notification: SessionEventNotification,
                         _connection: V2ConnectionTo<Agent>| {
                 session_events.route_session_event(notification);
-                Ok(())
-            },
-            agent_client_protocol::on_receive_notification!(),
-        )
-        .on_receive_notification(
-            async move |notification: ProviderRequestNotification,
-                        _connection: V2ConnectionTo<Agent>| {
-                let _ = provider_requests.deliver(
-                    notification.session_id,
-                    Inbound::Event(AgentEvent::ProviderRequest(notification.event)),
-                );
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),

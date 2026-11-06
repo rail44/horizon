@@ -159,9 +159,13 @@ ACP に居場所が無い。線を越える必要があるかどうかの選別�
 - シェルのセッションが送る command は `Prompt`、`Cancel`、`Approve`、
   `Deny`、`ContinueTurn`、`Close` の六つ。モデル切替はセッションの
   command ではなく、接続上の `session/set_config_option`。
-- `tool_call_update` の `_meta.horizon.human_decision` が
-  `ApprovalResolved` を運ぶ。再生でも人の承認・拒否の印が残る。
-- `ProviderRequestUsage` は線を越えない。`usage_update` は送らない。
+- `ApprovalResolved` は線を越えない。保留中の承認の後始末だけをする
+  (2026-11-06 に `_meta.horizon.human_decision` を削除。シェルに読み手が
+  いなかった)。
+- `ProviderRequestSent`/`FirstToken`/`Finished` と `ProviderRequestUsage` は
+  線を越えない。`usage_update` は送らない(2026-11-06 に
+  `_horizon/provider_request` 通知を削除。シェルはターン終了にモデル名を
+  記録するだけで、表示していなかった)。
 - `_horizon/session_event` は一本の通知で、`SessionResumed`、
   `ProviderRateLimited`、`HistoryCleared`、`AttachmentClosed`、`Error`、
   `Exited`、`SkippedLines` の種類を持つ。

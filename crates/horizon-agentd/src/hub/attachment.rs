@@ -66,7 +66,6 @@ impl Sink {
             Outgoing::ToolCallProgress(notification) => self.notify(notification),
             Outgoing::Memory(notification) => self.notify(notification),
             Outgoing::SessionEvent(notification) => self.notify(notification),
-            Outgoing::ProviderRequest(notification) => self.notify(notification),
             Outgoing::AskPermission(request) => {
                 asks.ask(self, request);
                 true

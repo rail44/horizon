@@ -579,7 +579,6 @@ mod tests {
     fn turn_end(reason: TurnEndReason) -> AgentFrameItem {
         AgentFrameItem::TurnEnded {
             reason,
-            model: None,
             elapsed: Duration::from_secs(48),
         }
     }

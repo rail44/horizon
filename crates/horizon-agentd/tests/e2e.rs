@@ -443,7 +443,6 @@ fn wire(inbound: &Inbound) -> serde_json::Value {
         Inbound::TaskProgress(notification) => serde_json::to_value(notification),
         Inbound::ToolCallProgress(notification) => serde_json::to_value(notification),
         Inbound::Memory(notification) => serde_json::to_value(notification),
-        Inbound::ProviderRequest(notification) => serde_json::to_value(notification),
         Inbound::Permission(request, _) => serde_json::to_value(request),
         Inbound::HostTool(request, _) => serde_json::to_value(request),
         Inbound::Replied(_) => Ok(serde_json::Value::Null),
@@ -875,16 +874,15 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
         approve_and_finish(&mut client, "please run a tool").await;
     let (_, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
     assert_eq!(meta.call_id, approval.call_id);
-    assert_eq!(meta.human_decision, Some(acp::HumanDecision::Approved));
 
-    // The human decision survives a reattachment.
+    // The finished call survives a reattachment.
     let replay = resume(&mut client, session_id).await.unwrap();
     let (_, replayed) = replay
         .iter()
         .rev()
         .find_map(finished_tool)
         .expect("the finished call is replayed");
-    assert_eq!(replayed.human_decision, Some(acp::HumanDecision::Approved));
+    assert_eq!(replayed.call_id, approval.call_id);
 }
 
 /// A session started in a plain checkout, the shape whose

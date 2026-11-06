@@ -105,21 +105,6 @@ pub struct ToolCallMeta {
     pub auto_approved: Option<bool>,
     #[serde(default)]
     pub policy_tier: Option<String>,
-    /// Present once a human has decided on the call's approval.
-    #[serde(default)]
-    pub human_decision: Option<HumanDecision>,
-}
-
-/// Mirrors `contract::ApprovalDecisionPayload` (crates/horizon-agent/src/contract.rs),
-/// carried on the call's `tool_call_update` after `ApprovalResolved`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum HumanDecision {
-    Approved,
-    Denied {
-        #[serde(default)]
-        reason: Option<String>,
-    },
 }
 
 /// Mirrors `contract::ApprovalRequest` minus `reason`, keyed by its
@@ -253,7 +238,6 @@ mod tests {
             outcome: None,
             auto_approved: None,
             policy_tier: None,
-            human_decision: None,
         });
         round_trip(&ToolCallMeta {
             call_id: "call-1".into(),
@@ -261,9 +245,6 @@ mod tests {
             outcome: Some(ToolOutcome::Denied),
             auto_approved: Some(true),
             policy_tier: Some("contained".into()),
-            human_decision: Some(HumanDecision::Denied {
-                reason: Some("not now".into()),
-            }),
         });
         round_trip(&ToolCallMeta {
             call_id: "call-2".into(),
@@ -271,7 +252,6 @@ mod tests {
             outcome: Some(ToolOutcome::Succeeded),
             auto_approved: None,
             policy_tier: None,
-            human_decision: Some(HumanDecision::Approved),
         });
         round_trip(&PermissionResponseMeta {
             reason: Some("not now".into()),
