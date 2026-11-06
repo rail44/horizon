@@ -24,33 +24,16 @@ pub struct Tab {
     pub active: PaneId,
 }
 
-/// Whether a session's title is still derived from its content (a
-/// terminal's OSC 0/2 title, an agent's first user message) or has been
-/// pinned by an explicit user rename. Only [`TitleSource::Auto`] titles
-/// may be overwritten by [`Workspace::set_session_derived_title`]; a
-/// future rename command is what would set `Manual`, so it wins over
-/// every later derived update (no rename path exists yet).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TitleSource {
-    Auto,
-    Manual,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceSession {
     pub id: SessionId,
     pub kind: SessionKind,
     pub display_number: usize,
-    /// The effective tab title. Starts at the `session_title` default and,
-    /// while `title_source` is [`TitleSource::Auto`], is overwritten by
-    /// content-derived updates pushed through
-    /// [`Workspace::set_session_derived_title`]. Persisted as-is (the
-    /// source flag itself is not: without a rename path every restored
-    /// session is auto-titled by construction).
+    /// The effective tab title. Starts at the `session_title` default and
+    /// is overwritten by content-derived updates (a terminal's OSC 0/2
+    /// title, an agent's first user message) pushed through
+    /// [`Workspace::set_session_derived_title`]. Persisted as-is.
     pub title: String,
-    /// Whether `title` may still be overwritten by content-derived
-    /// updates -- see [`TitleSource`].
-    pub title_source: TitleSource,
     /// The directory this session is confined to / was spawned in, when
     /// known (`docs/session-relationship-design.md` decision 4a: "Horizon
     /// knows every session's `directory`"). `None` until something
@@ -90,7 +73,6 @@ impl WorkspaceSession {
             kind,
             display_number,
             title: session_title(kind, display_number),
-            title_source: TitleSource::Auto,
             directory: None,
             parent_session_id: None,
         }

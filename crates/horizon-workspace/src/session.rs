@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::types::{PaneKind, SessionKind, TitleSource, Workspace, WorkspaceSession};
+use super::types::{PaneKind, SessionKind, Workspace, WorkspaceSession};
 use crate::SessionId;
 
 impl Workspace {
@@ -28,9 +28,7 @@ impl Workspace {
     /// and its reset, an agent's first user message; the shell's
     /// `wire_session_title_updates` pump is the single caller). `None`
     /// means the source retracted its title, restoring
-    /// [`WorkspaceSession::fallback_title`]. Only an auto-titled session
-    /// ([`TitleSource::Auto`]) is touched, so a future manual rename wins
-    /// over every derived update. Returns whether the model changed, so a
+    /// [`WorkspaceSession::fallback_title`]. Returns whether the model changed, so a
     /// source re-reporting a known title costs no persistence/repaint.
     pub fn set_session_derived_title(
         &mut self,
@@ -40,9 +38,6 @@ impl Workspace {
         let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) else {
             return false;
         };
-        if session.title_source != TitleSource::Auto {
-            return false;
-        }
         let derived = title
             .map(str::to_string)
             .unwrap_or_else(|| session.fallback_title());

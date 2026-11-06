@@ -1,4 +1,4 @@
-use super::types::{LayoutNode, PaneSummary, SessionSummary, TabSummary, TitleSource};
+use super::types::{LayoutNode, PaneSummary, SessionSummary, TabSummary};
 use super::*;
 use crate::SessionId;
 
@@ -1153,24 +1153,4 @@ fn a_title_reset_restores_the_fallback_and_an_unknown_session_is_ignored() {
     assert_eq!(workspace.session_summaries()[0].title, fallback);
     // A report for a session the model does not know is a no-op.
     assert!(!workspace.set_session_derived_title(SessionId::new(), Some("nope")));
-}
-
-#[test]
-fn a_manually_titled_session_ignores_every_derived_update() {
-    let mut workspace = Workspace::mvp();
-    let session_id = workspace.active_terminal_session_id().expect("session");
-    {
-        let session = workspace
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-            .expect("session");
-        session.title = "my terminal".to_string();
-        session.title_source = TitleSource::Manual;
-    }
-
-    // No rename path sets `Manual` yet, but the guard is the contract a
-    // future one relies on: derived updates never win over a pinned title.
-    assert!(!workspace.set_session_derived_title(session_id, Some("cargo build")));
-    assert_eq!(workspace.session_summaries()[0].title, "my terminal");
 }

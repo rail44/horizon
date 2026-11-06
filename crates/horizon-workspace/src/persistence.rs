@@ -7,8 +7,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    LayoutChild, LayoutNode, Pane, PaneId, PaneKind, SessionKind, SplitAxis, Tab, TabId,
-    TitleSource, ViewKind, Workspace, WorkspaceSession,
+    LayoutChild, LayoutNode, Pane, PaneId, PaneKind, SessionKind, SplitAxis, Tab, TabId, ViewKind,
+    Workspace, WorkspaceSession,
 };
 use crate::SessionId;
 
@@ -386,13 +386,6 @@ impl WorkspaceState {
                     kind: SessionKind::from(session.kind),
                     display_number: session.display_number,
                     title: session.title,
-                    // The title-source flag is not persisted either: with no
-                    // rename path every session is auto-titled by
-                    // construction, so a restored session derives again
-                    // (a terminal's OSC title re-arrives on the next
-                    // prompt, an agent's replay re-surfaces its first
-                    // user message).
-                    title_source: TitleSource::Auto,
                     // Not persisted (see `WorkspaceSession::directory`'s
                     // doc comment) -- a restored session's directory
                     // starts unknown again.
