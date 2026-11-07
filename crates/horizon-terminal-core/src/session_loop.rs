@@ -3,9 +3,9 @@
 //! into rate-controlled full-frame sends. `docs/session-daemon-design.md`
 //! decision 9 names this "the session loop" — extracted here, driven purely
 //! by channels, with no `portable-pty` dependency: the PTY reader/writer
-//! threads that feed and drain these channels stay in the `horizon` binary
-//! (`terminal::session::runtime`), since PTY ownership is a host/process
-//! concern.
+//! threads that feed and drain these channels live in `horizon-terminald`
+//! (`crates/horizon-terminald/src/terminal.rs`), since PTY ownership is a
+//! host/process concern.
 //!
 //! Since wire v11 (`docs/remoc-adoption-design.md` §5 Option A) the loop
 //! emits on two channels: `frame_tx` carries every rate-controlled
