@@ -1,5 +1,6 @@
 //! In-band model-limit discovery: `GET {base_url}/models`, parsed for the
-//! per-model `context_length` the configured provider declares.
+//! per-model `context_length` the configured provider declares (on the
+//! entry itself, or under its `metadata` as DeepInfra lists it).
 //!
 //! `docs/agent-compaction-design.md` Tier 1 derives its trigger from the
 //! model's real window. `docs/research/agent-context-memory-separation-
@@ -163,17 +164,22 @@ pub(super) fn models_url(base_url: &str) -> String {
 
 /// Reads `model`'s entry out of an OpenAI-shaped `/models` listing.
 ///
-/// `context_length` is required (it *is* the window). A listing whose entry
-/// carries none -- standard OpenAI -- yields `None`, which is the "limits unavailable" signal, not an error.
+/// `context_length` is required (it *is* the window). It is read from the
+/// entry itself (synthetic.new) or, failing that, from the entry's
+/// `metadata` object (DeepInfra). A listing whose entry carries it in
+/// neither place -- standard OpenAI -- yields `None`, which is the "limits
+/// unavailable" signal, not an error.
 pub(super) fn parse_model_limits(body: &serde_json::Value, model: &str) -> Option<ModelLimits> {
     let entry = body
         .get("data")?
         .as_array()?
         .iter()
         .find(|entry| entry.get("id").and_then(serde_json::Value::as_str) == Some(model))?;
-    Some(ModelLimits {
-        context_length: entry.get("context_length")?.as_u64()?,
-    })
+    let context_length = entry
+        .get("context_length")
+        .or_else(|| entry.get("metadata")?.get("context_length"))?
+        .as_u64()?;
+    Some(ModelLimits { context_length })
 }
 
 /// The provider's live model-id listing, for the picker's discovery: the
@@ -603,6 +609,24 @@ mod tests {
             "data": [{"id": "gpt-4o-mini", "object": "model", "owned_by": "openai"}]
         });
         assert_eq!(parse_model_limits(&body, "gpt-4o-mini"), None);
+    }
+
+    #[test]
+    fn a_context_length_nested_under_metadata_is_read() {
+        // The shape `GET https://api.deepinfra.com/v1/openai/models` returns
+        // (trimmed): the window sits in the entry's `metadata`.
+        let body = serde_json::json!({
+            "object": "list",
+            "data": [{
+                "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+                "object": "model",
+                "owned_by": "deepinfra",
+                "metadata": {"context_length": 1_048_576, "max_tokens": 1_048_576}
+            }]
+        });
+        let limits = parse_model_limits(&body, "deepseek-ai/DeepSeek-V4.1-Flash-1017")
+            .expect("the metadata declares a context length");
+        assert_eq!(limits.context_length, 1_048_576);
     }
 
     #[test]

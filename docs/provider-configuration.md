@@ -39,7 +39,8 @@ variable selects a model.
 
 Tier 1 history clearing (`docs/agent-compaction-design.md`) needs the model's
 context window. An `openai-compatible` entry's `/models` listing is read first
-(synthetic.new declares `context_length` and `max_output_length` there); a
+(synthetic.new declares `context_length` on each entry, DeepInfra under the
+entry's `metadata`); a
 listing that declares nothing -- standard OpenAI, Ollama Cloud (`id`,
 `object`, `created`, `owned_by` only) -- defers to the model catalog,
 models.dev's `api.json`, the catalog OpenCode lists models from. The entry is
