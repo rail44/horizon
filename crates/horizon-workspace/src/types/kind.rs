@@ -37,6 +37,10 @@ pub enum ViewKind {
     /// of this kind: the kind stays `Copy` and the persisted schema stays a
     /// bare tag.
     Preview,
+    /// A Markdown file read from disk. The file is the pane's
+    /// [`Pane::document`](super::Pane::document) rather than part of this
+    /// kind, so the kind stays `Copy`.
+    Markdown,
 }
 
 impl ViewKind {
@@ -49,6 +53,7 @@ impl ViewKind {
             Self::BoardList => "Board",
             Self::BoardThread { .. } => "Thread",
             Self::Preview => "Preview",
+            Self::Markdown => "Markdown",
         }
     }
 }

@@ -70,6 +70,14 @@ pub enum Subcommand {
         split: Option<SplitFlag>,
         activate: bool,
     },
+    /// Shows a Markdown file in a pane, or re-reads it in the pane that
+    /// already shows it. `path` is made absolute by [`crate::run`], as
+    /// `Preview`'s is.
+    Markdown {
+        path: PathBuf,
+        split: Option<SplitFlag>,
+        activate: bool,
+    },
     Attach {
         session_id: String,
         activate: bool,
@@ -159,6 +167,7 @@ Subcommands:\n  \
   new-terminal [--split [<session-id>]] [--active]\n  \
   new-agent [--prompt <text>] [--role <id>] [--split [<session-id>]] [--active]\n  \
   preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]\n  \
+  markdown <path> [--split [<session-id>]] [--active]\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \
   terminate-all-detached\n  \
@@ -223,6 +232,15 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             Subcommand::Preview {
                 path: PathBuf::from(path),
                 name: options.preview_name.take(),
+                split: options.split.take(),
+                activate: std::mem::take(&mut options.active),
+            }
+        }
+        "markdown" => {
+            let path = next_required(&mut positionals, "markdown", "path")?;
+            reject_extra(&mut positionals, "markdown")?;
+            Subcommand::Markdown {
+                path: PathBuf::from(path),
                 split: options.split.take(),
                 activate: std::mem::take(&mut options.active),
             }
@@ -395,7 +413,8 @@ pub fn resolved_split_for(
     match subcommand {
         Subcommand::NewTerminal { split, .. }
         | Subcommand::NewAgent { split, .. }
-        | Subcommand::Preview { split, .. } => resolve_split(split.clone(), env_session_id),
+        | Subcommand::Preview { split, .. }
+        | Subcommand::Markdown { split, .. } => resolve_split(split.clone(), env_session_id),
         _ => Ok(None),
     }
 }
@@ -554,6 +573,31 @@ mod tests {
             resolved_split_for(&parsed.subcommand, Some("pane-session".to_string())),
             Ok(Some("pane-session".to_string()))
         );
+    }
+
+    #[test]
+    fn markdown_takes_a_path_a_split_and_active_but_no_name() {
+        let parsed = parse(&args(&[
+            "markdown",
+            "notes/index.md",
+            "--split",
+            "--active",
+        ]))
+        .unwrap();
+        assert_eq!(
+            parsed.subcommand,
+            Subcommand::Markdown {
+                path: PathBuf::from("notes/index.md"),
+                split: Some(SplitFlag::Here),
+                activate: true,
+            }
+        );
+        assert_eq!(
+            resolved_split_for(&parsed.subcommand, Some("pane-session".to_string())),
+            Ok(Some("pane-session".to_string()))
+        );
+        assert!(parse(&args(&["markdown"])).is_err());
+        assert!(parse(&args(&["markdown", "a.md", "--name", "x"])).is_err());
     }
 
     #[test]

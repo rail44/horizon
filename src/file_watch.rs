@@ -1,10 +1,12 @@
-//! The preview pane's artifact watcher.
+//! A watch on one file, shared by the views that show a file from disk
+//! (the preview pane's plugin artifact, the Markdown view's document).
 //!
-//! cargo does not rewrite a `.wasm` in place — it unlinks the old file and
-//! links a new one — so watching the file itself loses the inode on the
-//! first rebuild. The watch is on the containing directory and
-//! [`event_touches`] filters its traffic down to the one artifact; the
-//! events of a single rebuild arrive in a burst, so a reload waits for
+//! Writers rarely rewrite a file in place: cargo unlinks the old `.wasm`
+//! and links a new one, and editors save by renaming a temporary file over
+//! the old one. Watching the file itself loses the inode on the first such
+//! write, so the watch is on the containing directory and
+//! [`event_touches`] filters its traffic down to the one file; the events
+//! of a single write arrive in a burst, so a reload waits for
 //! [`RELOAD_DEBOUNCE`] of quiet.
 
 use std::path::{Path, PathBuf};
@@ -16,25 +18,24 @@ use gpui::{AsyncApp, Task};
 use notify::event::{EventKind, ModifyKind};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
 
-/// How long the artifact must sit still before a reload starts.
+/// How long the file must sit still before a reload starts.
 pub(crate) const RELOAD_DEBOUNCE: Duration = Duration::from_millis(300);
 
-/// The directory a watch on `artifact` has to be placed on.
-pub(crate) fn watch_root(artifact: &Path) -> Option<&Path> {
-    artifact
-        .parent()
+/// The directory a watch on `file` has to be placed on.
+pub(crate) fn watch_root(file: &Path) -> Option<&Path> {
+    file.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
 }
 
-/// Whether a filesystem event concerns `artifact`. The watch covers a whole
+/// Whether a filesystem event concerns `file`. The watch covers a whole
 /// directory, and a cargo build touches many files in it.
-pub(crate) fn event_touches(event_paths: &[PathBuf], artifact: &Path) -> bool {
-    event_paths.iter().any(|path| path == artifact)
+pub(crate) fn event_touches(event_paths: &[PathBuf], file: &Path) -> bool {
+    event_paths.iter().any(|path| path == file)
 }
 
-/// Whether an event kind means the artifact's content may have changed.
+/// Whether an event kind means the file's content may have changed.
 /// inotify also reports opens and closes of a file that is only read, and
-/// loading a plugin reads the artifact, so reacting to access events makes
+/// loading a plugin or a document reads the file, so reacting to access events makes
 /// every load schedule the next one.
 pub(crate) fn event_changes_content(kind: &EventKind) -> bool {
     match kind {
@@ -46,23 +47,23 @@ pub(crate) fn event_changes_content(kind: &EventKind) -> bool {
 }
 
 /// A live watch. Dropping it stops the watcher and the debounce task.
-pub(crate) struct ArtifactWatch {
+pub(crate) struct FileWatch {
     _watcher: RecommendedWatcher,
     _debounce: Task<()>,
 }
 
-/// Watches `artifact` and runs `on_change` once per quiet burst of events.
+/// Watches `file` and runs `on_change` once per quiet burst of events.
 /// Returns `None` when the watch cannot be placed (no parent directory, or
 /// the directory does not exist yet); the caller keeps working without a
 /// watch rather than failing the pane.
 pub(crate) fn watch(
-    artifact: PathBuf,
+    file: PathBuf,
     cx: &mut gpui::App,
     mut on_change: impl FnMut(&mut gpui::App) + 'static,
-) -> Option<ArtifactWatch> {
-    let root = watch_root(&artifact)?.to_path_buf();
+) -> Option<FileWatch> {
+    let root = watch_root(&file)?.to_path_buf();
     let (sender, receiver) = mpsc::unbounded::<()>();
-    let watched = artifact.clone();
+    let watched = file.clone();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         let Ok(event) = event else {
             return;
@@ -74,7 +75,7 @@ pub(crate) fn watch(
     .ok()?;
     watcher.watch(&root, RecursiveMode::NonRecursive).ok()?;
     let debounce = cx.spawn(async move |cx| debounce_loop(receiver, cx, &mut on_change).await);
-    Some(ArtifactWatch {
+    Some(FileWatch {
         _watcher: watcher,
         _debounce: debounce,
     })

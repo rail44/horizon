@@ -26,8 +26,6 @@ pub mod guest;
 mod host;
 #[cfg(not(target_family = "wasm"))]
 mod pane;
-#[cfg(not(target_family = "wasm"))]
-mod watch;
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests;

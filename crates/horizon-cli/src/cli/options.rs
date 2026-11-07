@@ -38,12 +38,13 @@ impl CommandOptions {
         }
         if self.split.is_some() {
             return Err(UsageError(
-                "--split is only valid with new-terminal/new-agent/preview".to_string(),
+                "--split is only valid with new-terminal/new-agent/preview/markdown".to_string(),
             ));
         }
         if self.active {
             return Err(UsageError(
-                "--active is only valid with new-terminal/new-agent/preview/attach".to_string(),
+                "--active is only valid with new-terminal/new-agent/preview/markdown/attach"
+                    .to_string(),
             ));
         }
 

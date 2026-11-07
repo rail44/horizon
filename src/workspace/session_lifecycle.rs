@@ -12,6 +12,7 @@ use crate::agent::{AgentPane, AgentSession};
 use crate::board::events::{BoardSessionsRefreshed, OpenTaskSession, OpenTaskThread};
 use crate::board::sessions::BoardShellView;
 use crate::board::{BoardListView, BoardThreadView};
+use crate::markdown::{DocumentChanged, MarkdownView};
 use crate::preview::PreviewPane;
 use crate::runtime::{AgentSessionHandle, AgentdHandle, TerminalSessionHandle, TerminaldHandle};
 use crate::terminal::{TerminalSession, TerminalView};
@@ -313,7 +314,7 @@ impl WorkspaceShell {
         let pane_ids = self.workspace.all_pane_ids();
         self.panes.retain(|id, _| pane_ids.contains(id));
         self.preview_targets.retain(|id, _| pane_ids.contains(id));
-        self.board_subscriptions
+        self.view_subscriptions
             .retain(|id, _| pane_ids.contains(id));
         for pane_id in pane_ids {
             if self.panes.contains_key(&pane_id) {
@@ -368,7 +369,7 @@ impl WorkspaceShell {
                     cx.subscribe(&view, |shell, view, event: &BoardSessionsRefreshed, cx| {
                         shell.refresh_board_sessions(view, event.0.clone(), cx);
                     });
-                self.board_subscriptions
+                self.view_subscriptions
                     .insert(pane_id, vec![open, inventory]);
                 self.watch_board_pane(&view, cx);
                 self.panes.insert(pane_id, PaneView::board_list(view));
@@ -390,7 +391,7 @@ impl WorkspaceShell {
                     cx.subscribe(&view, |shell, view, event: &BoardSessionsRefreshed, cx| {
                         shell.refresh_board_sessions(view, event.0.clone(), cx);
                     });
-                self.board_subscriptions
+                self.view_subscriptions
                     .insert(pane_id, vec![open, inventory]);
                 self.watch_board_pane(&view, cx);
                 self.panes.insert(pane_id, PaneView::board_thread(view));
@@ -411,6 +412,20 @@ impl WorkspaceShell {
                     )
                 });
                 self.panes.insert(pane_id, PaneView::preview(view));
+            } else if matches!(
+                self.workspace.pane_kind(pane_id),
+                Some(PaneKind::View(ViewKind::Markdown))
+            ) {
+                let document = self
+                    .workspace
+                    .pane_document(pane_id)
+                    .map(|path| path.to_path_buf());
+                let view = cx.new(|cx| MarkdownView::new(document, window, cx));
+                let moved = cx.subscribe(&view, move |shell, _, event: &DocumentChanged, cx| {
+                    shell.record_markdown_document(pane_id, event.0.clone(), cx);
+                });
+                self.view_subscriptions.insert(pane_id, vec![moved]);
+                self.panes.insert(pane_id, PaneView::markdown(view));
             }
         }
         self.sync_board_session_states(cx);

@@ -26,6 +26,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::NewTerminal { .. } => "new-terminal",
         Subcommand::NewAgent { .. } => "new-agent",
         Subcommand::Preview { .. } => "preview",
+        Subcommand::Markdown { .. } => "markdown",
         Subcommand::Attach { .. } => "attach",
         Subcommand::TerminateSession { .. } => "terminate-session",
         Subcommand::TerminateAllDetached => "terminate-all-detached",
@@ -103,7 +104,11 @@ pub fn to_request(
             ..
         } => invoke(
             command_name,
-            preview_args(path, name.as_deref(), resolved_split, *activate),
+            file_view_args(path, name.as_deref(), resolved_split, *activate),
+        ),
+        Subcommand::Markdown { path, activate, .. } => invoke(
+            command_name,
+            file_view_args(path, None, resolved_split, *activate),
         ),
         Subcommand::Attach {
             session_id,
@@ -192,9 +197,10 @@ pub fn to_request(
     }
 }
 
-/// `preview`'s wire args. `split`/`name` ride only when given, so a bare
-/// `horizon preview <path>` sends just the path and `activate`.
-fn preview_args(
+/// `preview`'s and `markdown`'s wire args. `split`/`name` ride only when
+/// given, so a bare `horizon preview <path>` sends just the path and
+/// `activate`; `markdown` never has a name.
+fn file_view_args(
     path: &std::path::Path,
     name: Option<&str>,
     split: Option<&str>,
@@ -326,6 +332,29 @@ mod tests {
     fn preview_is_not_destructive_and_keeps_its_external_name() {
         assert_eq!(external_name(&preview(None, None, false)), "preview");
         assert!(!is_destructive(&preview(None, None, false)));
+    }
+
+    #[test]
+    fn markdown_sends_the_path_the_resolved_split_and_activate_and_no_name() {
+        let markdown = Subcommand::Markdown {
+            path: std::path::PathBuf::from("/notes/index.md"),
+            split: Some(SplitFlag::Here),
+            activate: true,
+        };
+        assert_eq!(external_name(&markdown), "markdown");
+        assert!(!is_destructive(&markdown));
+        let Request::Invoke(invoke) = to_request(&markdown, Some("resolved-session"), None) else {
+            panic!("expected an invoke");
+        };
+        assert_eq!(invoke.command, "markdown");
+        assert_eq!(
+            invoke.args,
+            serde_json::json!({
+                "path": "/notes/index.md",
+                "split": "resolved-session",
+                "activate": true
+            })
+        );
     }
 
     fn new_agent(prompt: Option<&str>, split: Option<SplitFlag>, activate: bool) -> Subcommand {

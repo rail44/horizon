@@ -9,65 +9,6 @@ use horizon_workspace::PaneId;
 use crate::preview::host::theme_input_json;
 use crate::preview::pane::{preview_pane_for_path, status_line, PreviewTarget, Status};
 use crate::preview::registry;
-use crate::preview::watch::{event_changes_content, event_touches, watch_root};
-
-// --- the watcher's pure decisions ---------------------------------------
-
-#[test]
-fn a_watch_is_placed_on_the_artifacts_directory_not_the_file() {
-    let artifact = Path::new("/tmp/plugin/target/wasm32-wasip2/quick/p.wasm");
-    assert_eq!(
-        watch_root(artifact),
-        Some(Path::new("/tmp/plugin/target/wasm32-wasip2/quick"))
-    );
-}
-
-#[test]
-fn a_bare_filename_has_no_directory_to_watch() {
-    assert_eq!(watch_root(Path::new("p.wasm")), None);
-}
-
-#[test]
-fn only_events_naming_the_artifact_count() {
-    let artifact = PathBuf::from("/tmp/out/p.wasm");
-    let sibling = PathBuf::from("/tmp/out/p.d");
-    assert!(event_touches(
-        &[sibling.clone(), artifact.clone()],
-        &artifact
-    ));
-    assert!(!event_touches(&[sibling], &artifact));
-    assert!(!event_touches(&[], &artifact));
-}
-
-#[test]
-fn reading_the_artifact_does_not_count_as_a_change() {
-    use notify::event::{
-        AccessKind, AccessMode, CreateKind, DataChange, EventKind, MetadataKind, ModifyKind,
-        RemoveKind, RenameMode,
-    };
-    // Loading a plugin opens and reads the artifact. If those access events
-    // scheduled a reload, every load would start the next one.
-    for kind in [
-        EventKind::Access(AccessKind::Open(AccessMode::Any)),
-        EventKind::Access(AccessKind::Close(AccessMode::Read)),
-        EventKind::Access(AccessKind::Close(AccessMode::Write)),
-        EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
-        EventKind::Any,
-        EventKind::Other,
-    ] {
-        assert!(!event_changes_content(&kind), "{kind:?}");
-    }
-    // What a cargo rebuild produces: the old file unlinked, the new one
-    // linked or written in its place.
-    for kind in [
-        EventKind::Remove(RemoveKind::File),
-        EventKind::Create(CreateKind::File),
-        EventKind::Modify(ModifyKind::Data(DataChange::Any)),
-        EventKind::Modify(ModifyKind::Name(RenameMode::To)),
-    ] {
-        assert!(event_changes_content(&kind), "{kind:?}");
-    }
-}
 
 // --- "the same path reloads instead of duplicating" ---------------------
 

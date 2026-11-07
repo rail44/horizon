@@ -69,6 +69,27 @@ pub(crate) fn markdown_body(
     source: String,
     color: Hsla,
 ) -> impl IntoElement {
+    running_text(TextView::markdown(id, source), color)
+}
+
+/// [`markdown_body`] whose links call `on_link` with the link's target
+/// instead of opening it, for a view that resolves links itself (a
+/// relative link to another document).
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn linked_markdown_body(
+    id: impl Into<ElementId>,
+    source: String,
+    color: Hsla,
+    on_link: impl Fn(&SharedString, &mut gpui::Window, &mut gpui::App) + Send + Sync + 'static,
+) -> impl IntoElement {
+    running_text(
+        TextView::markdown(id, source)
+            .on_link_click(move |target, _, window, cx| on_link(target, window, cx)),
+        color,
+    )
+}
+
+fn running_text(view: TextView, color: Hsla) -> impl IntoElement {
     let mut code = StyleRefinement::default();
     code.overflow.x = Some(Overflow::Scroll);
     let body = body();
@@ -82,11 +103,7 @@ pub(crate) fn markdown_body(
         .text_size(body.size)
         .line_height(body.line_height)
         .font_weight(REGULAR)
-        .child(
-            TextView::markdown(id, source)
-                .style(style)
-                .text_color(color),
-        )
+        .child(view.style(style).text_color(color))
 }
 
 /// Escapes plain text for verbatim rendering through `TextView::markdown`:

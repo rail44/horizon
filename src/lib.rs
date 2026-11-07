@@ -32,11 +32,15 @@ mod desktop_notify;
 #[cfg(not(target_family = "wasm"))]
 mod entry;
 #[cfg(not(target_family = "wasm"))]
+mod file_watch;
+#[cfg(not(target_family = "wasm"))]
 mod input_trace;
 #[cfg(not(target_family = "wasm"))]
 mod keymap;
 // Built for the plugin target too: the board views use it.
 mod keystroke_input;
+#[cfg(not(target_family = "wasm"))]
+mod markdown;
 #[cfg(not(target_family = "wasm"))]
 mod model_picker;
 #[cfg(not(target_family = "wasm"))]

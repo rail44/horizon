@@ -3,6 +3,7 @@ mod validation;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -109,6 +110,10 @@ struct PaneState {
     id: PaneId,
     kind: PaneKindState,
     session_id: Option<SessionId>,
+    /// Only a document view carries one; absent from every other pane's
+    /// JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    document: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -167,6 +172,9 @@ enum ViewKindState {
     /// a restored pane shows its "nothing loaded" state until `horizon
     /// preview` points it at an artifact again.
     Preview,
+    /// The file rides on the pane (`PaneState::document`), so a Markdown
+    /// pane restores on the file it showed.
+    Markdown,
 }
 
 impl PaneKindState {
@@ -416,6 +424,7 @@ impl LayoutState {
                         id: pane.id,
                         kind: PaneKindState::from(pane.kind),
                         session_id: pane.session_id,
+                        document: pane.document.clone(),
                     },
                 }
             }
@@ -469,6 +478,7 @@ impl LayoutState {
                     id,
                     kind: PaneKind::from(pane.kind),
                     session_id: pane.session_id,
+                    document: pane.document,
                 });
                 LayoutNode::Pane(id)
             }
@@ -531,6 +541,7 @@ impl From<ViewKind> for ViewKindState {
             ViewKind::BoardList => Self::BoardList,
             ViewKind::BoardThread { task } => Self::BoardThread { task },
             ViewKind::Preview => Self::Preview,
+            ViewKind::Markdown => Self::Markdown,
         }
     }
 }
@@ -542,6 +553,7 @@ impl From<ViewKindState> for ViewKind {
             ViewKindState::BoardList => Self::BoardList,
             ViewKindState::BoardThread { task } => Self::BoardThread { task },
             ViewKindState::Preview => Self::Preview,
+            ViewKindState::Markdown => Self::Markdown,
         }
     }
 }
@@ -799,6 +811,51 @@ mod tests {
         );
         assert_eq!(restored.session_count(), workspace.session_count());
         assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
+    }
+
+    #[test]
+    fn state_round_trip_restores_a_markdown_pane_on_its_document() {
+        let mut workspace = Workspace::mvp();
+        let view_pane =
+            workspace.split_active_tab_with_view(ViewKind::Markdown, SplitAxis::Horizontal);
+        assert!(workspace.set_pane_document(view_pane, "/notes/index.md".into()));
+
+        let json = workspace.to_persisted_json().expect("serialize");
+        let value: Value = serde_json::from_str(&json).expect("json");
+        let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
+        assert_eq!(pane["kind"], json!({"view": "markdown"}));
+        assert_eq!(pane["document"], json!("/notes/index.md"));
+        // Panes without a document write no `document` key at all.
+        let terminal = &value["tabs"][0]["root"]["children"][0]["node"]["pane"];
+        assert!(terminal.get("document").is_none());
+
+        let restored = Workspace::from_persisted_json(&json).expect("restore");
+        assert_eq!(
+            restored.pane_document(view_pane),
+            Some(std::path::Path::new("/notes/index.md"))
+        );
+        assert_eq!(
+            restored.document_pane("/notes/index.md".as_ref()),
+            Some(view_pane)
+        );
+        assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
+    }
+
+    #[test]
+    fn only_a_markdown_pane_takes_or_restores_a_document() {
+        let mut workspace = Workspace::mvp();
+        let preview =
+            workspace.split_active_tab_with_view(ViewKind::Preview, SplitAxis::Horizontal);
+        assert!(!workspace.set_pane_document(preview, "/notes/index.md".into()));
+
+        let mut value: Value =
+            serde_json::from_str(&workspace.to_persisted_json().expect("serialize")).expect("json");
+        value["tabs"][0]["root"]["children"][1]["node"]["pane"]["document"] =
+            json!("/notes/index.md");
+        assert!(matches!(
+            Workspace::from_persisted_json(&value.to_string()),
+            Err(WorkspaceStateError::Invalid(_))
+        ));
     }
 
     #[test]

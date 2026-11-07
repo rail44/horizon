@@ -23,6 +23,7 @@ use horizon_workspace::{PaneId, SessionId, Workspace, WORKSPACE_STATE_VERSION};
 
 use crate::agent::{AgentPane, AgentSession};
 use crate::board::{BoardListView, BoardThreadView};
+use crate::markdown::MarkdownView;
 use crate::model_picker::ModelPickerDelegate;
 use crate::palette::PaletteDelegate;
 use crate::preview::{PreviewPane, PreviewTarget};
@@ -38,6 +39,7 @@ mod bindings;
 mod commands;
 mod modals;
 use modals::ListModal;
+mod markdown;
 mod navigation;
 mod preview;
 mod recovery;
@@ -209,6 +211,7 @@ enum CachedPaneLeaf {
     BoardList(Entity<BoardListView>),
     BoardThread(Entity<BoardThreadView>),
     Preview(Entity<PreviewPane>),
+    Markdown(Entity<MarkdownView>),
 }
 
 /// A pane that owns narrower cache boundaries internally. Composite panes must
@@ -227,6 +230,7 @@ impl CachedPaneLeaf {
             Self::BoardList(view) => view.focus_handle(cx),
             Self::BoardThread(view) => view.focus_handle(cx),
             Self::Preview(view) => view.focus_handle(cx),
+            Self::Markdown(view) => view.focus_handle(cx),
         }
     }
 
@@ -238,6 +242,7 @@ impl CachedPaneLeaf {
             Self::BoardList(view) => view.clone().cached(style()).into_any_element(),
             Self::BoardThread(view) => view.clone().cached(style()).into_any_element(),
             Self::Preview(view) => view.clone().cached(style()).into_any_element(),
+            Self::Markdown(view) => view.clone().cached(style()).into_any_element(),
         }
     }
 }
@@ -279,6 +284,10 @@ impl PaneView {
 
     fn preview(view: Entity<PreviewPane>) -> Self {
         Self::Cached(CachedPaneLeaf::Preview(view))
+    }
+
+    fn markdown(view: Entity<MarkdownView>) -> Self {
+        Self::Cached(CachedPaneLeaf::Markdown(view))
     }
 
     fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -352,12 +361,13 @@ pub(crate) struct WorkspaceShell {
     // persisted schema stays a bare tag, so a restored preview pane comes
     // back empty (see `ViewKindState::Preview`).
     preview_targets: HashMap<PaneId, PreviewTarget>,
-    // What the shell listens to on each board pane: the view's request to
-    // open a thread or a task session, and its report of the session ids
-    // the board binds. Held here rather than on the view because a board
-    // view is also built inside a preview plugin, where no shell exists to
-    // subscribe; pruned with `panes`.
-    board_subscriptions: HashMap<PaneId, Vec<Subscription>>,
+    // What the shell listens to on each session-less view pane: a board
+    // view's request to open a thread or a task session and its report of
+    // the session ids the board binds, a Markdown view's move to another
+    // file. Held here rather than on the view because a board view is also
+    // built inside a preview plugin, where no shell exists to subscribe;
+    // pruned with `panes`.
+    view_subscriptions: HashMap<PaneId, Vec<Subscription>>,
     // This window — needed by `Reload Agent Runtime`'s post-resume step,
     // which rebuilds pane views from a background thread's async
     // continuation (no `&mut Window` of its own to reuse).
@@ -438,7 +448,7 @@ impl WorkspaceShell {
             reload_in_progress: false,
             panes: HashMap::new(),
             preview_targets: HashMap::new(),
-            board_subscriptions: HashMap::new(),
+            view_subscriptions: HashMap::new(),
             window: window.window_handle(),
             focus_handle: cx.focus_handle(),
             palette: None,
