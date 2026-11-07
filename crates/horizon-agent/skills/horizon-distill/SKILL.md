@@ -1,6 +1,6 @@
 ---
 name: horizon-distill
-description: Run a distillation pass -- mine this workspace's labeled agent history for repeatable lessons and write them to the knowledge layer (knowledge.write). Use this on the owner's explicit request to distill lessons ("run a distillation pass", "what have we learned", "turn recent failures into a skill"), not as a background or automatic activity.
+description: Run a distillation pass -- mine this workspace's labeled agent history for repeatable lessons and write them to the knowledge layer (knowledge.write), or verify the entries already there against current code and their cited history. Use this on the owner's explicit request to distill lessons ("run a distillation pass", "what have we learned", "turn recent failures into a skill") or to check existing entries ("verify the knowledge entries", "check knowledge for staleness"), not as a background or automatic activity.
 ---
 
 # Distilling lessons from labeled history
@@ -127,24 +127,44 @@ Write a lesson only if it clears all of:
   not the particular task that triggered it. "Commit X landed at ref Y"
   is a task fact, not knowledge; "a killed commit can still land, so
   check `git log` before retrying" is knowledge. Distill the latter.
+- **Durable, not state** -- nothing a session can read directly from
+  git, the board, or the code: what has landed, what is still open,
+  which branch holds which work, commit SHAs or issue numbers as
+  progress markers, today's version numbers. Nor the entry's own edit
+  history ("now", "refreshed", "superseded", "the old explanation is
+  obsolete"). The index rides every session's prompt, so a state claim
+  that goes stale misleads every session until someone notices; the
+  entry states what is true, and its history already lives in the
+  event log its `sources` point at.
 
 ## 4. Writing rules
 
 Write entries with `knowledge.write`. The fields:
 
 - `id` -- lowercase alphanumeric, hyphen-separated.
-- `description` -- one line, the summary shown in the knowledge index;
-  state *what the entry is* plainly so a future session can match it
-  against a task without reading the body first.
+- `description` -- one line (aim for under ~200 characters), shown in
+  the knowledge index that every session reads. Write it as **when it
+  applies, then what to do**, in the imperative: "Before shortening
+  `timeout_secs` on `git commit`: don't -- the pre-commit hook re-runs
+  the full gate", not "The pre-commit hook re-runs the full gate". A
+  working session matches the index against the situation it is in,
+  so lead with that situation (When / Before / If ...); a bare summary
+  of facts leaves the session to work out when the fact matters. Most
+  sessions act on the description alone, so it must carry the
+  instruction itself, not a pointer to the body.
 - `body` -- free-form Markdown; the full lesson.
 - `sources` -- **required**. Cite verifiable provenance as
   `session:<uuid8> seq:<range>` for every incident the lesson rests on
   (e.g. `session:872d18b7 seq:79-8756`), so the owner can `recall.read`
   the exact turns and spot-check your reasoning. More than one incident?
   cite each.
-- `anchors` -- optional but preferred: repository-relative paths or
-  symbols the entry relates to, so the lesson points at the code it's
-  about.
+- `anchors` -- required in practice: the repository-relative paths the
+  lesson depends on. Staleness is detected by checking whether the
+  anchored paths changed since the entry's `updated` date (§6); an
+  entry without anchors can only be re-checked by hand, so it quietly
+  goes stale. Leave `anchors` empty only when the lesson is about
+  something outside the repository (an external tool, the host), and
+  say so in the body.
 
 Other rules:
 
@@ -164,3 +184,42 @@ refinement without real new evidence behind them. An entry written to
 satisfy the act of running this pass, rather than because two or more
 real incidents demanded it, is exactly that failure mode -- don't
 produce one.
+
+## 6. Verification pass (checking existing entries)
+
+Run this when the owner asks to verify or review the knowledge store
+("verify the knowledge entries", "check knowledge for staleness"),
+instead of or after a distillation pass. Its job is correcting what is
+already there, not adding entries.
+
+1. **Find entries whose ground moved.** For each active entry, take its
+   `anchors` and `updated` from `knowledge.read`, then ask git whether
+   any anchored path changed since:
+
+   ```
+   git log --oneline --since=<updated> -- <anchor> <anchor> ...
+   ```
+
+   Any output makes the entry a candidate. Entries with no anchors are
+   candidates by default -- nothing else can tell you they are still
+   true.
+2. **Weigh by use.** `recall.search { "query": "<entry id>", "scope":
+   "all" }` returns `tool_call` hits whose tool is `knowledge.read`;
+   count them. Check candidates that are read often first -- a wrong
+   entry that sessions read does the most damage. Also treat any entry
+   whose description or body states progress (landed / open / waiting
+   on X) as a candidate, whatever its anchors say.
+3. **Re-derive, don't re-word.** For each candidate, read the turns its
+   `sources` cite (`recall.read`) and the current code at its anchors,
+   and decide from those what is true now -- never from the entry's own
+   previous wording, which is how refined memory turns generic and
+   lossy.
+4. **Act.** Still true: if the description or body breaks §3/§4
+   (state, edit history, a summary instead of an instruction, missing
+   anchors), rewrite it with `knowledge.write` under the same `id`.
+   Partly true: rewrite it to what is true now. No longer true and
+   nothing durable remains: write it back with `status: expired`. Not
+   sure: `status: needs-review`, and say why in the conversation.
+5. **Report the delta** in the conversation -- which entries you
+   rewrote, expired, or flagged, and on what evidence -- so the owner
+   can review it.

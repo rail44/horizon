@@ -25,7 +25,8 @@ pub(crate) struct ReadEntry {
 pub(crate) struct KnowledgeWrite {
     /// Filename slug: lowercase letters, digits and hyphens.
     pub id: String,
-    /// One-line summary shown in the project knowledge index.
+    /// One line shown in the project knowledge index: when it applies, then
+    /// what to do.
     pub description: Text,
     /// Markdown body.
     pub body: String,
