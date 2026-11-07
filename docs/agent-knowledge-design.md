@@ -120,7 +120,52 @@ active | needs-review | expired`) followed by a free markdown body.
    distillation pass re-verifies flagged entries against current code
    plus their cited log ranges. Contradiction resolution is
    overwrite-not-append (the same discipline as the store's upsert
-   semantics). Full automation of the flag pass is future work.
+   semantics). Full automation of the flag pass is future work; the
+   manual procedure is `horizon-distill` §6 (see Amendments).
+
+## Amendments (2026-11-07, owner-approved)
+
+Taken from two external sources read the same day — Anthropic's
+"The components of agent memory" (2026-11-06) and Letta's
+"FrontierMemory 1.0" (2026-10) — after checking each against the live
+store (23 entries) and the event log. Measured at the time: 276
+sessions had turns since the layer shipped; 14 of them ever called
+`knowledge.read`, 7 of those being distillation/update sessions; 14
+of 23 entries had no anchors, so decision 7 could not fire for them;
+descriptions carried progress state ("open, awaiting a fork push",
+"landed") and edit history ("refreshed", "superseded"), and two
+entries contradicted each other.
+
+- **Entries hold durable lessons, not state.** Nothing a session can
+  read from git, the board, or the code (what landed, what is open,
+  SHAs or issue numbers as progress), and no edit history. Source:
+  Anthropic's Pokémon comparison — storing what can be read off the
+  screen is redundant, a detailed record of constantly changing state
+  kept going out of date, and the useful files held strategy and
+  tested rules that exist only if the model writes them down; and its
+  warning that an incorrect injected note is carried into every
+  session.
+- **Descriptions say when they apply, then what to do**, imperative.
+  Source: FrontierMemory's observation that an imperative "use when"
+  skill description was loaded and generic summaries were not (one
+  example — weak evidence, adopted because it is cheap).
+- **Anchors are required in practice** (skill rule, not a tool
+  check), empty only for lessons about things outside the repository.
+  This is what makes decision 7 reach every entry.
+- **A manual verification pass** (`horizon-distill` §6): candidates
+  are entries whose anchors changed since `updated` or that state
+  progress, weighted by `knowledge.read` counts via `recall.search`;
+  each is re-derived from its sources and current code (decision 2)
+  and rewritten, expired, or flagged `needs-review`. Source:
+  Anthropic's dreaming-corrects-memory result and its suggestion to
+  focus checking on volatile, frequently used memory. Cadence stays
+  manual (decision 6).
+- **The index header states the layer's purpose for readers** — what
+  the entries are and to act on a matching line — but does not invite
+  in-session writes; that would reopen decision 6.
+
+The existing 23 entries were rewritten to these rules the same day
+(backup at `$XDG_DATA_HOME/horizon/knowledge.bak-20261107`).
 
 ## Evidence (both arms ran before this document)
 

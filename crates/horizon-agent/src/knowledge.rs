@@ -203,8 +203,10 @@ pub(crate) fn prompt_section(cwd: &Path) -> Option<String> {
     active.sort_by(|a, b| b.updated.cmp(&a.updated));
 
     let mut section = String::from(
-        "Project knowledge distilled from past session logs; each entry cites verifiable \
-         sources. Read a full entry with knowledge.read.\n",
+        "Project knowledge distilled from past session logs: procedures, traps, and \
+         environment behaviors in this project that its code and docs do not tell you. \
+         Each entry cites verifiable sources. When your situation matches a line, act on \
+         it; read the full entry with knowledge.read when you need its details.\n",
     );
     let mut chars = section.chars().count();
     for entry in &active {
