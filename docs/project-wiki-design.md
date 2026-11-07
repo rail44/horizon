@@ -3,7 +3,8 @@
 Status: shape decided with the owner 2026-11-07/08; concept grouping
 spiked and accepted 2026-11-08 ("悪くないと思うのでこれで進めてみましょう");
 a pilot of the overview and three concept pages accepted the same day
-("よい感じだと思います"); the other eighteen pages are not written. Background reading: Anthropic's "The
+("よい感じだと思います"); all 21 concept pages written by the session
+agent the same day, read against local main a3521c17. Background reading: Anthropic's "The
 components of agent memory" (2026-11-06) on wikis built by dreaming.
 
 ## Problem
@@ -103,10 +104,13 @@ What the pilot showed:
 
 ## Open points
 
-- **Generating the remaining pages.** How the agent pass that writes pages
-  is run — presumably a skill on request, as distillation is
+- **Regenerating pages.** How the agent pass that writes and refreshes
+  pages is run — presumably a skill on request, as distillation is
   (`horizon-distill`) — and whether the mechanical parts (graph weights,
-  candidates) become a code-db query.
+  candidates) become a code-db query. The full pass found four more stale
+  module comments beyond the pilot's (in `src/agent/mod.rs`,
+  `src/theme/oklab.rs`, `crates/horizon-cli/src/lib.rs`,
+  `duckdb-ext/git-history/src/lib.rs`), each recorded on its page.
 - **Choosing links to docs and the board.** The pilot used path mentions
   and the agent's judgment together. 50 of 72 docs mention repository
   paths; 53 of their 153 distinct backticked paths no longer exist.
