@@ -694,7 +694,7 @@ database's namespace graph plus an agent pass, spiked in
 `duckdb-ext/cluster-spike/`. `docs/project-wiki-design.md` is the
 self-contained record (decisions, spike results, open points).
 
-### logd — log infrastructure daemon (designed 2026-08-06, not started)
+### logd — log infrastructure daemon (designed 2026-08-06; stages A and B implemented)
 
 The third daemon: sole appender of the event logs, owner of the DuckDB
 projection, named-query servant, and the primary notification (poke)
@@ -703,7 +703,10 @@ self-contained record (decisions, the dissolved requirements, the
 DuckDB re-justification with its exit clause, open v1-slicing items);
 `docs/research/change-notification.md` and
 `docs/research/duckdb-ecosystem.md` carry the surveys. Supersedes the
-notification half of the deferred item below when built.
+notification half of the deferred item below when built. Built so far
+(`crates/horizon-logd`): stage A, board writes over `ingest`, and stage
+B, the subscribe stream; moving the agent event log and the DuckDB
+projection into it are later phases.
 
 ### Mixture-of-Agents as a selectable model (withdrawn 2026-10-20)
 
