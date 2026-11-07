@@ -1,4 +1,5 @@
-//! `git_history`: DuckDB table functions over a repository's git history.
+//! `git_history`: the DuckDB table function `git_tracked_files`, a
+//! worktree's current files and the content id of each.
 //!
 //! See `duckdb-ext/README.md` for the functions, their semantics and the
 //! build route.

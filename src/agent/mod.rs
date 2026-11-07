@@ -1,5 +1,5 @@
 //! The GPUI shell's agent model and pane. Shared agentd transport
-//! ownership lives in `crate::agentd`.
+//! ownership lives in `crate::runtime`.
 //!
 //! Everything but [`view`] reaches the runtime or the agent crates and is
 //! native-only; `view` draws the pane over a plain display model and builds
