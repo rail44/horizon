@@ -1,6 +1,6 @@
 //! Hand-rolled sRGB <-> OKLab <-> OKLCH conversions (Björn Ottosson's
 //! reference formulas, <https://bottosson.github.io/posts/oklab/>) plus WCAG
-//! relative-luminance/contrast-ratio helpers, for `theme.rs`'s seed
+//! relative-luminance/contrast-ratio helpers, for `scheme.rs`'s seed
 //! derivation (`docs/theme-design.md`). Kept dependency-free -- the design
 //! doc explicitly rules out adding a color crate for this (gpui-component's
 //! `Colorize::mix_oklab` does the OKLab conversion but not the L-targeting
@@ -138,7 +138,7 @@ pub(crate) fn packed_from_oklch(lch: Oklch) -> u32 {
 }
 
 /// A packed color's own OKLab lightness -- the perceptually-uniform
-/// polarity/ordering signal used throughout `theme.rs`'s seed derivation
+/// polarity/ordering signal used throughout `scheme.rs`'s seed derivation
 /// (background-vs-foreground polarity, neutral-ladder ordering) in place
 /// of the older BT.601-luma [`super::luminance`]/`is_light` pair, which
 /// stays in place unchanged for the pre-existing `contrast_safe_default`
@@ -216,7 +216,7 @@ const CONTRAST_QUANTIZATION_MAX_STEPS: u32 = 32;
 /// luminance`] on the quantized bytes, not the continuous-space solution
 /// bisection alone would produce (see the refinement step below for why
 /// that distinction matters). `contrast_snap`/`tint_for_contrast`/
-/// `readable_on` (`theme.rs`) all resolve through this one function, so
+/// `readable_on` (`palette.rs`) all resolve through this one function, so
 /// the guarantee reaches every text-floor consumer in the seed
 /// derivation, including B1's own `text_muted`/`foreground` solves.
 ///
@@ -311,7 +311,7 @@ pub(crate) fn solve_lightness_for_ratio(
     l
 }
 
-// --- convenience wrappers for `theme.rs`'s seed derivation --------------
+// --- convenience wrappers for `scheme.rs`'s seed derivation --------------
 
 /// [`solve_lightness_for_ratio`] plus the OKLCH rebuild step, for callers
 /// that just want the resulting color -- `background`'s own hue/chroma
@@ -331,7 +331,7 @@ pub(crate) fn tint_for_contrast(background: u32, target_ratio: f64) -> u32 {
 /// holding `from`'s own hue and chroma fixed -- the neutral-ladder
 /// primitive (`docs/theme-design.md`: surfaces/borders "stepped from the
 /// background toward the foreground in OKLCH"). `fraction` is not
-/// clamped to `0.0..=1.0`: every call site in `theme.rs` passes a
+/// clamped to `0.0..=1.0`: every call site in `scheme.rs` passes a
 /// constant already in range, and an out-of-range `fraction` is a
 /// meaningful (if unusual) extrapolation rather than a caller error.
 pub(crate) fn step_lightness_toward(from: u32, to: u32, fraction: f64) -> u32 {

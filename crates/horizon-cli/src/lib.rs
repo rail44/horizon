@@ -2,9 +2,9 @@
 //! see `docs/cli-control-plane-design.md` and the frozen contract crate,
 //! `crates/horizon-control`. As of the design doc's Second revision
 //! ("Single binary, subcommand client"), this crate has no binary of its
-//! own -- the root `horizon` binary's `src/main.rs` is the thin argv/env/
-//! stdio wrapper that calls [`run`] when it sees a subcommand, dispatching
-//! to the GUI (`app_view`) otherwise.
+//! own -- the root `horizon` binary's entry point (`src/entry.rs`, which
+//! `src/main.rs` calls) is the thin argv/env/stdio wrapper that calls
+//! [`run`] when it sees a subcommand and opens the GUI otherwise.
 //!
 //! Kept as a library so `tests/integration.rs` can drive [`run`] directly
 //! against a stub control-plane server (a real
