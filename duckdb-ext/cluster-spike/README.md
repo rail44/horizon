@@ -24,7 +24,12 @@ directions of a pair into one undirected weight.
 ```sh
 cargo run --release -- sweep edges.csv            # every algorithm over resolutions and seeds
 cargo run --release -- run edges.csv --algo leiden --resolution 2 --seed 1
+cargo run --release -- concepts edges.csv results/concepts.md --algo leiden --resolution 2 --seed 1
 ```
+
+`concepts` checks a concept file (`## id: title` headings, namespaces under
+each) covers every namespace once, and compares it with a partition.
+`results/` holds the agent pass's concept file and the findings.
 
 Algorithms: `leiden` and `leiden-cpm` (leiden-rs, modularity and the Constant
 Potts Model), `louvain-leiden-rs` (leiden-rs with refinement skipped),

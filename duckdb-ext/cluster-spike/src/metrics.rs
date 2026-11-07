@@ -17,6 +17,28 @@ pub fn renumber(membership: &[usize]) -> Vec<usize> {
         .collect()
 }
 
+/// Community indices renumbered by size, largest first (ties by smallest
+/// member), the order a partition listing prints them in.
+pub fn rank_by_size(membership: &[usize]) -> Vec<usize> {
+    let count = membership.iter().max().map_or(0, |c| c + 1);
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (node, &c) in membership.iter().enumerate() {
+        members[c].push(node);
+    }
+    let mut order: Vec<usize> = (0..count).collect();
+    order.sort_by(|&a, &b| {
+        members[b]
+            .len()
+            .cmp(&members[a].len())
+            .then_with(|| members[a].cmp(&members[b]))
+    });
+    let mut rank = vec![0; count];
+    for (position, &c) in order.iter().enumerate() {
+        rank[c] = position;
+    }
+    membership.iter().map(|&c| rank[c]).collect()
+}
+
 /// Newman's weighted modularity of an undirected graph with a resolution
 /// γ: Σ_c [ L_c / m − γ (d_c / 2m)² ], L_c the weight inside c, d_c its
 /// degree sum, m the total weight.
@@ -72,6 +94,11 @@ mod tests {
     #[test]
     fn renumbering_follows_first_appearance() {
         assert_eq!(renumber(&[7, 7, 2, 9, 2]), [0, 0, 1, 2, 1]);
+    }
+
+    #[test]
+    fn ranking_puts_the_largest_community_first() {
+        assert_eq!(rank_by_size(&[0, 1, 1, 2, 2, 2]), [2, 1, 1, 0, 0, 0]);
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //! namespace graph (README.md).
 
 pub mod algorithms;
+pub mod concepts;
 pub mod graph;
 pub mod metrics;
 pub mod report;

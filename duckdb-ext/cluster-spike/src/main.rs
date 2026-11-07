@@ -1,17 +1,21 @@
 //! `cluster-spike run EDGES.csv --algo NAME [--resolution R] [--seed S]`
 //! `cluster-spike sweep EDGES.csv [--resolutions R,..] [--cpm-resolutions R,..] [--seeds S,..]`
+//! `cluster-spike concepts EDGES.csv CONCEPTS.md --algo NAME [--resolution R] [--seed S]`
 //!
 //! EDGES.csv is `code-db query REPO namespace_graph FORMAT=csv` (README.md).
 
 use std::process::ExitCode;
 
-use cluster_spike::algorithms::Algorithm;
+use cluster_spike::algorithms::{Algorithm, run};
+use cluster_spike::concepts::{assign, comparison, parse_concepts};
 use cluster_spike::graph::parse_namespace_csv;
+use cluster_spike::metrics::rank_by_size;
 use cluster_spike::report::{partition_listing, sweep_table};
 
 const USAGE: &str = "usage:
   cluster-spike run EDGES.csv --algo NAME [--resolution R] [--seed S]
   cluster-spike sweep EDGES.csv [--resolutions R,..] [--cpm-resolutions R,..] [--seeds S,..]
+  cluster-spike concepts EDGES.csv CONCEPTS.md --algo NAME [--resolution R] [--seed S]
 algorithms: leiden, leiden-cpm, louvain-leiden-rs, louvain-graphrs";
 
 fn main() -> ExitCode {
@@ -49,17 +53,34 @@ fn dispatch(args: &[String]) -> Result<String, String> {
             .map(|v| v.parse::<f64>().map_err(|e| format!("`{v}`: {e}")))
             .collect()
     };
+    let partition_options = || -> Result<(Algorithm, f64, u64), String> {
+        let name = option("--algo")?.ok_or("--algo is required")?;
+        let algorithm =
+            Algorithm::parse(name).ok_or_else(|| format!("unknown algorithm `{name}`"))?;
+        let resolution = option("--resolution")?.map_or(Ok(1.0), |v| {
+            v.parse().map_err(|e| format!("--resolution: {e}"))
+        })?;
+        let seed =
+            option("--seed")?.map_or(Ok(1), |v| v.parse().map_err(|e| format!("--seed: {e}")))?;
+        Ok((algorithm, resolution, seed))
+    };
     match command.as_str() {
         "run" => {
-            let name = option("--algo")?.ok_or("run needs --algo")?;
-            let algorithm =
-                Algorithm::parse(name).ok_or_else(|| format!("unknown algorithm `{name}`"))?;
-            let resolution = option("--resolution")?.map_or(Ok(1.0), |v| {
-                v.parse().map_err(|e| format!("--resolution: {e}"))
-            })?;
-            let seed = option("--seed")?
-                .map_or(Ok(1), |v| v.parse().map_err(|e| format!("--seed: {e}")))?;
+            let (algorithm, resolution, seed) = partition_options()?;
             partition_listing(&graph, algorithm, resolution, seed)
+        }
+        "concepts" => {
+            let file = options
+                .first()
+                .filter(|a| !a.starts_with("--"))
+                .ok_or("concepts needs a concept file after the edge file")?;
+            let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+            let concepts = parse_concepts(&text)?;
+            let concept_of = assign(&graph, &concepts)?;
+            let (algorithm, resolution, seed) = partition_options()?;
+            // Numbered as `run` lists them, so "cluster N" matches its listing.
+            let cluster_of = rank_by_size(&run(algorithm, &graph, resolution, seed)?);
+            Ok(comparison(&graph, &concepts, &concept_of, &cluster_of))
         }
         "sweep" => {
             let resolutions = numbers(option("--resolutions")?.unwrap_or("0.5,1,2,4"))?;
