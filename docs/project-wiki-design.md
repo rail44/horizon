@@ -104,21 +104,26 @@ What the pilot showed:
 
 ## Open points
 
-- **Regenerating pages.** How the agent pass that writes and refreshes
-  pages is run — presumably a skill on request, as distillation is
-  (`horizon-distill`) — and whether the mechanical parts (graph weights,
-  candidates) become a code-db query. The full pass found four more stale
-  module comments beyond the pilot's (in `src/agent/mod.rs`,
-  `src/theme/oklab.rs`, `crates/horizon-cli/src/lib.rs`,
-  `duckdb-ext/git-history/src/lib.rs`), each recorded on its page.
+- **Regenerating pages: settled 2026-11-08.** The procedure is the
+  repository skill `.horizon/skills/project-wiki/SKILL.md`, written so it
+  does not depend on which agent runs it (owner: "スキルとしてはエージェント
+  実装によらない形でいいんじゃないですか？"); `.claude/skills/project-wiki`
+  links to the same file. Its mechanical steps are `cluster-spike place`
+  (namespaces the concept file lacks, with the concept each is most tied
+  to, and names the code no longer has) and `cluster-spike concept-graph`
+  (directed weights between concepts). The concept file moved to the store
+  as `concepts.md` beside the pages (owner's choice), so open point "Where
+  the concept file lives" is closed. Still open: a Horizon agent needs an
+  approval to write to the store, which sits outside every workspace; a
+  dedicated write path like `knowledge.write` would remove that, and
+  whether one is wanted is undecided. The full pass found four more stale
+  module comments beyond the pilot's, fixed on the same branch.
 - **Choosing links to docs and the board.** The pilot used path mentions
   and the agent's judgment together. 50 of 72 docs mention repository
   paths; 53 of their 153 distinct backticked paths no longer exist.
 - **Keeping pages current.** Anchoring pages to their concept's namespaces
   makes "did the code under this page change" a git question, as in the
   knowledge layer's verification pass.
-- **Where the concept file lives.** In the spike it is in the repository;
-  decision 3 puts pages user-side, and the concept file may follow them.
 - **The production clustering.** A crate inside code-db (leiden-rs or
   graphrs's Louvain; graphrs gives the same partition for every seed,
   which suits a candidate generator) versus keeping it a separate tool.

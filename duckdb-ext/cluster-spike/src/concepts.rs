@@ -82,6 +82,110 @@ pub fn assign(graph: &NamespaceGraph, concepts: &[Concept]) -> Result<Vec<usize>
     }
 }
 
+/// Namespace → concept id, for the namespaces the file names (duplicates
+/// keep their first concept; `assign` is the strict check).
+fn concept_by_namespace(concepts: &[Concept]) -> HashMap<&str, &str> {
+    let mut map = HashMap::new();
+    for concept in concepts {
+        for name in &concept.namespaces {
+            map.entry(name.as_str()).or_insert(concept.id.as_str());
+        }
+    }
+    map
+}
+
+/// Directed weights between concepts, as CSV `src,dst,weight`: the sum of
+/// the arcs from one concept's namespaces to another's, largest first within
+/// each source. Arcs touching a namespace the file does not name are left
+/// out (`placement` lists those).
+pub fn concept_graph(arcs: &[(String, String, f64)], concepts: &[Concept]) -> String {
+    let of = concept_by_namespace(concepts);
+    let mut weights: BTreeMap<(&str, &str), f64> = BTreeMap::new();
+    for (src, dst, w) in arcs {
+        if let (Some(a), Some(b)) = (of.get(src.as_str()), of.get(dst.as_str()))
+            && a != b
+        {
+            *weights.entry((a, b)).or_default() += w;
+        }
+    }
+    let mut rows: Vec<((&str, &str), f64)> = weights.into_iter().collect();
+    rows.sort_by(|((a1, b1), w1), ((a2, b2), w2)| {
+        a1.cmp(a2).then(w2.total_cmp(w1)).then(b1.cmp(b2))
+    });
+    let mut out = String::from("src,dst,weight\n");
+    for ((a, b), w) in rows {
+        writeln!(out, "{a},{b},{w}").unwrap();
+    }
+    out
+}
+
+/// What keeping the concept file current needs: namespaces the graph has but
+/// the file does not, each with the concept it is most strongly tied to
+/// (arcs in both directions), and namespaces the file names that the graph no
+/// longer has.
+pub fn placement(
+    graph: &NamespaceGraph,
+    arcs: &[(String, String, f64)],
+    concepts: &[Concept],
+) -> String {
+    let of = concept_by_namespace(concepts);
+    let present: BTreeSet<&str> = graph.names.iter().map(String::as_str).collect();
+    let mut out = String::new();
+
+    let missing: Vec<&str> = graph
+        .names
+        .iter()
+        .map(String::as_str)
+        .filter(|n| !of.contains_key(n))
+        .collect();
+    writeln!(
+        out,
+        "## namespaces not in the concept file: {}",
+        missing.len()
+    )
+    .unwrap();
+    for name in &missing {
+        let mut ties: BTreeMap<&str, f64> = BTreeMap::new();
+        for (src, dst, w) in arcs {
+            let other = if src == name {
+                dst
+            } else if dst == name {
+                src
+            } else {
+                continue;
+            };
+            if let Some(concept) = of.get(other.as_str()) {
+                *ties.entry(concept).or_default() += w;
+            }
+        }
+        let best = ties
+            .iter()
+            .max_by(|(c1, w1), (c2, w2)| w1.total_cmp(w2).then(c2.cmp(c1)));
+        match best {
+            Some((concept, weight)) => writeln!(out, "{name} -> {concept} ({weight})").unwrap(),
+            None => writeln!(out, "{name} -> (no tie to a named namespace)").unwrap(),
+        }
+    }
+
+    let gone: Vec<&str> = of
+        .keys()
+        .copied()
+        .filter(|n| !present.contains(n))
+        .collect();
+    let mut gone = gone;
+    gone.sort_unstable();
+    writeln!(
+        out,
+        "\n## namespaces in the concept file the graph no longer has: {}",
+        gone.len()
+    )
+    .unwrap();
+    for name in gone {
+        writeln!(out, "{name} (in {})", of[name]).unwrap();
+    }
+    out
+}
+
 /// The comparison of the concepts with the algorithm partition they started
 /// from: modularity of both, their adjusted Rand index, how many namespaces
 /// sit outside their concept's dominant source cluster, and per concept its
@@ -201,6 +305,34 @@ mod tests {
         assert!(error.contains("a/x.rs: in both one and two"), "{error}");
         assert!(error.contains("unassigned namespace a/y.rs"), "{error}");
         assert!(error.contains("unassigned namespace b/z.rs"), "{error}");
+    }
+
+    fn arcs() -> Vec<(String, String, f64)> {
+        vec![
+            ("a/x.rs".into(), "a/y.rs".into(), 3.0),
+            ("a/y.rs".into(), "b/z.rs".into(), 1.0),
+            ("b/z.rs".into(), "a/x.rs".into(), 2.0),
+        ]
+    }
+
+    #[test]
+    fn the_concept_graph_sums_directed_arcs_between_concepts() {
+        let concepts = parse_concepts("## one: A\na/x.rs\na/y.rs\n## two: B\nb/z.rs\n").unwrap();
+        assert_eq!(
+            concept_graph(&arcs(), &concepts),
+            "src,dst,weight\none,two,1\ntwo,one,2\n"
+        );
+    }
+
+    #[test]
+    fn placement_proposes_the_strongest_tie_and_lists_vanished_names() {
+        // b/z.rs is new to the file; old/w.rs is no longer in the graph.
+        let concepts = parse_concepts("## one: A\na/x.rs\n## two: B\na/y.rs\nold/w.rs\n").unwrap();
+        let report = placement(&graph(), &arcs(), &concepts);
+        assert!(report.contains("not in the concept file: 1"), "{report}");
+        // z ties to x (one) by 2 and to y (two) by 1.
+        assert!(report.contains("b/z.rs -> one (2)"), "{report}");
+        assert!(report.contains("old/w.rs (in two)"), "{report}");
     }
 
     #[test]

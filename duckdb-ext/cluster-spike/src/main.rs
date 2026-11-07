@@ -1,14 +1,16 @@
 //! `cluster-spike run EDGES.csv --algo NAME [--resolution R] [--seed S]`
 //! `cluster-spike sweep EDGES.csv [--resolutions R,..] [--cpm-resolutions R,..] [--seeds S,..]`
 //! `cluster-spike concepts EDGES.csv CONCEPTS.md --algo NAME [--resolution R] [--seed S]`
+//! `cluster-spike concept-graph EDGES.csv CONCEPTS.md`
+//! `cluster-spike place EDGES.csv CONCEPTS.md`
 //!
 //! EDGES.csv is `code-db query REPO namespace_graph FORMAT=csv` (README.md).
 
 use std::process::ExitCode;
 
 use cluster_spike::algorithms::{Algorithm, run};
-use cluster_spike::concepts::{assign, comparison, parse_concepts};
-use cluster_spike::graph::parse_namespace_csv;
+use cluster_spike::concepts::{assign, comparison, concept_graph, parse_concepts, placement};
+use cluster_spike::graph::{parse_namespace_arcs, parse_namespace_csv};
 use cluster_spike::metrics::rank_by_size;
 use cluster_spike::report::{partition_listing, sweep_table};
 
@@ -16,6 +18,8 @@ const USAGE: &str = "usage:
   cluster-spike run EDGES.csv --algo NAME [--resolution R] [--seed S]
   cluster-spike sweep EDGES.csv [--resolutions R,..] [--cpm-resolutions R,..] [--seeds S,..]
   cluster-spike concepts EDGES.csv CONCEPTS.md --algo NAME [--resolution R] [--seed S]
+  cluster-spike concept-graph EDGES.csv CONCEPTS.md
+  cluster-spike place EDGES.csv CONCEPTS.md
 algorithms: leiden, leiden-cpm, louvain-leiden-rs, louvain-graphrs";
 
 fn main() -> ExitCode {
@@ -53,6 +57,14 @@ fn dispatch(args: &[String]) -> Result<String, String> {
             .map(|v| v.parse::<f64>().map_err(|e| format!("`{v}`: {e}")))
             .collect()
     };
+    let concept_file = || -> Result<Vec<cluster_spike::concepts::Concept>, String> {
+        let file = options
+            .first()
+            .filter(|a| !a.starts_with("--"))
+            .ok_or("expected a concept file after the edge file")?;
+        let source = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+        parse_concepts(&source)
+    };
     let partition_options = || -> Result<(Algorithm, f64, u64), String> {
         let name = option("--algo")?.ok_or("--algo is required")?;
         let algorithm =
@@ -69,13 +81,16 @@ fn dispatch(args: &[String]) -> Result<String, String> {
             let (algorithm, resolution, seed) = partition_options()?;
             partition_listing(&graph, algorithm, resolution, seed)
         }
+        "concept-graph" => {
+            let concepts = concept_file()?;
+            Ok(concept_graph(&parse_namespace_arcs(&text)?, &concepts))
+        }
+        "place" => {
+            let concepts = concept_file()?;
+            Ok(placement(&graph, &parse_namespace_arcs(&text)?, &concepts))
+        }
         "concepts" => {
-            let file = options
-                .first()
-                .filter(|a| !a.starts_with("--"))
-                .ok_or("concepts needs a concept file after the edge file")?;
-            let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
-            let concepts = parse_concepts(&text)?;
+            let concepts = concept_file()?;
             let concept_of = assign(&graph, &concepts)?;
             let (algorithm, resolution, seed) = partition_options()?;
             // Numbered as `run` lists them, so "cluster N" matches its listing.
