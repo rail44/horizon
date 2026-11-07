@@ -13,6 +13,22 @@
 //! same id appears under several providers with different windows), and
 //! the model by exact id inside it. No match means no window, as before.
 //!
+//! The catalog writes `api` only for providers reached through a generic
+//! SDK that needs the URL (`@ai-sdk/openai-compatible` and the like); a
+//! provider with its own SDK package -- DeepInfra, Groq, OpenAI, Anthropic,
+//! Mistral, xAI, ... -- has `api: null`, its URL living in that package's
+//! code. Those are matched instead by the registrable domain of their
+//! `doc` link against the configured base URL's (`api.deepinfra.com` and
+//! `deepinfra.com/models` share `deepinfra.com`), only when no provider
+//! serves the base URL exactly, and only when one such provider claims the
+//! domain (Azure's two entries share `microsoft.com` and match nothing).
+//! The registrable domain is approximated as the host's last two labels:
+//! no `api: null` provider's `doc` sits under a two-label public suffix
+//! such as `co.jp`, and the exact model id is still required. Decided
+//! 2026-11-08 (owner), over matching the key variable's name against the
+//! catalog's `env`, which an owner names freely, and over extracting each
+//! SDK package's default URL, which is not reliably machine-readable.
+//!
 //! Fetched once per process the first time a window is needed, and the
 //! body written to `$XDG_CACHE_HOME/horizon/models-dev-api.json` (falling
 //! back to `~/.cache`); when the fetch fails the cached copy serves, and
@@ -41,16 +57,23 @@ const HOME_VAR: &str = "HOME";
 /// on this once per process, then never again.
 const CATALOG_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Per model id, the declared limits.
+type ModelTable = HashMap<String, ModelLimits>;
+
 /// The catalog reduced to what a window lookup reads: per provider base
-/// URL (normalized), per model id, the declared limits.
+/// URL (normalized), per model id, the declared limits; and for providers
+/// without a base URL, the same keyed by their `doc` link's registrable
+/// domain, `None` where several providers claim one domain.
 #[derive(Debug, Default)]
 pub(super) struct Catalog {
-    providers: HashMap<String, HashMap<String, ModelLimits>>,
+    providers: HashMap<String, ModelTable>,
+    by_doc_domain: HashMap<String, Option<ModelTable>>,
 }
 
 #[derive(Deserialize)]
 struct RawProvider {
     api: Option<String>,
+    doc: Option<String>,
     #[serde(default)]
     models: HashMap<String, RawModel>,
 }
@@ -66,43 +89,72 @@ struct RawLimit {
 }
 
 impl Catalog {
-    /// Reads the catalog document. A provider without a base URL, and a
-    /// model without a context limit, contribute nothing; anything else
-    /// malformed fails the whole parse, which reads as "no catalog".
+    /// Reads the catalog document. A provider with neither a base URL nor a
+    /// usable `doc` domain, and a model without a context limit, contribute
+    /// nothing; anything else malformed fails the whole parse, which reads
+    /// as "no catalog".
     pub(super) fn parse(body: &str) -> Option<Self> {
         let raw: HashMap<String, RawProvider> = serde_json::from_str(body).ok()?;
-        let mut providers: HashMap<String, HashMap<String, ModelLimits>> = HashMap::new();
+        let mut catalog = Self::default();
         for provider in raw.into_values() {
-            let Some(api) = provider.api else {
-                continue;
-            };
-            let models = providers.entry(normalize_base_url(&api)).or_default();
-            for (id, model) in provider.models {
-                let Some(limit) = model.limit else {
-                    continue;
-                };
-                let Some(context_length) = limit.context else {
-                    continue;
-                };
-                models.insert(id, ModelLimits { context_length });
+            let models = model_table(provider.models);
+            if let Some(api) = provider.api {
+                catalog
+                    .providers
+                    .entry(normalize_base_url(&api))
+                    .or_default()
+                    .extend(models);
+            } else if let Some(domain) = provider.doc.as_deref().and_then(registrable_domain) {
+                catalog
+                    .by_doc_domain
+                    .entry(domain)
+                    .and_modify(|claimed| *claimed = None)
+                    .or_insert(Some(models));
             }
         }
-        Some(Self { providers })
+        Some(catalog)
     }
 
     /// The limits the catalog declares for `model` at the provider serving
-    /// `base_url`, if it knows both.
+    /// `base_url`, if it knows both: by exact base URL, else by the one
+    /// URL-less provider whose `doc` shares the base URL's domain.
     pub(super) fn limits(&self, base_url: &str, model: &str) -> Option<ModelLimits> {
-        self.providers
-            .get(&normalize_base_url(base_url))?
-            .get(model)
-            .copied()
+        let models = match self.providers.get(&normalize_base_url(base_url)) {
+            Some(models) => models,
+            None => self
+                .by_doc_domain
+                .get(&registrable_domain(base_url)?)?
+                .as_ref()?,
+        };
+        models.get(model).copied()
     }
+}
+
+fn model_table(models: HashMap<String, RawModel>) -> ModelTable {
+    models
+        .into_iter()
+        .filter_map(|(id, model)| {
+            let context_length = model.limit?.context?;
+            Some((id, ModelLimits { context_length }))
+        })
+        .collect()
 }
 
 /// `https://ollama.com/v1/` and `https://ollama.com/v1` are one provider.
 fn normalize_base_url(url: &str) -> String {
     url.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
+/// The URL's host reduced to its last two labels (`api.deepinfra.com` →
+/// `deepinfra.com`); `None` for an IP address, a single-label host such
+/// as `localhost`, or an unparsable URL.
+fn registrable_domain(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url.trim()).ok()?;
+    let host = parsed.domain()?.trim_end_matches('.').to_ascii_lowercase();
+    let mut labels = host.rsplit('.');
+    let tld = labels.next().filter(|label| !label.is_empty())?;
+    let name = labels.next().filter(|label| !label.is_empty())?;
+    Some(format!("{name}.{tld}"))
 }
 
 /// The catalog's limits for `model` at `base_url`, loading the catalog on
@@ -275,6 +327,105 @@ mod tests {
             !catalog.providers.contains_key(""),
             "a provider without api is skipped"
         );
+    }
+
+    /// URL-less providers in the document's shape: one with its own SDK
+    /// (DeepInfra), two sharing a `doc` domain (Azure's pair), and one
+    /// URL-carrying provider on a domain a URL-less one also documents.
+    fn url_less_document() -> String {
+        serde_json::json!({
+            "deepinfra": {
+                "id": "deepinfra",
+                "npm": "@ai-sdk/deepinfra",
+                "doc": "https://deepinfra.com/models",
+                "models": {
+                    "deepseek-ai/DeepSeek-V4.1-Flash-1017": {"limit": {"context": 1048576}}
+                }
+            },
+            "azure": {
+                "id": "azure",
+                "doc": "https://learn.microsoft.com/en-us/azure/models",
+                "models": {"gpt-5": {"limit": {"context": 400000}}}
+            },
+            "azure-cognitive-services": {
+                "id": "azure-cognitive-services",
+                "doc": "https://learn.microsoft.com/en-us/azure/ai-services/models",
+                "models": {"gpt-5": {"limit": {"context": 272000}}}
+            },
+            "groq": {
+                "id": "groq",
+                "doc": "https://console.groq.com/docs/models",
+                "models": {"kimi": {"limit": {"context": 1000}}}
+            },
+            "groq-exact": {
+                "id": "groq-exact",
+                "api": "https://api.groq.com/openai/v1",
+                "models": {"kimi": {"limit": {"context": 2000}}}
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_url_less_provider_is_matched_by_its_doc_domain() {
+        let catalog = Catalog::parse(&url_less_document()).expect("parses");
+        assert_eq!(
+            catalog
+                .limits(
+                    "https://api.deepinfra.com/v1/openai",
+                    "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+                )
+                .map(|limits| limits.context_length),
+            Some(1_048_576)
+        );
+        // The model id still has to match exactly.
+        assert_eq!(
+            catalog.limits("https://api.deepinfra.com/v1/openai", "DeepSeek-V4.1"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_doc_domain_claimed_twice_matches_nothing() {
+        let catalog = Catalog::parse(&url_less_document()).expect("parses");
+        assert_eq!(
+            catalog.limits("https://myres.openai.azure.microsoft.com/v1", "gpt-5"),
+            None
+        );
+    }
+
+    #[test]
+    fn an_exact_base_url_wins_over_a_doc_domain() {
+        let catalog = Catalog::parse(&url_less_document()).expect("parses");
+        assert_eq!(
+            catalog
+                .limits("https://api.groq.com/openai/v1", "kimi")
+                .map(|limits| limits.context_length),
+            Some(2000)
+        );
+        // Another path on the same host has no exact provider: the domain
+        // match answers.
+        assert_eq!(
+            catalog
+                .limits("https://api.groq.com/v2", "kimi")
+                .map(|limits| limits.context_length),
+            Some(1000)
+        );
+    }
+
+    #[test]
+    fn the_registrable_domain_is_the_hosts_last_two_labels() {
+        assert_eq!(
+            registrable_domain("https://api.deepinfra.com/v1/openai").as_deref(),
+            Some("deepinfra.com")
+        );
+        assert_eq!(
+            registrable_domain("https://API.X.ai./v1").as_deref(),
+            Some("x.ai")
+        );
+        assert_eq!(registrable_domain("http://127.0.0.1:8080/v1"), None);
+        assert_eq!(registrable_domain("http://localhost:11434/v1"), None);
+        assert_eq!(registrable_domain("not a url"), None);
     }
 
     #[test]

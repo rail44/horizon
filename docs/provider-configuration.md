@@ -46,7 +46,13 @@ listing that declares nothing -- standard OpenAI, Ollama Cloud (`id`,
 models.dev's `api.json`, the catalog OpenCode lists models from. The entry is
 matched to a catalog provider by its `base_url` (`https://ollama.com/v1` is
 the catalog's `ollama-cloud`), and the model by exact id within it; the same
-id under another provider is another model. The catalog is fetched once per
+id under another provider is another model. A catalog provider with its own
+SDK package carries no base URL (`api` is null for DeepInfra, Groq, OpenAI,
+Anthropic, Mistral, xAI, ...); when no provider serves the entry's `base_url`
+exactly, such a provider is matched by its `doc` link sharing the base URL's
+registrable domain, approximated as the host's last two labels
+(`api.deepinfra.com` ↔ `deepinfra.com/models`), and only when exactly one
+URL-less provider claims that domain (decided 2026-11-08). The catalog is fetched once per
 daemon start and cached at `$XDG_CACHE_HOME/horizon/models-dev-api.json`
 (`~/.cache` when unset); a failed fetch uses the cached copy, and with
 neither, or with a provider or model the catalog does not know, clearing
