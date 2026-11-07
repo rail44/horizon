@@ -242,6 +242,14 @@ lands:
 - **First-party viewers** (image / markdown / git diff). Native Rust
   views on the session-less pane plumbing the theme settings view
   introduced (`PaneKind::View`, `docs/theme-settings-view-design.md`).
+  Markdown implemented 2026-11-08 (`src/markdown/`, opened with
+  `horizon markdown <path>`): a generic viewer of any Markdown file —
+  front matter as a heading plus chips, relative `.md` links followed in
+  the pane with a back history, live reload on change, and the file
+  persisted on the model's pane (`Pane::document`) so a restart restores
+  it. Viewing the project wiki (`docs/project-wiki-design.md`, on its own
+  branch) is meant to derive from it; wiki-only features are not built
+  yet. Image and git diff are not started.
 - **ACP as the shell↔agentd line — implemented 2026-09-27** (stages A–D
   on the integration branch, main merge pending; stage E, external
   agents, pending a config consultation) (`docs/acp-agentd-design.md`,

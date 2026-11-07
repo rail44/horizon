@@ -349,8 +349,13 @@ The shell is GPUI-based (the Floem shell retired at tag
   `wasm32-wasip2` plugin (`preview-plugin/`, its own sub-workspace) and
   replays its display lists through the native renderer. The named
   previews, the sample, and the host/guest vocabulary compile for both
-  targets; the pane, watcher, and theme publication are native-only. See
+  targets; the pane and theme publication are native-only. See
   `docs/preview-pane-design.md`.
+- `markdown/` — the Markdown view: a session-less view kind showing one
+  Markdown file from disk (`horizon markdown <path>`), following relative
+  `.md` links in place. The file it shows is persisted on the model's
+  pane (`Pane::document`). `file_watch.rs` is the single-file watch it
+  shares with the preview pane.
 - `keymap.rs` — `[keybindings]` chord/command translation;
   `theme/` — config-driven color scheme; `terminal_focus.rs` — the
   focus-reporting decision.

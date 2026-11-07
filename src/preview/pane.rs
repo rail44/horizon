@@ -22,9 +22,9 @@ use gpui::{
 use gpui_component::v_flex;
 use horizon_workspace::PaneId;
 
+use crate::file_watch::{self as watch, FileWatch};
 use crate::preview::host::{PreviewHostRoot, PreviewThemeSource};
 use crate::preview::schema::{PreviewPlugin, PreviewPluginCaller as _};
-use crate::preview::watch::{self, ArtifactWatch};
 use crate::theme;
 
 /// The most wall-clock time one guest turn may take before wasmtime traps
@@ -151,7 +151,7 @@ pub(crate) struct PreviewPane {
     theme_source: Entity<PreviewThemeSource>,
     focus_handle: FocusHandle,
     // The artifact watch survives load failures and belongs to the target path.
-    _watch: Option<ArtifactWatch>,
+    _watch: Option<FileWatch>,
 }
 
 impl PreviewPane {

@@ -173,6 +173,13 @@ fn dispatch_invoke(
         } => {
             shell.control_plane_open_preview(path, name, split, activate, window, cx)?;
         }
+        Command::Markdown {
+            path,
+            split,
+            activate,
+        } => {
+            shell.control_plane_open_markdown(path, split, activate, window, cx)?;
+        }
         Command::Attach {
             session_id,
             activate,

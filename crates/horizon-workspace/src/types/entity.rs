@@ -64,6 +64,9 @@ pub struct Pane {
     pub id: PaneId,
     pub kind: PaneKind,
     pub session_id: Option<SessionId>,
+    /// The file a document view shows (`ViewKind::Markdown`). Persisted, so
+    /// the pane restores on the same file; `None` for every other kind.
+    pub document: Option<PathBuf>,
 }
 
 impl WorkspaceSession {
@@ -93,11 +96,18 @@ impl Pane {
             id: PaneId::new(),
             kind,
             session_id,
+            document: None,
         }
     }
 
+    /// The document's file name when the pane shows one, else the kind's
+    /// title.
     pub fn title(&self) -> String {
-        pane_kind_title(self.kind).to_string()
+        self.document
+            .as_deref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| pane_kind_title(self.kind).to_string())
     }
 }
 
