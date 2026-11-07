@@ -125,6 +125,27 @@ pub(crate) fn plan_prepared_call(
             kind,
         }))
     };
+    if let Some(root) = tool_state.primary_checkout_needs_approval() {
+        let needs_approval = match request.tool_id.as_str() {
+            "fs.write" | "fs.edit" => true,
+            "bash" => match &request.input {
+                ToolInput::Bash(input) => !crate::tools::command_is_read_only(&input.command),
+                _ => false,
+            },
+            _ => false,
+        };
+        if needs_approval {
+            return approval(
+                format!(
+                    "This is the first mutation in the shared primary checkout `{}`. Allow direct \
+                     edits for this session, or call `worktree.enter` to work in a disposable \
+                     worktree instead? Reads and validation commands do not need this approval.",
+                    root.display()
+                ),
+                ApprovalKind::Standard,
+            );
+        }
+    }
     match crate::tools::permission_for_tool(&request.tool_id) {
         Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
             if call_escapes_root(tool_state, &request.input) {
@@ -153,7 +174,7 @@ pub(crate) fn plan_prepared_call(
             match classify_input(
                 &request.tool_id,
                 &request.input,
-                horizon_sandbox::is_available(),
+                horizon_sandbox::sandbox_ready(),
             ) {
                 Classification::Contained => ToolPlan::Automatic(if request.tool_id == "bash" {
                     AutomaticTool::SandboxedBash
@@ -657,6 +678,56 @@ mod tests {
         assert!(approval
             .reason
             .contains("host process's ordinary authority"));
+    }
+
+    #[test]
+    fn primary_checkout_mutations_ask_once_while_validation_stays_automatic() {
+        let root = tempfile::tempdir().unwrap();
+        let tool_state = crate::tools::ToolSessionBuilder::new(root.path().to_path_buf())
+            .with_primary_checkout(Some(root.path().to_path_buf()))
+            .build();
+        let mutation = |tool_id: &str, input: Value| ToolCallRequest {
+            call_id: crate::contract::ToolCallId("call-primary".into()),
+            tool_id: tool_id.into(),
+            input: input.into(),
+            occurrence_id: crate::contract::OccurrenceId("call-primary".into()),
+        };
+
+        for request in [
+            mutation(
+                "fs.write",
+                serde_json::json!({"path": root.path().join("src/lib.rs"), "content": "change"}),
+            ),
+            mutation(
+                "bash",
+                serde_json::json!({"command": "sed -i 's/a/b/' src/lib.rs"}),
+            ),
+        ] {
+            let ToolPlan::Approval(approval) = plan_tool_call(&tool_state, &request) else {
+                panic!("first primary mutation must ask: {request:?}");
+            };
+            assert_eq!(approval.kind, ApprovalKind::Standard);
+            assert!(approval.reason.contains("shared primary checkout"));
+        }
+        assert_eq!(
+            plan_tool_call(
+                &tool_state,
+                &mutation("bash", serde_json::json!({"command": "cargo nextest run"})),
+            ),
+            ToolPlan::Automatic(AutomaticTool::SandboxedBash)
+        );
+
+        tool_state.approve_primary_checkout();
+        assert_eq!(
+            plan_tool_call(
+                &tool_state,
+                &mutation(
+                    "fs.write",
+                    serde_json::json!({"path": root.path().join("src/lib.rs"), "content": "change"}),
+                ),
+            ),
+            ToolPlan::Automatic(AutomaticTool::ContainedFilesystem)
+        );
     }
 
     #[test]

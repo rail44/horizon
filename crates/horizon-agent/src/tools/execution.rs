@@ -145,6 +145,26 @@ fn execute_automatic(
                     );
                     return started.complete(live, request.identity().finish(output), Vec::new());
                 }
+                if input.background {
+                    let receipt = bash::jobs::launch(
+                        session_id,
+                        &request.identity(),
+                        tool_state,
+                        workspace_root,
+                        command,
+                        runtime.async_results.clone(),
+                    );
+                    bash::spawn_sandboxed_call(
+                        session_id,
+                        request,
+                        tool_state,
+                        runtime.async_results,
+                        workspace_root,
+                        bash::SandboxedApprovalOrigin::Tier1Auto,
+                        None,
+                    );
+                    return started.complete(live, request.identity().finish(receipt), Vec::new());
+                }
             }
             bash::spawn_sandboxed_call(
                 session_id,
@@ -178,8 +198,32 @@ fn execute_synchronous(
         ToolInput::TaskOutput(input) => {
             return crate::tools::explore::output(session_id, request, input)
         }
+        ToolInput::BashJobOutput(input) => {
+            return crate::tools::bash::jobs::output(session_id, input).into()
+        }
+        ToolInput::BashJobCancel(input) => {
+            return crate::tools::bash::jobs::cancel_tool(session_id, input).into()
+        }
         ToolInput::EnterWorktree(_) => return crate::tools::worktree::enter(host, session_id),
         _ => {}
+    }
+    if let ToolInput::Bash(input) = &request.input {
+        if input.background {
+            let receipt = match tool_state.workspace_root() {
+                Some(workspace_root) => crate::tools::bash::jobs::launch(
+                    session_id,
+                    &request.identity(),
+                    tool_state,
+                    workspace_root,
+                    &input.command,
+                    session_runtime(session_id)
+                        .map(|runtime| runtime.async_results)
+                        .unwrap_or_else(|| crossbeam_channel::unbounded().0),
+                ),
+                None => error_output("background bash requires a workspace root"),
+            };
+            return receipt.into();
+        }
     }
     match request.tool_id.as_str() {
         "board.update" | "board.session" => {

@@ -89,6 +89,11 @@ use crate::tools::state::ToolSessionState;
 
 pub(crate) use notify::{register_wake, unregister_wake};
 
+/// Wake a session loop whose finished background work is not a `task` child.
+pub(crate) fn wake(session_id: SessionId) {
+    notify::wake(session_id);
+}
+
 /// The model-visible tool id. Renamed from `agent.explore` on 2026-07-27:
 /// the plain `task` name measurably improved delegation adoption for one of
 /// the two production models and was neutral for the other
@@ -333,8 +338,22 @@ pub(crate) struct TaskNotification {
 /// when a wake signal arrives with the turn already ended.
 pub(crate) fn take_notification(session_id: SessionId) -> Option<TaskNotification> {
     let completions = children::take_pending(session_id);
-    (!completions.is_empty()).then(|| TaskNotification {
-        text: notify::notification_text(&completions),
+    let jobs = super::bash::jobs::take_notifications(session_id);
+    if completions.is_empty() && jobs.is_empty() {
+        return None;
+    }
+    let mut text = String::new();
+    if !completions.is_empty() {
+        text.push_str(&notify::notification_text(&completions));
+    }
+    for job in jobs {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(&job);
+    }
+    Some(TaskNotification {
+        text,
         failures: notify::failure_lines(&completions),
     })
 }

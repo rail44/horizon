@@ -576,3 +576,57 @@ lifetimes are tied to the parent session. Session teardown
 waits for retirement before deleting a worktree; see
 [background work ownership](agent-background-work.md) for the stop/finish contract
 and the requirements for adding a worker.
+
+## Background bash jobs (2026-11-04)
+
+`bash` accepts `background: true`. The call then returns a receipt immediately
+(`job_id`, state, log path) instead of waiting for the process. The job still
+runs through the ordinary path — same per-session FIFO, sandbox policy, grants,
+approval origin, and process-tree kill — and its terminal result is stored on
+the job, not folded as a second result for the call that launched it.
+
+- `bash.output` reads a job's current state and log. It works while the job is
+  running and after it ends. The in-context output is bounded; the full log
+  stays at the reported `log_path` under the session's
+  `.horizon-sandbox-tmp/`.
+- `bash.cancel` kills the job's process tree. The real exit information stays
+  readable through `bash.output`.
+- A finished job queues a notification on the same channel as a finished
+  `task`, so the next provider round learns about it without polling. The
+  notification names the state, exit summary, job id, and log path.
+- Jobs belong to the session that launched them. `cancel-turn` leaves them
+  running; session teardown stops them and drops the registry entry, leaving
+  logs on disk.
+
+## Primary-checkout mutation gate (2026-11-04)
+
+A session whose working root is the repository's primary checkout and that
+owns no worktree asks once before its first mutation. `fs.write`/`fs.edit`
+and a `bash` command classified as mutating are both covered, so a shell edit
+cannot bypass a file-tool gate. Read-only and validation commands (`git
+status`, `cargo check`/`nextest`/`clippy`, `sed -n`, ...) run as before.
+
+Approval is session-scoped and not persisted. The prompt names the shared
+checkout and points to `worktree.enter`; approving records that this session
+may continue editing there. Isolated worktrees and non-primary roots never
+see the prompt.
+
+## Session-first history: `recall.sessions` (2026-11-04)
+
+`recall.sessions` lists persisted sessions newest-first, one row per session:
+last activity, first/latest user request, latest turn outcome, turn count,
+approval count, and the first sequence for `recall.read`. Optional `limit`,
+`since`/`until` (Unix ms), `session_id`, and latest-`turn_outcome` filters are
+available.
+
+Failure counts stay separate because `is_error` alone conflates them:
+`tool_error_count` counts failures without a command exit status and without
+containment evidence, `command_failure_count` counts non-zero `exit_code`,
+and `denial_count` counts filesystem/network/mach-service/ungrantable
+evidence. A successful run that also recorded a denial is a command success
+plus a denial, not a tool error.
+
+`task` children (the explore role) advertise `recall.search`, `recall.read`,
+`recall.sessions`, and `knowledge.read` alongside the read-only filesystem
+tools, so a delegated investigation can survey persisted history and project
+knowledge. `bash` and every write tool remain unavailable to them.

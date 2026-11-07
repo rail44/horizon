@@ -27,7 +27,8 @@
 //! access while `horizon-agentd` is running.
 
 use crate::tools::output::{
-    RecallEntry as OutputEntry, RecallHit, RecallRead, RecallSearch, Response,
+    RecallEntry as OutputEntry, RecallHit, RecallRead, RecallSearch, RecallSession, RecallSessions,
+    Response,
 };
 
 use crate::contract::SessionId;
@@ -193,6 +194,48 @@ pub(super) fn read(
     Response::succeeded(RecallRead { entries: rows, note: truncated.then(|| format!(
         "output truncated at ~{READ_TOTAL_CHAR_CAP} characters; call recall.read again with a later from_sequence to continue"
     )) })
+}
+
+pub(super) fn sessions(
+    tool_state: &ToolSessionState,
+    input: &crate::tools::input::RecallSessions,
+) -> Response {
+    let store = match resolve_store(&tool_state.recall_context()) {
+        Ok(store) => store,
+        Err(response) => return response,
+    };
+    let outcome = input.turn_outcome.as_ref().map(|outcome| outcome.as_str());
+    let rows = store.query(|store| {
+        store.list_sessions(
+            input.session_id.map(SessionId::from_uuid),
+            input.since,
+            input.until,
+            outcome,
+            input.limit.get() as usize,
+        )
+    });
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(error) => return error_output(format!("recall.sessions failed: {error}")),
+    };
+    Response::succeeded(RecallSessions {
+        sessions: rows
+            .into_iter()
+            .map(|row| RecallSession {
+                session_id: row.session_id.as_uuid().to_string(),
+                at: row.at,
+                first_request: row.first_request,
+                latest_request: row.latest_request,
+                last_turn_outcome: row.last_turn_outcome,
+                turn_count: row.turn_count,
+                tool_error_count: row.tool_error_count,
+                command_failure_count: row.command_failure_count,
+                denial_count: row.denial_count,
+                approval_count: row.approval_count,
+                first_sequence: row.first_sequence,
+            })
+            .collect(),
+    })
 }
 
 /// Builds a snippet of roughly [`SNIPPET_RADIUS_CHARS`] * 2 characters

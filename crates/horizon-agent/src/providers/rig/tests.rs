@@ -2954,7 +2954,18 @@ fn an_exploration_session_advertises_exactly_the_read_only_toolset() {
         .into_iter()
         .map(|definition| definition.name)
         .collect::<Vec<_>>();
-    assert_eq!(advertised, vec!["fs.read", "fs.glob", "fs.grep"]);
+    assert_eq!(
+        advertised,
+        vec![
+            "fs.read",
+            "fs.glob",
+            "fs.grep",
+            "recall.search",
+            "recall.read",
+            "recall.sessions",
+            "knowledge.read",
+        ]
+    );
     assert_eq!(
         config.iteration_cap, 25,
         "an exploration answers one question and runs under a tighter turn cap"

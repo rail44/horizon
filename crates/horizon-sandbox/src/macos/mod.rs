@@ -107,6 +107,11 @@ pub(crate) fn spawn_with_grants(
     wrapped.process_group(0);
     crate::command::configure_child(&command, &mut wrapped, policy, stdio)?;
 
-    let child = wrapped.spawn()?;
+    let child = wrapped
+        .spawn()
+        .map_err(|source| SandboxError::HelperLaunch {
+            path: helper,
+            source,
+        })?;
     Ok(SandboxedChild { child })
 }

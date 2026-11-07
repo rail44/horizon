@@ -69,6 +69,28 @@ pub(crate) struct RecallRead {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
+
+/// One session in the session-first history index. The aggregate labels keep
+/// command failures, tool/runtime errors, and containment denials separate.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct RecallSession {
+    pub session_id: String,
+    pub at: String,
+    pub first_request: Option<String>,
+    pub latest_request: Option<String>,
+    pub last_turn_outcome: Option<String>,
+    pub turn_count: usize,
+    pub tool_error_count: usize,
+    pub command_failure_count: usize,
+    pub denial_count: usize,
+    pub approval_count: usize,
+    pub first_sequence: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct RecallSessions {
+    pub sessions: Vec<RecallSession>,
+}
 /// `worktree.enter`'s receipt: the activation is queued, not yet applied.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct WorktreeRequested {

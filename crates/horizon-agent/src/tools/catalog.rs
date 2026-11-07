@@ -224,6 +224,30 @@ fn build_definitions() -> Vec<Definition> {
                 .to_string(),
 
         ),
+        SynchronousTool::BashJobOutput.definition(
+            "Read a Background Bash Job".to_string(),
+            "Read the current state and log of a background bash job started with bash background: \
+                true. Works while it is running and after it finishes; the output is bounded, and \
+                the full log stays at the reported log_path. A finished job also arrives as a \
+                notification, so polling is not required."
+                .to_string(),
+        ),
+        SynchronousTool::BashJobCancel.definition(
+            "Cancel a Background Bash Job".to_string(),
+            "Stop a background bash job started by this session by killing its whole process \
+                tree. The job's real exit information and log remain readable through \
+                bash.output."
+                .to_string(),
+        ),
+        SynchronousTool::ListSessions.definition(
+            "List Persisted Sessions".to_string(),
+            "List persisted sessions newest-first, one row per session, with the first/latest \
+                user request, last turn outcome, bounded error/approval counts, and the first \
+                sequence for recall.read. Optional limit, since/until Unix milliseconds, \
+                session_id, and latest turn_outcome filters are available. Use this before \
+                recall.read when you need to survey recent work rather than search event text."
+                .to_string(),
+        ),
         // `task` (`tools::explore`, `docs/agent-explore-design.md`) is
         // auto-allowed like every other read tool -- the session it spawns
         // can only read, and only inside the requester's own workspace root.

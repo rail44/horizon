@@ -29,7 +29,9 @@ pub use approval::{
     ApprovalDecision, ApprovalOutcome,
 };
 pub use bash::exclude_git_metadata;
-pub(crate) use bash::{command_requires_metadata_write, metadata_grants, metadata_writable_roots};
+pub(crate) use bash::{
+    command_is_read_only, command_requires_metadata_write, metadata_grants, metadata_writable_roots,
+};
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
 pub use completion::{should_fold_completion, BashCompletion, ToolCompletion};
 pub(crate) use fs::{call_escapes_root, call_writes_git_metadata, out_of_root_refusal};

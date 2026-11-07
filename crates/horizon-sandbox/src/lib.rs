@@ -100,6 +100,46 @@ pub const KNOWN_SECURITY_SERVICES: [&str; 5] = [
 ];
 
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Whether this process currently considers helper-based execution ready.
+/// A failed helper launch turns this off; the next fresh interaction turns
+/// it back on so a repaired installation is probed instead of latched off.
+static SANDBOX_READY: AtomicBool = AtomicBool::new(true);
+
+/// Whether helper execution is currently worth attempting. The platform's
+/// own capability probe remains a separate, independent requirement.
+pub fn sandbox_ready() -> bool {
+    SANDBOX_READY.load(Ordering::Acquire) && is_available()
+}
+
+/// Allow the next interaction to probe helper execution again.
+pub fn reprobe_sandbox() {
+    SANDBOX_READY.store(true, Ordering::Release);
+}
+
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+fn note_helper_failure(error: &SandboxError) {
+    if matches!(
+        error,
+        SandboxError::HelperNotFound | SandboxError::HelperLaunch { .. }
+    ) {
+        SANDBOX_READY.store(false, Ordering::Release);
+    }
+}
+
+/// Resolve the helper without starting a process. This is a diagnostic
+/// preflight, not the Landlock/Seatbelt capability probe `is_available`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn preflight() -> Result<(), SandboxError> {
+    helper::resolve().map(|_| ())
+}
+
+/// Unsupported platforms have no helper preflight either.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn preflight() -> Result<(), SandboxError> {
+    Err(SandboxError::UnsupportedPlatform)
+}
 
 /// Name of the TMPDIR-parity scratch directory both OS backends provision
 /// under a sandboxed command's first writable root (see `crate::tmpdir`'s
@@ -147,14 +187,20 @@ pub fn spawn_with_filesystem_grants(
     filesystem_grants: &[FilesystemGrant],
     stdio: SandboxStdio,
 ) -> Result<SandboxedChild, SandboxError> {
-    #[cfg(target_os = "linux")]
-    {
-        linux::spawn_with_grants(command, policy, filesystem_grants, stdio)
+    let outcome = {
+        #[cfg(target_os = "linux")]
+        {
+            linux::spawn_with_grants(command, policy, filesystem_grants, stdio)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            macos::spawn_with_grants(command, policy, filesystem_grants, stdio)
+        }
+    };
+    if let Err(error) = &outcome {
+        note_helper_failure(error);
     }
-    #[cfg(target_os = "macos")]
-    {
-        macos::spawn_with_grants(command, policy, filesystem_grants, stdio)
-    }
+    outcome
 }
 
 /// Always returns [`SandboxError::UnsupportedPlatform`] on any OS other
@@ -201,4 +247,33 @@ pub fn is_available() -> bool {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn is_available() -> bool {
     false
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn helper_failure_requires_a_new_probe_instead_of_staying_permanently_down() {
+        let _guard = LOCK.lock().unwrap();
+        reprobe_sandbox();
+        note_helper_failure(&SandboxError::HelperNotFound);
+        assert!(!sandbox_ready());
+        reprobe_sandbox();
+        assert_eq!(sandbox_ready(), is_available());
+    }
+
+    #[test]
+    fn helper_launch_error_names_the_path_and_recovery() {
+        let error = SandboxError::HelperLaunch {
+            path: "/missing/horizon-sandbox-helper".into(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        };
+        let message = error.to_string();
+        assert!(message.contains("/missing/horizon-sandbox-helper"));
+        assert!(message.contains("rebuild the workspace"));
+    }
 }

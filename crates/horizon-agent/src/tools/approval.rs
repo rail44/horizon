@@ -285,6 +285,9 @@ fn resolve_synchronous_tool(
 ) -> ApprovalOutcome {
     match decision {
         ApprovalDecision::Approve => {
+            if matches!(request.tool_id.as_str(), "fs.write" | "fs.edit") {
+                runtime.tool_state.approve_primary_checkout();
+            }
             ApprovalOutcome::from(ToolUpdate::execute(&runtime.live_state, request, || {
                 crate::tools::execute_approved(&runtime.tool_state, &request.input)
             }))
@@ -425,6 +428,11 @@ fn resolve_standard_bash(
             let outcome = begin_execution(runtime, request, None);
             if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
                 return outcome;
+            }
+            if matches!(&request.input, crate::tools::input::ToolInput::Bash(input)
+                if !crate::tools::command_is_read_only(&input.command))
+            {
+                runtime.tool_state.approve_primary_checkout();
             }
 
             bash::spawn_approved_host(

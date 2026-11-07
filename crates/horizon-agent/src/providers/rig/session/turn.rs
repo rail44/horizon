@@ -45,6 +45,7 @@ impl SessionLoopState {
     /// and the standing-role memory checkpoint
     /// ([`Self::handle_memory_checkpoint`]).
     pub(crate) async fn run_turn(&mut self, prompt: Prompt, fallback: impl FnOnce() -> Message) {
+        horizon_sandbox::reprobe_sandbox();
         self.collect_inputs();
         self.activate_environment().await;
         self.collect_inputs();

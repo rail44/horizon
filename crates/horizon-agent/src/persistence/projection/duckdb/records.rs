@@ -72,6 +72,22 @@ pub(crate) struct AgentStoredEvent {
     pub provider_payload: Option<Value>,
 }
 
+/// One session's session-first history summary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RecallSessionSummary {
+    pub session_id: SessionId,
+    pub at: String,
+    pub first_request: Option<String>,
+    pub latest_request: Option<String>,
+    pub last_turn_outcome: Option<String>,
+    pub turn_count: usize,
+    pub tool_error_count: usize,
+    pub command_failure_count: usize,
+    pub denial_count: usize,
+    pub approval_count: usize,
+    pub first_sequence: Option<i64>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg(test)]
 pub(crate) struct AgentStoredMessage {

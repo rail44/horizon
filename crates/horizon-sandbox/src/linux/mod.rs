@@ -291,7 +291,7 @@ pub(crate) fn spawn_with_grants(
         .get_args()
         .map(|argument| argument.to_os_string())
         .collect::<Vec<_>>();
-    let mut wrapped = Command::new(helper);
+    let mut wrapped = Command::new(&helper);
     wrapped
         .arg("--supervised-linux")
         .arg(report_fd.to_string())
@@ -321,7 +321,12 @@ pub(crate) fn spawn_with_grants(
         });
     }
 
-    let child = wrapped.spawn()?;
+    let child = wrapped
+        .spawn()
+        .map_err(|source| SandboxError::HelperLaunch {
+            path: helper,
+            source,
+        })?;
     let helper_pid = child.id();
     drop(report_writer);
     Ok(SandboxedChild {

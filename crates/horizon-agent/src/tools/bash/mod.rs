@@ -12,9 +12,10 @@
 mod cargo;
 mod exec;
 mod git;
-mod job;
+pub(crate) mod job;
+pub(crate) mod jobs;
 mod output;
-mod process;
+pub(crate) mod process;
 pub(crate) mod recent;
 mod registry;
 mod shell;
@@ -38,6 +39,7 @@ pub(crate) use git::{
     metadata_writable_roots,
 };
 pub(crate) use recent::{find_reusable_output, guidance_output};
+pub(crate) use shell::command_is_read_only;
 
 /// What a [`spawn_sandboxed_call`] run's eventual `Finished` completion should be
 /// annotated with, once it lands -- distinguishes a genuine tier-1

@@ -1,7 +1,8 @@
 use super::*;
 use crate::config::AgentToolsConfig;
 use crate::contract::{
-    Event, Message, MessageRole, ToolCallId, ToolCallRequest, ToolCallResult, TurnEndReason,
+    Event, Message, MessageRole, OccurrenceId, ToolCallId, ToolCallRequest, ToolCallResult,
+    TurnEndReason,
 };
 use crate::persistence::projection::duckdb::{
     AppendEvent, DuckdbStoreHandle, SharedDuckdbStore, Store,
@@ -113,6 +114,103 @@ fn tool_state_with_seeded_store(
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
     (tool_state, path)
+}
+
+#[test]
+fn sessions_return_one_bounded_summary_per_session_with_separate_failure_classes() {
+    let session_a = SessionId::new();
+    let session_b = SessionId::new();
+    let (tool_state, path) = tool_state_with_seeded_store(
+        session_a,
+        vec![(session_a, vec!["first question", "second question"])],
+    );
+    let slot = tool_state.recall_context().store;
+    let store = slot.current();
+    let crate::persistence::projection::duckdb::DuckdbStoreState::Ready(store) = store else {
+        panic!("seeded store must be ready");
+    };
+    let finished = |id: &str, output: Value| {
+        Event::ToolCallFinished(ToolCallResult::new(
+            ToolCallId(id.into()),
+            OccurrenceId(id.into()),
+            output,
+        ))
+    };
+    for (session, turn_id, events) in [
+        (
+            session_a,
+            "turn-a",
+            vec![
+                finished(
+                    "tool-error",
+                    json!({"is_error": true, "message": "helper missing"}),
+                ),
+                finished("command-error", json!({"exit_code": 1, "output": "failed"})),
+                finished(
+                    "denied",
+                    json!({"is_error": true, "denied_filesystem_paths": ["/outside"]}),
+                ),
+                Event::TurnEnded(TurnEndReason::Failed),
+            ],
+        ),
+        (
+            session_b,
+            "turn-b",
+            vec![
+                Event::MessageCommitted(Message {
+                    role: MessageRole::User,
+                    text: "other work".into(),
+                }),
+                Event::TurnEnded(TurnEndReason::Completed),
+            ],
+        ),
+    ] {
+        for event in events {
+            store
+                .lock()
+                .unwrap()
+                .append_event(AppendEvent {
+                    session_id: session,
+                    turn_id: Some(turn_id.to_string()),
+                    provider_id: None,
+                    role_id: None,
+                    event,
+                    provider_payload: None,
+                })
+                .unwrap();
+        }
+    }
+
+    let output = execute_auto(&tool_state, "recall.sessions", &json!({"limit": 10}))
+        .expect("recall.sessions handled");
+    let sessions = output["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 2);
+    let summary = sessions
+        .iter()
+        .find(|session| session["session_id"] == session_a.as_uuid().to_string())
+        .unwrap();
+    assert_eq!(summary["first_request"], "first question");
+    assert_eq!(summary["latest_request"], "second question");
+    assert_eq!(summary["last_turn_outcome"], "failed");
+    assert_eq!(summary["turn_count"], 1);
+    assert_eq!(summary["tool_error_count"], 1);
+    assert_eq!(summary["command_failure_count"], 1);
+    assert_eq!(summary["denial_count"], 1);
+    assert_eq!(summary["approval_count"], 0);
+    assert_eq!(summary["first_sequence"], 0);
+
+    let filtered = execute_auto(
+        &tool_state,
+        "recall.sessions",
+        &json!({"turn_outcome": "completed"}),
+    )
+    .unwrap();
+    assert_eq!(filtered["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        filtered["sessions"][0]["session_id"],
+        session_b.as_uuid().to_string()
+    );
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]

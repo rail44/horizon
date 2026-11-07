@@ -5,6 +5,7 @@ use crate::contract::{Command, Event};
 
 impl SessionLoopState {
     pub(super) async fn activate_environment(&mut self) {
+        horizon_sandbox::reprobe_sandbox();
         while !self.has_pending_stop() {
             let Some(base) = self.activation.pop_front() else {
                 break;

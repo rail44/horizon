@@ -21,6 +21,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 pub(super) struct Registration {
     work: super::super::background::Registration,
     state: Arc<Mutex<ExecutionState>>,
+    identity: crate::contract::ToolCallIdentity,
 }
 impl Registration {
     #[cfg(test)]
@@ -34,13 +35,20 @@ impl Registration {
         #[cfg(test)]
         let call_id = identity.call_id.clone();
         use super::super::background::{Lifetime, Registration as Work, WorkKind};
-        let work = Work::new(session_id, Lifetime::Call(identity), WorkKind::Tool);
+        let work = Work::new(session_id, Lifetime::Call(identity.clone()), WorkKind::Tool);
         let state = Arc::new(Mutex::new(ExecutionState::default()));
         let cancellation = state.clone();
         work.on_stop(move || cancel(&cancellation));
         #[cfg(test)]
         lock(process_observations()).insert((session_id, call_id.clone()), Arc::downgrade(&state));
-        Self { work, state }
+        Self {
+            work,
+            state,
+            identity,
+        }
+    }
+    pub(super) fn identity(&self) -> &crate::contract::ToolCallIdentity {
+        &self.identity
     }
     pub(super) fn is_cancelled(&self) -> bool {
         self.work.is_cancelled()

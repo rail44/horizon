@@ -241,8 +241,15 @@ fn spawn_host(job: BashJob, approval: Option<HostExecutionApproval>) {
                 );
             }
         }
-        BashCompletion::Finished(job.identity.finish(output))
+        deliver(job, output)
     });
+}
+
+fn deliver(job: &BashJob, output: Response) -> BashCompletion {
+    if job.input.background {
+        return BashCompletion::Background(job.identity.finish(output));
+    }
+    BashCompletion::Finished(job.identity.finish(output))
 }
 
 /// Snapshot `request` and the session's current sandbox grants, then enqueue
@@ -274,8 +281,49 @@ pub(crate) fn spawn_sandboxed(job: BashJob, sandbox: SandboxedRun) {
     let sandbox = std::panic::AssertUnwindSafe(sandbox);
     job.enqueue(move |job, registration| {
         let sandbox = sandbox;
-        run_sandboxed_job(job, registration, sandbox.0)
+        let completion = run_sandboxed_job(job, registration, sandbox.0);
+        if job.input.background {
+            spawn_background(completion.clone());
+        }
+        let _ = &completion;
+        completion
     });
+}
+
+/// A background job keeps every normal execution property: it runs on the
+/// same per-session FIFO, with the same sandbox policy, cancellation, and
+/// panic boundary. Only the *call* stops waiting for it.
+pub(crate) fn spawn_background(completion: BashCompletion) {
+    if let BashCompletion::Finished(result) = completion {
+        BashJob::finish_background(&result);
+    }
+}
+
+impl BashJob {
+    fn finish_background(result: &crate::contract::ToolCallResult) {
+        let Some(body) = result.output.0.as_object() else {
+            return;
+        };
+        let _ = body;
+        let output: crate::tools::output::BashOutput =
+            match serde_json::from_value(result.output.0.clone()) {
+                Ok(output) => output,
+                Err(_) => return,
+            };
+        let Some(job_id) =
+            crate::tools::bash::jobs::job_id_for(&result.call_id, &result.occurrence_id)
+        else {
+            return;
+        };
+        let _ = job_id;
+        let state = match output.termination {
+            crate::tools::output::BashTermination::Exited { exit_code: 0 } => {
+                crate::tools::bash::jobs::JobState::Finished
+            }
+            _ => crate::tools::bash::jobs::JobState::Failed,
+        };
+        crate::tools::bash::jobs::finish(job_id, state, &output);
+    }
 }
 
 /// Runs `work` (in practice, `exec::run`/`exec::run_sandboxed`) and *always*

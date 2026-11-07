@@ -44,6 +44,12 @@ pub(super) fn fold_tool_completion(
         ToolCompletion::ApprovalJudged(judgment) => {
             fold_approval_judgment(state, live_state, commands_tx, session_id, *judgment)
         }
+        ToolCompletion::Background(result) => {
+            // The call was already answered with its launch receipt; this
+            // terminal result is informational and must not be folded as a
+            // second result for the same tool call.
+            let _ = result;
+        }
         ToolCompletion::Finished(result) => publish_tool_update(
             state,
             commands_tx,

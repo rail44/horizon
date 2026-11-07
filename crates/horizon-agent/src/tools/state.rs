@@ -216,6 +216,15 @@ struct Inner {
     /// makes `board.read`/`board.comment` resolve to an actionable error
     /// rather than a silent no-op.
     board: Option<Arc<dyn crate::tools::board::BoardHost>>,
+    /// The primary checkout this session may modify only after one explicit
+    /// approval. `None` for isolated or non-primary working roots.
+    primary_checkout: Option<PrimaryCheckout>,
+}
+
+#[derive(Debug)]
+struct PrimaryCheckout {
+    root: PathBuf,
+    approved: std::cell::Cell<bool>,
 }
 
 impl ToolSessionState {
@@ -387,6 +396,24 @@ impl ToolSessionState {
         self.inner.workspace_root.as_deref()
     }
 
+    /// A primary checkout whose first mutation still needs an explicit
+    /// approval. Read-only and validation commands do not consult this.
+    pub(crate) fn primary_checkout_needs_approval(&self) -> Option<&Path> {
+        self.inner
+            .primary_checkout
+            .as_ref()
+            .filter(|checkout| !checkout.approved.get())
+            .map(|checkout| checkout.root.as_path())
+    }
+
+    /// Record the one session-scoped approval for direct primary-checkout
+    /// work. It is deliberately not persisted across a daemon restart.
+    pub(crate) fn approve_primary_checkout(&self) {
+        if let Some(checkout) = &self.inner.primary_checkout {
+            checkout.approved.set(true);
+        }
+    }
+
     /// The grants merged into the next sandboxed spawn's policy, each
     /// re-checked against the live filesystem first -- a grant whose target
     /// disappeared, changed kind, or became over-broad simply drops out
@@ -556,6 +583,7 @@ pub fn unregister_session_runtime(session_id: SessionId) {
     super::background::close_session(session_id);
     super::web::clear_session_approvals(session_id);
     crate::tools::explore::cancel_session(session_id);
+    crate::tools::bash::jobs::remove_session(session_id);
     SESSION_RUNTIMES.with(|runtimes| {
         runtimes.borrow_mut().remove(&session_id);
     });

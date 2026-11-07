@@ -82,4 +82,14 @@ pub(crate) struct Bash {
         { crate::config::DEFAULT_BASH_TIMEOUT_MAX_SECS },
         { crate::config::DEFAULT_BASH_TIMEOUT_DEFAULT_SECS },
     >,
+    /// Start a session-managed job and return its receipt immediately.
+    #[serde(default)]
+    pub background: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BashJob {
+    /// The job id returned by a background bash call.
+    pub job_id: Text,
 }

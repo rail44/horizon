@@ -60,6 +60,15 @@ pub(super) fn collect(
     // already reaped), `std::process::Child::id()` is plain `u32` -- always
     // available up to this point.
     let guard = registration.attach_process(child.id());
+    let pid = child.id();
+    let kill_target = registration.identity();
+    crate::tools::bash::jobs::attach_cancel(
+        &kill_target.call_id,
+        &kill_target.occurrence_id,
+        move || {
+            crate::tools::bash::process::kill_process_tree(pid);
+        },
+    );
 
     let (status, killed) = wait_child_with_timeout(child, timeout);
 

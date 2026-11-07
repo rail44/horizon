@@ -96,6 +96,23 @@ pub(crate) struct RecallRead {
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct RecallSessions {
+    #[serde(default)]
+    pub limit: Number<1, 100, 20>,
+    /// Optional inclusive lower/upper activity bounds in Unix milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<uuid::Uuid>,
+    /// Filter by the latest turn's outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_outcome: Option<TurnOutcome>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Task {
     /// Short task label displayed in completion notifications.
     pub description: Text<200>,

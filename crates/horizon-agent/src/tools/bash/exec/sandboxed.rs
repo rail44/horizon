@@ -109,10 +109,18 @@ pub(in crate::tools::bash) fn run_sandboxed(
     ) {
         Ok(sandboxed) => sandboxed,
         Err(error) => {
+            let recovery = match &error {
+                horizon_sandbox::SandboxError::HelperNotFound
+                | horizon_sandbox::SandboxError::HelperLaunch { .. } => {
+                    " The command did not run. Do not retry until the helper is rebuilt; \
+                     filesystem tools remain available. The next interaction will probe again."
+                }
+                _ => "",
+            };
             return finished(
                 identity,
                 failed_output(
-                    &format!("failed to start sandboxed bash: {error}"),
+                    &format!("failed to start sandboxed bash: {error}.{recovery}"),
                     None,
                     config,
                 ),

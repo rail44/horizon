@@ -181,7 +181,7 @@ fn expect_domain_denied(
             assert!(domains.iter().any(|domain| domain == expected_host));
             result
         }
-        BashCompletion::Finished(result) => {
+        BashCompletion::Finished(result) | BashCompletion::Background(result) => {
             panic!(
                 "expected named proxy denial, got finished: {:?}",
                 result.output
@@ -371,7 +371,7 @@ fn proxy_unaware_direct_connect_cannot_bypass_the_fixed_endpoint() {
         BashCompletion::ApprovalJudged(judgment) => {
             panic!("unexpected approval judgment: {judgment:?}")
         }
-        BashCompletion::Finished(result) => {
+        BashCompletion::Finished(result) | BashCompletion::Background(result) => {
             assert_ne!(result.output["exit_code"], 0);
             assert!(result.output["denied_network_routes"].is_array());
         }

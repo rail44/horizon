@@ -185,7 +185,7 @@ pub(crate) fn unregister_wake(session_id: SessionId) {
 /// Signals `session_id`'s loop that it has something queued. A no-op for a
 /// session with no registered loop (a non-rig provider, or one that already
 /// exited) -- the completion stays queued either way.
-pub(super) fn wake(session_id: SessionId) {
+pub(crate) fn wake(session_id: SessionId) {
     let wakers = wakers()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

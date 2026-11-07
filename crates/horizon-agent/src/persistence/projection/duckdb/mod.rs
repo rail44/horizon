@@ -26,7 +26,7 @@ pub(crate) use records::{
     AgentStoredApproval, AgentStoredMessage, AgentStoredSession, AgentStoredSessionSnapshot,
     AgentStoredToolCall, AgentStoredToolResult, AgentStoredTurn, AppendEvent,
 };
-pub(crate) use records::{RecallEntry, RecallEntryKind, RecallSearchReport};
+pub(crate) use records::{RecallEntry, RecallEntryKind, RecallSearchReport, RecallSessionSummary};
 pub use shared_store::{DuckdbStoreState, SharedDuckdbStore};
 
 /// A live `Store`, shared (behind a lock) by every in-process consumer that

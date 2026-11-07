@@ -17,6 +17,10 @@ pub enum ToolCompletion<R = ToolCallResult> {
     /// `ToolCallFinished` and forward the result to the provider, exactly
     /// what every bash call did before this type grew a second variant.
     Finished(R),
+    /// A background job's terminal result. The call that started it was
+    /// already answered with its receipt, so this must never be folded as
+    /// that call's result.
+    Background(R),
     /// A sandboxed attempt's network egress was refused by the allowlist
     /// proxy for one or more domains (`docs/agent-approval-design.md` leg
     /// 4b). The call actually ran to completion (`result` is a genuine,
@@ -87,6 +91,7 @@ impl ToolCompletion {
                 ..
             } => (call_id, occurrence_id),
             Self::Finished(result)
+            | Self::Background(result)
             | Self::DomainDenied { result, .. }
             | Self::FilesystemDenied { result, .. }
             | Self::MachServiceDenied { result, .. } => (&result.call_id, &result.occurrence_id),
@@ -101,6 +106,7 @@ impl<R> ToolCompletion<R> {
     pub(crate) fn result_mut(&mut self) -> Option<&mut R> {
         match self {
             Self::Finished(result)
+            | Self::Background(result)
             | Self::DomainDenied { result, .. }
             | Self::FilesystemDenied { result, .. }
             | Self::MachServiceDenied { result, .. } => Some(result),
@@ -110,6 +116,7 @@ impl<R> ToolCompletion<R> {
     pub(crate) fn map_result<T>(self, map: impl FnOnce(R) -> T) -> ToolCompletion<T> {
         match self {
             Self::Finished(result) => ToolCompletion::Finished(map(result)),
+            Self::Background(result) => ToolCompletion::Background(map(result)),
             Self::DomainDenied { domains, result } => ToolCompletion::DomainDenied {
                 domains,
                 result: map(result),

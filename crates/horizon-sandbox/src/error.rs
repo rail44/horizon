@@ -17,9 +17,25 @@ pub enum SandboxError {
     /// Linux or macOS: the `horizon-sandbox-helper` binary
     /// couldn't be resolved next to the running executable or on `PATH`
     /// (see `macos::resolve_helper`).
-    #[error("horizon-sandbox-helper binary not found next to the running executable or on PATH")]
+    #[error(
+        "horizon-sandbox-helper binary not found next to the running executable or on PATH; \
+         rebuild the workspace and reload the agent runtime"
+    )]
     HelperNotFound,
 
+    /// The resolved helper existed at lookup time but could not be launched.
+    #[error(
+        "failed to launch horizon-sandbox-helper at {path}: {source}; rebuild the workspace and \
+         reload the agent runtime"
+    )]
+    HelperLaunch {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("I/O error preparing or spawning the sandboxed process: {0}")]
+    Spawn(#[from] std::io::Error),
     /// Linux or macOS: failed to serialize the policy for the helper
     /// handoff (see `macos::spawn` and `src/bin/horizon-sandbox-helper.rs`).
     /// In practice this only happens for a non-UTF-8 policy path -- serde's
@@ -85,9 +101,6 @@ pub enum SandboxError {
 
     #[error("filesystem grant proposal for {attempted} changed before approval")]
     GrantProposalChanged { attempted: PathBuf },
-
-    #[error("I/O error preparing or spawning the sandboxed process: {0}")]
-    Spawn(#[from] std::io::Error),
 
     #[error("the sandbox setup thread panicked before spawning the command")]
     ThreadPanicked,

@@ -186,8 +186,9 @@ const EXPLORE_ITERATION_CAP: u32 = 25;
 /// by another session's `task` call to answer one question about the shared
 /// workspace, and terminated as soon as it has.
 ///
-/// The allowlist is the whole restriction mechanism: three read-only tools,
-/// every one of them `ToolPermission::AutoAllowRead`. That alone does not
+/// The allowlist is the whole restriction mechanism: read-only filesystem,
+/// history, and project-knowledge tools, every one of them
+/// `ToolPermission::AutoAllowRead`. That alone does not
 /// keep approvals out of the session -- a read whose path escapes the
 /// workspace root is still routed to the approval gate -- so the session is
 /// additionally marked unattended (`ToolSessionState::is_unattended`),
@@ -208,7 +209,15 @@ pub(crate) const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
     id: EXPLORE_ROLE_ID,
     title: "Exploration Session",
     prompt_section: EXPLORE_ROLE_PROMPT_SECTION,
-    allowed_tool_ids: Some(&["fs.read", "fs.grep", "fs.glob"]),
+    allowed_tool_ids: Some(&[
+        "fs.read",
+        "fs.grep",
+        "fs.glob",
+        "recall.search",
+        "recall.read",
+        "recall.sessions",
+        "knowledge.read",
+    ]),
     model: None,
     iteration_cap: Some(EXPLORE_ITERATION_CAP),
     include_repository_instructions: true,
@@ -358,16 +367,27 @@ mod tests {
     }
 
     /// `docs/agent-explore-design.md` decision 4: the exploration session's
-    /// toolset is exactly the three read-only tools, and `task`
+    /// toolset is exactly the read-only tools, and `task`
     /// itself is absent so recursion cannot be expressed at all.
     #[test]
-    fn explore_role_allowlist_is_exactly_the_three_read_only_tools() {
+    fn explore_role_allowlist_is_exactly_the_read_only_tools() {
         let role =
             resolve(&RoleId(EXPLORE_ROLE_ID.to_string())).expect("the explore role must resolve");
         let allowed = role
             .allowed_tool_ids
             .expect("the explore role must restrict its tools");
-        assert_eq!(allowed, &["fs.read", "fs.grep", "fs.glob"]);
+        assert_eq!(
+            allowed,
+            &[
+                "fs.read",
+                "fs.grep",
+                "fs.glob",
+                "recall.search",
+                "recall.read",
+                "recall.sessions",
+                "knowledge.read",
+            ]
+        );
         for forbidden in [
             "task",
             "bash",

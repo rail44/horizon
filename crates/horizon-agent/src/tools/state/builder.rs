@@ -69,6 +69,7 @@ impl ToolSessionBuilder {
                 judge: None,
                 exploration: None,
                 board: None,
+                primary_checkout: None,
             },
         }
     }
@@ -89,6 +90,16 @@ impl ToolSessionBuilder {
     ) -> Self {
         let root = workspace_root.canonicalize().ok();
         Self::with_root(root, tools, recall)
+    }
+
+    /// Mark the root as a primary checkout that needs one explicit mutation
+    /// approval. Other roots never need this prompt.
+    pub fn with_primary_checkout(mut self, root: Option<PathBuf>) -> Self {
+        self.inner.primary_checkout = root.map(|root| super::PrimaryCheckout {
+            root,
+            approved: std::cell::Cell::new(false),
+        });
+        self
     }
 
     /// Install the host-discovered skill registry.

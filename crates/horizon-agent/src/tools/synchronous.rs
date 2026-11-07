@@ -19,6 +19,9 @@ pub(super) enum SynchronousTool {
     ReadSkill,
     SearchRecall,
     ReadRecall,
+    ListSessions,
+    BashJobOutput,
+    BashJobCancel,
     ReadKnowledge,
     WriteKnowledge,
     UpdateMemory,
@@ -26,7 +29,7 @@ pub(super) enum SynchronousTool {
 
 impl SynchronousTool {
     #[cfg(test)]
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 16] = [
         Self::ReadFile,
         Self::Glob,
         Self::Grep,
@@ -37,6 +40,9 @@ impl SynchronousTool {
         Self::ReadSkill,
         Self::SearchRecall,
         Self::ReadRecall,
+        Self::ListSessions,
+        Self::BashJobOutput,
+        Self::BashJobCancel,
         Self::ReadKnowledge,
         Self::WriteKnowledge,
         Self::UpdateMemory,
@@ -54,6 +60,9 @@ impl SynchronousTool {
             Self::ReadSkill => "skill.read",
             Self::SearchRecall => "recall.search",
             Self::ReadRecall => "recall.read",
+            Self::ListSessions => "recall.sessions",
+            Self::BashJobOutput => "bash.output",
+            Self::BashJobCancel => "bash.cancel",
             Self::ReadKnowledge => "knowledge.read",
             Self::WriteKnowledge => "knowledge.write",
             Self::UpdateMemory => memory::TOOL_ID,
@@ -70,6 +79,9 @@ impl SynchronousTool {
             | Self::ReadSkill
             | Self::SearchRecall
             | Self::ReadRecall
+            | Self::ListSessions
+            | Self::BashJobOutput
+            | Self::BashJobCancel
             | Self::ReadKnowledge
             | Self::WriteKnowledge
             | Self::UpdateMemory => ToolPermission::AutoAllowRead,
@@ -111,6 +123,13 @@ pub(super) fn execute(
         }
         ToolInput::SearchRecall(input) => recall::search(state, input),
         ToolInput::ReadRecall(input) => recall::read(state, input),
+        ToolInput::ListRecallSessions(input) => recall::sessions(state, input),
+        ToolInput::BashJobOutput(input) => {
+            super::bash::jobs::output(state.recall_context().session_id?, input)
+        }
+        ToolInput::BashJobCancel(input) => {
+            super::bash::jobs::cancel_tool(state.recall_context().session_id?, input)
+        }
         ToolInput::ReadKnowledge(input) => knowledge::read(state, input),
         ToolInput::WriteKnowledge(input) => knowledge::write(state, input),
         ToolInput::UpdateMemory(input) => memory::execute(input),

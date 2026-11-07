@@ -147,7 +147,7 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
         BashCompletion::ApprovalJudged(judgment) => {
             panic!("expected a finished bash completion, got judge result: {judgment:?}")
         }
-        BashCompletion::Finished(result) => result,
+        BashCompletion::Finished(result) | BashCompletion::Background(result) => result,
         BashCompletion::DomainDenied {
             result: ToolCallResult { call_id, .. },
             domains,
@@ -2631,7 +2631,7 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
         BashCompletion::ApprovalJudged(judgment) => {
             panic!("expected a finished, ungrantable-annotated result, got: {judgment:?}")
         }
-        BashCompletion::Finished(result) => {
+        BashCompletion::Finished(result) | BashCompletion::Background(result) => {
             assert_eq!(result.call_id, request.call_id);
             assert_eq!(result.output["sandboxed"], true);
             let ungrantable = result.output["ungrantable_filesystem_paths"]
@@ -3150,6 +3150,7 @@ fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
     // command's stdout is carried in the result.
     let result = match completion {
         BashCompletion::Finished(result) => result,
+        BashCompletion::Background(result) => result,
         BashCompletion::FilesystemDenied { result, .. } => {
             // Expected: the sandbox caught and denied the config/hooks
             // writes. The result carries the command's stdout.

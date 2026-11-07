@@ -8,6 +8,7 @@ use super::setup::{
     configured_mach_services, project_is_trusted, skill_discovery_root, tool_session_builder_for,
 };
 use super::state::{lock_unpoisoned, AgentdState};
+use crate::worktree;
 use crossbeam_channel::Sender;
 use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::{Command, Event, ProviderId, SessionId};
@@ -105,6 +106,12 @@ impl SessionEnvironment<'_> {
         // on top for anything not listed here.
         let domains =
             SessionDomainPolicy::with_allowed(configured_domains(state, workspace_root.as_deref()));
+        if let Err(error) = horizon_sandbox::preflight() {
+            eprintln!(
+                "horizon-agentd: sandbox helper preflight failed for session {session_id:?}: \
+                 {error}; session continues with the existing host-approval fallback"
+            );
+        }
         let network = if horizon_sandbox::is_available() {
             match horizon_agent::tools::SessionNetworkProxy::start_with_policy(&domains) {
                 Ok(proxy) => Some(Arc::new(proxy)),
@@ -153,6 +160,22 @@ impl SessionEnvironment<'_> {
         // sessions are unaffected by later config edits; `Reload Session
         // Runtime` picks changes up for new ones, same lifecycle as
         // `[[providers]]`.
+        let primary_checkout = if isolated {
+            None
+        } else {
+            match workspace_root.as_deref().and_then(worktree::project_root) {
+                Some(project)
+                    if workspace_root
+                        .as_deref()
+                        .and_then(|path| path.canonicalize().ok())
+                        .as_ref()
+                        == Some(&project) =>
+                {
+                    Some(project)
+                }
+                _ => None,
+            }
+        };
         let mut filesystem_grants = configured_filesystem_grants(state, workspace_root.as_deref());
         for grant in retained_grants {
             if !filesystem_grants.contains(grant) {
@@ -165,6 +188,7 @@ impl SessionEnvironment<'_> {
         // `tool_session_builder_for` below.
         let board = board_host_for(workspace_root.as_deref(), state.clone());
         let tool_state = tool_session_builder_for(workspace_root, agent_config.tools, recall)
+            .with_primary_checkout(primary_checkout)
             // An explore-role session (a `task` child) is never attached to
             // a pane, so an approval prompt raised for it would reach nobody.
             .with_unattended(role_id.is_some_and(horizon_agent::roles::is_exploration))

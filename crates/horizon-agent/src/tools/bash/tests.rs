@@ -28,6 +28,7 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             panic!("expected a finished bash completion, got judge result: {judgment:?}")
         }
         BashCompletion::Finished(result) => result,
+        BashCompletion::Background(result) => result,
         BashCompletion::DomainDenied {
             result: ToolCallResult { call_id, .. },
             domains,

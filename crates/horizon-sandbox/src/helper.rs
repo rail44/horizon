@@ -101,7 +101,9 @@ fn cargo_test_artifact(deps_dir: &std::path::Path) -> Option<PathBuf> {
     static CACHED: OnceLock<Option<PathBuf>> = OnceLock::new();
     CACHED
         .get_or_init(|| find_cargo_test_artifact(deps_dir))
-        .clone()
+        .as_ref()
+        .filter(|path| path.is_file())
+        .cloned()
 }
 
 fn find_cargo_test_artifact(deps_dir: &std::path::Path) -> Option<PathBuf> {
@@ -134,7 +136,8 @@ fn find_cargo_test_artifact(deps_dir: &std::path::Path) -> Option<PathBuf> {
 mod tests {
     use super::HELPER_BIN_NAME;
     use super::{
-        adjacent_helper, find_cargo_test_artifact, resolve_from, workspace_uplifted_helper,
+        adjacent_helper, cargo_test_artifact, find_cargo_test_artifact, resolve_from,
+        workspace_uplifted_helper,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -255,6 +258,17 @@ mod tests {
             find_cargo_test_artifact(&root),
             Some(root.join("horizon_sandbox_helper-new"))
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cached_artifact_is_revalidated_after_the_binary_disappears() {
+        let root = test_dir("stale-cache");
+        let helper = root.join("horizon_sandbox_helper-current");
+        fs::write(&helper, crate::HELPER_PROTOCOL_MARKER).unwrap();
+        assert_eq!(cargo_test_artifact(&root), Some(helper.clone()));
+        fs::remove_file(helper).unwrap();
+        assert_eq!(cargo_test_artifact(&root), None);
         fs::remove_dir_all(root).unwrap();
     }
 

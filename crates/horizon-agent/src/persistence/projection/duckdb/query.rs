@@ -17,7 +17,7 @@ use crate::roles::RoleId;
 
 use super::{
     schema::PROJECTION_SCHEMA_VERSION, session_id_text, AgentStoredEvent, RecallEntry,
-    RecallEntryKind, RecallSearchReport, SessionLiveness, Store,
+    RecallEntryKind, RecallSearchReport, RecallSessionSummary, SessionLiveness, Store,
 };
 #[cfg(test)]
 use super::{
@@ -259,6 +259,103 @@ impl Store {
                 })
             })
             .collect()
+    }
+
+    pub(crate) fn list_sessions(
+        &self,
+        session_id: Option<SessionId>,
+        since_unix_ms: Option<i64>,
+        until_unix_ms: Option<i64>,
+        turn_outcome: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RecallSessionSummary>> {
+        let session_id = session_id.map(session_id_text).transpose()?;
+        let mut clauses = Vec::new();
+        let mut bindings = Vec::new();
+        if let Some(session_id) = session_id {
+            clauses.push("s.session_id = ?");
+            bindings.push(DuckValue::Text(session_id));
+        }
+        if let Some(since_unix_ms) = since_unix_ms {
+            clauses.push("s.updated_at >= epoch_ms(?)");
+            bindings.push(DuckValue::BigInt(since_unix_ms));
+        }
+        if let Some(until_unix_ms) = until_unix_ms {
+            clauses.push("s.updated_at <= epoch_ms(?)");
+            bindings.push(DuckValue::BigInt(until_unix_ms));
+        }
+        if let Some(turn_outcome) = turn_outcome {
+            clauses.push(
+                "(SELECT t.end_reason FROM agent_turns t
+                    JOIN agent_events e ON e.event_id = t.ended_event_id
+                    WHERE t.session_id = s.session_id
+                    ORDER BY e.sequence DESC LIMIT 1) = ?",
+            );
+            bindings.push(DuckValue::Text(turn_outcome.to_string()));
+        }
+        let where_clause = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", clauses.join(" AND "))
+        };
+        let sql = format!(
+            "SELECT s.session_id, s.updated_at::TEXT,
+                (SELECT substr(m.text, 1, {bound}) FROM agent_messages m
+                 WHERE m.session_id = s.session_id AND m.role = 'user'
+                 ORDER BY m.sequence ASC LIMIT 1),
+                (SELECT substr(m.text, 1, {bound}) FROM agent_messages m
+                 WHERE m.session_id = s.session_id AND m.role = 'user'
+                 ORDER BY m.sequence DESC LIMIT 1),
+                (SELECT t.end_reason FROM agent_turns t
+                 JOIN agent_events e ON e.event_id = t.ended_event_id
+                 WHERE t.session_id = s.session_id
+                 ORDER BY e.sequence DESC LIMIT 1),
+                (SELECT COUNT(*) FROM agent_turns t WHERE t.session_id = s.session_id),
+                (SELECT COUNT(*) FROM agent_tool_results r
+                 WHERE r.session_id = s.session_id AND r.is_error
+                   AND json_extract_string(r.output_json, '$.exit_code') IS NULL
+                   AND json_extract(r.output_json, '$.denied_filesystem_paths') IS NULL
+                   AND json_extract(r.output_json, '$.denied_network_routes') IS NULL
+                   AND json_extract(r.output_json, '$.denied_mach_services') IS NULL
+                   AND json_extract(r.output_json, '$.ungrantable_filesystem_paths') IS NULL),
+                (SELECT COUNT(*) FROM agent_tool_results r
+                 WHERE r.session_id = s.session_id
+                   AND json_extract_string(r.output_json, '$.exit_code') IS NOT NULL
+                   AND json_extract_string(r.output_json, '$.exit_code') <> '0'),
+                (SELECT COUNT(*) FROM agent_tool_results r
+                 WHERE r.session_id = s.session_id
+                   AND (json_extract(r.output_json, '$.denied_filesystem_paths') IS NOT NULL
+                     OR json_extract(r.output_json, '$.denied_network_routes') IS NOT NULL
+                     OR json_extract(r.output_json, '$.denied_mach_services') IS NOT NULL
+                     OR json_extract(r.output_json, '$.ungrantable_filesystem_paths') IS NOT NULL)),
+                (SELECT COUNT(*) FROM agent_approvals a WHERE a.session_id = s.session_id),
+                (SELECT MIN(m.sequence) FROM agent_messages m
+                 WHERE m.session_id = s.session_id)
+             FROM agent_sessions s
+             {where_clause}
+             ORDER BY s.updated_at DESC, s.session_id
+             LIMIT ?",
+            bound = RECALL_TEXT_BOUND_CHARS,
+        );
+        bindings.push(DuckValue::BigInt(limit as i64));
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(bindings), |row| {
+            Ok(RecallSessionSummary {
+                session_id: parse_session_id_column(0, &row.get::<_, String>(0)?)?,
+                at: row.get(1)?,
+                first_request: row.get(2)?,
+                latest_request: row.get(3)?,
+                last_turn_outcome: row.get(4)?,
+                turn_count: row.get::<_, i64>(5)? as usize,
+                tool_error_count: row.get::<_, i64>(6)? as usize,
+                command_failure_count: row.get::<_, i64>(7)? as usize,
+                denial_count: row.get::<_, i64>(8)? as usize,
+                approval_count: row.get::<_, i64>(9)? as usize,
+                first_sequence: row.get(10)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .context("query session history summaries")
     }
 
     pub(crate) fn events_for_session(
