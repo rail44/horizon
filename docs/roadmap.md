@@ -681,6 +681,18 @@ The dynamic tier between session logs and repository skills:
 embeddings, relational projection, automatic cadence). Operation is
 manual distillation on owner request via the reworked `horizon-distill`
 skill; the store is user-side and never enters the repository.
+Amended 2026-11-07: durable-only entries, situation-first descriptions,
+anchors in practice, and a manual verification pass (the doc's
+Amendments section).
+
+### Project wiki (shape decided 2026-11-08, no pages yet)
+
+A human-facing view of the project's current state: an overview plus one
+page per concept, user-side Markdown, linking to docs and the board
+rather than restating them. Concepts come from clustering the code
+database's namespace graph plus an agent pass, spiked in
+`duckdb-ext/cluster-spike/`. `docs/project-wiki-design.md` is the
+self-contained record (decisions, spike results, open points).
 
 ### logd — log infrastructure daemon (designed 2026-08-06, not started)
 
