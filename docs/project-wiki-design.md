@@ -2,7 +2,8 @@
 
 Status: shape decided with the owner 2026-11-07/08; concept grouping
 spiked and accepted 2026-11-08 ("悪くないと思うのでこれで進めてみましょう");
-no page has been generated yet. Background reading: Anthropic's "The
+a pilot of the overview and three concept pages accepted the same day
+("よい感じだと思います"); the other eighteen pages are not written. Background reading: Anthropic's "The
 components of agent memory" (2026-11-06) on wikis built by dreaming.
 
 ## Problem
@@ -60,16 +61,55 @@ weighted by non-test unit edges.
 
 The owner accepted the 21 concepts as the starting page set.
 
+## The page pilot (2026-11-08)
+
+Written by the session agent into
+`$XDG_DATA_HOME/horizon/wiki/<sanitized-root>/` (the knowledge layer's
+root naming): `index.md`, `sandbox.md`, `approval.md`, `terminal.md`. The
+three concepts were picked for differing shapes: a cohesive one, a
+cross-cutting low-cohesion one, and one split across a daemon, a library
+and a pane.
+
+Page format, accepted with the pilot:
+
+- Frontmatter: `concept`, `title`, `code_at` (the commit the page was read
+  against), `written`.
+- A concept page: what it is (a few lines); entry points (where users and
+  other concepts touch it); the flow inside, naming the main types and
+  functions with their files; links to other concepts with the
+  concept-graph weight; related records (docs, board items — open ones
+  apart from past ones — and knowledge-layer entries, links only); stale
+  text noticed while reading; and the page's namespaces as its anchors.
+- The overview: the process split, the concepts grouped by where they run
+  with one line each (unwritten pages marked), the strongest concept-graph
+  edges, and the entry records (`AGENTS.md`, the roadmap, the UX
+  principles). It says the graph shows references only, not messages
+  between processes.
+- Japanese, since the reader is the owner.
+- Pages are read against the owner's local `main`, not a worker branch:
+  the pilot's branch was seven commits behind, two of them in approval.
+
+What the pilot showed:
+
+- Concept-graph weights and docs/board candidates were mechanical (a join
+  of the concept file with `namespace_graph`, a grep of `docs/` for the
+  concept's paths, the board's folded items); the body still needed the
+  code read, and three statements had to be corrected against it before
+  they were right.
+- Reading for a page surfaces stale text, which serves the "find where to
+  work next" purpose directly: in the pilot, a module comment claiming the
+  PTY threads live in the shell, the roadmap still calling logd "not
+  started", and a knowledge-layer entry citing a function main removed.
+
 ## Open points
 
-- **Page format and generation.** What a concept page contains (entry
-  points, the flow through the code, public surface, links), and how the
-  agent pass that writes pages is run — presumably a skill on request, as
-  distillation is (`horizon-distill`).
-- **Choosing links to docs and the board.** Candidates can come from the
-  repository paths a doc or board item mentions (50 of 72 docs mention
-  paths; 53 of their 153 distinct backticked paths no longer exist), from
-  an agent reading them, or both.
+- **Generating the remaining pages.** How the agent pass that writes pages
+  is run — presumably a skill on request, as distillation is
+  (`horizon-distill`) — and whether the mechanical parts (graph weights,
+  candidates) become a code-db query.
+- **Choosing links to docs and the board.** The pilot used path mentions
+  and the agent's judgment together. 50 of 72 docs mention repository
+  paths; 53 of their 153 distinct backticked paths no longer exist.
 - **Keeping pages current.** Anchoring pages to their concept's namespaces
   makes "did the code under this page change" a git question, as in the
   knowledge layer's verification pass.
