@@ -29,7 +29,15 @@ cargo run --release -- concepts edges.csv results/concepts.md --algo leiden --re
 
 `concepts` checks a concept file (`## id: title` headings, namespaces under
 each) covers every namespace once, and compares it with a partition.
-`results/` holds the agent pass's concept file and the findings.
+`results/` holds the agent pass's concept file as the spike left it, and the
+findings; the live concept file is the wiki store's `concepts.md`.
+
+Two commands serve the wiki skill (`.horizon/skills/project-wiki/`):
+
+```sh
+cargo run --release -- place edges.csv concepts.md          # new and vanished namespaces
+cargo run --release -- concept-graph edges.csv concepts.md  # directed weights between concepts
+```
 
 Algorithms: `leiden` and `leiden-cpm` (leiden-rs, modularity and the Constant
 Potts Model), `louvain-leiden-rs` (leiden-rs with refinement skipped),
