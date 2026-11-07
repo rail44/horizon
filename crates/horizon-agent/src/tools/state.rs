@@ -217,7 +217,9 @@ struct Inner {
     /// rather than a silent no-op.
     board: Option<Arc<dyn crate::tools::board::BoardHost>>,
     /// The primary checkout this session may modify only after one explicit
-    /// approval. `None` for isolated or non-primary working roots.
+    /// approval. `None` for isolated or non-primary working roots. The
+    /// sandbox reads it as a write root minus the root: read stays allowed,
+    /// writes are denied and become the ordinary containment denial.
     primary_checkout: Option<PrimaryCheckout>,
 }
 
@@ -396,14 +398,23 @@ impl ToolSessionState {
         self.inner.workspace_root.as_deref()
     }
 
-    /// A primary checkout whose first mutation still needs an explicit
-    /// approval. Read-only and validation commands do not consult this.
-    pub(crate) fn primary_checkout_needs_approval(&self) -> Option<&Path> {
+    /// The primary checkout this session may read but not write until it is
+    /// approved. `None` once approved, and for every non-primary root.
+    pub(crate) fn primary_checkout_without_write_access(&self) -> Option<&Path> {
         self.inner
             .primary_checkout
             .as_ref()
             .filter(|checkout| !checkout.approved.get())
             .map(|checkout| checkout.root.as_path())
+    }
+
+    /// Whether this session may write to its primary checkout. Always true
+    /// for a root that is not a primary checkout.
+    pub(crate) fn primary_checkout_writable(&self) -> bool {
+        self.inner
+            .primary_checkout
+            .as_ref()
+            .is_none_or(|checkout| checkout.approved.get())
     }
 
     /// Record the one session-scoped approval for direct primary-checkout

@@ -190,7 +190,7 @@ pub(crate) fn finish(id: Uuid, state: JobState, result: &BashOutput) {
     let Some(entry) = lock(registry()).entries.get(&id).cloned() else {
         return;
     };
-    let (owner, id, log_path, summary) = {
+    let (owner, id, log_path, summary, reported_state) = {
         let mut guard = lock(&entry);
         if guard.state != JobState::Running && guard.state != JobState::Cancelled {
             return;
@@ -198,6 +198,7 @@ pub(crate) fn finish(id: Uuid, state: JobState, result: &BashOutput) {
         if guard.state != JobState::Cancelled {
             guard.state = state;
         }
+        let reported_state = guard.state;
         guard.cancel = None;
         guard.result = Some(result.clone());
         (
@@ -205,6 +206,7 @@ pub(crate) fn finish(id: Uuid, state: JobState, result: &BashOutput) {
             guard.id,
             guard.log_path.clone(),
             result.summary(),
+            reported_state,
         )
     };
     let output = if let Some(path) = &result.output_file {
@@ -223,7 +225,7 @@ pub(crate) fn finish(id: Uuid, state: JobState, result: &BashOutput) {
     }
     let notification = format!(
         "A background bash job has finished. This is a system notification, not a message from the user. job_id: {id}; state: {}; summary: {summary}; log: {}. Use bash.output to read it.",
-        entry_state(owner, id).as_str(),
+        reported_state.as_str(),
         log_path.display()
     );
     lock(registry())
@@ -232,12 +234,6 @@ pub(crate) fn finish(id: Uuid, state: JobState, result: &BashOutput) {
         .or_default()
         .push(notification);
     crate::tools::explore::wake(owner);
-}
-
-fn entry_state(owner: SessionId, id: Uuid) -> JobState {
-    owned_entry(owner, id)
-        .map(|entry| lock(&entry).state)
-        .unwrap_or(JobState::Failed)
 }
 
 /// Start tracking a job and prepare the call that will run it. The caller
@@ -249,7 +245,6 @@ pub(crate) fn launch(
     tool_state: &crate::tools::ToolSessionState,
     workspace_root: &Path,
     command: &str,
-    result_tx: crossbeam_channel::Sender<crate::tools::ToolCompletion>,
 ) -> crate::tools::output::Response {
     let cwd = tool_state
         .bash_cwd_handle()
@@ -266,7 +261,6 @@ pub(crate) fn launch(
     );
     // The job's own completion marks the entry; the registry keeps the call
     // receipt separate from the ordinary foreground result.
-    let _ = result_tx;
     crate::tools::output::Response::external(receipt(id, &entry))
 }
 
@@ -299,11 +293,14 @@ pub(crate) fn output(owner: SessionId, input: &BashJob) -> Response {
     let Some(entry) = owned_entry(owner, id) else {
         return crate::tools::output::error("no bash job with that id belongs to this session");
     };
-    let mut value = lock(&entry).status();
-    let log_path = lock(&entry).log_path.clone();
+    let (mut value, log_path) = {
+        let guard = lock(&entry);
+        (guard.status(), guard.log_path.clone())
+    };
     let contents = std::fs::read_to_string(&log_path).unwrap_or_default();
     let (shown, truncated) = crate::transcript::truncate_chars(&contents, 4_000);
     if let Some(object) = value.as_object_mut() {
+        object.remove("output");
         object.insert("output".into(), shown.into());
         object.insert("log_truncated".into(), truncated.into());
     }

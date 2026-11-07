@@ -92,8 +92,9 @@ impl ToolSessionBuilder {
         Self::with_root(root, tools, recall)
     }
 
-    /// Mark the root as a primary checkout that needs one explicit mutation
-    /// approval. Other roots never need this prompt.
+    /// Mark the root as a primary checkout. Until it is approved, the
+    /// sandbox treats it as read-only, so any write becomes a containment
+    /// denial rather than a silent change.
     pub fn with_primary_checkout(mut self, root: Option<PathBuf>) -> Self {
         self.inner.primary_checkout = root.map(|root| super::PrimaryCheckout {
             root,

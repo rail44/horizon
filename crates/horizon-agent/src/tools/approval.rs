@@ -429,11 +429,11 @@ fn resolve_standard_bash(
             if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
                 return outcome;
             }
-            if matches!(&request.input, crate::tools::input::ToolInput::Bash(input)
-                if !crate::tools::command_is_read_only(&input.command))
-            {
-                runtime.tool_state.approve_primary_checkout();
-            }
+            // Any Standard bash approval either is the host-execution
+            // fallback or the filesystem-retry retry; both mean this session
+            // may now write its primary checkout, so the sandbox stops
+            // excluding it.
+            runtime.tool_state.approve_primary_checkout();
 
             bash::spawn_approved_host(
                 bash::BashJob::new(

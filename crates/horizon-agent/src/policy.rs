@@ -125,21 +125,18 @@ pub(crate) fn plan_prepared_call(
             kind,
         }))
     };
-    if let Some(root) = tool_state.primary_checkout_needs_approval() {
-        let needs_approval = match request.tool_id.as_str() {
-            "fs.write" | "fs.edit" => true,
-            "bash" => match &request.input {
-                ToolInput::Bash(input) => !crate::tools::command_is_read_only(&input.command),
-                _ => false,
-            },
-            _ => false,
-        };
-        if needs_approval {
+    // `bash` is not classified here: the sandbox makes the primary checkout
+    // read-only, so an attempt to write is a containment denial and takes the
+    // ordinary filesystem-retry approval. Only the fs tools, which run
+    // outside the OS sandbox, need this pre-execution gate.
+    if matches!(request.tool_id.as_str(), "fs.write" | "fs.edit") {
+        if let Some(root) = tool_state.primary_checkout_without_write_access() {
             return approval(
                 format!(
-                    "This is the first mutation in the shared primary checkout `{}`. Allow direct \
+                    "`{}` would write inside the shared primary checkout `{}`. Allow direct \
                      edits for this session, or call `worktree.enter` to work in a disposable \
-                     worktree instead? Reads and validation commands do not need this approval.",
+                     worktree instead?",
+                    request.tool_id,
                     root.display()
                 ),
                 ApprovalKind::Standard,
@@ -681,51 +678,47 @@ mod tests {
     }
 
     #[test]
-    fn primary_checkout_mutations_ask_once_while_validation_stays_automatic() {
+    fn primary_checkout_gates_fs_mutations_until_approved_while_bash_is_left_to_the_sandbox() {
         let root = tempfile::tempdir().unwrap();
         let tool_state = crate::tools::ToolSessionBuilder::new(root.path().to_path_buf())
             .with_primary_checkout(Some(root.path().to_path_buf()))
             .build();
-        let mutation = |tool_id: &str, input: Value| ToolCallRequest {
+        let request = |tool_id: &str, input: Value| ToolCallRequest {
             call_id: crate::contract::ToolCallId("call-primary".into()),
             tool_id: tool_id.into(),
             input: input.into(),
             occurrence_id: crate::contract::OccurrenceId("call-primary".into()),
         };
 
-        for request in [
-            mutation(
-                "fs.write",
-                serde_json::json!({"path": root.path().join("src/lib.rs"), "content": "change"}),
-            ),
-            mutation(
-                "bash",
-                serde_json::json!({"command": "sed -i 's/a/b/' src/lib.rs"}),
-            ),
-        ] {
-            let ToolPlan::Approval(approval) = plan_tool_call(&tool_state, &request) else {
-                panic!("first primary mutation must ask: {request:?}");
-            };
-            assert_eq!(approval.kind, ApprovalKind::Standard);
-            assert!(approval.reason.contains("shared primary checkout"));
-        }
+        let write = request(
+            "fs.write",
+            serde_json::json!({"path": root.path().join("src/lib.rs"), "content": "change"}),
+        );
+        let ToolPlan::Approval(approval) = plan_tool_call(&tool_state, &write) else {
+            panic!("a primary-checkout fs write must ask before it runs");
+        };
+        assert_eq!(approval.kind, ApprovalKind::Standard);
+        assert!(approval.reason.contains("shared primary checkout"));
+
+        // bash is not classified by command text: the sandbox makes the
+        // checkout read-only, so a write attempt becomes a containment
+        // denial instead.
         assert_eq!(
             plan_tool_call(
                 &tool_state,
-                &mutation("bash", serde_json::json!({"command": "cargo nextest run"})),
+                &request(
+                    "bash",
+                    serde_json::json!({"command": "sed -i 's/a/b/' src/lib.rs"})
+                ),
             ),
             ToolPlan::Automatic(AutomaticTool::SandboxedBash)
         );
+        assert!(!tool_state.primary_checkout_writable());
 
         tool_state.approve_primary_checkout();
+        assert!(tool_state.primary_checkout_writable());
         assert_eq!(
-            plan_tool_call(
-                &tool_state,
-                &mutation(
-                    "fs.write",
-                    serde_json::json!({"path": root.path().join("src/lib.rs"), "content": "change"}),
-                ),
-            ),
+            plan_tool_call(&tool_state, &write),
             ToolPlan::Automatic(AutomaticTool::ContainedFilesystem)
         );
     }

@@ -86,6 +86,7 @@ pub(crate) struct SandboxedRun {
     filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
     origin: SandboxedApprovalOrigin,
     git_metadata_roots: Option<Vec<PathBuf>>,
+    primary_checkout_writable: bool,
 }
 
 impl SandboxedRun {
@@ -102,6 +103,7 @@ impl SandboxedRun {
             filesystem_grants: tools.effective_sandbox_grants(),
             origin,
             git_metadata_roots,
+            primary_checkout_writable: tools.primary_checkout_writable(),
         }
     }
 
@@ -133,6 +135,7 @@ fn run_sandboxed_job(
             sandbox.network.as_deref(),
             &sandbox.loopback_connect,
             &grants,
+            sandbox.primary_checkout_writable,
             &job.config,
         ),
         Err(error) => {
@@ -285,7 +288,6 @@ pub(crate) fn spawn_sandboxed(job: BashJob, sandbox: SandboxedRun) {
         if job.input.background {
             spawn_background(completion.clone());
         }
-        let _ = &completion;
         completion
     });
 }
@@ -301,10 +303,6 @@ pub(crate) fn spawn_background(completion: BashCompletion) {
 
 impl BashJob {
     fn finish_background(result: &crate::contract::ToolCallResult) {
-        let Some(body) = result.output.0.as_object() else {
-            return;
-        };
-        let _ = body;
         let output: crate::tools::output::BashOutput =
             match serde_json::from_value(result.output.0.clone()) {
                 Ok(output) => output,

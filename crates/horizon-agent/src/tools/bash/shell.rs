@@ -115,58 +115,6 @@ pub(super) fn executable_index(words: &[String]) -> Option<usize> {
     words.get(index).map(|_| index)
 }
 
-/// A conservative UX classification for the primary-checkout approval gate.
-/// Every segment must be a known read-only invocation or a validation command
-/// whose writes are build artifacts. Unknown syntax/commands are not called
-/// read-only; the OS sandbox still supplies the actual containment boundary.
-pub(crate) fn command_is_read_only(command: &str) -> bool {
-    if command.contains('>') {
-        return false;
-    }
-    !super::git::command_requires_metadata_write(command)
-        && !any_command_segment(command, |words| {
-            if words.is_empty() {
-                return false;
-            }
-            let Some(index) = executable_index(words) else {
-                return true;
-            };
-            let Some(program) = words.get(index).map(String::as_str) else {
-                return true;
-            };
-            let name = program.rsplit('/').next().unwrap_or(program);
-            let read_only = match name {
-                "git" => true,
-                "cargo" => matches!(
-                    words.get(index + 1).map(String::as_str),
-                    Some(
-                        "check"
-                            | "build"
-                            | "test"
-                            | "nextest"
-                            | "clippy"
-                            | "fmt"
-                            | "run"
-                            | "doc"
-                            | "tree"
-                            | "metadata"
-                            | "outdated"
-                    )
-                ),
-                "ls" | "pwd" | "cat" | "grep" | "rg" | "find" | "head" | "tail" | "wc" | "sort"
-                | "uniq" | "cut" | "tr" | "jq" | "echo" | "printf" | "date" | "env" | "which"
-                | "type" | "ps" | "pgrep" | "stat" | "file" | "ldd" | "readlink" | "realpath"
-                | "dirname" | "basename" | "uname" | "nproc" | "du" | "df" | "tree" | "true"
-                | "false" | "test" | "[" => true,
-                "sed" => !words[index + 1..].iter().any(|word| {
-                    word == "-i" || word.starts_with("-i") || word.starts_with("--in-place")
-                }),
-                _ => false,
-            };
-            !read_only
-        })
-}
-
 fn is_assignment(word: &str) -> bool {
     let Some((name, _)) = word.split_once('=') else {
         return false;
@@ -269,40 +217,4 @@ pub(super) fn tokenize(command: &str) -> Vec<ShellToken> {
     }
     push_word(&mut tokens, &mut word);
     tokens
-}
-
-#[cfg(test)]
-mod tests {
-    use super::command_is_read_only;
-
-    #[test]
-    fn read_only_and_validation_commands_stay_out_of_the_primary_gate() {
-        for command in [
-            "git status --short",
-            "git diff --stat | head -20",
-            "cargo check --workspace",
-            "cargo nextest run --workspace --locked",
-            "env -u HORIZON_AGENTD_BINARY cargo test -p horizon-agent",
-            "nice -n 19 cargo clippy --workspace",
-            "timeout 300 cargo test",
-            "sed -n '1,80p' src/lib.rs",
-            "echo alive",
-        ] {
-            assert!(command_is_read_only(command), "{command}");
-        }
-    }
-
-    #[test]
-    fn mutation_or_unrecognized_commands_require_the_primary_gate() {
-        for command in [
-            "git add src/lib.rs",
-            "cargo update",
-            "sed -i 's/a/b/' src/lib.rs",
-            "echo change > src/lib.rs",
-            "python3 analyze.py",
-            "cargo test && sed -i 's/a/b/' src/lib.rs",
-        ] {
-            assert!(!command_is_read_only(command), "{command}");
-        }
-    }
 }

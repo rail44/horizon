@@ -598,19 +598,29 @@ the job, not folded as a second result for the call that launched it.
   running; session teardown stops them and drops the registry entry, leaving
   logs on disk.
 
-## Primary-checkout mutation gate (2026-11-04)
+## Primary-checkout write gate (2026-11-04)
 
 A session whose working root is the repository's primary checkout and that
-owns no worktree asks once before its first mutation. `fs.write`/`fs.edit`
-and a `bash` command classified as mutating are both covered, so a shell edit
-cannot bypass a file-tool gate. Read-only and validation commands (`git
-status`, `cargo check`/`nextest`/`clippy`, `sed -n`, ...) run as before.
+owns no worktree cannot write it until it has been approved once.
 
-Approval is session-scoped and not persisted. The prompt names the shared
-checkout and points to `worktree.enter`; approving records that this session
-may continue editing there. Isolated worktrees and non-primary roots never
-see the prompt.
+The gate is a capability, not a command classifier. An unapproved primary
+checkout is passed to the sandbox as a write root that excludes itself, which
+`SandboxPolicy` interprets as a read-only root: reads stay allowed, and every
+attempt to create, modify, or delete beneath it — the root's own files
+included — is a containment denial. The self-exclusion is what makes the root
+itself covered; ordinary exclusions only reach paths *beneath* one. The
+supervisor therefore refuses the write no matter how the command is spelled:
+a wrapper script, `bash -c`, `xargs`, or a tool whose flags happen to write.
+Ordinary work that writes (`cargo fmt`, `sed -i`, a build that regenerates
+sources) takes the existing filesystem-denial approval instead of retrying a
+heuristic.
 
+Approval is session-scoped and not persisted. Approving either a
+filesystem-retry or the host-execution fallback records that this session may
+write its primary checkout, and the next sandboxed run gets the ordinary
+writable root back. `fs.write`/`fs.edit` run outside the OS sandbox, so they
+keep a pre-execution approval for the same checkout. Isolated worktrees and
+non-primary roots never see either prompt.
 ## Session-first history: `recall.sessions` (2026-11-04)
 
 `recall.sessions` lists persisted sessions newest-first, one row per session:

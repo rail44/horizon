@@ -154,6 +154,37 @@ fn writes_outside_writable_root_are_denied() {
     cleanup(outside);
 }
 
+/// A write root that excludes itself is a read-only root: reads still work
+/// while every write beneath it, the root's own files included, is denied
+/// with the same evidence an out-of-root write produces. This is what lets a
+/// primary checkout awaiting approval stay readable without being writable.
+#[test]
+fn a_write_root_excluding_itself_keeps_reads_and_denies_writes() {
+    let root = tempdir("self-excluded-root");
+    let file = root.join("tracked.txt");
+    std::fs::write(&file, "before").unwrap();
+
+    let policy = SandboxPolicy {
+        writable_roots: vec![root.clone()],
+        writable_root_exclusions: vec![root.clone()],
+        readable_scope: ReadableScope::Full,
+        network: NetworkPolicy::Disabled,
+    };
+    let cmd = shell(
+        "/usr/bin/env",
+        &format!(
+            "sh -c \"cat {file} && echo after > {file}\"",
+            file = shell_quote(&file)
+        ),
+    );
+    let sandboxed = spawn(cmd, &policy, SandboxStdio::inherit()).expect("spawn should succeed");
+    let code = wait_with_timeout(sandboxed.child, TEST_TIMEOUT);
+    assert_ne!(code, 0, "writing an excluded root must fail");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "before");
+
+    cleanup(root);
+}
+
 /// TMPDIR parity (`docs/roadmap.md`'s backlog-60 entry): the one
 /// deliberate behavior change from the old bwrap backend. bwrap gave a
 /// private `--tmpfs /tmp`, so a sandboxed write to a literal `/tmp/<name>`

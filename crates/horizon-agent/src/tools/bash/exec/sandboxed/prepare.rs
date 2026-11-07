@@ -16,6 +16,7 @@ pub(super) fn prepare(
     network: Option<&SessionNetworkProxy>,
     loopback_connect: &[std::net::SocketAddr],
     filesystem_grants: &[horizon_sandbox::FilesystemGrant],
+    primary_checkout_writable: bool,
 ) -> PreparedCommand {
     // Same wrapper shape as the unsandboxed path (`wrapped_script`): merges
     // the command's own stdout+stderr, and reports the final `$PWD` on the
@@ -73,9 +74,17 @@ pub(super) fn prepare(
         #[cfg(target_os = "macos")]
         configure_ssh_tunneling(&mut cmd, network.proxy_addr().port(), workspace_root);
     }
+    let mut writable_root_exclusions = git_metadata_exclusions(workspace_root);
+    // A primary checkout this session has not been approved to write is a
+    // write root that excludes itself: reads stay allowed and every write
+    // beneath it is a containment denial. No command text is classified, so
+    // an unrecognized wrapper or alias cannot slip a write past the gate.
+    if !primary_checkout_writable {
+        writable_root_exclusions.push(workspace_root.to_path_buf());
+    }
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![workspace_root.to_path_buf()],
-        writable_root_exclusions: git_metadata_exclusions(workspace_root),
+        writable_root_exclusions,
         readable_scope: horizon_sandbox::ReadableScope::Full,
         network: network_policy,
     };

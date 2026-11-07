@@ -265,13 +265,18 @@ fn match_initial_capability<'a>(
     // the supervisor denies the write regardless. Read access is not denied;
     // git needs to read config and hooks.
     if requested != AccessMode::Read {
+        // An exclusion equal to the capability's own path denies writes to
+        // the whole tree beneath it, the root itself included. That is how a
+        // write root is marked read-only for one run (a primary checkout
+        // awaiting approval): reads stay allowed and every write is refused
+        // with the same evidence an out-of-root write produces.
         for capability in initial_caps {
             if capability.is_file {
                 continue;
             }
             if path.starts_with(&capability.path) {
                 for excluded in &capability.excluded_paths {
-                    if path.starts_with(excluded) {
+                    if path.starts_with(excluded) || excluded == &capability.path {
                         return InitialCapabilityMatch::Insufficient(capability);
                     }
                 }

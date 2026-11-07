@@ -76,6 +76,7 @@ pub(in crate::tools::bash) fn run_sandboxed(
     network: Option<&SessionNetworkProxy>,
     loopback_connect: &[std::net::SocketAddr],
     filesystem_grants: &[horizon_sandbox::FilesystemGrant],
+    primary_checkout_writable: bool,
     config: &BashToolConfig,
 ) -> BashCompletion {
     let command = &*input.command;
@@ -98,6 +99,7 @@ pub(in crate::tools::bash) fn run_sandboxed(
         network,
         loopback_connect,
         filesystem_grants,
+        primary_checkout_writable,
     );
     #[cfg(target_os = "macos")]
     let started_at = std::time::SystemTime::now();

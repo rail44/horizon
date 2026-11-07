@@ -152,7 +152,6 @@ fn execute_automatic(
                         tool_state,
                         workspace_root,
                         command,
-                        runtime.async_results.clone(),
                     );
                     bash::spawn_sandboxed_call(
                         session_id,
@@ -216,9 +215,6 @@ fn execute_synchronous(
                     tool_state,
                     workspace_root,
                     &input.command,
-                    session_runtime(session_id)
-                        .map(|runtime| runtime.async_results)
-                        .unwrap_or_else(|| crossbeam_channel::unbounded().0),
                 ),
                 None => error_output("background bash requires a workspace root"),
             };

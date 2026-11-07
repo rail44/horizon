@@ -135,7 +135,9 @@ fn excluded_paths_by_capability(
             .writable_root_exclusions
             .iter()
             .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
-            .filter(|path| path.starts_with(&root))
+            // An exclusion equal to the root marks the whole root
+            // write-denied; every other exclusion must lie beneath it.
+            .filter(|path| **path == root || path.starts_with(&root))
             .filter(|path| {
                 !tree_grants.iter().any(|(resolved, grant)| {
                     grant.access == FilesystemGrantAccess::ReadWrite && path.starts_with(resolved)
