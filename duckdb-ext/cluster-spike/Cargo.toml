@@ -1,0 +1,21 @@
+# `cluster-spike`: a spike comparing community-detection crates on the code
+# database's namespace graph (README.md). It reads the CSV `code-db query REPO
+# namespace_graph FORMAT=csv` prints and depends on no DuckDB crate.
+#
+# A workspace of its own, like code-db and host-check, so trying it never
+# touches the extensions' lockfile.
+[package]
+name = "cluster-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Leiden and a Louvain-like mode (skip_refinement), seeded. Without default
+# features: no rayon (its parallel path may differ from the sequential one),
+# no CLI.
+leiden-rs = { version = "=0.8.1", default-features = false }
+# Seeded Louvain; its Leiden takes no seed, so only Louvain is compared.
+graphrs = { version = "=0.12.0", default-features = false }
