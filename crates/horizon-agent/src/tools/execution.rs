@@ -228,6 +228,14 @@ fn execute_synchronous(
         "board.comment" => return board::execute_comment(tool_state, session_id, request),
         _ => {}
     }
+    if let Some(output) = super::external::execute(
+        tool_state,
+        session_id,
+        &request.tool_id,
+        &request.request.input,
+    ) {
+        return Response::external(output).into();
+    }
     super::synchronous::execute(tool_state, &request.input, false)
         .or_else(|| {
             host.execute_auto(&request.tool_id, &request.request.input)

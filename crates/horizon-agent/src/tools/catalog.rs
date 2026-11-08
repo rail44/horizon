@@ -13,8 +13,16 @@ pub(crate) struct Definition {
     pub permission: ToolPermission,
 }
 
+/// The built-in tools, then any registered from outside
+/// ([`super::external`]).
 pub(crate) fn definitions() -> Vec<Definition> {
-    catalog().to_vec()
+    let mut definitions = catalog().to_vec();
+    definitions.extend(super::external::definitions());
+    definitions
+}
+
+pub(crate) fn is_builtin(tool_id: &str) -> bool {
+    catalog().iter().any(|definition| definition.id == tool_id)
 }
 
 /// Joins a tool's hand-written prose to the field legend generated from its
@@ -443,6 +451,7 @@ pub(crate) fn permission_for_tool(tool_id: &str) -> Option<ToolPermission> {
         .iter()
         .find(|definition| definition.id == tool_id)
         .map(|definition| definition.permission)
+        .or_else(|| super::external::is_registered(tool_id).then_some(ToolPermission::AutoAllowUi))
 }
 
 #[cfg(test)]
