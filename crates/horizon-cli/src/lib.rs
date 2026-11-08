@@ -108,6 +108,26 @@ pub fn run(
         *path = cli::absolute_path(path, &cwd);
     }
 
+    // `wiki`: the caller's project, not the shell's, names the wiki.
+    if let cli::Subcommand::Wiki { page, path, .. } = &mut parsed.subcommand {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let Some(store) = horizon_wiki::Store::for_dir(&cwd) else {
+            let _ = writeln!(
+                stderr,
+                "error: {} is not in a repository with a wiki",
+                cwd.display()
+            );
+            return 1;
+        };
+        match store.page_path(page) {
+            Ok(file) => *path = file,
+            Err(error) => {
+                let _ = writeln!(stderr, "error: {error}");
+                return 2;
+            }
+        }
+    }
+
     let resolved_split = match cli::resolved_split_for(&parsed.subcommand, env_session_id.clone()) {
         Ok(resolved) => resolved,
         Err(message) => {

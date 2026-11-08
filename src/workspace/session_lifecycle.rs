@@ -18,6 +18,7 @@ use crate::runtime::{AgentSessionHandle, AgentdHandle, TerminalSessionHandle, Te
 use crate::terminal::{TerminalSession, TerminalView};
 use crate::theme;
 use crate::theme_settings::ThemeSettingsView;
+use crate::wiki::WikiView;
 
 type AgentSessionId = horizon_agent::contract::SessionId;
 
@@ -426,6 +427,23 @@ impl WorkspaceShell {
                 });
                 self.view_subscriptions.insert(pane_id, vec![moved]);
                 self.panes.insert(pane_id, PaneView::markdown(view));
+            } else if matches!(
+                self.workspace.pane_kind(pane_id),
+                Some(PaneKind::View(ViewKind::Wiki))
+            ) {
+                // A pane opened from the view chooser has no page yet: it
+                // shows the overview of the project Horizon was started in.
+                let document = self
+                    .workspace
+                    .pane_document(pane_id)
+                    .map(|path| path.to_path_buf())
+                    .or_else(super::wiki::default_page);
+                let view = cx.new(|cx| WikiView::new(document, window, cx));
+                let moved = cx.subscribe(&view, move |shell, _, event: &DocumentChanged, cx| {
+                    shell.record_markdown_document(pane_id, event.0.clone(), cx);
+                });
+                self.view_subscriptions.insert(pane_id, vec![moved]);
+                self.panes.insert(pane_id, PaneView::wiki(view));
             }
         }
         self.sync_board_session_states(cx);

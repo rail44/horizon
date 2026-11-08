@@ -117,7 +117,11 @@ fn validate_attachment(
     sessions: &HashMap<SessionId, SessionKind>,
     attached_sessions: &mut HashSet<SessionId>,
 ) -> Result<(), WorkspaceStateError> {
-    if pane.document.is_some() && !matches!(pane.kind, PaneKindState::View(ViewKindState::Markdown))
+    if pane.document.is_some()
+        && !matches!(
+            pane.kind,
+            PaneKindState::View(ViewKindState::Markdown | ViewKindState::Wiki)
+        )
     {
         return Err(state_error(format!(
             "pane {:?} carries a document but is not a document view",

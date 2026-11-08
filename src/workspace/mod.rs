@@ -33,6 +33,7 @@ use crate::terminal::{TerminalSession, TerminalView};
 use crate::terminal_focus::focus_transition;
 use crate::theme_settings::ThemeSettingsView;
 use crate::view_chooser::{Placement, ViewChooserDelegate};
+use crate::wiki::WikiView;
 use crate::workspace_state::{InvalidState, LoadResult, WorkspaceStateStore};
 
 mod bindings;
@@ -45,6 +46,7 @@ mod preview;
 mod recovery;
 mod render;
 mod restore;
+mod wiki;
 use recovery::WorkspacePhase;
 mod runtime_reload;
 mod session_creation;
@@ -212,6 +214,7 @@ enum CachedPaneLeaf {
     BoardThread(Entity<BoardThreadView>),
     Preview(Entity<PreviewPane>),
     Markdown(Entity<MarkdownView>),
+    Wiki(Entity<WikiView>),
 }
 
 /// A pane that owns narrower cache boundaries internally. Composite panes must
@@ -231,6 +234,7 @@ impl CachedPaneLeaf {
             Self::BoardThread(view) => view.focus_handle(cx),
             Self::Preview(view) => view.focus_handle(cx),
             Self::Markdown(view) => view.focus_handle(cx),
+            Self::Wiki(view) => view.focus_handle(cx),
         }
     }
 
@@ -243,6 +247,7 @@ impl CachedPaneLeaf {
             Self::BoardThread(view) => view.clone().cached(style()).into_any_element(),
             Self::Preview(view) => view.clone().cached(style()).into_any_element(),
             Self::Markdown(view) => view.clone().cached(style()).into_any_element(),
+            Self::Wiki(view) => view.clone().cached(style()).into_any_element(),
         }
     }
 }
@@ -288,6 +293,10 @@ impl PaneView {
 
     fn markdown(view: Entity<MarkdownView>) -> Self {
         Self::Cached(CachedPaneLeaf::Markdown(view))
+    }
+
+    fn wiki(view: Entity<WikiView>) -> Self {
+        Self::Cached(CachedPaneLeaf::Wiki(view))
     }
 
     fn focus_handle(&self, cx: &App) -> FocusHandle {

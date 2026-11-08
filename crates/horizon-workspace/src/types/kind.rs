@@ -41,6 +41,10 @@ pub enum ViewKind {
     /// [`Pane::document`](super::Pane::document) rather than part of this
     /// kind, so the kind stays `Copy`.
     Markdown,
+    /// A page of the project wiki with its comment threads
+    /// (`src/wiki/`). The page's file is the pane's
+    /// [`Pane::document`](super::Pane::document), as a Markdown pane's is.
+    Wiki,
 }
 
 impl ViewKind {
@@ -54,7 +58,16 @@ impl ViewKind {
             Self::BoardThread { .. } => "Thread",
             Self::Preview => "Preview",
             Self::Markdown => "Markdown",
+            Self::Wiki => "Wiki",
         }
+    }
+}
+
+impl ViewKind {
+    /// Whether a pane of this kind shows a file, kept on
+    /// [`Pane::document`](super::Pane::document).
+    pub fn carries_document(self) -> bool {
+        matches!(self, Self::Markdown | Self::Wiki)
     }
 }
 

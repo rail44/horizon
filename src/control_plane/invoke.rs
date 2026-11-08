@@ -28,6 +28,11 @@ pub(super) enum Command {
         split: Option<(SessionId, SplitAxis)>,
         activate: bool,
     },
+    Wiki {
+        path: PathBuf,
+        split: Option<(SessionId, SplitAxis)>,
+        activate: bool,
+    },
     Attach {
         session_id: SessionId,
         activate: bool,
@@ -69,6 +74,11 @@ pub(super) fn parse(invoke: &Invoke) -> Result<Command, String> {
             activate: activate_arg(args)?,
         },
         "markdown" => Command::Markdown {
+            path: required_string_arg(args, "path")?.into(),
+            split: optional_session_id_arg(args, "split")?,
+            activate: activate_arg(args)?,
+        },
+        "wiki" => Command::Wiki {
             path: required_string_arg(args, "path")?.into(),
             split: optional_session_id_arg(args, "split")?,
             activate: activate_arg(args)?,

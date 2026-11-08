@@ -131,6 +131,9 @@ horizon-agent = { path = "crates/horizon-agent" }
 horizon-cli = { path = "crates/horizon-cli" }
 horizon-control = { path = "crates/horizon-control" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
+# The project wiki's store, comment threads and anchoring, for the wiki view
+# (`src/wiki/`, docs/project-wiki-design.md).
+horizon-wiki = { path = "crates/horizon-wiki" }
 horizon-wire = { path = "crates/horizon-wire" }
 # The `log` facade backend lives in the shell library (`lib.rs`'s
 # StderrLogger): gpui and its platform crates — including the

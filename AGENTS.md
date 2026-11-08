@@ -362,6 +362,12 @@ The shell is GPUI-based (the Floem shell retired at tag
   `.md` links in place. The file it shows is persisted on the model's
   pane (`Pane::document`). `file_watch.rs` is the single-file watch it
   shares with the preview pane.
+- `wiki/` — the wiki view: a page of the project wiki
+  (`crates/horizon-wiki`, an extension package outside the repository's
+  core) drawn like the Markdown view, with the owner's comment threads
+  anchored in it, opened with `horizon wiki [page]` or the view chooser.
+  Comments go straight to the page's thread log; `horizon-agentd`'s
+  `wiki_flow` answers them. See `docs/project-wiki-design.md`.
 - `keymap.rs` — `[keybindings]` chord/command translation;
   `theme/` — config-driven color scheme; `terminal_focus.rs` — the
   focus-reporting decision.

@@ -39,6 +39,12 @@ impl Store {
         Some(data_home()?.join("horizon").join("wiki"))
     }
 
+    /// The store of the project `dir` is in (any worktree of it resolves to
+    /// the main repository). `None` outside a repository.
+    pub fn for_dir(dir: &Path) -> Option<Self> {
+        Self::for_project(&project_root(dir)?)
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -72,6 +78,29 @@ pub fn validate_page_name(name: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// The main repository toplevel of `dir`, canonicalized: the parent of
+/// `git rev-parse --git-common-dir`, as the knowledge layer and the board
+/// resolve it, so a linked worktree names its main checkout.
+pub fn project_root(dir: &Path) -> Option<PathBuf> {
+    let mut command = std::process::Command::new("git");
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(key);
+        }
+    }
+    let output = command
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let common = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    std::fs::canonicalize(common.parent()?).ok()
 }
 
 fn data_home() -> Option<PathBuf> {

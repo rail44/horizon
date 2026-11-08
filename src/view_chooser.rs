@@ -66,6 +66,13 @@ fn view_choices() -> Vec<ViewChoice> {
             kind: PaneKind::View(ViewKind::BoardList),
             role_id: None,
         },
+        // Opens on the overview of the project Horizon was started in;
+        // `horizon wiki <page>` names another page or project.
+        ViewChoice {
+            title: "Wiki",
+            kind: PaneKind::View(ViewKind::Wiki),
+            role_id: None,
+        },
     ]);
     choices
 }
@@ -225,7 +232,7 @@ mod tests {
     #[test]
     fn role_less_entries_stay_role_less() {
         let choices = view_choices();
-        for title in ["Terminal", "Agent", "Theme Settings", "Board"] {
+        for title in ["Terminal", "Agent", "Theme Settings", "Board", "Wiki"] {
             let c = choices.iter().find(|c| c.title == title).expect(title);
             assert!(c.role_id.is_none(), "{title} must remain role-less");
         }

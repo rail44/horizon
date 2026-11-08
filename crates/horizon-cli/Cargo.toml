@@ -6,6 +6,9 @@ edition = "2021"
 [dependencies]
 horizon-board = { path = "../horizon-board" }
 horizon-control = { path = "../horizon-control" }
+# `wiki` resolves the caller's project wiki and page file itself, so the
+# shell is handed a path as `markdown` hands it one.
+horizon-wiki = { path = "../horizon-wiki" }
 # Not a "new" dependency in spirit: `horizon-control::contract::{Invoke,
 # Query}::args`/`what` are typed as `serde_json::Value`, and Rust's extern
 # prelude only makes a *direct* dependency's items nameable -- so building

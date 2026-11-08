@@ -365,6 +365,22 @@ owner's call.
    from the view chooser and a CLI subcommand. AGENTS.md's module map and
    this doc updated.
 
+   Done 2026-11-09 on the same branch, as a first draft whose layout is
+   not settled: `ViewKind::Wiki` carries the page's file on
+   `Pane::document` as Markdown does (`ViewKind::carries_document`);
+   `horizon wiki [page]` resolves the caller's project and page file in
+   the CLI (`Store::for_dir`) and hands the shell a path; the view
+   chooser's "Wiki" opens the overview of the project Horizon started
+   in. The view (`src/wiki/`) draws the page through a `TextViewState`
+   it holds, highlights each anchored thread once that load's parse has
+   landed, lists threads under the page (anchored in page order, then
+   orphans under their own heading), marks a thread whose passage now
+   reads differently, and pins a composer that opens a thread on the
+   selection (`c`) or continues the focused one (`n`/`p`, or a click).
+   The page file and its thread log are watched. The layout copies the
+   board thread view's composition (body, cards, pinned composer); where
+   threads should sit relative to the page is for the owner to compare.
+
 ### Still open before planning
 
 - Later: how orphaned and outdated comments look; what else the view
