@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "termination", rename_all = "snake_case")]
 pub enum BashTermination {
     Exited {
@@ -28,37 +28,45 @@ pub enum BashTermination {
         reason: String,
     },
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BashOutput {
     #[serde(flatten)]
     pub termination: BashTermination,
+    /// Why the call ended the way it did, when the harness has something to
+    /// say beyond the termination.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// The command's combined stdout and stderr, capped.
     pub output: String,
+    /// Whether the cap dropped output that exists.
     pub truncated: bool,
+    /// Where the full output was spilled, when it was spilled.
     pub output_file: Option<String>,
+    /// A problem the harness wants the model to know about, such as the drain
+    /// cutting the result short.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     /// Where the command left bash's working directory, when the wrapper's
-    /// report showed it has moved. The directory carries forward between
-    /// calls, but nothing told the model where it now was, so it re-pinned
-    /// the directory before every command; this is the fact that was missing.
-    ///
-    /// Absolute, at most one path, and only on a *change*: repeating an
-    /// unchanged directory on every result would re-write the model's prompt
-    /// cache to say nothing. `None` when no report arrived or it named the
-    /// directory the call already started in. A problem the harness wants to
-    /// flag is `note`'s job -- this field only ever means "you are here now".
+    /// report showed it has moved. Absolute, at most one path, and only on a
+    /// *change*: repeating an unchanged directory on every result would
+    /// re-write the model's prompt cache to say nothing. `None` when no report
+    /// arrived or it named the directory the call already started in. A problem
+    /// the harness wants to flag is `note`'s job -- this field only ever means
+    /// "you are here now".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct TaskReport {
+    /// The child session this report is about.
     pub session_id: String,
+    /// The label the child was launched with.
     pub description: String,
+    /// What the child found, once it finished.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<String>,
+    /// Whether the report is shorter than what the child wrote.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub capped: bool,
     /// A child may fail with a useful partial report. This is independent of
@@ -72,7 +80,7 @@ impl TaskReport {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub(crate) enum TaskOutput {
     Started {

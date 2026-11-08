@@ -17,6 +17,22 @@ pub(crate) fn definitions() -> Vec<Definition> {
     catalog().to_vec()
 }
 
+/// Joins a tool's hand-written prose to the field legend generated from its
+/// output type.
+///
+/// The prose carries what a schema cannot: how to choose between tools, what a
+/// result means for the next step. The legend carries what the type knows:
+/// which fields the result has and what each one means. Keeping them joined
+/// here, rather than retyping field names into prose, is what stops the two
+/// from drifting apart.
+fn legend_after(prose: &str, legend: String) -> String {
+    if legend.is_empty() {
+        prose.to_string()
+    } else {
+        format!("{prose}\n\n{legend}")
+    }
+}
+
 fn catalog() -> &'static [Definition] {
     static DEFINITIONS: std::sync::OnceLock<Vec<Definition>> = std::sync::OnceLock::new();
     DEFINITIONS.get_or_init(build_definitions)
@@ -49,82 +65,81 @@ fn build_definitions() -> Vec<Definition> {
         },
         SynchronousTool::ReadFile.definition(
             "Read File".to_string(),
-            "Read a known text file or a relevant line window, with line numbers. \
+            legend_after(
+                "Read a known text file or a relevant line window, with line numbers. \
                 Requires an absolute path. Use fs.grep to locate specific content before \
                 reading a large file, and fs.glob when the file path is unknown. Pass \
-                offset/limit to continue through a file; the result stops at 50,000 content \
-                characters and returns next_offset. Each line is truncated at 2,000 \
-                characters. Read independent known files in parallel, and prefer one useful \
-                window over many tiny adjacent slices."
-                .to_string(),
-
+                offset/limit to continue through a file. Read independent known files in \
+                parallel, and prefer one useful window over many tiny adjacent slices.",
+                super::output_legend::legend::<super::output::FileRead>("FileRead"),
+            ),
         ),
         SynchronousTool::Glob.definition(
             "Find Files".to_string(),
-            "Find files under a directory matching a glob pattern (e.g. \
-                `**/*.rs`). Requires an absolute base path; results are capped, with the \
-                total match count reported."
-                .to_string(),
-
+            legend_after(
+                "Find files under a directory matching a glob pattern (e.g. `**/*.rs`). \
+                Requires an absolute base path.",
+                super::output_legend::legend::<super::output::Matches<String>>("Matches"),
+            ),
         ),
         SynchronousTool::Grep.definition(
             "Search File Contents".to_string(),
-            "Find where text occurs. Search one file or all files under a \
-                directory with a regular expression, optionally restricted by glob. Returns \
-                one `path` + `line_number` per match — locations, not content — plus the \
-                total match count. Read what a location says with fs.read, passing offset \
-                and limit around the reported line. For an open-ended exploration that \
-                would take several rounds of searching and reading, call task instead and \
-                keep only its report. Requires an absolute base \
-                path. Traversal stops at 64 MiB of scanned file bytes or 20,000 files."
-                .to_string(),
-
+            legend_after(
+                "Find where text occurs. Search one file or all files under a directory \
+                with a regular expression, optionally restricted by glob. Read what a \
+                location says with fs.read, passing offset and limit around the reported \
+                line. For an open-ended exploration that would take several rounds of \
+                searching and reading, call task instead and keep only its report. \
+                Requires an absolute base path.",
+                super::output_legend::legend::<super::output::Matches<super::output::Location>>("Matches"),
+            ),
         ),
         SynchronousTool::WriteFile.definition(
             "Write File".to_string(),
-            "Create or overwrite a file with the given content, creating parent \
+            legend_after(
+                "Create or overwrite a file with the given content, creating parent \
                 directories as needed. Overwriting an existing file requires it to have been \
-                read in this session with no changes on disk since."
-                .to_string(),
-
+                read in this session with no changes on disk since.",
+                super::output_legend::legend::<super::output::FileWritten>("FileWritten"),
+            ),
         ),
         SynchronousTool::EditFile.definition(
             "Edit File".to_string(),
-            "Apply one or more string replacements in a single call. Batch related \
-                edits — several files, or several hunks of one file — into one list instead of \
-                one call each. Each `old_string` must match exactly once unless \
-                `replace_all: true` is set for that edit, and every file must have been read in \
-                this session with no changes on disk since. Edits apply in list order and later \
-                edits see earlier ones' effects. If an edit fails, the call stops there: earlier \
-                edits stay applied, the rest are not attempted, and the result reports every \
-                edit's outcome (applied / failed / not_attempted) in order plus the failing \
-                index, so you can fix that edit and resend from it."
-                .to_string(),
-
+            legend_after(
+                "Apply one or more string replacements in a single call. Batch related \
+                edits -- several files, or several hunks of one file -- into one list instead \
+                of one call each. Each `old_string` must match exactly once unless \
+                `replace_all: true` is set for that edit, and every file must have been read \
+                in this session with no changes on disk since. Edits apply in list order and \
+                later edits see earlier ones' effects. If an edit fails, the call stops \
+                there: earlier edits stay applied and the rest are not attempted, so you can \
+                fix that edit and resend from it.",
+                super::output_legend::legend::<super::output::FileEdits>("FileEdits"),
+            ),
         ),
         Definition {
             id: "bash".to_string(),
             title: "Run Shell Command".to_string(),
-            description: "Run a shell command via `bash -c` in a fresh subprocess — not a \
-                persistent shell. The working directory is tracked across calls within this \
-                session (a `cd` in the command carries forward to the next call). A result that \
-                carries a `cwd` field means that call moved to that directory. Requires user \
-                approval. Output is stdout+stderr combined, capped in-context with the full \
-                output always spilled to a temp file whose path is returned. A non-zero exit \
-                code is a normal result, not an error. When you need a different slice of a \
-                command's output, read or grep the spilled file (`output_file`) instead of \
-                re-running the command."
-                .to_string(),
+            description: legend_after(
+                "Run a shell command via `bash -c` in a fresh subprocess -- not a persistent \
+                shell. The working directory carries forward between calls, but only when the \
+                wrapper's report reached the result: a `cwd` field means that call moved there. \
+                Requires user approval. A non-zero exit code is a normal result, not an error. \
+                When you need a different slice of a command's output, read or grep the spilled \
+                file instead of re-running the command.",
+                super::output_legend::legend::<super::output::BashOutput>("BashOutput"),
+            ),
             input_schema: super::input::schema("bash").expect("registered tool input"),
             permission: ToolPermission::RequireApproval,
         },
         Definition {
             id: "web_search".to_string(),
             title: "Search the Web".to_string(),
-            description: "Search the public web through Horizon's fixed Exa adapter. Returns a \
-                bounded list of titles, URLs, publication metadata, and relevant excerpts. \
-                Requires EXA_API_KEY in Horizon's environment."
-                .to_string(),
+            description: legend_after(
+                "Search the public web through Horizon's fixed Exa adapter. Requires \
+                EXA_API_KEY in Horizon's environment.",
+                super::output_legend::legend::<super::output::WebSearch>("WebSearch"),
+            ),
             input_schema: super::input::schema("web_search").expect("registered tool input"),
             permission: ToolPermission::RequireApproval,
         },
@@ -242,14 +257,12 @@ fn build_definitions() -> Vec<Definition> {
         ),
         SynchronousTool::ListSessions.definition(
             "List Persisted Sessions".to_string(),
-            format!(
+            legend_after(
                 "List persisted sessions newest-first, one row per session. Optional limit, \
-                 since/until Unix milliseconds, session_id, and latest turn_outcome filters are \
-                 available. Use this before recall.read when you need to survey recent work \
-                 rather than search event text.\n\n{}",
-                crate::tools::output_legend::legend::<crate::tools::output::RecallSession>(
-                    "RecallSession"
-                )
+                 since/until Unix milliseconds, session_id, and latest turn_outcome filters \
+                 are available. Use this before recall.read when you need to survey recent \
+                 work rather than search event text.",
+                super::output_legend::legend::<super::output::RecallSession>("RecallSession"),
             ),
         ),
         // `task` (`tools::explore`, `docs/agent-explore-design.md`) is
@@ -297,36 +310,41 @@ fn build_definitions() -> Vec<Definition> {
         Definition {
             id: "task_output".to_string(),
             title: "Read a Task's Report".to_string(),
-            description: "Read the full report of a background task you launched with task, by \
-                its session id. Use it when a completion notification says the report was \
-                truncated, or to re-read a report from earlier in this session. A task that is \
-                still running reports as such — you do not need to poll it; you will be notified \
-                when it completes."
-                .to_string(),
+            description: legend_after(
+                "Read the full report of a background task you launched with task, by its \
+                session id. Use it when a completion notification says the report was \
+                truncated, or to re-read a report from earlier in this session. A task that \
+                is still running reports as such -- you do not need to poll it; you will be \
+                notified when it completes.",
+                super::output_legend::legend::<super::output::TaskOutput>("TaskOutput"),
+            ),
             input_schema: super::input::schema("task_output").expect("registered tool input"),
             permission: ToolPermission::AutoAllowRead,
         },
         SynchronousTool::ReadSkill.definition(
             "Read Skill".to_string(),
-            "Read one of this session's available skills by id (see the skills \
-                listed in the system prompt) and return its full instructions."
-                .to_string(),
-
+            legend_after(
+                "Read one of this session's available skills by id (see the skills listed \
+                in the system prompt).",
+                super::output_legend::legend::<super::output::SkillRead>("SkillRead"),
+            ),
         ),
         SynchronousTool::ReadKnowledge.definition(
             "Read Knowledge".to_string(),
-            "Read one of this project's knowledge entries by id (see the system \
-                prompt's project-knowledge section) and return its full frontmatter and body."
-                .to_string(),
-
+            legend_after(
+                "Read one of this project's knowledge entries by id (see the system \
+                prompt's project-knowledge section).",
+                super::output_legend::legend::<super::output::KnowledgeRead>("KnowledgeRead"),
+            ),
         ),
         SynchronousTool::WriteKnowledge.definition(
             "Write Knowledge".to_string(),
-            "Create or update a knowledge entry for this project. Upserts by id: \
-                an existing entry's `created` date is preserved while `updated` is refreshed. \
-                No approval — the tool-event recording is the audit."
-                .to_string(),
-
+            legend_after(
+                "Create or update a knowledge entry for this project. Upserts by id: an \
+                existing entry's `created` date is preserved while `updated` is refreshed. No \
+                approval -- the tool-event recording is the audit.",
+                super::output_legend::legend::<super::output::KnowledgeWritten>("KnowledgeWritten"),
+            ),
         ),
         Definition {
             id: "board.read".to_string(),
@@ -445,6 +463,35 @@ mod tests {
                 description.contains(field),
                 "`recall.sessions` describes no `{field}`; the legend is missing \
                  or the output type changed without the catalog following"
+            );
+        }
+    }
+
+    /// Every tool whose result the model must interpret carries a legend.
+    ///
+    /// The per-field test above pins `recall.sessions`; this one pins the rest,
+    /// so a tool cannot quietly drop the field half of its description while its
+    /// output type keeps growing.
+    #[test]
+    fn every_interpreting_tool_carries_a_legend() {
+        for (tool, type_name) in [
+            ("fs.read", "FileRead"),
+            ("fs.glob", "Matches"),
+            ("fs.grep", "Matches"),
+            ("fs.write", "FileWritten"),
+            ("fs.edit", "FileEdits"),
+            ("bash", "BashOutput"),
+            ("recall.sessions", "RecallSession"),
+            ("task_output", "TaskOutput"),
+            ("skill.read", "SkillRead"),
+            ("knowledge.read", "KnowledgeRead"),
+            ("knowledge.write", "KnowledgeWritten"),
+            ("web_search", "WebSearch"),
+        ] {
+            let description = definition(tool).description;
+            assert!(
+                description.contains(&format!("{type_name} fields:")),
+                "`{tool}` carries no generated legend for `{type_name}`"
             );
         }
     }

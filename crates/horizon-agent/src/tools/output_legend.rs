@@ -26,15 +26,13 @@ use serde_json::Value;
 /// the catalog tests reject that state, this function only reports it.
 pub(crate) fn legend<T: JsonSchema>(type_name: &str) -> String {
     let schema = field_schema::<T>();
-    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
-        return String::new();
-    };
+    let properties = properties_of(&schema);
 
     let mut lines = Vec::with_capacity(properties.len());
     for (name, property) in properties {
         match property.get("description").and_then(Value::as_str) {
             Some(description) => lines.push(format!("{name} — {}", unwrap_lines(description))),
-            None => lines.push(name.clone()),
+            None => lines.push(name),
         }
     }
 
@@ -42,6 +40,42 @@ pub(crate) fn legend<T: JsonSchema>(type_name: &str) -> String {
         return String::new();
     }
     format!("{type_name} fields:\n{}", lines.join("\n"))
+}
+
+/// Collects a schema's fields, looking through the shapes a tagged enum makes.
+///
+/// A plain struct carries `properties` at the top. A `#[serde(tag = ...)]`
+/// enum instead carries `oneOf` of per-variant objects that each spell the tag
+/// and their own fields, so a legend built only from the top level would come
+/// out empty — and an empty legend silently vanishes from the description
+/// rather than failing loudly.
+fn properties_of(schema: &Value) -> Vec<(String, &Value)> {
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        return properties
+            .iter()
+            .map(|(name, property)| (name.clone(), property))
+            .collect();
+    }
+
+    let Some(variants) = schema.get("oneOf").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut seen: Vec<String> = Vec::new();
+    let mut fields = Vec::new();
+    for variant in variants {
+        let Some(properties) = variant.get("properties").and_then(Value::as_object) else {
+            continue;
+        };
+        for (name, property) in properties {
+            // A tagged enum repeats its tag in every variant; list it once.
+            if seen.iter().any(|existing| existing == name) {
+                continue;
+            }
+            seen.push(name.clone());
+            fields.push((name.clone(), property));
+        }
+    }
+    fields
 }
 
 /// The same generator settings the tool *input* schemas use
@@ -66,18 +100,26 @@ fn field_schema<T: JsonSchema>() -> Value {
 /// a deliberate paragraph break, so it ends the phrase instead.
 fn unwrap_lines(description: &str) -> String {
     let mut out = String::with_capacity(description.len());
-    let mut at_break = false;
+    let mut pending_break = false;
     for line in description.lines() {
         let line = line.trim();
         if line.is_empty() {
-            at_break = true;
+            pending_break = true;
             continue;
         }
-        if !out.is_empty() && !at_break {
+        if out.is_empty() {
+            out.push_str(line);
+        } else if pending_break {
+            if !out.ends_with(['.', '!', '?']) {
+                out.push('.');
+            }
             out.push(' ');
+            out.push_str(line);
+        } else {
+            out.push(' ');
+            out.push_str(line);
         }
-        out.push_str(line);
-        at_break = false;
+        pending_break = false;
     }
     out
 }
@@ -123,10 +165,64 @@ mod tests {
         );
     }
 
+    /// A blank line in a doc comment is a deliberate paragraph break. The
+    /// legend is one line per field, so the break must still separate the two
+    /// sentences rather than run them together.
+    #[derive(JsonSchema)]
+    #[allow(dead_code)]
+    struct Paragraphs {
+        /// Where it ended.
+        ///
+        /// Absolute, and only on a change.
+        cwd: Option<String>,
+    }
+
+    #[test]
+    fn a_paragraph_break_stays_a_break() {
+        assert_eq!(
+            legend::<Paragraphs>("Paragraphs"),
+            "Paragraphs fields:\ncwd — Where it ended. Absolute, and only on a change."
+        );
+    }
+
     /// A type with no object properties contributes no legend, so a tool whose
     /// result is a bare scalar keeps its hand-written prose alone.
     #[test]
     fn renders_nothing_for_a_non_object_schema() {
         assert_eq!(legend::<String>("Text"), "");
+    }
+
+    /// A tagged enum carries its fields inside `oneOf`, one copy per variant,
+    /// and its tag once. A legend that only read the top level would come out
+    /// empty and then vanish from the description without failing.
+    #[derive(JsonSchema)]
+    #[allow(dead_code)]
+    #[serde(tag = "status", rename_all = "snake_case")]
+    enum Tagged {
+        Started {
+            /// The child session's id.
+            session_id: String,
+        },
+        Finished {
+            /// The child session's id.
+            session_id: String,
+            /// What the child found.
+            report: Option<String>,
+        },
+    }
+
+    #[test]
+    fn reads_the_fields_of_a_tagged_enum_once_each() {
+        let legend = legend::<Tagged>("Tagged");
+        assert!(
+            legend.starts_with("Tagged fields:\n"),
+            "a tagged enum must still produce a legend, got {legend:?}"
+        );
+        assert_eq!(
+            legend.matches("The child session's id.").count(),
+            1,
+            "a field repeated across variants is listed once"
+        );
+        assert!(legend.contains("report — What the child found."));
     }
 }
