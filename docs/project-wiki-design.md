@@ -296,6 +296,16 @@ owner's call.
 
    Once 1.1 lands, moving the board's and knowledge layer's tools onto
    the seam is delegated to a separate Claude Code session.
+
+   Done 2026-11-09 on `worktree-wiki-comments-design`:
+   `tools::register_external_tools` (1.1; agentd registers nothing yet, so
+   its composition entry arrives with the wiki's tools in stage 3);
+   `crate::outbox` with `TriggerSource`/`ReplySink` and the board plugged
+   in (1.2); `flushed_session_records` reading the projection for
+   `resume_session` and `acknowledge_delivery`, and `Command::Suspend` /
+   `SessionState::Suspended` (1.3). The daemon-side `suspend_session`,
+   which marks a session so its thread-exit cleanup keeps an owned
+   worktree, has no caller before stage 3 and moves there.
 2. **`crates/horizon-wiki`**:
    1. the store and pages (frontmatter `id`, whole writes and partial
       edits), the concept file, `place`/`concept-graph` moved in,
