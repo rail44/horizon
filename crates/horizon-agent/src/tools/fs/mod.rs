@@ -16,6 +16,7 @@ pub(super) use edit::execute as edit;
 pub(super) use glob::execute as glob;
 pub(super) use grep::execute as grep;
 pub(super) use read::execute as read;
+pub(crate) use read::{MAX_CONTENT_CHARS, MAX_LINE_LEN};
 pub(super) use write::execute as write;
 
 /// Whether an fs read tool call's path escapes what this session may read

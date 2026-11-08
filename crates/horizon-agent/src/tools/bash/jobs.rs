@@ -11,6 +11,11 @@ use crate::contract::SessionId;
 use crate::tools::input::BashJob;
 use crate::tools::output::{BashOutput, Response};
 
+/// How much of a job's log `bash.output` shows before it reports the rest as
+/// truncated. Named so the catalog description can state the same number the
+/// reader applies, instead of retyping it and drifting.
+pub(crate) const OUTPUT_CHAR_CAP: usize = 4_000;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum JobState {
     Running,
@@ -300,7 +305,7 @@ pub(crate) fn output(owner: SessionId, input: &BashJob) -> Response {
         (guard.status(), guard.log_path.clone())
     };
     let contents = std::fs::read_to_string(&log_path).unwrap_or_default();
-    let (shown, truncated) = crate::transcript::truncate_chars(&contents, 4_000);
+    let (shown, truncated) = crate::transcript::truncate_chars(&contents, OUTPUT_CHAR_CAP);
     if let Some(object) = value.as_object_mut() {
         object.remove("output");
         object.insert("output".into(), shown.into());

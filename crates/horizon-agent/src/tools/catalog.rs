@@ -66,11 +66,16 @@ fn build_definitions() -> Vec<Definition> {
         SynchronousTool::ReadFile.definition(
             "Read File".to_string(),
             legend_after(
-                "Read a known text file or a relevant line window, with line numbers. \
+                &format!(
+                    "Read a known text file or a relevant line window, with line numbers. \
                 Requires an absolute path. Use fs.grep to locate specific content before \
                 reading a large file, and fs.glob when the file path is unknown. Pass \
-                offset/limit to continue through a file. Read independent known files in \
-                parallel, and prefer one useful window over many tiny adjacent slices.",
+                offset/limit to continue through a file; the result stops at {} content \
+                characters and returns next_offset. Each line is truncated at {} \
+                characters. Read independent known files in parallel, and prefer one \
+                useful window over many tiny adjacent slices.",
+                    super::fs::MAX_CONTENT_CHARS, super::fs::MAX_LINE_LEN
+                ),
                 super::output_legend::legend::<super::output::FileRead>("FileRead"),
             ),
         ),
@@ -85,12 +90,15 @@ fn build_definitions() -> Vec<Definition> {
         SynchronousTool::Grep.definition(
             "Search File Contents".to_string(),
             legend_after(
-                "Find where text occurs. Search one file or all files under a directory \
+                &format!(
+                    "Find where text occurs. Search one file or all files under a directory \
                 with a regular expression, optionally restricted by glob. Read what a \
                 location says with fs.read, passing offset and limit around the reported \
                 line. For an open-ended exploration that would take several rounds of \
                 searching and reading, call task instead and keep only its report. \
-                Requires an absolute base path.",
+                Requires an absolute base path. Traversal stops at {} scanned files.",
+                    crate::config::FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT
+                ),
                 super::output_legend::legend::<super::output::Matches<super::output::Location>>("Matches"),
             ),
         ),
@@ -242,11 +250,13 @@ fn build_definitions() -> Vec<Definition> {
         ),
         SynchronousTool::BashJobOutput.definition(
             "Read a Background Bash Job".to_string(),
-            "Read the current state and log of a background bash job started with bash background: \
-                true. Works while it is running and after it finishes; the output is bounded, and \
-                the full log stays at the reported log_path. A finished job also arrives as a \
-                notification, so polling is not required."
-                .to_string(),
+            format!(
+                "Read the current state and log of a background bash job started with bash \
+                background: true. Works while it is running and after it finishes; the output \
+                shows at most {} characters, and the full log stays at the reported log_path. \
+                A finished job also arrives as a notification, so polling is not required.",
+                super::bash::jobs::OUTPUT_CHAR_CAP
+            ),
         ),
         SynchronousTool::BashJobCancel.definition(
             "Cancel a Background Bash Job".to_string(),
@@ -465,6 +475,36 @@ mod tests {
                  or the output type changed without the catalog following"
             );
         }
+    }
+
+    /// The numbers a description states are the constants the code enforces.
+    ///
+    /// Each is formatted in from its constant rather than retyped, so this
+    /// test fails only if someone reintroduces a literal -- which is exactly
+    /// the drift it exists to prevent.
+    #[test]
+    fn descriptions_state_the_limits_the_code_enforces() {
+        let read = definition("fs.read").description;
+        assert!(
+            read.contains(&crate::tools::fs::MAX_CONTENT_CHARS.to_string()),
+            "fs.read must state its content cap"
+        );
+        assert!(
+            read.contains(&crate::tools::fs::MAX_LINE_LEN.to_string()),
+            "fs.read must state its per-line cap"
+        );
+
+        let grep = definition("fs.grep").description;
+        assert!(
+            grep.contains(&crate::config::FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT.to_string()),
+            "fs.grep must state its traversal cap"
+        );
+
+        let job = definition("bash.output").description;
+        assert!(
+            job.contains(&crate::tools::bash::jobs::OUTPUT_CHAR_CAP.to_string()),
+            "bash.output must state how much of the log it shows"
+        );
     }
 
     /// Every tool whose result the model must interpret carries a legend.

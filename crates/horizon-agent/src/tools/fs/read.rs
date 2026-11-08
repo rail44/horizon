@@ -9,11 +9,11 @@ use crate::tools::state::ToolSessionState;
 
 /// Per-line character cap, independent of `limit`, so one absurdly long
 /// line can't blow out the tool result.
-const MAX_LINE_LEN: usize = 2000;
+pub(crate) const MAX_LINE_LEN: usize = 2000;
 /// Hard cap on the rendered `content` field. This is deliberately independent
 /// of the line window: many ordinary-width lines can still dwarf the useful
 /// context budget before the line limit is reached.
-const MAX_CONTENT_CHARS: usize = 50_000;
+pub(crate) const MAX_CONTENT_CHARS: usize = 50_000;
 
 pub(in crate::tools) fn execute(
     tool_state: &ToolSessionState,
