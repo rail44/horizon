@@ -106,12 +106,16 @@ pub fn system_prompt(environment: &SessionEnvironment, extra_sections: &[String]
          presenting them as success.\n\
          \n\
          Environment:\n\
-         - Working directory: {cwd}\n\
+         - Working directory at session start: {cwd}\n\
          - OS: {os}\n\
          - Git repository: {git_repo}\n\
          \n\
          Tool policy:\n\
          - Tools require absolute paths; relative paths are rejected.\n\
+         - `bash` keeps its working directory across calls in this session, so a `cd` carries \
+         forward and a bare `git status` already runs where the previous call left off. Do not \
+         prefix commands with `cd <project> &&`; change directory only when you actually need a \
+         different one.\n\
          - Prefer targeted reads and searches (grep, glob, line-windowed reads) over dumping whole files.\n\
          - Use $TMPDIR for temporary files so sandboxed calls do not rely on literal /tmp being writable.\n\
          \n\

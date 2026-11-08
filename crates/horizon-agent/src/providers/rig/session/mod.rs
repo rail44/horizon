@@ -72,7 +72,8 @@ pub(super) fn spawn_rig_session(
     // moved-from just below) from `request.workspace_root` -- the session's
     // own real root (an isolated worktree, post-isolation, when this
     // session is isolated), not this daemon process's own cwd -- so both
-    // the prompt's "Working directory" line and `session_extra_sections`'s
+    // the prompt's "Working directory at session start" line and
+    // `session_extra_sections`'s
     // skill discovery below reflect where this session actually runs.
     let environment = session_environment(&request);
     let provider_id = request.provider_id;

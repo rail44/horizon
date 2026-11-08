@@ -93,7 +93,7 @@ pub(crate) struct StartSession {
     /// running from. `None` when no root is available at all. Consumed by
     /// the rig provider to build [`crate::prompt::SessionEnvironment`]
     /// (`providers::rig::session::spawn_rig_session`), so the system
-    /// prompt's "Working directory" line and the skills listing
+    /// prompt's "Working directory at session start" line and the skills listing
     /// (`providers::rig::session::session_extra_sections`) both reflect the
     /// session's actual root instead of the daemon's `cwd`.
     pub workspace_root: Option<PathBuf>,
