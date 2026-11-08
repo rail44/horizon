@@ -87,7 +87,7 @@ start_app() {
   if [[ -n "$host_runtime_dir" && -n "$wayland_display" ]]; then
     ln -sf "$host_runtime_dir/$wayland_display" "$runtime_dir/$wayland_display"
   fi
-  (cd "$fixture_repo" && exec env -u OPENAI_BASE_URL -u OPENAI_API_KEY \
+  (cd "$fixture_repo" && exec env -u OPENAI_API_KEY \
     HORIZON_CONFIG="$config_file" \
     HORIZON_ACP_CHECK_MOCK_KEY="mock" \
     HORIZON_AGENTD_SOCKET="$agentd_socket" \

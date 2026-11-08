@@ -352,14 +352,8 @@ mod tests {
         assert_eq!(config.kind, ProviderKind::Anthropic);
         assert_eq!(config.api_key_env, "ANTHROPIC_API_KEY");
         assert_eq!(config.model, "m-opus");
-        // Base URL keeps the entry's env precedence (the kind's own
-        // variable wins over the file value); compared against the same
-        // resolution so the assertion holds whatever the environment
-        // carries.
-        assert_eq!(
-            config.base_url,
-            crate::config::resolve_base_url(std::env::var("ANTHROPIC_BASE_URL").ok(), None)
-        );
+        // The entry's own base URL, unset here: rig's default applies.
+        assert_eq!(config.base_url, None);
         // Presence re-read at switch time — compared against the same env
         // read, and never the source entry's build-time value.
         assert_eq!(
@@ -375,11 +369,8 @@ mod tests {
         assert_eq!(config.model, "raw-model-id");
         assert_eq!(config.kind, ProviderKind::OpenAiCompatible);
         assert_eq!(
-            config.base_url,
-            crate::config::resolve_base_url(
-                std::env::var("OPENAI_BASE_URL").ok(),
-                Some("https://openai.example.invalid".to_string()),
-            )
+            config.base_url.as_deref(),
+            Some("https://openai.example.invalid")
         );
     }
 

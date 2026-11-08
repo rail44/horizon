@@ -53,17 +53,7 @@ use std::path::PathBuf;
 /// never a value) overrides it, and the same check runs against that name
 /// — the multi-provider generalization of the same rule.
 pub(crate) const OPENAI_API_KEY_VAR: &str = "OPENAI_API_KEY";
-/// The anthropic kind's base-URL environment variable — the
-/// `OPENAI_BASE_URL` counterpart, honored by [`NamedProviderConfig::resolved`]
-/// for `kind = anthropic` entries.
-pub(crate) const ANTHROPIC_BASE_URL_VAR: &str = "ANTHROPIC_BASE_URL";
 pub(crate) const EXA_API_KEY_VAR: &str = "EXA_API_KEY";
-
-/// Rig/OpenAI's own base-URL env var (already honored implicitly by
-/// `openai::CompletionsClient::from_env()`); kept authoritative here too so
-/// it wins over `[[providers]].base_url` in the config file, per Horizon's
-/// "existing env vars keep working and win" precedence rule.
-pub(crate) const OPENAI_BASE_URL_VAR: &str = "OPENAI_BASE_URL";
 
 /// Overrides the path of the append-only agent event log (JSONL). Falls
 /// back to `$XDG_DATA_HOME/horizon/agent-events.jsonl` (see
@@ -334,19 +324,8 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    /// The base-URL environment variable this kind's client honors:
-    /// existing env vars keep working and win over the config file, per the
-    /// module doc's precedence rule — one variable per kind.
-    pub(crate) fn base_url_env(self) -> &'static str {
-        match self {
-            ProviderKind::OpenAiCompatible => OPENAI_BASE_URL_VAR,
-            ProviderKind::Anthropic => ANTHROPIC_BASE_URL_VAR,
-        }
-    }
-
-    /// The endpoint this kind's rig client uses when neither the entry's
-    /// `base_url` nor the kind's base-URL env var is set — rig's own
-    /// per-kind default (`completion_client` leaves the builder's default in
+    /// The endpoint this kind's rig client uses when the entry has no
+    /// `base_url` — rig's own per-kind default (`completion_client` leaves the builder's default in
     /// place for `None`). Named here so callers outside the client (the
     /// picker's `/models` discovery) resolve the same endpoint the client
     /// actually talks to.
@@ -366,17 +345,15 @@ pub(crate) const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 
 /// One resolved `[[providers]]` entry as the caller (`horizon-agentd`'s
 /// `main` / `AgentdState::reload_provider_config`) translates it from
-/// `horizon_config`'s own resolution. This crate owns the env-var
-/// precedence on top of it ([`Self::resolved`]). Secrets stay out: the
+/// `horizon_config`'s own resolution. Secrets stay out: the
 /// config file records at most the environment variable's **name**
 /// ([`Self::api_key_env`]) — never a value.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamedProviderConfig {
     pub name: String,
     pub kind: ProviderKind,
-    /// The file's `base_url`, if any — env resolution (the kind's own
-    /// base-URL variable) happens in [`Self::resolved`], which is why the
-    /// file value is carried unresolved here.
+    /// The file's `base_url`, if any; `None` leaves the kind's own default
+    /// endpoint.
     pub base_url: Option<String>,
     /// The environment variable **name** the entry's API key is read from
     /// (never a value — see [`NamedProviderConfig`]'s doc).
@@ -416,8 +393,8 @@ impl NamedProviderConfig {
     /// The provider's own live model listing (`GET {base_url}/models`), for
     /// the picker's discovery (`_horizon/list_provider_models`).
     /// Resolves this entry the same way [`Self::resolved`] resolves its
-    /// base URL and key name — the kind's env var, then the entry's
-    /// `base_url`, then the kind's own default endpoint — so an Anthropic
+    /// base URL and key name — the entry's `base_url`, then the kind's own
+    /// default endpoint — so an Anthropic
     /// entry with no `base_url` asks `api.anthropic.com`, not rig's OpenAI
     /// default. An unavailable entry (no key variable set) or a provider
     /// that answers no listing yields an empty list. Never an error: this
@@ -430,36 +407,27 @@ impl NamedProviderConfig {
         crate::providers::rig::list_model_ids(self.kind, &self.discovery_base_url(), &api_key).await
     }
 
-    /// Where this entry's `/models` discovery request goes: the kind's
-    /// base-URL env var > the entry's `base_url` > the kind's own default
-    /// endpoint (the same endpoint `completion_client` would talk to for
-    /// this entry).
+    /// Where this entry's `/models` discovery request goes: the entry's
+    /// `base_url`, else the kind's own default endpoint (the same endpoint
+    /// `completion_client` would talk to for this entry).
     fn discovery_base_url(&self) -> String {
-        resolve_base_url(
-            std::env::var(self.kind.base_url_env()).ok(),
-            self.base_url.clone(),
-        )
-        .unwrap_or_else(|| self.kind.default_base_url().to_string())
+        self.base_url
+            .clone()
+            .unwrap_or_else(|| self.kind.default_base_url().to_string())
     }
 }
 
 impl NamedProviderConfig {
-    /// The resolved, per-turn rig view of this entry: Horizon's env
-    /// precedence applied on top of the file values (existing env vars keep
-    /// working and win) — the entry's own API-key variable (by *name*,
-    /// [`Self::api_key_env`]) decides [`RigAgentConfig::api_key_present`]
-    /// and the kind's own base-URL variable decides the URL. The model is
-    /// left empty: an entry carries no model, so the caller sets the one it
-    /// selected (`default_model` or a switch). Env reads happen
-    /// at the call site, never stored.
+    /// The resolved, per-turn rig view of this entry: the entry's own
+    /// API-key variable (by *name*, [`Self::api_key_env`]) decides
+    /// [`RigAgentConfig::api_key_present`] and the entry's `base_url` is the
+    /// URL. The model is left empty: an entry carries no model, so the
+    /// caller sets the one it selected (`default_model` or a switch).
     pub(crate) fn resolved(&self) -> RigAgentConfig {
         RigAgentConfig {
             api_key_present: self.api_key_present,
             model: String::new(),
-            base_url: resolve_base_url(
-                std::env::var(self.kind.base_url_env()).ok(),
-                self.base_url.clone(),
-            ),
+            base_url: self.base_url.clone(),
             kind: self.kind,
             api_key_env: self.api_key_env.clone(),
             clearing_threshold_pct: resolve_clearing_threshold_pct(
@@ -643,8 +611,8 @@ impl RigAgentConfig {
 /// Points `config` at one `[[providers]]` entry running `model`: the
 /// provider bits (kind, key variable, base URL, key presence) plus the model
 /// id. Used by the plain provider switch ([`ResolvedModelSelection::apply`]).
-/// Presence and base URL are re-read from the environment here, the same
-/// rule a switch has always followed.
+/// Key presence is re-read from the environment here, the same rule a
+/// switch has always followed.
 pub(crate) fn apply_provider_entry(
     config: &mut RigAgentConfig,
     entry: &NamedProviderConfig,
@@ -652,10 +620,7 @@ pub(crate) fn apply_provider_entry(
 ) {
     config.kind = entry.kind;
     config.api_key_env = entry.api_key_env.clone();
-    config.base_url = resolve_base_url(
-        std::env::var(entry.kind.base_url_env()).ok(),
-        entry.base_url.clone(),
-    );
+    config.base_url = entry.base_url.clone();
     config.api_key_present = std::env::var_os(&entry.api_key_env).is_some();
     config.model = model.to_string();
 }
@@ -663,7 +628,9 @@ pub(crate) fn apply_provider_entry(
 /// Pure resolution for the Tier 1 clearing trigger percentage: a parseable
 /// env value clamped into `1..=100` wins, anything else (absent, empty,
 /// non-numeric, zero) leaves [`DEFAULT_CLEARING_TRIGGER_PCT`] in place.
-/// Kept free of I/O for the same testability reason as [`resolve_base_url`].
+/// Kept free of I/O (the env read happens at the call site) so it is
+/// unit-testable without mutating process environment, which would race
+/// every other test reading the same variable.
 ///
 /// Zero is deliberately rejected rather than clamped up: "0%" would read as
 /// "clear on every request", which is not a measurement mode this design
@@ -674,21 +641,6 @@ pub(crate) fn resolve_clearing_threshold_pct(env_value: Option<String>) -> u32 {
         .and_then(|value| value.trim().parse::<u32>().ok())
         .filter(|pct| (1..=100).contains(pct))
         .unwrap_or(DEFAULT_CLEARING_TRIGGER_PCT)
-}
-
-/// Pure precedence resolution for the base URL: the kind's env var wins,
-/// then the config file's `base_url` (already resolved by the caller — see
-/// the module doc). `None` means "let rig use its own default" — there is
-/// no Horizon-side default URL to fall back to. Kept free of I/O (env reads
-/// happen at the call site) so precedence is unit-testable without
-/// mutating process environment — `cargo test` runs tests in parallel
-/// within one process, so real env mutation in a test would race every
-/// other test reading the same variable.
-pub(crate) fn resolve_base_url(
-    env_value: Option<String>,
-    provider_value: Option<String>,
-) -> Option<String> {
-    env_value.or(provider_value)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -725,7 +677,8 @@ impl AgentPersistenceConfig {
 /// wins, then [`default_event_log_path_from`]'s XDG-based built-in default.
 /// An env value gets a leading `~/` expanded against `home` (see
 /// [`expand_tilde`]). Kept free of I/O (the env read happens at the call
-/// site) for the same testability reason as [`resolve_base_url`].
+/// site) for the same testability reason as
+/// [`resolve_clearing_threshold_pct`].
 pub(crate) fn resolve_event_log_path(
     env_value: Option<String>,
     xdg_data_home: Option<String>,
@@ -833,8 +786,8 @@ pub(crate) fn resolve_state_db_path(
 /// as does a `~/`-prefixed value when `home` is `None` or empty — there
 /// being nothing to expand it against. Takes `home` as a parameter rather
 /// than reading `$HOME` itself so callers stay unit-testable without
-/// mutating process environment — see [`resolve_base_url`]'s doc comment for
-/// why. A duplicate of Horizon's own `crate::config::expand_tilde` (this
+/// mutating process environment — see [`resolve_clearing_threshold_pct`]'s
+/// doc comment for why. A duplicate of Horizon's own `crate::config::expand_tilde` (this
 /// crate can't depend on that module — see the module doc); kept in sync
 /// by inspection since it's a small, stable helper.
 fn expand_tilde(value: &str, home: Option<&str>) -> PathBuf {
@@ -904,23 +857,22 @@ impl Default for AgentToolsConfig {
 mod tests {
     use super::*;
 
-    // --- precedence: env beats the resolved provider value beats built-in
-    // default -----------------------------------------------------------
-
+    /// The entry's `base_url` is the URL as written: no environment variable
+    /// redirects it, and `None` leaves rig's own default.
     #[test]
-    fn base_url_prefers_env_over_provider_and_is_none_by_default() {
+    fn the_entrys_base_url_is_used_as_written() {
+        std::env::set_var("OPENAI_BASE_URL", "https://env.invalid");
+        let entry = NamedProviderConfig {
+            base_url: Some("https://provider.invalid".to_string()),
+            ..NamedProviderConfig::default()
+        };
         assert_eq!(
-            resolve_base_url(
-                Some("https://env.invalid".to_string()),
-                Some("https://provider.invalid".to_string())
-            ),
-            Some("https://env.invalid".to_string())
+            entry.resolved().base_url.as_deref(),
+            Some("https://provider.invalid")
         );
-        assert_eq!(
-            resolve_base_url(None, Some("https://provider.invalid".to_string())),
-            Some("https://provider.invalid".to_string())
-        );
-        assert_eq!(resolve_base_url(None, None), None);
+        assert_eq!(entry.discovery_base_url(), "https://provider.invalid");
+        assert_eq!(NamedProviderConfig::default().resolved().base_url, None);
+        std::env::remove_var("OPENAI_BASE_URL");
     }
 
     #[test]
@@ -1140,9 +1092,7 @@ mod tests {
     }
 
     /// An Anthropic entry with no `base_url` discovers against the kind's own
-    /// default (or its env-var override), never rig's OpenAI endpoint. Env
-    /// compared against the same read so the assertion holds whatever the
-    /// environment carries.
+    /// default, never rig's OpenAI endpoint.
     #[test]
     fn discovery_base_url_falls_back_to_the_kinds_own_default() {
         let entry = NamedProviderConfig {
@@ -1152,8 +1102,6 @@ mod tests {
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             api_key_present: true,
         };
-        let expected = resolve_base_url(std::env::var(ANTHROPIC_BASE_URL_VAR).ok(), None)
-            .unwrap_or_else(|| "https://api.anthropic.com".to_string());
-        assert_eq!(entry.discovery_base_url(), expected);
+        assert_eq!(entry.discovery_base_url(), "https://api.anthropic.com");
     }
 }

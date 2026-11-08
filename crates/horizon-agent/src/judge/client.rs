@@ -224,19 +224,16 @@ mod tests {
         std::env::set_var("OPENAI_API_KEY", "wrong-conversation-key");
         std::env::set_var("HORIZON_TEST_AUX_FIRST_KEY", "first-helper-key");
         std::env::set_var("HORIZON_TEST_AUX_SECOND_KEY", "second-helper-key");
-        std::env::set_var("OPENAI_BASE_URL", &first_url);
-        let first = AuxiliaryConfig::from_env(
-            Some("https://unused.invalid".into()),
-            "HORIZON_TEST_AUX_FIRST_KEY".into(),
-            "small-test".into(),
-        );
-        assert_eq!(first.base_url.as_deref(), Some(first_url.as_str()));
-        std::env::remove_var("OPENAI_BASE_URL");
-        let second = AuxiliaryConfig::from_env(
-            Some(second_url),
-            "HORIZON_TEST_AUX_SECOND_KEY".into(),
-            "small-test".into(),
-        );
+        let first = AuxiliaryConfig {
+            base_url: Some(first_url),
+            api_key_env: "HORIZON_TEST_AUX_FIRST_KEY".into(),
+            model: "small-test".into(),
+        };
+        let second = AuxiliaryConfig {
+            base_url: Some(second_url),
+            api_key_env: "HORIZON_TEST_AUX_SECOND_KEY".into(),
+            model: "small-test".into(),
+        };
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let first_title = AuxiliaryClient::new(first.clone());
         assert_eq!(

@@ -15,7 +15,7 @@
 //! `decision_model` for approval judgments and turn-continuation checks (the
 //! last two must name an OpenAI-compatible entry).
 //! No provider entries means the built-in OpenAI-compatible `default` entry.
-//! Environment values override file values; secrets remain environment-only.
+//! Endpoint URLs come only from the file; secrets remain environment-only.
 //! A missing file uses defaults. Invalid files warn at startup; reload errors
 //! retain the previously applied configuration. Reload applies provider changes
 //! to new sessions and title calls, alongside theme and keybindings.
@@ -186,9 +186,8 @@ pub struct ResolvedDecisionModel {
 /// One resolved provider entry — [`RawConfig::resolved_providers`]'s output:
 /// entry defaults applied and
 /// nameless entries dropped. This is the shape `horizon-agentd` hands to
-/// `horizon_agent::config`, which owns the env-var precedence on top
-/// (`OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` keep winning over the file's
-/// `base_url`; keys are read from the named variable).
+/// `horizon_agent::config`, which reads keys from the named variable. The
+/// file's URLs are used as written; no environment variable overrides them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedProviderConfig {
     pub name: String,

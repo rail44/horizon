@@ -33,8 +33,8 @@ decision_url = "https://ollama.com/v1/systemone"
 ```
 
 Only environment-variable names go in TOML; credentials stay in the environment.
-`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` override file URLs. No environment
-variable selects a model.
+Endpoint URLs come only from the file: no environment variable overrides an
+entry's `base_url` or `decision_url`. No environment variable selects a model.
 
 ## Context windows
 

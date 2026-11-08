@@ -564,10 +564,8 @@ impl RigCompletionClient {
 /// **named** by `config.api_key_env` — secrets never flow through the
 /// config file (`agent::config`'s module doc) — so this can't just call
 /// `from_env()`: rig's own env helpers also read their base-URL variables,
-/// which would silently ignore Horizon's own precedence. The base URL
-/// comes from `config.base_url`, already resolved with the right
-/// precedence (the kind's base-URL env var > the entry's `base_url`);
-/// `None` leaves rig's own default (`https://api.openai.com/v1` /
+/// which would let the environment redirect an entry. The base URL is the
+/// entry's `base_url` as written (`config.base_url`); `None` leaves rig's own default (`https://api.openai.com/v1` /
 /// `https://api.anthropic.com`) in place by simply not calling
 /// `.base_url(..)` on the builder. The variable is re-read per turn —
 /// `config.api_key_env` is a name, and a key appearing (or disappearing)

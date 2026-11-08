@@ -317,14 +317,16 @@ def main():
         git("add", "AGENTS.md", ".horizon/skills/board-integration/SKILL.md")
         git("commit", "-qm", "Fixture policy")
         Provider.root, Provider.repository, Provider.base = root, repository, git("rev-parse", "HEAD")
-        (root / "config.toml").write_text(
-            f"trusted_projects = [{json.dumps(str(repository))}]\n"
-            "default_model = { provider = \"default\", model = \"board-flow-fixture\" }\n"
-            "small_model = { provider = \"default\", model = \"board-flow-fixture\" }\n")
         (root / "runtime").mkdir(mode=0o700)
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider)
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        environment["OPENAI_BASE_URL"] = f"http://127.0.0.1:{server.server_port}/v1"
+        (root / "config.toml").write_text(
+            f"trusted_projects = [{json.dumps(str(repository))}]\n"
+            "default_model = { provider = \"default\", model = \"board-flow-fixture\" }\n"
+            "small_model = { provider = \"default\", model = \"board-flow-fixture\" }\n"
+            "[[providers]]\n"
+            "name = \"default\"\n"
+            f"base_url = \"http://127.0.0.1:{server.server_port}/v1\"\n")
 
         def start(name, socket):
             with (root / f"{name}.log").open("a") as log:

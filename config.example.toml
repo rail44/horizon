@@ -12,9 +12,10 @@
 #
 #     HORIZON_CONFIG=/path/to/my-config.toml horizon
 #
-# Precedence: environment variable > this file > built-in default. Existing
-# env vars (OPENAI_API_KEY, EXA_API_KEY, OPENAI_BASE_URL, ...) keep winning
-# over whatever is set below.
+# Precedence: environment variable > this file > built-in default, for the
+# settings an environment variable exists for. Secrets (OPENAI_API_KEY,
+# EXA_API_KEY, ...) live only in the environment; endpoint URLs live only
+# in this file.
 #
 # Models are chosen by three top-level { provider, model } pairs:
 # default_model for conversation sessions, small_model for AI titles (and
@@ -101,8 +102,8 @@
 #   registered but unavailable (grayed out, not hidden); sessions on it run
 #   the ordinary deterministic fallback instead of calling the provider.
 # - base_url: unset means rig's own default endpoint for the kind
-#   (https://api.openai.com/v1 / https://api.anthropic.com); env
-#   OPENAI_BASE_URL / ANTHROPIC_BASE_URL win when set.
+#   (https://api.openai.com/v1 / https://api.anthropic.com). No environment
+#   variable overrides it.
 # - decision_url: the full URL of the entry's System One decision route,
 #   used as written (never derived from base_url; no env var overrides it).
 #   Only an entry decision_model names needs it. Providers serve it at

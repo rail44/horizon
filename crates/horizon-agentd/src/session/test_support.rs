@@ -104,7 +104,6 @@ pub(crate) fn state_with_trusted_projects(trusted: Vec<std::path::PathBuf>) -> A
 #[test]
 fn session_fixtures_do_not_read_host_provider_or_persistence_settings() {
     std::env::set_var("OPENAI_API_KEY", "fixture-only");
-    std::env::set_var("OPENAI_BASE_URL", "https://fixture.invalid");
     std::env::set_var("HORIZON_AGENT_CLEARING_THRESHOLD_PCT", "1");
     std::env::set_var("HORIZON_AGENT_EVENT_LOG", "host-events.jsonl");
     std::env::set_var("HORIZON_AGENT_STATE_DB", "host-state.duckdb");
