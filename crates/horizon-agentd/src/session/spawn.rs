@@ -249,7 +249,12 @@ pub(super) fn spawn_session_thread_with_context(
         let _lifecycle = lock_unpoisoned(&thread_state.lifecycle);
         let entry = lock_unpoisoned(&thread_state.sessions).remove(&session_id);
         lock_unpoisoned(&thread_state.agent_subscribers).remove(&session_id);
-        if let Some(worktree) = entry.and_then(|entry| entry.worktree) {
+        // A suspended session resumes into the worktree it owns.
+        let suspended = thread_state.take_suspending(session_id);
+        if let Some(worktree) = entry
+            .and_then(|entry| entry.worktree)
+            .filter(|_| !suspended)
+        {
             if !work_settled || !worktree::remove_worktree_if_clean(&worktree) {
                 eprintln!(
                     "horizon-agentd: kept worktree {} for {session_id:?} (not clean or background work still stopping)",

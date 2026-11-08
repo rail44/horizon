@@ -15,7 +15,7 @@ markdown = "=1.0.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
-uuid = { version = "1.18", features = ["v4", "serde"] }
+uuid = { version = "1.18", features = ["v4", "v5", "serde"] }
 
 [dev-dependencies]
 # Validates generated annotations against the W3C test suite's draft-04

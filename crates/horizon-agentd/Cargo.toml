@@ -10,6 +10,7 @@ crossbeam-channel = "0.5"
 horizon-acp = { path = "../horizon-acp" }
 horizon-agent = { path = "../horizon-agent" }
 horizon-board = { path = "../horizon-board" }
+horizon-wiki = { path = "../horizon-wiki" }
 horizon-config = { path = "../horizon-config" }
 horizon-sandbox = { path = "../horizon-sandbox" }
 horizon-wire = { path = "../horizon-wire" }

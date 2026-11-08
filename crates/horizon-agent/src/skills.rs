@@ -125,9 +125,13 @@ fn embedded_skills() -> &'static [Skill] {
             HORIZON_DISTILL_SKILL_SOURCE,
             GITHUB_PR_SKILL_SOURCE,
         ];
-        if let Some(external) = EXTERNAL_SKILL_SOURCES.get() {
-            sources.extend_from_slice(external);
-        }
+        sources.extend(
+            EXTERNAL_SKILL_SOURCES
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .copied(),
+        );
         sources
             .into_iter()
             .map(|source| {
@@ -150,15 +154,24 @@ fn embedded_skills() -> &'static [Skill] {
 /// this lazily on first access, so registration must happen before the first
 /// `SkillRegistry` is composed (which happens at the first session spawn).
 /// See `docs/board-keeper-design.md` §1.
-static EXTERNAL_SKILL_SOURCES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+static EXTERNAL_SKILL_SOURCES: std::sync::RwLock<Vec<&'static str>> =
+    std::sync::RwLock::new(Vec::new());
 
 /// Registers externally-provided embedded skill sources so
 /// [`embedded_skills`] includes them. Each source is a `&'static str`
 /// pointing at a `SKILL.md` file `include_str!`-loaded by the providing crate
 /// (e.g. `horizon_board::agents::TASK_SKILL`). Called once at
-/// `horizon-agentd` startup.
+/// `horizon-agentd` startup, once per providing package; registrations add
+/// up, and a source already registered is ignored.
 pub fn register_external_skill_sources(sources: Vec<&'static str>) {
-    let _ = EXTERNAL_SKILL_SOURCES.set(sources);
+    let mut external = EXTERNAL_SKILL_SOURCES
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for source in sources {
+        if !external.contains(&source) {
+            external.push(source);
+        }
+    }
 }
 
 /// Bounds a skill's body as returned by `skill.read` -- a repository skill

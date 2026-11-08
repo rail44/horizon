@@ -111,6 +111,12 @@ pub struct RoleDefinition {
     /// one field the two prior roles didn't -- the third extension of this
     /// struct after `iteration_cap` and `summarize_on_cap`.
     pub standing: bool,
+    /// Whether nobody watches a session with this role: no pane is attached
+    /// to it, so a tool call that would ask for approval is refused instead
+    /// of parked (`ToolSessionState::is_unattended`). Such a role is started
+    /// by the harness, never by the user, so [`user_launchable`] leaves it
+    /// out. The exploration role and the wiki's thread role set it.
+    pub unattended: bool,
 }
 
 /// Horizon's configuration assistant: the first role -- the concrete
@@ -143,6 +149,7 @@ pub const CONFIG_ROLE: RoleDefinition = RoleDefinition {
     skill_ids: &["horizon-config"],
     summarize_on_cap: false,
     standing: false,
+    unattended: false,
 };
 
 const CONFIG_ROLE_PROMPT_SECTION: &str = "You are Horizon's configuration assistant: you help \
@@ -224,6 +231,7 @@ pub(crate) const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
     skill_ids: &[],
     summarize_on_cap: true,
     standing: false,
+    unattended: true,
 };
 
 const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: another agent asked \
@@ -261,11 +269,19 @@ fn is_exploration_id(id: &str) -> bool {
 static ROLES: &[&RoleDefinition] = &[&CONFIG_ROLE, &EXPLORE_ROLE];
 
 /// Roles registered at runtime by the composition root (`horizon-agentd`)
-/// from external crates (e.g. `horizon-board`'s keeper role) -- see
-/// [`register_external`]. Populated once at daemon startup, before any
-/// session is spawned; a `OnceLock` because `resolve` is called from every
-/// session-start path and must be lock-free after init.
-static EXTERNAL_ROLES: std::sync::OnceLock<Vec<RoleDefinition>> = std::sync::OnceLock::new();
+/// from external crates (the board's roles, the wiki's thread role) -- see
+/// [`register_external`]. Each package registers its own, so registrations
+/// add up; a registered definition is leaked to `'static`, which
+/// [`resolve`]'s callers hold on to.
+static EXTERNAL_ROLES: std::sync::RwLock<Vec<&'static RoleDefinition>> =
+    std::sync::RwLock::new(Vec::new());
+
+fn external_roles() -> Vec<&'static RoleDefinition> {
+    EXTERNAL_ROLES
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
 
 /// Registers externally-provided roles (from crates `horizon-agent` does not
 /// depend on) so [`resolve`] can find them. Called once at `horizon-agentd`
@@ -275,9 +291,20 @@ static EXTERNAL_ROLES: std::sync::OnceLock<Vec<RoleDefinition>> = std::sync::Onc
 /// `board_flow::roles`), so the registration is a by-value copy of thin
 /// references -- no allocation, no lifetime extension. See
 /// `docs/board-keeper-design.md` §1 for why this indirection exists instead
-/// of a Cargo edge.
+/// of a Cargo edge. Adds to earlier registrations; a role whose id is
+/// already known (built in or registered before) is ignored, so a package
+/// may register again.
 pub fn register_external(roles: Vec<RoleDefinition>) {
-    let _ = EXTERNAL_ROLES.set(roles);
+    let mut external = EXTERNAL_ROLES
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for role in roles {
+        let known = ROLES.iter().any(|known| known.id == role.id)
+            || external.iter().any(|known| known.id == role.id);
+        if !known {
+            external.push(Box::leak(Box::new(role)));
+        }
+    }
 }
 
 /// Every role this build knows about that a user can launch directly —
@@ -293,12 +320,10 @@ pub fn register_external(roles: Vec<RoleDefinition>) {
 /// providing crate.
 pub fn user_launchable() -> Vec<&'static RoleDefinition> {
     let mut roles: Vec<&'static RoleDefinition> = ROLES.to_vec();
-    if let Some(external) = EXTERNAL_ROLES.get() {
-        roles.extend(external.iter());
-    }
+    roles.extend(external_roles());
     roles
         .into_iter()
-        .filter(|role| !is_exploration_id(role.id))
+        .filter(|role| !is_exploration_id(role.id) && !role.unattended)
         .collect()
 }
 
@@ -310,12 +335,9 @@ pub fn resolve(role_id: &RoleId) -> Option<&'static RoleDefinition> {
     if let Some(role) = ROLES.iter().copied().find(|role| role.id == role_id.0) {
         return Some(role);
     }
-    // `OnceLock::get` returns `&Vec<RoleDefinition>` with `'static` lifetime
-    // (the OnceLock itself is static), and `Vec::iter` borrows from it -- so
-    // the returned `&RoleDefinition` is `'static` too.
-    EXTERNAL_ROLES
-        .get()
-        .and_then(|roles| roles.iter().find(|role| role.id == role_id.0))
+    external_roles()
+        .into_iter()
+        .find(|role| role.id == role_id.0)
 }
 
 #[cfg(test)]
@@ -491,6 +513,7 @@ mod tests {
             skill_ids: &[],
             summarize_on_cap: false,
             standing: false,
+            unattended: false,
         }]);
         let role = resolve(&RoleId("test-external-role".to_string()))
             .expect("external role must resolve after registration");
@@ -517,6 +540,7 @@ mod tests {
             skill_ids: &[],
             summarize_on_cap: false,
             standing: false,
+            unattended: false,
         }]);
         // Built-in roles must still be found.
         assert!(resolve(&RoleId("config".to_string())).is_some());
@@ -525,6 +549,43 @@ mod tests {
         assert!(resolve(&RoleId("test-additive".to_string())).is_some());
         // And a genuinely unknown id is still None.
         assert!(resolve(&RoleId("no-such-role".to_string())).is_none());
+    }
+
+    /// Each package registers its own roles: a later registration adds to
+    /// the earlier ones, and a known id keeps its first definition.
+    #[test]
+    fn registrations_add_up_and_a_known_id_is_kept() {
+        let role = |id: &'static str, title: &'static str| RoleDefinition {
+            id,
+            title,
+            prompt_section: "",
+            allowed_tool_ids: Some(&[]),
+            model: None,
+            iteration_cap: None,
+            include_repository_instructions: false,
+            skill_ids: &[],
+            summarize_on_cap: false,
+            standing: false,
+            unattended: false,
+        };
+        register_external(vec![role("test-first", "First")]);
+        register_external(vec![
+            role("test-second", "Second"),
+            role("test-first", "Replacement"),
+            role("config", "Replacement"),
+        ]);
+        let title = |id: &str| resolve(&RoleId(id.to_string())).map(|role| role.title);
+        assert_eq!(title("test-first"), Some("First"));
+        assert_eq!(title("test-second"), Some("Second"));
+        assert_eq!(title("config"), Some("Configuration Agent"));
+        let launchable = user_launchable();
+        assert_eq!(
+            launchable
+                .iter()
+                .filter(|role| role.id == "test-first")
+                .count(),
+            1
+        );
     }
 
     /// `user_launchable` must include the config role and any externally

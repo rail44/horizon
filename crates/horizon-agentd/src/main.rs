@@ -68,6 +68,7 @@ mod hub;
 mod outbox;
 mod providers;
 mod session;
+mod wiki_flow;
 mod worktree;
 
 use std::path::Path;
@@ -140,11 +141,15 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     board_flow::roles::register();
+    wiki_flow::register();
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
+    let start_dir = std::env::current_dir().ok();
+    let mut sources = vec![board_flow::source(&state, start_dir.clone())];
+    sources.extend(wiki_flow::source(start_dir));
     outbox::spawn(
         state.clone(),
-        vec![board_flow::source(&state, std::env::current_dir().ok())],
-        vec![board_flow::sink()],
+        sources,
+        vec![board_flow::sink(), wiki_flow::sink()],
     );
 
     run(listener, &socket_path, state).await

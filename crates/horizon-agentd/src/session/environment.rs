@@ -189,9 +189,14 @@ impl SessionEnvironment<'_> {
         let board = board_host_for(workspace_root.as_deref(), state.clone());
         let tool_state = tool_session_builder_for(workspace_root, agent_config.tools, recall)
             .with_primary_checkout(primary_checkout)
-            // An explore-role session (a `task` child) is never attached to
-            // a pane, so an approval prompt raised for it would reach nobody.
-            .with_unattended(role_id.is_some_and(horizon_agent::roles::is_exploration))
+            // An unattended role's session (a `task` child, a wiki thread)
+            // is never attached to a pane, so an approval prompt raised for
+            // it would reach nobody.
+            .with_unattended(
+                role_id
+                    .and_then(horizon_agent::roles::resolve)
+                    .is_some_and(|role| role.unattended),
+            )
             .with_filesystem_grants(filesystem_grants.clone())
             .with_loopback_connect(loopback_connect)
             .with_skills(if trusted {

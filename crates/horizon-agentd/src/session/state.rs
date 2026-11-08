@@ -39,6 +39,9 @@ pub(crate) struct AgentdState {
     /// session, not a running turn.
     pub(super) lifecycle: Mutex<()>,
     board_projects: Mutex<std::collections::HashSet<PathBuf>>,
+    /// Sessions sent `Command::Suspend` whose threads have not ended yet:
+    /// their thread-exit cleanup keeps an owned worktree for the resume.
+    suspending: Mutex<std::collections::HashSet<SessionId>>,
     pub(crate) providers: Mutex<ProviderRegistry>,
     /// Same swap story as `providers`: `[[providers]]`'s `base_url` is read at
     /// spawn time for the enforcing judge (see `run_session`), so a live
@@ -136,6 +139,7 @@ impl AgentdState {
         Self {
             lifecycle: Mutex::new(()),
             board_projects: Mutex::new(std::collections::HashSet::new()),
+            suspending: Mutex::new(std::collections::HashSet::new()),
             providers: Mutex::new(providers),
             agent_config: Mutex::new(agent_config),
             writer: Mutex::new(writer),
@@ -152,6 +156,25 @@ impl AgentdState {
             project_grants,
             trusted_projects,
         }
+    }
+
+    /// Ends `session_id`'s thread without ending the session
+    /// (`Command::Suspend`): it is not resumed at startup, keeps any
+    /// worktree it owns, and `resume_session` brings it back. `false` when
+    /// no live session has that id.
+    pub(crate) fn suspend_session(&self, session_id: SessionId) -> bool {
+        lock_unpoisoned(&self.suspending).insert(session_id);
+        let sent = self.send_command(session_id, Command::Suspend);
+        if !sent {
+            lock_unpoisoned(&self.suspending).remove(&session_id);
+        }
+        sent
+    }
+
+    /// Whether `session_id`'s thread is ending on a suspend, clearing the
+    /// mark. Called once by the thread's own exit cleanup.
+    pub(super) fn take_suspending(&self, session_id: SessionId) -> bool {
+        lock_unpoisoned(&self.suspending).remove(&session_id)
     }
 
     pub(crate) fn register_board(&self, root: PathBuf) {

@@ -340,6 +340,25 @@ owner's call.
    new owner annotation) and reply sink (appending the replying
    annotation) registered on the outbox core; closing after an answer
    and resuming on the next message.
+
+   Done 2026-11-09 on the same branch (`crates/horizon-agentd/src/wiki_flow.rs`,
+   `crates/horizon-wiki/src/agent.rs`): `wiki.list`, `wiki.read` (also
+   `concepts`), `wiki.write` and `wiki.edit`, offered in trusted projects
+   only, as the knowledge tools are; the `wiki-thread` role (read-only
+   repository and web tools plus the wiki's, the `project-wiki` skill) and
+   the skill registered from `horizon-wiki`. A thread's session id is a
+   UUID v5 of its root annotation's id, so nothing records the binding. The
+   trigger source covers the daemon's start project and hands each owner
+   annotation that no session reply targets to that session (spawned, or
+   resumed when it has history); the sink appends the answer with an id
+   derived from the session and answer ids, so a redelivery is recorded
+   once, then suspends the session when its thread has nothing left
+   unanswered. Found on the way: role and skill registration kept only the
+   first caller's batch (`OnceLock::set`), so the wiki's would have been
+   dropped after the board's; both now add up. Thread sessions are
+   unattended (an approval nobody sees would stall the thread), declared by
+   a new `RoleDefinition::unattended` that also keeps such roles out of
+   the user-launchable list.
 4. **Shell**: `ViewKind::Wiki` and `src/wiki/` from the Markdown view —
    commenting from a selection, highlighting anchors, the thread, file
    watching; orphaned comments listed at the end at first. Opening it

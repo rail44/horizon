@@ -4332,6 +4332,7 @@ dependencies = [
  "horizon-config",
  "horizon-daemon-testkit",
  "horizon-sandbox",
+ "horizon-wiki",
  "horizon-wire",
  "libc",
  "serde",
