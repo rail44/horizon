@@ -18,6 +18,10 @@ thiserror = "2.0"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 
 [dev-dependencies]
+# Validates generated annotations against the W3C test suite's draft-04
+# schemas (tests/wpt). No network or file resolution: every schema is
+# registered from the vendored copies.
+jsonschema = { version = "0.61", default-features = false }
 tempfile = "3"
 
 [lints.clippy]

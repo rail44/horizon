@@ -5,14 +5,17 @@
 //! logical text comments are anchored in, the comment log, and the skill
 //! that maintains the wiki; it depends on neither `horizon-agent` nor gpui.
 
+pub mod annotation;
 pub mod concepts;
 pub mod logical;
 pub mod page;
 pub mod skill;
 pub mod store;
+pub mod thread;
 
 pub use page::{Edit, PageInfo};
 pub use store::Store;
+pub use thread::Thread;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WikiError {

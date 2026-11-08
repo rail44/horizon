@@ -30,12 +30,13 @@ impl Store {
     /// The store of the project whose main repository toplevel is
     /// `project_root`. `None` when no data home can be found.
     pub fn for_project(project_root: &Path) -> Option<Self> {
-        Some(Self::at(
-            data_home()?
-                .join("horizon")
-                .join("wiki")
-                .join(sanitize(project_root)),
-        ))
+        Some(Self::at(Self::wiki_root()?.join(sanitize(project_root))))
+    }
+
+    /// The directory above every project's store, which also holds the
+    /// installation's owner id ([`crate::thread::owner_id`]).
+    pub fn wiki_root() -> Option<PathBuf> {
+        Some(data_home()?.join("horizon").join("wiki"))
     }
 
     pub fn dir(&self) -> &Path {
