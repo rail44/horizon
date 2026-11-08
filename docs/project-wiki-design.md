@@ -170,10 +170,9 @@ Diagrams are deferred; gpui-component (7591a35) has no mermaid rendering.
     `RenderedText::range_for_source()`, to a rendered range for
     `set_range_highlights()` (all public on `TextViewState` at
     gpui-kit 7591a35). Agents build the same logical text from the source
-    with no gpui dependency. Positions count Unicode code points. Still
-    to pin: the block separator, the character map inside text nodes that
-    contain escapes, and parse options identical to the view's (GFM
-    extensions), or the trees diverge.
+    with no gpui dependency. Positions count Unicode code points. The
+    separator, the character map and the parse options are pinned in
+    `crates/horizon-wiki/src/logical.rs` (stage 2.2 below).
   - Every identifier is an IRI (the Annotation `id` MUST be one;
     relative references such as `sandbox.md` are not).
   - Not used: the HTTP protocol, collections and paging, JSON-LD
@@ -319,6 +318,23 @@ owner's call.
       snapshots;
    4. re-anchoring: Hypothesis's quote matching and approximate search
       ported, counting characters.
+
+   Done 2026-11-09 on the same branch: `Store` with page `id`s, whole
+   writes and all-or-nothing exact-string edits, and the `horizon-wiki`
+   binary's `place`/`concept-graph` (2.1); `logical::LogicalText`, built
+   from `markdown::to_mdast` with `ParseOptions::gfm()`, one `\n` between
+   blocks and for a hard break, each character mapped to the source bytes
+   it was aligned with (escapes and fences skipped, decoded entities given
+   an empty span) (2.2); `annotation` and `thread` — questions quote 32
+   characters of context on each side, a page is snapshotted per question,
+   the owner id lives in `<wiki root>/owner`, and a test validates a
+   generated question and reply against all 54 MUST assertions of the WPT
+   `annotation-model` suite vendored in `crates/horizon-wiki/tests/wpt`
+   (2.3); `anchor` — the stored position is tried first, then
+   `match-quote.ts`'s scoring ported as is, with the approximate search
+   computed by Sellers' dynamic program with Ukkonen's cut-off, returning
+   what `approx-string-match` returns (the lowest-error matches, each made
+   longest) rather than porting its bit-vector algorithm (2.4).
 3. **Agent integration**: the wiki tools (read, whole write, partial
    edit) through the seam; the thread role, the wiki trigger source (a
    new owner annotation) and reply sink (appending the replying
@@ -332,11 +348,6 @@ owner's call.
 
 ### Still open before planning
 
-- The resumable close and the projection-based resume (design detail,
-  no owner decision expected).
-- The re-anchoring implementation (a port of Hypothesis's
-  `match-quote.ts` and approximate search, or existing crates), now over
-  the logical text.
 - Later: how orphaned and outdated comments look; what else the view
   shows.
 
