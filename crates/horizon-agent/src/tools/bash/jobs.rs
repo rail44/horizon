@@ -121,17 +121,19 @@ pub(crate) fn register(
 /// Install the actual process kill. A cancel that already won runs it now.
 /// Called by the bash worker once its child exists, so `bash.cancel` reaches
 /// the same process-tree kill a timeout and a turn cancel use.
+///
+/// Every sandboxed run calls this, but only a background call has an entry:
+/// without one there is no `bash.cancel` to reach, so nothing is installed
+/// and the process keeps running. Turn cancels and session teardown reach the
+/// process through its execution registration, not through this registry.
 pub(crate) fn attach_cancel(
     call_id: &crate::contract::ToolCallId,
     occurrence_id: &crate::contract::OccurrenceId,
     cancel: impl FnOnce() + Send + 'static,
 ) {
-    let Some(id) = job_id_for(call_id, occurrence_id) else {
-        cancel();
-        return;
-    };
-    let Some(entry) = lock(registry()).entries.get(&id).cloned() else {
-        cancel();
+    let Some(entry) = job_id_for(call_id, occurrence_id)
+        .and_then(|id| lock(registry()).entries.get(&id).cloned())
+    else {
         return;
     };
     let cancel = {
@@ -380,6 +382,55 @@ mod tests {
             "done"
         );
         assert_eq!(take_notifications(owner).len(), 1);
+        remove_session(owner);
+    }
+
+    /// A foreground call has no job entry; attaching its kill must not run
+    /// it, or every sandboxed foreground command dies as soon as it starts.
+    #[test]
+    fn a_call_without_a_job_keeps_its_process() {
+        let killed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = killed.clone();
+        attach_cancel(
+            &crate::contract::ToolCallId("foreground-call".into()),
+            &crate::contract::OccurrenceId("foreground-occ".into()),
+            move || flag.store(true, std::sync::atomic::Ordering::SeqCst),
+        );
+        assert!(!killed.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// A `bash.cancel` that lands before the worker attaches the kill still
+    /// kills the process once it is attached; a later cancel runs the
+    /// attached kill.
+    #[test]
+    fn a_job_cancel_reaches_the_process_whichever_comes_first() {
+        let owner = SessionId::new();
+        let root = tempfile::tempdir().unwrap();
+        for cancel_first in [true, false] {
+            let call_id = crate::contract::ToolCallId(format!("job-call-{cancel_first}"));
+            let occurrence_id = crate::contract::OccurrenceId(format!("job-occ-{cancel_first}"));
+            let (id, _entry) = register(
+                owner,
+                &call_id,
+                &occurrence_id,
+                "sleep 5".into(),
+                root.path().into(),
+                root.path().join("job.log"),
+            );
+            let killed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = killed.clone();
+            if cancel_first {
+                cancel(owner, id).expect("the job is the owner's");
+            }
+            attach_cancel(&call_id, &occurrence_id, move || {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst)
+            });
+            if !cancel_first {
+                assert!(!killed.load(std::sync::atomic::Ordering::SeqCst));
+                cancel(owner, id).expect("the job is the owner's");
+            }
+            assert!(killed.load(std::sync::atomic::Ordering::SeqCst));
+        }
         remove_session(owner);
     }
 }
