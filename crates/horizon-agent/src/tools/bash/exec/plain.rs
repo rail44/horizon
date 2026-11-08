@@ -45,7 +45,7 @@ pub(super) async fn run_async(
             Some(raw_stdout),
             config,
         ),
-        Err(_) => timeout_output(timeout, raw_stdout, config),
+        Err(_) => timeout_output(timeout, raw_stdout, &raw_stderr, cwd_handle, config),
     };
 
     if !drained {

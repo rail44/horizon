@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -37,6 +39,18 @@ pub struct BashOutput {
     pub output_file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Where the command left bash's working directory, when the wrapper's
+    /// report showed it has moved. The directory carries forward between
+    /// calls, but nothing told the model where it now was, so it re-pinned
+    /// the directory before every command; this is the fact that was missing.
+    ///
+    /// Absolute, at most one path, and only on a *change*: repeating an
+    /// unchanged directory on every result would re-write the model's prompt
+    /// cache to say nothing. `None` when no report arrived or it named the
+    /// directory the call already started in. A problem the harness wants to
+    /// flag is `note`'s job -- this field only ever means "you are here now".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -130,6 +144,7 @@ mod tests {
             truncated: false,
             output_file: None,
             note: None,
+            cwd: None,
         };
         assert_eq!(runner.exit_code(), None);
         assert_eq!(runner.summary(), "sandbox failure (not the command)");
@@ -155,10 +170,61 @@ mod tests {
             truncated: false,
             output_file: None,
             note: None,
+            cwd: None,
         };
         let json = serde_json::to_value(&output).unwrap();
         assert_eq!(json["termination"], "infrastructure_failed");
         assert_eq!(json["reason"], "helper exited");
         assert_eq!(serde_json::from_value::<BashOutput>(json).unwrap(), output);
+    }
+
+    /// A reported directory travels with the result and comes back as a path,
+    /// not as text the reader has to re-parse.
+    #[test]
+    fn a_reported_cwd_round_trips_through_json() {
+        let output = BashOutput {
+            termination: BashTermination::Exited { exit_code: 0 },
+            message: None,
+            output: String::new(),
+            truncated: false,
+            output_file: None,
+            note: None,
+            cwd: Some(PathBuf::from("/repo/crates/horizon-agent")),
+        };
+        let json = serde_json::to_value(&output).unwrap();
+        assert_eq!(json["cwd"], "/repo/crates/horizon-agent");
+        assert_eq!(serde_json::from_value::<BashOutput>(json).unwrap(), output);
+    }
+
+    /// An unchanged directory leaves no trace in the serialized output: the
+    /// key is absent, not `null`.
+    #[test]
+    fn an_absent_cwd_is_omitted_from_json() {
+        let output = BashOutput {
+            termination: BashTermination::Exited { exit_code: 0 },
+            message: None,
+            output: "hi".into(),
+            truncated: false,
+            output_file: None,
+            note: None,
+            cwd: None,
+        };
+        assert!(serde_json::to_value(&output).unwrap().get("cwd").is_none());
+    }
+
+    /// A result recorded before this field existed carries no `cwd` key at
+    /// all, and the event log must replay it unchanged.
+    #[test]
+    fn a_record_without_a_cwd_still_reads() {
+        let record = serde_json::json!({
+            "termination": "exited",
+            "exit_code": 3,
+            "output": "boom",
+            "truncated": false,
+            "output_file": null,
+        });
+        let output: BashOutput = serde_json::from_value(record).unwrap();
+        assert_eq!(output.cwd, None);
+        assert_eq!(output.exit_code(), Some(3));
     }
 }

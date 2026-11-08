@@ -103,6 +103,180 @@ fn non_zero_exit_is_a_normal_result_carrying_the_code() {
     assert_eq!(output["exit_code"], 7);
 }
 
+// --- reported working directory ----------------------------------------
+
+/// Where a call left bash, the model has to be able to see it: the directory
+/// carries forward, but a result that never said so left the next call
+/// guessing and re-pinning it.
+#[test]
+fn a_call_that_changes_directory_reports_the_new_one() {
+    let base = scratch_dir("cd-report");
+    let sub = base.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let cwd = cwd_handle(base.clone());
+
+    let output = super::exec::run(
+        &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-1".into())),
+        &serde_json::from_value(json!({ "command": "cd sub && pwd" })).unwrap(),
+        &cwd,
+        &config(),
+    )
+    .to_json();
+
+    assert_eq!(output["output"], format!("{}\n", sub.display()));
+    assert_eq!(
+        output["cwd"].as_str(),
+        Some(sub.display().to_string().as_str()),
+        "the result must name the directory the call moved to: {output}"
+    );
+}
+
+/// The report is the wrapper's `printf "$PWD"`, which runs after the
+/// command's group ends -- so a command that moves and *then* fails still
+/// reports its directory, and the next call really does start there. Gating
+/// the report on a zero exit would have hidden exactly the drift that made
+/// models re-pin the directory.
+#[test]
+fn a_failing_call_that_changed_directory_still_reports_it() {
+    let base = scratch_dir("cd-report-failure");
+    let sub = base.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let cwd = cwd_handle(base.clone());
+
+    let output = super::exec::run(
+        &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-2".into())),
+        &serde_json::from_value(json!({ "command": "cd sub && false" })).unwrap(),
+        &cwd,
+        &config(),
+    )
+    .to_json();
+
+    assert_eq!(output["exit_code"], 1);
+    assert_eq!(
+        output["cwd"].as_str(),
+        Some(sub.display().to_string().as_str()),
+        "a non-zero exit is not a reason to withhold the directory: {output}"
+    );
+    assert_eq!(*cwd.lock().unwrap(), sub);
+}
+
+/// Staying put reports nothing. `cwd` is present only on a change, so an
+/// unchanged directory neither re-writes the model's prompt cache nor makes
+/// a result differ from one recorded before the field existed.
+#[test]
+fn a_call_that_stays_put_omits_the_cwd_field() {
+    let base = scratch_dir("cd-report-unchanged");
+    let cwd = cwd_handle(base.clone());
+
+    let output = super::exec::run(
+        &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-3".into())),
+        &serde_json::from_value(json!({ "command": "pwd" })).unwrap(),
+        &cwd,
+        &config(),
+    )
+    .to_json();
+
+    assert!(
+        output.get("cwd").is_none(),
+        "an unchanged directory must serialize as absent, not null: {output}"
+    );
+}
+
+/// A timeout on the unsandboxed path reports no directory: the kill is a
+/// SIGKILL of the whole process group, wrapper bash included, so the
+/// `printf` that reports `$PWD` never runs. This pins that the absence is
+/// understood rather than accidental -- a timed-out call must not claim the
+/// tracked directory moved, or the next call would start where it did not.
+#[test]
+fn a_timed_out_call_reports_no_directory_when_the_kill_beat_the_report() {
+    let base = scratch_dir("cd-report-timeout");
+    let sub = base.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let cwd = cwd_handle(base.clone());
+
+    let output = super::exec::run(
+        &super::registry::Registration::new(SessionId::new(), ToolCallId("cd-4".into())),
+        &serde_json::from_value(json!({
+            "command": "cd sub && sleep 5",
+            "timeout_secs": 1
+        }))
+        .unwrap(),
+        &cwd,
+        &config(),
+    )
+    .to_json();
+
+    assert!(output["message"]
+        .as_str()
+        .expect("message")
+        .contains("timed out"));
+    assert!(
+        output.get("cwd").is_none(),
+        "a group SIGKILL takes the reporting wrapper with it: {output}"
+    );
+    assert_eq!(
+        *cwd.lock().unwrap(),
+        base,
+        "the tracked directory must not move on a report that never arrived"
+    );
+}
+
+/// A per-test scratch directory under the host temp dir, created fresh so a
+/// test never depends on (or disturbs) a sibling's state.
+fn scratch_dir(label: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("horizon-bash-{label}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// The containment path assembles its command from the same `wrapped_script`
+/// and reports through the same `status_output` branch, so a sandboxed `cd`
+/// reaches the model exactly like an unsandboxed one -- including the
+/// failing case. Skips itself where the helper cannot be launched (a missing
+/// helper is an infrastructure result by design, not a cwd answer).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_sandboxed_call_reports_the_directory_it_moved_to() {
+    let base = scratch_dir("cd-report-sandboxed");
+    let sub = base.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let cwd = cwd_handle(base.clone());
+    let call_id = ToolCallId("cd-sandboxed".into());
+    let identity = crate::test_support::tool_identity(&call_id);
+
+    let completion: crate::tools::ToolCompletion<crate::tools::output::Response> =
+        super::exec::run_sandboxed(
+            &super::registry::Registration::for_execution(SessionId::new(), identity.clone()),
+            &identity,
+            &serde_json::from_value(json!({ "command": "cd sub && false" })).unwrap(),
+            &cwd,
+            &base,
+            None,
+            &[],
+            &[],
+            false,
+            &config(),
+        );
+    let crate::tools::ToolCompletion::Finished(result) = completion else {
+        panic!("a plain command must produce a finished result, not {completion:?}");
+    };
+    let output = result.to_json();
+    if output.get("reason").is_some() {
+        // A missing or unlaunchable helper is an infrastructure result by
+        // design (the command never ran), and some hosts -- including a
+        // sandboxed development session -- cannot spawn one nested. There is
+        // no command result to assert a cwd on, so skip.
+        eprintln!("skipping: no sandbox helper on this machine ({output})");
+        return;
+    }
+    assert_eq!(output["exit_code"], 1);
+    assert_eq!(
+        output["cwd"].as_str(),
+        Some(sub.display().to_string().as_str()),
+        "the sandboxed path must carry the reported directory too: {output}"
+    );
+}
+
 // --- timeout ----------------------------------------------------------
 
 #[test]

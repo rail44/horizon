@@ -203,6 +203,9 @@ pub(crate) fn guidance_output(incoming_command: &str, prior: &ReusableOutput) ->
         output_file: Some(prior.output_file.display().to_string()),
         message: None,
         note: None,
+        // A reused result re-shows a prior call's output; it reports nothing
+        // new about where bash is, so it carries no cwd.
+        cwd: None,
     })
 }
 

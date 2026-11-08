@@ -131,7 +131,7 @@ fn success_output(
     config: &BashToolConfig,
 ) -> Response {
     let mut shown_source = String::from_utf8_lossy(&raw_stdout).into_owned();
-    apply_cwd_report(&raw_stderr, cwd_handle, &mut shown_source);
+    let cwd = apply_cwd_report(&raw_stderr, cwd_handle, &mut shown_source);
 
     let output_file = output::spill(&shown_source);
     let Capped { shown, truncated } = output::cap(
@@ -149,44 +149,90 @@ fn success_output(
         truncated,
         output_file: output_file.map(|path| path.display().to_string()),
         note: None,
+        cwd,
     })
 }
 
 /// Applies the wrapper's cwd report (see `wrapped_script`) to `cwd_handle`
 /// if it looks like an absolute path, updating the session's tracked bash
-/// cwd for the next call. If it doesn't — the wrapper script itself failed
-/// before reaching the `printf` (e.g. a bash parse error) — the tracked cwd
-/// is left unchanged and the stray text is folded into the shown output
-/// instead of silently dropped.
+/// cwd for the next call. Returns the new directory when the call *moved*,
+/// so the result can tell the model where it now is; `None` when the report
+/// named the directory the call already started in (nothing to say) or was
+/// empty. If the report does not look like an absolute path — the wrapper
+/// script itself failed before reaching the `printf`, e.g. a bash parse
+/// error — the tracked cwd is left unchanged and the stray text is folded
+/// into the shown output instead of silently dropped.
+///
+/// A report is the only evidence either of these uses: whether the command
+/// exited zero is irrelevant, since `%s' "$PWD"` runs immediately after the
+/// command's group ends, so `cd sub && false` still reports the new
+/// directory.
 fn apply_cwd_report(
     raw_stderr: &[u8],
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     shown_source: &mut String,
-) {
+) -> Option<PathBuf> {
     let reported = String::from_utf8_lossy(raw_stderr);
     let trimmed = reported.trim();
     if trimmed.is_empty() {
-        return;
+        return None;
     }
     if Path::new(trimmed).is_absolute() {
-        *cwd_handle
+        let reported = PathBuf::from(trimmed);
+        let mut tracked = cwd_handle
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = PathBuf::from(trimmed);
-        return;
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let moved = *tracked != reported;
+        *tracked = reported.clone();
+        return moved.then_some(reported);
     }
     if !shown_source.is_empty() {
         shown_source.push('\n');
     }
     shown_source.push_str(trimmed);
+    None
 }
 
-fn timeout_output(timeout: Duration, raw_stdout: Vec<u8>, config: &BashToolConfig) -> Response {
-    let mut output = failed_output(
+/// A call that timed out or was killed adopts whatever directory it reported
+/// before the kill. Whether anything arrives depends on the path: the
+/// unsandboxed path SIGKILLs the whole process group, wrapper bash included,
+/// so its `printf` never runs and nothing is reported -- but the sandboxed
+/// path's wrapper can still have printed. Adopting a report when one arrives
+/// is the difference between the next call starting where bash actually is
+/// and it starting where the model last saw it.
+fn failed_with_cwd(
+    message: &str,
+    raw_stdout: Vec<u8>,
+    raw_stderr: &[u8],
+    cwd_handle: &Arc<StdMutex<PathBuf>>,
+    config: &BashToolConfig,
+) -> Response {
+    let mut output = failed_output(message, Some(raw_stdout), config);
+    // The stray-text fallback (a report that is not an absolute path) would
+    // land in a buffer nobody reads here, so this takes only the
+    // tracked-directory update and the changed path.
+    let cwd = apply_cwd_report(raw_stderr, cwd_handle, &mut String::new());
+    if let Some(body) = output.bash_mut() {
+        body.cwd = cwd;
+    }
+    output
+}
+
+fn timeout_output(
+    timeout: Duration,
+    raw_stdout: Vec<u8>,
+    raw_stderr: &[u8],
+    cwd_handle: &Arc<StdMutex<PathBuf>>,
+    config: &BashToolConfig,
+) -> Response {
+    let mut output = failed_with_cwd(
         &format!(
             "bash command timed out after {}s and was killed",
             timeout.as_secs()
         ),
-        Some(raw_stdout),
+        raw_stdout,
+        raw_stderr,
+        cwd_handle,
         config,
     );
     output.bash_mut().expect("bash failure").termination = BashTermination::TimedOut {
@@ -201,10 +247,18 @@ fn timeout_output(timeout: Duration, raw_stdout: Vec<u8>, config: &BashToolConfi
 /// intentionally sends a process a fatal signal (see `bash::cancel_call`
 /// and the process-group kill it performs, called for a still-running
 /// call whose turn was cancelled).
-fn terminated_output(status: ExitStatus, raw_stdout: Vec<u8>, config: &BashToolConfig) -> Response {
-    let mut output = failed_output(
+fn terminated_output(
+    status: ExitStatus,
+    raw_stdout: Vec<u8>,
+    raw_stderr: &[u8],
+    cwd_handle: &Arc<StdMutex<PathBuf>>,
+    config: &BashToolConfig,
+) -> Response {
+    let mut output = failed_with_cwd(
         &format!("bash command was terminated{}", signal_suffix(status)),
-        Some(raw_stdout),
+        raw_stdout,
+        raw_stderr,
+        cwd_handle,
         config,
     );
     output.bash_mut().expect("bash failure").termination = BashTermination::Terminated;
@@ -238,6 +292,7 @@ fn failure_body(message: &str) -> BashOutput {
         truncated: false,
         output_file: None,
         note: None,
+        cwd: None,
     }
 }
 
@@ -277,6 +332,7 @@ fn infrastructure_output(
         truncated: false,
         output_file: None,
         note: None,
+        cwd: None,
     };
     if let Some(raw) = partial_output {
         let source = String::from_utf8_lossy(&raw).into_owned();
@@ -290,8 +346,10 @@ fn infrastructure_output(
     Response::failed(body)
 }
 
-/// Build the result before classifying containment denials. A signal has no
-/// cwd report: only an ordinary exit can update the session's working directory.
+/// Build the result before classifying containment denials. Both an ordinary
+/// exit and a signal-terminated child consult the wrapper's cwd report: a
+/// command may have moved before it was killed, and the next call starts in
+/// the directory it left behind either way.
 fn status_output(
     status: ExitStatus,
     raw_stdout: Vec<u8>,
@@ -307,7 +365,7 @@ fn status_output(
         // denial from *our* containment never lands here; treated as an
         // ordinary harness failure, same as the unsandboxed path's
         // `terminated_output`.
-        None => terminated_output(status, raw_stdout, config),
+        None => terminated_output(status, raw_stdout, &raw_stderr, cwd_handle, config),
     }
 }
 

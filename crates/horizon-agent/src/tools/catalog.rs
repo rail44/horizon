@@ -107,7 +107,8 @@ fn build_definitions() -> Vec<Definition> {
             title: "Run Shell Command".to_string(),
             description: "Run a shell command via `bash -c` in a fresh subprocess — not a \
                 persistent shell. The working directory is tracked across calls within this \
-                session (a `cd` in the command carries forward to the next call). Requires user \
+                session (a `cd` in the command carries forward to the next call). A result that \
+                carries a `cwd` field means that call moved to that directory. Requires user \
                 approval. Output is stdout+stderr combined, capped in-context with the full \
                 output always spilled to a temp file whose path is returned. A non-zero exit \
                 code is a normal result, not an error. When you need a different slice of a \

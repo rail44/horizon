@@ -367,6 +367,7 @@ mod tests {
             truncated: false,
             output_file: None,
             note: None,
+            cwd: None,
         };
         finish(id, JobState::Finished, &finished);
         assert_eq!(status(owner, id).unwrap()["exit_code"], 0);

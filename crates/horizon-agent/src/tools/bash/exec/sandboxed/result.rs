@@ -44,7 +44,7 @@ pub(super) fn complete(
         }
     };
     if killed {
-        let mut value = timeout_output(timeout, raw_stdout, config);
+        let mut value = timeout_output(timeout, raw_stdout, &raw_stderr, cwd_handle, config);
         annotate(&mut value, &denials);
         if !drained {
             note_undrained(&mut value, Duration::from_secs(config.drain_grace_secs));
@@ -475,6 +475,23 @@ mod tests {
             );
             assert!(result.output.get("denied_filesystem_paths").is_none());
             assert_eq!(result.output.get("note").is_some(), killed);
+            // A timed-out call still reported its directory before it was
+            // killed, so the result carries it. A wait failure never reached
+            // the wrapper's `printf`, so nothing was reported and neither the
+            // tracked directory nor the result moves.
+            assert_eq!(
+                result.output.get("cwd").is_some(),
+                killed,
+                "only a killed call has a report to carry"
+            );
+            assert_eq!(
+                cwd,
+                PathBuf::from(if killed {
+                    "/workspace/next"
+                } else {
+                    "/workspace"
+                })
+            );
             assert!(result.output["message"]
                 .as_str()
                 .unwrap()
@@ -483,7 +500,14 @@ mod tests {
                 } else {
                     "failed to wait"
                 }));
-            assert_eq!(cwd, PathBuf::from("/workspace"));
+            assert_eq!(
+                cwd,
+                PathBuf::from(if killed {
+                    "/workspace/next"
+                } else {
+                    "/workspace"
+                })
+            );
         }
     }
 
@@ -507,7 +531,7 @@ mod tests {
             assert_eq!(result.output["sandboxed"], true);
             assert!(result.output.get("note").is_none());
             if raw_status == 9 {
-                assert_eq!(cwd, PathBuf::from("/workspace"));
+                assert_eq!(cwd, PathBuf::from("/workspace/next"));
                 assert!(result.output["message"]
                     .as_str()
                     .unwrap()

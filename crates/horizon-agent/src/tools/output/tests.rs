@@ -28,6 +28,7 @@ fn annotate_sandboxed_records_the_flag() {
         output_file: None,
         message: None,
         note: None,
+        cwd: None,
     });
     annotate_sandboxed(&mut output, true);
     assert_eq!(output.to_json()["sandboxed"], true);
@@ -39,6 +40,7 @@ fn annotate_sandboxed_records_the_flag() {
         output_file: None,
         message: None,
         note: None,
+        cwd: None,
     });
     annotate_sandboxed(&mut output, false);
     assert_eq!(output.to_json()["sandboxed"], false);
@@ -58,6 +60,7 @@ fn containment_evidence_overrides_success_without_interpreting_payload_flags() {
         output_file: None,
         message: None,
         note: None,
+        cwd: None,
     });
     assert_eq!(
         identity.finish(response.clone()).outcome,
