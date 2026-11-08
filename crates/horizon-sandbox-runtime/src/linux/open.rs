@@ -36,6 +36,32 @@ pub(crate) struct InitialCapability {
     pub(crate) excluded_paths: Vec<PathBuf>,
 }
 
+impl InitialCapability {
+    /// Whether `excluded` is this capability excluding itself — the whole
+    /// tree write-denied for the run — and a narrower directory capability
+    /// beneath it still grants `requested` at `path`. A self-exclusion only
+    /// withdraws the root's own write access: an explicit narrower grant (an
+    /// approved Git operation's metadata tree, a configured tree) keeps
+    /// working beneath it. Ordinary exclusions are never lifted this way;
+    /// they guard paths such as `.git/hooks` against every grant.
+    pub(crate) fn self_exclusion_lifted(
+        &self,
+        excluded: &Path,
+        path: &Path,
+        requested: AccessMode,
+        initial_caps: &[InitialCapability],
+    ) -> bool {
+        excluded == self.path
+            && initial_caps.iter().any(|narrower| {
+                !narrower.is_file
+                    && narrower.path != self.path
+                    && narrower.path.starts_with(&self.path)
+                    && path.starts_with(&narrower.path)
+                    && narrower.access.contains(requested)
+            })
+    }
+}
+
 enum InitialCapabilityMatch<'a> {
     Sufficient,
     Insufficient(&'a InitialCapability),
@@ -269,13 +295,17 @@ fn match_initial_capability<'a>(
         // the whole tree beneath it, the root itself included. That is how a
         // write root is marked read-only for one run (a primary checkout
         // awaiting approval): reads stay allowed and every write is refused
-        // with the same evidence an out-of-root write produces.
+        // with the same evidence an out-of-root write produces, except
+        // beneath a narrower grant that allows it.
         for capability in initial_caps {
             if capability.is_file {
                 continue;
             }
             if path.starts_with(&capability.path) {
                 for excluded in &capability.excluded_paths {
+                    if capability.self_exclusion_lifted(excluded, path, requested, initial_caps) {
+                        continue;
+                    }
                     if path.starts_with(excluded) || excluded == &capability.path {
                         return InitialCapabilityMatch::Insufficient(capability);
                     }
@@ -415,6 +445,86 @@ mod tests {
                 &caps
             ),
             InitialCapabilityMatch::Sufficient
+        ));
+    }
+
+    /// A primary checkout awaiting approval excludes itself, yet an approved
+    /// Git operation's metadata grant beneath it still writes, and that
+    /// grant's own exclusions still hold.
+    #[test]
+    fn a_self_excluded_root_still_writes_beneath_a_narrower_grant() {
+        let caps = vec![
+            InitialCapability {
+                path: PathBuf::from("/repo"),
+                access: AccessMode::ReadWrite,
+                is_file: false,
+                excluded_paths: vec![PathBuf::from("/repo")],
+            },
+            InitialCapability {
+                path: PathBuf::from("/repo/.git"),
+                access: AccessMode::ReadWrite,
+                is_file: false,
+                excluded_paths: vec![PathBuf::from("/repo/.git/hooks")],
+            },
+        ];
+        let write =
+            |path: &str| match_initial_capability(Path::new(path), AccessMode::Write, &caps);
+        assert!(matches!(
+            write("/repo/src/lib.rs"),
+            InitialCapabilityMatch::Insufficient(_)
+        ));
+        assert!(matches!(
+            write("/repo"),
+            InitialCapabilityMatch::Insufficient(_)
+        ));
+        assert!(matches!(
+            write("/repo/.git/refs/tags/v1.lock"),
+            InitialCapabilityMatch::Sufficient
+        ));
+        assert!(matches!(
+            write("/repo/.git/hooks/pre-commit"),
+            InitialCapabilityMatch::Insufficient(_)
+        ));
+        assert!(matches!(
+            match_initial_capability(Path::new("/repo/src/lib.rs"), AccessMode::Read, &caps),
+            InitialCapabilityMatch::Sufficient
+        ));
+    }
+
+    /// Only a self-exclusion is lifted: an ordinary exclusion holds even
+    /// beneath a narrower read-write capability, and a narrower read-only
+    /// capability lifts nothing.
+    #[test]
+    fn ordinary_exclusions_and_read_only_grants_lift_nothing() {
+        let caps = vec![
+            InitialCapability {
+                path: PathBuf::from("/repo"),
+                access: AccessMode::ReadWrite,
+                is_file: false,
+                excluded_paths: vec![PathBuf::from("/repo/.git"), PathBuf::from("/repo")],
+            },
+            InitialCapability {
+                path: PathBuf::from("/repo/.git/objects"),
+                access: AccessMode::ReadWrite,
+                is_file: false,
+                excluded_paths: Vec::new(),
+            },
+            InitialCapability {
+                path: PathBuf::from("/repo/docs"),
+                access: AccessMode::Read,
+                is_file: false,
+                excluded_paths: Vec::new(),
+            },
+        ];
+        let write =
+            |path: &str| match_initial_capability(Path::new(path), AccessMode::Write, &caps);
+        assert!(matches!(
+            write("/repo/.git/objects/ab"),
+            InitialCapabilityMatch::Insufficient(_)
+        ));
+        assert!(matches!(
+            write("/repo/docs/a.md"),
+            InitialCapabilityMatch::Insufficient(_)
         ));
     }
 

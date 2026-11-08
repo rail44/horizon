@@ -250,6 +250,9 @@ fn excluded_target(path: &Path, initial_caps: &[InitialCapability]) -> Option<Pa
             continue;
         }
         for excluded in &capability.excluded_paths {
+            if capability.self_exclusion_lifted(excluded, path, AccessMode::Write, initial_caps) {
+                continue;
+            }
             if path.starts_with(excluded) {
                 return Some(path.to_path_buf());
             }
@@ -464,6 +467,32 @@ mod tests {
         // Outside the capability is Landlock's business.
         assert_eq!(excluded_target(Path::new("/repo"), &caps), None);
         assert_eq!(excluded_target(Path::new("/elsewhere/x"), &caps), None);
+    }
+
+    /// A self-excluded root refuses mutations everywhere except beneath a
+    /// narrower write grant, whose own exclusions still hold.
+    #[test]
+    fn a_self_excluded_root_still_mutates_beneath_a_narrower_grant() {
+        let mut checkout = caps("/repo", &["/repo"]);
+        checkout.extend(caps("/repo/.git", &["/repo/.git/hooks"]));
+        let caps = checkout;
+        assert_eq!(
+            excluded_target(Path::new("/repo/src/new"), &caps),
+            Some(PathBuf::from("/repo/src/new"))
+        );
+        assert_eq!(
+            excluded_target(Path::new("/repo/.git/refs/tags"), &caps),
+            None
+        );
+        assert_eq!(
+            excluded_target(Path::new("/repo/.git/hooks/x"), &caps),
+            Some(PathBuf::from("/repo/.git/hooks/x"))
+        );
+        // Replacing the gitdir itself would still replace `hooks/`.
+        assert_eq!(
+            excluded_target(Path::new("/repo/.git"), &caps),
+            Some(PathBuf::from("/repo/.git/hooks"))
+        );
     }
 
     #[test]

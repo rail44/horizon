@@ -615,6 +615,16 @@ Ordinary work that writes (`cargo fmt`, `sed -i`, a build that regenerates
 sources) takes the existing filesystem-denial approval instead of retrying a
 heuristic.
 
+The self-exclusion withdraws only the root's own write access. A narrower
+explicit write grant beneath the root keeps working: an approved Git
+operation's metadata grant on `.git` (whose own `hooks`/`config` exclusions
+still hold) and a configured `[[grants.project]]` tree inside the checkout
+(such as `target/`) both write without the checkout approval. Without this,
+an approved Git operation in an unapproved primary checkout failed with
+`EPERM` on its ref lock. Both supervisor checks — the open path and the
+path-mutation syscalls — apply the same rule
+(`InitialCapability::self_exclusion_lifted`).
+
 Approval is session-scoped and not persisted. Approving either a
 filesystem-retry or the host-execution fallback records that this session may
 write its primary checkout, and the next sandboxed run gets the ordinary
