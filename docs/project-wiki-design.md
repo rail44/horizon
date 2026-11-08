@@ -102,6 +102,105 @@ What the pilot showed:
   PTY threads live in the shell, the roadmap still calling logd "not
   started", and a knowledge-layer entry citing a function main removed.
 
+## Next directions (owner, 2026-11-08)
+
+The owner named three: updating the wiki as main changes, asking an agent
+about any spot in the wiki by comment, and embedding diagrams such as
+mermaid. No order among them ("特にどれから、というのはないです").
+Updating stays manual for now, since automatic and manual updating share
+almost all their parts ("まずは手動運用でシンプルな形でいいかなと感じています").
+Diagrams are deferred; gpui-component (7591a35) has no mermaid rendering.
+
+## Comments and the wiki view (decided 2026-11-08)
+
+- **A view of its own.** A wiki view built from the Markdown view
+  (`src/markdown/`), with comments as what makes it specific to reading
+  the wiki ("明らかに、コメント機能だと思うんですが").
+- **A comment targets a selected text range**, and answers come back as a
+  thread. Whoever answers — the thread's session or an ordinary one — can
+  edit and create pages ("スレッドとして帰ってくれば十分。ただしそこで
+  動作するセッションでも普段のセッションでも、必要に応じてページの修正や
+  作成は出来る作りであるべき").
+- **Agents are woken the way the board wakes them, but the board is not
+  the store** ("boardと同様のエージェント発火機構を用いていいという意味で、
+  boardをそのまま活用するという意味ではないです"). Comment threads live in
+  a log of their own beside the wiki pages.
+- **One session per thread.** A thread's session is closed after it
+  answers and resumed when the thread gets a new message. Nothing about
+  the session is shown to the reader: the thread itself shows whether a
+  question is still unanswered ("利用者から見える状態はそもそも必要ない
+  んじゃないですかね"). Closing a thread's session is internal and must not
+  reuse `Terminated`, which is the owner's explicit, destructive end.
+  `resume_session` today re-reads the whole event log (~640 MB) per call;
+  resuming per follow-up needs a projection-based path like startup
+  resume's.
+- **Thread sessions do not change the repository**, for now; usage may
+  change that ("一旦、リポジトリを変えることはない前提でよいですが、
+  使用感次第で変わりウルトは思います").
+- **Pages are written through dedicated tools**, both a partial edit
+  (exact-string replacement, as `fs.edit`) and a whole-page write for new
+  or regenerated pages. The store sits outside every workspace, so
+  without them every write needs an approval.
+- **Anchors borrow the W3C Web Annotation Data Model** (Recommendation,
+  2017-02-23), a subset of it, kept conformant to its MUSTs:
+  - Annotation core (`@context` `http://www.w3.org/ns/anno.jsonld`, `id`,
+    `type`, `motivation`, `body`, `target`, `creator`, `created`,
+    `modified`); `TextualBody` (`text/markdown`, `ja`); `SpecificResource`
+    with `TextQuoteSelector` (primary) and `TextPositionSelector`
+    (disambiguation) as alternatives; `TimeState` with `sourceDate` and
+    `cached` pointing at a snapshot of the page when the comment was made;
+    agents as `Person` (owner) and `Software` (a session).
+  - A reply is an Annotation with motivation `replying` whose target is
+    the parent Annotation. The spec has no reply example; a target may be
+    any resource.
+  - Quotes are taken from the rendered text (markup removed, as the spec
+    asks), positions counted in Unicode code points.
+  - Every identifier is an IRI (the Annotation `id` MUST be one;
+    relative references such as `sandbox.md` are not).
+  - Not used: the HTTP protocol, collections and paging, JSON-LD
+    processing. The data is read and written as plain JSON carrying the
+    `@context` line.
+  - Why this subset: offsets alone break on any edit; edit-tracked
+    positions (Yjs-style) need every write to pass one model and lose a
+    comment when its own range is replaced, which agent edits do often;
+    quote plus context with fuzzy re-anchoring is what annotation systems
+    over documents they do not own use (Hypothesis), and the comment-time
+    snapshot keeps an "outdated" display possible (GitHub review style).
+    Web Annotation's broad web-wide vision did not take hold (no browser
+    shipped it, Apache Annotator retired from the Incubator 2025-08-11),
+    but its selector model is in use where one party holds documents and
+    annotations (IIIF Presentation 3.0, EPUB Annotations drafts).
+  - Conformance can be checked with the WPT `annotation-model/` JSON
+    Schemas (draft-04, BSD-3) under a JSON Schema validator in tests.
+    Re-anchoring can port Hypothesis's `match-quote.ts` (BSD-2) and the
+    approximate search it uses (`approx-string-match`, MIT); no Rust crate
+    implements either.
+- **The wiki is an extension package**: its store, annotation model,
+  anchoring, tools, skill and the shell's wiki view are kept apart from
+  Horizon's core, positioned as an extension ("horizonの基本機能という
+  より拡張という立ち位置を明確にしたい"). Roles and skills already have
+  external registration (`roles::register_external`,
+  `skills::register_external_skill_sources`); tools do not, so this work
+  includes a seam for registering tools from outside `horizon-agent`.
+  Moving the board's and knowledge layer's tools onto that seam is handed
+  to a separate session directly, not through the board.
+
+### Still open before planning
+
+- Generalize `board_flow` for wiki threads, or add a parallel flow of the
+  same shape.
+- Who writes the comment log: through `horizon-logd` as board writes do
+  (the view and agents write concurrently), or otherwise.
+- Package layout: crates, how the shell's wiki view is registered and
+  opened, where the skill and `cluster-spike` move.
+- Whether the text a view selection yields (gpui-component `TextView`'s
+  `selected_text`) can be reproduced from the Markdown source on the
+  agent side; the anchor design rests on it.
+- The re-anchoring implementation (a port, or existing crates).
+- The IRI forms for pages, snapshots, comments and sessions.
+- Later: how orphaned and outdated comments look; what else the view
+  shows; the slicing of the work.
+
 ## Open points
 
 - **Regenerating pages: settled 2026-11-08.** The procedure is the
