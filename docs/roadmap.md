@@ -693,14 +693,17 @@ Amended 2026-11-07: durable-only entries, situation-first descriptions,
 anchors in practice, and a manual verification pass (the doc's
 Amendments section).
 
-### Project wiki (shape decided 2026-11-08, no pages yet)
+### Project wiki (pages written 2026-11-08; comments planned 2026-11-09)
 
 A human-facing view of the project's current state: an overview plus one
 page per concept, user-side Markdown, linking to docs and the board
 rather than restating them. Concepts come from clustering the code
 database's namespace graph plus an agent pass, spiked in
-`duckdb-ext/cluster-spike/`. `docs/project-wiki-design.md` is the
-self-contained record (decisions, spike results, open points).
+`duckdb-ext/cluster-spike/`. Comment threads on selected text, answered
+by agent sessions and anchored with a subset of W3C Web Annotation, are
+planned in four stages (core seams, `horizon-wiki`, agent integration,
+the shell's wiki view). `docs/project-wiki-design.md` is the
+self-contained record (decisions, spike results, the plan, open points).
 
 ### logd — log infrastructure daemon (designed 2026-08-06; stages A and B implemented)
 
