@@ -1,7 +1,19 @@
 use super::*;
-use crate::board_flow::tests::record;
-use horizon_agent::contract::{Event, SessionInputOutcome, SessionWorktree};
+use crate::outbox::log::Pending;
+use crate::outbox::tests::record;
+use crate::outbox::Outbox;
+use horizon_agent::contract::{Command, Event, InputResult, SessionInputOutcome, SessionWorktree};
 use horizon_agent::persistence::event_log::{WriterHandle, WriterInit};
+
+/// The outbox with the board's source and sink plugged in, as agentd runs it.
+fn board_outbox(state: Arc<AgentdState>, path: PathBuf) -> Outbox {
+    Outbox::new(
+        state,
+        path,
+        vec![Box::new(BoardSource::default())],
+        vec![Arc::new(BoardSink)],
+    )
+}
 
 fn repository() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -74,7 +86,7 @@ async fn replayed_review_result_preserves_board_destination_and_receipt() {
     let reply = ReplyAddress::review_result(&root, 27, task_session).unwrap();
     let pending = answer(reply);
     assert_eq!(
-        recipient_key(&pending),
+        board_outbox(state.clone(), log.clone()).recipient_key(&pending),
         Some(format!("session:{}", task_session.as_uuid()))
     );
     let Pending::Answer { outcome, .. } = pending else {
@@ -87,7 +99,7 @@ async fn replayed_review_result_preserves_board_destination_and_receipt() {
 
     // The route is recovered from persisted records, not the requester's
     // current active turn or the most recently associated reviewer.
-    let mut runner = Runner::new(state.clone(), log.clone());
+    let mut runner = board_outbox(state.clone(), log.clone());
     runner.tick().await.unwrap();
     let Command::SessionInput(input) = receiver.try_recv().unwrap() else {
         panic!("expected review input")
@@ -103,7 +115,7 @@ async fn replayed_review_result_preserves_board_destination_and_receipt() {
     );
 
     // A restart before acceptance retries the same identity and destination.
-    let mut runner = Runner::new(state.clone(), log.clone());
+    let mut runner = board_outbox(state.clone(), log.clone());
     runner.tick().await.unwrap();
     assert!(
         matches!(receiver.try_recv().unwrap(), Command::SessionInput(retried) if retried == input)
@@ -113,14 +125,14 @@ async fn replayed_review_result_preserves_board_destination_and_receipt() {
         .unwrap();
     writer.flush().unwrap();
 
-    let mut runner = Runner::new(state, log);
+    let mut runner = board_outbox(state, log);
     runner.tick().await.unwrap();
     runner.tick().await.unwrap();
     assert!(
         receiver.try_recv().is_err(),
         "Accepted review result must not be delivered again"
     );
-    assert!(runner.index.pending.is_empty());
+    assert!(runner.index().pending.is_empty());
 }
 
 #[tokio::test]
@@ -129,7 +141,7 @@ async fn ordinary_session_reply_keeps_its_terminal_destination() {
     let state = crate::session::test_support::state_with_rig_config(false, "test");
     let target = SessionId::new();
     let receiver = state.install_test_session(target);
-    let runner = Runner::new(state, dir.path().join("agent.jsonl"));
+    let runner = board_outbox(state, dir.path().join("agent.jsonl"));
     let legacy_route = format!(r#"{{"kind":"session","id":"{}"}}"#, target.as_uuid());
     runner
         .deliver_one(SessionId::new(), "result", answer(legacy_route))
@@ -150,13 +162,13 @@ async fn review_continuation_rejects_a_different_project_at_either_session() {
     let reviewer = SessionId::new();
     let target = SessionId::new();
     let receiver = state.install_test_session(target);
-    let mut runner = Runner::new(state, root.join("agent.jsonl"));
+    let mut runner = board_outbox(state, root.join("agent.jsonl"));
     let reply = ReplyAddress::review_result(&root, 27, target).unwrap();
     for mismatch in [reviewer, target] {
-        runner.index.projects.insert(reviewer, root.clone());
-        runner.index.projects.insert(target, root.clone());
+        runner.index_mut().projects.insert(reviewer, root.clone());
+        runner.index_mut().projects.insert(target, root.clone());
         runner
-            .index
+            .index_mut()
             .projects
             .insert(mismatch, root.join("different-project"));
         assert!(runner

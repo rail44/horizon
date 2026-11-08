@@ -3,7 +3,7 @@ use horizon_agent::contract::{Event, InputResult, SessionId, SessionInput, Sessi
 use horizon_agent::persistence::event_log::Record;
 use std::io::Write;
 
-pub(super) fn record(session_id: SessionId, event: Event) -> Record {
+pub(crate) fn record(session_id: SessionId, event: Event) -> Record {
     Record {
         schema: "horizon.agent.event_log".into(),
         version: 4,
@@ -110,17 +110,12 @@ fn queueing_an_input_is_not_a_durable_receipt() {
         resume_work: false,
     };
     let mut index = Index::default();
-    assert!(!super::dispatch::receipt(
-        &state,
-        &index,
-        target,
-        input.clone()
-    ));
+    assert!(!super::receipt(&state, &index, target, input.clone()));
     assert!(
         matches!(receiver.try_recv().unwrap(),horizon_agent::contract::Command::SessionInput(value) if value==input)
     );
     index.fold(record(target, Event::InputAccepted(input.clone())));
-    assert!(super::dispatch::receipt(&state, &index, target, input));
+    assert!(super::receipt(&state, &index, target, input));
     assert!(receiver.try_recv().is_err());
 }
 
@@ -139,7 +134,10 @@ fn pending_deliveries_keep_log_order_across_replay_and_duplicate_records() {
             Event::InputOutcome(SessionInputOutcome {
                 input_ids: vec!["input".into()],
                 delivery_id: id.into(),
-                reply_to: Some(super::ReplyAddress::session(target)),
+                reply_to: Some(format!(
+                    r#"{{"kind":"session","id":"{}"}}"#,
+                    target.as_uuid()
+                )),
                 outcome: InputResult::Success {
                     text: "result".into(),
                 },
@@ -209,4 +207,90 @@ fn tail_read_failure_does_not_discard_earlier_records_in_the_same_batch() {
     assert_eq!(records.len(), 1);
     assert!(matches!(&records[0].event,Event::DeliveryAcknowledged(id) if id=="retained"));
     assert!(tail.read().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn pending_receipt_orders_one_recipient_without_blocking_another() {
+    use horizon_agent::contract::Command;
+    let state = crate::session::test_support::state_with_rig_config(false, "test");
+    let source = SessionId::new();
+    let target = SessionId::new();
+    let other = SessionId::new();
+    let receiver = state.install_test_session(target);
+    let other_receiver = state.install_test_session(other);
+    let dir = tempfile::tempdir().unwrap();
+    let mut outbox = super::Outbox::new(
+        state,
+        dir.path().join("agent.jsonl"),
+        Vec::new(),
+        Vec::new(),
+    );
+    for (id, sequence, recipient) in [
+        ("request", 1, target),
+        ("correction", 2, target),
+        ("unrelated", 3, other),
+    ] {
+        outbox.index.pending.insert(
+            (source, id.into()),
+            Pending::Send {
+                sequence,
+                target: recipient,
+                input: SessionInput {
+                    id: id.into(),
+                    origin: "source".into(),
+                    text: id.into(),
+                    reply_to: None,
+                    resume_work: false,
+                },
+            },
+        );
+    }
+    outbox.deliver_outputs().await.unwrap();
+    assert!(
+        matches!(receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "request")
+    );
+    assert!(
+        receiver.try_recv().is_err(),
+        "Correction waits for request receipt"
+    );
+    assert!(
+        matches!(other_receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "unrelated")
+    );
+    outbox.index.accepted.insert((target, "request".into()));
+    // A missing source writer prevents acknowledgement in this isolated
+    // test, but an accepted first request must still release its successor.
+    assert!(outbox.deliver_outputs().await.is_err());
+    assert!(
+        matches!(receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "correction")
+    );
+}
+
+#[tokio::test]
+async fn an_answer_for_an_unregistered_kind_is_an_error_not_a_delivery() {
+    let state = crate::session::test_support::state_with_rig_config(false, "test");
+    let source = SessionId::new();
+    let dir = tempfile::tempdir().unwrap();
+    let mut outbox = super::Outbox::new(
+        state,
+        dir.path().join("agent.jsonl"),
+        Vec::new(),
+        Vec::new(),
+    );
+    outbox.index.pending.insert(
+        (source, "answer".into()),
+        Pending::Answer {
+            sequence: 1,
+            at: 1,
+            outcome: SessionInputOutcome {
+                input_ids: vec!["question".into()],
+                delivery_id: "answer".into(),
+                reply_to: Some(r#"{"kind":"elsewhere"}"#.into()),
+                outcome: InputResult::Success {
+                    text: "done".into(),
+                },
+            },
+        },
+    );
+    let error = outbox.deliver_outputs().await.unwrap_err();
+    assert!(error.contains("no sink for `elsewhere`"), "{error}");
 }

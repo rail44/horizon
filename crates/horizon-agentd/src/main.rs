@@ -65,6 +65,7 @@
 
 mod board_flow;
 mod hub;
+mod outbox;
 mod providers;
 mod session;
 mod worktree;
@@ -140,7 +141,11 @@ async fn main() -> anyhow::Result<()> {
 
     board_flow::roles::register();
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
-    board_flow::spawn(state.clone(), std::env::current_dir().ok());
+    outbox::spawn(
+        state.clone(),
+        vec![board_flow::source(&state, std::env::current_dir().ok())],
+        vec![board_flow::sink()],
+    );
 
     run(listener, &socket_path, state).await
 }

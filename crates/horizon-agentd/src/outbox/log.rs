@@ -1,4 +1,5 @@
-//! Incremental durable-log reads and the pending-delivery projection.
+//! Incremental reads of the agent event log and the pending-delivery projection
+//! the outbox works from.
 
 use horizon_agent::contract::{Event, SessionId, SessionInput, SessionInputOutcome};
 use horizon_agent::persistence::event_log::Record;
@@ -7,22 +8,22 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 
-pub(super) struct Tail {
+pub(crate) struct Tail {
     path: PathBuf,
     offset: u64,
 }
 impl Tail {
-    pub(super) fn new(path: PathBuf) -> Self {
+    pub(crate) fn new(path: PathBuf) -> Self {
         Self { path, offset: 0 }
     }
-    pub(super) fn read(&mut self) -> Result<Vec<Record>, String> {
+    pub(crate) fn read(&mut self) -> Result<Vec<Record>, String> {
         let file = match File::open(&self.path) {
             Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e.to_string()),
         };
         if file.metadata().map_err(|e| e.to_string())?.len() < self.offset {
-            return Err("Agent log shrank while board delivery was running".into());
+            return Err("Agent log shrank while outbox delivery was running".into());
         }
         let mut reader = BufReader::new(file);
         reader
@@ -49,7 +50,7 @@ impl Tail {
 }
 
 #[derive(Clone)]
-pub(super) enum Pending {
+pub(crate) enum Pending {
     Answer {
         sequence: u64,
         outcome: SessionInputOutcome,
@@ -69,17 +70,17 @@ impl Pending {
     }
 }
 #[derive(Default)]
-pub(super) struct Index {
-    pub(super) sessions: HashMap<SessionId, Record>,
-    pub(super) projects: HashMap<SessionId, PathBuf>,
-    pub(super) accepted: HashSet<(SessionId, String)>,
-    pub(super) pending: HashMap<(SessionId, String), Pending>,
+pub(crate) struct Index {
+    pub(crate) sessions: HashMap<SessionId, Record>,
+    pub(crate) projects: HashMap<SessionId, PathBuf>,
+    pub(crate) accepted: HashSet<(SessionId, String)>,
+    pub(crate) pending: HashMap<(SessionId, String), Pending>,
     acknowledged: HashSet<(SessionId, String)>,
 }
 impl Index {
     /// The writer's global sequence preserves source conversation order even
     /// when the in-memory index was rebuilt after restart.
-    pub(super) fn ordered_pending(&self) -> Vec<((SessionId, String), Pending)> {
+    pub(crate) fn ordered_pending(&self) -> Vec<((SessionId, String), Pending)> {
         let mut pending: Vec<_> = self
             .pending
             .iter()
@@ -93,7 +94,7 @@ impl Index {
         });
         pending
     }
-    pub(super) fn fold(&mut self, record: Record) {
+    pub(crate) fn fold(&mut self, record: Record) {
         let source = record.session_id;
         match &record.event {
             Event::EnvironmentActivated(identity) => {

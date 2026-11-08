@@ -2,18 +2,15 @@
 //! identified inputs and settled outcomes using durable logs on both sides.
 
 mod dispatch;
-mod log;
 mod operations;
 pub(crate) mod roles;
-#[cfg(test)]
-mod tests;
 
+use crate::outbox::{ReplySink, TriggerSource};
 use crate::session::AgentdState;
 use horizon_agent::contract::SessionId;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 pub(crate) use operations::{operate, organizer_session};
 
@@ -57,32 +54,16 @@ impl ReplyAddress {
     }
 }
 
-pub(crate) fn spawn(state: Arc<AgentdState>, root: Option<PathBuf>) {
+/// The board's trigger source for the outbox, with `root`'s board (the
+/// daemon's start directory) registered up front.
+pub(crate) fn source(state: &AgentdState, root: Option<PathBuf>) -> Box<dyn TriggerSource> {
     if let Some(root) = root {
         state.register_board(root);
     }
-    tokio::spawn(async move {
-        state.wait_until_resume_ready().await;
-        let path = state
-            .agent_config
-            .lock()
-            .unwrap()
-            .persistence
-            .event_log_path
-            .clone();
-        let mut runner = dispatch::Runner::new(state, path);
-        let mut last_error = None;
-        loop {
-            match runner.tick().await {
-                Ok(()) => last_error = None,
-                Err(error) => {
-                    if last_error.as_ref() != Some(&error) {
-                        eprintln!("horizon-agentd: board delivery: {error}");
-                    }
-                    last_error = Some(error);
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-    });
+    Box::new(dispatch::BoardSource::default())
+}
+
+/// The board's reply sink for the outbox.
+pub(crate) fn sink() -> Arc<dyn ReplySink> {
+    Arc::new(dispatch::BoardSink)
 }
