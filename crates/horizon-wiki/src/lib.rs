@@ -6,6 +6,7 @@
 //! that maintains the wiki; it depends on neither `horizon-agent` nor gpui.
 
 pub mod concepts;
+pub mod logical;
 pub mod page;
 pub mod skill;
 pub mod store;

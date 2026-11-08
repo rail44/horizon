@@ -35,14 +35,20 @@ struct Frontmatter<'a> {
     body_start: usize,
 }
 
+/// Recognizes the same block the Markdown view splits off
+/// (`src/markdown/document.rs`): an opening `---` line (LF or CRLF) and the
+/// first `---` or `...` line after it, so a page's body starts at the same
+/// byte here and in the view.
 fn frontmatter(text: &str) -> Option<Frontmatter<'_>> {
-    let rest = text.strip_prefix("---\n")?;
-    let mut offset = 4;
+    let (rest, mut offset) = match text.strip_prefix("---\n") {
+        Some(rest) => (rest, 4),
+        None => (text.strip_prefix("---\r\n")?, 5),
+    };
     let mut entries = Vec::new();
     for line in rest.split_inclusive('\n') {
         offset += line.len();
-        let trimmed = line.trim_end_matches('\n');
-        if trimmed == "---" {
+        let trimmed = line.trim_end_matches(['\n', '\r']);
+        if trimmed == "---" || trimmed == "..." {
             return Some(Frontmatter {
                 entries,
                 body_start: offset,
@@ -79,9 +85,14 @@ pub fn body(text: &str) -> &str {
     frontmatter(text).map_or(text, |fm| &text[fm.body_start..])
 }
 
-/// `text` with `id` as the frontmatter's first entry.
+/// `text` (which opens with a frontmatter block) with `id` as the block's
+/// first entry.
 fn with_id(text: &str, id: Uuid) -> String {
-    format!("---\n{ID_KEY}: {}\n{}", urn(id), &text[4..])
+    let (fence, rest) = match text.strip_prefix("---\r\n") {
+        Some(rest) => ("---\r\n", rest),
+        None => ("---\n", &text[4..]),
+    };
+    format!("{fence}{ID_KEY}: {}\n{rest}", urn(id))
 }
 
 fn write_atomically(path: &Path, text: &str) -> Result<()> {
@@ -246,6 +257,22 @@ mod tests {
         assert!(store.read_page("sandbox").unwrap().contains("New body."));
     }
 
+    /// The body starts where the Markdown view's does
+    /// (`src/markdown/document.rs`): CRLF fences and a `...` close count.
+    #[test]
+    fn the_body_split_matches_the_markdown_view() {
+        assert_eq!(body("---\r\ntitle: T\r\n---\r\nbody\r\n"), "body\r\n");
+        assert_eq!(body("---\ntitle: T\n...\nbody\n"), "body\n");
+        assert_eq!(
+            body("---\ntitle: T\nno close\n"),
+            "---\ntitle: T\nno close\n"
+        );
+        let id = Uuid::new_v4();
+        let crlf = with_id("---\r\ntitle: T\r\n---\r\nbody\r\n", id);
+        assert_eq!(page_id(&crlf), Some(id));
+        assert_eq!(body(&crlf), "body\r\n");
+    }
+
     #[test]
     fn a_write_cannot_change_a_page_id_or_drop_the_frontmatter() {
         let (_dir, store) = store();
@@ -314,13 +341,13 @@ mod tests {
     fn an_ambiguous_edit_is_refused() {
         let (_dir, store) = store();
         store
-            .write_page("p", "---\ntitle: P\n---\nab ab\n")
+            .write_page("p", "---\ntitle: P\n---\nzq zq\n")
             .unwrap();
         let error = store
             .edit_page(
                 "p",
                 &[Edit {
-                    old: "ab".into(),
+                    old: "zq".into(),
                     new: "x".into(),
                 }],
             )
