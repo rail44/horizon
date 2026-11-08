@@ -15,7 +15,7 @@ use horizon_agent::frame::{agent_frame_from_events, AgentFrame, AgentFrameItem};
 #[cfg(test)]
 use horizon_agent::persistence::event_log::PersistedSessionContext;
 use horizon_agent::persistence::event_log::{Appender, Record, WriterHandle};
-use horizon_agent::persistence::projection::duckdb::DuckdbStoreHandle;
+use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, DuckdbStoreState};
 #[cfg(test)]
 use horizon_agent::roles::RoleId;
 use horizon_agent::tools::cancelled_tool_call_result;
@@ -397,18 +397,7 @@ pub(crate) fn resume_session(
     let mut lifecycle = lock_unpoisoned(&state.lifecycle);
     let writer = state.writer().ok_or("Session persistence is unavailable")?;
     writer.flush().map_err(|error| error.to_string())?;
-    let path = lock_unpoisoned(&state.agent_config)
-        .persistence
-        .event_log_path
-        .clone();
-    let report =
-        horizon_agent::persistence::event_log::read(&path).map_err(|error| error.to_string())?;
-    let mut records: Vec<_> = report
-        .records
-        .into_iter()
-        .filter(|record| record.session_id == session_id)
-        .collect();
-    records.sort_by_key(|record| record.sequence);
+    let records = state.flushed_session_records(session_id)?;
     if records.is_empty() {
         if state.session_exists(session_id) {
             return Ok(());
@@ -560,6 +549,39 @@ pub(super) fn interrupted_input_outcomes(events: &[Event]) -> Vec<Event> {
 }
 
 impl AgentdState {
+    /// One session's records in sequence order, for a caller that has just
+    /// flushed the writer. The writer projects each append before it takes
+    /// the next command, so after a flush a ready DuckDB projection holds
+    /// every record; while the projection is rebuilding, unavailable, or
+    /// failing, this reads the whole event log instead.
+    pub(crate) fn flushed_session_records(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<Record>, String> {
+        if let DuckdbStoreState::Ready(store) = self.duckdb_cell().current() {
+            match store.session_records(session_id, i64::MAX as u64) {
+                Ok(records) => return Ok(records),
+                Err(error) => eprintln!(
+                    "horizon-agentd: reading a session from the projection failed ({error:#}); \
+                     reading the whole event log"
+                ),
+            }
+        }
+        let path = lock_unpoisoned(&self.agent_config)
+            .persistence
+            .event_log_path
+            .clone();
+        let report =
+            horizon_agent::persistence::event_log::read(path).map_err(|error| error.to_string())?;
+        let mut records: Vec<_> = report
+            .records
+            .into_iter()
+            .filter(|record| record.session_id == session_id)
+            .collect();
+        records.sort_by_key(|record| record.sequence);
+        Ok(records)
+    }
+
     /// Acknowledge an outbox record even after its source session ended.
     /// This writes the authoritative log directly; transport records have no
     /// provider-history or transcript projection to mutate in a live session.
@@ -571,17 +593,7 @@ impl AgentdState {
         let _lifecycle = lock_unpoisoned(&self.lifecycle);
         let writer = self.writer().ok_or("Session persistence is unavailable")?;
         writer.flush().map_err(|error| error.to_string())?;
-        let path = lock_unpoisoned(&self.agent_config)
-            .persistence
-            .event_log_path
-            .clone();
-        let report =
-            horizon_agent::persistence::event_log::read(path).map_err(|error| error.to_string())?;
-        let records: Vec<_> = report
-            .records
-            .into_iter()
-            .filter(|record| record.session_id == session_id)
-            .collect();
+        let records = self.flushed_session_records(session_id)?;
         if records.iter().any(
             |record| matches!(&record.event, Event::DeliveryAcknowledged(id) if id == &delivery_id),
         ) {
@@ -615,6 +627,46 @@ impl AgentdState {
 mod delivery_tests {
     use super::*;
     use horizon_agent::contract::{InputResult, SessionInput, SessionInputOutcome};
+
+    /// After a flush, a ready projection answers without the event log: the
+    /// log is emptied, and the session's records still come back, in order
+    /// and without another session's.
+    #[test]
+    fn flushed_session_records_reads_the_projection_once_it_is_ready() {
+        use horizon_agent::persistence::event_log::{WriterHandle, WriterInit};
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("agent.jsonl");
+        let (writer, init, duckdb) =
+            WriterHandle::open_silently(&log, Some(dir.path().join("state.duckdb")));
+        assert!(matches!(init.recv().unwrap(), WriterInit::Ready(_)));
+        let store = duckdb.recv().unwrap().expect("projection opens");
+        let state = crate::session::test_support::test_state();
+        state.set_writer(Some(writer.clone()));
+        state.duckdb_cell().set(Some(store));
+
+        let mine = SessionId::new();
+        let other = SessionId::new();
+        for (session, id) in [(mine, "first"), (other, "elsewhere"), (mine, "second")] {
+            writer
+                .append(crate::outbox::tests::record(
+                    session,
+                    Event::DeliveryAcknowledged(id.into()),
+                ))
+                .unwrap();
+        }
+        writer.flush().unwrap();
+        std::fs::write(&log, "").unwrap();
+
+        let records = state.flushed_session_records(mine).unwrap();
+        let ids: Vec<_> = records
+            .iter()
+            .map(|record| match &record.event {
+                Event::DeliveryAcknowledged(id) => id.as_str(),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(ids, ["first", "second"]);
+    }
 
     #[test]
     fn restart_interrupts_active_destination_and_preserves_other_queued_requests() {
