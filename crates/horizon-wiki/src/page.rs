@@ -95,7 +95,7 @@ fn with_id(text: &str, id: Uuid) -> String {
     format!("{fence}{ID_KEY}: {}\n{rest}", urn(id))
 }
 
-fn write_atomically(path: &Path, text: &str) -> Result<()> {
+pub(crate) fn write_atomically(path: &Path, text: &str) -> Result<()> {
     let dir = path.parent().expect("store paths have a parent");
     std::fs::create_dir_all(dir)?;
     let temp = dir.join(format!(".{}.tmp", Uuid::new_v4()));
