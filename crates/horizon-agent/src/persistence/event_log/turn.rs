@@ -76,6 +76,7 @@ fn ends_turn(event: &Event) -> bool {
                     | SessionState::Cancelled
                     | SessionState::Failed
                     | SessionState::Terminated
+                    | SessionState::Suspended
             )
         )
 }

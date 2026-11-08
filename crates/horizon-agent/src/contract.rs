@@ -243,6 +243,10 @@ pub enum Command {
         model: String,
     },
     Shutdown,
+    /// Ends the session's thread but not the session: the persisted state is
+    /// [`SessionState::Suspended`] rather than `Terminated`, startup does not
+    /// resume it, and an explicit resume brings it back.
+    Suspend,
     /// Daemon-to-provider delivery of an already validated selection. Explicitly
     /// excluded from serialization/schema so clients cannot supply provider
     /// endpoints or key-variable names instead of selecting configured entries.
@@ -652,6 +656,9 @@ pub enum SessionState {
     Completed,
     Failed,
     Terminated,
+    /// The thread ended on [`Command::Suspend`]: not running, not resumed at
+    /// startup, and resumable on demand, unlike the owner's `Terminated`.
+    Suspended,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]

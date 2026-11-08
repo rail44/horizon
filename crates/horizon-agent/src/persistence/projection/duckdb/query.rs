@@ -137,7 +137,10 @@ impl Store {
                 role_id: row.get::<_, Option<String>>(2)?.map(RoleId),
                 dead: matches!(
                     last_state_event,
-                    Some(Event::StateChanged(SessionState::Terminated) | Event::Exited(_))
+                    Some(
+                        Event::StateChanged(SessionState::Terminated | SessionState::Suspended)
+                            | Event::Exited(_)
+                    )
                 ),
             })
         })?;

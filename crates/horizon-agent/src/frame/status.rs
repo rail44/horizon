@@ -18,6 +18,8 @@ pub enum SessionStatus {
     Completed,
     Failed,
     Terminated,
+    /// The thread ended on `Command::Suspend`; the session can be resumed.
+    Suspended,
 }
 
 impl AgentFrame {
@@ -42,6 +44,7 @@ impl AgentFrame {
             SessionState::Completed => SessionStatus::Completed,
             SessionState::Failed => SessionStatus::Failed,
             SessionState::Terminated => SessionStatus::Terminated,
+            SessionState::Suspended => SessionStatus::Suspended,
         })
     }
 }

@@ -359,20 +359,24 @@ fn terminate_orphaned_exploration(
     appender.commit_provider_events(closing.into_iter().map(ProviderEvent::from).collect())
 }
 
-/// Whether `frame`'s folded state shows its session already dead: either
+/// Whether `frame`'s folded state shows its session's thread already ended:
 /// `SessionState::Terminated` (the state `rig`'s `Command::Shutdown` path
-/// sends -- see `providers::rig::session`) or an `Event::Exited` item (the
+/// sends -- see `providers::rig::session`), `SessionState::Suspended` (its
+/// `Command::Suspend` path; such a session is resumed only on demand, by
+/// [`resume_session`]), or an `Event::Exited` item (the
 /// mock provider's shutdown path, `providers::mock`, pairs this with
 /// `Terminated`; checked independently here in case a future provider ever
 /// sends one without the other). Used by [`resume_persisted_sessions`] to
 /// decide which sessions are worth spawning a thread for at all.
 pub(super) fn session_is_dead(frame: &AgentFrame) -> bool {
-    matches!(frame.state, Some(SessionState::Terminated))
-        || (frame.state.is_none()
-            && frame
-                .items
-                .iter()
-                .any(|item| matches!(item, AgentFrameItem::Exited(_))))
+    matches!(
+        frame.state,
+        Some(SessionState::Terminated | SessionState::Suspended)
+    ) || (frame.state.is_none()
+        && frame
+            .items
+            .iter()
+            .any(|item| matches!(item, AgentFrameItem::Exited(_))))
 }
 
 /// Preserve each unfinished attempt's identity when settling durable history.
@@ -1205,6 +1209,19 @@ mod tests {
     /// `rig`'s `Command::Shutdown` path sends, with no accompanying
     /// `Event::Exited` -- see `providers::rig::session`) must be treated as
     /// dead.
+    /// A suspended session's thread has ended too, so startup leaves it for
+    /// an explicit resume (`rig`'s `Command::Suspend` path sends no
+    /// `Event::Exited`).
+    #[test]
+    fn a_suspended_session_is_not_resumed_at_startup() {
+        let events = vec![
+            Event::StateChanged(SessionState::Created),
+            Event::StateChanged(SessionState::WaitingForUser),
+            Event::StateChanged(SessionState::Suspended),
+        ];
+        assert!(session_is_dead(&agent_frame_from_events(&events)));
+    }
+
     #[test]
     fn session_is_dead_when_the_frame_state_is_terminated() {
         let events = vec![
