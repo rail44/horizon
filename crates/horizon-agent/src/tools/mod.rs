@@ -15,6 +15,7 @@ mod knowledge;
 mod memory;
 mod network;
 pub(crate) mod output;
+mod output_legend;
 mod processing;
 mod recall;
 mod settlement;

@@ -72,18 +72,33 @@ pub(crate) struct RecallRead {
 
 /// One session in the session-first history index. The aggregate labels keep
 /// command failures, tool/runtime errors, and containment denials separate.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RecallSession {
+    /// The session's id, the key `recall.read` takes.
     pub session_id: String,
+    /// When the session was most recently active.
     pub at: String,
+    /// The first user request that opened the session.
     pub first_request: Option<String>,
+    /// The most recent user request.
     pub latest_request: Option<String>,
+    /// How the last turn ended, when it produced an outcome.
     pub last_turn_outcome: Option<String>,
+    /// How many turns the session ran.
     pub turn_count: usize,
+    /// Tool results that failed without a command exit code and without a
+    /// containment refusal.
     pub tool_error_count: usize,
+    /// Command results whose exit code was non-zero.
     pub command_failure_count: usize,
+    /// Tool results carrying sandbox containment refusals -- filesystem,
+    /// network, mach service, or ungrantable paths. A refused call that was
+    /// then retried under approval counts here once.
     pub denial_count: usize,
+    /// Approval requests raised in this session, whether a human answered
+    /// them, denied them, or left them unanswered.
     pub approval_count: usize,
+    /// The sequence to resume `recall.read` from.
     pub first_sequence: Option<i64>,
 }
 

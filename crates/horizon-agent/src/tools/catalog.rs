@@ -242,12 +242,15 @@ fn build_definitions() -> Vec<Definition> {
         ),
         SynchronousTool::ListSessions.definition(
             "List Persisted Sessions".to_string(),
-            "List persisted sessions newest-first, one row per session, with the first/latest \
-                user request, last turn outcome, bounded error/approval counts, and the first \
-                sequence for recall.read. Optional limit, since/until Unix milliseconds, \
-                session_id, and latest turn_outcome filters are available. Use this before \
-                recall.read when you need to survey recent work rather than search event text."
-                .to_string(),
+            format!(
+                "List persisted sessions newest-first, one row per session. Optional limit, \
+                 since/until Unix milliseconds, session_id, and latest turn_outcome filters are \
+                 available. Use this before recall.read when you need to survey recent work \
+                 rather than search event text.\n\n{}",
+                crate::tools::output_legend::legend::<crate::tools::output::RecallSession>(
+                    "RecallSession"
+                )
+            ),
         ),
         // `task` (`tools::explore`, `docs/agent-explore-design.md`) is
         // auto-allowed like every other read tool -- the session it spawns
@@ -421,6 +424,48 @@ mod tests {
             .into_iter()
             .find(|definition| definition.id == id)
             .unwrap_or_else(|| panic!("`{id}` must be in the catalog"))
+    }
+
+    /// A tool whose result the model must interpret carries its field legend,
+    /// generated from the output type, so a field cannot disappear from the
+    /// description without disappearing from the type first.
+    #[test]
+    fn tool_descriptions_carry_the_generated_field_legend() {
+        let description = definition("recall.sessions").description;
+        for field in [
+            "session_id",
+            "turn_count",
+            "tool_error_count",
+            "command_failure_count",
+            "denial_count",
+            "approval_count",
+            "first_sequence",
+        ] {
+            assert!(
+                description.contains(field),
+                "`recall.sessions` describes no `{field}`; the legend is missing \
+                 or the output type changed without the catalog following"
+            );
+        }
+    }
+
+    /// The legend carries each field's doc comment, so the meaning the model
+    /// reads is the meaning written beside the type.
+    #[test]
+    fn the_legend_carries_the_output_types_field_documentation() {
+        let description = definition("recall.sessions").description;
+        assert!(
+            description.contains("Tool results carrying sandbox containment refusals"),
+            "the `denial_count` meaning must come from its doc comment"
+        );
+        assert!(
+            description.contains("whether a human answered"),
+            "the `approval_count` meaning must come from its doc comment"
+        );
+        assert!(
+            !description.contains("bounded error/approval counts"),
+            "the vague phrase this legend replaced must not come back"
+        );
     }
 
     /// `worktree.enter` takes no arguments, needs no approval, and tells
