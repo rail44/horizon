@@ -216,7 +216,7 @@ Diagrams are deferred; gpui-component (7591a35) has no mermaid rendering.
 
 ### What the investigation found (2026-11-08)
 
-- **Waking (recommended, not yet decided): generalize `board_flow`.** Its
+- **Waking (decided 2026-11-08, "それでよいです"): generalize `board_flow`.** Its
   outbox half (tailing the agent event log, pending answers and sends,
   per-recipient ordering, receipts) is already generic; its trigger half
   (folding the board log, the delivery cursor stored in the board log,
@@ -225,9 +225,9 @@ Diagrams are deferred; gpui-component (7591a35) has no mermaid rendering.
   the log, so a wiki reply address would error there on every tick
   (`board_flow/dispatch.rs:160-164`): a parallel wiki flow would still
   have to change the board code, and would read the agent log a second
-  time. Recommended: extract the outbox into a core with trigger sources
-  and reply sinks registered from outside, board and wiki each plugging
-  in one. Risk: board delivery's retry and ordering invariants, covered by
+  time. The outbox is extracted into a core with trigger sources and
+  reply sinks registered from outside, board and wiki each plugging in
+  one. Risk: board delivery's retry and ordering invariants, covered by
   its existing tests.
 - **No resumable close exists yet.** The only way to stop a session is
   `Shutdown`, which persists `Terminated`; startup skips dead sessions and
@@ -244,18 +244,51 @@ Diagrams are deferred; gpui-component (7591a35) has no mermaid rendering.
   again before fetching the web. Confirmed as far as the in-memory add;
   the absence of a replay is the investigating agent's finding.
 
+### Package layout (decided 2026-11-09)
+
+- **`crates/horizon-wiki`**, a new domain crate depending on neither
+  `horizon-agent` nor gpui (the board crate's boundary): the store and its
+  paths, the concept file, page reads and writes (whole and partial),
+  the comment log (Web Annotation types, `flock` append, thread
+  assembly), the logical text and its source map, re-anchoring, and
+  snapshots. The `project-wiki` skill and the thread-answering role move
+  into it as constant data, as `horizon-board`'s `agents.rs` does.
+  `cluster-spike`'s `place` and `concept-graph` move into it; the rest of
+  the spike is deleted (owner: "消してよいです").
+- **A tool registration seam in `horizon-agent`**: tools registered from
+  outside reach the four places tool ids are matched today (the
+  definitions in `tools/catalog.rs`, dispatch in `tools/execution.rs` and
+  `tools/synchronous.rs`, typed input in `tools/input`, classification in
+  `policy.rs`). The executor's signature uses plain types (a session id,
+  JSON in and out), so `horizon-wiki` implements its tools without
+  depending on `horizon-agent`. A registering package declares a tool
+  contained, and the core trusts that declaration — the wiki's writes are
+  confined to its store by the library. `horizon-agentd` is the
+  composition root that registers the wiki's tools, role, skill, trigger
+  source and reply sink (`docs/board-keeper-design.md` §3).
+- **The shell's view is `ViewKind::Wiki`, with the view in `src/wiki/`**,
+  the board's shape. This and the trusted declaration above are interim,
+  until plugin infrastructure exists ("Aでよいですが、プラグインの整備まで
+  一旦という印象ではあります"; "これも同上でその形でよいです"). The
+  alternatives were a hook in the Markdown view through which an extension
+  adds behavior, and registering view kinds from outside, which overlaps
+  `docs/view-runtime-principle.md`'s plugin views as a third runtime.
+- **Every identifier is a `urn:uuid:` IRI** (owner: "OK"): a page carries
+  `id: urn:uuid:…` in its frontmatter, so a rename keeps its identity;
+  snapshots are named by their uuid; a session is
+  `urn:uuid:<session id>`; the owner is one uuid per installation. `tag:`
+  URIs need a domain or email address the minter holds (RFC 4151), and
+  `file://` IRIs tie identity to one machine's paths.
+
 ### Still open before planning
 
-- The waking design above (recommended: generalize).
-- The resumable close and the projection-based resume.
-- Package layout: crates, how the shell's wiki view is registered and
-  opened, where the skill and `cluster-spike` move.
+- The resumable close and the projection-based resume (design detail,
+  no owner decision expected).
 - The re-anchoring implementation (a port of Hypothesis's
   `match-quote.ts` and approximate search, or existing crates), now over
   the logical text.
-- The IRI forms for pages, snapshots, comments and sessions.
 - Later: how orphaned and outdated comments look; what else the view
-  shows; the slicing of the work.
+  shows.
 
 ## Open points
 
