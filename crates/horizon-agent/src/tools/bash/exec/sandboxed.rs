@@ -1,5 +1,5 @@
 //! Sandboxed bash: prepare authority, capture execution, then classify the result.
-use super::{failed_output, finished, BashCompletion};
+use super::{failed_output, finished, infrastructure_output, BashCompletion};
 use crate::config::BashToolConfig;
 use crate::tools::bash::registry::Registration;
 use crate::tools::network::SessionNetworkProxy;
@@ -121,7 +121,7 @@ pub(in crate::tools::bash) fn run_sandboxed(
             };
             return finished(
                 identity,
-                failed_output(
+                infrastructure_output(
                     &format!("failed to start sandboxed bash: {error}.{recovery}"),
                     None,
                     config,

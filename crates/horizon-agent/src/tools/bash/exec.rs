@@ -259,6 +259,37 @@ fn failed_output(
     Response::failed(body)
 }
 
+/// A failure of the containment layer rather than of the command. The
+/// distinction is what keeps a broken runner from being mistaken for a broken
+/// command: the same command text cannot fix this, and a model that treats it
+/// as an ordinary failure re-runs it until the turn budget runs out.
+fn infrastructure_output(
+    reason: &str,
+    partial_output: Option<Vec<u8>>,
+    config: &BashToolConfig,
+) -> Response {
+    let mut body = BashOutput {
+        termination: BashTermination::InfrastructureFailed {
+            reason: reason.into(),
+        },
+        message: Some(reason.into()),
+        output: String::new(),
+        truncated: false,
+        output_file: None,
+        note: None,
+    };
+    if let Some(raw) = partial_output {
+        let source = String::from_utf8_lossy(&raw).into_owned();
+        let output_file = output::spill(&source);
+        let Capped { shown, truncated } =
+            output::cap(&source, config.output_cap_chars, output_file.as_deref());
+        body.output = shown;
+        body.truncated = truncated;
+        body.output_file = output_file.map(|path| path.display().to_string());
+    }
+    Response::failed(body)
+}
+
 /// Build the result before classifying containment denials. A signal has no
 /// cwd report: only an ordinary exit can update the session's working directory.
 fn status_output(

@@ -1,5 +1,5 @@
 //! Own the child through exit and output drain, then collect denial evidence.
-use super::super::{failed_output, stream::spawn_blocking_pump, take};
+use super::super::{failed_output, infrastructure_output, stream::spawn_blocking_pump, take};
 use crate::config::BashToolConfig;
 use crate::tools::bash::process::kill_process_tree;
 use crate::tools::bash::registry::Registration;
@@ -90,7 +90,7 @@ pub(super) fn collect(
             Some(handle) => match handle.join() {
                 Ok(Ok(denials)) => denials,
                 Ok(Err(error)) => {
-                    let mut value = failed_output(
+                    let mut value = infrastructure_output(
                         &format!("sandbox supervisor report failed: {error}"),
                         Some(raw_stdout),
                         config,
@@ -99,7 +99,7 @@ pub(super) fn collect(
                     return Err(value);
                 }
                 Err(_) => {
-                    let mut value = failed_output(
+                    let mut value = infrastructure_output(
                         "sandbox supervisor report reader panicked",
                         Some(raw_stdout),
                         config,
@@ -109,7 +109,7 @@ pub(super) fn collect(
                 }
             },
             None => {
-                let mut value = failed_output(
+                let mut value = infrastructure_output(
                     "sandbox supervisor did not provide a structured report channel",
                     Some(raw_stdout),
                     config,
