@@ -289,7 +289,7 @@ mod tests {
 
     fn connection(api_key_env: &str) -> DecisionConfig {
         DecisionConfig {
-            base_url: Some("https://ollama.com/v1".into()),
+            url: "https://ollama.com/v1/systemone".into(),
             api_key_env: api_key_env.into(),
             model: "clef:cloud".into(),
         }

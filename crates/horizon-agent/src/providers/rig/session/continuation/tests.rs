@@ -357,7 +357,7 @@ async fn client_errors_and_timeouts_hand_back_with_a_fallback_reason() {
 #[test]
 fn the_check_is_installed_only_with_a_decision_model_outside_exploration_roles() {
     let decision = DecisionConfig {
-        base_url: Some("https://decision.invalid/v1".into()),
+        url: "https://decision.invalid/v1/systemone".into(),
         api_key_env: "DECISION_KEY".into(),
         model: "clef:cloud".into(),
     };

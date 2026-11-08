@@ -622,6 +622,7 @@ fn small_model_is_independent_of_default_model_and_never_uses_anthropic() {
         name = "helper"
         base_url = "https://helpers.invalid/v1"
         api_key_env = "HELPER_KEY"
+        decision_url = "https://helpers.invalid/v1/systemone"
     "#,
     )
     .unwrap();
@@ -717,23 +718,40 @@ fn a_decision_model_on_an_anthropic_entry_is_rejected() {
 fn a_valid_decision_model_resolves_its_entry_and_model() {
     let config = parse(
         r#"
-        decision_model = { provider = "ollama", model = "clef:cloud" }
+        decision_model = { provider = "deepinfra", model = "Cloudflare/clef" }
         [[providers]]
-        name = "ollama"
-        base_url = "https://ollama.com/v1"
-        api_key_env = "OLLAMA_API_KEY"
+        name = "deepinfra"
+        base_url = "https://api.deepinfra.com/v1/openai"
+        api_key_env = "DEEPINFRA_API_KEY"
+        decision_url = "https://api.deepinfra.com/v1/decisions"
     "#,
     )
     .unwrap();
     let decision = config.resolved_decision_model().unwrap();
-    assert_eq!(decision.provider.name, "ollama");
-    assert_eq!(
-        decision.provider.base_url.as_deref(),
-        Some("https://ollama.com/v1")
-    );
-    assert_eq!(decision.provider.api_key_env, "OLLAMA_API_KEY");
-    assert_eq!(decision.model, "clef:cloud");
+    assert_eq!(decision.provider.name, "deepinfra");
+    // The URL is taken as written, never derived from base_url.
+    assert_eq!(decision.url, "https://api.deepinfra.com/v1/decisions");
+    assert_eq!(decision.provider.api_key_env, "DEEPINFRA_API_KEY");
+    assert_eq!(decision.model, "Cloudflare/clef");
     assert!(!provider_config_warnings(&config)
+        .iter()
+        .any(|warning| warning.starts_with("decision_model:")));
+}
+
+#[test]
+fn a_decision_model_on_an_entry_without_a_decision_url_is_rejected() {
+    let config = parse(
+        "decision_model = { provider = \"ollama\", model = \"clef:cloud\" }\n\
+         [[providers]]\nname = \"ollama\"\nbase_url = \"https://ollama.com/v1\"\n",
+    )
+    .unwrap();
+    let error = config.resolved_decision_model().unwrap_err();
+    assert!(
+        error.starts_with("decision_model: provider \"ollama\" has no decision_url"),
+        "{error}"
+    );
+    assert!(error.contains("turn-continuation checks are disabled"));
+    assert!(provider_config_warnings(&config)
         .iter()
         .any(|warning| warning.starts_with("decision_model:")));
 }

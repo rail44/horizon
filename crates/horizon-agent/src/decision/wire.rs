@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// `POST {base_url}/systemone`'s body.
+/// `POST {decision_url}`'s body.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DecisionRequest {
     pub model: String,

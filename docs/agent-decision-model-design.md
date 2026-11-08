@@ -54,12 +54,14 @@ ACP line to the shell or the terminal wire.
 
 `decision_model = { provider, model }` is a top-level pair beside
 `default_model` and `small_model` (`docs/provider-configuration.md`). Its
-provider must be an `openai-compatible` entry: the System One route lives
-beside `/chat/completions` on the same base URL, so the entry's `base_url`
-(or `OPENAI_BASE_URL`) is what `/systemone` is joined to and its
-`api_key_env` is the credential. The pair absent or invalid, the key
-variable unset, or the entry without a base URL (OpenAI's default URL
-serves no System One route) is warned at startup. The judge then falls
+provider must be an `openai-compatible` entry with a `decision_url`, the
+route's full URL used as written, and its `api_key_env` is the credential.
+The URL is not joined onto `base_url`: Ollama cloud serves the route at
+`https://ollama.com/v1/systemone`, but DeepInfra serves it at
+`https://api.deepinfra.com/v1/decisions`, outside its `/v1/openai` chat
+base, and a derived `/v1/openai/systemone` answered 404 on every call
+(2026-11-07). The pair absent or invalid, the key variable unset, or the
+entry without a `decision_url` is warned at startup. The judge then falls
 back to the `small_model` two-stage chat judge when that pair is available
 (without it, every approval candidate goes to the human), and the
 turn-continuation check is off: a turn ends where the model ended it.

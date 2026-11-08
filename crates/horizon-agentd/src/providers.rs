@@ -44,11 +44,11 @@ pub(crate) fn agent_config(raw: &horizon_config::RawConfig) -> horizon_agent::co
         )
     });
     config.decision = raw.resolved_decision_model().ok().map(|decision| {
-        horizon_agent::decision::DecisionConfig::from_env(
-            decision.provider.base_url,
-            decision.provider.api_key_env,
-            decision.model,
-        )
+        horizon_agent::decision::DecisionConfig {
+            url: decision.url,
+            api_key_env: decision.provider.api_key_env,
+            model: decision.model,
+        }
     });
     config
 }
@@ -78,6 +78,7 @@ mod tests {
             name = "ollama"
             base_url = "https://ollama.com/v1"
             api_key_env = "OLLAMA_API_KEY"
+            decision_url = "https://ollama.com/v1/systemone"
         "#,
         )
         .unwrap();
@@ -94,7 +95,19 @@ mod tests {
         let decision = before.decision.as_ref().unwrap();
         assert_eq!(decision.api_key_env, "OLLAMA_API_KEY");
         assert_eq!(decision.model, "clef:cloud");
-        assert_eq!(decision.base_url.as_deref(), Some("https://ollama.com/v1"));
+        assert_eq!(decision.url, "https://ollama.com/v1/systemone");
+        // The decision URL is used as written: the chat base-URL variable
+        // does not redirect it.
+        std::env::set_var("OPENAI_BASE_URL", "https://elsewhere.invalid/v1");
+        assert_eq!(
+            agent_config(&raw).decision.unwrap().url,
+            "https://ollama.com/v1/systemone"
+        );
+        std::env::remove_var("OPENAI_BASE_URL");
+        // An entry without a decision_url cannot serve decision_model.
+        let mut no_url = raw.clone();
+        no_url.providers[2].decision_url = None;
+        assert!(agent_config(&no_url).decision.is_none());
         // An invalid decision_model leaves the other two pairs alone.
         let mut no_decision = raw.clone();
         no_decision.decision_model = Some(horizon_config::RawModelPair {

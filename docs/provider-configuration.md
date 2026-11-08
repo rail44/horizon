@@ -29,6 +29,7 @@ api_key_env = "HELPER_API_KEY"
 name = "ollama"
 base_url = "https://ollama.com/v1"
 api_key_env = "OLLAMA_API_KEY"
+decision_url = "https://ollama.com/v1/systemone"
 ```
 
 Only environment-variable names go in TOML; credentials stay in the environment.
@@ -86,14 +87,17 @@ from another entry.
 ## `decision_model`
 
 The decision model automatic approval judgments and turn-continuation checks
-ask. A decision model generates no text: `POST {base_url}/systemone` (the
-System One API) takes a `state` plus named `choice`/`noul` questions and
-returns a probability per option. Its provider must be an `openai-compatible`
-entry whose `base_url` serves that route beside `/chat/completions`, such as
-Ollama cloud's `https://ollama.com/v1` with model `clef:cloud`; the entry's
-`api_key_env` serves it as a bearer token. OpenAI's default URL has no such
-route, so an entry without a `base_url` cannot serve it. When the pair is
-absent, invalid, or names a non-openai-compatible entry, startup warns naming
+ask. A decision model generates no text: `POST {decision_url}` (the System
+One API) takes a `state` plus named `choice`/`noul` questions and returns a
+probability per option. Its provider must be an `openai-compatible` entry
+with a `decision_url`: the route's full URL, used as written. It is not
+derived from `base_url`, because providers serve it at unrelated paths —
+Ollama cloud at `https://ollama.com/v1/systemone` (model `clef:cloud`),
+DeepInfra at `https://api.deepinfra.com/v1/decisions` (model
+`Cloudflare/clef`), outside its `/v1/openai` chat base — and no environment
+variable overrides it. The entry's `api_key_env` serves it as a bearer token.
+When the pair is absent, invalid, names a non-openai-compatible entry, or
+names an entry without a `decision_url`, startup warns naming
 the key: automatic approval judgments fall back to `small_model`'s chat
 judge (and stay with the human when that pair is unavailable too), and
 turn-continuation checks are off. The same happens when the entry's key

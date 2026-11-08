@@ -62,8 +62,8 @@ pub struct RawConfig {
     pub small_model: Option<RawModelPair>,
     /// `decision_model = { provider, model }`: the System One decision model
     /// approval judgments and turn-continuation checks ask. The provider
-    /// must be an openai-compatible entry whose `base_url` serves the
-    /// `/systemone` route; `None` (or an invalid pair) disables
+    /// must be an openai-compatible entry with a `decision_url`; `None` (or
+    /// an invalid pair) disables
     /// turn-continuation checks, and approval judgments fall back to
     /// `small_model`'s chat judge.
     #[serde(deserialize_with = "deserialize_lenient_model_pair")]
@@ -139,6 +139,11 @@ pub struct RawNamedProviderConfig {
     /// is read from. `None` means the kind's own default
     /// ([`RawProviderKind::default_api_key_env`]).
     pub api_key_env: Option<String>,
+    /// The full URL of the entry's System One decision route (e.g.
+    /// `https://ollama.com/v1/systemone`). It is not derived from
+    /// `base_url`: providers serve the route at unrelated paths, so an
+    /// entry `decision_model` names must state it.
+    pub decision_url: Option<String>,
 }
 
 /// A top-level `{ provider, model }` pair as the file writes it
@@ -168,10 +173,13 @@ pub struct ResolvedSmallModel {
 }
 
 /// [`RawConfig::resolved_decision_model`]'s output: the openai-compatible
-/// entry the `decision_model` pair names, plus the decision model id.
+/// entry the `decision_model` pair names, its decision URL, and the
+/// decision model id.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedDecisionModel {
     pub provider: ResolvedProviderConfig,
+    /// The entry's `decision_url`, present by construction.
+    pub url: String,
     pub model: String,
 }
 
@@ -187,6 +195,7 @@ pub struct ResolvedProviderConfig {
     pub kind: RawProviderKind,
     pub base_url: Option<String>,
     pub api_key_env: String,
+    pub decision_url: Option<String>,
 }
 
 /// [`RawConfig::resolved_providers`]'s whole output: the effective entry
@@ -215,6 +224,7 @@ impl RawConfig {
                 api_key_env: RawProviderKind::OpenAiCompatible
                     .default_api_key_env()
                     .to_string(),
+                decision_url: None,
             });
         } else {
             for entry in &self.providers {
@@ -230,6 +240,7 @@ impl RawConfig {
                         .api_key_env
                         .clone()
                         .unwrap_or_else(|| kind.default_api_key_env().to_string()),
+                    decision_url: entry.decision_url.clone(),
                 });
             }
         }
@@ -271,8 +282,8 @@ impl RawConfig {
     }
 
     /// The `decision_model` pair resolved against the provider entries. Its
-    /// provider must be openai-compatible; an invalid pair never redirects a
-    /// request to another entry.
+    /// provider must be openai-compatible and state a `decision_url`; an
+    /// invalid pair never redirects a request to another entry.
     pub fn resolved_decision_model(&self) -> Result<ResolvedDecisionModel, String> {
         let providers = self.resolved_providers().providers;
         let (entry, pair) =
@@ -284,8 +295,16 @@ impl RawConfig {
                 pair_consequence(DECISION_MODEL_KEY)
             ));
         }
+        let url = entry.decision_url.clone().ok_or_else(|| {
+            format!(
+                "{DECISION_MODEL_KEY}: provider {:?} has no decision_url — {}",
+                pair.provider,
+                pair_consequence(DECISION_MODEL_KEY)
+            )
+        })?;
         Ok(ResolvedDecisionModel {
             provider: entry,
+            url,
             model: pair.model,
         })
     }

@@ -72,7 +72,7 @@ const MODEL_PAIR_KEYS: &[&str] = &["provider", "model"];
 /// Keys a single `[[providers]]` entry recognizes — checked the same way
 /// [`PROJECT_GRANT_KEYS`] is: `SECTIONS` can't see inside an array of
 /// tables.
-const PROVIDER_ENTRY_KEYS: &[&str] = &["name", "kind", "base_url", "api_key_env"];
+const PROVIDER_ENTRY_KEYS: &[&str] = &["name", "kind", "base_url", "api_key_env", "decision_url"];
 
 /// Pure collection of warning strings for `contents` -- factored out from
 /// [`warn`] so tests can assert on the returned strings instead of
@@ -291,7 +291,8 @@ mod tests {
             "default_model = { provider = \"default\", model = \"m\" }\n\
              small_model = { provider = \"default\", model = \"s\" }\n\
              decision_model = { provider = \"default\", model = \"d\" }\n\
-             [[providers]]\nname = \"default\"\napi_key_env = \"KEY\"\nbase_url = \"https://example.invalid\"\n",
+             [[providers]]\nname = \"default\"\napi_key_env = \"KEY\"\nbase_url = \"https://example.invalid\"\n\
+             decision_url = \"https://example.invalid/systemone\"\n",
         );
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
     }

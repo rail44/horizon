@@ -72,11 +72,12 @@
 #   their raw titles and that fallback judge is off; it never borrows
 #   another entry's credentials.
 # - decision_model: the decision model (System One API, POST
-#   {base_url}/systemone) automatic approval judgments and turn-continuation
-#   checks ask. Its provider must be an openai-compatible entry whose
-#   base_url serves the System One route, e.g. an entry with base_url
-#   "https://ollama.com/v1" and model "clef:cloud"; that entry's
-#   api_key_env serves it. Unset or invalid, or its key variable unset:
+#   {decision_url}) automatic approval judgments and turn-continuation
+#   checks ask. Its provider must be an openai-compatible entry with a
+#   decision_url, e.g. an entry with decision_url
+#   "https://ollama.com/v1/systemone" and model "clef:cloud"; that entry's
+#   api_key_env serves it. Unset or invalid, the entry without a
+#   decision_url, or its key variable unset:
 #   startup warns naming the key, automatic approval judgments fall back to
 #   small_model (approval stays with you when that is unavailable too), and
 #   turn-continuation checks are off. Ollama cloud needs a paid plan or credits.
@@ -102,6 +103,11 @@
 # - base_url: unset means rig's own default endpoint for the kind
 #   (https://api.openai.com/v1 / https://api.anthropic.com); env
 #   OPENAI_BASE_URL / ANTHROPIC_BASE_URL win when set.
+# - decision_url: the full URL of the entry's System One decision route,
+#   used as written (never derived from base_url; no env var overrides it).
+#   Only an entry decision_model names needs it. Providers serve it at
+#   unrelated paths: Ollama cloud at https://ollama.com/v1/systemone,
+#   DeepInfra at https://api.deepinfra.com/v1/decisions.
 # - There is no model here: the picker's candidates are whatever the
 #   provider's own GET /models listing answers (fetched when you drill into
 #   the entry), and default_model / small_model / decision_model above name
