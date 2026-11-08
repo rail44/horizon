@@ -1,5 +1,7 @@
 mod clearing;
 mod completion;
+#[cfg(test)]
+pub(crate) use completion::offered_tool_ids;
 pub(crate) mod conversation;
 mod guards;
 mod history;

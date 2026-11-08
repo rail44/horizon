@@ -129,6 +129,10 @@ pub(crate) fn plan_prepared_call(
     // read-only, so an attempt to write is a containment denial and takes the
     // ordinary filesystem-retry approval. Only the fs tools, which run
     // outside the OS sandbox, need this pre-execution gate.
+    // A registered tool's package declared it contained (`tools::external`).
+    if crate::tools::is_external_tool(&request.tool_id) {
+        return ToolPlan::Automatic(AutomaticTool::Synchronous);
+    }
     if matches!(request.tool_id.as_str(), "fs.write" | "fs.edit") {
         if let Some(root) = tool_state.primary_checkout_without_write_access() {
             return approval(
