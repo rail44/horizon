@@ -230,7 +230,13 @@ const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: anoth
      you one question about this workspace and will read only your final message, never your \
      tool calls. There is no human to ask; take the most plausible reading of an ambiguous \
      question. Answer with concrete paths, line numbers, and findings, complete enough that the \
-     requester need not repeat your reading.";
+     requester need not repeat your reading.\n\
+     \n\
+     Your toolset is read-only: fs.read, fs.grep, fs.glob, recall.search, recall.read, \
+     recall.sessions, knowledge.read. You have no shell, cannot edit or create files, and cannot \
+     run tests or commands -- asking for those fails and wastes the turn budget. When the answer \
+     genuinely needs execution, say so in your final message and hand the step back to the \
+     requester instead of attempting it.";
 
 /// Whether `role_id` names an exploration session -- [`EXPLORE_ROLE`], a
 /// `task` child. This is the one predicate `horizon-agentd` needs to tell
@@ -388,6 +394,16 @@ mod tests {
                 "knowledge.read",
             ]
         );
+        // The prompt counts the same tools out in prose. It exists because a
+        // child that does not know its own limits spends its budget asking
+        // for a shell it does not have, so a tool added to one list and not
+        // the other reintroduces exactly that failure.
+        for tool in allowed.iter() {
+            assert!(
+                role.prompt_section.contains(tool),
+                "the explore prompt must name {tool} so the child does not attempt it blindly"
+            );
+        }
         for forbidden in [
             "task",
             "bash",
