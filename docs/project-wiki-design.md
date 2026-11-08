@@ -280,6 +280,45 @@ Diagrams are deferred; gpui-component (7591a35) has no mermaid rendering.
   URIs need a domain or email address the minter holds (RFC 4151), and
   `file://` IRIs tie identity to one machine's paths.
 
+### Plan (accepted 2026-11-09, "この計画で進めましょう")
+
+Each stage ends with the gate; landing each on local main is the
+owner's call.
+
+1. **Core preparation**, independent of the wiki:
+   1. the tool registration seam in `horizon-agent`, with a composition
+      entry in agentd;
+   2. `board_flow`'s outbox extracted into a core taking registered
+      trigger sources and reply sinks, the board's tests kept;
+   3. the resumable close (a new stop and its persisted marker, skipped
+      at startup) and projection-based resume, removing the whole-log
+      reads from `resume_session` and `acknowledge_delivery`.
+
+   Once 1.1 lands, moving the board's and knowledge layer's tools onto
+   the seam is delegated to a separate Claude Code session.
+2. **`crates/horizon-wiki`**:
+   1. the store and pages (frontmatter `id`, whole writes and partial
+      edits), the concept file, `place`/`concept-graph` moved in,
+      `cluster-spike` deleted, the skill moved in (and the
+      `.claude/skills` link repointed);
+   2. the logical text and its source map, parse options matching the
+      view's `TextView`;
+   3. Web Annotation types and JSON with WPT-schema conformance tests,
+      the per-page log appended under `flock`, thread assembly,
+      snapshots;
+   4. re-anchoring: Hypothesis's quote matching and approximate search
+      ported, counting characters.
+3. **Agent integration**: the wiki tools (read, whole write, partial
+   edit) through the seam; the thread role, the wiki trigger source (a
+   new owner annotation) and reply sink (appending the replying
+   annotation) registered on the outbox core; closing after an answer
+   and resuming on the next message.
+4. **Shell**: `ViewKind::Wiki` and `src/wiki/` from the Markdown view —
+   commenting from a selection, highlighting anchors, the thread, file
+   watching; orphaned comments listed at the end at first. Opening it
+   from the view chooser and a CLI subcommand. AGENTS.md's module map and
+   this doc updated.
+
 ### Still open before planning
 
 - The resumable close and the projection-based resume (design detail,
