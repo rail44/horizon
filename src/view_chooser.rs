@@ -213,6 +213,7 @@ mod tests {
             skill_ids: &[],
             summarize_on_cap: false,
             standing: false,
+            unattended: false,
         }]);
         let choices = view_choices();
         assert!(choices.iter().any(|choice| choice

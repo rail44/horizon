@@ -32,6 +32,7 @@ pub(crate) fn register() {
         },
         summarize_on_cap: false,
         standing,
+        unattended: false,
     })
     .collect();
     horizon_agent::roles::register_external(definitions);

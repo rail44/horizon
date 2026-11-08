@@ -219,9 +219,15 @@ impl Annotation {
 
     /// A reply to the annotation `parent` (its id).
     pub fn reply(parent: &str, creator: Agent, body: TextualBody) -> Self {
+        Self::reply_with_id(Uuid::new_v4(), parent, creator, body)
+    }
+
+    /// A reply with a given id, for a writer that may record the same reply
+    /// twice and relies on the log refusing a repeated id.
+    pub fn reply_with_id(id: Uuid, parent: &str, creator: Agent, body: TextualBody) -> Self {
         Self {
             context: CONTEXT.into(),
-            id: urn(Uuid::new_v4()),
+            id: urn(id),
             kind: AnnotationType::Annotation,
             motivation: Motivation::Replying,
             creator,

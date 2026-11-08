@@ -24,9 +24,19 @@ layer's naming. In it:
   (`## id: title`, then one namespace per line). It is what persists; do not
   replace it with a fresh clustering.
 
-Nothing in the store is ever placed in the repository. The store is outside
-any workspace, so an agent running under containment needs an approval to
-write there; ask for it rather than writing pages into the repository.
+- `threads/` and `snapshots/` -- the owner's comments on pages and the page
+  copies they were made on. Never edit them; they are written by the wiki
+  view and the thread sessions.
+
+Each page's frontmatter carries an `id` (`urn:uuid:...`) that comments point
+at: keep it when rewriting a page, and never copy it into another page.
+
+Nothing in the store is ever placed in the repository. A Horizon agent writes
+pages with the `wiki.write` (whole page) and `wiki.edit` (exact-string
+replacements) tools, which keep the `id` and need no approval, and reads them
+with `wiki.read` and `wiki.list`. Any other agent writes the files directly;
+the store is outside any workspace, so under containment that needs an
+approval -- ask for it rather than writing pages into the repository.
 
 ## 1. Read against the owner's local main
 
