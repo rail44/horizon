@@ -43,7 +43,8 @@ written for a person. It is separate from the knowledge layer
 ## The concept grouping spike (2026-11-08)
 
 `duckdb-ext/cluster-spike/` (README, `results/findings.md`,
-`results/concepts.md`). Input: 443 namespaces and 2068 undirected edges
+`results/concepts.md`; deleted 2026-11-09 once `place` and `concept-graph`
+moved into `horizon-wiki` — read them at commit 0cfb2ab1). Input: 443 namespaces and 2068 undirected edges
 weighted by non-test unit edges.
 
 - leiden-rs (Leiden, modularity, resolution 2) proposed 18 groups, most of
@@ -345,9 +346,9 @@ owner's call.
   repository skill `.horizon/skills/project-wiki/SKILL.md`, written so it
   does not depend on which agent runs it (owner: "スキルとしてはエージェント
   実装によらない形でいいんじゃないですか？"); `.claude/skills/project-wiki`
-  links to the same file. Its mechanical steps are `cluster-spike place`
+  links to the same file. Its mechanical steps are `horizon-wiki place`
   (namespaces the concept file lacks, with the concept each is most tied
-  to, and names the code no longer has) and `cluster-spike concept-graph`
+  to, and names the code no longer has) and `horizon-wiki concept-graph`
   (directed weights between concepts). The concept file moved to the store
   as `concepts.md` beside the pages (owner's choice), so open point "Where
   the concept file lives" is closed. Still open: a Horizon agent needs an

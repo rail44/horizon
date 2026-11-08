@@ -44,14 +44,15 @@ Remove it with `git worktree remove <tmpdir>/wiki-main` when done.
 
 Build the tools once per machine (`duckdb-ext/README.md`): `duckdb-ext/build.sh`
 for `code-db`, `uv run --locked --script scripts/refactor-audit/run.py setup`
-for the jscpd binary `code-db index` requires, and `cargo build --release` in
-`duckdb-ext/cluster-spike/`. Then, on the main checkout:
+for the jscpd binary `code-db index` requires, and `cargo build -p horizon-wiki`
+for `horizon-wiki` (in `target/debug/`). Then, on the main checkout:
 
 ```sh
+horizon-wiki store-dir <main repository toplevel>     # the <store> below
 code-db index <tmpdir>/wiki-main
 code-db query <tmpdir>/wiki-main namespace_graph FORMAT=csv > <tmpdir>/edges.csv
-cluster-spike place <tmpdir>/edges.csv <store>/concepts.md
-cluster-spike concept-graph <tmpdir>/edges.csv <store>/concepts.md > <tmpdir>/concept-graph.csv
+horizon-wiki place <tmpdir>/edges.csv <store>/concepts.md
+horizon-wiki concept-graph <tmpdir>/edges.csv <store>/concepts.md > <tmpdir>/concept-graph.csv
 ```
 
 - `place` lists namespaces the concept file does not name, each with the

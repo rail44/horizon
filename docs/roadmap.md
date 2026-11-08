@@ -699,7 +699,8 @@ A human-facing view of the project's current state: an overview plus one
 page per concept, user-side Markdown, linking to docs and the board
 rather than restating them. Concepts come from clustering the code
 database's namespace graph plus an agent pass, spiked in
-`duckdb-ext/cluster-spike/`. Comment threads on selected text, answered
+`duckdb-ext/cluster-spike/` (now deleted; its concept commands live in
+`crates/horizon-wiki`). Comment threads on selected text, answered
 by agent sessions and anchored with a subset of W3C Web Annotation, are
 planned in four stages (core seams, `horizon-wiki`, agent integration,
 the shell's wiki view). `docs/project-wiki-design.md` is the
