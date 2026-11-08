@@ -27,6 +27,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::NewAgent { .. } => "new-agent",
         Subcommand::Preview { .. } => "preview",
         Subcommand::Markdown { .. } => "markdown",
+        Subcommand::Wiki { .. } => "wiki",
         Subcommand::Attach { .. } => "attach",
         Subcommand::TerminateSession { .. } => "terminate-session",
         Subcommand::TerminateAllDetached => "terminate-all-detached",
@@ -105,6 +106,10 @@ pub fn to_request(
         } => invoke(
             command_name,
             file_view_args(path, name.as_deref(), resolved_split, *activate),
+        ),
+        Subcommand::Wiki { path, activate, .. } => invoke(
+            command_name,
+            file_view_args(path, None, resolved_split, *activate),
         ),
         Subcommand::Markdown { path, activate, .. } => invoke(
             command_name,

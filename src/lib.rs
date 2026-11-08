@@ -66,6 +66,8 @@ mod ui;
 #[cfg(not(target_family = "wasm"))]
 mod view_chooser;
 #[cfg(not(target_family = "wasm"))]
+mod wiki;
+#[cfg(not(target_family = "wasm"))]
 mod workspace;
 #[cfg(not(target_family = "wasm"))]
 mod workspace_state;

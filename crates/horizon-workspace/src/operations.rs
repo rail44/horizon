@@ -401,20 +401,19 @@ impl Workspace {
             return false;
         }
         pane.kind = PaneKind::View(kind);
-        if kind != ViewKind::Markdown {
+        if !kind.carries_document() {
             pane.document = None;
         }
         true
     }
 
-    /// Points a Markdown pane at `path`. `false`, a no-op, when `pane_id`
-    /// is unknown or is not a Markdown pane: only a document view carries
-    /// a document.
+    /// Points a document view (Markdown, Wiki) at `path`. `false`, a
+    /// no-op, when `pane_id` is unknown or is not a document view.
     pub fn set_pane_document(&mut self, pane_id: PaneId, path: std::path::PathBuf) -> bool {
         let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == pane_id) else {
             return false;
         };
-        if pane.kind != PaneKind::View(ViewKind::Markdown) {
+        if !matches!(pane.kind, PaneKind::View(kind) if kind.carries_document()) {
             return false;
         }
         pane.document = Some(path);

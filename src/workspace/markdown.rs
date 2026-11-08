@@ -24,7 +24,7 @@ impl WorkspaceShell {
         if !path.is_file() {
             return Err(format!("not a file: {}", path.display()));
         }
-        if let Some(pane_id) = self.workspace.document_pane(&path) {
+        if let Some(pane_id) = self.workspace.document_pane(ViewKind::Markdown, &path) {
             if let Some(PaneView::Cached(CachedPaneLeaf::Markdown(view))) =
                 self.panes.get(&pane_id).cloned()
             {

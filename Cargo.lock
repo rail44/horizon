@@ -4259,6 +4259,7 @@ dependencies = [
  "horizon-config",
  "horizon-control",
  "horizon-terminal-core",
+ "horizon-wiki",
  "horizon-wire",
  "horizon-workspace",
  "log",
@@ -4363,6 +4364,7 @@ version = "0.1.0"
 dependencies = [
  "horizon-board",
  "horizon-control",
+ "horizon-wiki",
  "serde_json",
  "tokio",
 ]

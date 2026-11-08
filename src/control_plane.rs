@@ -180,6 +180,13 @@ fn dispatch_invoke(
         } => {
             shell.control_plane_open_markdown(path, split, activate, window, cx)?;
         }
+        Command::Wiki {
+            path,
+            split,
+            activate,
+        } => {
+            shell.control_plane_open_wiki(path, split, activate, window, cx)?;
+        }
         Command::Attach {
             session_id,
             activate,

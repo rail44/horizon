@@ -89,7 +89,7 @@ pub(crate) fn linked_markdown_body(
     )
 }
 
-fn running_text(view: TextView, color: Hsla) -> impl IntoElement {
+pub(crate) fn running_text(view: TextView, color: Hsla) -> impl IntoElement {
     let mut code = StyleRefinement::default();
     code.overflow.x = Some(Overflow::Scroll);
     let body = body();

@@ -1,0 +1,194 @@
+//! What the wiki view draws, read without gpui: one page of the project
+//! wiki, its comment threads, and where each thread sits in the page now.
+//!
+//! Positions cross three spaces. A thread stores code points of the page's
+//! logical text (`horizon_wiki::logical`); the view's `TextView` reports a
+//! selection, and takes highlights, through byte ranges of the Markdown
+//! body it was given. The logical text's source map converts between the
+//! first two, and `RenderedText::range_for_source` takes a body range on to
+//! the rendered string.
+
+use std::ops::Range;
+
+use horizon_wiki::anchor::{self, Anchor};
+use horizon_wiki::logical::LogicalText;
+use horizon_wiki::{Store, Thread};
+use uuid::Uuid;
+
+use crate::markdown::document::{self, Document};
+
+/// One thread and where it is in the page as it reads now.
+#[derive(Debug, Clone)]
+pub(crate) struct PlacedThread {
+    pub(crate) thread: Thread,
+    pub(crate) anchor: Anchor,
+    /// The anchor's bytes in the page body, when it is still in the page.
+    pub(crate) source: Option<Range<usize>>,
+}
+
+impl PlacedThread {
+    /// The text the thread's root quoted.
+    pub(crate) fn quote(&self) -> String {
+        self.thread
+            .root
+            .quote()
+            .map(|quote| quote.exact)
+            .unwrap_or_default()
+    }
+}
+
+/// A page as loaded for the view.
+#[derive(Debug)]
+pub(crate) struct WikiPage {
+    /// The page's id; `None` until it has one (a page nobody commented on
+    /// may lack it).
+    pub(crate) id: Option<Uuid>,
+    pub(crate) document: Document,
+    logical: LogicalText,
+    /// Anchored threads first, in page order, then orphans in the order
+    /// they were opened.
+    pub(crate) threads: Vec<PlacedThread>,
+}
+
+impl WikiPage {
+    pub(crate) fn load(store: &Store, name: &str) -> Result<Self, String> {
+        let text = store.read_page(name).map_err(|error| error.to_string())?;
+        let id = horizon_wiki::page::page_id(&text);
+        let document = document::parse(&text);
+        let logical = LogicalText::of_markdown(&document.body);
+        let threads = match id {
+            Some(id) => store.threads(id).map_err(|error| error.to_string())?,
+            None => Vec::new(),
+        };
+        let mut threads: Vec<PlacedThread> = threads
+            .into_iter()
+            .map(|thread| place(&logical, thread))
+            .collect();
+        // Stable: orphans keep their log order after every anchored one.
+        threads.sort_by_key(|placed| {
+            placed
+                .source
+                .as_ref()
+                .map_or(usize::MAX, |range| range.start)
+        });
+        Ok(Self {
+            id,
+            document,
+            logical,
+            threads,
+        })
+    }
+
+    /// The logical characters a selection of body bytes `source` covers;
+    /// `None` when it covers no text (only markup or separators).
+    pub(crate) fn selection(&self, source: Range<usize>) -> Option<Range<usize>> {
+        self.logical
+            .logical_range(source)
+            .filter(|chars| !chars.is_empty())
+    }
+
+    /// The logical text of `chars`, for showing what a new comment quotes.
+    pub(crate) fn quote_of(&self, chars: Range<usize>) -> String {
+        self.logical.slice(chars)
+    }
+
+    pub(crate) fn orphans(&self) -> impl Iterator<Item = (usize, &PlacedThread)> {
+        self.threads
+            .iter()
+            .enumerate()
+            .filter(|(_, placed)| placed.source.is_none())
+    }
+}
+
+fn place(logical: &LogicalText, thread: Thread) -> PlacedThread {
+    let anchor = thread
+        .root
+        .quote()
+        .map_or(Anchor::Orphaned, |quote| anchor::anchor(logical, &quote));
+    let source = anchor.range().and_then(|chars| logical.source_range(chars));
+    PlacedThread {
+        thread,
+        anchor,
+        source,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_wiki::annotation::{markdown_body, Agent};
+
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn store() -> (Scratch, Store) {
+        let dir = Scratch(std::env::temp_dir().join(format!("horizon-wiki-{}", Uuid::new_v4())));
+        let store = Store::at(&dir.0);
+        store
+            .write_page(
+                "sandbox",
+                "---\ntitle: Sandbox\n---\nThe **helper** runs `nono` first.\n\nThen the agent.\n",
+            )
+            .unwrap();
+        (dir, store)
+    }
+
+    #[test]
+    fn a_selection_round_trips_through_logical_positions() {
+        let (_dir, store) = store();
+        let page = WikiPage::load(&store, "sandbox").unwrap();
+        let body = &page.document.body;
+        // A selection that spans the `**` delimiters covers "helper".
+        let start = body.find("**helper").unwrap();
+        let chars = page.selection(start..start + "**helper**".len()).unwrap();
+        assert_eq!(page.quote_of(chars.clone()), "helper");
+
+        store
+            .ask(
+                "sandbox",
+                chars,
+                Agent::person(Uuid::new_v4(), "owner"),
+                markdown_body("Which helper?"),
+            )
+            .unwrap();
+        let page = WikiPage::load(&store, "sandbox").unwrap();
+        let placed = &page.threads[0];
+        let source = placed.source.clone().unwrap();
+        assert_eq!(&page.document.body[source.clone()], "helper");
+        assert_eq!(page.orphans().count(), 0);
+    }
+
+    #[test]
+    fn a_removed_passage_leaves_its_thread_an_orphan_after_the_anchored_ones() {
+        let (_dir, store) = store();
+        let owner = Agent::person(Uuid::new_v4(), "owner");
+        let agent = "The helper runs nono first.\nThen the ".chars().count();
+        store
+            .ask(
+                "sandbox",
+                agent..agent + 5,
+                owner.clone(),
+                markdown_body("first"),
+            )
+            .unwrap();
+        store
+            .ask("sandbox", 4..10, owner, markdown_body("second"))
+            .unwrap();
+        let text = store.read_page("sandbox").unwrap();
+        store
+            .write_page("sandbox", &text.replace("\nThen the agent.\n", "\n"))
+            .unwrap();
+        let page = WikiPage::load(&store, "sandbox").unwrap();
+        assert_eq!(page.threads.len(), 2);
+        assert_eq!(page.threads[0].thread.root.body.value, "second");
+        assert!(page.threads[0].source.is_some());
+        let orphans: Vec<_> = page.orphans().collect();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].1.thread.root.body.value, "first");
+    }
+}

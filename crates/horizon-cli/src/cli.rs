@@ -78,6 +78,16 @@ pub enum Subcommand {
         split: Option<SplitFlag>,
         activate: bool,
     },
+    /// Shows a page of the caller's project wiki (`index` when `page` is
+    /// left out) in a wiki pane, or re-reads it in the pane already
+    /// showing it. `path` is the page's file, filled in by [`crate::run`]
+    /// from the caller's cwd; `parse` leaves it empty.
+    Wiki {
+        page: String,
+        path: PathBuf,
+        split: Option<SplitFlag>,
+        activate: bool,
+    },
     Attach {
         session_id: String,
         activate: bool,
@@ -168,6 +178,7 @@ Subcommands:\n  \
   new-agent [--prompt <text>] [--role <id>] [--split [<session-id>]] [--active]\n  \
   preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]\n  \
   markdown <path> [--split [<session-id>]] [--active]\n  \
+  wiki [<page>] [--split [<session-id>]] [--active]\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \
   terminate-all-detached\n  \
@@ -241,6 +252,16 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             reject_extra(&mut positionals, "markdown")?;
             Subcommand::Markdown {
                 path: PathBuf::from(path),
+                split: options.split.take(),
+                activate: std::mem::take(&mut options.active),
+            }
+        }
+        "wiki" => {
+            let page = positionals.next().unwrap_or_else(|| "index".to_string());
+            reject_extra(&mut positionals, "wiki")?;
+            Subcommand::Wiki {
+                page,
+                path: PathBuf::new(),
                 split: options.split.take(),
                 activate: std::mem::take(&mut options.active),
             }
@@ -414,7 +435,8 @@ pub fn resolved_split_for(
         Subcommand::NewTerminal { split, .. }
         | Subcommand::NewAgent { split, .. }
         | Subcommand::Preview { split, .. }
-        | Subcommand::Markdown { split, .. } => resolve_split(split.clone(), env_session_id),
+        | Subcommand::Markdown { split, .. }
+        | Subcommand::Wiki { split, .. } => resolve_split(split.clone(), env_session_id),
         _ => Ok(None),
     }
 }
@@ -573,6 +595,21 @@ mod tests {
             resolved_split_for(&parsed.subcommand, Some("pane-session".to_string())),
             Ok(Some("pane-session".to_string()))
         );
+    }
+
+    #[test]
+    fn wiki_defaults_to_the_overview_and_takes_a_split() {
+        let parsed = parse(&args(&["wiki"])).unwrap();
+        assert!(matches!(
+            parsed.subcommand,
+            Subcommand::Wiki { ref page, split: None, activate: false, .. } if page == "index"
+        ));
+        let parsed = parse(&args(&["wiki", "sandbox", "--active"])).unwrap();
+        assert!(matches!(
+            parsed.subcommand,
+            Subcommand::Wiki { ref page, activate: true, .. } if page == "sandbox"
+        ));
+        assert!(parse(&args(&["wiki", "a", "b"])).is_err());
     }
 
     #[test]

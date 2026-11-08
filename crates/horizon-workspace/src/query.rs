@@ -51,11 +51,13 @@ impl Workspace {
             .and_then(|pane| pane.document.as_deref())
     }
 
-    /// The document view pane already showing `path`, if any.
-    pub fn document_pane(&self, path: &std::path::Path) -> Option<PaneId> {
+    /// The `kind` pane already showing `path`, if any.
+    pub fn document_pane(&self, kind: crate::ViewKind, path: &std::path::Path) -> Option<PaneId> {
         self.panes
             .iter()
-            .find(|pane| pane.document.as_deref() == Some(path))
+            .find(|pane| {
+                pane.kind == PaneKind::View(kind) && pane.document.as_deref() == Some(path)
+            })
             .map(|pane| pane.id)
     }
 

@@ -175,6 +175,8 @@ enum ViewKindState {
     /// The file rides on the pane (`PaneState::document`), so a Markdown
     /// pane restores on the file it showed.
     Markdown,
+    /// The page's file rides on the pane as a Markdown pane's does.
+    Wiki,
 }
 
 impl PaneKindState {
@@ -542,6 +544,7 @@ impl From<ViewKind> for ViewKindState {
             ViewKind::BoardThread { task } => Self::BoardThread { task },
             ViewKind::Preview => Self::Preview,
             ViewKind::Markdown => Self::Markdown,
+            ViewKind::Wiki => Self::Wiki,
         }
     }
 }
@@ -554,6 +557,7 @@ impl From<ViewKindState> for ViewKind {
             ViewKindState::BoardThread { task } => Self::BoardThread { task },
             ViewKindState::Preview => Self::Preview,
             ViewKindState::Markdown => Self::Markdown,
+            ViewKindState::Wiki => Self::Wiki,
         }
     }
 }
@@ -814,6 +818,27 @@ mod tests {
     }
 
     #[test]
+    fn state_round_trip_restores_a_wiki_pane_on_its_page() {
+        let mut workspace = Workspace::mvp();
+        let view_pane = workspace.split_active_tab_with_view(ViewKind::Wiki, SplitAxis::Horizontal);
+        assert!(workspace.set_pane_document(view_pane, "/wiki/sandbox.md".into()));
+        let json = workspace.to_persisted_json().expect("serialize");
+        let value: Value = serde_json::from_str(&json).expect("json");
+        let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
+        assert_eq!(pane["kind"], json!({"view": "wiki"}));
+        let restored = Workspace::from_persisted_json(&json).expect("restore");
+        // A Markdown pane on the same file is a different pane.
+        assert_eq!(
+            restored.document_pane(ViewKind::Wiki, "/wiki/sandbox.md".as_ref()),
+            Some(view_pane)
+        );
+        assert_eq!(
+            restored.document_pane(ViewKind::Markdown, "/wiki/sandbox.md".as_ref()),
+            None
+        );
+    }
+
+    #[test]
     fn state_round_trip_restores_a_markdown_pane_on_its_document() {
         let mut workspace = Workspace::mvp();
         let view_pane =
@@ -835,7 +860,7 @@ mod tests {
             Some(std::path::Path::new("/notes/index.md"))
         );
         assert_eq!(
-            restored.document_pane("/notes/index.md".as_ref()),
+            restored.document_pane(ViewKind::Markdown, "/notes/index.md".as_ref()),
             Some(view_pane)
         );
         assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
