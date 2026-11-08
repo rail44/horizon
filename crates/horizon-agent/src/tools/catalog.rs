@@ -154,10 +154,12 @@ fn build_definitions() -> Vec<Definition> {
         Definition {
             id: "web_fetch".to_string(),
             title: "Fetch a Web Page".to_string(),
-            description: "Fetch one public HTTP(S) URL with SSRF protection and bounded \
+            description: legend_after(
+                "Fetch one public HTTP(S) URL with SSRF protection and bounded \
                 redirects/body size. HTML is reduced to readable Markdown; text and JSON pass \
-                through. A session must approve each exact destination host before contact."
-                .to_string(),
+                through. A session must approve each exact destination host before contact.",
+                super::output_legend::legend::<super::output::WebFetch>("WebFetch"),
+            ),
             input_schema: super::input::schema("web_fetch").expect("registered tool input"),
             permission: ToolPermission::RequireApproval,
         },
@@ -527,6 +529,7 @@ mod tests {
             ("knowledge.read", "KnowledgeRead"),
             ("knowledge.write", "KnowledgeWritten"),
             ("web_search", "WebSearch"),
+            ("web_fetch", "WebFetch"),
         ] {
             let description = definition(tool).description;
             assert!(
