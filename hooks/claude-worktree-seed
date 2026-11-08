@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Claude Code hook: run the target seed (hooks/post-checkout) for worktrees
+# Claude Code creates itself.
+#
+# Claude Code runs its own git with `-c core.hooksPath=/dev/null`, so the
+# `git worktree add` behind EnterWorktree and `isolation: "worktree"`
+# subagents never runs post-checkout, and every such worktree cold-builds
+# the whole dependency graph. `.claude/settings.json` wires this script to
+# PostToolUse(EnterWorktree) and SubagentStart; both deliver the new
+# worktree as the hook input's `cwd`.
+#
+# All the safety lives in post-checkout itself: it does nothing in the main
+# checkout (a subagent without isolation), nothing when target/ already
+# exists (re-entering a worktree), and degrades to a cold build on any
+# failure. This wrapper only finds the worktree root and never fails: every
+# path out is exit 0, and nothing is written to stdout.
+
+seed="$(dirname "$0")/post-checkout"
+[ -x "$seed" ] || exit 0
+
+input=$(cat 2>/dev/null)
+cwd=$(printf '%s' "$input" | python3 -I -c 'import sys,json; print(json.load(sys.stdin).get("cwd",""))' 2>/dev/null)
+[ -n "$cwd" ] || cwd=$PWD
+
+root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root" || exit 0
+
+# post-checkout's third argument 1 means "branch checkout", the case
+# `git worktree add` produces.
+"$seed" 0 0 1 >&2
+exit 0

@@ -208,9 +208,15 @@ load-bearing, not an optimization: copied member fingerprints reference
 the main checkout's sources and would otherwise validate as fresh,
 handing the worktree main's binaries instead of its own. Do not skip it.
 `HORIZON_SKIP_TARGET_SEED=1` disables seeding (e.g. to measure cold
-builds). The hook degrades to a cold build on any failure and works the
-same for agentd session worktrees, `.claude/worktrees` workers, and
-review checkouts — they are all created via plain `git worktree add`.
+builds). The hook degrades to a cold build on any failure. Plain
+`git worktree add` runs it directly (agentd session worktrees, review
+checkouts). Claude Code's own worktrees do not: Claude Code runs its git
+with `core.hooksPath=/dev/null`, so the tracked `.claude/settings.json`
+runs the same seed through `hooks/claude-worktree-seed` on
+`PostToolUse(EnterWorktree)` and `SubagentStart` (an
+`isolation: "worktree"` subagent never calls EnterWorktree). To check a
+worktree was seeded, compare its `target/CACHEDIR.TAG` mtime with the
+main checkout's: the reflink copy keeps it, a cold build writes a new one.
 
 Two build-sharing schemes preceded this and were both retired; their
 history lives in `.cargo/config.toml`'s comment, which is deliberately
