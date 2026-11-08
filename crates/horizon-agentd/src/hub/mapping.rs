@@ -478,7 +478,8 @@ impl Mapper {
             | SessionState::Completed
             | SessionState::Cancelled
             | SessionState::Failed
-            | SessionState::Terminated => (
+            | SessionState::Terminated
+            | SessionState::Suspended => (
                 StateKind::Idle,
                 v2::StateUpdate::Idle(
                     v2::IdleStateUpdate::new().stop_reason(self.stop_reason.clone()),

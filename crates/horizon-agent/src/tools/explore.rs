@@ -630,7 +630,8 @@ fn fold_until_terminal(
                             None => Terminal::TurnEnded(None),
                         };
                     }
-                    Event::StateChanged(SessionState::Terminated) | Event::Exited(_) => {
+                    Event::StateChanged(SessionState::Terminated | SessionState::Suspended)
+                    | Event::Exited(_) => {
                         break Terminal::Terminated;
                     }
                     Event::Error(failure) => error = Some(failure.message),

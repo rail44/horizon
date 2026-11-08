@@ -261,6 +261,16 @@ impl SessionLoopState {
                     );
                     break;
                 }
+                crate::contract::Command::Suspend => {
+                    self.finish_input(crate::contract::InputResult::Interrupted);
+                    let _ = self.events_tx.send(
+                        crate::contract::Event::StateChanged(
+                            crate::contract::SessionState::Suspended,
+                        )
+                        .into(),
+                    );
+                    break;
+                }
                 crate::contract::Command::ApproveToolCall { .. }
                 | crate::contract::Command::DenyToolCall { .. }
                 | crate::contract::Command::ToolCallsSettled { .. } => {}

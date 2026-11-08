@@ -230,6 +230,16 @@ impl Provider for MockProvider {
                         );
                         break;
                     }
+                    Command::Suspend => {
+                        let _ = events_tx.send(Event::StateChanged(SessionState::Suspended).into());
+                        let _ = events_tx.send(
+                            Event::Exited(Exit {
+                                reason: "suspend".to_string(),
+                            })
+                            .into(),
+                        );
+                        break;
+                    }
                 }
             }
         });
@@ -668,6 +678,40 @@ mod tests {
                 Event::Exited(_)
             ));
         }
+    }
+
+    #[test]
+    fn suspend_ends_the_session_as_suspended_not_terminated() {
+        let provider = MockProvider::new();
+        let handle = provider.start_session(StartSession {
+            session_id: SessionId::new(),
+            provider_id: provider.provider_id(),
+            role_id: None,
+            workspace_root: None,
+            history: Vec::new(),
+            trusted_project: true,
+        });
+        handle.sender().send(Command::Suspend).unwrap();
+        let events = handle.events();
+        let mut seen = Vec::new();
+        while let Ok(event) = events.recv_timeout(Duration::from_secs(2)) {
+            if let Some(event) = event.into_event() {
+                let exited = matches!(event, Event::Exited(_));
+                seen.push(event);
+                if exited {
+                    break;
+                }
+            }
+        }
+        assert!(
+            seen.contains(&Event::StateChanged(SessionState::Suspended)),
+            "{seen:?}"
+        );
+        assert!(
+            !seen.contains(&Event::StateChanged(SessionState::Terminated)),
+            "{seen:?}"
+        );
+        assert!(matches!(seen.last(), Some(Event::Exited(_))), "{seen:?}");
     }
 
     #[test]

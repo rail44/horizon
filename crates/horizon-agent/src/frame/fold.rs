@@ -83,9 +83,10 @@ pub(crate) fn apply_agent_event_to_frame(
                 SessionState::Failed => Some(TurnEndReason::Failed),
                 SessionState::Cancelled => Some(TurnEndReason::Cancelled),
                 SessionState::Completed => Some(TurnEndReason::Completed),
-                SessionState::Created | SessionState::WaitingForUser | SessionState::Terminated => {
-                    frame.turn_end_reason
-                }
+                SessionState::Created
+                | SessionState::WaitingForUser
+                | SessionState::Terminated
+                | SessionState::Suspended => frame.turn_end_reason,
             };
         }
         Event::ReasoningDelta(delta) => {
