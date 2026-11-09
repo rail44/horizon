@@ -39,7 +39,7 @@ const LOADING: &str = "Loading";
 const THREADS: &str = "Comments";
 const ORPHANS: &str = "No longer in the page";
 const CHANGED: &str = "(the passage has changed since)";
-const NO_SELECTION: &str = "Select text in the page, then press c to comment on it";
+const NO_SELECTION: &str = "Select text in the page to comment on it";
 const COMMENT_ON: &str = "Comment on";
 const REPLY_IN: &str = "Reply in the thread on";
 const TO_SEND: &str = "to send, Esc to cancel";
@@ -47,6 +47,9 @@ const OWNER: &str = "Owner";
 const AGENT: &str = "Agent";
 const UNSUPPORTED_LINK: &str = "Not a wiki page";
 const BACK: &str = "Back";
+const COMMENT: &str = "Comment";
+/// How much of the selection the comment bar quotes.
+const SELECTION_QUOTE_CHARS: usize = 80;
 
 /// The composer's row bounds, as the board thread's composer has them.
 const COMPOSER_MIN_ROWS: usize = 2;
@@ -72,6 +75,9 @@ pub(crate) struct WikiView {
     text: Entity<TextViewState>,
     focused: Option<usize>,
     target: Option<Target>,
+    /// The page text selected now, in logical characters, followed from
+    /// the text view so the comment button can act on it.
+    selection: Option<Range<usize>>,
     composer: Entity<TextareaState>,
     notice: Option<SharedString>,
     /// The pages left by following links, most recent last, as the
@@ -109,7 +115,10 @@ impl WikiView {
                 .submit_on_enter(true)
         });
         let subscriptions = vec![
-            cx.observe(&text, |view, _, cx| view.apply_highlights(cx)),
+            cx.observe(&text, |view, _, cx| {
+                view.apply_highlights(cx);
+                view.follow_selection(cx);
+            }),
             cx.subscribe_in(
                 &composer,
                 window,
@@ -140,6 +149,7 @@ impl WikiView {
             text,
             focused: None,
             target: None,
+            selection: None,
             composer,
             notice: None,
             history: Vec::new(),
@@ -326,9 +336,26 @@ impl WikiView {
     }
 
     /// Starts a comment on the page text currently selected.
-    fn comment_on_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Keeps [`Self::selection`] in step with the text view's selection.
+    fn follow_selection(&mut self, cx: &mut Context<Self>) {
         let source = self.text.read(cx).selected_source_range();
         let chars = source.and_then(|source| self.page.as_ref()?.selection(source));
+        if chars != self.selection {
+            self.selection = chars;
+            cx.notify();
+        }
+    }
+
+    /// Starts a comment on the selected page text. Reads the stored
+    /// selection: a click on the comment button may clear the text view's
+    /// own before this runs.
+    fn comment_on_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let live = self
+            .text
+            .read(cx)
+            .selected_source_range()
+            .and_then(|source| self.page.as_ref()?.selection(source));
+        let chars = live.or_else(|| self.selection.clone());
         match chars {
             Some(chars) => {
                 self.target = Some(Target::Selection(chars));
@@ -392,6 +419,11 @@ impl WikiView {
                 };
                 self.composer
                     .update(cx, |composer, cx| composer.set_value("", window, cx));
+                // The composer of a new thread closes; keys go back to the
+                // view rather than to an input no longer drawn.
+                if self.target.is_none() {
+                    window.focus(&self.focus_handle, cx);
+                }
                 self.reload(cx);
             }
             Err(error) => self.notice = Some(error.to_string().into()),
@@ -439,7 +471,14 @@ impl WikiView {
             cx.stop_propagation();
             return;
         }
-        if !self.focus_handle.is_focused(window)
+        // Selecting page text focuses the text view inside this view, so
+        // keys count while focus is anywhere in it except the composer.
+        if !self.focus_handle.contains_focused(window, cx)
+            || self
+                .composer
+                .read(cx)
+                .focus_handle(cx)
+                .contains_focused(window, cx)
             || keystroke.modifiers.control
             || keystroke.modifiers.alt
             || keystroke.modifiers.platform
@@ -652,6 +691,60 @@ impl WikiView {
             .into_any_element()
     }
 
+    /// While page text is selected and nothing is being written: the
+    /// selection's quote and a button that starts a comment on it.
+    fn render_selection_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.target.is_some() {
+            return None;
+        }
+        let page = self.page.as_ref()?;
+        let quote = page.quote_of(self.selection.clone()?);
+        let quote: String = if quote.chars().count() > SELECTION_QUOTE_CHARS {
+            let head: String = quote.chars().take(SELECTION_QUOTE_CHARS).collect();
+            format!("{head}…")
+        } else {
+            quote
+        };
+        Some(
+            h_flex()
+                .w_full()
+                .flex_none()
+                .px(pad_x())
+                .py(pad_y())
+                .gap(gap_label())
+                .items_center()
+                .border_t_1()
+                .border_color(theme::border())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(meta().size)
+                        .line_height(meta().line_height)
+                        .text_color(theme::text_muted())
+                        .child(format!("“{}”", quote.replace('\n', " "))),
+                )
+                .child(key_chip("c"))
+                .child(
+                    Button::new("wiki-comment")
+                        .small()
+                        .label(COMMENT)
+                        // On press, not release: the press may clear the
+                        // text view's selection, and the stored one is
+                        // what this acts on.
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|view, _, window, cx| {
+                                cx.stop_propagation();
+                                view.comment_on_selection(window, cx);
+                            }),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_composer(&self) -> Option<AnyElement> {
         let page = self.page.as_ref()?;
         let label = match self.target.as_ref()? {
@@ -753,6 +846,7 @@ impl Render for WikiView {
                     .line_height(body().line_height)
                     .child(self.render_body(cx)),
             )
+            .children(self.render_selection_bar(cx))
             .children(self.render_composer())
     }
 }
@@ -790,6 +884,38 @@ mod tests {
         let window = cx.add_window(|window, cx| WikiView::build(Some(path), false, window, cx));
         cx.run_until_parked();
         (scratch, store, window)
+    }
+
+    /// After a new thread is sent, its composer closes and keys reach the
+    /// view again, so the next `c` is handled.
+    #[gpui::test]
+    fn keys_reach_the_view_again_after_a_comment_is_sent(cx: &mut TestAppContext) {
+        let (_scratch, _store, window) = open(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.selection = Some(4..10);
+                view.comment_on_selection(window, cx);
+                assert_eq!(view.target, Some(Target::Selection(4..10)));
+                view.composer.update(cx, |composer, cx| {
+                    composer.set_value("Which helper?", window, cx)
+                });
+                view.send(window, cx);
+                assert!(view.target.is_none());
+                assert!(view.focus_handle.is_focused(window));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                view.selection = Some(15..19);
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "c");
+        window
+            .read_with(cx, |view, _| {
+                assert_eq!(view.target, Some(Target::Selection(15..19)));
+            })
+            .unwrap();
     }
 
     #[gpui::test]
