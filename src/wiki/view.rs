@@ -61,23 +61,22 @@ const REPLYING: &str = "Replying";
 const UNSUPPORTED_LINK: &str = "Not a wiki page";
 const BACK: &str = "Back";
 const COMMENT: &str = "Comment";
-/// How much of the selection the comment bar quotes.
-const SELECTION_QUOTE_CHARS: usize = 80;
 /// The composer's row bounds, as the board thread's composer has them.
 const COMPOSER_MIN_ROWS: usize = 2;
 const COMPOSER_MAX_ROWS: usize = 8;
 /// One cycle of the replying dots, as the agent pane's thinking dots.
 const DOTS_CYCLE_MS: u64 = 1200;
 
-/// The margin threads sit in.
-fn margin_width() -> Pixels {
-    scaled(320.0)
-}
+/// The share of the width the margin takes: comments run long, so it
+/// takes a good part of the pane.
+const MARGIN_SHARE: f32 = 0.4;
 
-/// The narrowest the text may get beside the margin; below it, threads
-/// move into the page.
-fn text_min_width() -> Pixels {
-    scaled(360.0)
+/// The margin's width for `available` (the width inside the page's
+/// gutters), or `None` when the text beside it would get too narrow and
+/// threads move into the page instead.
+fn margin_for(available: Pixels) -> Option<Pixels> {
+    let margin = (available * MARGIN_SHARE).clamp(scaled(240.0), scaled(560.0));
+    (available - margin - gap_section() >= scaled(280.0)).then_some(margin)
 }
 
 /// How far the owner's posts are indented, as in the agent pane.
@@ -889,22 +888,44 @@ impl WikiView {
             .into_any_element()
     }
 
-    /// The page's text and its threads: in a margin beside the text when
-    /// `wide`, in the text after their blocks otherwise.
-    fn render_page(&self, page: &WikiPage, wide: bool, cx: &mut Context<Self>) -> AnyElement {
-        let new_comment = match &self.target {
-            Some(Target::Selection(chars)) => Some((page.block_of(chars.clone()), chars.clone())),
-            _ => None,
+    /// The page's text and its threads: in a margin of width `margin`
+    /// beside the text, or with no margin in the text after their blocks.
+    /// What starts a comment (the button while text is selected, then the
+    /// form) sits where the comment will show, ahead of that block's
+    /// threads.
+    fn render_page(
+        &self,
+        page: &WikiPage,
+        margin: Option<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let wide = margin.is_some();
+        let starting: Option<(usize, AnyElement)> = match &self.target {
+            Some(Target::Selection(chars)) => page
+                .block_of(chars.clone())
+                .map(|block| (block, self.render_new_comment(page, chars.clone()))),
+            Some(Target::Thread(_)) => None,
+            None => self
+                .selection
+                .clone()
+                .and_then(|chars| page.block_of(chars))
+                .map(|block| (block, self.render_comment_button(cx))),
         };
+        let mut starting = starting;
 
-        let mut text = v_flex().flex_1().min_w_0().gap(gap_tight());
+        let mut text = v_flex().flex_1().min_w_0();
         for (index, block) in self.blocks.iter().enumerate() {
             let links = self.links.clone();
             let scroll = self.scroll.clone();
+            // A list's items read as one list: no gap between them.
+            let same_list = index > 0
+                && page.lists.get(index).copied().flatten().is_some()
+                && page.lists.get(index) == page.lists.get(index - 1);
             text = text.child(
                 div()
                     .relative()
                     .w_full()
+                    .when(index > 0 && !same_list, |block| block.mt(gap_tight()))
                     .child(running_text(
                         TextView::new(block)
                             .on_link_click(move |target, _, _, _| {
@@ -921,14 +942,15 @@ impl WikiView {
                     .when(wide, |block| block.child(probe(&self.measure, index))),
             );
             if !wide {
-                for placed in &page.threads {
-                    if placed.block == Some(index) {
-                        text = text.child(self.render_thread(placed, cx));
+                if starting.as_ref().is_some_and(|(block, _)| *block == index) {
+                    if let Some((_, element)) = starting.take() {
+                        text = text.child(div().mt(gap_tight()).child(element));
                     }
                 }
-                if let Some((Some(block), chars)) = &new_comment {
-                    if *block == index {
-                        text = text.child(self.render_new_comment(page, chars.clone()));
+                for placed in &page.threads {
+                    if placed.block == Some(index) {
+                        text =
+                            text.child(div().mt(gap_tight()).child(self.render_thread(placed, cx)));
                     }
                 }
             }
@@ -940,20 +962,21 @@ impl WikiView {
             .items_start()
             .gap(gap_section())
             .child(text);
-        if wide {
+        if let Some(width) = margin {
             let mut items: Vec<(usize, AnyElement)> = page
                 .threads
                 .iter()
                 .filter_map(|placed| Some((placed.block?, self.render_thread(placed, cx))))
                 .collect();
-            if let Some((Some(block), chars)) = &new_comment {
+            if let Some((block, element)) = starting.take() {
                 let at = items
                     .iter()
-                    .position(|(other, _)| other > block)
+                    .position(|(other, _)| *other >= block)
                     .unwrap_or(items.len());
-                items.insert(at, (*block, self.render_new_comment(page, chars.clone())));
+                items.insert(at, (block, element));
             }
             row = row.child(MarginColumn {
+                width,
                 items,
                 measure: self.measure.clone(),
                 view: cx.weak_entity(),
@@ -1009,14 +1032,13 @@ impl WikiView {
         // builds its contents in prepaint, after layout).
         let view = cx.entity();
         container_query(move |size, _, cx| {
-            let wide =
-                size.width - pad_x() * 2. >= text_min_width() + margin_width() + gap_section();
-            view.update(cx, |view, cx| view.render_scroll(wide, cx))
+            let margin = margin_for(size.width - pad_x() * 2.);
+            view.update(cx, |view, cx| view.render_scroll(margin, cx))
         })
         .into_any_element()
     }
 
-    fn render_scroll(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_scroll(&self, margin: Option<Pixels>, cx: &mut Context<Self>) -> AnyElement {
         let Some(page) = self.page.as_ref() else {
             return div().into_any_element();
         };
@@ -1028,62 +1050,35 @@ impl WikiView {
             .px(pad_x())
             .pt(gap_section())
             .pb(gap_composer())
-            .child(self.render_page(page, wide, cx))
+            .child(self.render_page(page, margin, cx))
             .into_any_element()
     }
 
     /// While page text is selected and nothing is being written: the
-    /// selection's quote and a button that starts a comment on it.
-    fn render_selection_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.target.is_some() {
-            return None;
-        }
-        let page = self.page.as_ref()?;
-        let quote = page.quote_of(self.selection.clone()?);
-        let quote: String = if quote.chars().count() > SELECTION_QUOTE_CHARS {
-            let head: String = quote.chars().take(SELECTION_QUOTE_CHARS).collect();
-            format!("{head}…")
-        } else {
-            quote
-        };
-        Some(
-            h_flex()
-                .w_full()
-                .flex_none()
-                .px(pad_x())
-                .py(pad_y())
-                .gap(gap_label())
-                .items_center()
-                .border_t_1()
-                .border_color(theme::border())
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(meta().size)
-                        .line_height(meta().line_height)
-                        .text_color(theme::text_muted())
-                        .child(format!("“{}”", one_line(&quote))),
-                )
-                .child(key_chip("c"))
-                .child(
-                    Button::new("wiki-comment")
-                        .small()
-                        .label(COMMENT)
-                        // On press, not release: the press may clear the
-                        // text views' selection, and the stored one is
-                        // what this acts on.
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|view, _, window, cx| {
-                                cx.stop_propagation();
-                                view.comment_on_selection(window, cx);
-                            }),
-                        ),
-                )
-                .into_any_element(),
-        )
+    /// button that starts a comment on it, placed where the comment will
+    /// show, as a document editor offers it beside the selection.
+    fn render_comment_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        h_flex()
+            .w_full()
+            .gap(gap_label())
+            .items_center()
+            .child(
+                Button::new("wiki-comment")
+                    .small()
+                    .label(COMMENT)
+                    // On press, not release: the press may clear the text
+                    // views' selection, and the stored one is what this
+                    // acts on.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|view, _, window, cx| {
+                            cx.stop_propagation();
+                            view.comment_on_selection(window, cx);
+                        }),
+                    ),
+            )
+            .child(key_chip("c"))
+            .into_any_element()
     }
 }
 
@@ -1108,6 +1103,7 @@ fn probe(measure: &Rc<RefCell<Measure>>, index: usize) -> impl IntoElement {
 /// the text column (an earlier sibling) has recorded this frame's block
 /// tops, so nothing waits a frame for a position.
 struct MarginColumn {
+    width: Pixels,
     items: Vec<(usize, AnyElement)>,
     measure: Rc<RefCell<Measure>>,
     view: WeakEntity<WikiView>,
@@ -1141,7 +1137,7 @@ impl Element for MarginColumn {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
-        style.size.width = margin_width().into();
+        style.size.width = self.width.into();
         style.size.height = self.measure.borrow().margin_height.into();
         style.flex_shrink = 0.;
         (window.request_layout(style, [], cx), ())
@@ -1301,7 +1297,6 @@ impl Render for WikiView {
                     .line_height(body().line_height)
                     .child(self.render_body(cx)),
             )
-            .children(self.render_selection_bar(cx))
     }
 }
 
@@ -1427,6 +1422,19 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    /// The margin takes a share of the width within bounds, and gives way
+    /// when the text beside it would get too narrow.
+    #[test]
+    fn the_margin_takes_a_share_and_gives_way_when_narrow() {
+        use crate::ui::spec::scaled;
+        let wide = super::margin_for(scaled(1200.)).unwrap();
+        assert!(wide > scaled(400.) && wide <= scaled(560.), "{wide:?}");
+        assert_eq!(super::margin_for(scaled(2400.)), Some(scaled(560.)));
+        let narrow = super::margin_for(scaled(640.)).unwrap();
+        assert!(narrow >= scaled(240.) && narrow < wide, "{narrow:?}");
+        assert_eq!(super::margin_for(scaled(500.)), None);
     }
 
     #[gpui::test]

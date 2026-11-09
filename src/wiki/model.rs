@@ -49,9 +49,12 @@ pub(crate) struct WikiPage {
     pub(crate) id: Option<Uuid>,
     pub(crate) document: Document,
     logical: LogicalText,
-    /// The body's top-level blocks, as byte ranges; the view draws each on
-    /// its own and puts a block's threads right after it.
+    /// The body's blocks (top-level blocks, and each item of a top-level
+    /// list), as byte ranges; the view draws each on its own and places a
+    /// block's threads against it.
     pub(crate) blocks: Vec<Range<usize>>,
+    /// Per block, the top-level list it is an item of, if any.
+    pub(crate) lists: Vec<Option<usize>>,
     /// Anchored threads first, in page order, then orphans in the order
     /// they were opened.
     pub(crate) threads: Vec<PlacedThread>,
@@ -69,7 +72,10 @@ impl WikiPage {
             Some(id) => store.threads(id).map_err(|error| error.to_string())?,
             None => Vec::new(),
         };
-        let blocks = horizon_wiki::logical::top_level_blocks(&document.body);
+        let (blocks, lists): (Vec<_>, Vec<_>) = horizon_wiki::logical::page_blocks(&document.body)
+            .into_iter()
+            .map(|block| (block.range, block.list))
+            .unzip();
         let mut threads: Vec<PlacedThread> = threads
             .into_iter()
             .map(|thread| place(&logical, &blocks, thread))
@@ -86,6 +92,7 @@ impl WikiPage {
             document,
             logical,
             blocks,
+            lists,
             threads,
             replying: store.replying(),
         })
@@ -207,6 +214,33 @@ mod tests {
         let page = WikiPage::load(&store, "sandbox").unwrap();
         assert!(page.threads[0].replying(&page.replying));
         assert_eq!(page.orphans().count(), 0);
+    }
+
+    #[test]
+    fn a_comment_on_a_list_item_belongs_to_that_item() {
+        let (_dir, store) = store();
+        store
+            .write_page(
+                "list",
+                "---\ntitle: L\n---\nIntro.\n\n- first item\n- second item\n",
+            )
+            .unwrap();
+        let page = WikiPage::load(&store, "list").unwrap();
+        assert_eq!(page.blocks.len(), 3);
+        assert_eq!(page.lists, vec![None, Some(0), Some(0)]);
+        let start = "Intro.\nfirst item\n".chars().count();
+        assert_eq!(page.quote_of(start..start + 6), "second");
+        assert_eq!(page.block_of(start..start + 6), Some(2));
+        store
+            .ask(
+                "list",
+                start..start + 6,
+                Agent::person(Uuid::new_v4(), "owner"),
+                markdown_body("Why second?"),
+            )
+            .unwrap();
+        let page = WikiPage::load(&store, "list").unwrap();
+        assert_eq!(page.threads[0].block, Some(2));
     }
 
     #[test]

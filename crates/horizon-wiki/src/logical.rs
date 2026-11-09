@@ -28,20 +28,53 @@ pub struct LogicalText {
     sources: Vec<Range<usize>>,
 }
 
-/// The byte ranges of `body`'s top-level blocks (a paragraph, a heading, a
-/// whole list, a table, a code block…), in order, parsed as
-/// [`LogicalText::of_markdown`] parses: a view that draws a page block by
-/// block, to place comment threads between blocks, splits it here.
-pub fn top_level_blocks(body: &str) -> Vec<Range<usize>> {
+/// One unit a view draws on its own and places comment threads against:
+/// a top-level block (a paragraph, a heading, a table, a code block…), or
+/// one item of a top-level list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block {
+    /// The block's bytes in the body.
+    pub range: Range<usize>,
+    /// For a list item, which top-level list it belongs to (counted in
+    /// order), so a view can keep a list's items together.
+    pub list: Option<usize>,
+}
+
+/// `body` split into [`Block`]s, in order, parsed as
+/// [`LogicalText::of_markdown`] parses. A top-level list is split into its
+/// items, each with its nested content; an item's own text keeps its
+/// marker, and an ordered item its number.
+pub fn page_blocks(body: &str) -> Vec<Block> {
     let Ok(root) = markdown::to_mdast(body, &ParseOptions::gfm()) else {
         return Vec::new();
     };
-    root.children()
-        .into_iter()
-        .flatten()
-        .filter_map(|node| node.position())
-        .map(|position| position.start.offset..position.end.offset)
-        .collect()
+    let span = |node: &Node| {
+        node.position()
+            .map(|position| position.start.offset..position.end.offset)
+    };
+    let mut blocks = Vec::new();
+    let mut lists = 0;
+    for node in root.children().into_iter().flatten() {
+        match node {
+            Node::List(list) => {
+                for item in &list.children {
+                    if let Some(range) = span(item) {
+                        blocks.push(Block {
+                            range,
+                            list: Some(lists),
+                        });
+                    }
+                }
+                lists += 1;
+            }
+            other => {
+                if let Some(range) = span(other) {
+                    blocks.push(Block { range, list: None });
+                }
+            }
+        }
+    }
+    blocks
 }
 
 impl LogicalText {
@@ -251,15 +284,24 @@ mod tests {
     }
 
     #[test]
-    fn top_level_blocks_cover_each_block_and_keep_a_list_whole() {
-        let body = "# Title\n\nOne paragraph.\n\n- a\n- b\n\n```sh\nx\n```\n";
-        let blocks: Vec<&str> = top_level_blocks(body)
+    fn a_page_splits_into_blocks_and_lists_into_their_items() {
+        let body =
+            "# Title\n\nOne paragraph.\n\n- a\n- b\n  - nested\n\n3. c\n4. d\n\n```sh\nx\n```\n";
+        let blocks: Vec<(&str, Option<usize>)> = page_blocks(body)
             .into_iter()
-            .map(|range| &body[range])
+            .map(|block| (body[block.range].trim_end(), block.list))
             .collect();
         assert_eq!(
             blocks,
-            ["# Title", "One paragraph.", "- a\n- b\n", "```sh\nx\n```"]
+            [
+                ("# Title", None),
+                ("One paragraph.", None),
+                ("- a", Some(0)),
+                ("- b\n  - nested", Some(0)),
+                ("3. c", Some(1)),
+                ("4. d", Some(1)),
+                ("```sh\nx\n```", None),
+            ]
         );
     }
 

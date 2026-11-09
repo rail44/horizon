@@ -401,8 +401,15 @@ owner's call.
   owner's indented behind a rule down the left edge, an agent's in a
   bordered card as the agent pane draws a turn, a reply being written as a
   card with the accent bar; the thread in focus has an accent border.
-  The page is drawn one top-level block per text view, so a comment
-  spanning blocks is not possible and a list is one block. Layout is
+  The page is drawn one block per text view, a top-level list split into
+  its items (owner, 2026-11-10: a comment in a list sat at the whole
+  list), so a comment spanning blocks is not possible. Following the
+  document-editor pattern the owner asked for ("Webにおけるデザインの
+  パターンが普通に適用できていない"), the button that starts a comment
+  appears while text is selected where the comment will show, and the
+  form opens there; the margin takes 40% of the width (240 to 560 at the
+  reference size), and threads move into the page only below 280 of text
+  ("コメント欄の占有率は高く、Aの形へ切り替える幅のしきい値は低く"). Layout is
   settled in the frame that draws it, as Zed's editor and gpui-kit's
   popups place elements (checked against their source, 2026-11-10, after
   a first version measured in one frame and placed in the next): gpui's
