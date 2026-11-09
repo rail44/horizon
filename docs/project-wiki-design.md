@@ -389,15 +389,23 @@ owner's call.
 
 ### After first use (decided 2026-11-09)
 
-- **Threads are read in the page** ("notionなどのようにコメントが文書中で
-  読めてほしい"), right after the top-level block their passage starts in
-  (option A, "ではAで"); threads whose passage left the page follow it.
-  The page is drawn one top-level block per text view so threads can sit
-  between blocks; a comment spanning blocks is not possible, and a list is
-  one block. The alternative, threads in a margin beside their line, needs
-  positions TextView does not expose (upstream issue longbridge/gpui-kit
-  #3669); `gpui_base::text::editor_host` exposes per-leaf geometry for a
-  host that draws blocks itself, at the cost of owning selection.
+- **Threads are read beside the page** ("notionなどのようにコメントが文書中で
+  読めてほしい"): in a margin at the right, each at the height of the
+  top-level block its passage starts in (option B at block granularity;
+  the owner first answered "ではAで" and then "AとBを取り違えていました").
+  On a pane too narrow for the margin they sit in the page right after
+  that block (option A, implemented first). Threads start closed as one
+  line and open on a click ("デフォルトでは閉じたトグルをクリックで展開"),
+  an open thread holds its composer, and posts are drawn as the agent pane
+  draws a conversation: the owner's indented on a grey tint, an agent's in
+  a bordered card, a reply being written as a card with the accent bar.
+  The page is drawn one top-level block per text view, and each block's
+  top is measured with a `canvas` laid over it, so a comment spanning
+  blocks is not possible and a list is one block. Line-level alignment
+  needs positions TextView does not expose (upstream issue
+  longbridge/gpui-kit #3669); `gpui_base::text::editor_host` exposes
+  per-leaf geometry for a host that draws blocks itself, at the cost of
+  owning selection.
 - **Only "a session is writing a reply" is shown** ("エージェントが返信を
   書こうとしている状態であることのみは見えてよい"), in English like the
   rest of Horizon. `horizon-agentd`'s wiki flow writes

@@ -99,6 +99,15 @@ impl WikiPage {
             .filter(|chars| !chars.is_empty())
     }
 
+    /// The top-level block logical characters `chars` start in, where a new
+    /// comment on them is drawn.
+    pub(crate) fn block_of(&self, chars: Range<usize>) -> Option<usize> {
+        let source = self.logical.source_range(chars)?;
+        self.blocks
+            .iter()
+            .rposition(|block| block.start <= source.start)
+    }
+
     /// The logical text of `chars`, for showing what a new comment quotes.
     pub(crate) fn quote_of(&self, chars: Range<usize>) -> String {
         self.logical.slice(chars)
