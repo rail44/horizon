@@ -18,9 +18,10 @@ use futures::channel::mpsc::{self, UnboundedSender};
 use futures::StreamExt as _;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{InputEvent, Textarea, TextareaState};
 use gpui_component::text::{RangeHighlight, TextView, TextViewState};
-use gpui_component::{h_flex, v_flex};
+use gpui_component::{h_flex, v_flex, Sizable as _};
 use horizon_wiki::anchor::Anchor;
 use horizon_wiki::annotation::{markdown_body, Agent, AgentType, Annotation};
 use horizon_wiki::Store;
@@ -45,6 +46,7 @@ const TO_SEND: &str = "to send, Esc to cancel";
 const OWNER: &str = "Owner";
 const AGENT: &str = "Agent";
 const UNSUPPORTED_LINK: &str = "Not a wiki page";
+const BACK: &str = "Back";
 
 /// The composer's row bounds, as the board thread's composer has them.
 const COMPOSER_MIN_ROWS: usize = 2;
@@ -72,6 +74,9 @@ pub(crate) struct WikiView {
     target: Option<Target>,
     composer: Entity<TextareaState>,
     notice: Option<SharedString>,
+    /// The pages left by following links, most recent last, as the
+    /// Markdown view keeps them.
+    history: Vec<PathBuf>,
     owner: Option<uuid::Uuid>,
     scroll: ScrollHandle,
     focus_handle: FocusHandle,
@@ -137,6 +142,7 @@ impl WikiView {
             target: None,
             composer,
             notice: None,
+            history: Vec::new(),
             owner: None,
             scroll: ScrollHandle::new(),
             focus_handle,
@@ -400,6 +406,7 @@ impl WikiView {
         match resolve_link(&current, target) {
             LinkTarget::Document(path) if path.parent() == current.parent() => {
                 if path != current {
+                    self.history.push(current);
                     self.show(path, cx);
                 }
             }
@@ -408,6 +415,12 @@ impl WikiView {
                 self.notice = Some(format!("{UNSUPPORTED_LINK}: {target}").into());
                 cx.notify();
             }
+        }
+    }
+
+    fn back(&mut self, cx: &mut Context<Self>) {
+        if let Some(previous) = self.history.pop() {
+            self.show(previous, cx);
         }
     }
 
@@ -441,6 +454,7 @@ impl WikiView {
             "k" | "up" => self.scroll_by(-line, cx),
             "space" | "pagedown" => self.scroll_by(page, cx),
             "pageup" => self.scroll_by(-page, cx),
+            "backspace" | "h" | "left" => self.back(cx),
             "c" => self.comment_on_selection(window, cx),
             "n" | "p" if threads > 0 => {
                 let next = match (self.focused, keystroke.key.as_str()) {
@@ -456,8 +470,9 @@ impl WikiView {
         cx.stop_propagation();
     }
 
-    fn render_header(&self) -> Option<AnyElement> {
+    fn render_header(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let document = &self.page.as_ref()?.document;
+        let can_go_back = !self.history.is_empty();
         let heading = t1();
         let fields: Vec<_> = document
             .fields
@@ -471,6 +486,17 @@ impl WikiView {
                 .px(pad_x())
                 .pt(gap_section())
                 .gap(gap_tight())
+                .when(can_go_back, |column| {
+                    column.child(
+                        h_flex().child(
+                            Button::new("wiki-back")
+                                .ghost()
+                                .xsmall()
+                                .label(BACK)
+                                .on_click(cx.listener(|view, _, _, cx| view.back(cx))),
+                        ),
+                    )
+                })
                 .when_some(document.title.clone(), |column, title| {
                     column.child(
                         div()
@@ -705,7 +731,7 @@ impl Render for WikiView {
             .min_w(VIEW_MIN_WIDTH)
             .bg(rgb(theme::background()))
             .text_color(theme::text_primary())
-            .children(self.render_header())
+            .children(self.render_header(cx))
             .when_some(self.notice.clone(), |column, notice| {
                 column.child(
                     div()
@@ -764,6 +790,38 @@ mod tests {
         let window = cx.add_window(|window, cx| WikiView::build(Some(path), false, window, cx));
         cx.run_until_parked();
         (scratch, store, window)
+    }
+
+    #[gpui::test]
+    fn a_followed_link_can_be_gone_back_from(cx: &mut TestAppContext) {
+        let (_scratch, store, window) = open(cx);
+        store
+            .write_page("other", "---\ntitle: Other\n---\nSee [back](sandbox.md).\n")
+            .unwrap();
+        let sandbox = store.page_path("sandbox").unwrap();
+        window
+            .update(cx, |view, _, cx| view.follow_link("other.md", cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .read_with(cx, |view, _| {
+                assert_eq!(view.history, vec![sandbox.clone()]);
+                let title = view
+                    .page
+                    .as_ref()
+                    .and_then(|page| page.document.title.clone());
+                assert_eq!(title.as_deref(), Some("Other"));
+            })
+            .unwrap();
+        // The back key, through the view's own key handling.
+        cx.simulate_keystrokes(window.into(), "backspace");
+        cx.run_until_parked();
+        window
+            .read_with(cx, |view, _| {
+                assert_eq!(view.path.as_deref(), Some(sandbox.as_path()));
+                assert!(view.history.is_empty());
+            })
+            .unwrap();
     }
 
     #[gpui::test]
