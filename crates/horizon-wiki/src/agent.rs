@@ -3,7 +3,10 @@
 //! page tools, the role a thread's session runs with, the input that hands a
 //! comment to it, and the derived ids that tie a thread to its session.
 
-use serde::Deserialize;
+use std::path::PathBuf;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -71,19 +74,100 @@ pub const THREAD_ROLE_PROMPT: &str = "You answer the owner's comments on the pro
      format, and say in your reply what you changed. You cannot change the repository: when \
      the answer needs a code or docs change, describe it for the owner instead.";
 
-/// The page tools, as `(id, title, description, input schema)`.
-pub fn tool_definitions() -> Vec<(&'static str, &'static str, &'static str, Value)> {
+/// One page tool as a composition root registers it.
+pub struct ToolDefinition {
+    pub id: &'static str,
+    pub title: &'static str,
+    /// Hand-written prose: what the tool is for. The result's fields are
+    /// rendered from [`Self::output_schema`] after it.
+    pub description: &'static str,
+    pub input_schema: Value,
+    pub output_type: &'static str,
+    /// The result type's schema: draft 2020-12, subschemas inlined, each
+    /// field carrying its doc comment as its description.
+    pub output_schema: Value,
+}
+
+/// `wiki.list`'s result.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WikiPages {
+    /// The wiki's directory, outside the repository.
+    pub store: PathBuf,
+    /// Every page by name, each with its frontmatter `title` (null when it
+    /// has none) and its `id` (a `urn:uuid:` IRI comments point at; null
+    /// until the page has one).
+    pub pages: Vec<WikiPageEntry>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WikiPageEntry {
+    pub name: String,
+    pub title: Option<String>,
+    pub id: Option<String>,
+}
+
+/// `wiki.read`'s result.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WikiPageText {
+    /// The page name read, or `concepts` for the concept file.
+    pub page: String,
+    /// The whole file, frontmatter included, never truncated: `wiki.edit`
+    /// needs the exact text.
+    pub text: String,
+}
+
+/// `wiki.write`'s result.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WikiPageWritten {
+    /// The page name written.
+    pub page: String,
+    /// The page's `id`, kept from the existing page or newly made.
+    pub id: String,
+}
+
+/// `wiki.edit`'s result.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WikiPageEdited {
+    /// The page name edited.
+    pub page: String,
+    /// How many edits were applied; all of them, or the call fails.
+    pub edited: usize,
+}
+
+/// A result type's schema as the catalog's legend reads it.
+fn output_schema<T: JsonSchema>() -> Value {
+    let settings = schemars::generate::SchemaSettings::draft2020_12().with(|settings| {
+        settings.inline_subschemas = true;
+    });
+    settings
+        .into_generator()
+        .into_root_schema_for::<T>()
+        .to_value()
+}
+
+/// The page tools.
+pub fn tool_definitions() -> Vec<ToolDefinition> {
+    let tool = |id, title, description, input_schema, output_type, output_schema| ToolDefinition {
+        id,
+        title,
+        description,
+        input_schema,
+        output_type,
+        output_schema,
+    };
     vec![
-        (
+        tool(
             "wiki.list",
             "List wiki pages",
-            "List the project wiki's pages: name, title and id.",
+            "List the project wiki's pages.",
             json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            "WikiPages",
+            output_schema::<WikiPages>(),
         ),
-        (
+        tool(
             "wiki.read",
             "Read a wiki page",
-            "Read one project wiki page (frontmatter included), or `concepts` for the concept \
+            "Read one project wiki page, or `concepts` for the concept \
              file.",
             json!({
                 "type": "object",
@@ -91,8 +175,10 @@ pub fn tool_definitions() -> Vec<(&'static str, &'static str, &'static str, Valu
                 "required": ["page"],
                 "additionalProperties": false
             }),
+            "WikiPageText",
+            output_schema::<WikiPageText>(),
         ),
-        (
+        tool(
             "wiki.write",
             "Write a wiki page",
             "Write a project wiki page whole, creating it if it does not exist. The text opens \
@@ -107,8 +193,10 @@ pub fn tool_definitions() -> Vec<(&'static str, &'static str, &'static str, Valu
                 "required": ["page", "text"],
                 "additionalProperties": false
             }),
+            "WikiPageWritten",
+            output_schema::<WikiPageWritten>(),
         ),
-        (
+        tool(
             "wiki.edit",
             "Edit a wiki page",
             "Replace exact strings in a project wiki page. Each `old` must occur exactly once in \
@@ -131,6 +219,8 @@ pub fn tool_definitions() -> Vec<(&'static str, &'static str, &'static str, Valu
                 "required": ["page", "edits"],
                 "additionalProperties": false
             }),
+            "WikiPageEdited",
+            output_schema::<WikiPageEdited>(),
         ),
     ]
 }
@@ -159,11 +249,17 @@ pub fn run_tool(store: &Store, tool_id: &str, input: &Value) -> Result<Value, St
     let result = match tool_id {
         "wiki.list" => {
             let pages = store.list_pages().map_err(message)?;
-            json!({"store": store.dir(), "pages": pages.iter().map(|page| json!({
-                "name": page.name,
-                "title": page.title,
-                "id": page.id.map(crate::page::urn),
-            })).collect::<Vec<_>>()})
+            to_value(WikiPages {
+                store: store.dir().to_path_buf(),
+                pages: pages
+                    .into_iter()
+                    .map(|page| WikiPageEntry {
+                        name: page.name,
+                        title: page.title,
+                        id: page.id.map(crate::page::urn),
+                    })
+                    .collect(),
+            })
         }
         "wiki.read" => {
             let PageInput { page } = PageInput::deserialize(input).map_err(parse)?;
@@ -172,21 +268,31 @@ pub fn run_tool(store: &Store, tool_id: &str, input: &Value) -> Result<Value, St
             } else {
                 store.read_page(&page).map_err(message)?
             };
-            json!({"page": page, "text": text})
+            to_value(WikiPageText { page, text })
         }
         "wiki.write" => {
             let WriteInput { page, text } = WriteInput::deserialize(input).map_err(parse)?;
             let id = store.write_page(&page, &text).map_err(message)?;
-            json!({"page": page, "id": crate::page::urn(id), "written": true})
+            to_value(WikiPageWritten {
+                page,
+                id: crate::page::urn(id),
+            })
         }
         "wiki.edit" => {
             let EditInput { page, edits } = EditInput::deserialize(input).map_err(parse)?;
             store.edit_page(&page, &edits).map_err(message)?;
-            json!({"page": page, "edited": edits.len()})
+            to_value(WikiPageEdited {
+                page,
+                edited: edits.len(),
+            })
         }
         other => return Err(format!("`{other}` is not a wiki tool")),
     };
     Ok(result)
+}
+
+fn to_value(result: impl Serialize) -> Value {
+    serde_json::to_value(result).expect("tool results serialize")
 }
 
 fn message(error: WikiError) -> String {
@@ -291,6 +397,25 @@ mod tests {
         assert!(first.ends_with("Which helper?"), "{first}");
         let later = thread_input(&store, "p", thread, &follow_up);
         assert!(later.starts_with("Follow-up"), "{later}");
+    }
+
+    /// Every field the model reads about is documented, so the catalog's
+    /// legend gives each one its meaning.
+    #[test]
+    fn every_tool_result_field_is_documented() {
+        for definition in tool_definitions() {
+            let properties = definition.output_schema["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{} has no top-level fields", definition.id));
+            assert!(!properties.is_empty(), "{}", definition.id);
+            for (name, property) in properties {
+                assert!(
+                    property.get("description").is_some(),
+                    "{}: `{name}` has no doc comment",
+                    definition.id
+                );
+            }
+        }
     }
 
     #[test]

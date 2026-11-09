@@ -25,8 +25,16 @@ use serde_json::Value;
 /// field's doc comment. A field without a doc comment renders as `field` alone;
 /// the catalog tests reject that state, this function only reports it.
 pub(crate) fn legend<T: JsonSchema>(type_name: &str) -> String {
-    let schema = field_schema::<T>();
-    let properties = properties_of(&schema);
+    legend_from_schema(type_name, &field_schema::<T>())
+}
+
+/// [`legend`] from an output type's schema already generated, for a tool
+/// registered from a crate that does not depend on this one
+/// (`tools::external`). The schema should be generated as [`field_schema`]
+/// generates one: draft 2020-12 with subschemas inlined, so fields sit at
+/// the top level.
+pub(crate) fn legend_from_schema(type_name: &str, schema: &Value) -> String {
+    let properties = properties_of(schema);
 
     let mut lines = Vec::with_capacity(properties.len());
     for (name, property) in properties {

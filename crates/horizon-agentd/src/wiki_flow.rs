@@ -15,7 +15,7 @@ use std::sync::{Arc, Once};
 
 use horizon_agent::contract::{SessionId, SessionInput};
 use horizon_agent::roles::{RoleDefinition, RoleId};
-use horizon_agent::tools::ExternalTool;
+use horizon_agent::tools::{ExternalOutput, ExternalTool};
 use horizon_wiki::agent::{self, THREAD_ROLE_ID};
 use horizon_wiki::annotation::{markdown_body, Agent, Annotation};
 use horizon_wiki::{Store, WikiError};
@@ -59,21 +59,29 @@ pub(crate) fn register() {
         ]);
         let tools = agent::tool_definitions()
             .into_iter()
-            .map(|(id, title, description, input_schema)| ExternalTool {
-                id: id.into(),
-                title: title.into(),
-                description: description.into(),
-                input_schema,
-                // What a page says reaches the prompt, as knowledge does.
-                requires_trusted_project: true,
-                execute: Arc::new(move |call| {
-                    let root = call
-                        .project_root
-                        .as_deref()
-                        .ok_or("The session is not in a repository, so it has no wiki")?;
-                    let store = Store::for_project(root).ok_or("No data directory for the wiki")?;
-                    agent::run_tool(&store, id, call.input)
-                }),
+            .map(|definition| {
+                let id = definition.id;
+                ExternalTool {
+                    id: id.into(),
+                    title: definition.title.into(),
+                    description: definition.description.into(),
+                    input_schema: definition.input_schema,
+                    // What a page says reaches the prompt, as knowledge does.
+                    requires_trusted_project: true,
+                    output: Some(ExternalOutput {
+                        type_name: definition.output_type.into(),
+                        schema: definition.output_schema,
+                    }),
+                    execute: Arc::new(move |call| {
+                        let root = call
+                            .project_root
+                            .as_deref()
+                            .ok_or("The session is not in a repository, so it has no wiki")?;
+                        let store =
+                            Store::for_project(root).ok_or("No data directory for the wiki")?;
+                        agent::run_tool(&store, id, call.input)
+                    }),
+                }
             })
             .collect();
         if let Err(error) = horizon_agent::tools::register_external_tools(tools) {

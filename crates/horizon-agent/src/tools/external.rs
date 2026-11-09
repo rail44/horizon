@@ -40,7 +40,23 @@ pub struct ExternalTool {
     /// Offered only to sessions whose project is in `trusted_projects`, as the
     /// knowledge tools are: what the tool reads can reach the prompt.
     pub requires_trusted_project: bool,
+    /// The result's type, whose documented fields are rendered after
+    /// `description` as built-in tools' legends are
+    /// (`tools::output_legend`), so the fields the model reads about are the
+    /// fields the type has. `None` only for a tool whose result the model
+    /// does not interpret.
+    pub output: Option<ExternalOutput>,
     pub execute: ExternalToolExecutor,
+}
+
+/// An external tool's result type, as its name and its JSON Schema. Generate
+/// the schema with schemars' draft 2020-12 settings and
+/// `inline_subschemas = true`, so its fields sit at the top level; each
+/// field's doc comment becomes the meaning the legend shows.
+#[derive(Debug, Clone)]
+pub struct ExternalOutput {
+    pub type_name: String,
+    pub schema: Value,
 }
 
 impl std::fmt::Debug for ExternalTool {
@@ -95,7 +111,13 @@ pub(crate) fn definitions() -> Vec<super::Definition> {
         .map(|tool| super::Definition {
             id: tool.id.clone(),
             title: tool.title.clone(),
-            description: tool.description.clone(),
+            description: match &tool.output {
+                Some(output) => super::catalog::legend_after(
+                    &tool.description,
+                    super::output_legend::legend_from_schema(&output.type_name, &output.schema),
+                ),
+                None => tool.description.clone(),
+            },
             input_schema: tool.input_schema.clone(),
             permission: crate::contract::ToolPermission::AutoAllowUi,
         })
@@ -133,8 +155,40 @@ mod tests {
             description: format!("{id} description"),
             input_schema: json!({ "type": "object" }),
             requires_trusted_project: true,
+            output: None,
             execute,
         }
+    }
+
+    #[test]
+    fn an_output_type_renders_its_documented_fields_after_the_description() {
+        let mut documented = tool("test.legend", echo());
+        documented.output = Some(ExternalOutput {
+            type_name: "Echoed".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "echo": {"description": "The input, returned unchanged."},
+                    "bare": {}
+                }
+            }),
+        });
+        register_external_tools(vec![documented]).unwrap();
+        let entry = crate::tools::definitions()
+            .into_iter()
+            .find(|definition| definition.id == "test.legend")
+            .unwrap();
+        assert!(
+            entry
+                .description
+                .starts_with("test.legend description\n\nEchoed fields:\n"),
+            "{}",
+            entry.description
+        );
+        assert!(entry
+            .description
+            .contains("echo — The input, returned unchanged."));
+        assert!(entry.description.contains("\nbare"));
     }
 
     fn echo() -> ExternalToolExecutor {

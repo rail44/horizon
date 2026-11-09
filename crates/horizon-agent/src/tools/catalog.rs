@@ -33,7 +33,7 @@ pub(crate) fn is_builtin(tool_id: &str) -> bool {
 /// which fields the result has and what each one means. Keeping them joined
 /// here, rather than retyping field names into prose, is what stops the two
 /// from drifting apart.
-fn legend_after(prose: &str, legend: String) -> String {
+pub(super) fn legend_after(prose: &str, legend: String) -> String {
     if legend.is_empty() {
         prose.to_string()
     } else {

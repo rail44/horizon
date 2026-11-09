@@ -189,6 +189,7 @@ fn registration_adds_the_role_skill_and_tools_once() {
             description: String::new(),
             input_schema: serde_json::json!({"type": "object"}),
             requires_trusted_project: true,
+            output: None,
             execute: Arc::new(|_| Ok(serde_json::Value::Null)),
         };
         assert!(

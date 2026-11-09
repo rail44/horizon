@@ -12,6 +12,9 @@ libc = "0.2"
 # The parser gpui-component's TextView renders Markdown with, so the logical
 # text built here and the view's rendering read the same syntax tree.
 markdown = "=1.0.0"
+# The page tools' result types derive their schemas, from which the agent
+# catalog renders each tool's field legend (horizon-agent's output_legend).
+schemars = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"

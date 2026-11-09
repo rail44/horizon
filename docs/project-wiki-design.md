@@ -358,7 +358,13 @@ owner's call.
    dropped after the board's; both now add up. Thread sessions are
    unattended (an approval nobody sees would stall the thread), declared by
    a new `RoleDefinition::unattended` that also keeps such roles out of
-   the user-launchable list.
+   the user-launchable list. Aligned afterwards with main's tool field
+   legends (2026-11-09): an `ExternalTool` carries its result type's
+   schema (`ExternalOutput`), the catalog renders its documented fields
+   after the prose as it does for built-in tools, and the wiki tools'
+   results are typed (`WikiPages`, `WikiPageText`, …). `wiki.read` is not
+   truncated: pages are a few KB, and `wiki.edit` needs the exact text
+   (owner asked; no cap recommended and taken).
 4. **Shell**: `ViewKind::Wiki` and `src/wiki/` from the Markdown view —
    commenting from a selection, highlighting anchors, the thread, file
    watching; orphaned comments listed at the end at first. Opening it

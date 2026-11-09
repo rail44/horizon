@@ -13,7 +13,9 @@ mod external;
 pub(crate) use external::{
     is_registered as is_external_tool, requires_trusted_project as external_requires_trust,
 };
-pub use external::{register_external_tools, ExternalTool, ExternalToolCall, ExternalToolExecutor};
+pub use external::{
+    register_external_tools, ExternalOutput, ExternalTool, ExternalToolCall, ExternalToolExecutor,
+};
 mod fs;
 pub(crate) mod input;
 mod knowledge;
