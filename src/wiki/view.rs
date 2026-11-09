@@ -190,7 +190,10 @@ pub(crate) struct WikiView {
     links: UnboundedSender<SharedString>,
     watch_files: bool,
     _watches: Vec<FileWatch>,
-    _tasks: Vec<Task<()>>,
+    _link_pump: Task<()>,
+    /// The latest read of the page; a newer one replaces (and so cancels)
+    /// it, since its result would be overwritten anyway.
+    _load: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -256,7 +259,8 @@ impl WikiView {
             links,
             watch_files,
             _watches: Vec::new(),
-            _tasks: vec![link_pump],
+            _link_pump: link_pump,
+            _load: None,
             _subscriptions: subscriptions,
         };
         if let Some(path) = path {
@@ -357,8 +361,7 @@ impl WikiView {
                 }
             });
         });
-        self._tasks.push(task);
-        self._tasks.truncate(8);
+        self._load = Some(task);
     }
 
     fn loaded(&mut self, page: WikiPage, cx: &mut Context<Self>) {
@@ -1341,6 +1344,33 @@ mod tests {
         window
             .read_with(cx, |view, _| {
                 assert_eq!(view.target, Some(Target::Selection(15..19)));
+            })
+            .unwrap();
+    }
+
+    /// Many reloads (comments sent, the page or its log rewritten) must not
+    /// leave a later load cancelled: a link followed afterwards loads.
+    #[gpui::test]
+    fn a_link_followed_after_many_reloads_still_loads(cx: &mut TestAppContext) {
+        let (_scratch, store, window) = open(cx);
+        store
+            .write_page("other", "---\ntitle: Other\n---\nOther page.\n")
+            .unwrap();
+        for _ in 0..12 {
+            window.update(cx, |view, _, cx| view.reload(cx)).unwrap();
+            cx.run_until_parked();
+        }
+        window
+            .update(cx, |view, _, cx| view.follow_link("other.md", cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .read_with(cx, |view, _| {
+                let title = view
+                    .page
+                    .as_ref()
+                    .and_then(|page| page.document.title.clone());
+                assert_eq!(title.as_deref(), Some("Other"), "still loading");
             })
             .unwrap();
     }
