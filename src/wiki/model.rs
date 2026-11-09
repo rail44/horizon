@@ -8,6 +8,7 @@
 //! first two, and `RenderedText::range_for_source` takes a body range on to
 //! the rendered string.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use horizon_wiki::anchor::{self, Anchor};
@@ -24,6 +25,9 @@ pub(crate) struct PlacedThread {
     pub(crate) anchor: Anchor,
     /// The anchor's bytes in the page body, when it is still in the page.
     pub(crate) source: Option<Range<usize>>,
+    /// The top-level block the anchor starts in, which the thread is drawn
+    /// after; `None` for an orphan.
+    pub(crate) block: Option<usize>,
 }
 
 impl PlacedThread {
@@ -45,9 +49,14 @@ pub(crate) struct WikiPage {
     pub(crate) id: Option<Uuid>,
     pub(crate) document: Document,
     logical: LogicalText,
+    /// The body's top-level blocks, as byte ranges; the view draws each on
+    /// its own and puts a block's threads right after it.
+    pub(crate) blocks: Vec<Range<usize>>,
     /// Anchored threads first, in page order, then orphans in the order
     /// they were opened.
     pub(crate) threads: Vec<PlacedThread>,
+    /// The comments a session is answering now.
+    pub(crate) replying: BTreeSet<String>,
 }
 
 impl WikiPage {
@@ -60,9 +69,10 @@ impl WikiPage {
             Some(id) => store.threads(id).map_err(|error| error.to_string())?,
             None => Vec::new(),
         };
+        let blocks = horizon_wiki::logical::top_level_blocks(&document.body);
         let mut threads: Vec<PlacedThread> = threads
             .into_iter()
-            .map(|thread| place(&logical, thread))
+            .map(|thread| place(&logical, &blocks, thread))
             .collect();
         // Stable: orphans keep their log order after every anchored one.
         threads.sort_by_key(|placed| {
@@ -75,7 +85,9 @@ impl WikiPage {
             id,
             document,
             logical,
+            blocks,
             threads,
+            replying: store.replying(),
         })
     }
 
@@ -100,16 +112,31 @@ impl WikiPage {
     }
 }
 
-fn place(logical: &LogicalText, thread: Thread) -> PlacedThread {
+impl PlacedThread {
+    /// Whether a session is writing an answer in this thread now.
+    pub(crate) fn replying(&self, replying: &BTreeSet<String>) -> bool {
+        std::iter::once(&self.thread.root)
+            .chain(&self.thread.replies)
+            .any(|annotation| replying.contains(&annotation.id))
+    }
+}
+
+fn place(logical: &LogicalText, blocks: &[Range<usize>], thread: Thread) -> PlacedThread {
     let anchor = thread
         .root
         .quote()
         .map_or(Anchor::Orphaned, |quote| anchor::anchor(logical, &quote));
     let source = anchor.range().and_then(|chars| logical.source_range(chars));
+    // The block holding the anchor's start, or failing that (the start
+    // sits in the gap between blocks) the last block before it.
+    let block = source
+        .as_ref()
+        .and_then(|source| blocks.iter().rposition(|block| block.start <= source.start));
     PlacedThread {
         thread,
         anchor,
         source,
+        block,
     }
 }
 
@@ -160,6 +187,16 @@ mod tests {
         let placed = &page.threads[0];
         let source = placed.source.clone().unwrap();
         assert_eq!(&page.document.body[source.clone()], "helper");
+        assert_eq!(placed.block, Some(0));
+        assert_eq!(page.blocks.len(), 2);
+        assert!(!placed.replying(&page.replying));
+
+        // The answering side lists the root as being answered.
+        store
+            .write_replying(&[placed.thread.root.id.clone()].into())
+            .unwrap();
+        let page = WikiPage::load(&store, "sandbox").unwrap();
+        assert!(page.threads[0].replying(&page.replying));
         assert_eq!(page.orphans().count(), 0);
     }
 

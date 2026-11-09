@@ -30,6 +30,8 @@ fn source_for(dir: &tempfile::TempDir, store: &Store) -> WikiSource {
         store: store.clone(),
         lengths: HashMap::new(),
         waiting: HashSet::new(),
+        threads: HashMap::new(),
+        replying: None,
     }
 }
 
@@ -81,6 +83,8 @@ async fn an_owner_comment_reaches_its_thread_session_until_accepted() {
         .unwrap();
     assert_eq!(delivered(&receiver).len(), 1);
 
+    assert!(store.replying().is_empty(), "sent is not yet answering");
+
     index.fold(record(session, Event::InputAccepted(input.clone())));
     source
         .tick(Context {
@@ -90,6 +94,25 @@ async fn an_owner_comment_reaches_its_thread_session_until_accepted() {
         .await
         .unwrap();
     assert!(delivered(&receiver).is_empty());
+    // Accepted, unanswered, session alive: being answered.
+    assert_eq!(store.replying(), [question.id.clone()].into());
+
+    store
+        .reply(
+            page,
+            &question.id,
+            Agent::session(session.as_uuid()),
+            markdown_body("The sandbox helper."),
+        )
+        .unwrap();
+    source
+        .tick(Context {
+            state: &state,
+            index: &index,
+        })
+        .await
+        .unwrap();
+    assert!(store.replying().is_empty());
 }
 
 #[tokio::test]

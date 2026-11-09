@@ -387,6 +387,25 @@ owner's call.
    board thread view's composition (body, cards, pinned composer); where
    threads should sit relative to the page is for the owner to compare.
 
+### After first use (decided 2026-11-09)
+
+- **Threads are read in the page** ("notionなどのようにコメントが文書中で
+  読めてほしい"), right after the top-level block their passage starts in
+  (option A, "ではAで"); threads whose passage left the page follow it.
+  The page is drawn one top-level block per text view so threads can sit
+  between blocks; a comment spanning blocks is not possible, and a list is
+  one block. The alternative, threads in a margin beside their line, needs
+  positions TextView does not expose (upstream issue longbridge/gpui-kit
+  #3669); `gpui_base::text::editor_host` exposes per-leaf geometry for a
+  host that draws blocks itself, at the cost of owning selection.
+- **Only "a session is writing a reply" is shown** ("エージェントが返信を
+  書こうとしている状態であることのみは見えてよい"), in English like the
+  rest of Horizon. `horizon-agentd`'s wiki flow writes
+  `threads/replying.json` each pass: comments whose input the thread's
+  session accepted, with no reply yet, while that session runs. The
+  shell's session list carries no status, and adopting hidden thread
+  sessions as the board adopts its own was the heavier alternative.
+
 ### Still open before planning
 
 - Later: how orphaned and outdated comments look; what else the view

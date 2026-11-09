@@ -9,7 +9,7 @@
 //! started on the thread's first comment, suspended once the thread has no
 //! comment left to answer, and resumed by the next one.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Once};
 
@@ -18,7 +18,7 @@ use horizon_agent::roles::{RoleDefinition, RoleId};
 use horizon_agent::tools::{ExternalOutput, ExternalTool};
 use horizon_wiki::agent::{self, THREAD_ROLE_ID};
 use horizon_wiki::annotation::{markdown_body, Agent, Annotation};
-use horizon_wiki::{Store, WikiError};
+use horizon_wiki::{Store, Thread, WikiError};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -100,6 +100,8 @@ pub(crate) fn source(root: Option<PathBuf>) -> Option<Box<dyn TriggerSource>> {
         store,
         lengths: HashMap::new(),
         waiting: HashSet::new(),
+        threads: HashMap::new(),
+        replying: None,
     }))
 }
 
@@ -114,6 +116,10 @@ struct WikiSource {
     lengths: HashMap<Uuid, u64>,
     /// Pages with a comment not yet accepted by its session.
     waiting: HashSet<Uuid>,
+    /// Each page's threads as last read.
+    threads: HashMap<Uuid, Vec<Thread>>,
+    /// The comments last written as being answered.
+    replying: Option<BTreeSet<String>>,
 }
 
 impl TriggerSource for WikiSource {
@@ -128,7 +134,16 @@ impl TriggerSource for WikiSource {
                     continue;
                 }
                 self.lengths.insert(page, length);
-                match self.deliver_page(ctx, page) {
+                let threads = match self.store.threads(page) {
+                    Ok(threads) => threads,
+                    Err(e) => {
+                        error = Some(e.to_string());
+                        continue;
+                    }
+                };
+                let delivered = self.deliver_page(ctx, page, &threads);
+                self.threads.insert(page, threads);
+                match delivered {
                     Ok(true) => {
                         self.waiting.remove(&page);
                     }
@@ -141,6 +156,9 @@ impl TriggerSource for WikiSource {
                     }
                 }
             }
+            if let Err(e) = self.publish_replying(ctx) {
+                error = Some(e);
+            }
             error.map_or(Ok(()), Err)
         })
     }
@@ -149,15 +167,19 @@ impl TriggerSource for WikiSource {
 impl WikiSource {
     /// Hands every unanswered owner comment on `page` to its thread's
     /// session. `true` once each has been accepted.
-    fn deliver_page(&self, ctx: Context<'_>, page: Uuid) -> Result<bool, String> {
-        let threads = self.store.threads(page).map_err(|e| e.to_string())?;
+    fn deliver_page(
+        &self,
+        ctx: Context<'_>,
+        page: Uuid,
+        threads: &[Thread],
+    ) -> Result<bool, String> {
         let name = match self.store.page_name(page) {
             Ok(name) => name,
             Err(WikiError::NotFound(_)) => horizon_wiki::page::urn(page),
             Err(e) => return Err(e.to_string()),
         };
         let mut done = true;
-        for thread in &threads {
+        for thread in threads {
             let session = SessionId::from_uuid(agent::thread_session(&thread.root.id));
             for annotation in agent::unanswered(thread) {
                 let id = format!("wiki:{}", annotation.id);
@@ -185,6 +207,35 @@ impl WikiSource {
             }
         }
         Ok(done)
+    }
+
+    /// Writes which comments are being answered now, for the wiki view's
+    /// progress line: those whose input the thread's session has accepted,
+    /// that have no reply yet, while that session is running. Recomputed
+    /// every pass, so a crash or a suspend leaves nothing stale behind;
+    /// written only when it changes.
+    fn publish_replying(&mut self, ctx: Context<'_>) -> Result<(), String> {
+        let mut replying = BTreeSet::new();
+        for thread in self.threads.values().flatten() {
+            let session = SessionId::from_uuid(agent::thread_session(&thread.root.id));
+            if !ctx.state.session_exists(session) {
+                continue;
+            }
+            for annotation in agent::unanswered(thread) {
+                let id = format!("wiki:{}", annotation.id);
+                if ctx.index.accepted.contains(&(session, id)) {
+                    replying.insert(annotation.id.clone());
+                }
+            }
+        }
+        if self.replying.as_ref() == Some(&replying) {
+            return Ok(());
+        }
+        self.store
+            .write_replying(&replying)
+            .map_err(|e| e.to_string())?;
+        self.replying = Some(replying);
+        Ok(())
     }
 
     /// Starts `session` with the thread role, or resumes it when it has

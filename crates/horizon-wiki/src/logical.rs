@@ -28,6 +28,22 @@ pub struct LogicalText {
     sources: Vec<Range<usize>>,
 }
 
+/// The byte ranges of `body`'s top-level blocks (a paragraph, a heading, a
+/// whole list, a table, a code block…), in order, parsed as
+/// [`LogicalText::of_markdown`] parses: a view that draws a page block by
+/// block, to place comment threads between blocks, splits it here.
+pub fn top_level_blocks(body: &str) -> Vec<Range<usize>> {
+    let Ok(root) = markdown::to_mdast(body, &ParseOptions::gfm()) else {
+        return Vec::new();
+    };
+    root.children()
+        .into_iter()
+        .flatten()
+        .filter_map(|node| node.position())
+        .map(|position| position.start.offset..position.end.offset)
+        .collect()
+}
+
 impl LogicalText {
     /// The logical text of a page body (the Markdown after its frontmatter).
     pub fn of_markdown(body: &str) -> Self {
@@ -232,6 +248,19 @@ mod tests {
         let start = logical.as_str().find("cargo").unwrap();
         let source = logical.source_range(start..start + 10).unwrap();
         assert_eq!(&body[source], "cargo test");
+    }
+
+    #[test]
+    fn top_level_blocks_cover_each_block_and_keep_a_list_whole() {
+        let body = "# Title\n\nOne paragraph.\n\n- a\n- b\n\n```sh\nx\n```\n";
+        let blocks: Vec<&str> = top_level_blocks(body)
+            .into_iter()
+            .map(|range| &body[range])
+            .collect();
+        assert_eq!(
+            blocks,
+            ["# Title", "One paragraph.", "- a\n- b\n", "```sh\nx\n```"]
+        );
     }
 
     #[test]

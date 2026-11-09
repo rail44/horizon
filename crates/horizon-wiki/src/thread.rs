@@ -12,7 +12,12 @@ use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
+use std::collections::BTreeSet;
+
 use uuid::Uuid;
+
+/// The progress hint's file name in `threads/`; not a page log.
+pub const REPLYING_FILE: &str = "replying.json";
 
 use crate::annotation::{Agent, Annotation, Motivation, Quote, Target, TextualBody};
 use crate::logical::LogicalText;
@@ -48,6 +53,27 @@ impl Store {
 
     pub fn snapshot_path(&self, snapshot: Uuid) -> PathBuf {
         self.snapshots_dir().join(format!("{snapshot}.md"))
+    }
+
+    /// Where the answering side lists the comments being answered now.
+    pub fn replying_path(&self) -> PathBuf {
+        self.threads_dir().join(REPLYING_FILE)
+    }
+
+    /// The ids of the comments a session is answering now. Missing or
+    /// unreadable reads as none: the file is only a progress hint.
+    pub fn replying(&self) -> BTreeSet<String> {
+        std::fs::read_to_string(self.replying_path())
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    /// Replaces the list of comments being answered, whole.
+    pub fn write_replying(&self, ids: &BTreeSet<String>) -> Result<()> {
+        let text =
+            serde_json::to_string(ids).map_err(|error| WikiError::Invalid(error.to_string()))?;
+        crate::page::write_atomically(&self.replying_path(), &text)
     }
 
     /// Every annotation on page `page`, in log order. A line that does not
@@ -385,6 +411,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.annotations(page).unwrap(), vec![question, reply]);
+    }
+
+    #[test]
+    fn the_replying_list_round_trips_and_is_empty_when_missing() {
+        let (_dir, store) = store_with_page();
+        assert!(store.replying().is_empty());
+        let ids: BTreeSet<String> = ["urn:uuid:a".to_string()].into();
+        store.write_replying(&ids).unwrap();
+        assert_eq!(store.replying(), ids);
+        assert!(store.commented_pages().unwrap().is_empty());
     }
 
     #[test]

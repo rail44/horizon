@@ -1,11 +1,13 @@
-//! The wiki view: one page of the project wiki drawn as running text, its
-//! comment threads highlighted in it and listed under it, and a composer
-//! pinned at the bottom that opens a thread on the selected text or
-//! continues the thread in focus.
+//! The wiki view: one page of the project wiki drawn as running text,
+//! with each comment thread highlighted where it points and read in the
+//! page, right after the block (paragraph, list, table…) it points into, and
+//! a composer pinned at the bottom that opens a thread on the selected text
+//! or continues the thread in focus. Threads whose passage left the page are
+//! listed after it.
 //!
-//! The layout follows the board's thread view (a body, cards under it, the
-//! composer pinned under them); where threads sit relative to the page is
-//! not settled (docs/project-wiki-design.md, "Still open before planning").
+//! The page is drawn one top-level block per text view, so threads can sit
+//! between blocks (docs/project-wiki-design.md, "Comments and the wiki
+//! view"); positions convert through each block's offset in the body.
 //!
 //! Comments are written straight to the page's thread log; the daemon's
 //! wiki flow notices them and answers through the thread's session. The
@@ -36,7 +38,6 @@ use crate::ui::spec::*;
 
 const NO_PAGE: &str = "No wiki page";
 const LOADING: &str = "Loading";
-const THREADS: &str = "Comments";
 const ORPHANS: &str = "No longer in the page";
 const CHANGED: &str = "(the passage has changed since)";
 const NO_SELECTION: &str = "Select text in the page to comment on it";
@@ -45,6 +46,7 @@ const REPLY_IN: &str = "Reply in the thread on";
 const TO_SEND: &str = "to send, Esc to cancel";
 const OWNER: &str = "Owner";
 const AGENT: &str = "Agent";
+const REPLYING: &str = "Agent is replying…";
 const UNSUPPORTED_LINK: &str = "Not a wiki page";
 const BACK: &str = "Back";
 const COMMENT: &str = "Comment";
@@ -68,11 +70,14 @@ pub(crate) struct WikiView {
     path: Option<PathBuf>,
     page: Option<WikiPage>,
     error: Option<String>,
-    /// Bumped on every load; the highlights are set once per load, after
-    /// the text view's parse of that load's body has landed.
+    /// Bumped on every load; each block's highlights are set once per
+    /// load, after that block's text view has parsed the load's text.
     generation: u64,
-    highlighted: Option<u64>,
-    text: Entity<TextViewState>,
+    /// Per block, the generation its highlights were last set for.
+    highlighted: Vec<Option<u64>>,
+    /// One text view per top-level block of the page body.
+    blocks: Vec<Entity<TextViewState>>,
+    _block_subscriptions: Vec<Subscription>,
     focused: Option<usize>,
     target: Option<Target>,
     /// The page text selected now, in logical characters, followed from
@@ -108,27 +113,20 @@ impl WikiView {
     ) -> Self {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
-        let text = cx.new(|cx| TextViewState::markdown("", cx).selectable(true));
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MAX_ROWS)
                 .submit_on_enter(true)
         });
-        let subscriptions = vec![
-            cx.observe(&text, |view, _, cx| {
-                view.apply_highlights(cx);
-                view.follow_selection(cx);
-            }),
-            cx.subscribe_in(
-                &composer,
-                window,
-                |view, _, event: &InputEvent, window, cx| {
-                    if let InputEvent::PressEnter { shift: false, .. } = event {
-                        view.send(window, cx);
-                    }
-                },
-            ),
-        ];
+        let subscriptions = vec![cx.subscribe_in(
+            &composer,
+            window,
+            |view, _, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { shift: false, .. } = event {
+                    view.send(window, cx);
+                }
+            },
+        )];
         let (links, mut clicked) = mpsc::unbounded::<SharedString>();
         let link_pump = cx.spawn(async move |this, cx| {
             while let Some(target) = clicked.next().await {
@@ -145,8 +143,9 @@ impl WikiView {
             page: None,
             error: None,
             generation: 0,
-            highlighted: None,
-            text,
+            highlighted: Vec::new(),
+            blocks: Vec::new(),
+            _block_subscriptions: Vec::new(),
             focused: None,
             target: None,
             selection: None,
@@ -216,6 +215,7 @@ impl WikiView {
         {
             let _ = std::fs::create_dir_all(store.threads_dir());
             files.push(store.thread_log_path(id));
+            files.push(store.replying_path());
         }
         let weak = cx.entity().downgrade();
         self._watches = files
@@ -262,7 +262,11 @@ impl WikiView {
 
     fn loaded(&mut self, page: WikiPage, cx: &mut Context<Self>) {
         let had_id = self.page.as_ref().and_then(|page| page.id);
-        let body = page.document.body.clone();
+        let texts: Vec<String> = page
+            .blocks
+            .iter()
+            .map(|block| page.document.body[block.clone()].to_string())
+            .collect();
         let threads = page.threads.len();
         self.error = None;
         self.page = Some(page);
@@ -273,61 +277,122 @@ impl WikiView {
         if had_id.is_none() && self.page.as_ref().is_some_and(|page| page.id.is_some()) {
             self.watch(cx);
         }
-        self.text.update(cx, |text, cx| text.set_text(&body, cx));
+        self.sync_blocks(texts, cx);
         self.apply_highlights(cx);
         cx.notify();
     }
 
-    /// Paints every anchored thread once the text view has parsed this
-    /// load's body; the focused thread is painted stronger.
+    /// One text view per block: existing views take the new text (a view
+    /// whose text is unchanged keeps its parse), missing ones are made and
+    /// extra ones dropped.
+    fn sync_blocks(&mut self, texts: Vec<String>, cx: &mut Context<Self>) {
+        self.blocks.truncate(texts.len());
+        self._block_subscriptions.truncate(texts.len());
+        for (index, text) in texts.iter().enumerate() {
+            match self.blocks.get(index) {
+                Some(block) => block.update(cx, |block, cx| block.set_text(text, cx)),
+                None => {
+                    let block = cx.new(|cx| TextViewState::markdown(text, cx).selectable(true));
+                    self._block_subscriptions
+                        .push(cx.observe(&block, |view, _, cx| {
+                            view.apply_highlights(cx);
+                            view.follow_selection(cx);
+                        }));
+                    self.blocks.push(block);
+                }
+            }
+        }
+        self.highlighted = vec![None; self.blocks.len()];
+    }
+
+    /// Paints every anchored thread, block by block, once each block's
+    /// text view has parsed this load's text; the focused thread is painted
+    /// stronger. A thread spanning blocks paints its part in each.
     fn apply_highlights(&mut self, cx: &mut Context<Self>) {
         let Some(page) = self.page.as_ref() else {
             return;
         };
-        if self.highlighted == Some(self.generation) {
-            return;
-        }
-        let rendered = self.text.read(cx).rendered_text();
-        if rendered.source() != page.document.body {
-            return;
-        }
         let accent = theme::accent();
-        let highlights: Vec<RangeHighlight> = page
-            .threads
-            .iter()
-            .enumerate()
-            .filter_map(|(index, placed)| {
-                let range = rendered.range_for_source(placed.source.clone()?)?;
-                let alpha = if Some(index) == self.focused {
-                    0.35
-                } else {
-                    0.15
-                };
-                Some(RangeHighlight::new(range, accent.opacity(alpha)))
-            })
-            .collect();
-        self.highlighted = Some(self.generation);
-        let _ = self
-            .text
-            .update(cx, |text, cx| text.set_range_highlights(highlights, cx));
+        for (index, block) in self.blocks.clone().into_iter().enumerate() {
+            if self.highlighted.get(index).copied().flatten() == Some(self.generation) {
+                continue;
+            }
+            let Some(range) = page.blocks.get(index).cloned() else {
+                continue;
+            };
+            let rendered = block.read(cx).rendered_text();
+            if rendered.source() != &page.document.body[range.clone()] {
+                continue;
+            }
+            let highlights: Vec<RangeHighlight> = page
+                .threads
+                .iter()
+                .enumerate()
+                .filter_map(|(thread, placed)| {
+                    let source = placed.source.clone()?;
+                    let start = source.start.max(range.start);
+                    let end = source.end.min(range.end);
+                    if start >= end {
+                        return None;
+                    }
+                    let local =
+                        rendered.range_for_source(start - range.start..end - range.start)?;
+                    let alpha = if Some(thread) == self.focused {
+                        0.35
+                    } else {
+                        0.15
+                    };
+                    Some(RangeHighlight::new(local, accent.opacity(alpha)))
+                })
+                .collect();
+            if let Some(slot) = self.highlighted.get_mut(index) {
+                *slot = Some(self.generation);
+            }
+            let _ = block.update(cx, |block, cx| block.set_range_highlights(highlights, cx));
+        }
+    }
+
+    /// The body bytes selected now: from the first selecting block's start
+    /// to the last one's end.
+    fn selected_source(&self, cx: &App) -> Option<Range<usize>> {
+        let page = self.page.as_ref()?;
+        let mut selected: Option<Range<usize>> = None;
+        for (block, range) in self.blocks.iter().zip(&page.blocks) {
+            let Some(local) = block.read(cx).selected_source_range() else {
+                continue;
+            };
+            let start = range.start + local.start;
+            let end = range.start + local.end;
+            selected = Some(match selected {
+                Some(earlier) => earlier.start.min(start)..earlier.end.max(end),
+                None => start..end,
+            });
+        }
+        selected
     }
 
     fn focus_thread(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.focused = Some(index);
         self.target = Some(Target::Thread(index));
-        self.highlighted = None;
+        self.highlighted = vec![None; self.blocks.len()];
         self.apply_highlights(cx);
-        if let Some(source) = self
-            .page
-            .as_ref()
-            .and_then(|page| page.threads.get(index))
-            .and_then(|placed| placed.source.clone())
-        {
-            let rendered = self.text.read(cx).rendered_text();
-            if let Some(range) = rendered.range_for_source(source) {
-                let _ = self
-                    .text
-                    .update(cx, |text, cx| text.reveal_range(range, cx));
+        let target = self.page.as_ref().and_then(|page| {
+            let placed = page.threads.get(index)?;
+            let block = placed.block?;
+            let range = page.blocks.get(block)?;
+            let source = placed.source.clone()?;
+            let start = source.start.max(range.start) - range.start;
+            Some((
+                block,
+                start..source.end.min(range.end).max(range.start) - range.start,
+            ))
+        });
+        if let Some((block, local)) = target {
+            if let Some(state) = self.blocks.get(block).cloned() {
+                let rendered = state.read(cx).rendered_text();
+                if let Some(range) = rendered.range_for_source(local) {
+                    let _ = state.update(cx, |state, cx| state.reveal_range(range, cx));
+                }
             }
         }
         self.composer
@@ -338,7 +403,7 @@ impl WikiView {
     /// Starts a comment on the page text currently selected.
     /// Keeps [`Self::selection`] in step with the text view's selection.
     fn follow_selection(&mut self, cx: &mut Context<Self>) {
-        let source = self.text.read(cx).selected_source_range();
+        let source = self.selected_source(cx);
         let chars = source.and_then(|source| self.page.as_ref()?.selection(source));
         if chars != self.selection {
             self.selection = chars;
@@ -351,9 +416,7 @@ impl WikiView {
     /// own before this runs.
     fn comment_on_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let live = self
-            .text
-            .read(cx)
-            .selected_source_range()
+            .selected_source(cx)
             .and_then(|source| self.page.as_ref()?.selection(source));
         let chars = live.or_else(|| self.selection.clone());
         match chars {
@@ -590,6 +653,10 @@ impl WikiView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let focused = self.focused == Some(index);
+        let replying = self
+            .page
+            .as_ref()
+            .is_some_and(|page| placed.replying(&page.replying));
         let posts: Vec<&Annotation> = std::iter::once(&placed.thread.root)
             .chain(&placed.thread.replies)
             .collect();
@@ -623,6 +690,15 @@ impl WikiView {
                     }),
             )
             .children(posts.into_iter().map(|post| self.render_post(post)))
+            .when(replying, |card| {
+                card.child(
+                    div()
+                        .text_size(meta().size)
+                        .line_height(meta().line_height)
+                        .text_color(theme::text_muted())
+                        .child(REPLYING),
+                )
+            })
             .into_any_element()
     }
 
@@ -646,14 +722,32 @@ impl WikiView {
         let Some(page) = self.page.as_ref() else {
             return muted(LOADING.into(), theme::text_muted());
         };
-        let links = self.links.clone();
-        let anchored: Vec<AnyElement> = page
-            .threads
-            .iter()
-            .enumerate()
-            .filter(|(_, placed)| placed.source.is_some())
-            .map(|(index, placed)| self.render_thread(index, placed, cx))
-            .collect();
+        let mut flow: Vec<AnyElement> = Vec::new();
+        for (block_index, block) in self.blocks.iter().enumerate() {
+            let links = self.links.clone();
+            let scroll = self.scroll.clone();
+            flow.push(
+                running_text(
+                    TextView::new(block)
+                        .on_link_click(move |target, _, _, _| {
+                            let _ = links.unbounded_send(target.clone());
+                        })
+                        // The body scrolls in this view's own container, which
+                        // a text view's reveal does not move by itself.
+                        .on_reveal(move |line, window, _| {
+                            reveal_in(&scroll, line);
+                            window.refresh();
+                        }),
+                    theme::text_primary(),
+                )
+                .into_any_element(),
+            );
+            for (index, placed) in page.threads.iter().enumerate() {
+                if placed.block == Some(block_index) {
+                    flow.push(self.render_thread(index, placed, cx));
+                }
+            }
+        }
         let orphans: Vec<AnyElement> = page
             .orphans()
             .map(|(index, placed)| self.render_thread(index, placed, cx))
@@ -675,16 +769,8 @@ impl WikiView {
             .px(pad_x())
             .pt(gap_section())
             .pb(gap_composer())
-            .gap(gap_unit())
-            .child(running_text(
-                TextView::new(&self.text).on_link_click(move |target, _, _, _| {
-                    let _ = links.unbounded_send(target.clone());
-                }),
-                theme::text_primary(),
-            ))
-            .when(!anchored.is_empty(), |column| {
-                column.child(section(THREADS)).children(anchored)
-            })
+            .gap(gap_tight())
+            .children(flow)
             .when(!orphans.is_empty(), |column| {
                 column.child(section(ORPHANS)).children(orphans)
             })
@@ -797,6 +883,24 @@ impl WikiView {
                 .into_any_element(),
         )
     }
+}
+
+/// Scrolls `scroll` so `line` (window coordinates) is inside its
+/// viewport, with some room around it.
+fn reveal_in(scroll: &ScrollHandle, line: Bounds<Pixels>) {
+    let viewport = scroll.bounds();
+    let room = line.size.height * 2.;
+    let mut offset = scroll.offset();
+    if line.top() < viewport.top() {
+        offset.y += viewport.top() - line.top() + room;
+    } else if line.bottom() > viewport.bottom() {
+        offset.y -= line.bottom() - viewport.bottom() + room;
+    } else {
+        return;
+    }
+    let max = scroll.max_offset().y;
+    offset.y = offset.y.clamp(-max, px(0.));
+    scroll.set_offset(offset);
 }
 
 impl Focusable for WikiView {
@@ -958,6 +1062,8 @@ mod tests {
                 let page = view.page.as_ref().expect("loaded");
                 assert_eq!(page.document.title.as_deref(), Some("Sandbox"));
                 assert!(view.owner.is_some());
+                // One text view per top-level block.
+                assert_eq!(view.blocks.len(), page.blocks.len());
             })
             .unwrap();
 
