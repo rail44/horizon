@@ -68,8 +68,6 @@ const COMPOSER_MIN_ROWS: usize = 2;
 const COMPOSER_MAX_ROWS: usize = 8;
 /// One cycle of the replying dots, as the agent pane's thinking dots.
 const DOTS_CYCLE_MS: u64 = 1200;
-/// The measure key of a comment being started.
-const NEW_COMMENT: &str = "new";
 
 /// The margin threads sit in.
 fn margin_width() -> Pixels {
@@ -87,9 +85,19 @@ fn owner_indent() -> Pixels {
     scaled(24.0)
 }
 
-/// A thread's height before it has been measured.
-fn unmeasured_height() -> Pixels {
-    scaled(40.0)
+/// What the margin column needs from layout, shared between the canvases
+/// laid over the blocks and the margin column, which reads it later in the
+/// same frame.
+#[derive(Debug, Default)]
+struct Measure {
+    /// Each block's top in window coordinates, written by a canvas over the
+    /// block while the text column prepaints. The margin column prepaints
+    /// after it, so it reads this frame's values.
+    blocks: HashMap<usize, Pixels>,
+    /// How tall the margin column's items reached last frame. The column
+    /// asks for that height, so the scroll extent covers threads that run
+    /// past the end of the text; only a change in it costs a second frame.
+    margin_height: Pixels,
 }
 
 /// What the composer writes to when it is sent.
@@ -99,63 +107,6 @@ enum Target {
     Selection(Range<usize>),
     /// The thread whose root annotation has this id.
     Thread(String),
-}
-
-/// Where things were laid out in the last frame, measured by canvases laid
-/// over them and read by the next render.
-#[derive(Debug, Default)]
-struct Measure {
-    /// The row holding the text and the margin, in window coordinates.
-    row: Option<Bounds<Pixels>>,
-    /// Each block's top, in window coordinates.
-    blocks: HashMap<usize, Pixels>,
-    /// Each margin item's height, by thread root id (or [`NEW_COMMENT`]).
-    items: HashMap<String, Pixels>,
-}
-
-#[derive(Debug, Clone)]
-enum Probe {
-    Row,
-    Block(usize),
-    Item(String),
-}
-
-impl Measure {
-    /// Records `bounds` for `probe`; `true` when it moved enough to redraw.
-    fn record(&mut self, probe: &Probe, bounds: Bounds<Pixels>) -> bool {
-        let moved = |old: Pixels, new: Pixels| (old - new).abs() > px(0.5);
-        match probe {
-            Probe::Row => {
-                let changed = self.row.is_none_or(|row| {
-                    moved(row.size.width, bounds.size.width) || moved(row.top(), bounds.top())
-                });
-                self.row = Some(bounds);
-                changed
-            }
-            Probe::Block(index) => self
-                .blocks
-                .insert(*index, bounds.top())
-                .is_none_or(|old| moved(old, bounds.top())),
-            Probe::Item(key) => self
-                .items
-                .insert(key.clone(), bounds.size.height)
-                .is_none_or(|old| moved(old, bounds.size.height)),
-        }
-    }
-
-    /// Whether the last frame's row had room for the margin.
-    fn wide(&self) -> bool {
-        self.row
-            .is_some_and(|row| row.size.width >= text_min_width() + margin_width() + gap_section())
-    }
-
-    /// A block's top relative to the row.
-    fn block_top(&self, index: usize) -> Pixels {
-        match (self.row, self.blocks.get(&index)) {
-            (Some(row), Some(top)) => (*top - row.top()).max(px(0.)),
-            _ => px(0.),
-        }
-    }
 }
 
 pub(crate) struct WikiView {
@@ -939,12 +890,8 @@ impl WikiView {
     }
 
     /// The page's text and its threads: in a margin beside the text when
-    /// the last frame had room for one, in the text after their blocks
-    /// otherwise.
-    fn render_page(&self, page: &WikiPage, cx: &mut Context<Self>) -> AnyElement {
-        let measure = self.measure.borrow();
-        let wide = measure.wide();
-        let weak = cx.weak_entity();
+    /// `wide`, in the text after their blocks otherwise.
+    fn render_page(&self, page: &WikiPage, wide: bool, cx: &mut Context<Self>) -> AnyElement {
         let new_comment = match &self.target {
             Some(Target::Selection(chars)) => Some((page.block_of(chars.clone()), chars.clone())),
             _ => None,
@@ -971,7 +918,7 @@ impl WikiView {
                             }),
                         theme::text_primary(),
                     ))
-                    .child(probe(&self.measure, &weak, Probe::Block(index))),
+                    .when(wide, |block| block.child(probe(&self.measure, index))),
             );
             if !wide {
                 for placed in &page.threads {
@@ -994,55 +941,24 @@ impl WikiView {
             .gap(gap_section())
             .child(text);
         if wide {
-            // Each item at its block's top, pushed below the one before.
-            let mut items: Vec<(usize, String, AnyElement)> = page
+            let mut items: Vec<(usize, AnyElement)> = page
                 .threads
                 .iter()
-                .filter_map(|placed| {
-                    Some((
-                        placed.block?,
-                        placed.thread.root.id.clone(),
-                        self.render_thread(placed, cx),
-                    ))
-                })
+                .filter_map(|placed| Some((placed.block?, self.render_thread(placed, cx))))
                 .collect();
             if let Some((Some(block), chars)) = &new_comment {
                 let at = items
                     .iter()
-                    .position(|(other, _, _)| other > block)
+                    .position(|(other, _)| other > block)
                     .unwrap_or(items.len());
-                items.insert(
-                    at,
-                    (
-                        *block,
-                        NEW_COMMENT.to_string(),
-                        self.render_new_comment(page, chars.clone()),
-                    ),
-                );
+                items.insert(at, (*block, self.render_new_comment(page, chars.clone())));
             }
-            let mut margin = div().relative().flex_none().w(margin_width());
-            let mut cursor = px(0.);
-            for (block, key, element) in items {
-                let top = measure.block_top(block).max(cursor);
-                let height = measure
-                    .items
-                    .get(&key)
-                    .copied()
-                    .unwrap_or_else(unmeasured_height);
-                cursor = top + height + gap_tight();
-                margin = margin.child(
-                    div()
-                        .absolute()
-                        .top(top)
-                        .left_0()
-                        .w_full()
-                        .child(element)
-                        .child(probe(&self.measure, &weak, Probe::Item(key))),
-                );
-            }
-            row = row.child(margin.h(cursor));
+            row = row.child(MarginColumn {
+                items,
+                measure: self.measure.clone(),
+                view: cx.weak_entity(),
+            });
         }
-        drop(measure);
 
         let orphans: Vec<AnyElement> = page
             .orphans()
@@ -1051,7 +967,7 @@ impl WikiView {
         v_flex()
             .w_full()
             .gap(gap_tight())
-            .child(row.child(probe(&self.measure, &weak, Probe::Row)))
+            .child(row)
             .when(!orphans.is_empty(), |column| {
                 column
                     .child(
@@ -1085,8 +1001,24 @@ impl WikiView {
         if let Some(error) = self.error.clone() {
             return muted(error.into(), theme::danger());
         }
-        let Some(page) = self.page.as_ref() else {
+        if self.page.is_none() {
             return muted(LOADING.into(), theme::text_muted());
+        }
+        // Whether the margin fits is decided from the width this element
+        // is given, in the frame that draws it (gpui's container query
+        // builds its contents in prepaint, after layout).
+        let view = cx.entity();
+        container_query(move |size, _, cx| {
+            let wide =
+                size.width - pad_x() * 2. >= text_min_width() + margin_width() + gap_section();
+            view.update(cx, |view, cx| view.render_scroll(wide, cx))
+        })
+        .into_any_element()
+    }
+
+    fn render_scroll(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+        let Some(page) = self.page.as_ref() else {
+            return div().into_any_element();
         };
         v_flex()
             .id("wiki-scroll")
@@ -1096,7 +1028,7 @@ impl WikiView {
             .px(pad_x())
             .pt(gap_section())
             .pb(gap_composer())
-            .child(self.render_page(page, cx))
+            .child(self.render_page(page, wide, cx))
             .into_any_element()
     }
 
@@ -1155,27 +1087,119 @@ impl WikiView {
     }
 }
 
-/// A canvas laid over its parent that records the parent's bounds for the
-/// next render, and asks for one when they moved.
-fn probe(
-    measure: &Rc<RefCell<Measure>>,
-    view: &WeakEntity<WikiView>,
-    key: Probe,
-) -> impl IntoElement {
+/// A canvas laid over block `index` that records where its top was laid
+/// out in this frame. It asks for nothing: the margin column reads it later
+/// in the same frame.
+fn probe(measure: &Rc<RefCell<Measure>>, index: usize) -> impl IntoElement {
     let measure = measure.clone();
-    let view = view.clone();
     canvas(
-        move |bounds, _, cx| {
-            if measure.borrow_mut().record(&key, bounds) {
-                cx.defer(move |cx| {
-                    view.update(cx, |_, cx| cx.notify()).ok();
-                });
-            }
+        move |bounds, _, _| {
+            measure.borrow_mut().blocks.insert(index, bounds.top());
         },
         |_, _, _, _| {},
     )
     .absolute()
     .inset_0()
+}
+
+/// The margin beside the text: each item placed at the top of its block,
+/// pushed below the item before it, as Zed's editor lays out its blocks
+/// and popovers. It lays its items out and places them in prepaint, after
+/// the text column (an earlier sibling) has recorded this frame's block
+/// tops, so nothing waits a frame for a position.
+struct MarginColumn {
+    items: Vec<(usize, AnyElement)>,
+    measure: Rc<RefCell<Measure>>,
+    view: WeakEntity<WikiView>,
+}
+
+impl IntoElement for MarginColumn {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for MarginColumn {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = margin_width().into();
+        style.size.height = self.measure.borrow().margin_height.into();
+        style.flex_shrink = 0.;
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let tops = self.measure.borrow().blocks.clone();
+        let mut cursor = px(0.);
+        for (block, item) in &mut self.items {
+            let size = item.layout_as_root(
+                size(
+                    AvailableSpace::Definite(bounds.size.width),
+                    AvailableSpace::MinContent,
+                ),
+                window,
+                cx,
+            );
+            let top = tops
+                .get(block)
+                .map_or(px(0.), |top| (*top - bounds.top()).max(px(0.)))
+                .max(cursor);
+            item.prepaint_at(bounds.origin + point(px(0.), top), window, cx);
+            cursor = top + size.height + gap_tight();
+        }
+        let mut measure = self.measure.borrow_mut();
+        if (measure.margin_height - cursor).abs() > px(0.5) {
+            // Only the scroll extent depends on this; a notify during the
+            // draw would be dropped, so it is deferred.
+            measure.margin_height = cursor;
+            let view = self.view.clone();
+            cx.defer(move |cx| {
+                view.update(cx, |_, cx| cx.notify()).ok();
+            });
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        for (_, item) in &mut self.items {
+            item.paint(window, cx);
+        }
+    }
 }
 
 /// `Replying` and three dots whose opacity cycles, as the agent pane's
@@ -1285,10 +1309,10 @@ impl Render for WikiView {
 mod tests {
     // Not `super::*`: that brings in `gpui::*`, whose `test` shadows the
     // attribute `#[gpui::test]` expands to.
-    use gpui::{px, size, Bounds, TestAppContext, WindowHandle};
+    use gpui::{TestAppContext, WindowHandle};
     use horizon_wiki::Store;
 
-    use super::{Measure, Probe, Target, WikiView};
+    use super::{Target, WikiView};
 
     struct Scratch(std::path::PathBuf);
 
@@ -1371,6 +1395,36 @@ mod tests {
                     .as_ref()
                     .and_then(|page| page.document.title.clone());
                 assert_eq!(title.as_deref(), Some("Other"), "still loading");
+            })
+            .unwrap();
+    }
+
+    /// Drawn in a wide window, a thread is laid out in the margin column in
+    /// the frame that draws it: the blocks' tops are recorded and the
+    /// margin's items reach a height.
+    #[gpui::test]
+    fn a_wide_window_lays_threads_out_in_the_margin(cx: &mut TestAppContext) {
+        let (_scratch, _store, window) = open(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.target = Some(Target::Selection(4..10));
+                view.composer.update(cx, |composer, cx| {
+                    composer.set_value("Which helper?", window, cx)
+                });
+                view.send(window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_window_resize(window.into(), gpui::size(gpui::px(1400.), gpui::px(900.)));
+        cx.run_until_parked();
+        window
+            .read_with(cx, |view, _| {
+                let measure = view.measure.borrow();
+                assert!(!measure.blocks.is_empty(), "block tops were recorded");
+                assert!(
+                    measure.margin_height > gpui::px(0.),
+                    "the margin laid its thread out"
+                );
             })
             .unwrap();
     }
@@ -1466,23 +1520,5 @@ mod tests {
                 assert!(view.target.is_none());
             })
             .unwrap();
-    }
-
-    /// The margin is used only when the row has room for it beside the
-    /// text, and a block's top is read relative to the row.
-    #[test]
-    fn the_margin_needs_room_and_tops_are_relative_to_the_row() {
-        let mut measure = Measure::default();
-        assert!(!measure.wide(), "unmeasured is narrow");
-        let row = Bounds::new(gpui::point(px(0.), px(100.)), size(px(1200.), px(800.)));
-        assert!(measure.record(&Probe::Row, row));
-        assert!(!measure.record(&Probe::Row, row), "no change, no redraw");
-        assert!(measure.wide());
-        let block = Bounds::new(gpui::point(px(0.), px(160.)), size(px(600.), px(40.)));
-        measure.record(&Probe::Block(2), block);
-        assert_eq!(measure.block_top(2), px(60.));
-        let narrow = Bounds::new(gpui::point(px(0.), px(100.)), size(px(400.), px(800.)));
-        measure.record(&Probe::Row, narrow);
-        assert!(!measure.wide());
     }
 }

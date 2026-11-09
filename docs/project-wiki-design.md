@@ -401,9 +401,17 @@ owner's call.
   owner's indented behind a rule down the left edge, an agent's in a
   bordered card as the agent pane draws a turn, a reply being written as a
   card with the accent bar; the thread in focus has an accent border.
-  The page is drawn one top-level block per text view, and each block's
-  top is measured with a `canvas` laid over it, so a comment spanning
-  blocks is not possible and a list is one block. Line-level alignment
+  The page is drawn one top-level block per text view, so a comment
+  spanning blocks is not possible and a list is one block. Layout is
+  settled in the frame that draws it, as Zed's editor and gpui-kit's
+  popups place elements (checked against their source, 2026-11-10, after
+  a first version measured in one frame and placed in the next): gpui's
+  `container_query` decides wide or narrow from the width it is given, a
+  `canvas` over each block records its top while the text column
+  prepaints, and a custom `MarginColumn` element lays each thread out with
+  `layout_as_root` and places it with `prepaint_at` later in the same
+  prepaint. Only a change in the margin's total height, which sets the
+  scroll extent, asks for one more frame. Line-level alignment
   needs positions TextView does not expose (upstream issue
   longbridge/gpui-kit #3669); `gpui_base::text::editor_host` exposes
   per-leaf geometry for a host that draws blocks itself, at the cost of
