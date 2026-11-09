@@ -3,6 +3,17 @@
 version = 4
 
 [[package]]
+name = "a2ui-gpui"
+version = "0.1.0"
+dependencies = [
+ "gpui-component",
+ "gpui-pre",
+ "gpui-pre-platform",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "accesskit"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,24 @@
+[package]
+name = "a2ui-gpui"
+version = "0.1.0"
+edition = "2021"
+description = "Spike: render A2UI v1.0 surfaces with GPUI and gpui-component."
+publish = false
+
+# Deliberately depends on no Horizon crate: the renderer is meant to be usable
+# outside Horizon. The gpui and gpui-component pins match the root package so
+# the workspace keeps one gpui.
+[dependencies]
+gpui = { package = "gpui-pre", version = "0.3.1" }
+gpui-component = { git = "https://github.com/longbridge/gpui-kit", rev = "7591a35eced761e3613c01e71ff04c10129dae1a" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+# GPUI's deterministic test executor for the view tests.
+gpui = { package = "gpui-pre", version = "0.3.1", features = ["test-support"] }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
+    "font-kit",
+    "wayland",
+    "x11",
+] }

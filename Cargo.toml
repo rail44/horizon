@@ -18,6 +18,7 @@ members = [
     "crates/horizon-board",
     "crates/horizon-logd",
     "crates/horizon-wiki",
+    "crates/a2ui-gpui",
 ]
 # The preview plugin is a `wasm32-wasip2` cdylib with its own sub-workspace
 # and its own lockfile; it depends on the root package by path, so cargo
