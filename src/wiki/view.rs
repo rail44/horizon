@@ -14,8 +14,9 @@
 //! The page is drawn one top-level block per text view so that a block's
 //! height can be measured (a `canvas` laid over it) and threads placed
 //! against it; positions convert through each block's offset in the body.
-//! Posts are drawn as the agent pane draws a conversation: the owner's
-//! indented on a grey tint, an agent's in a bordered card.
+//! Posts are told apart by their borders, not by fills (a tint read
+//! worse): the owner's indented behind a rule down the left edge, an
+//! agent's in a bordered card as the agent pane draws a turn.
 //!
 //! Comments are written straight to the page's thread log; the daemon's
 //! wiki flow notices them and answers through the thread's session, and
@@ -758,8 +759,8 @@ impl WikiView {
         )
     }
 
-    /// One post, drawn as the agent pane draws a conversation: the owner's
-    /// indented on a grey tint, an agent's in a bordered card.
+    /// One post: the owner's indented behind a rule down the left edge,
+    /// an agent's in a bordered card.
     fn render_post(&self, annotation: &Annotation) -> impl IntoElement {
         let when = text_line(
             micro(),
@@ -779,10 +780,11 @@ impl WikiView {
             .child(div().w_full().child(text))
             .child(when);
         match annotation.creator.kind {
-            AgentType::Person => post.ml(owner_indent()).bg(theme::tint_over_background(
-                theme::text_primary(),
-                BAND_TINT,
-            )),
+            AgentType::Person => post
+                .ml(owner_indent())
+                .rounded_none()
+                .border_l(ACCENT_BAR)
+                .border_color(theme::text_muted()),
             AgentType::Software => post.border_1().border_color(theme::border()),
         }
     }
@@ -891,8 +893,11 @@ impl WikiView {
             .p(gap_tight())
             .gap(gap_tight())
             .rounded(RADIUS)
-            .when(focused, |card| {
-                card.bg(theme::tint_over_background(theme::accent(), SELECTION_TINT))
+            .border_1()
+            .border_color(if focused {
+                theme::accent()
+            } else {
+                theme::border()
             })
             .child(head)
             .when(open, |card| {
@@ -912,7 +917,8 @@ impl WikiView {
             .p(gap_tight())
             .gap(gap_tight())
             .rounded(RADIUS)
-            .bg(theme::tint_over_background(theme::accent(), SELECTION_TINT))
+            .border_1()
+            .border_color(theme::accent())
             .child(
                 div()
                     .w_full()

@@ -396,9 +396,11 @@ owner's call.
   On a pane too narrow for the margin they sit in the page right after
   that block (option A, implemented first). Threads start closed as one
   line and open on a click ("デフォルトでは閉じたトグルをクリックで展開"),
-  an open thread holds its composer, and posts are drawn as the agent pane
-  draws a conversation: the owner's indented on a grey tint, an agent's in
-  a bordered card, a reply being written as a card with the accent bar.
+  an open thread holds its composer, and posts are told apart by borders
+  rather than fills ("背景色がむしろ見辛さを生んでいるので、枠線で"): the
+  owner's indented behind a rule down the left edge, an agent's in a
+  bordered card as the agent pane draws a turn, a reply being written as a
+  card with the accent bar; the thread in focus has an accent border.
   The page is drawn one top-level block per text view, and each block's
   top is measured with a `canvas` laid over it, so a comment spanning
   blocks is not possible and a list is one block. Line-level alignment
