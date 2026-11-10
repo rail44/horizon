@@ -423,6 +423,12 @@ owner's call.
   longbridge/gpui-kit #3669); `gpui_base::text::editor_host` exposes
   per-leaf geometry for a host that draws blocks itself, at the cost of
   owning selection.
+- **A dialog layout to compare** ("モーダル型を作ってみましょう",
+  2026-11-11): switched from the view's header, it keeps only each
+  thread's head line in the page, after its block, and opens the thread
+  (or a new comment, which stays open on the thread it made) in a dialog
+  over the view, drawn as the shell's own dialogs are (a click outside or
+  Esc closes it). Not yet decided between this and the margin.
 - **Only "a session is writing a reply" is shown** ("エージェントが返信を
   書こうとしている状態であることのみは見えてよい"), in English like the
   rest of Horizon. `horizon-agentd`'s wiki flow writes

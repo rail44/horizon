@@ -11,6 +11,10 @@
 //! left the page are listed after it (docs/project-wiki-design.md, "After
 //! first use").
 //!
+//! A second layout, switched from the header for comparison, keeps only
+//! each thread's head line in the page and opens a thread, or a new
+//! comment, in a dialog over the view.
+//!
 //! The page is drawn one top-level block per text view so that a block's
 //! height can be measured (a `canvas` laid over it) and threads placed
 //! against it; positions convert through each block's offset in the body.
@@ -60,6 +64,9 @@ const TO_SEND: &str = "to send, Esc to cancel";
 const REPLYING: &str = "Replying";
 const UNSUPPORTED_LINK: &str = "Not a wiki page";
 const BACK: &str = "Back";
+const TO_DIALOG: &str = "Comments in a dialog";
+const TO_MARGIN: &str = "Comments in the margin";
+const CLOSE: &str = "Close";
 const COMMENT: &str = "Comment";
 /// The composer's row bounds, as the board thread's composer has them.
 const COMPOSER_MIN_ROWS: usize = 2;
@@ -99,6 +106,15 @@ struct Measure {
     margin_height: Pixels,
 }
 
+/// Where an open thread is read: in a margin beside the text (in the
+/// page on a narrow pane), or in a dialog over the page, with only each
+/// thread's head line in the page. The owner compares the two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommentLayout {
+    Margin,
+    Dialog,
+}
+
 /// What the composer writes to when it is sent.
 #[derive(Debug, Clone, PartialEq)]
 enum Target {
@@ -125,6 +141,7 @@ pub(crate) struct WikiView {
     /// Threads shown open, by root id.
     expanded: HashSet<String>,
     target: Option<Target>,
+    layout: CommentLayout,
     /// The page text selected now, in logical characters, followed from
     /// the text views so the comment button can act on it.
     selection: Option<Range<usize>>,
@@ -198,6 +215,7 @@ impl WikiView {
             focused: None,
             expanded: HashSet::new(),
             target: None,
+            layout: CommentLayout::Margin,
             selection: None,
             composer,
             notice: None,
@@ -471,6 +489,10 @@ impl WikiView {
 
     /// A click on a thread's head: opens it in focus, or closes it.
     fn toggle_thread(&mut self, root: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.layout == CommentLayout::Dialog {
+            self.focus_thread(root, window, cx);
+            return;
+        }
         if self.expanded.contains(&root) {
             self.expanded.remove(&root);
             if self.focused.as_ref() == Some(&root) {
@@ -566,9 +588,14 @@ impl WikiView {
                 // back to the view rather than to an input no longer drawn.
                 if let Some(root) = new_root {
                     self.expanded.insert(root.clone());
-                    self.focused = Some(root);
-                    self.target = None;
-                    window.focus(&self.focus_handle, cx);
+                    self.focused = Some(root.clone());
+                    if self.layout == CommentLayout::Dialog {
+                        // The dialog stays open on the thread just made.
+                        self.target = Some(Target::Thread(root));
+                    } else {
+                        self.target = None;
+                        window.focus(&self.focus_handle, cx);
+                    }
                 }
                 self.reload(cx);
             }
@@ -681,17 +708,33 @@ impl WikiView {
                 .px(pad_x())
                 .pt(gap_section())
                 .gap(gap_tight())
-                .when(can_go_back, |column| {
-                    column.child(
-                        h_flex().child(
-                            Button::new("wiki-back")
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap(gap_label())
+                        .when(can_go_back, |row| {
+                            row.child(
+                                Button::new("wiki-back")
+                                    .ghost()
+                                    .xsmall()
+                                    .label(BACK)
+                                    .on_click(cx.listener(|view, _, _, cx| view.back(cx))),
+                            )
+                        })
+                        .child(div().flex_1())
+                        .child(
+                            Button::new("wiki-layout")
                                 .ghost()
                                 .xsmall()
-                                .label(BACK)
-                                .on_click(cx.listener(|view, _, _, cx| view.back(cx))),
+                                .label(match self.layout {
+                                    CommentLayout::Margin => TO_DIALOG,
+                                    CommentLayout::Dialog => TO_MARGIN,
+                                })
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.switch_layout(window, cx)
+                                })),
                         ),
-                    )
-                })
+                )
                 .when_some(document.title.clone(), |column, title| {
                     column.child(
                         div()
@@ -796,7 +839,7 @@ impl WikiView {
     /// agent is replying), and when open its posts and composer.
     fn render_thread(&self, placed: &PlacedThread, cx: &mut Context<Self>) -> AnyElement {
         let root = placed.thread.root.id.clone();
-        let open = self.expanded.contains(&root);
+        let open = self.layout == CommentLayout::Margin && self.expanded.contains(&root);
         let focused = self.focused.as_ref() == Some(&root);
         let replying = self
             .page
@@ -888,6 +931,119 @@ impl WikiView {
             .into_any_element()
     }
 
+    fn switch_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.layout = match self.layout {
+            CommentLayout::Margin => CommentLayout::Dialog,
+            CommentLayout::Dialog => CommentLayout::Margin,
+        };
+        // An open thread or form carries over: the dialog shows it, or it
+        // opens in the margin.
+        if let Some(Target::Thread(root)) = self.target.clone() {
+            self.expanded.insert(root);
+        }
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    /// In dialog mode, the thread or new comment being worked on, over the
+    /// view: the whole quote, the posts and the composer. Esc, `Close` or a
+    /// click outside closes it; drawn as the shell's own dialogs are.
+    fn render_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.layout != CommentLayout::Dialog {
+            return None;
+        }
+        let page = self.page.as_ref()?;
+        let (quote, posts, replying) = match self.target.as_ref()? {
+            Target::Selection(chars) => (
+                format!("{COMMENT_ON} “{}”", page.quote_of(chars.clone())),
+                Vec::new(),
+                false,
+            ),
+            Target::Thread(root) => {
+                let placed = self.placed(root)?;
+                let posts: Vec<&Annotation> = std::iter::once(&placed.thread.root)
+                    .chain(&placed.thread.replies)
+                    .collect();
+                (
+                    format!("“{}”", placed.quote()),
+                    posts,
+                    placed.replying(&page.replying),
+                )
+            }
+        };
+        let replying_id: SharedString = format!("wiki-dialog-replying:{}", posts.len()).into();
+        Some(
+            div()
+                .id("wiki-dialog-backdrop")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .flex()
+                .justify_center()
+                .items_start()
+                .pt(gap_section() * 2.)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|view, _, window, cx| view.cancel(window, cx)),
+                )
+                .child(
+                    v_flex()
+                        .w(scaled(720.))
+                        .max_w(relative(0.92))
+                        .max_h(relative(0.85))
+                        .p(pad_x())
+                        .gap(gap_tight())
+                        .bg(rgb(theme::background()))
+                        .border_1()
+                        .border_color(theme::border())
+                        .shadow(theme::overlay_shadow())
+                        .rounded_md()
+                        // A click in the dialog is not a click outside it.
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap(gap_label())
+                                .items_start()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_size(meta().size)
+                                        .line_height(meta().line_height)
+                                        .text_color(theme::text_muted())
+                                        .child(quote),
+                                )
+                                .child(key_chip("Esc"))
+                                .child(
+                                    Button::new("wiki-dialog-close")
+                                        .ghost()
+                                        .xsmall()
+                                        .label(CLOSE)
+                                        .on_click(cx.listener(|view, _, window, cx| {
+                                            view.cancel(window, cx)
+                                        })),
+                                ),
+                        )
+                        .child(
+                            v_flex()
+                                .id("wiki-dialog-posts")
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .gap(gap_tight())
+                                .children(posts.into_iter().map(|post| self.render_post(post)))
+                                .when(replying, |posts| {
+                                    posts.child(self.render_replying(replying_id))
+                                }),
+                        )
+                        .child(self.render_composer()),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// The page's text and its threads: in a margin of width `margin`
     /// beside the text, or with no margin in the text after their blocks.
     /// What starts a comment (the button while text is selected, then the
@@ -899,8 +1055,11 @@ impl WikiView {
         margin: Option<Pixels>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let dialog = self.layout == CommentLayout::Dialog;
+        let margin = margin.filter(|_| !dialog);
         let wide = margin.is_some();
         let starting: Option<(usize, AnyElement)> = match &self.target {
+            Some(Target::Selection(_)) if dialog => None,
             Some(Target::Selection(chars)) => page
                 .block_of(chars.clone())
                 .map(|block| (block, self.render_new_comment(page, chars.clone()))),
@@ -1271,6 +1430,7 @@ impl Render for WikiView {
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                 view.on_key(event, window, cx);
             }))
+            .relative()
             .size_full()
             .min_w(VIEW_MIN_WIDTH)
             .bg(rgb(theme::background()))
@@ -1297,6 +1457,7 @@ impl Render for WikiView {
                     .line_height(body().line_height)
                     .child(self.render_body(cx)),
             )
+            .children(self.render_dialog(cx))
     }
 }
 
@@ -1435,6 +1596,48 @@ mod tests {
         let narrow = super::margin_for(scaled(640.)).unwrap();
         assert!(narrow >= scaled(240.) && narrow < wide, "{narrow:?}");
         assert_eq!(super::margin_for(scaled(500.)), None);
+    }
+
+    /// In dialog mode a new thread stays open in the dialog, a reply goes
+    /// to it, and closing the dialog leaves nothing open.
+    #[gpui::test]
+    fn the_dialog_keeps_a_new_thread_open_and_closes(cx: &mut TestAppContext) {
+        let (_scratch, store, window) = open(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.switch_layout(window, cx);
+                assert_eq!(view.layout, super::CommentLayout::Dialog);
+                view.selection = Some(4..10);
+                view.comment_on_selection(window, cx);
+                view.composer.update(cx, |composer, cx| {
+                    composer.set_value("Which helper?", window, cx)
+                });
+                view.send(window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let (page_id, root) = window
+            .read_with(cx, |view, _| {
+                let page = view.page.as_ref().unwrap();
+                let root = page.threads[0].thread.root.id.clone();
+                assert_eq!(view.target, Some(Target::Thread(root.clone())));
+                (page.id.unwrap(), root)
+            })
+            .unwrap();
+        window
+            .update(cx, |view, window, cx| {
+                view.composer.update(cx, |composer, cx| {
+                    composer.set_value("And why?", window, cx)
+                });
+                view.send(window, cx);
+                view.cancel(window, cx);
+                assert!(view.target.is_none());
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let threads = store.threads(page_id).unwrap();
+        assert_eq!(threads[0].root.id, root);
+        assert_eq!(threads[0].replies[0].body.value, "And why?");
     }
 
     #[gpui::test]
