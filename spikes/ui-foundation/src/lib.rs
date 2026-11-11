@@ -27,6 +27,7 @@ use reactive_graph::graph::untrack;
 use reactive_graph::owner::Owner;
 
 pub mod demo;
+pub mod markdown;
 pub mod term;
 
 pub use blitz_dom;
@@ -40,6 +41,19 @@ type Handler = Rc<dyn Fn(&DomEvent)>;
 struct Shared {
     document: Rc<RefCell<BaseDocument>>,
     handlers: RefCell<HashMap<NodeId, Vec<(&'static str, Handler)>>>,
+    /// What handlers asked to do with the document itself, done once the
+    /// event that ran them has been dispatched.
+    later: RefCell<Vec<Deferred>>,
+}
+
+type Deferred = Box<dyn FnOnce(&mut BaseDocument)>;
+
+/// Does `work` on the document once the event being handled has been
+/// dispatched: a handler runs while the document is busy dispatching, so
+/// what it wants of the document beyond a signal's write (scrolling an
+/// element, moving focus) waits until then.
+pub fn later(work: impl FnOnce(&mut BaseDocument) + 'static) {
+    shared().later.borrow_mut().push(Box::new(work));
 }
 
 thread_local! {
@@ -147,6 +161,25 @@ impl El {
         self
     }
 
+    /// A child that is there while `shown` says so, built by `view` each
+    /// time it appears.
+    pub fn when(self, shown: impl Fn() -> bool + 'static, view: impl Fn() -> El + 'static) -> Self {
+        self.each(
+            move || if shown() { vec![()] } else { Vec::new() },
+            |_| (),
+            move |_| view(),
+        )
+    }
+
+    /// Moves keyboard focus here, so that keys reach this element's
+    /// handlers.
+    pub fn focus(self) -> Self {
+        later(move |document| {
+            document.set_focus_to(self.0);
+        });
+        self
+    }
+
     /// Children that follow a list: one per item of `items`, told apart by
     /// `key`. An item whose key stays keeps its node; `view` runs once for
     /// each key that is new.
@@ -240,6 +273,7 @@ impl App {
         let shared = Rc::new(Shared {
             document: Rc::new(RefCell::new(document)),
             handlers: RefCell::new(HashMap::new()),
+            later: RefCell::new(Vec::new()),
         });
         CURRENT.with(|current| *current.borrow_mut() = Some(shared.clone()));
         let body = el("body");
@@ -273,6 +307,18 @@ impl App {
     pub fn run_effects(&self) {
         CURRENT.with(|current| *current.borrow_mut() = Some(self.shared.clone()));
         Executor::poll_local();
+        // What handlers and effects left for the document, and the effects
+        // of that in turn.
+        loop {
+            let later = std::mem::take(&mut *self.shared.later.borrow_mut());
+            if later.is_empty() {
+                break;
+            }
+            for work in later {
+                work(&mut self.shared.document.borrow_mut());
+            }
+            Executor::poll_local();
+        }
     }
 
     /// Restyles and lays out what the writes since the last call touched.

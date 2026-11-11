@@ -33,6 +33,10 @@ The findings are in `docs/research/ui-foundation-candidates-2026-11-11.md`.
   `src/window.rs` the borders that layout rounded to nothing at a fractional
   display scale are given back after each resolve. `Cargo.toml` puts it in
   place of the published crate.
+- `src/markdown.rs` — Horizon's Markdown view on this stack, using Horizon's
+  own front matter reader and link resolver (`src/markdown/document.rs`);
+  `tests/markdown.rs` holds it to what the GPUI view's tests hold that to,
+  and `src/bin/markdown.rs` opens a file in a window.
 - `src/term.rs` — a stand-in for a terminal's screen, drawn by hand, and the
   widget that puts it in a document.
 - `src/bin/terminal.rs` — what that screen costs to shape and draw, alone

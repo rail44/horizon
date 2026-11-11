@@ -24,6 +24,8 @@ anyrender_vello = "0.15"
 parley = "0.12"
 wgpu = "30"
 pollster = "0.4"
+pulldown-cmark = "0.13"
+keyboard-types = "0.8"
 
 [profile.release]
 opt-level = 3
