@@ -27,6 +27,7 @@ use reactive_graph::graph::untrack;
 use reactive_graph::owner::Owner;
 
 pub mod demo;
+pub mod term;
 
 pub use blitz_dom;
 pub use blitz_traits;
@@ -423,4 +424,22 @@ pub fn click_at(app: &App, x: f32, y: f32) {
     app.dispatch(UiEvent::PointerMove(event(MouseEventButtons::None)));
     app.dispatch(UiEvent::PointerDown(event(MouseEventButtons::Primary)));
     app.dispatch(UiEvent::PointerUp(event(MouseEventButtons::None)));
+}
+
+/// An [`App`] as the document a shell shows: input goes through the
+/// layer's handlers, and so through the signals' effects.
+pub struct Live(pub App);
+
+impl Document for Live {
+    fn inner(&self) -> blitz_dom::DocGuard<'_> {
+        blitz_dom::DocGuard::RefCell(self.0.document_cell().borrow())
+    }
+
+    fn inner_mut(&mut self) -> blitz_dom::DocGuardMut<'_> {
+        blitz_dom::DocGuardMut::RefCell(self.0.document_cell().borrow_mut())
+    }
+
+    fn handle_ui_event(&mut self, event: UiEvent) {
+        self.0.dispatch(event);
+    }
 }

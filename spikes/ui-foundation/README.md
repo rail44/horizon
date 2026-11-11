@@ -33,8 +33,13 @@ The findings are in `docs/research/ui-foundation-candidates-2026-11-11.md`.
   `src/window.rs` the borders that layout rounded to nothing at a fractional
   display scale are given back after each resolve. `Cargo.toml` puts it in
   place of the published crate.
-- `src/bin/terminal.rs` — what a terminal's grid costs to shape and draw by
-  hand, as a widget would, at three screen sizes and three scales.
+- `src/term.rs` — a stand-in for a terminal's screen, drawn by hand, and the
+  widget that puts it in a document.
+- `src/bin/terminal.rs` — what that screen costs to shape and draw, alone
+  and as a widget in a document, at three sizes and three scales.
+- `src/bin/terminal_window.rs` — the same screen in a window, showing its
+  own frame times: `-- scroll`, `-- flood` or `-- still`.
+- `src/bin/adapter.rs` — which graphics adapter the renderers are given.
 - `src/bin/observed.rs`, `src/bin/look.rs`, `src/bin/hit.rs` —
   reproductions, without a window, of what the window showed.
 

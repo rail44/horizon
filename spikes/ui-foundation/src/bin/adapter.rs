@@ -17,7 +17,8 @@ fn main() {
             info.name, info.device_type, info.backend, info.driver, info.driver_info
         );
     }
-    let chosen = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()));
+    let chosen =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()));
     match chosen {
         Ok(adapter) => {
             let info = adapter.get_info();
