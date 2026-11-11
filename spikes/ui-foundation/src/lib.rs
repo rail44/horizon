@@ -26,6 +26,8 @@ use reactive_graph::effect::Effect;
 use reactive_graph::graph::untrack;
 use reactive_graph::owner::Owner;
 
+pub mod demo;
+
 pub use blitz_dom;
 pub use blitz_traits;
 pub use reactive_graph;
@@ -305,7 +307,13 @@ impl App {
         let scale = document.viewport().scale_f64();
         let area = input.editor.ime_cursor_area();
         let layout = node.final_layout();
-        let origin = node.absolute_position(layout.content_box_x(), layout.content_box_y());
+        // The content box's corner: the node's place on the page, in from
+        // its border and padding. (`Layout::content_box_x` is not that
+        // inset alone: it has the node's own location in it already.)
+        let origin = node.absolute_position(
+            layout.border.left + layout.padding.left,
+            layout.border.top + layout.padding.top,
+        );
         let (scroll_x, scroll_y) = match input.is_multiline {
             true => (0., input.scroll_offset),
             false => (input.scroll_offset, 0.),

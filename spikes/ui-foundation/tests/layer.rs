@@ -132,4 +132,23 @@ fn the_input_methods_area_follows_what_is_typed() {
     assert!(once.0 > focused.0, "{focused:?} then {once:?}");
     assert!(twice.0 > once.0, "{once:?} then {twice:?}");
     assert_eq!(once.1, twice.1);
+
+    // And it is inside the input's own box on the page.
+    let document = app.document();
+    let document = document.borrow();
+    let input = document
+        .find_element_by_tag_name(&ui_foundation_spike::blitz_dom::LocalName::from("input"))
+        .expect("the input");
+    let bounds = document.get_client_bounding_rect(input.id).expect("a box");
+    let (x, y, _, height) = twice;
+    // The line of text is a little taller than the box this style sheet
+    // gives the input, so the area may end just below it.
+    let top_left_inside = (bounds.x..bounds.x + bounds.width).contains(&(x as f64))
+        && (bounds.y..bounds.y + bounds.height).contains(&(y as f64));
+    let ends_near = (y + height) as f64 <= bounds.y + bounds.height + 4.;
+    assert!(
+        top_left_inside && ends_near,
+        "{twice:?} in {:?}",
+        (bounds.x, bounds.y, bounds.width, bounds.height)
+    );
 }
