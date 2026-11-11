@@ -18,7 +18,7 @@ use keyboard_types::Key;
 use reactive_graph::signal::RwSignal;
 use reactive_graph::traits::{Get, GetUntracked, Set, Update};
 
-use crate::{El, el, later};
+use crate::{El, dispatched, el};
 
 /// How far the pointer moves with the button held before a row is carried.
 const SLOP: f32 = 4.;
@@ -161,7 +161,7 @@ pub fn view(tasks: Vec<Task>) -> (El, Board) {
         let known = known.clone();
         // The document is busy with the event: what is under the pointer
         // and where its box is are asked once it is done.
-        later(move |document| {
+        dispatched(move |document| {
             if let Some(origin) = document.get_client_bounding_rect(root.0) {
                 ghost_at.set((x - origin.x as f32 + 12., y - origin.y as f32 + 12.));
             }
@@ -259,7 +259,6 @@ pub fn view(tasks: Vec<Task>) -> (El, Board) {
                         .unwrap_or_default()
                 })
         },
-    )
-    .focus();
+    );
     (root, state)
 }

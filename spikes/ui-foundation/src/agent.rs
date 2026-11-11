@@ -37,88 +37,89 @@ use display::{
 const COMPOSER_MAX_ROWS: usize = 8;
 const COMPOSER_LINE: usize = 22;
 
+// Every rule sits under the view's own class: the page's style sheet is one
+// for all the views on it.
 pub const CSS: &str = "
-    html, body { margin: 0; height: 100%; }
-    body { font-family: sans-serif; font-size: 14px; line-height: 22px;
-           color: #202020; background: #fafafa; }
     .agent { display: flex; flex-direction: column; height: 100%; min-width: 240px;
-             outline: none; }
-    .column { flex: 1; min-height: 0; overflow-y: scroll; padding: 24px 24px 16px 24px; }
-    .unit { padding-bottom: 8px; }
-    .user { margin-left: 24px; padding: 8px 12px; border-radius: 4px; background: #efefef;
-            white-space: pre-wrap; }
-    .user.muted { color: #808080; }
-    .turn { position: relative; display: flex; flex-direction: column; gap: 4px;
-            padding: 8px 12px; border: 1px solid #d8d8d8; border-radius: 4px; }
-    .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: #356df3; }
-    .notice, .task { padding: 0 12px; font-size: 12px; line-height: 18px; color: #808080; }
-    .footer { display: flex; flex-direction: column; gap: 8px; }
-    .warning { color: #b7791f; }
-    .danger { color: #c0392b; }
-    .line { display: flex; align-items: center; gap: 8px; }
-    .spacer { flex: 1; min-width: 0; }
-    .chip { flex: none; padding: 0 4px; border-radius: 3px; font-size: 11px;
-            line-height: 16px; background: #ececec; color: #606060; }
-    .chip.accent { background: #e3ebfd; color: #2a56c6; }
-    .chip.danger { background: #fbe9e7; color: #c0392b; }
-    .button { flex: none; padding: 0 8px; border-radius: 4px; font-size: 12px;
-              line-height: 20px; color: #606060; cursor: pointer; }
-    .button:hover { background: #ececec; }
-    .button.primary { padding: 0 12px; line-height: 28px; background: #356df3; color: white; }
-    .button.primary:hover { background: #477df8; }
-    .receipt { display: flex; flex-direction: column; gap: 4px; }
-    .receipt-line { display: flex; align-items: center; gap: 8px; cursor: pointer;
-                    font-size: 12px; line-height: 18px; color: #808080; }
-    .calls { display: flex; flex-direction: column; gap: 4px; margin-left: 8px;
-             padding-left: 12px; border-left: 1px solid #d8d8d8; }
-    .call { display: flex; flex-direction: column; gap: 4px; }
-    .call-row { display: flex; align-items: center; gap: 8px; font-size: 12px;
-                line-height: 18px; }
-    .call-row.opens { cursor: pointer; }
-    .dot-cell { flex: none; width: 16px; display: flex; align-items: center;
-                justify-content: center; }
-    .dot { width: 8px; height: 8px; border-radius: 4px; background: #a0a0a0; }
-    .dot.failed { background: #c0392b; }
-    .dot.running { background: #356df3; }
-    .dot.denied { background: #b7791f; }
-    .verb { flex: none; color: #808080; }
-    .target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-              white-space: nowrap; font-family: monospace; }
-    .mono { font-family: monospace; font-size: 12px; line-height: 18px; white-space: pre; }
-    .diff-line { display: flex; color: #808080; }
-    .diff-line.added { background: #e6f4ea; color: #1e7b34; }
-    .diff-line.removed { background: #fbe9e7; color: #c0392b; }
-    .mark { flex: none; width: 16px; }
-    .output { overflow-x: scroll; color: #808080; }
-    .more { font-size: 11px; line-height: 16px; color: #808080; }
-    .approval { display: flex; align-items: center; gap: 8px; font-size: 12px;
-                line-height: 18px; }
-    .reason { flex: 1; min-width: 0; }
-    .end { display: flex; justify-content: flex-end; align-items: baseline; gap: 8px;
-           font-size: 12px; line-height: 18px; color: #808080; }
-    .thinking { display: flex; font-size: 11px; line-height: 16px; color: #808080; }
-    .thinking .d { animation: thinking 1.2s linear infinite; }
-    .thinking .d1 { animation-delay: -0.8s; }
-    .thinking .d2 { animation-delay: -0.4s; }
+             outline: none; font-family: sans-serif; font-size: 14px; line-height: 22px;
+             color: #202020; background: #fafafa;
+        .column { flex: 1; min-height: 0; overflow-y: scroll; padding: 24px 24px 16px 24px; }
+        .unit { padding-bottom: 8px; }
+        .user { margin-left: 24px; padding: 8px 12px; border-radius: 4px; background: #efefef;
+                white-space: pre-wrap; }
+        .user.muted { color: #808080; }
+        .turn { position: relative; display: flex; flex-direction: column; gap: 4px;
+                padding: 8px 12px; border: 1px solid #d8d8d8; border-radius: 4px; }
+        .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: #356df3; }
+        .notice, .task { padding: 0 12px; font-size: 12px; line-height: 18px; color: #808080; }
+        .footer { display: flex; flex-direction: column; gap: 8px; }
+        .warning { color: #b7791f; }
+        .danger { color: #c0392b; }
+        .line { display: flex; align-items: center; gap: 8px; }
+        .spacer { flex: 1; min-width: 0; }
+        .chip { flex: none; padding: 0 4px; border-radius: 3px; font-size: 11px;
+                line-height: 16px; background: #ececec; color: #606060; }
+        .chip.accent { background: #e3ebfd; color: #2a56c6; }
+        .chip.danger { background: #fbe9e7; color: #c0392b; }
+        .button { flex: none; padding: 0 8px; border-radius: 4px; font-size: 12px;
+                  line-height: 20px; color: #606060; cursor: pointer; }
+        .button:hover { background: #ececec; }
+        .button.primary { padding: 0 12px; line-height: 28px; background: #356df3; color: white; }
+        .button.primary:hover { background: #477df8; }
+        .receipt { display: flex; flex-direction: column; gap: 4px; }
+        .receipt-line { display: flex; align-items: center; gap: 8px; cursor: pointer;
+                        font-size: 12px; line-height: 18px; color: #808080; }
+        .calls { display: flex; flex-direction: column; gap: 4px; margin-left: 8px;
+                 padding-left: 12px; border-left: 1px solid #d8d8d8; }
+        .call { display: flex; flex-direction: column; gap: 4px; }
+        .call-row { display: flex; align-items: center; gap: 8px; font-size: 12px;
+                    line-height: 18px; }
+        .call-row.opens { cursor: pointer; }
+        .dot-cell { flex: none; width: 16px; display: flex; align-items: center;
+                    justify-content: center; }
+        .dot { width: 8px; height: 8px; border-radius: 4px; background: #a0a0a0; }
+        .dot.failed { background: #c0392b; }
+        .dot.running { background: #356df3; }
+        .dot.denied { background: #b7791f; }
+        .verb { flex: none; color: #808080; }
+        .target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                  white-space: nowrap; font-family: monospace; }
+        .mono { font-family: monospace; font-size: 12px; line-height: 18px; white-space: pre; }
+        .diff-line { display: flex; color: #808080; }
+        .diff-line.added { background: #e6f4ea; color: #1e7b34; }
+        .diff-line.removed { background: #fbe9e7; color: #c0392b; }
+        .mark { flex: none; width: 16px; }
+        .output { overflow-x: scroll; color: #808080; }
+        .more { font-size: 11px; line-height: 16px; color: #808080; }
+        .approval { display: flex; align-items: center; gap: 8px; font-size: 12px;
+                    line-height: 18px; }
+        .reason { flex: 1; min-width: 0; }
+        .end { display: flex; justify-content: flex-end; align-items: baseline; gap: 8px;
+               font-size: 12px; line-height: 18px; color: #808080; }
+        .thinking { display: flex; font-size: 11px; line-height: 16px; color: #808080; }
+        .thinking .d { animation: thinking 1.2s linear infinite; }
+        .thinking .d1 { animation-delay: -0.8s; }
+        .thinking .d2 { animation-delay: -0.4s; }
+        .composer { flex: none; padding: 0 24px 12px 24px; }
+        .box { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px;
+               border: 1px solid #d8d8d8; border-radius: 4px; }
+        textarea { font-family: sans-serif; font-size: 14px; line-height: 22px; border: none;
+                   outline: none; padding: 0; margin: 0; background: transparent; resize: none; }
+        textarea:focus { outline: none; }
+        .hints { display: flex; align-items: center; gap: 4px; font-size: 11px;
+                 line-height: 16px; color: #808080; }
+        .model { cursor: pointer; }
+        .text h1, .text h2, .text h3 { font-size: 14px; line-height: 22px; font-weight: 600;
+                                       margin: 8px 0 4px 0; }
+        .text p, .text ul, .text ol, .text pre, .text blockquote { margin: 0 0 8px 0; }
+        .text .body > :first-child { margin-top: 0; }
+        .text .body > :last-child { margin-bottom: 0; }
+        .text pre { padding: 8px 12px; border-radius: 4px; background: #f0f0f0;
+                    font-size: 13px; line-height: 20px; overflow-x: scroll; }
+        .text code { font-family: monospace; font-size: 13px; }
+        .link { color: #356df3; }
+    }
     @keyframes thinking { from { opacity: 1; } to { opacity: 0.25; } }
-    .composer { flex: none; padding: 0 24px 12px 24px; }
-    .box { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px;
-           border: 1px solid #d8d8d8; border-radius: 4px; }
-    textarea { font-family: sans-serif; font-size: 14px; line-height: 22px; border: none;
-               outline: none; padding: 0; margin: 0; background: transparent; resize: none; }
-    textarea:focus { outline: none; }
-    .hints { display: flex; align-items: center; gap: 4px; font-size: 11px;
-             line-height: 16px; color: #808080; }
-    .model { cursor: pointer; }
-    .text h1, .text h2, .text h3 { font-size: 14px; line-height: 22px; font-weight: 600;
-                                   margin: 8px 0 4px 0; }
-    .text p, .text ul, .text ol, .text pre, .text blockquote { margin: 0 0 8px 0; }
-    .text .body > :first-child { margin-top: 0; }
-    .text .body > :last-child { margin-bottom: 0; }
-    .text pre { padding: 8px 12px; border-radius: 4px; background: #f0f0f0;
-                font-size: 13px; line-height: 20px; overflow-x: scroll; }
-    .text code { font-family: monospace; font-size: 13px; }
-    .link { color: #356df3; }
 ";
 
 /// What the view asks of whatever holds it.
@@ -147,7 +148,8 @@ pub struct Agent {
     /// What the composer holds.
     pub typed: RwSignal<String>,
     ask: StoredValue<Rc<dyn Fn(Asked)>, LocalStorage>,
-    /// The column and the composer's field, for whoever drives the view.
+    /// The column, and the composer's field: what takes the focus when the
+    /// view is given it.
     pub column: El,
     pub field: El,
 }
@@ -310,8 +312,7 @@ pub fn view(ask: impl Fn(Asked) + 'static) -> (El, Agent) {
                 state.submit();
                 rows.set(1);
             }
-        })
-        .focus();
+        });
 
     let composer = el("div").class("composer").child(
         el("div").class("box").child(state.field).child(

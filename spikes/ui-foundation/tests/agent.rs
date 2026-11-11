@@ -26,6 +26,7 @@ fn open(session: &Session) -> Opened {
     let mut agent = None;
     let app = App::new(900, 700, CSS, || {
         let (root, state) = view(move |asked| log.borrow_mut().push(asked));
+        state.field.focus();
         agent = Some(state);
         root
     });

@@ -53,7 +53,7 @@ fn open(path: &Path) -> Opened {
             Rc::new(move |url: &str| log.borrow_mut().push(url.to_owned())),
         );
         state = Some(markdown);
-        root
+        root.focus()
     });
     app.resolve();
     Opened {

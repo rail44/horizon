@@ -17,7 +17,7 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 use reactive_graph::signal::RwSignal;
 use reactive_graph::traits::{Get, GetUntracked, Set, Update};
 
-use crate::{El, el, later};
+use crate::{El, dispatched, el, later};
 
 #[allow(dead_code)]
 #[path = "../../../src/markdown/document.rs"]
@@ -29,39 +29,40 @@ const BACK: &str = "Back";
 const NO_DOCUMENT: &str = "No document";
 const UNSUPPORTED_LINK: &str = "Not a Markdown file";
 
+// Every rule sits under the view's own class: the page's style sheet is one
+// for all the views on it.
 pub const CSS: &str = "
-    html, body { margin: 0; height: 100%; }
-    body { font-family: sans-serif; font-size: 14px; line-height: 26px;
-           color: #202020; background: #fafafa; }
     .markdown { display: flex; flex-direction: column; height: 100%; min-width: 240px;
-                outline: none; }
-    .header { flex: none; display: flex; flex-direction: column; gap: 8px;
-              padding: 24px 16px 0 16px; }
-    .header:empty { display: none; }
-    .body > :first-child { margin-top: 0; }
-    .back { align-self: flex-start; padding: 0 8px; border-radius: 4px; font-size: 12px;
-            line-height: 20px; color: #606060; cursor: pointer; }
-    .back:hover { background: #ececec; }
-    .title { font-size: 16px; line-height: 24px; font-weight: 600; }
-    .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-    .chip { padding: 0 4px; border-radius: 3px; background: #ececec; color: #606060;
-            font-size: 11px; line-height: 16px; }
-    .notice, .empty, .error { flex: none; padding: 8px 16px 0 16px; font-size: 12px;
-                              line-height: 18px; color: #808080; }
-    .error { color: #c0392b; }
-    .scroll { flex: 1; min-height: 0; overflow-y: scroll; padding: 24px 16px 32px 16px; }
-    .scroll h1, .scroll h2, .scroll h3 { font-size: 14px; line-height: 22px;
-                                         font-weight: 600; margin: 24px 0 8px 0; }
-    .scroll h1 { font-size: 16px; line-height: 24px; }
-    .scroll p, .scroll ul, .scroll ol, .scroll pre, .scroll blockquote, .scroll table {
-        margin: 0 0 8px 0; }
-    .scroll pre { padding: 8px 12px; border-radius: 4px; background: #f0f0f0;
-                  font-size: 13px; line-height: 20px; overflow-x: scroll; }
-    .scroll code { font-family: monospace; font-size: 13px; }
-    .scroll blockquote { padding-left: 12px; border-left: 2px solid #d0d0d0; color: #606060; }
-    .scroll td, .scroll th { padding: 2px 8px; border: 1px solid #d0d0d0; }
-    .link { color: #356df3; cursor: pointer; }
-    .link:hover { text-decoration: underline; }
+                outline: none; font-family: sans-serif; font-size: 14px;
+                line-height: 26px; color: #202020; background: #fafafa;
+        .header { flex: none; display: flex; flex-direction: column; gap: 8px;
+                  padding: 24px 16px 0 16px; }
+        .header:empty { display: none; }
+        .body > :first-child { margin-top: 0; }
+        .back { align-self: flex-start; padding: 0 8px; border-radius: 4px; font-size: 12px;
+                line-height: 20px; color: #606060; cursor: pointer; }
+        .back:hover { background: #ececec; }
+        .title { font-size: 16px; line-height: 24px; font-weight: 600; }
+        .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+        .chip { padding: 0 4px; border-radius: 3px; background: #ececec; color: #606060;
+                font-size: 11px; line-height: 16px; }
+        .notice, .empty, .error { flex: none; padding: 8px 16px 0 16px; font-size: 12px;
+                                  line-height: 18px; color: #808080; }
+        .error { color: #c0392b; }
+        .scroll { flex: 1; min-height: 0; overflow-y: scroll; padding: 24px 16px 32px 16px; }
+        .scroll h1, .scroll h2, .scroll h3 { font-size: 14px; line-height: 22px;
+                                             font-weight: 600; margin: 24px 0 8px 0; }
+        .scroll h1 { font-size: 16px; line-height: 24px; }
+        .scroll p, .scroll ul, .scroll ol, .scroll pre, .scroll blockquote, .scroll table {
+            margin: 0 0 8px 0; }
+        .scroll pre { padding: 8px 12px; border-radius: 4px; background: #f0f0f0;
+                      font-size: 13px; line-height: 20px; overflow-x: scroll; }
+        .scroll code { font-family: monospace; font-size: 13px; }
+        .scroll blockquote { padding-left: 12px; border-left: 2px solid #d0d0d0; color: #606060; }
+        .scroll td, .scroll th { padding: 2px 8px; border: 1px solid #d0d0d0; }
+        .link { color: #356df3; cursor: pointer; }
+        .link:hover { text-decoration: underline; }
+    }
 ";
 
 /// What is outside the view: a URL handed to the desktop.
@@ -223,7 +224,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl) -> (El, Markdown) {
         }
         // A line is three of the body's lines; a page most of the box.
         let scroll_by = move |lines: f64, pages: f64| {
-            later(move |document| {
+            dispatched(move |document| {
                 let height = document
                     .get_node(scroll.0)
                     .map_or(0., |node| node.final_layout().size.height as f64);
@@ -265,8 +266,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl) -> (El, Markdown) {
                 .text_dyn(move || state.error.get().unwrap_or_default())
         },
     )
-    .child(scroll)
-    .focus();
+    .child(scroll);
     (root, state)
 }
 

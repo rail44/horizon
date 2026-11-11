@@ -31,6 +31,7 @@ pub mod board;
 pub mod demo;
 pub mod markdown;
 pub mod term;
+pub mod workspace;
 
 pub use blitz_dom;
 pub use blitz_traits;
@@ -46,6 +47,12 @@ struct Shared {
     /// What handlers asked to do with the document itself, done once the
     /// event that ran them has been dispatched.
     later: RefCell<Vec<Deferred>>,
+    /// What handlers asked of the document as it was when they ran.
+    dispatched: RefCell<Vec<Deferred>>,
+    /// What is to have the keyboard focus once the document is next laid
+    /// out, and whether that is the element itself or the first thing
+    /// inside it that takes focus.
+    focus: Cell<Option<(NodeId, bool)>>,
     /// What runs after every layout, with the boxes that layout made.
     laid_out: RefCell<Vec<Box<dyn FnMut(&mut BaseDocument)>>>,
     /// What runs when the shell polls the document.
@@ -67,9 +74,30 @@ pub fn after_resolve(document: &mut BaseDocument) {
     let Some(shared) = CURRENT.with(|current| current.borrow().clone()) else {
         return;
     };
+    laid_out(&shared, document);
+}
+
+/// What follows every layout.
+fn laid_out(shared: &Shared, document: &mut BaseDocument) {
     for work in shared.laid_out.borrow_mut().iter_mut() {
         work(document);
     }
+    if let Some((element, within)) = shared.focus.take() {
+        let mut pending = vec![element];
+        while let Some(id) = pending.pop() {
+            let Some(node) = document.get_node(id) else {
+                continue;
+            };
+            let field =
+                (node.element_data()).is_some_and(|element| element.text_input_data().is_some());
+            if !within || field || node.attr(blitz_dom::local_name!("tabindex")).is_some() {
+                document.set_focus_to(id);
+                break;
+            }
+            pending.extend(node.children.iter().rev().copied());
+        }
+    }
+    place_input_method(document);
 }
 
 thread_local! {
@@ -89,11 +117,21 @@ pub fn stop_propagation() {
 }
 
 /// Does `work` on the document once the event being handled has been
-/// dispatched: a handler runs while the document is busy dispatching, so
-/// what it wants of the document beyond a signal's write (scrolling an
-/// element, moving focus) waits until then.
+/// dispatched and the effects of what its handlers wrote have run: the
+/// place for acting on what those effects made (scrolling an element,
+/// giving the focus to something just built).
 pub fn later(work: impl FnOnce(&mut BaseDocument) + 'static) {
     shared().later.borrow_mut().push(Box::new(work));
+}
+
+/// Does `work` on the document as soon as the event being handled has been
+/// dispatched, before any effect runs: the place for reading the layout
+/// (what is under a point, where a box is). A handler runs while the
+/// document is busy dispatching, so it cannot ask then; and once effects
+/// have changed the document, its boxes are those of nodes that may be
+/// gone until the next layout.
+pub fn dispatched(work: impl FnOnce(&mut BaseDocument) + 'static) {
+    shared().dispatched.borrow_mut().push(Box::new(work));
 }
 
 thread_local! {
@@ -224,11 +262,19 @@ impl El {
     }
 
     /// Moves keyboard focus here, so that keys reach this element's
-    /// handlers.
+    /// handlers, once the document is next laid out. Not at once:
+    /// blitz-dom, focusing a node, asks where it is on the page, and
+    /// follows boxes that are gone if the node was built or moved since
+    /// the last layout.
     pub fn focus(self) -> Self {
-        later(move |document| {
-            document.set_focus_to(self.0);
-        });
+        shared().focus.set(Some((self.0, false)));
+        self
+    }
+
+    /// [`focus`](Self::focus) for the first thing inside this element that
+    /// takes focus: a text field, or an element with a `tabindex`.
+    pub fn focus_within(self) -> Self {
+        shared().focus.set(Some((self.0, true)));
         self
     }
 
@@ -322,11 +368,16 @@ impl App {
             viewport: Some(Viewport::new(width, height, 1.0, ColorScheme::Light)),
             ..DocumentConfig::default()
         });
-        document.add_user_agent_stylesheet(UserAgentStylesheet::parse(css));
+        // The page fills the window and has no margin of its own; a view's
+        // rules come after and are about the view.
+        let css = format!("html, body {{ margin: 0; height: 100%; }}\n{css}");
+        document.add_user_agent_stylesheet(UserAgentStylesheet::parse(&css));
         let shared = Rc::new(Shared {
             document: Rc::new(RefCell::new(document)),
             handlers: RefCell::new(HashMap::new()),
             later: RefCell::new(Vec::new()),
+            dispatched: RefCell::new(Vec::new()),
+            focus: Cell::new(None),
             laid_out: RefCell::new(Vec::new()),
             polled: RefCell::new(Vec::new()),
         });
@@ -387,9 +438,7 @@ impl App {
         let mut document = self.shared.document.borrow_mut();
         document.resolve(seconds);
         restore_thin_borders(&mut document);
-        for work in self.shared.laid_out.borrow_mut().iter_mut() {
-            work(&mut document);
-        }
+        laid_out(&self.shared, &mut document);
     }
 
     /// Runs `work` whenever the shell polls the document, with the waker
@@ -414,14 +463,12 @@ impl App {
         if let Some((x, y)) = pressed {
             self.focus_from(x, y);
         }
-        self.run_effects();
-        // blitz-dom tells the shell where an input is when it takes focus,
-        // and not again: the input method's candidates would stay there
-        // while the caret moves on.
-        if let Some((x, y, width, height)) = self.ime_cursor_area() {
-            let shell = self.shared.document.borrow().shell_provider.clone();
-            shell.set_ime_cursor_area(x, y, width, height);
+        CURRENT.with(|current| *current.borrow_mut() = Some(self.shared.clone()));
+        let dispatched = std::mem::take(&mut *self.shared.dispatched.borrow_mut());
+        for work in dispatched {
+            work(&mut self.shared.document.borrow_mut());
         }
+        self.run_effects();
     }
 
     /// A press on something that cannot take focus leaves the page itself
@@ -454,31 +501,48 @@ impl App {
     /// being composed if there is some, the caret otherwise. `None` unless
     /// a text input has focus.
     pub fn ime_cursor_area(&self) -> Option<(f32, f32, f32, f32)> {
-        let document = self.shared.document.borrow();
-        let node = document.get_node(document.get_focussed_node_id()?)?;
-        let input = node.element_data()?.text_input_data()?;
-        // The editor lays its text out in device pixels, scrolled inside
-        // the input along the axis it runs out on.
-        let scale = document.viewport().scale_f64();
-        let area = input.editor.ime_cursor_area();
-        let layout = node.final_layout();
-        // The content box's corner: the node's place on the page, in from
-        // its border and padding. (`Layout::content_box_x` is not that
-        // inset alone: it has the node's own location in it already.)
-        let origin = node.absolute_position(
-            layout.border.left + layout.padding.left,
-            layout.border.top + layout.padding.top,
-        );
-        let (scroll_x, scroll_y) = match input.is_multiline {
-            true => (0., input.scroll_offset),
-            false => (input.scroll_offset, 0.),
-        };
-        Some((
-            origin.x + (area.x0 / scale) as f32 - scroll_x,
-            origin.y + (area.y0 / scale) as f32 - scroll_y,
-            ((area.x1 - area.x0) / scale) as f32,
-            ((area.y1 - area.y0) / scale) as f32,
-        ))
+        ime_cursor_area(&self.shared.document.borrow())
+    }
+}
+
+/// [`App::ime_cursor_area`], of a document just laid out.
+fn ime_cursor_area(document: &BaseDocument) -> Option<(f32, f32, f32, f32)> {
+    let node = document.get_node(document.get_focussed_node_id()?)?;
+    let input = node.element_data()?.text_input_data()?;
+    // The editor lays its text out in device pixels, scrolled inside
+    // the input along the axis it runs out on.
+    let scale = document.viewport().scale_f64();
+    let area = input.editor.ime_cursor_area();
+    let layout = node.final_layout();
+    // The content box's corner: the node's place on the page, in from
+    // its border and padding. (`Layout::content_box_x` is not that
+    // inset alone: it has the node's own location in it already.)
+    let origin = node.absolute_position(
+        layout.border.left + layout.padding.left,
+        layout.border.top + layout.padding.top,
+    );
+    let (scroll_x, scroll_y) = match input.is_multiline {
+        true => (0., input.scroll_offset),
+        false => (input.scroll_offset, 0.),
+    };
+    Some((
+        origin.x + (area.x0 / scale) as f32 - scroll_x,
+        origin.y + (area.y0 / scale) as f32 - scroll_y,
+        ((area.x1 - area.x0) / scale) as f32,
+        ((area.y1 - area.y0) / scale) as f32,
+    ))
+}
+
+/// Tells the shell where the text being edited is. blitz-dom tells it
+/// where an input is when it takes focus, and not again: the input
+/// method's candidates would stay there while the caret moves on. Done
+/// after a layout, when the boxes it reads are those of the document as it
+/// is.
+fn place_input_method(document: &BaseDocument) {
+    if let Some((x, y, width, height)) = ime_cursor_area(document) {
+        document
+            .shell_provider
+            .set_ime_cursor_area(x, y, width, height);
     }
 }
 

@@ -34,6 +34,7 @@ fn open(asked: impl Fn(Asked) + 'static) -> (App, Agent) {
     let mut agent = None;
     let app = App::new(900, 700, CSS, || {
         let (root, state) = view(asked);
+        state.field.focus();
         agent = Some(state);
         root
     });

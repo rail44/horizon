@@ -43,6 +43,14 @@ The findings are in `docs/research/ui-foundation-candidates-2026-11-11.md`.
   drives it with real input events, and `src/bin/agent.rs` shows it in a
   window with a turn streaming in, times an update against histories of
   several lengths, or draws one frame.
+- `src/board.rs` — a list whose rows are reordered by dragging, the part of
+  Horizon's board list (`src/board/list.rs`) that asks the most of the
+  stack; `tests/board.rs` drives it with the mouse's own events.
+- `src/workspace.rs` — the shell around the views: tabs, panes split across
+  and down with a boundary to drag, workspace mode and a palette of
+  commands, with the four views above in its panes; `tests/workspace.rs`
+  drives it, and `src/bin/workspace.rs` shows it in a window or draws one
+  frame.
 - `src/term.rs` — a stand-in for a terminal's screen, drawn by hand, and the
   widget that puts it in a document.
 - `src/bin/terminal.rs` — what that screen costs to shape and draw, alone

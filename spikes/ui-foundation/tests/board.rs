@@ -18,7 +18,7 @@ fn open() -> (App, Board) {
     let app = App::new(600, 400, CSS, || {
         let (root, state) = view(tasks);
         board = Some(state);
-        root
+        root.focus()
     });
     app.resolve();
     (app, board.unwrap())

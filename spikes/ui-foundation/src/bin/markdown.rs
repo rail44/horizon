@@ -25,7 +25,7 @@ fn main() {
     let open_url: OpenUrl = Rc::new(|url| {
         let _ = std::process::Command::new("xdg-open").arg(url).spawn();
     });
-    let app = App::new(900, 700, CSS, move || view(Some(path), open_url).0);
+    let app = App::new(900, 700, CSS, move || view(Some(path), open_url).0.focus());
 
     if let Some(picture) = picture {
         // At 150 %, as a desktop set to it shows the view.
@@ -64,6 +64,7 @@ fn main() {
         return;
     }
 
+    blitz_shell::set_after_resolve(ui_foundation_spike::after_resolve);
     let event_loop = create_default_event_loop();
     let (proxy, events) = BlitzShellProxy::new(event_loop.create_proxy());
     let mut application = BlitzApplication::new(proxy, events);
