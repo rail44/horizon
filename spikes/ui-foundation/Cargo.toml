@@ -29,3 +29,10 @@ opt-level = 3
 # the input method is enabled with its cursor area.
 [patch.crates-io]
 blitz-shell = { path = "vendor/blitz-shell" }
+# Blitz at the head of upstream's fix for hit testing through a clip
+# (DioxusLabs/blitz#1324, 58 commits past 0.3.0-beta.4, not merged when this
+# was written): content scrolled out of a box no longer takes the clicks
+# meant for what is drawn over it.
+blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
+blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
+blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }

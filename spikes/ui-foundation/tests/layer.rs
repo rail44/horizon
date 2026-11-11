@@ -187,3 +187,46 @@ fn thin_borders_survive_a_fractional_display_scale() {
         );
     }
 }
+
+#[test]
+fn rows_scrolled_out_of_a_list_do_not_take_the_clicks_above_it() {
+    use ui_foundation_spike::blitz_dom::ScrollBehavior;
+
+    const SCROLLING: &str = "
+        body { margin: 0; }
+        .bar { height: 40px; }
+        .list { height: 100px; overflow-y: scroll; }
+        .row { height: 20px; }
+    ";
+    let (bar, row) = (RwSignal::new(0u32), RwSignal::new(0u32));
+    let mut list = None;
+    let app = App::new(400, 300, SCROLLING, || {
+        let rows = el("div").class("list").each(
+            || (0..100u32).collect::<Vec<_>>(),
+            |index| *index,
+            move |_| {
+                el("div")
+                    .class("row")
+                    .on("click", move |_| row.update(|count| *count += 1))
+            },
+        );
+        list = Some(rows);
+        el("div")
+            .child(
+                el("div")
+                    .class("bar")
+                    .on("click", move |_| bar.update(|count| *count += 1)),
+            )
+            .child(rows)
+    });
+    app.resolve();
+    (app.document().borrow_mut()).scroll_to(list.unwrap().0, 0., 1000., ScrollBehavior::Instant);
+    app.resolve();
+
+    // Over the bar: the rows scrolled up behind it are clipped away.
+    click_at(&app, 100., 20.);
+    assert_eq!((bar.get(), row.get()), (1, 0));
+    // Inside the list: a row.
+    click_at(&app, 100., 90.);
+    assert_eq!((bar.get(), row.get()), (1, 1));
+}

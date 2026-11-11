@@ -24,14 +24,17 @@ The findings are in `docs/research/ui-foundation-candidates-2026-11-11.md`.
 - `src/bin/window.rs` — the same layer in a window, for what a test cannot
   try: typing, the input method, hover, scrolling.
 
-- `vendor/blitz-shell/` — blitz-shell 0.3.0-beta.4 with two changes, each
-  marked where it is. In `src/lib.rs` the input method is enabled with its
+- `Cargo.toml` takes blitz-dom, blitz-paint and blitz-traits from the head
+  of upstream's fix for hit testing through a clip (DioxusLabs/blitz#1324,
+  58 commits past 0.3.0-beta.4 and not merged when this was written).
+- `vendor/blitz-shell/` — blitz-shell from that same revision with two
+  changes, each marked where it is. In `src/lib.rs` the input method is enabled with its
   cursor area, so that winit keeps the positions it is told afterwards. In
   `src/window.rs` the borders that layout rounded to nothing at a fractional
   display scale are given back after each resolve. `Cargo.toml` puts it in
   place of the published crate.
-- `src/bin/observed.rs`, `src/bin/look.rs` — reproductions, without a
-  window, of what the window showed.
+- `src/bin/observed.rs`, `src/bin/look.rs`, `src/bin/hit.rs` —
+  reproductions, without a window, of what the window showed.
 
 ## Running
 

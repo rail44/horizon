@@ -87,16 +87,23 @@ pub fn current_android_app() -> android_activity::AndroidApp {
 pub struct BlitzShellProvider {
     window: Arc<dyn Window>,
     proxy: BlitzShellProxy,
+    doc_id: usize,
 }
 impl BlitzShellProvider {
-    pub fn new(window: Arc<dyn Window>, proxy: BlitzShellProxy) -> Self {
-        Self { window, proxy }
+    pub fn new(window: Arc<dyn Window>, proxy: BlitzShellProxy, doc_id: usize) -> Self {
+        Self {
+            window,
+            proxy,
+            doc_id,
+        }
     }
 }
 
 impl ShellProvider for BlitzShellProvider {
     fn request_redraw(&self) {
-        self.window.request_redraw();
+        self.proxy.send_event(BlitzShellEvent::RequestRedraw {
+            doc_id: self.doc_id,
+        });
     }
     fn set_cursor(&self, icon: Option<CursorIcon>) {
         match icon {
@@ -115,8 +122,8 @@ impl ShellProvider for BlitzShellProvider {
     }
     fn set_ime_enabled(&self, is_enabled: bool) {
         if is_enabled {
-            // Changed from blitz-shell 0.3.0-beta.4: the cursor area is declared
-            // as a capability, with a first value. Without it winit discards
+            // Changed from upstream: the cursor area is declared as a
+            // capability, with a first value. Without it winit discards
             // every later `set_ime_cursor_area`, and the input method's
             // candidates are placed without regard to the caret.
             let capabilities = ImeCapabilities::new().with_cursor_area();
@@ -161,40 +168,18 @@ impl ShellProvider for BlitzShellProvider {
         let _ = self.window.drag_window();
     }
 
-    #[cfg(all(
-        feature = "clipboard",
-        any(
-            target_os = "windows",
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "dragonfly",
-            target_os = "freebsd",
-            target_os = "netbsd",
-            target_os = "openbsd"
-        )
-    ))]
-    fn get_clipboard_text(&self) -> Result<String, blitz_traits::shell::ClipboardError> {
-        let mut cb = arboard::Clipboard::new().unwrap();
-        cb.get_text()
-            .map_err(|_| blitz_traits::shell::ClipboardError)
+    fn request_clipboard_text(&self) -> Result<(), blitz_traits::shell::ClipboardError> {
+        self.proxy
+            .send_event(BlitzShellEvent::RequestClipboardText {
+                window_id: self.window.id(),
+            });
+        Ok(())
     }
 
-    #[cfg(all(
-        feature = "clipboard",
-        any(
-            target_os = "windows",
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "dragonfly",
-            target_os = "freebsd",
-            target_os = "netbsd",
-            target_os = "openbsd"
-        )
-    ))]
     fn set_clipboard_text(&self, text: String) -> Result<(), blitz_traits::shell::ClipboardError> {
-        let mut cb = arboard::Clipboard::new().unwrap();
-        cb.set_text(text.to_owned())
-            .map_err(|_| blitz_traits::shell::ClipboardError)
+        self.proxy
+            .send_event(BlitzShellEvent::SetClipboardText { text });
+        Ok(())
     }
 
     #[cfg(all(
