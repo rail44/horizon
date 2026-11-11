@@ -27,6 +27,7 @@ use reactive_graph::graph::untrack;
 use reactive_graph::owner::Owner;
 
 pub mod agent;
+pub mod board;
 pub mod demo;
 pub mod markdown;
 pub mod term;
@@ -153,6 +154,18 @@ impl El {
 
     pub fn class_dyn(self, class: impl Fn() -> String + 'static) -> Self {
         self.attr_dyn("class", class)
+    }
+
+    /// One property of the element's own style, following the signals
+    /// `value` reads.
+    pub fn style_dyn(self, property: &'static str, value: impl Fn() -> String + 'static) -> Self {
+        Effect::new(move |_| {
+            let value = value();
+            with_document(|document| {
+                (document.mutate()).set_style_property(self.0, property, &value)
+            });
+        });
+        self
     }
 
     pub fn child(self, child: El) -> Self {
@@ -389,9 +402,18 @@ impl App {
     /// Hands the document an input event, runs the handlers it reaches and
     /// then the effects of what they wrote.
     pub fn dispatch(&self, event: UiEvent) {
+        let pressed = match &event {
+            UiEvent::PointerDown(pointer) | UiEvent::PointerUp(pointer) => {
+                Some((pointer.page_x(), pointer.page_y()))
+            }
+            _ => None,
+        };
         let mut document = self.shared.document.clone();
         let handler = Handlers(self.shared.clone());
         EventDriver::new(&mut document as &mut dyn Document, handler).handle_ui_event(event);
+        if let Some((x, y)) = pressed {
+            self.focus_from(x, y);
+        }
         self.run_effects();
         // blitz-dom tells the shell where an input is when it takes focus,
         // and not again: the input method's candidates would stay there
@@ -399,6 +421,32 @@ impl App {
         if let Some((x, y, width, height)) = self.ime_cursor_area() {
             let shell = self.shared.document.borrow().shell_provider.clone();
             shell.set_ime_cursor_area(x, y, width, height);
+        }
+    }
+
+    /// A press on something that cannot take focus leaves the page itself
+    /// focused, and keys then go to the page and to no view. A browser
+    /// gives the focus to the nearest thing around the press that can take
+    /// it; this does that.
+    fn focus_from(&self, x: f32, y: f32) {
+        let mut document = self.shared.document.borrow_mut();
+        let on_a_view = document.get_focussed_node_id().is_some_and(|id| {
+            let tag = document.get_node(id).and_then(|node| node.element_data());
+            tag.is_some_and(|element| !matches!(&*element.name.local, "html" | "body"))
+        });
+        if on_a_view {
+            return;
+        }
+        let mut node = document.hit(x, y).map(|hit| hit.node_id);
+        while let Some(id) = node {
+            let Some(found) = document.get_node(id) else {
+                return;
+            };
+            if found.attr(blitz_dom::local_name!("tabindex")).is_some() {
+                document.set_focus_to(id);
+                return;
+            }
+            node = found.parent;
         }
     }
 
@@ -504,19 +552,21 @@ impl EventHandler for Handlers {
     }
 }
 
-/// A press and a release of the main button at a point of the page: what a
-/// test drives the document's hit testing and dispatch with.
-pub fn click_at(app: &App, x: f32, y: f32) {
-    pointer(app, x, y, true);
+/// One step of the mouse at a point of the page: what a test drives the
+/// document's hit testing and dispatch with.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Pointer {
+    /// A move with no button held.
+    Move,
+    /// The main button goes down.
+    Down,
+    /// A move with the main button held.
+    Drag,
+    /// The main button comes up.
+    Up,
 }
 
-/// The pointer moved to a point of the page: what the wheel then scrolls
-/// is what is under it.
-pub fn move_to(app: &App, x: f32, y: f32) {
-    pointer(app, x, y, false);
-}
-
-fn pointer(app: &App, x: f32, y: f32, press: bool) {
+pub fn pointer(app: &App, x: f32, y: f32, step: Pointer) {
     use blitz_traits::events::{
         BlitzPointerEvent, BlitzPointerId, MouseEventButton, MouseEventButtons, PointerCoords,
     };
@@ -538,12 +588,25 @@ fn pointer(app: &App, x: f32, y: f32, press: bool) {
         element: Default::default(),
         active_pointers: Default::default(),
     };
-    app.dispatch(UiEvent::PointerMove(event(MouseEventButtons::None)));
-    if !press {
-        return;
+    app.dispatch(match step {
+        Pointer::Move => UiEvent::PointerMove(event(MouseEventButtons::None)),
+        Pointer::Down => UiEvent::PointerDown(event(MouseEventButtons::Primary)),
+        Pointer::Drag => UiEvent::PointerMove(event(MouseEventButtons::Primary)),
+        Pointer::Up => UiEvent::PointerUp(event(MouseEventButtons::None)),
+    });
+}
+
+/// A press and a release of the main button at a point of the page.
+pub fn click_at(app: &App, x: f32, y: f32) {
+    for step in [Pointer::Move, Pointer::Down, Pointer::Up] {
+        pointer(app, x, y, step);
     }
-    app.dispatch(UiEvent::PointerDown(event(MouseEventButtons::Primary)));
-    app.dispatch(UiEvent::PointerUp(event(MouseEventButtons::None)));
+}
+
+/// The pointer moved to a point of the page: what the wheel then scrolls
+/// is what is under it.
+pub fn move_to(app: &App, x: f32, y: f32) {
+    pointer(app, x, y, Pointer::Move);
 }
 
 /// An [`App`] as the document a shell shows: input goes through the

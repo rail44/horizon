@@ -214,65 +214,59 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl) -> (El, Markdown) {
     });
 
     let root = el("div").class("markdown").attr("tabindex", "0");
-    root
-        // A click on something inside that cannot take focus leaves nothing
-        // focused, and keys then go to the page instead of the view.
-        .on("click", move |_| {
-            root.focus();
-        })
-        .on("keydown", move |event| {
-            let DomEventData::KeyDown(key) = &event.data else {
-                return;
-            };
-            if key.modifiers.ctrl() || key.modifiers.alt() || key.modifiers.meta() {
-                return;
-            }
-            // A line is three of the body's lines; a page most of the box.
-            let scroll_by = move |lines: f64, pages: f64| {
-                later(move |document| {
-                    let height = document
-                        .get_node(scroll.0)
-                        .map_or(0., |node| node.final_layout().size.height as f64);
-                    let down = lines * 26. * 3. + pages * height * 0.8;
-                    document.scroll_by(scroll.0, 0., down, ScrollBehavior::Instant);
-                });
-            };
-            match &key.key {
-                Key::Character(character) if character == "j" => scroll_by(1., 0.),
-                Key::Character(character) if character == "k" => scroll_by(-1., 0.),
-                Key::Character(character) if character == " " => scroll_by(0., 1.),
-                Key::Character(character) if character == "h" => state.back(),
-                Key::Named(NamedKey::ArrowDown) => scroll_by(1., 0.),
-                Key::Named(NamedKey::ArrowUp) => scroll_by(-1., 0.),
-                Key::Named(NamedKey::PageDown) => scroll_by(0., 1.),
-                Key::Named(NamedKey::PageUp) => scroll_by(0., -1.),
-                Key::Named(NamedKey::Backspace | NamedKey::ArrowLeft) => state.back(),
-                _ => {}
-            }
-        })
-        .child(header)
-        .when(
-            move || state.notice.get().is_some(),
-            move || {
-                el("div")
-                    .class("notice")
-                    .text_dyn(move || state.notice.get().unwrap_or_default())
-            },
-        )
-        .when(
-            move || state.path.get().is_none(),
-            || el("div").class("empty").text(NO_DOCUMENT),
-        )
-        .when(
-            move || state.error.get().is_some(),
-            move || {
-                el("div")
-                    .class("error")
-                    .text_dyn(move || state.error.get().unwrap_or_default())
-            },
-        )
-        .child(scroll)
-        .focus();
+    root.on("keydown", move |event| {
+        let DomEventData::KeyDown(key) = &event.data else {
+            return;
+        };
+        if key.modifiers.ctrl() || key.modifiers.alt() || key.modifiers.meta() {
+            return;
+        }
+        // A line is three of the body's lines; a page most of the box.
+        let scroll_by = move |lines: f64, pages: f64| {
+            later(move |document| {
+                let height = document
+                    .get_node(scroll.0)
+                    .map_or(0., |node| node.final_layout().size.height as f64);
+                let down = lines * 26. * 3. + pages * height * 0.8;
+                document.scroll_by(scroll.0, 0., down, ScrollBehavior::Instant);
+            });
+        };
+        match &key.key {
+            Key::Character(character) if character == "j" => scroll_by(1., 0.),
+            Key::Character(character) if character == "k" => scroll_by(-1., 0.),
+            Key::Character(character) if character == " " => scroll_by(0., 1.),
+            Key::Character(character) if character == "h" => state.back(),
+            Key::Named(NamedKey::ArrowDown) => scroll_by(1., 0.),
+            Key::Named(NamedKey::ArrowUp) => scroll_by(-1., 0.),
+            Key::Named(NamedKey::PageDown) => scroll_by(0., 1.),
+            Key::Named(NamedKey::PageUp) => scroll_by(0., -1.),
+            Key::Named(NamedKey::Backspace | NamedKey::ArrowLeft) => state.back(),
+            _ => {}
+        }
+    })
+    .child(header)
+    .when(
+        move || state.notice.get().is_some(),
+        move || {
+            el("div")
+                .class("notice")
+                .text_dyn(move || state.notice.get().unwrap_or_default())
+        },
+    )
+    .when(
+        move || state.path.get().is_none(),
+        || el("div").class("empty").text(NO_DOCUMENT),
+    )
+    .when(
+        move || state.error.get().is_some(),
+        move || {
+            el("div")
+                .class("error")
+                .text_dyn(move || state.error.get().unwrap_or_default())
+        },
+    )
+    .child(scroll)
+    .focus();
     (root, state)
 }
 
