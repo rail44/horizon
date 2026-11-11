@@ -21,6 +21,7 @@ kurbo = "0.13"
 peniko = "0.6"
 blitz-shell = "=0.3.0-beta.4"
 anyrender_vello = "0.15"
+parley = "0.12"
 
 [profile.release]
 opt-level = 3

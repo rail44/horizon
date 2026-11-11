@@ -33,6 +33,8 @@ The findings are in `docs/research/ui-foundation-candidates-2026-11-11.md`.
   `src/window.rs` the borders that layout rounded to nothing at a fractional
   display scale are given back after each resolve. `Cargo.toml` puts it in
   place of the published crate.
+- `src/bin/terminal.rs` — what a terminal's grid costs to shape and draw by
+  hand, as a widget would, at three screen sizes and three scales.
 - `src/bin/observed.rs`, `src/bin/look.rs`, `src/bin/hit.rs` —
   reproductions, without a window, of what the window showed.
 

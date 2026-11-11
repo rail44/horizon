@@ -3550,6 +3550,7 @@ dependencies = [
  "blitz-shell",
  "blitz-traits",
  "kurbo",
+ "parley",
  "peniko",
  "png 0.17.16",
  "reactive_graph",
