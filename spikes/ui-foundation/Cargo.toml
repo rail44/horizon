@@ -24,3 +24,8 @@ anyrender_vello = "0.15"
 
 [profile.release]
 opt-level = 3
+
+# blitz-shell with one change, marked in `vendor/blitz-shell/src/lib.rs`:
+# the input method is enabled with its cursor area.
+[patch.crates-io]
+blitz-shell = { path = "vendor/blitz-shell" }

@@ -284,6 +284,38 @@ impl App {
         let handler = Handlers(self.shared.clone());
         EventDriver::new(&mut document as &mut dyn Document, handler).handle_ui_event(event);
         self.run_effects();
+        // blitz-dom tells the shell where an input is when it takes focus,
+        // and not again: the input method's candidates would stay there
+        // while the caret moves on.
+        if let Some((x, y, width, height)) = self.ime_cursor_area() {
+            let shell = self.shared.document.borrow().shell_provider.clone();
+            shell.set_ime_cursor_area(x, y, width, height);
+        }
+    }
+
+    /// Where the text being edited is, in the page's CSS pixels: the text
+    /// being composed if there is some, the caret otherwise. `None` unless
+    /// a text input has focus.
+    pub fn ime_cursor_area(&self) -> Option<(f32, f32, f32, f32)> {
+        let document = self.shared.document.borrow();
+        let node = document.get_node(document.get_focussed_node_id()?)?;
+        let input = node.element_data()?.text_input_data()?;
+        // The editor lays its text out in device pixels, scrolled inside
+        // the input along the axis it runs out on.
+        let scale = document.viewport().scale_f64();
+        let area = input.editor.ime_cursor_area();
+        let layout = node.final_layout();
+        let origin = node.absolute_position(layout.content_box_x(), layout.content_box_y());
+        let (scroll_x, scroll_y) = match input.is_multiline {
+            true => (0., input.scroll_offset),
+            false => (input.scroll_offset, 0.),
+        };
+        Some((
+            origin.x + (area.x0 / scale) as f32 - scroll_x,
+            origin.y + (area.y0 / scale) as f32 - scroll_y,
+            ((area.x1 - area.x0) / scale) as f32,
+            ((area.y1 - area.y0) / scale) as f32,
+        ))
     }
 }
 
