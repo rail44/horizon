@@ -69,6 +69,20 @@ are the same either way.
 `src/extension/tests.rs` builds the extension itself and holds it to what
 the built-in view's tests hold that view to.
 
+## What the other views use
+
+Read from `src/board`, `src/wiki` and `src/theme_settings` as they are.
+
+| | Used by | In `gpui-wit-plugin` |
+|---|---|---|
+| Hover and group-hover styles | board list, board thread | yes |
+| Mouse down, positioning, opacity, truncation | board, wiki | yes |
+| A component with state of its own | every one (text input) | the mechanism is there (`Window::use_keyed_state` by the node's id); no `input` component is registered |
+| Work off the main thread, answered later | board (the store), wiki (thread log) | a request answered by an event, as `watch` and `file-changed`; no such call exists for a store |
+| Drag and drop | board list (reordering) | no |
+| Custom painting (`canvas`) | board thread, wiki | no |
+| An animation | wiki | no |
+
 ## Not there
 
 - The extension runs on the main thread, and reads its file there; a call

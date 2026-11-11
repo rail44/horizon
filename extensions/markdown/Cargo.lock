@@ -29,7 +29,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 [[package]]
 name = "gpui-wit-plugin-sdk"
 version = "0.1.0"
-source = "git+https://github.com/rail44/gpui-wit-plugin?rev=29bbb17dbec4b59146f85bcbdca76dc420a48dcd#29bbb17dbec4b59146f85bcbdca76dc420a48dcd"
+source = "git+https://github.com/rail44/gpui-wit-plugin?rev=532a86474ee5e8ff5de0b118a57da0cb2bec9b22#532a86474ee5e8ff5de0b118a57da0cb2bec9b22"
 dependencies = [
  "serde_json",
  "wit-bindgen",
