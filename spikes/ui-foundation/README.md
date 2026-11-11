@@ -43,6 +43,8 @@ The findings are in `docs/research/ui-foundation-candidates-2026-11-11.md`.
   drives it with real input events, and `src/bin/agent.rs` shows it in a
   window with a turn streaming in, times an update against histories of
   several lengths, or draws one frame.
+- `src/windowed.rs` — a long list in a scrolling box with only the items
+  near what is in view built as elements; the agent pane's column uses it.
 - `src/board.rs` — a list whose rows are reordered by dragging, the part of
   Horizon's board list (`src/board/list.rs`) that asks the most of the
   stack; `tests/board.rs` drives it with the mouse's own events.

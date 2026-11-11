@@ -1,11 +1,12 @@
 //! Horizon's agent pane on this stack.
 //!
-//!     cargo run --release --bin agent -- window [turns]
+//!     cargo run --release --bin agent -- window [turns] [whole]
 //!     cargo run --release --bin agent -- measure [scale]
 //!     cargo run --release --bin agent -- picture out.png
 //!
 //! `window` shows a made-up session of `turns` ended turns (200 unless
-//! given) and keeps a turn streaming into it: text a few characters at a
+//! given; with `whole`, every unit an element, in view or not, and
+//! otherwise only those near the view) and keeps a turn streaming into it: text a few characters at a
 //! time, a call, an approval that Enter or a click answers. `measure`
 //! times what an update of the turn in progress costs against histories of
 //! several lengths, with no window. `picture` draws one frame into a PNG.
@@ -19,7 +20,10 @@ use anyrender_vello::VelloWindowRenderer;
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
 use reactive_graph::traits::Update;
 use ui_foundation_spike::agent::sample::Session;
-use ui_foundation_spike::agent::{Agent, Asked, CSS, view};
+use ui_foundation_spike::agent::{Agent, Asked, CSS, Column, view_with};
+use ui_foundation_spike::blitz_traits::events::{
+    BlitzWheelDelta, BlitzWheelEvent, PointerCoords, UiEvent,
+};
 use ui_foundation_spike::blitz_traits::shell::{ColorScheme, Viewport};
 use ui_foundation_spike::{App, Live};
 
@@ -30,10 +34,10 @@ const STREAMED: &str = "承知しました。まず `cargo clippy --workspace` �
 - `let _ =` で捨てている戻り値\n\n\
 順に直して、最後にもう一度 `clippy` と `nextest` を通します。";
 
-fn open(asked: impl Fn(Asked) + 'static) -> (App, Agent) {
+fn open(asked: impl Fn(Asked) + 'static, column: Column) -> (App, Agent) {
     let mut agent = None;
     let app = App::new(900, 700, CSS, || {
-        let (root, state) = view(asked);
+        let (root, state) = view_with(asked, column);
         state.field.focus();
         agent = Some(state);
         root
@@ -63,16 +67,22 @@ fn median(mut samples: Vec<Duration>) -> (f64, f64) {
 }
 
 fn measure(scale: f32) {
-    println!("at a display scale of {scale}");
+    println!("at a display scale of {scale}, every unit an element");
+    measure_column(scale, Column::Whole, &[10, 50, 200, 400]);
+    println!("at a display scale of {scale}, the units near the view elements");
+    measure_column(scale, Column::Windowed, &[10, 50, 200, 400, 2000]);
+}
+
+fn measure_column(scale: f32, column: Column, lengths: &[usize]) {
     println!(
         "turns  units  nodes  first(ms) | per update of the turn in progress, median / worst (ms)"
     );
     println!(
-        "                                | adapt+effects   resolve        paint(cpu)     | idle resolve | open a receipt"
+        "                                | adapt+effects   resolve        paint(cpu)     | idle resolve | open a receipt | a wheel step"
     );
-    for turns in [10, 50, 200, 400] {
+    for &turns in lengths {
         let mut session = Session::long(turns);
-        let (app, agent) = open(|_| {});
+        let (app, agent) = open(|_| {}, column);
         let (width, height) = ((900. * scale) as u32, (700. * scale) as u32);
         (app.document().borrow_mut()).set_viewport(Viewport::new(
             width,
@@ -148,12 +158,35 @@ fn measure(scale: f32) {
                 started.elapsed()
             })
             .collect();
+        // The wheel, 400 px a step, up through the history.
+        ui_foundation_spike::move_to(&app, 400., 300.);
+        let scrolls = (0..30)
+            .map(|_| {
+                let started = Instant::now();
+                app.dispatch(UiEvent::Wheel(BlitzWheelEvent {
+                    delta: BlitzWheelDelta::Pixels(0., 400.),
+                    coords: PointerCoords {
+                        page_x: 400.,
+                        page_y: 300.,
+                        screen_x: 400.,
+                        screen_y: 300.,
+                        client_x: 400.,
+                        client_y: 300.,
+                    },
+                    buttons: Default::default(),
+                    mods: Default::default(),
+                    element: Default::default(),
+                }));
+                app.resolve();
+                started.elapsed()
+            })
+            .collect();
         let pair = |samples| {
             let (median, worst) = median(samples);
             format!("{median:5.2} / {worst:5.2}")
         };
         println!(
-            "{turns:5}  {:5}  {:5}  {:8.1}  | {}   {}   {}  | {:5.2}        | {}",
+            "{turns:5}  {:5}  {:5}  {:8.1}  | {}   {}   {}  | {:5.2}        | {}  | {}",
             session.units(),
             nodes(&app),
             first.as_secs_f64() * 1000.,
@@ -162,6 +195,7 @@ fn measure(scale: f32) {
             pair(paints),
             median(idle).0,
             pair(toggles),
+            pair(scrolls),
         );
     }
 }
@@ -184,7 +218,7 @@ fn staged(turns: usize) -> Session {
 
 fn picture(path: &str) {
     let session = staged(3);
-    let (app, agent) = open(|_| {});
+    let (app, agent) = open(|_| {}, Column::Windowed);
     let (width, height, scale) = (1350, 1050, 1.5);
     (app.document().borrow_mut()).set_viewport(Viewport::new(
         width,
@@ -240,10 +274,10 @@ enum Step {
     Closing(usize),
 }
 
-fn window(turns: usize) {
+fn window(turns: usize, column: Column) {
     let asked = Rc::new(RefCell::new(Vec::new()));
     let log = asked.clone();
-    let (app, agent) = open(move |asked| log.borrow_mut().push(asked));
+    let (app, agent) = open(move |asked| log.borrow_mut().push(asked), column);
     let mut session = Session::long(turns);
     session.show(&agent);
 
@@ -352,6 +386,10 @@ fn main() {
             (arguments.get(1))
                 .map(|turns| turns.parse().expect("a number of turns"))
                 .unwrap_or(200),
+            match arguments.get(2).map(String::as_str) {
+                Some("whole") => Column::Whole,
+                _ => Column::Windowed,
+            },
         ),
         Some(other) => panic!("window, measure or picture, not {other}"),
     }

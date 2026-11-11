@@ -3,10 +3,11 @@
 //!
 //! What it draws is Horizon's own display model, used as it is
 //! (`src/agent/view/display.rs`), and its fixed labels
-//! (`src/agent/view/chrome.rs`). The column holds every unit as elements of
-//! the document: there is no list that builds only the rows in view. A unit
-//! that is the same allocation as before keeps its elements; the turn in
-//! progress is a new allocation on every update and is built again.
+//! (`src/agent/view/chrome.rs`). The column holds the units near what is
+//! in view as elements of the document ([`crate::windowed`]), or, asked to,
+//! all of them. A unit that is the same allocation as before keeps its
+//! elements; the turn in progress is a new allocation on every update and
+//! is built again.
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -15,10 +16,12 @@ use std::rc::Rc;
 use blitz_dom::ScrollBehavior;
 use blitz_traits::events::DomEventData;
 use keyboard_types::{Key, NamedKey};
+use reactive_graph::effect::Effect;
 use reactive_graph::owner::{LocalStorage, StoredValue};
 use reactive_graph::signal::RwSignal;
 use reactive_graph::traits::{Get, GetUntracked, Set, Update, WithValue};
 
+use crate::windowed::windowed;
 use crate::{El, each_layout, el, later, prevent_default, stop_propagation};
 
 #[allow(dead_code)]
@@ -147,6 +150,8 @@ pub struct Agent {
     pub open_bodies: RwSignal<HashSet<(usize, usize)>>,
     /// What the composer holds.
     pub typed: RwSignal<String>,
+    /// Which units are elements, by their places in the conversation.
+    pub built: RwSignal<(usize, usize)>,
     ask: StoredValue<Rc<dyn Fn(Asked)>, LocalStorage>,
     /// The column, and the composer's field: what takes the focus when the
     /// view is given it.
@@ -222,8 +227,21 @@ impl Agent {
     }
 }
 
+/// How the column holds the conversation.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Column {
+    /// Only the units near what is in view are elements.
+    Windowed,
+    /// Every unit is an element, in view or not.
+    Whole,
+}
+
 /// Builds the view, empty; `ask` hears what the owner asks for.
 pub fn view(ask: impl Fn(Asked) + 'static) -> (El, Agent) {
+    view_with(ask, Column::Windowed)
+}
+
+pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
     let state = Agent {
         units: RwSignal::new_local(Vec::new()),
         status: RwSignal::new(Status::Idle),
@@ -233,47 +251,53 @@ pub fn view(ask: impl Fn(Asked) + 'static) -> (El, Agent) {
         expanded: RwSignal::new(HashSet::new()),
         open_bodies: RwSignal::new(HashSet::new()),
         typed: RwSignal::new(String::new()),
+        built: RwSignal::new((0, 0)),
         ask: StoredValue::new_local(Rc::new(ask)),
         column: el("div").class("column"),
         field: el("textarea"),
     };
 
-    state
-        .column
-        .each(
-            move || (state.units.get().into_iter().enumerate()).collect::<Vec<_>>(),
-            // A unit kept from the last update is the allocation it was.
-            |(index, unit)| (*index, Rc::as_ptr(unit) as usize),
-            move |(_, unit)| {
-                el("div").class("unit").child(match unit.as_ref() {
-                    Unit::User(message) => el("div")
-                        .class(match message.label {
-                            Label::You => "user",
-                            Label::Task | Label::Continue => "user muted",
-                        })
-                        .text(&message.text),
-                    Unit::Notice(notice) => notice_line(notice),
-                    Unit::Turn(turn) => turn_card(turn, state),
+    let units = move || (state.units.get().into_iter().enumerate()).collect::<Vec<_>>();
+    // A unit kept from the last update is the allocation it was.
+    let key = |(index, unit): &(usize, Rc<Unit>)| (*index, Rc::as_ptr(unit) as usize);
+    let unit = move |(_, unit): &(usize, Rc<Unit>)| {
+        el("div").class("unit").child(match unit.as_ref() {
+            Unit::User(message) => el("div")
+                .class(match message.label {
+                    Label::You => "user",
+                    Label::Task | Label::Continue => "user muted",
                 })
-            },
-        )
-        .child(
-            el("div")
-                .class("footer")
-                .when(
-                    move || session_end(state.status.get()).is_some(),
-                    move || match session_end(state.status.get_untracked()) {
-                        Some(notice) => notice_line(&notice),
-                        None => el("div"),
-                    },
-                )
-                .each(
-                    move || state.tasks.get(),
-                    |task| chrome::task_line(task),
-                    |task| el("div").class("task").text(&chrome::task_line(task)),
-                ),
-        );
-    follow_tail(state.column);
+                .text(&message.text),
+            Unit::Notice(notice) => notice_line(notice),
+            Unit::Turn(turn) => turn_card(turn, state),
+        })
+    };
+    match column {
+        Column::Windowed => {
+            let built = windowed(state.column, units, key, unit, true);
+            Effect::new(move |_| state.built.set(built.get()));
+        }
+        Column::Whole => {
+            state.column.each(units, key, unit);
+            follow_tail(state.column);
+        }
+    }
+    state.column.child(
+        el("div")
+            .class("footer")
+            .when(
+                move || session_end(state.status.get()).is_some(),
+                move || match session_end(state.status.get_untracked()) {
+                    Some(notice) => notice_line(&notice),
+                    None => el("div"),
+                },
+            )
+            .each(
+                move || state.tasks.get(),
+                |task| chrome::task_line(task),
+                |task| el("div").class("task").text(&chrome::task_line(task)),
+            ),
+    );
 
     let rows = RwSignal::new(1usize);
     state

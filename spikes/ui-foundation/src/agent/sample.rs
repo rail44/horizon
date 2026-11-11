@@ -57,7 +57,8 @@ impl Session {
             session.push(Unit::Turn(Turn {
                 state: TurnState::Done,
                 parts: vec![
-                    TurnPart::Text(ANSWER.to_string()),
+                    // Not all one height: a turn in four says more.
+                    TurnPart::Text(ANSWER.to_string() + &"\n\n補足の段落です。".repeat(turn % 4)),
                     TurnPart::Receipt(receipt),
                     TurnPart::Text(CLOSING.to_string()),
                 ],

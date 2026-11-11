@@ -301,7 +301,7 @@ impl<Rend: WindowRenderer> View<Rend> {
         let (width, height) = {
             let mut inner = self.doc.inner_mut();
             inner.resolve(animation_time);
-            restore_thin_borders(&mut inner);
+            restore_thin_borders(&mut inner, animation_time);
             inner.viewport().window_size
         };
 
@@ -334,7 +334,7 @@ impl<Rend: WindowRenderer> View<Rend> {
         let animation_time = self.current_animation_time();
         let mut inner = self.doc.inner_mut();
         inner.resolve(animation_time);
-            restore_thin_borders(&mut inner);
+            restore_thin_borders(&mut inner, animation_time);
         let (width, height) = inner.viewport().window_size;
         let scale = inner.viewport().scale_f64();
         let insets = self.safe_area_insets;
@@ -408,7 +408,7 @@ impl<Rend: WindowRenderer> View<Rend> {
 
         let mut inner = self.doc.inner_mut();
         inner.resolve(animation_time);
-            restore_thin_borders(&mut inner);
+            restore_thin_borders(&mut inner, animation_time);
 
         // Unregister resources (e.g. textures) from dropped custom widget nodes
         #[cfg(feature = "custom-widget")]
@@ -883,14 +883,15 @@ impl<Rend: WindowRenderer> View<Rend> {
 }
 
 thread_local! {
-    static AFTER_RESOLVE: std::cell::Cell<Option<fn(&mut blitz_dom::BaseDocument)>> =
+    static AFTER_RESOLVE: std::cell::Cell<Option<fn(&mut blitz_dom::BaseDocument, f64)>> =
         const { std::cell::Cell::new(None) };
 }
 
 /// Added to upstream's blitz-shell: `work` runs after each resolve and
 /// before the document is painted, for what depends on the layout a change
-/// produced.
-pub fn set_after_resolve(work: fn(&mut blitz_dom::BaseDocument)) {
+/// produced. It is given the animation clock the resolve ran at, to
+/// resolve again at if it changes the document.
+pub fn set_after_resolve(work: fn(&mut blitz_dom::BaseDocument, f64)) {
     AFTER_RESOLVE.set(Some(work));
 }
 
@@ -903,9 +904,9 @@ pub fn set_after_resolve(work: fn(&mut blitz_dom::BaseDocument)) {
 /// pixel, its width comes out 0 and that side is not drawn. A side that has
 /// a width before rounding and none after is given one device pixel. The
 /// same correction is in the spike's own `resolve`, for when no shell runs.
-fn restore_thin_borders(document: &mut blitz_dom::BaseDocument) {
+fn restore_thin_borders(document: &mut blitz_dom::BaseDocument, animation_time: f64) {
     if let Some(work) = AFTER_RESOLVE.get() {
-        work(document);
+        work(document, animation_time);
     }
     let scale = document.viewport().scale();
     if scale.fract() == 0. {

@@ -32,7 +32,8 @@ opt-level = 3
 
 # blitz-shell with three changes, each marked where it is made: the input
 # method is enabled with its cursor area, thin borders are given back after
-# each resolve, and a function the embedder sets runs after each resolve.
+# each resolve, and a function the embedder sets runs after each resolve, with the clock
+# the resolve ran at.
 [patch.crates-io]
 blitz-shell = { path = "vendor/blitz-shell" }
 # Blitz at the head of upstream's fix for hit testing through a clip

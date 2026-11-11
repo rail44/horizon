@@ -31,6 +31,7 @@ pub mod board;
 pub mod demo;
 pub mod markdown;
 pub mod term;
+pub mod windowed;
 pub mod workspace;
 
 pub use blitz_dom;
@@ -53,6 +54,8 @@ struct Shared {
     /// out, and whether that is the element itself or the first thing
     /// inside it that takes focus.
     focus: Cell<Option<(NodeId, bool)>>,
+    /// Whether [`each_layout`] work asked for another layout.
+    relayout: Cell<bool>,
     /// What runs after every layout, with the boxes that layout made.
     laid_out: RefCell<Vec<Box<dyn FnMut(&mut BaseDocument)>>>,
     /// What runs when the shell polls the document.
@@ -70,18 +73,15 @@ pub fn each_layout(work: impl FnMut(&mut BaseDocument) + 'static) {
 
 /// What a shell calls after it has resolved the document itself, in place
 /// of [`App::resolve`]: the [`each_layout`] work.
-pub fn after_resolve(document: &mut BaseDocument) {
+pub fn after_resolve(document: &mut BaseDocument, seconds: f64) {
     let Some(shared) = CURRENT.with(|current| current.borrow().clone()) else {
         return;
     };
-    laid_out(&shared, document);
+    settle(&shared, document, seconds);
 }
 
-/// What follows every layout.
+/// What follows the last layout before a paint.
 fn laid_out(shared: &Shared, document: &mut BaseDocument) {
-    for work in shared.laid_out.borrow_mut().iter_mut() {
-        work(document);
-    }
     if let Some((element, within)) = shared.focus.take() {
         let mut pending = vec![element];
         while let Some(id) = pending.pop() {
@@ -142,10 +142,65 @@ fn shared() -> Rc<Shared> {
     CURRENT.with(|current| current.borrow().clone().expect("inside an App"))
 }
 
+thread_local! {
+    /// The document while [`settle`] holds it: effects run from there
+    /// reach it through this, since its cell is borrowed by whoever called.
+    static LENT: Cell<Option<*mut BaseDocument>> = const { Cell::new(None) };
+}
+
 fn with_document<R>(write: impl FnOnce(&mut BaseDocument) -> R) -> R {
+    if let Some(document) = LENT.get() {
+        // SAFETY: `settle` set this from a `&mut` it does not use while
+        // effects run, and clears it before using it again; effects run on
+        // this thread only and do not nest a second use.
+        return write(unsafe { &mut *document });
+    }
     let shared = shared();
     let mut document = shared.document.borrow_mut();
     write(&mut document)
+}
+
+/// Runs the effects of the signals written so far, and what they and the
+/// handlers before them left for the document.
+fn run_effects(shared: &Rc<Shared>) {
+    CURRENT.with(|current| *current.borrow_mut() = Some(shared.clone()));
+    Executor::poll_local();
+    loop {
+        let later = std::mem::take(&mut *shared.later.borrow_mut());
+        if later.is_empty() {
+            break;
+        }
+        for work in later {
+            with_document(work);
+        }
+        Executor::poll_local();
+    }
+}
+
+/// From [`each_layout`] work: what it wrote changes the layout it has just
+/// read, and the document is laid out again before it is painted.
+pub fn relayout() {
+    shared().relayout.set(true);
+}
+
+/// What follows a layout, `document` having just been resolved at the
+/// animation clock `seconds`: the [`each_layout`] work, and for as long as
+/// that asks for it, its effects and another layout.
+fn settle(shared: &Rc<Shared>, document: &mut BaseDocument, seconds: f64) {
+    for _ in 0..8 {
+        for work in shared.laid_out.borrow_mut().iter_mut() {
+            work(document);
+        }
+        if !shared.relayout.take() {
+            break;
+        }
+        LENT.set(Some(document as *mut BaseDocument));
+        run_effects(shared);
+        LENT.set(None);
+        document.resolve(seconds);
+        restore_thin_borders(document);
+    }
+    laid_out(shared, document);
 }
 
 fn name(local: &str) -> QualName {
@@ -378,6 +433,7 @@ impl App {
             later: RefCell::new(Vec::new()),
             dispatched: RefCell::new(Vec::new()),
             focus: Cell::new(None),
+            relayout: Cell::new(false),
             laid_out: RefCell::new(Vec::new()),
             polled: RefCell::new(Vec::new()),
         });
@@ -411,20 +467,7 @@ impl App {
     /// Runs the effects of the signals written since the last call: the
     /// writes to the document.
     pub fn run_effects(&self) {
-        CURRENT.with(|current| *current.borrow_mut() = Some(self.shared.clone()));
-        Executor::poll_local();
-        // What handlers and effects left for the document, and the effects
-        // of that in turn.
-        loop {
-            let later = std::mem::take(&mut *self.shared.later.borrow_mut());
-            if later.is_empty() {
-                break;
-            }
-            for work in later {
-                work(&mut self.shared.document.borrow_mut());
-            }
-            Executor::poll_local();
-        }
+        run_effects(&self.shared);
     }
 
     /// Restyles and lays out what the writes since the last call touched.
@@ -438,7 +481,7 @@ impl App {
         let mut document = self.shared.document.borrow_mut();
         document.resolve(seconds);
         restore_thin_borders(&mut document);
-        laid_out(&self.shared, &mut document);
+        settle(&self.shared, &mut document, seconds);
     }
 
     /// Runs `work` whenever the shell polls the document, with the waker
