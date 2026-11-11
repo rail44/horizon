@@ -1,0 +1,343 @@
+//! Spike: components that run once, over signals, writing a `blitz-dom`
+//! document.
+//!
+//! A view function builds its elements once, as nodes of the document. What
+//! changes afterwards is a closure over signals, run as an effect that
+//! writes one thing — a text node's contents, an attribute, a list's
+//! children — when a signal it read changes. Nothing is rendered again and
+//! nothing is compared, apart from a keyed list's keys.
+//!
+//! `blitz-dom` owns everything below: CSS (Stylo), layout (Taffy), text
+//! (Parley), hit testing, focus and event dispatch.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::rc::Rc;
+
+use any_spawner::Executor;
+use blitz_dom::{
+    BaseDocument, Document, DocumentConfig, EventDriver, EventHandler, LocalName, NodeId, QualName,
+    UserAgentStylesheet, ns,
+};
+use blitz_traits::events::{DomEvent, EventState, UiEvent};
+use blitz_traits::shell::{ColorScheme, Viewport};
+use reactive_graph::effect::Effect;
+use reactive_graph::graph::untrack;
+use reactive_graph::owner::Owner;
+
+pub use blitz_dom;
+pub use blitz_traits;
+pub use reactive_graph;
+
+type Handler = Rc<dyn Fn(&DomEvent)>;
+
+/// What the builders and the effects reach: the document, and the handlers
+/// by node.
+struct Shared {
+    document: Rc<RefCell<BaseDocument>>,
+    handlers: RefCell<HashMap<NodeId, Vec<(&'static str, Handler)>>>,
+}
+
+thread_local! {
+    static CURRENT: RefCell<Option<Rc<Shared>>> = const { RefCell::new(None) };
+}
+
+fn shared() -> Rc<Shared> {
+    CURRENT.with(|current| current.borrow().clone().expect("inside an App"))
+}
+
+fn with_document<R>(write: impl FnOnce(&mut BaseDocument) -> R) -> R {
+    let shared = shared();
+    let mut document = shared.document.borrow_mut();
+    write(&mut document)
+}
+
+fn name(local: &str) -> QualName {
+    QualName::new(None, ns!(), LocalName::from(local))
+}
+
+/// An element being built: a node of the document already.
+#[derive(Clone, Copy)]
+pub struct El(pub NodeId);
+
+pub fn el(tag: &str) -> El {
+    let tag = QualName::new(None, ns!(html), LocalName::from(tag));
+    El(with_document(|document| {
+        document.mutate().create_element(tag, Vec::new())
+    }))
+}
+
+impl El {
+    pub fn attr(self, attribute: &str, value: &str) -> Self {
+        with_document(|document| {
+            document
+                .mutate()
+                .set_attribute(self.0, name(attribute), value)
+        });
+        self
+    }
+
+    /// An attribute that follows the signals `value` reads.
+    pub fn attr_dyn(self, attribute: &'static str, value: impl Fn() -> String + 'static) -> Self {
+        Effect::new(move |_| {
+            let value = value();
+            with_document(|document| {
+                document
+                    .mutate()
+                    .set_attribute(self.0, name(attribute), &value)
+            });
+        });
+        self
+    }
+
+    pub fn class(self, class: &str) -> Self {
+        self.attr("class", class)
+    }
+
+    pub fn class_dyn(self, class: impl Fn() -> String + 'static) -> Self {
+        self.attr_dyn("class", class)
+    }
+
+    pub fn child(self, child: El) -> Self {
+        with_document(|document| document.mutate().append_children(self.0, &[child.0]));
+        self
+    }
+
+    pub fn text(self, text: &str) -> Self {
+        with_document(|document| {
+            let mut mutator = document.mutate();
+            let node = mutator.create_text_node(text);
+            mutator.append_children(self.0, &[node]);
+        });
+        self
+    }
+
+    /// A text node that follows the signals `text` reads.
+    pub fn text_dyn(self, text: impl Fn() -> String + 'static) -> Self {
+        let node = with_document(|document| {
+            let mut mutator = document.mutate();
+            let node = mutator.create_text_node("");
+            mutator.append_children(self.0, &[node]);
+            node
+        });
+        Effect::new(move |_| {
+            let text = text();
+            with_document(|document| document.mutate().set_node_text(node, &text));
+        });
+        self
+    }
+
+    /// Hands the element's box to `widget`, which paints it itself: the
+    /// place for content the document does not describe (a terminal's grid).
+    pub fn widget(self, widget: impl blitz_dom::Widget + 'static) -> Self {
+        with_document(|document| document.set_custom_widget(self.0, Box::new(widget)));
+        self
+    }
+
+    /// Runs `handler` for the DOM event `event` (`click`, `keydown`, ...)
+    /// that reaches this element.
+    pub fn on(self, event: &'static str, handler: impl Fn(&DomEvent) + 'static) -> Self {
+        let shared = shared();
+        let mut handlers = shared.handlers.borrow_mut();
+        (handlers.entry(self.0).or_default()).push((event, Rc::new(handler)));
+        self
+    }
+
+    /// Children that follow a list: one per item of `items`, told apart by
+    /// `key`. An item whose key stays keeps its node; `view` runs once for
+    /// each key that is new.
+    pub fn each<T, K>(
+        self,
+        items: impl Fn() -> Vec<T> + 'static,
+        key: impl Fn(&T) -> K + 'static,
+        view: impl Fn(&T) -> El + 'static,
+    ) -> Self
+    where
+        T: 'static,
+        K: Eq + Hash + Clone + 'static,
+    {
+        // The list's place among its parent's children: its nodes go just
+        // before this marker, whatever else the parent holds.
+        let marker = with_document(|document| {
+            let mut mutator = document.mutate();
+            let marker = mutator.create_comment_node("each");
+            mutator.append_children(self.0, &[marker]);
+            marker
+        });
+        let outer = Owner::current().expect("an owner");
+        Effect::new(move |previous: Option<Vec<(K, NodeId, Owner)>>| {
+            let items = items();
+            let previous = previous.unwrap_or_default();
+            let kept_before: Vec<NodeId> = previous.iter().map(|(_, node, _)| *node).collect();
+            let mut old: HashMap<K, (NodeId, Owner)> = (previous.into_iter())
+                .map(|(key, node, owner)| (key, (node, owner)))
+                .collect();
+            let mut next = Vec::with_capacity(items.len());
+            let mut created = Vec::new();
+            for item in &items {
+                let key = key(item);
+                let (node, owner) = old.remove(&key).unwrap_or_else(|| {
+                    // The row's own effects belong to the row, and what
+                    // `view` reads is not what the list depends on.
+                    let owner = outer.child();
+                    let node = owner.with(|| untrack(|| view(item))).0;
+                    created.push(node);
+                    (node, owner)
+                });
+                next.push((key, node, owner));
+            }
+            let order: Vec<NodeId> = next.iter().map(|(_, node, _)| *node).collect();
+            // The nodes that stay, in the order they were in and are in now.
+            let stayed = |nodes: &[NodeId], other: &[NodeId]| -> Vec<NodeId> {
+                (nodes.iter().copied())
+                    .filter(|node| other.contains(node))
+                    .collect()
+            };
+            let moved = stayed(&kept_before, &order) != stayed(&order, &kept_before);
+            let appended = order.ends_with(&created);
+            with_document(|document| {
+                let mut mutator = document.mutate();
+                for (node, owner) in old.into_values() {
+                    owner.cleanup();
+                    mutator.remove_and_drop_node(node);
+                }
+                if moved || !appended {
+                    // Put in order again, each before the marker.
+                    mutator.insert_nodes_before(marker, &order);
+                } else if !created.is_empty() {
+                    mutator.insert_nodes_before(marker, &created);
+                }
+            });
+            next
+        });
+        self
+    }
+}
+
+/// A document, the view built into it, and the signals' effects.
+pub struct App {
+    shared: Rc<Shared>,
+    _owner: Owner,
+}
+
+impl App {
+    /// Builds `view` once into a new document of `width` by `height`,
+    /// styled by `css`.
+    pub fn new(width: u32, height: u32, css: &str, view: impl FnOnce() -> El) -> Self {
+        // One executor a thread; a second `App` on it finds it set.
+        let _ = Executor::init_futures_executor();
+        let owner = Owner::new();
+        owner.set();
+        let mut document = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(width, height, 1.0, ColorScheme::Light)),
+            ..DocumentConfig::default()
+        });
+        document.add_user_agent_stylesheet(UserAgentStylesheet::parse(css));
+        let shared = Rc::new(Shared {
+            document: Rc::new(RefCell::new(document)),
+            handlers: RefCell::new(HashMap::new()),
+        });
+        CURRENT.with(|current| *current.borrow_mut() = Some(shared.clone()));
+        let body = el("body");
+        let html = el("html").child(body);
+        with_document(|document| {
+            let root = document.root_node().id;
+            document.mutate().append_children(root, &[html.0]);
+        });
+        let view = view();
+        body.child(view);
+        let app = Self {
+            shared,
+            _owner: owner,
+        };
+        app.run_effects();
+        app
+    }
+
+    /// The document, for whatever draws it or feeds it events.
+    pub fn document(&self) -> Rc<RefCell<BaseDocument>> {
+        self.shared.document.clone()
+    }
+
+    /// The document where it lives, for a borrow that outlasts the call.
+    pub fn document_cell(&self) -> &RefCell<BaseDocument> {
+        &self.shared.document
+    }
+
+    /// Runs the effects of the signals written since the last call: the
+    /// writes to the document.
+    pub fn run_effects(&self) {
+        CURRENT.with(|current| *current.borrow_mut() = Some(self.shared.clone()));
+        Executor::poll_local();
+    }
+
+    /// Restyles and lays out what the writes since the last call touched.
+    pub fn resolve(&self) {
+        self.shared.document.borrow_mut().resolve(0.0);
+    }
+
+    /// Hands the document an input event, runs the handlers it reaches and
+    /// then the effects of what they wrote.
+    pub fn dispatch(&self, event: UiEvent) {
+        let mut document = self.shared.document.clone();
+        let handler = Handlers(self.shared.clone());
+        EventDriver::new(&mut document as &mut dyn Document, handler).handle_ui_event(event);
+        self.run_effects();
+    }
+}
+
+struct Handlers(Rc<Shared>);
+
+impl EventHandler for Handlers {
+    fn handle_event(
+        &mut self,
+        chain: &[NodeId],
+        event: &mut DomEvent,
+        _document: &mut dyn Document,
+        _state: &mut EventState,
+    ) {
+        for node in chain {
+            // Cloned out: a handler may add handlers (a row made in it).
+            let handlers: Vec<Handler> = (self.0.handlers.borrow().get(node).into_iter().flatten())
+                .filter(|(name, _)| *name == event.name())
+                .map(|(_, handler)| handler.clone())
+                .collect();
+            for handler in handlers {
+                handler(event);
+            }
+            if !event.bubbles {
+                break;
+            }
+        }
+    }
+}
+
+/// A press and a release of the main button at a point of the page: what a
+/// test drives the document's hit testing and dispatch with.
+pub fn click_at(app: &App, x: f32, y: f32) {
+    use blitz_traits::events::{
+        BlitzPointerEvent, BlitzPointerId, MouseEventButton, MouseEventButtons, PointerCoords,
+    };
+    let event = |buttons| BlitzPointerEvent {
+        id: BlitzPointerId::Mouse,
+        is_primary: true,
+        coords: PointerCoords {
+            page_x: x,
+            page_y: y,
+            screen_x: x,
+            screen_y: y,
+            client_x: x,
+            client_y: y,
+        },
+        button: MouseEventButton::Main,
+        buttons,
+        mods: Default::default(),
+        details: Default::default(),
+        element: Default::default(),
+        active_pointers: Default::default(),
+    };
+    app.dispatch(UiEvent::PointerMove(event(MouseEventButtons::None)));
+    app.dispatch(UiEvent::PointerDown(event(MouseEventButtons::Primary)));
+    app.dispatch(UiEvent::PointerUp(event(MouseEventButtons::None)));
+}

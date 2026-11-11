@@ -16,3 +16,5 @@
 
 # Playwright MCP page-snapshot debris (session tooling output, never project content)
 .playwright-mcp/
+# A spike is its own workspace, with its own target/.
+/spikes/*/target/

@@ -1,0 +1,26 @@
+[package]
+name = "ui-foundation-spike"
+description = "Spike: run-once components over signals, writing a blitz-dom document."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Its own workspace: nothing here is part of Horizon's build or its gate.
+[workspace]
+
+[dependencies]
+blitz-dom = "=0.3.0-beta.4"
+blitz-traits = "=0.3.0-beta.4"
+reactive_graph = { version = "0.2", features = ["effects"] }
+any_spawner = { version = "0.3", features = ["futures-executor"] }
+blitz-paint = { version = "=0.3.0-beta.4", features = ["custom-widget"] }
+anyrender = "0.14"
+anyrender_vello_cpu = "0.18"
+png = "0.17"
+kurbo = "0.13"
+peniko = "0.6"
+blitz-shell = "=0.3.0-beta.4"
+anyrender_vello = "0.15"
+
+[profile.release]
+opt-level = 3
