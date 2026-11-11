@@ -12,6 +12,7 @@ mod host;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::SystemTime;
 
 use gpui::*;
 use gpui_wit_plugin::wasmtime::component::Component;
@@ -24,10 +25,11 @@ use crate::file_watch::{self, FileWatch};
 use crate::markdown::DocumentChanged;
 
 /// The runtime every extension view shares, and the components loaded so
-/// far, by the file each came from.
+/// far, by the file each came from and when that file was written: a
+/// rebuilt extension is what the next pane opened on it runs.
 struct Extensions {
     runtime: Rc<Runtime>,
-    components: HashMap<PathBuf, Component>,
+    components: HashMap<PathBuf, (Option<SystemTime>, Component)>,
 }
 
 impl Global for Extensions {}
@@ -76,12 +78,15 @@ impl ExtensionView {
     ) -> Result<Entity<Self>, String> {
         let extensions = extensions(cx)?;
         let runtime = extensions.runtime.clone();
+        let written = std::fs::metadata(wasm)
+            .and_then(|file| file.modified())
+            .ok();
         let component = match extensions.components.get(wasm) {
-            Some(component) => component.clone(),
-            None => {
+            Some((loaded, component)) if *loaded == written => component.clone(),
+            _ => {
                 let component = (runtime.load(wasm))
                     .map_err(|error| format!("{}: {error:#}", wasm.display()))?;
-                (extensions.components).insert(wasm.to_path_buf(), component.clone());
+                (extensions.components).insert(wasm.to_path_buf(), (written, component.clone()));
                 component
             }
         };

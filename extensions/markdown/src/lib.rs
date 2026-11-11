@@ -109,11 +109,13 @@ impl Markdown {
             "k" | "up" => self.scroll.scroll_by(-line, 0.),
             "space" | "pagedown" => self.scroll.scroll_by(0., 0.8),
             "pageup" => self.scroll.scroll_by(0., -0.8),
-            "backspace" | "h" | "left" => self.back(),
+            "backspace" | "h" | "left" => {
+                self.back();
+                cx.notify();
+            }
             _ => return,
         }
         cx.stop_propagation();
-        cx.notify();
     }
 
     fn header(&self, cx: &mut Cx<Self>) -> Option<Element> {

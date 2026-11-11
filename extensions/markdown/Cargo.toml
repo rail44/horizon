@@ -14,7 +14,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-gpui-wit-plugin-sdk = { git = "https://github.com/rail44/gpui-wit-plugin", rev = "3dcadb82023d539865d463eb61be679563fb7b8b" }
+gpui-wit-plugin-sdk = { git = "https://github.com/rail44/gpui-wit-plugin", rev = "29bbb17dbec4b59146f85bcbdca76dc420a48dcd" }
 # For Horizon's own interface (`../wit`), imported beside the plugin world.
 wit-bindgen = "0.63"
 
