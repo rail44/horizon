@@ -41,16 +41,11 @@ pub(super) struct HostData {
     pub(super) requests: Vec<Request>,
 }
 
-fn hex(color: Hsla) -> String {
+/// A color as `0xRRGGBBAA`, which GPUI's `rgba` reads.
+fn packed(color: Hsla) -> u32 {
     let color = Rgba::from(color);
-    let channel = |value: f32| (value * 255.0).round() as u8;
-    format!(
-        "#{:02x}{:02x}{:02x}{:02x}",
-        channel(color.r),
-        channel(color.g),
-        channel(color.b),
-        channel(color.a)
-    )
+    let channel = |value: f32| (value * 255.0).round() as u32;
+    channel(color.r) << 24 | channel(color.g) << 16 | channel(color.b) << 8 | channel(color.a)
 }
 
 fn step(step: spec::Step) -> Step {
@@ -63,10 +58,10 @@ fn step(step: spec::Step) -> Step {
 impl host::Host for HostData {
     fn current_look(&mut self) -> Look {
         Look {
-            background: format!("#{:06x}", theme::background()),
-            text_primary: hex(theme::text_primary()),
-            text_muted: hex(theme::text_muted()),
-            danger: hex(theme::danger()),
+            background: theme::background() << 8 | 0xff,
+            text_primary: packed(theme::text_primary()),
+            text_muted: packed(theme::text_muted()),
+            danger: packed(theme::danger()),
             title: step(spec::t1()),
             body: step(spec::body()),
             meta: step(spec::meta()),

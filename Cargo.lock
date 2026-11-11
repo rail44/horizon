@@ -4045,7 +4045,7 @@ checksum = "99b18b06f5026b3d312488eacfdddbe78f82b4bf32bb2d2bc3186e31e552b797"
 [[package]]
 name = "gpui-wit-plugin"
 version = "0.1.0"
-source = "git+https://github.com/rail44/gpui-wit-plugin?rev=e42c94e479cb6d86373e423cce2b3971918f51e4#e42c94e479cb6d86373e423cce2b3971918f51e4"
+source = "git+https://github.com/rail44/gpui-wit-plugin?rev=45a4a497eb9328b3cc7327abbb66648c097b6157#45a4a497eb9328b3cc7327abbb66648c097b6157"
 dependencies = [
  "anyhow",
  "gpui-pre",

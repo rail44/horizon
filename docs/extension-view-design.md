@@ -27,7 +27,10 @@ this way; it runs beside the built-in Markdown view, not in place of it.
 - **`extensions/markdown/`** is the Markdown view as an extension, its own
   sub-workspace built for `wasm32-wasip2`. It is written with
   `gpui-wit-plugin-sdk` (same revision as the host), the way a GPUI view is
-  written: a struct with a `render` that runs again after `cx.notify()`.
+  written: a struct with a `render` that runs again after `cx.notify()`,
+  its elements styled with GPUI's own `Styled`. The SDK depends on `gpui`
+  for those style types, so an extension's first build compiles `gpui` for
+  `wasm32-wasip2`.
 
 ## Who does what, for the Markdown view
 

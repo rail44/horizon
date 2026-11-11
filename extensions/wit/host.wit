@@ -13,12 +13,12 @@ interface host {
         line-height: f32,
     }
 
-    /// The colors (`#rrggbbaa`) and measurements (pixels) views draw with.
+    /// The colors (`0xRRGGBBAA`) and measurements (pixels) views draw with.
     record look {
-        background: string,
-        text-primary: string,
-        text-muted: string,
-        danger: string,
+        background: u32,
+        text-primary: u32,
+        text-muted: u32,
+        danger: u32,
         title: step,
         body: step,
         meta: step,

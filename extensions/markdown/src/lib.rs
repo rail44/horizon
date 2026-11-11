@@ -2,7 +2,8 @@
 //! running text, with links to other Markdown files followed inside the
 //! same pane.
 //!
-//! The view holds what it shows (the file, the way back, a notice) and
+//! It is styled with GPUI's own `Styled`, as a view in `src/` is. The view
+//! holds what it shows (the file, the way back, a notice) and
 //! decides what a link or a key does. Horizon draws the Markdown itself
 //! and the controls (the `markdown`, `button` and `chip` components),
 //! reads the front matter and resolves links (`horizon:extension/host`),
@@ -129,12 +130,13 @@ impl Markdown {
             return None;
         }
         let mut header = div()
+            .flex()
             .flex_col()
             .flex_none()
             .w_full()
-            .px(look.pad_x)
-            .pt(look.gap_section)
-            .gap(look.gap_tight);
+            .px(px(look.pad_x))
+            .pt(px(look.gap_section))
+            .gap(px(look.gap_tight));
         if can_go_back {
             let back = component("button", json!({ "label": BACK })).on(
                 "click",
@@ -143,13 +145,13 @@ impl Markdown {
                     cx.notify();
                 }),
             );
-            header = header.child(div().flex_row().items_center().child(back));
+            header = header.child(div().flex().flex_row().items_center().child(back));
         }
         if let Some(title) = title {
             header = header.child(
                 sized(div(), &look.title)
-                    .font_weight(look.anchor_weight)
-                    .text_color(&look.text_primary)
+                    .font_weight(gpui::FontWeight(look.anchor_weight))
+                    .text_color(rgba(look.text_primary))
                     .child(title),
             );
         }
@@ -159,10 +161,11 @@ impl Markdown {
             });
             header = header.child(
                 div()
+                    .flex()
                     .flex_row()
                     .items_center()
                     .flex_wrap()
-                    .gap(look.gap_label)
+                    .gap(px(look.gap_label))
                     .children(chips),
             );
         }
@@ -171,26 +174,27 @@ impl Markdown {
 
     fn body(&self, cx: &mut Cx<Self>) -> Element {
         let look = &self.look;
-        let line = |text: &str, color: &str| {
+        let line = |text: &str, color: u32| {
             sized(div(), &look.meta)
-                .px(look.pad_x)
-                .pt(look.gap_section)
-                .text_color(color)
+                .px(px(look.pad_x))
+                .pt(px(look.gap_section))
+                .text_color(rgba(color))
                 .child(text)
         };
         let Some(path) = &self.path else {
-            return line(NO_DOCUMENT, &look.text_muted);
+            return line(NO_DOCUMENT, look.text_muted);
         };
         match &self.content {
-            Err(error) => line(error, &look.danger),
+            Err(error) => line(error, look.danger),
             Ok(document) => div()
+                .flex()
                 .flex_col()
                 .size_full()
                 .overflow_y_scroll()
                 .track_scroll(&self.scroll)
-                .px(look.pad_x)
-                .pt(look.gap_section)
-                .pb(look.gap_composer)
+                .px(px(look.pad_x))
+                .pt(px(look.gap_section))
+                .pb(px(look.gap_composer))
                 .child(
                     component(
                         "markdown",
@@ -210,7 +214,9 @@ impl Markdown {
 
 /// `element` with the type scale's `step`.
 fn sized(element: Element, step: &Step) -> Element {
-    element.text_size(step.size).line_height(step.line_height)
+    element
+        .text_size(px(step.size))
+        .line_height(px(step.line_height))
 }
 
 impl Render for Markdown {
@@ -227,11 +233,12 @@ impl Render for Markdown {
     fn render(&mut self, cx: &mut Cx<Self>) -> Element {
         let look = &self.look;
         let mut view = div()
+            .flex()
             .flex_col()
             .size_full()
-            .min_w(look.min_width)
-            .bg(&look.background)
-            .text_color(&look.text_primary)
+            .min_w(px(look.min_width))
+            .bg(rgba(look.background))
+            .text_color(rgba(look.text_primary))
             .on_key_down(cx.listener(|view, event, cx| view.on_key(event, cx)));
         if let Some(header) = self.header(cx) {
             view = view.child(header);
@@ -240,16 +247,16 @@ impl Render for Markdown {
             view = view.child(
                 sized(div(), &look.meta)
                     .flex_none()
-                    .px(look.pad_x)
-                    .pt(look.gap_tight)
-                    .text_color(&look.text_muted)
+                    .px(px(look.pad_x))
+                    .pt(px(look.gap_tight))
+                    .text_color(rgba(look.text_muted))
                     .child(notice.as_str()),
             );
         }
         view.child(
             sized(div(), &look.body)
                 .flex_1()
-                .min_h(0.)
+                .min_h_0()
                 .w_full()
                 .child(self.body(cx)),
         )
