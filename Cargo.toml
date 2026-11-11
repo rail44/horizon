@@ -115,7 +115,7 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 alacritty_terminal = "0.26.0"
 # Hosts extension views (`src/extension`): WASI components that describe
 # GPUI elements. Same revision as `extensions/markdown`'s SDK.
-gpui-wit-plugin = { git = "https://github.com/rail44/gpui-wit-plugin", rev = "29bbb17dbec4b59146f85bcbdca76dc420a48dcd" }
+gpui-wit-plugin = { git = "https://github.com/rail44/gpui-wit-plugin", rev = "532a86474ee5e8ff5de0b118a57da0cb2bec9b22" }
 crossbeam-channel = "0.5"
 futures = "0.3"
 # The OS event loop, renderer, IME integration, and frame scheduling
