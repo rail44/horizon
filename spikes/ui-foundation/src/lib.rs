@@ -30,7 +30,9 @@ pub mod agent;
 pub mod board;
 pub mod demo;
 pub mod markdown;
+pub mod pty;
 pub mod term;
+pub mod terminal;
 pub mod windowed;
 pub mod workspace;
 
@@ -56,6 +58,14 @@ struct Shared {
     focus: Cell<Option<(NodeId, bool)>>,
     /// Whether [`each_layout`] work asked for another layout.
     relayout: Cell<bool>,
+    /// The elements that take text without being text fields, each with
+    /// where its text is being written, in its own box.
+    text_targets: RefCell<HashMap<NodeId, TextArea>>,
+    /// The element the input method was last turned on for from here.
+    composing_for: Cell<Option<NodeId>>,
+    /// What takes a paste when the focus is on an element that is not a
+    /// text field.
+    pastes: RefCell<HashMap<NodeId, Rc<dyn Fn(&str)>>>,
     /// What runs after every layout, with the boxes that layout made.
     laid_out: RefCell<Vec<Box<dyn FnMut(&mut BaseDocument)>>>,
     /// What runs when the shell polls the document.
@@ -63,6 +73,9 @@ struct Shared {
 }
 
 type Deferred = Box<dyn FnOnce(&mut BaseDocument)>;
+/// Where an element's text is being written: x, y, width and height in
+/// the element's own box, or nowhere to show.
+type TextArea = Box<dyn Fn() -> Option<(f32, f32, f32, f32)>>;
 
 /// Runs `work` after every layout from now on, before the page is painted:
 /// the place for what depends on the boxes a change produced (keeping a
@@ -97,7 +110,7 @@ fn laid_out(shared: &Shared, document: &mut BaseDocument) {
             pending.extend(node.children.iter().rev().copied());
         }
     }
-    place_input_method(document);
+    place_input_method(shared, document);
 }
 
 thread_local! {
@@ -290,6 +303,23 @@ impl El {
         self
     }
 
+    /// Has the input method on while this element has the focus, with its
+    /// candidates by `area`: for an element that takes text and is not a
+    /// text field (a terminal). blitz-dom turns the input method on for its
+    /// own text fields only. What is composed arrives as `composition`
+    /// events.
+    pub fn takes_text(self, area: impl Fn() -> Option<(f32, f32, f32, f32)> + 'static) -> Self {
+        (shared().text_targets.borrow_mut()).insert(self.0, Box::new(area));
+        self
+    }
+
+    /// Runs `handler` with what is pasted while this element has the
+    /// focus. blitz-dom gives a paste to its own text fields only.
+    pub fn on_paste(self, handler: impl Fn(&str) + 'static) -> Self {
+        (shared().pastes.borrow_mut()).insert(self.0, Rc::new(handler));
+        self
+    }
+
     /// Hands the element's box to `widget`, which paints it itself: the
     /// place for content the document does not describe (a terminal's grid).
     pub fn widget(self, widget: impl blitz_dom::Widget + 'static) -> Self {
@@ -434,6 +464,9 @@ impl App {
             dispatched: RefCell::new(Vec::new()),
             focus: Cell::new(None),
             relayout: Cell::new(false),
+            text_targets: RefCell::new(HashMap::new()),
+            composing_for: Cell::new(None),
+            pastes: RefCell::new(HashMap::new()),
             laid_out: RefCell::new(Vec::new()),
             polled: RefCell::new(Vec::new()),
         });
@@ -500,6 +533,16 @@ impl App {
             }
             _ => None,
         };
+        if let UiEvent::Paste(text) = &event {
+            let focused = self.shared.document.borrow().get_focussed_node_id();
+            let taker = focused.and_then(|id| self.shared.pastes.borrow().get(&id).cloned());
+            if let Some(taker) = taker {
+                CURRENT.with(|current| *current.borrow_mut() = Some(self.shared.clone()));
+                taker(text);
+                self.run_effects();
+                return;
+            }
+        }
         let mut document = self.shared.document.clone();
         let handler = Handlers(self.shared.clone());
         EventDriver::new(&mut document as &mut dyn Document, handler).handle_ui_event(event);
@@ -581,11 +624,33 @@ fn ime_cursor_area(document: &BaseDocument) -> Option<(f32, f32, f32, f32)> {
 /// method's candidates would stay there while the caret moves on. Done
 /// after a layout, when the boxes it reads are those of the document as it
 /// is.
-fn place_input_method(document: &BaseDocument) {
+fn place_input_method(shared: &Shared, document: &BaseDocument) {
     if let Some((x, y, width, height)) = ime_cursor_area(document) {
-        document
-            .shell_provider
-            .set_ime_cursor_area(x, y, width, height);
+        (document.shell_provider).set_ime_cursor_area(x, y, width, height);
+        shared.composing_for.set(None);
+        return;
+    }
+    // An element that takes text without being a text field.
+    let focused = document.get_focussed_node_id();
+    let area = focused.and_then(|id| {
+        let area = shared.text_targets.borrow().get(&id)?();
+        let origin = document.get_node(id)?.absolute_position(0., 0.);
+        Some(area.map(|(x, y, width, height)| (origin.x + x, origin.y + y, width, height)))
+    });
+    match area {
+        Some(area) => {
+            if shared.composing_for.get() != focused {
+                document.shell_provider.set_ime_enabled(true);
+                shared.composing_for.set(focused);
+            }
+            if let Some((x, y, width, height)) = area {
+                (document.shell_provider).set_ime_cursor_area(x, y, width, height);
+            }
+        }
+        None if shared.composing_for.take().is_some() => {
+            document.shell_provider.set_ime_enabled(false);
+        }
+        None => {}
     }
 }
 

@@ -26,6 +26,13 @@ wgpu = "30"
 pollster = "0.4"
 pulldown-cmark = "0.13"
 keyboard-types = "0.8"
+# The terminal view: Horizon's own terminal core, and what
+# `horizon-terminald` puts around it.
+horizon-terminal-core = { path = "../../crates/horizon-terminal-core" }
+portable-pty = "0.9.0"
+crossbeam-channel = "0.5"
+termwiz = { version = "0.23.3", features = ["use_serde"] }
+unicode-width = "0.2"
 
 [profile.release]
 opt-level = 3

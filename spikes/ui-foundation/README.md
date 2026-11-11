@@ -53,6 +53,12 @@ The findings are in `docs/research/ui-foundation-candidates-2026-11-11.md`.
   commands, with the four views above in its panes; `tests/workspace.rs`
   drives it, and `src/bin/workspace.rs` shows it in a window or draws one
   frame.
+- `src/pty.rs`, `src/terminal.rs` — a real shell on a PTY behind Horizon's
+  own terminal core (`crates/horizon-terminal-core`), and the view that
+  takes keys, the input method, pastes, the mouse and its box's size to it
+  and paints its frames; `tests/terminal.rs` drives a real `sh`, and
+  `src/bin/live_terminal.rs` shows `$SHELL` in a window, draws one frame or
+  times a long output.
 - `src/term.rs` — a stand-in for a terminal's screen, drawn by hand, and the
   widget that puts it in a document.
 - `src/bin/terminal.rs` — what that screen costs to shape and draw, alone
