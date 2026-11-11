@@ -24,10 +24,14 @@ The findings are in `docs/research/ui-foundation-candidates-2026-11-11.md`.
 - `src/bin/window.rs` — the same layer in a window, for what a test cannot
   try: typing, the input method, hover, scrolling.
 
-- `vendor/blitz-shell/` — blitz-shell 0.3.0-beta.4 with one change, marked
-  in its `src/lib.rs`: the input method is enabled with its cursor area, so
-  that winit keeps the positions it is told afterwards. `Cargo.toml` puts
-  it in place of the published crate.
+- `vendor/blitz-shell/` — blitz-shell 0.3.0-beta.4 with two changes, each
+  marked where it is. In `src/lib.rs` the input method is enabled with its
+  cursor area, so that winit keeps the positions it is told afterwards. In
+  `src/window.rs` the borders that layout rounded to nothing at a fractional
+  display scale are given back after each resolve. `Cargo.toml` puts it in
+  place of the published crate.
+- `src/bin/observed.rs`, `src/bin/look.rs` — reproductions, without a
+  window, of what the window showed.
 
 ## Running
 

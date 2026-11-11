@@ -152,3 +152,38 @@ fn the_input_methods_area_follows_what_is_typed() {
         (bounds.x, bounds.y, bounds.width, bounds.height)
     );
 }
+
+#[test]
+fn thin_borders_survive_a_fractional_display_scale() {
+    use ui_foundation_spike::blitz_traits::shell::{ColorScheme, Viewport};
+
+    const BORDERED: &str = "
+        body { margin: 0; font-size: 15px; }
+        .column { display: flex; flex-direction: column; gap: 4px; padding: 16px; }
+        .row { padding: 4px 8px; border: 1px solid #d0d0d0; }
+    ";
+    let mut rows = Vec::new();
+    let app = App::new(1800, 1350, BORDERED, || {
+        let mut column = el("div").class("column");
+        for row in 0..12 {
+            let element = el("div").class("row").text(&format!("row {row}"));
+            rows.push(element);
+            column = column.child(element);
+        }
+        column
+    });
+    // 150 %, as a desktop set to it reports.
+    (app.document().borrow_mut()).set_viewport(Viewport::new(1800, 1350, 1.5, ColorScheme::Light));
+    app.resolve();
+
+    let document = app.document();
+    let document = document.borrow();
+    for (index, row) in rows.iter().enumerate() {
+        let border = document.get_node(row.0).unwrap().final_layout().border;
+        let sides = [border.top, border.right, border.bottom, border.left];
+        assert!(
+            sides.iter().all(|side| *side > 0.),
+            "row {index} has a side without a border: {sides:?}"
+        );
+    }
+}

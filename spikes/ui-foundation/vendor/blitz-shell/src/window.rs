@@ -300,6 +300,7 @@ impl<Rend: WindowRenderer> View<Rend> {
         let (width, height) = {
             let mut inner = self.doc.inner_mut();
             inner.resolve(animation_time);
+            restore_thin_borders(&mut inner);
             inner.viewport().window_size
         };
 
@@ -332,6 +333,7 @@ impl<Rend: WindowRenderer> View<Rend> {
         let animation_time = self.current_animation_time();
         let mut inner = self.doc.inner_mut();
         inner.resolve(animation_time);
+            restore_thin_borders(&mut inner);
         let (width, height) = inner.viewport().window_size;
         let scale = inner.viewport().scale_f64();
         let insets = self.safe_area_insets;
@@ -405,6 +407,7 @@ impl<Rend: WindowRenderer> View<Rend> {
 
         let mut inner = self.doc.inner_mut();
         inner.resolve(animation_time);
+            restore_thin_borders(&mut inner);
 
         // Unregister resources (e.g. textures) from dropped custom widget nodes
         #[cfg(feature = "custom-widget")]
@@ -874,6 +877,45 @@ impl<Rend: WindowRenderer> View<Rend> {
             WindowEvent::DragDropped { .. } => {},
             WindowEvent::DragLeft { .. } => {},
             _ => {}
+        }
+    }
+}
+
+/// Added to blitz-shell 0.3.0-beta.4: gives back the borders layout rounded
+/// away, after each resolve and before the document is painted.
+///
+/// At a fractional display scale a border one device pixel wide is less
+/// than one CSS pixel, and blitz-dom rounds layout to whole CSS pixels from
+/// each box's position: where both edges of such a border land on the same
+/// pixel, its width comes out 0 and that side is not drawn. A side that has
+/// a width before rounding and none after is given one device pixel. The
+/// same correction is in the spike's own `resolve`, for when no shell runs.
+fn restore_thin_borders(document: &mut blitz_dom::BaseDocument) {
+    let scale = document.viewport().scale();
+    if scale.fract() == 0. {
+        return;
+    }
+    let device_pixel = 1. / scale;
+    let mut pending = vec![document.root_node().id];
+    while let Some(id) = pending.pop() {
+        let Some(node) = document.get_node_mut(id) else {
+            continue;
+        };
+        pending.extend(node.children.iter().copied());
+        if node.element_data().is_none() {
+            continue;
+        }
+        let unrounded = node.unrounded_layout().border;
+        let border = &mut node.final_layout_mut().border;
+        for (side, before) in [
+            (&mut border.top, unrounded.top),
+            (&mut border.right, unrounded.right),
+            (&mut border.bottom, unrounded.bottom),
+            (&mut border.left, unrounded.left),
+        ] {
+            if before > 0. && *side == 0. {
+                *side = device_pixel;
+            }
         }
     }
 }
