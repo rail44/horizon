@@ -37,6 +37,12 @@ The findings are in `docs/research/ui-foundation-candidates-2026-11-11.md`.
   own front matter reader and link resolver (`src/markdown/document.rs`);
   `tests/markdown.rs` holds it to what the GPUI view's tests hold that to,
   and `src/bin/markdown.rs` opens a file in a window.
+- `src/agent.rs` — Horizon's agent pane on this stack, over Horizon's own
+  display model and labels (`src/agent/view/{display,chrome}.rs`);
+  `src/agent/sample.rs` is a made-up session to show in it, `tests/agent.rs`
+  drives it with real input events, and `src/bin/agent.rs` shows it in a
+  window with a turn streaming in, times an update against histories of
+  several lengths, or draws one frame.
 - `src/term.rs` — a stand-in for a terminal's screen, drawn by hand, and the
   widget that puts it in a document.
 - `src/bin/terminal.rs` — what that screen costs to shape and draw, alone

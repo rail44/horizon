@@ -277,7 +277,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl) -> (El, Markdown) {
 }
 
 /// Markdown as elements, a link calling `on_link` with where it points.
-fn render(source: &str, on_link: Rc<dyn Fn(&str)>) -> El {
+pub(crate) fn render(source: &str, on_link: Rc<dyn Fn(&str)>) -> El {
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     // The elements open at this point of the text, innermost last.

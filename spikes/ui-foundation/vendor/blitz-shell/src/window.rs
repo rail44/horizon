@@ -882,6 +882,18 @@ impl<Rend: WindowRenderer> View<Rend> {
     }
 }
 
+thread_local! {
+    static AFTER_RESOLVE: std::cell::Cell<Option<fn(&mut blitz_dom::BaseDocument)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Added to upstream's blitz-shell: `work` runs after each resolve and
+/// before the document is painted, for what depends on the layout a change
+/// produced.
+pub fn set_after_resolve(work: fn(&mut blitz_dom::BaseDocument)) {
+    AFTER_RESOLVE.set(Some(work));
+}
+
 /// Added to upstream's blitz-shell: gives back the borders layout rounded
 /// away, after each resolve and before the document is painted.
 ///
@@ -892,6 +904,9 @@ impl<Rend: WindowRenderer> View<Rend> {
 /// a width before rounding and none after is given one device pixel. The
 /// same correction is in the spike's own `resolve`, for when no shell runs.
 fn restore_thin_borders(document: &mut blitz_dom::BaseDocument) {
+    if let Some(work) = AFTER_RESOLVE.get() {
+        work(document);
+    }
     let scale = document.viewport().scale();
     if scale.fract() == 0. {
         return;

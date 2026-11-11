@@ -30,8 +30,9 @@ keyboard-types = "0.8"
 [profile.release]
 opt-level = 3
 
-# blitz-shell with one change, marked in `vendor/blitz-shell/src/lib.rs`:
-# the input method is enabled with its cursor area.
+# blitz-shell with three changes, each marked where it is made: the input
+# method is enabled with its cursor area, thin borders are given back after
+# each resolve, and a function the embedder sets runs after each resolve.
 [patch.crates-io]
 blitz-shell = { path = "vendor/blitz-shell" }
 # Blitz at the head of upstream's fix for hit testing through a clip

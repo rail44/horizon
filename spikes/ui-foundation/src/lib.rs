@@ -10,8 +10,8 @@
 //! `blitz-dom` owns everything below: CSS (Stylo), layout (Taffy), text
 //! (Parley), hit testing, focus and event dispatch.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -26,6 +26,7 @@ use reactive_graph::effect::Effect;
 use reactive_graph::graph::untrack;
 use reactive_graph::owner::Owner;
 
+pub mod agent;
 pub mod demo;
 pub mod markdown;
 pub mod term;
@@ -44,9 +45,47 @@ struct Shared {
     /// What handlers asked to do with the document itself, done once the
     /// event that ran them has been dispatched.
     later: RefCell<Vec<Deferred>>,
+    /// What runs after every layout, with the boxes that layout made.
+    laid_out: RefCell<Vec<Box<dyn FnMut(&mut BaseDocument)>>>,
+    /// What runs when the shell polls the document.
+    polled: RefCell<Vec<Box<dyn FnMut(&std::task::Waker)>>>,
 }
 
 type Deferred = Box<dyn FnOnce(&mut BaseDocument)>;
+
+/// Runs `work` after every layout from now on, before the page is painted:
+/// the place for what depends on the boxes a change produced (keeping a
+/// scrolled box at its end as its content grows).
+pub fn each_layout(work: impl FnMut(&mut BaseDocument) + 'static) {
+    shared().laid_out.borrow_mut().push(Box::new(work));
+}
+
+/// What a shell calls after it has resolved the document itself, in place
+/// of [`App::resolve`]: the [`each_layout`] work.
+pub fn after_resolve(document: &mut BaseDocument) {
+    let Some(shared) = CURRENT.with(|current| current.borrow().clone()) else {
+        return;
+    };
+    for work in shared.laid_out.borrow_mut().iter_mut() {
+        work(document);
+    }
+}
+
+thread_local! {
+    static PREVENTED: Cell<bool> = const { Cell::new(false) };
+    static STOPPED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// From a handler: the document does not do what it would have done with
+/// the event itself (a text field does not take the key).
+pub fn prevent_default() {
+    PREVENTED.set(true);
+}
+
+/// From a handler: the event goes to no element further out.
+pub fn stop_propagation() {
+    STOPPED.set(true);
+}
 
 /// Does `work` on the document once the event being handled has been
 /// dispatched: a handler runs while the document is busy dispatching, so
@@ -226,6 +265,7 @@ impl El {
             let order: Vec<NodeId> = next.iter().map(|(_, node, _)| *node).collect();
             // The nodes that stay, in the order they were in and are in now.
             let stayed = |nodes: &[NodeId], other: &[NodeId]| -> Vec<NodeId> {
+                let other: HashSet<NodeId> = other.iter().copied().collect();
                 (nodes.iter().copied())
                     .filter(|node| other.contains(node))
                     .collect()
@@ -274,6 +314,8 @@ impl App {
             document: Rc::new(RefCell::new(document)),
             handlers: RefCell::new(HashMap::new()),
             later: RefCell::new(Vec::new()),
+            laid_out: RefCell::new(Vec::new()),
+            polled: RefCell::new(Vec::new()),
         });
         CURRENT.with(|current| *current.borrow_mut() = Some(shared.clone()));
         let body = el("body");
@@ -323,9 +365,25 @@ impl App {
 
     /// Restyles and lays out what the writes since the last call touched.
     pub fn resolve(&self) {
+        self.resolve_at(0.0);
+    }
+
+    /// [`resolve`](Self::resolve) with the clock CSS animations run on at
+    /// `seconds`.
+    pub fn resolve_at(&self, seconds: f64) {
         let mut document = self.shared.document.borrow_mut();
-        document.resolve(0.0);
+        document.resolve(seconds);
         restore_thin_borders(&mut document);
+        for work in self.shared.laid_out.borrow_mut().iter_mut() {
+            work(&mut document);
+        }
+    }
+
+    /// Runs `work` whenever the shell polls the document, with the waker
+    /// that makes it poll again: how something outside the document (a
+    /// session's updates, a timer) gets its changes in and drawn.
+    pub fn on_poll(&self, work: impl FnMut(&std::task::Waker) + 'static) {
+        self.shared.polled.borrow_mut().push(Box::new(work));
     }
 
     /// Hands the document an input event, runs the handlers it reaches and
@@ -425,7 +483,7 @@ impl EventHandler for Handlers {
         chain: &[NodeId],
         event: &mut DomEvent,
         _document: &mut dyn Document,
-        _state: &mut EventState,
+        state: &mut EventState,
     ) {
         for node in chain {
             // Cloned out: a handler may add handlers (a row made in it).
@@ -436,7 +494,10 @@ impl EventHandler for Handlers {
             for handler in handlers {
                 handler(event);
             }
-            if !event.bubbles {
+            if PREVENTED.replace(false) {
+                state.prevent_default();
+            }
+            if STOPPED.replace(false) || !event.bubbles {
                 break;
             }
         }
@@ -446,6 +507,16 @@ impl EventHandler for Handlers {
 /// A press and a release of the main button at a point of the page: what a
 /// test drives the document's hit testing and dispatch with.
 pub fn click_at(app: &App, x: f32, y: f32) {
+    pointer(app, x, y, true);
+}
+
+/// The pointer moved to a point of the page: what the wheel then scrolls
+/// is what is under it.
+pub fn move_to(app: &App, x: f32, y: f32) {
+    pointer(app, x, y, false);
+}
+
+fn pointer(app: &App, x: f32, y: f32, press: bool) {
     use blitz_traits::events::{
         BlitzPointerEvent, BlitzPointerId, MouseEventButton, MouseEventButtons, PointerCoords,
     };
@@ -468,6 +539,9 @@ pub fn click_at(app: &App, x: f32, y: f32) {
         active_pointers: Default::default(),
     };
     app.dispatch(UiEvent::PointerMove(event(MouseEventButtons::None)));
+    if !press {
+        return;
+    }
     app.dispatch(UiEvent::PointerDown(event(MouseEventButtons::Primary)));
     app.dispatch(UiEvent::PointerUp(event(MouseEventButtons::None)));
 }
@@ -487,5 +561,18 @@ impl Document for Live {
 
     fn handle_ui_event(&mut self, event: UiEvent) {
         self.0.dispatch(event);
+    }
+
+    fn poll(&mut self, task_context: Option<std::task::Context>) -> bool {
+        let Some(context) = task_context else {
+            return false;
+        };
+        let polled = !self.0.shared.polled.borrow().is_empty();
+        CURRENT.with(|current| *current.borrow_mut() = Some(self.0.shared.clone()));
+        for work in self.0.shared.polled.borrow_mut().iter_mut() {
+            work(context.waker());
+        }
+        self.0.run_effects();
+        polled
     }
 }
