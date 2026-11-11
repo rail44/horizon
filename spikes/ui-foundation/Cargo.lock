@@ -3553,7 +3553,9 @@ dependencies = [
  "parley",
  "peniko",
  "png 0.17.16",
+ "pollster",
  "reactive_graph",
+ "wgpu",
 ]
 
 [[package]]
