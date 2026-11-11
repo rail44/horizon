@@ -362,6 +362,12 @@ The shell is GPUI-based (the Floem shell retired at tag
   `.md` links in place. The file it shows is persisted on the model's
   pane (`Pane::document`). `file_watch.rs` is the single-file watch it
   shares with the preview pane.
+- `extension/` — extension views: a pane's view drawn by a WASI
+  component (`extensions/`, each its own sub-workspace built for
+  `wasm32-wasip2`) through `gpui-wit-plugin`, calling Horizon through
+  `extensions/wit/host.wit`. The Markdown view is the first, run beside the
+  built-in one with `HORIZON_MARKDOWN_EXTENSION=<component>`. Its tests
+  build the extension themselves. See `docs/extension-view-design.md`.
 - `wiki/` — the wiki view: a page of the project wiki
   (`crates/horizon-wiki`, an extension package outside the repository's
   core) drawn like the Markdown view, with the owner's comment threads

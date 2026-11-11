@@ -1,0 +1,74 @@
+package horizon:extension@0.1.0;
+
+/// What Horizon offers an extension's view beyond drawing.
+///
+/// Besides these calls, Horizon tells the view (as events on the view as a
+/// whole): `open` with a path, when the pane is pointed at another file
+/// from outside; `file-changed`, when the watched file changed; and
+/// `look-changed`, when the theme or the font size did.
+interface host {
+    /// A step of the type scale, in pixels.
+    record step {
+        size: f32,
+        line-height: f32,
+    }
+
+    /// The colors (`#rrggbbaa`) and measurements (pixels) views draw with.
+    record look {
+        background: string,
+        text-primary: string,
+        text-muted: string,
+        danger: string,
+        title: step,
+        body: step,
+        meta: step,
+        anchor-weight: f32,
+        pad-x: f32,
+        gap-label: f32,
+        gap-tight: f32,
+        gap-section: f32,
+        gap-composer: f32,
+        min-width: f32,
+    }
+
+    current-look: func() -> look;
+
+    /// The file the pane was opened on.
+    document: func() -> option<string>;
+
+    /// Records the file the pane shows now, for its title and a restart.
+    set-document: func(path: string);
+
+    /// Asks for `file-changed` when `path` changes, instead of the file
+    /// watched before.
+    watch: func(path: string);
+
+    /// Hands a URL to the desktop.
+    open-url: func(url: string);
+
+    /// A file's source, split into its front matter and the Markdown body.
+    record parsed {
+        title: option<string>,
+        /// Every other top-level scalar of the front matter, in file order.
+        fields: list<tuple<string, string>>,
+        body: string,
+    }
+
+    parse: func(source: string) -> parsed;
+
+    variant link {
+        /// Another Markdown file.
+        document(string),
+        /// A URL with a scheme.
+        external(string),
+        /// An in-page anchor, or a local file that is not Markdown.
+        unsupported,
+    }
+
+    /// Where `href`, a link in the document at `current`, points.
+    resolve-link: func(current: string, href: string) -> link;
+}
+
+world extension {
+    import host;
+}

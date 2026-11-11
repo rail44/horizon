@@ -1,0 +1,24 @@
+[package]
+name = "horizon-markdown-extension"
+description = "Horizon's Markdown view, as an extension."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Its own sub-workspace: built for `wasm32-wasip2`, and excluded from the
+# root workspace so `cargo build --workspace` never builds it for the host.
+#   cargo build --release --target wasm32-wasip2
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+gpui-wit-plugin-sdk = { git = "https://github.com/rail44/gpui-wit-plugin", rev = "3dcadb82023d539865d463eb61be679563fb7b8b" }
+# For Horizon's own interface (`../wit`), imported beside the plugin world.
+wit-bindgen = "0.63"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

@@ -4043,6 +4043,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99b18b06f5026b3d312488eacfdddbe78f82b4bf32bb2d2bc3186e31e552b797"
 
 [[package]]
+name = "gpui-wit-plugin"
+version = "0.1.0"
+source = "git+https://github.com/rail44/gpui-wit-plugin?rev=3dcadb82023d539865d463eb61be679563fb7b8b#3dcadb82023d539865d463eb61be679563fb7b8b"
+dependencies = [
+ "anyhow",
+ "gpui-pre",
+ "serde_json",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "granit-parser"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4252,6 +4264,7 @@ dependencies = [
  "gpui-kit-assets",
  "gpui-pre",
  "gpui-pre-platform",
+ "gpui-wit-plugin",
  "horizon-acp",
  "horizon-agent",
  "horizon-board",

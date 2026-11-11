@@ -1,6 +1,8 @@
 /target/
 # The preview plugin is its own sub-workspace, so it has its own target/.
 /preview-plugin/target/
+# So is each extension.
+/extensions/*/target/
 # So are the DuckDB extensions.
 /duckdb-ext/target/
 # And its two host workspaces.

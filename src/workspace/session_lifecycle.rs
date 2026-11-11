@@ -12,6 +12,7 @@ use crate::agent::{AgentPane, AgentSession};
 use crate::board::events::{BoardSessionsRefreshed, OpenTaskSession, OpenTaskThread};
 use crate::board::sessions::BoardShellView;
 use crate::board::{BoardListView, BoardThreadView};
+use crate::extension::ExtensionView;
 use crate::markdown::{DocumentChanged, MarkdownView};
 use crate::preview::PreviewPane;
 use crate::runtime::{AgentSessionHandle, AgentdHandle, TerminalSessionHandle, TerminaldHandle};
@@ -421,6 +422,24 @@ impl WorkspaceShell {
                     .workspace
                     .pane_document(pane_id)
                     .map(|path| path.to_path_buf());
+                // With `HORIZON_MARKDOWN_EXTENSION` naming the Markdown
+                // extension's component, that draws the pane instead of
+                // the built-in view. One that does not load falls back.
+                let extension = std::env::var_os("HORIZON_MARKDOWN_EXTENSION").and_then(|wasm| {
+                    ExtensionView::new(wasm.as_ref(), document.clone(), window, cx)
+                        .map_err(|error| eprintln!("markdown extension: {error}"))
+                        .ok()
+                });
+                if let Some(view) = extension {
+                    let moved =
+                        cx.subscribe(&view, move |shell, _, event: &DocumentChanged, cx| {
+                            shell.record_markdown_document(pane_id, event.0.clone(), cx);
+                        });
+                    self.view_subscriptions.insert(pane_id, vec![moved]);
+                    self.panes
+                        .insert(pane_id, PaneView::markdown_extension(view));
+                    continue;
+                }
                 let view = cx.new(|cx| MarkdownView::new(document, window, cx));
                 let moved = cx.subscribe(&view, move |shell, _, event: &DocumentChanged, cx| {
                     shell.record_markdown_document(pane_id, event.0.clone(), cx);

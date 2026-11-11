@@ -32,6 +32,8 @@ mod desktop_notify;
 #[cfg(not(target_family = "wasm"))]
 mod entry;
 #[cfg(not(target_family = "wasm"))]
+mod extension;
+#[cfg(not(target_family = "wasm"))]
 mod file_watch;
 #[cfg(not(target_family = "wasm"))]
 mod input_trace;

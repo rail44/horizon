@@ -25,10 +25,14 @@ impl WorkspaceShell {
             return Err(format!("not a file: {}", path.display()));
         }
         if let Some(pane_id) = self.workspace.document_pane(ViewKind::Markdown, &path) {
-            if let Some(PaneView::Cached(CachedPaneLeaf::Markdown(view))) =
-                self.panes.get(&pane_id).cloned()
-            {
-                view.update(cx, |view, cx| view.open(path, cx));
+            match self.panes.get(&pane_id).cloned() {
+                Some(PaneView::Cached(CachedPaneLeaf::Markdown(view))) => {
+                    view.update(cx, |view, cx| view.open(path, cx));
+                }
+                Some(PaneView::Cached(CachedPaneLeaf::MarkdownExtension(view))) => {
+                    view.update(cx, |view, cx| view.open(path, cx));
+                }
+                _ => {}
             }
             if activate {
                 if let Some((tab_index, pane_index)) = self.workspace.pane_position(pane_id) {

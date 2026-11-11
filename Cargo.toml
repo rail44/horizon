@@ -24,7 +24,7 @@ members = [
 # would otherwise pull it into this workspace and build it for the host.
 # The DuckDB extensions are a sub-workspace too (pinned to DuckDB's unstable
 # C API v2 and its own libduckdb-sys features; see duckdb-ext/README.md).
-exclude = ["preview-plugin", "duckdb-ext"]
+exclude = ["preview-plugin", "duckdb-ext", "extensions/markdown"]
 
 # The one workspace-wide remoc pin (docs/remoc-adoption-design.md §1,
 # "remoc version policy"): exact version (`=`), reviewed against the remoc
@@ -113,6 +113,9 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 # a module gated `#[cfg(not(target_family = "wasm"))]` in src/lib.rs.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 alacritty_terminal = "0.26.0"
+# Hosts extension views (`src/extension`): WASI components that describe
+# GPUI elements. Same revision as `extensions/markdown`'s SDK.
+gpui-wit-plugin = { git = "https://github.com/rail44/gpui-wit-plugin", rev = "3dcadb82023d539865d463eb61be679563fb7b8b" }
 crossbeam-channel = "0.5"
 futures = "0.3"
 # The OS event loop, renderer, IME integration, and frame scheduling

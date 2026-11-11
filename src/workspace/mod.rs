@@ -23,6 +23,7 @@ use horizon_workspace::{PaneId, SessionId, Workspace, WORKSPACE_STATE_VERSION};
 
 use crate::agent::{AgentPane, AgentSession};
 use crate::board::{BoardListView, BoardThreadView};
+use crate::extension::ExtensionView;
 use crate::markdown::MarkdownView;
 use crate::model_picker::ModelPickerDelegate;
 use crate::palette::PaletteDelegate;
@@ -214,6 +215,8 @@ enum CachedPaneLeaf {
     BoardThread(Entity<BoardThreadView>),
     Preview(Entity<PreviewPane>),
     Markdown(Entity<MarkdownView>),
+    /// A Markdown pane drawn by the Markdown extension instead.
+    MarkdownExtension(Entity<ExtensionView>),
     Wiki(Entity<WikiView>),
 }
 
@@ -234,6 +237,7 @@ impl CachedPaneLeaf {
             Self::BoardThread(view) => view.focus_handle(cx),
             Self::Preview(view) => view.focus_handle(cx),
             Self::Markdown(view) => view.focus_handle(cx),
+            Self::MarkdownExtension(view) => view.focus_handle(cx),
             Self::Wiki(view) => view.focus_handle(cx),
         }
     }
@@ -247,6 +251,7 @@ impl CachedPaneLeaf {
             Self::BoardThread(view) => view.clone().cached(style()).into_any_element(),
             Self::Preview(view) => view.clone().cached(style()).into_any_element(),
             Self::Markdown(view) => view.clone().cached(style()).into_any_element(),
+            Self::MarkdownExtension(view) => view.clone().cached(style()).into_any_element(),
             Self::Wiki(view) => view.clone().cached(style()).into_any_element(),
         }
     }
@@ -293,6 +298,10 @@ impl PaneView {
 
     fn markdown(view: Entity<MarkdownView>) -> Self {
         Self::Cached(CachedPaneLeaf::Markdown(view))
+    }
+
+    fn markdown_extension(view: Entity<ExtensionView>) -> Self {
+        Self::Cached(CachedPaneLeaf::MarkdownExtension(view))
     }
 
     fn wiki(view: Entity<WikiView>) -> Self {

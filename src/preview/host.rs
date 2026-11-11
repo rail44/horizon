@@ -44,6 +44,20 @@ pub(crate) fn publish_font_size(cx: &mut App) {
     cx.set_global(PreviewFontSizeInput);
 }
 
+/// Runs `on_change` on `cx`'s entity whenever the theme or the live font
+/// size is published: what a view that keeps colors or sizes outside its
+/// own render (a preview's guest, an extension's plugin) refreshes on.
+pub(crate) fn observe_look<V: 'static>(
+    cx: &mut gpui::Context<V>,
+    on_change: impl Fn(&mut V, &mut gpui::Context<V>) + Clone + 'static,
+) -> [Subscription; 2] {
+    let on_theme = on_change.clone();
+    [
+        cx.observe_global::<PreviewThemeInput>(move |view, cx| on_theme(view, cx)),
+        cx.observe_global::<PreviewFontSizeInput>(move |view, cx| on_change(view, cx)),
+    ]
+}
+
 fn current_theme_json(cx: &App) -> String {
     match cx.try_global::<PreviewThemeInput>() {
         Some(input) => input.json.clone(),
