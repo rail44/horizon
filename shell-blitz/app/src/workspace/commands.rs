@@ -1,11 +1,13 @@
 //! The commands this shell carries out, of `horizon-workspace`'s command
 //! model: the palette and the mode's keys are bindings to them.
 
+use std::path::Path;
+
 use horizon_ui::reactive_graph::traits::WithUntracked;
 use horizon_workspace::commands::{CommandId, CommandState};
-use horizon_workspace::{CloseCursorOutcome, SessionKind, SplitAxis};
+use horizon_workspace::{CloseCursorOutcome, SessionId, SessionKind, SplitAxis};
 
-use super::Shell;
+use super::{Modal, Shell, Start};
 
 /// The commands of the model this shell carries out so far: what the
 /// palette lists.
@@ -18,6 +20,8 @@ pub(super) const CARRIED_OUT: &[CommandId] = &[
     CommandId::CloseActiveTab,
     CommandId::TerminateActiveSession,
     CommandId::TerminateAllDetachedSessions,
+    CommandId::OpenSessionManager,
+    CommandId::OpenTerminalInSessionDirectory,
 ];
 
 impl Shell {
@@ -32,15 +36,25 @@ impl Shell {
             has_pending_approval: false,
             has_turn_in_flight: false,
             has_paused_turn: false,
-            has_active_session_directory: false,
+            has_active_session_directory: (model.active_session_id())
+                .is_some_and(|session| model.session_directory(session).is_some()),
         })
     }
 
     pub fn execute(&self, command: CommandId) {
+        let kept = self.kept();
+        // A new terminal's shell starts where the one it was made from is.
+        let begin = |made: SessionId, from: Option<SessionId>| {
+            if let Some(from) = from {
+                (kept.starting.borrow_mut()).insert(made, Start::Beside(from));
+            }
+        };
         match command {
             CommandId::NewTab => self.change(|model| {
+                let from = model.active_terminal_session_id();
                 model.exit_workspace_mode();
-                model.open_tab_with_new_session_activated(SessionKind::Terminal, true);
+                let made = model.open_tab_with_new_session_activated(SessionKind::Terminal, true);
+                begin(made, from);
             }),
             CommandId::SplitRight | CommandId::SplitDown => {
                 let axis = match command {
@@ -48,9 +62,14 @@ impl Shell {
                     _ => SplitAxis::Vertical,
                 };
                 self.change(|model| {
+                    let from = model.active_terminal_session_id();
                     if let Some(target) = model.active_session_id() {
                         let kind = SessionKind::Terminal;
-                        model.split_session_with_new_session(target, kind, axis, true);
+                        if let Some(made) =
+                            model.split_session_with_new_session(target, kind, axis, true)
+                        {
+                            begin(made, from);
+                        }
                     }
                     model.exit_workspace_mode();
                 });
@@ -72,6 +91,16 @@ impl Shell {
                     model.terminate_session(session.id);
                 }
             }),
+            CommandId::OpenSessionManager => self.open(Modal::Sessions),
+            CommandId::OpenTerminalInSessionDirectory => {
+                let directory = self.model.with_untracked(|model| {
+                    let session = model.active_session_id()?;
+                    model.session_directory(session).map(Path::to_path_buf)
+                });
+                if let Some(directory) = directory {
+                    self.open_terminal_in(directory);
+                }
+            }
             _ => {}
         }
     }

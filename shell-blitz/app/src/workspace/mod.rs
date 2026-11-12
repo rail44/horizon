@@ -9,20 +9,25 @@
 //!
 //! So far a pane shows a terminal. Creating one goes straight to a
 //! terminal, where the GPUI shell asks which view first.
+//!
+//! Closing a pane lets go of its view and keeps its session, which the
+//! session manager lists and puts back in a pane; a session ends when it
+//! is terminated, or when the shell in it goes.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::task::Waker;
 
-use horizon_terminal_core::TerminalCommand;
+use horizon_terminal_core::{TerminalCommand, TerminalUpdate};
 use horizon_theme_css::TerminalLook;
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::{LocalStorage, Owner, StoredValue};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{
-    Get, GetUntracked, Track, Update, With, WithUntracked, WithValue,
+    Get, GetUntracked, Set, Track, Update, With, WithUntracked, WithValue,
 };
 use horizon_ui::{El, each_layout, el, relayout};
 use horizon_workspace::types::TabSummary;
@@ -34,6 +39,8 @@ mod arrangement;
 mod commands;
 mod keys;
 mod palette;
+mod picker;
+mod sessions;
 
 // Every rule sits under the view's own class: the page's style sheet is one
 // for all the views on it.
@@ -72,22 +79,27 @@ pub const CSS: &str = "
         .scrim { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 100;
                  display: flex; justify-content: center; align-items: flex-start;
                  padding-top: 97px; }
-        .palette { width: 560px; display: flex; flex-direction: column; overflow: hidden;
-                   background: var(--background); border: 1px solid var(--border);
-                   border-radius: 8px;
-                   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1); }
-        .search { position: relative; display: flex; align-items: center; height: 32px;
-                  padding: 0 12px; border-bottom: 1px solid var(--border); }
+        .picker { width: 560px; max-height: 400px; display: flex; flex-direction: column;
+                  overflow: hidden; background: var(--background);
+                  border: 1px solid var(--border); border-radius: 8px;
+                  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1); }
+        .search { flex: none; position: relative; display: flex; align-items: center;
+                  height: 32px; padding: 0 12px; border-bottom: 1px solid var(--border); }
         .search input { flex: 1; font-family: var(--font-family);
                         font-size: var(--body-size); line-height: 20px; padding: 0;
                         border: none; outline: none; background: transparent;
                         color: var(--text); }
         .search .placeholder { position: absolute; left: 12px; top: 6px; line-height: 20px;
                                color: var(--text-muted); pointer-events: none; }
-        .item { display: flex; flex-direction: column; padding: 7px 12px; cursor: pointer; }
+        .items { flex: 1; min-height: 0; overflow-y: auto; }
+        .item { display: flex; padding: 7px 12px; cursor: pointer; }
+        .item.command { flex-direction: column; }
+        .item.session { align-items: baseline; gap: 8px; }
         .item .name { line-height: 20px; }
-        .item .about { font-size: var(--meta-size); line-height: var(--meta-line);
-                       color: var(--text-muted); }
+        .item .about, .item .attached, .item .detached {
+            font-size: var(--meta-size); line-height: var(--meta-line);
+            color: var(--text-muted); }
+        .item .attached { color: var(--success); }
         .item.destructive .name { color: var(--danger); }
         .item.disabled { cursor: default; }
         .item.disabled .name { color: var(--text-muted); }
@@ -100,8 +112,30 @@ pub fn css() -> String {
     [CSS, terminal::CSS].concat()
 }
 
-/// Starts the terminal session the model has just made.
-pub type Spawn = Box<dyn Fn(SessionId) -> Session>;
+/// A terminal session the model has just made, to start: its shell
+/// begins where the session it was made from is, or in a directory named
+/// for it.
+pub struct Starting {
+    pub session: SessionId,
+    pub from: Option<SessionId>,
+    pub directory: Option<PathBuf>,
+}
+
+/// Starts a terminal session.
+pub type Spawn = Box<dyn Fn(Starting) -> Session>;
+
+/// Where a session not yet started is to begin.
+enum Start {
+    Beside(SessionId),
+    In(PathBuf),
+}
+
+/// The list over everything, when one is open.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Modal {
+    Palette,
+    Sessions,
+}
 
 /// A pane on the page.
 struct PaneView {
@@ -117,6 +151,8 @@ struct Kept {
     /// The sessions of the model, whether a pane shows them or not:
     /// closing a pane lets go of its view and keeps its session.
     sessions: RefCell<HashMap<SessionId, Rc<Session>>>,
+    /// Where the sessions made and not yet started are to begin.
+    starting: RefCell<HashMap<SessionId, Start>>,
     spawn: Spawn,
     look: TerminalLook,
     waker: RefCell<Option<Waker>>,
@@ -131,7 +167,8 @@ pub struct Shell {
     /// The pane commands act on: the mode's cursor, and outside the mode
     /// the pane with the focus.
     cursor: Memo<Option<PaneId>>,
-    palette: RwSignal<bool>,
+    modal: RwSignal<Option<Modal>>,
+    /// What is typed into the open list, and which of its rows is chosen.
     query: RwSignal<String>,
     chosen: RwSignal<usize>,
     /// The boundary being dragged.
@@ -151,6 +188,20 @@ impl Shell {
         self.model.update(change);
         self.reconcile();
         self.focus_active();
+    }
+
+    /// [`change`](Self::change) that leaves the focus where it is: under
+    /// an open list.
+    fn model_changed(&self, change: impl FnOnce(&mut Workspace)) {
+        self.model.update(change);
+        self.reconcile();
+    }
+
+    /// Opens a list over everything, empty of what was typed before.
+    fn open(&self, modal: Modal) {
+        self.query.set(String::new());
+        self.chosen.set(0);
+        self.modal.set(Some(modal));
     }
 
     /// Makes a view for each pane the model has and the page does not,
@@ -201,7 +252,19 @@ impl Shell {
             let content = match (kind, session) {
                 (PaneKind::Terminal, Some(session_id)) => {
                     let session = (kept.sessions.borrow_mut().entry(session_id))
-                        .or_insert_with(|| Rc::new((kept.spawn)(session_id)))
+                        .or_insert_with(|| {
+                            let start = kept.starting.borrow_mut().remove(&session_id);
+                            let (from, directory) = match start {
+                                Some(Start::Beside(from)) => (Some(from), None),
+                                Some(Start::In(directory)) => (None, Some(directory)),
+                                None => (None, None),
+                            };
+                            Rc::new((kept.spawn)(Starting {
+                                session: session_id,
+                                from,
+                                directory,
+                            }))
+                        })
                         .clone();
                     if let Some(waker) = kept.waker.borrow().clone() {
                         session.set_waker(waker);
@@ -291,6 +354,26 @@ impl Shell {
                 exited.push(*session);
             }
         }
+        // A session no pane shows has no view to take its updates in.
+        let kept = self.kept();
+        let shown: HashSet<SessionId> = (kept.panes.borrow().values())
+            .filter_map(|view| view.terminal.as_ref().map(|(session, _)| *session))
+            .collect();
+        for (id, session) in kept.sessions.borrow().iter() {
+            if shown.contains(id) {
+                continue;
+            }
+            for update in session.take_updates() {
+                match update {
+                    TerminalUpdate::Exited => exited.push(*id),
+                    TerminalUpdate::Title(title) => titles.push((*id, title)),
+                    TerminalUpdate::WorkingDirectory(directory) => {
+                        directories.push((*id, directory));
+                    }
+                    _ => {}
+                }
+            }
+        }
         if titles.is_empty() && directories.is_empty() && exited.is_empty() {
             return;
         }
@@ -306,7 +389,7 @@ impl Shell {
                 model.terminate_session(session);
             }
         });
-        if ended {
+        if ended && self.modal.get_untracked().is_none() {
             self.focus_active();
         }
         // What follows the model is on the page before it is painted.
@@ -330,9 +413,9 @@ impl Shell {
         Some(terminal.clone())
     }
 
-    /// Whether the palette is open.
-    pub fn palette_open(&self) -> bool {
-        self.palette.get_untracked()
+    /// The list open over everything.
+    pub fn modal(&self) -> Option<Modal> {
+        self.modal.get_untracked()
     }
 }
 
@@ -368,13 +451,14 @@ pub fn view(look: TerminalLook, spawn: Spawn) -> (El, Shell) {
         model,
         mode: Memo::new(move |_| model.with(Workspace::is_workspace_mode_active)),
         cursor: Memo::new(move |_| model.with(Workspace::cursor_pane_id)),
-        palette: RwSignal::new(false),
+        modal: RwSignal::new(None),
         query: RwSignal::new(String::new()),
         chosen: RwSignal::new(0),
         resizing: RwSignal::new(None),
         kept: StoredValue::new_local(Rc::new(Kept {
             panes: RefCell::default(),
             sessions: RefCell::default(),
+            starting: RefCell::default(),
             spawn,
             look,
             waker: RefCell::default(),
@@ -411,7 +495,14 @@ pub fn view(look: TerminalLook, spawn: Spawn) -> (El, Shell) {
         })
         .child(strip(shell))
         .child(arrangement::view(shell))
-        .when(move || shell.palette.get(), move || palette::view(shell));
+        .each(
+            move || shell.modal.get().into_iter().collect::<Vec<_>>(),
+            |modal| *modal,
+            move |modal| match modal {
+                Modal::Palette => palette::view(shell),
+                Modal::Sessions => sessions::view(shell),
+            },
+        );
     shell.focus_active();
     (root, shell)
 }

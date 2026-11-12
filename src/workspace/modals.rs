@@ -16,8 +16,9 @@ use super::WorkspaceShell;
 use crate::agent::AgentSession;
 use crate::model_picker::{ConfirmedModel, ModelPickerDelegate};
 use crate::palette::PaletteDelegate;
-use crate::session_manager::{subtree_session_ids, SessionManagerDelegate};
+use crate::session_manager::SessionManagerDelegate;
 use crate::view_chooser::{Placement, ViewChooserDelegate};
+use horizon_workspace::lineage::subtree_session_ids;
 
 enum ModelPickerQuery {
     Providers,

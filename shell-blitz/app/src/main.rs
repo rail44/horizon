@@ -39,9 +39,9 @@ fn main() {
     let terminald = TerminaldHandle::start(&sockets.join("terminald.sock"), &control_socket);
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let directory = (std::env::current_dir().ok().or(home)).unwrap_or_else(|| "/".into());
-    let spawn: workspace::Spawn = Box::new(move |session| {
+    let spawn: workspace::Spawn = Box::new(move |starting| {
         Session::attached(terminald.start_terminal(
-            session.as_uuid(),
+            starting.session.as_uuid(),
             TerminalSpawnSpec {
                 shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
                 args: Vec::new(),
@@ -49,8 +49,8 @@ fn main() {
                 scrollback_lines: DEFAULT_SCROLLBACK_LINES,
                 color_scheme: TerminalColorScheme::default(),
                 control_socket: control_socket.clone(),
-                fallback_cwd: directory.clone(),
-                spawn_source_session_id: None,
+                fallback_cwd: starting.directory.unwrap_or_else(|| directory.clone()),
+                spawn_source_session_id: starting.from.map(|from| from.as_uuid()),
                 initial_size: TerminalSize::new(80, 24),
             },
         ))

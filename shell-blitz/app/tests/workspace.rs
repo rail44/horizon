@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use horizon_blitz::workspace::{Shell, css, view};
+use horizon_blitz::workspace::{Modal, Shell, Spawn, css, view};
 use horizon_terminal_core::TerminalSize;
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
@@ -26,7 +26,7 @@ fn open() -> Opened {
     let mut shell = None;
     let css = [horizon_theme_css::CSS, &css()].concat();
     let app = App::new(1200, 800, &css, || {
-        let spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
+        let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let (root, built) = view(Theme::built_in().terminal(), spawn);
         shell = Some(built);
         themed(Theme::built_in, root)
@@ -281,22 +281,22 @@ fn the_palette_runs_the_command_chosen_from_what_is_typed() {
     let opened = open();
     opened.chord();
     opened.character(":");
-    assert!(opened.shell.palette_open());
+    assert!(opened.shell.modal() == Some(Modal::Palette));
     // The mode stays on under the palette, and Escape goes back to it.
     opened.named(NamedKey::Escape);
-    assert!(!opened.shell.palette_open());
+    assert_eq!(opened.shell.modal(), None);
     assert!(opened.mode());
 
     opened.character(":");
     let every = opened.all("item").len();
     assert!(every > 4, "{every} commands");
-    // A lone pane is not closed from the palette, and no session is
-    // detached to end.
-    assert_eq!(opened.all("disabled").len(), 2);
+    // A lone pane is not closed from the palette, no session is detached
+    // to end, and the test's shell reports no directory to open.
+    assert_eq!(opened.all("disabled").len(), 3);
     opened.commit("split d");
     assert_eq!(opened.all("item").len(), 1);
     opened.named(NamedKey::Enter);
-    assert!(!opened.shell.palette_open());
+    assert_eq!(opened.shell.modal(), None);
     assert!(!opened.mode());
     let boxes: Vec<_> = (opened.all("pane").into_iter())
         .map(|pane| opened.bounds(pane))
@@ -347,7 +347,7 @@ fn a_shell_that_exits_takes_its_pane_and_the_last_leaves_an_empty_workspace() {
 
     // With no pane to take the keys, the palette opens without the chord.
     opened.character(":");
-    assert!(opened.shell.palette_open());
+    assert!(opened.shell.modal() == Some(Modal::Palette));
     opened.commit("new tab");
     opened.named(NamedKey::Enter);
     assert_eq!(opened.model(Workspace::tab_count), 1);
@@ -358,4 +358,62 @@ fn a_shell_that_exits_takes_its_pane_and_the_last_leaves_an_empty_workspace() {
     opened.wait(pane, "the output", |text| {
         text.lines().any(|line| line == "again")
     });
+}
+
+#[test]
+fn the_session_manager_puts_a_detached_session_back_and_ends_one() {
+    let opened = open();
+    let first = opened.panes()[0];
+    opened.prompt(first);
+    opened.run("echo kept-$((2+3))");
+    opened.wait(first, "the output", |text| text.contains("kept-5"));
+    let kept = opened.model(|model| model.terminal_session_id(first).unwrap());
+
+    // A second pane, and the first closed: its session is detached.
+    opened.chord();
+    opened.character("s");
+    opened.chord();
+    opened.character("h");
+    opened.character("x");
+    assert_eq!(opened.model(Workspace::detached_session_count), 1);
+
+    // The manager lists both, the detached one told apart.
+    opened.chord();
+    opened.character(":");
+    opened.commit("manage");
+    opened.named(NamedKey::Enter);
+    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
+    assert_eq!(opened.all("session").len(), 2);
+    assert_eq!(opened.all("detached").len(), 1);
+
+    // Enter on the detached session puts it in a pane beside the active
+    // one, as it was left.
+    opened.commit("#1");
+    assert_eq!(opened.all("session").len(), 1);
+    opened.named(NamedKey::Enter);
+    assert_eq!(opened.shell.modal(), None);
+    assert!(!opened.mode());
+    assert_eq!(opened.model(Workspace::detached_session_count), 0);
+    let panes = opened.panes();
+    assert_eq!(panes.len(), 2);
+    let back = (panes.iter().copied())
+        .find(|pane| opened.model(|model| model.terminal_session_id(*pane)) == Some(kept))
+        .expect("the session's pane");
+    opened.wait(back, "what it showed", |text| text.contains("kept-5"));
+    // It has the keys.
+    opened.run("echo back-$((4+4))");
+    opened.wait(back, "the output", |text| text.contains("back-8"));
+
+    // Ctrl+Enter ends the chosen session, and the list stays.
+    opened.chord();
+    opened.character(":");
+    opened.commit("manage");
+    opened.named(NamedKey::Enter);
+    opened.key(Key::Named(NamedKey::Enter), Modifiers::CONTROL);
+    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
+    assert_eq!(opened.sessions(), 1);
+    assert_eq!(opened.all("session").len(), 1);
+    assert_eq!(opened.panes().len(), 1);
+    opened.named(NamedKey::Escape);
+    assert_eq!(opened.shell.modal(), None);
 }

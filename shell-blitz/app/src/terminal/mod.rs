@@ -84,8 +84,9 @@ struct State {
     session: Rc<Session>,
     /// The theme's colors, font and row height.
     look: TerminalLook,
-    /// The frame on screen.
+    /// The frame on screen, and its number among the session's.
     frame: RefCell<Option<TerminalFrame>>,
+    seen: Cell<u64>,
     /// A cell's width in CSS pixels, and how many columns and rows fit.
     cells: Cell<(f64, usize, usize)>,
     /// What the input method is composing, drawn at the cursor.
@@ -187,8 +188,9 @@ impl Terminal {
 
 fn pump(state: &State) -> bool {
     let mut came = false;
-    if let Some(frame) = state.session.take_frame() {
+    if let Some((number, frame)) = state.session.frame_after(state.seen.get()) {
         *state.frame.borrow_mut() = Some(frame);
+        state.seen.set(number);
         came = true;
     }
     for update in state.session.take_updates() {
@@ -285,6 +287,7 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         session,
         look,
         frame: RefCell::new(None),
+        seen: Cell::new(0),
         cells: Cell::new((1., 0, 0)),
         preedit: RefCell::new(String::new()),
         focused: Cell::new(false),

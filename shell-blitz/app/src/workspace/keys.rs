@@ -3,21 +3,21 @@
 //! (`docs/workspace-mode-design.md`).
 
 use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
-use horizon_ui::reactive_graph::traits::{GetUntracked, Set, WithUntracked};
+use horizon_ui::reactive_graph::traits::{GetUntracked, WithUntracked};
 use horizon_ui::{prevent_default, stop_propagation};
 use horizon_workspace::commands::CommandId;
 use horizon_workspace::{Direction, Workspace};
 use keyboard_types::{Key, NamedKey};
 
-use super::Shell;
+use super::{Modal, Shell};
 
 /// A key on its way in to the view with the focus.
 pub(super) fn pressed(shell: Shell, event: &DomEvent) {
     let DomEventData::KeyDown(key) = &event.data else {
         return;
     };
-    // The palette has the keys while it is open.
-    if shell.palette.get_untracked() {
+    // An open list has the keys.
+    if shell.modal.get_untracked().is_some() {
         return;
     }
     let character = match &key.key {
@@ -52,11 +52,7 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
             "t" => shell.execute(CommandId::NewTab),
             "s" => shell.execute(CommandId::SplitRight),
             "x" => shell.close_pane(),
-            ":" => {
-                shell.query.set(String::new());
-                shell.chosen.set(0);
-                shell.palette.set(true);
-            }
+            ":" => shell.open(Modal::Palette),
             _ => {}
         },
         Key::Named(NamedKey::ArrowLeft) => step(Direction::Left),
