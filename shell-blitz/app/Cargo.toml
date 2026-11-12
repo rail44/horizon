@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 horizon-ui = { path = "../ui" }
 horizon-theme-css = { path = "../theme" }
+horizon-config = { path = "../../crates/horizon-config" }
 horizon-shell-runtime = { path = "../../crates/horizon-shell-runtime" }
 horizon-terminal-core = { path = "../../crates/horizon-terminal-core" }
 horizon-workspace = { path = "../../crates/horizon-workspace" }

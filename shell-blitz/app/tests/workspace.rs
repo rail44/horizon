@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use horizon_blitz::workspace::{Modal, Shell, Spawn, css, view};
+use horizon_blitz::workspace::{Keymap, Modal, Shell, Spawn, css, view};
 use horizon_terminal_core::TerminalSize;
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
@@ -416,4 +416,46 @@ fn the_session_manager_puts_a_detached_session_back_and_ends_one() {
     assert_eq!(opened.panes().len(), 1);
     opened.named(NamedKey::Escape);
     assert_eq!(opened.shell.modal(), None);
+}
+
+#[test]
+fn the_configurations_chords_run_commands_and_replace_the_modes() {
+    let opened = open();
+    let config = horizon_config::parse(
+        r#"
+        [keybindings]
+        "Ctrl+Shift+D" = "split-down"
+        "Ctrl+Shift+P" = "open-palette"
+        "Alt+M" = "workspace-mode"
+        "#,
+    )
+    .unwrap();
+    opened.shell.set_keymap(Keymap::from_config(&config));
+
+    // A bound chord runs its command with no mode on, and is not typed
+    // into the terminal.
+    let pane = opened.panes()[0];
+    opened.prompt(pane);
+    opened.key(
+        Key::Character("D".into()),
+        Modifiers::CONTROL | Modifiers::SHIFT,
+    );
+    let boxes: Vec<_> = (opened.all("pane").into_iter())
+        .map(|pane| opened.bounds(pane))
+        .collect();
+    assert_eq!(boxes.len(), 2);
+    assert!(boxes[0].1 + boxes[0].3 <= boxes[1].1, "{boxes:?}");
+
+    opened.key(
+        Key::Character("P".into()),
+        Modifiers::CONTROL | Modifiers::SHIFT,
+    );
+    assert_eq!(opened.shell.modal(), Some(Modal::Palette));
+    opened.named(NamedKey::Escape);
+
+    // The mode's chord is the configured one, and no longer the built-in.
+    opened.chord();
+    assert!(!opened.mode());
+    opened.key(Key::Character("m".into()), Modifiers::ALT);
+    assert!(opened.mode());
 }

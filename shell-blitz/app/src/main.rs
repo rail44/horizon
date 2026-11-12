@@ -61,6 +61,7 @@ fn main() {
     let mut shell = None;
     let app = App::new(1100, 720, &css, || {
         let (root, built) = workspace::view(look.terminal(), spawn);
+        built.set_keymap(workspace::Keymap::from_config(horizon_config::load()));
         shell = Some(built);
         themed(move || look.clone(), root)
     });

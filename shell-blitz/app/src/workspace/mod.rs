@@ -37,6 +37,7 @@ use crate::terminal::{self, Session, Terminal};
 
 mod arrangement;
 mod commands;
+mod keymap;
 mod keys;
 mod palette;
 mod picker;
@@ -112,6 +113,8 @@ pub fn css() -> String {
     [CSS, terminal::CSS].concat()
 }
 
+pub use keymap::Keymap;
+
 /// A terminal session the model has just made, to start: its shell
 /// begins where the session it was made from is, or in a directory named
 /// for it.
@@ -153,6 +156,7 @@ struct Kept {
     sessions: RefCell<HashMap<SessionId, Rc<Session>>>,
     /// Where the sessions made and not yet started are to begin.
     starting: RefCell<HashMap<SessionId, Start>>,
+    keymap: RefCell<Keymap>,
     spawn: Spawn,
     look: TerminalLook,
     waker: RefCell<Option<Waker>>,
@@ -413,6 +417,11 @@ impl Shell {
         Some(terminal.clone())
     }
 
+    /// Binds the configuration's chords, in place of the ones bound.
+    pub fn set_keymap(&self, keymap: Keymap) {
+        *self.kept().keymap.borrow_mut() = keymap;
+    }
+
     /// The list open over everything.
     pub fn modal(&self) -> Option<Modal> {
         self.modal.get_untracked()
@@ -459,6 +468,7 @@ pub fn view(look: TerminalLook, spawn: Spawn) -> (El, Shell) {
             panes: RefCell::default(),
             sessions: RefCell::default(),
             starting: RefCell::default(),
+            keymap: RefCell::default(),
             spawn,
             look,
             waker: RefCell::default(),

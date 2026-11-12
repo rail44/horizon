@@ -9,6 +9,7 @@ use horizon_workspace::commands::CommandId;
 use horizon_workspace::{Direction, Workspace};
 use keyboard_types::{Key, NamedKey};
 
+use super::keymap::Bound;
 use super::{Modal, Shell};
 
 /// A key on its way in to the view with the focus.
@@ -24,11 +25,24 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
         Key::Character(character) => character.as_str(),
         _ => "",
     };
-    if key.modifiers.ctrl() && character == "'" {
+    let kept = shell.kept();
+    let (toggles, bound) = {
+        let keymap = kept.keymap.borrow();
+        (keymap.workspace_mode.matches(key), keymap.bound(key))
+    };
+    if toggles {
         shell.change(|model| match model.is_workspace_mode_active() {
             true => model.cancel_workspace_mode(),
             false => model.enter_workspace_mode(),
         });
+    }
+    // A chord the configuration binds works in the mode and out of it.
+    match bound.filter(|_| !toggles) {
+        Some(Bound::OpenPalette) => shell.open(Modal::Palette),
+        Some(Bound::Command(command)) => shell.execute(command),
+        None => {}
+    }
+    if toggles || bound.is_some() {
         prevent_default();
         stop_propagation();
         return;

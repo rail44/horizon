@@ -2679,6 +2679,7 @@ dependencies = [
  "blitz-shell",
  "crossbeam-channel",
  "futures",
+ "horizon-config",
  "horizon-shell-runtime",
  "horizon-terminal-core",
  "horizon-theme-css",
