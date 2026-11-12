@@ -1,0 +1,105 @@
+package horizon:ui;
+
+/// The document as a view built into a plugin reaches it: what `El` and
+/// `Page` are made of. A node is named by the number the host gave it
+/// (`blitz-traits`' `NodeId`, as a number).
+interface document {
+    create-element: func(tag: string) -> u64;
+    create-text: func(text: string) -> u64;
+    create-comment: func(text: string) -> u64;
+    set-attribute: func(node: u64, name: string, value: string);
+    set-style: func(node: u64, property: string, value: string);
+    set-text: func(node: u64, text: string);
+    append: func(parent: u64, child: u64);
+    /// Puts nodes, in order, just before a node among its parent's.
+    insert-before: func(marker: u64, nodes: list<u64>);
+    /// Takes a node out for good with everything inside it: the nodes
+    /// that went.
+    remove: func(node: u64) -> list<u64>;
+    /// Takes a node out of where it is, to be put somewhere else.
+    detach: func(node: u64);
+    scroll-to: func(node: u64, x: f64, y: f64);
+    scroll-by: func(node: u64, x: f64, y: f64);
+    set-value: func(node: u64, text: string);
+    /// Gives a node the keys at the next layout: itself, or the first
+    /// thing inside it that takes them.
+    focus: func(node: u64, within: bool);
+    /// Has the plugin hear an event at a node: on its way in to what is
+    /// inside the node, or at the node and on its way out.
+    listen: func(node: u64, event: string, capture: bool);
+    /// From work after a layout: lay out again before painting.
+    relayout: func();
+
+    /// The layout, as it is while the plugin's work after a layout or
+    /// after an event runs.
+    record bounds {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    }
+    bounds-of: func(node: u64) -> option<bounds>;
+    size-of: func(node: u64) -> option<tuple<f64, f64>>;
+    /// The plugin's nodes drawn at a point, innermost first.
+    under: func(x: f32, y: f32) -> list<u64>;
+    scrolled: func(node: u64) -> option<tuple<f64, f64>>;
+    lines: func(node: u64) -> option<u32>;
+    has-focus: func(node: u64) -> bool;
+    has-focus-within: func(node: u64) -> bool;
+}
+
+world plugin {
+    import document;
+
+    record key-event {
+        /// A named key (`Enter`), or the characters a key gives.
+        named: option<string>,
+        character: option<string>,
+        /// `keyboard-types`' modifier bits.
+        modifiers: u32,
+        repeat: bool,
+        composing: bool,
+        text: option<string>,
+    }
+
+    record pointer-event {
+        page-x: f32,
+        page-y: f32,
+        client-x: f32,
+        client-y: f32,
+        /// The button that changed, and the buttons held, as the DOM
+        /// numbers them.
+        button: u8,
+        buttons: u8,
+        modifiers: u32,
+    }
+
+    variant event-data {
+        key(key-event),
+        pointer(pointer-event),
+        input(string),
+        /// An event whose payload does not cross yet.
+        other,
+    }
+
+    record handled {
+        prevent-default: bool,
+        stop-propagation: bool,
+        /// A handler has questions for the page once the event is
+        /// dispatched: `after-dispatch` is to be called then.
+        asks-page: bool,
+    }
+
+    /// The previews the plugin has, by name.
+    export names: func() -> list<string>;
+    /// The style sheet of what the plugin shows.
+    export css: func() -> string;
+    /// Builds a preview: its root node.
+    export mount: func(name: string) -> option<u64>;
+    /// An event at a node the plugin listens at.
+    export handle: func(node: u64, target: u64, event: string, capture: bool, data: event-data) -> handled;
+    export after-dispatch: func();
+    export after-layout: func();
+    /// Runs the effects of the signals written since the last call.
+    export run-effects: func();
+}

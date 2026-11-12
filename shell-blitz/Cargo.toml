@@ -3,7 +3,7 @@
 # of the root lockfile (`docs/ui-foundation-migration-design.md`).
 [workspace]
 resolver = "3"
-members = ["ui", "theme", "app"]
+members = ["ui", "theme", "app", "preview-plugin"]
 
 [workspace.dependencies]
 blitz-dom = "=0.3.0-beta.4"

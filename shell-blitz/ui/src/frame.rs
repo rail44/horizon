@@ -17,7 +17,7 @@ const LAYOUTS_A_FRAME: usize = 8;
 /// document that were left for when it is free.
 pub(crate) fn run_effects(shared: &Rc<Shared>) {
     enter(shared);
-    Executor::poll_local();
+    poll_effects(shared);
     loop {
         let later = std::mem::take(&mut *shared.later.borrow_mut());
         if later.is_empty() {
@@ -26,7 +26,36 @@ pub(crate) fn run_effects(shared: &Rc<Shared>) {
         for work in later {
             work(&mut shared.document.borrow_mut());
         }
-        Executor::poll_local();
+        poll_effects(shared);
+    }
+}
+
+/// This thread's effects, and those run alongside them.
+fn poll_effects(shared: &Shared) {
+    Executor::poll_local();
+    // Taken out while it runs: work may register more, or retire some.
+    let mut work = std::mem::take(&mut *shared.effects.borrow_mut());
+    work.retain(|(id, _)| !shared.retired.borrow_mut().remove(id));
+    for (_, work) in &mut work {
+        work();
+    }
+    work.append(&mut shared.effects.borrow_mut());
+    *shared.effects.borrow_mut() = work;
+}
+
+/// Runs `work` whenever the signals' effects run, with the document free
+/// to change, for as long as what it was made under lasts: how a graph
+/// that is not this thread's (a plugin's) has its effects run at the
+/// same times.
+pub fn each_effects(work: impl FnMut() + 'static) {
+    let id = crate::shared::fresh_id();
+    shared().effects.borrow_mut().push((id, Box::new(work)));
+    if reactive_graph::owner::Owner::current().is_some() {
+        reactive_graph::owner::on_cleanup(move || {
+            if let Some(shared) = current() {
+                shared.retired.borrow_mut().insert(id);
+            }
+        });
     }
 }
 

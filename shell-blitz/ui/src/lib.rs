@@ -12,23 +12,51 @@
 //! and asks what it needs of the layout through a [`Page`]
 //! (`docs/ui-foundation-migration-design.md`).
 
+//!
+//! Built for wasm, the crate is that layer as a plugin has it
+//! ([`guest`]): the same names over the host's document.
+
+#[cfg(not(target_family = "wasm"))]
 mod app;
+#[cfg(not(target_family = "wasm"))]
 mod borders;
+#[cfg(not(target_family = "wasm"))]
 mod dispatch;
+#[cfg(not(target_family = "wasm"))]
 mod el;
+#[cfg(not(target_family = "wasm"))]
 mod frame;
+#[cfg(target_family = "wasm")]
+pub mod guest;
+#[cfg(not(target_family = "wasm"))]
+pub mod host;
+#[cfg(not(target_family = "wasm"))]
 mod input_method;
+#[cfg(not(target_family = "wasm"))]
 mod page;
+#[cfg(not(target_family = "wasm"))]
 mod shared;
+#[cfg(not(target_family = "wasm"))]
 pub mod testing;
+#[cfg(not(target_family = "wasm"))]
 pub mod windowed;
 
+#[cfg(not(target_family = "wasm"))]
 pub use app::{App, Live};
+#[cfg(not(target_family = "wasm"))]
 pub use dispatch::{prevent_default, stop_propagation};
+#[cfg(not(target_family = "wasm"))]
 pub use el::{El, copy, el, request_paste};
-pub use frame::{frame, relayout};
+#[cfg(not(target_family = "wasm"))]
+pub use frame::{each_effects, frame, relayout};
+#[cfg(target_family = "wasm")]
+pub use guest::{
+    Bounds, El, Page, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
+};
+#[cfg(not(target_family = "wasm"))]
 pub use page::{Bounds, Page, dispatched, each_layout};
 
+#[cfg(not(target_family = "wasm"))]
 pub use blitz_dom;
 pub use blitz_traits;
 pub use reactive_graph;

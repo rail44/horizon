@@ -7,12 +7,17 @@ publish = false
 
 [dependencies]
 horizon-ui = { path = "../ui" }
+horizon-board = { path = "../../crates/horizon-board" }
+horizon-board-view = { path = "../../crates/horizon-board-view" }
+keyboard-types = "0.8"
+
+# What a view built into a preview plugin (`../preview-plugin`, wasm) does
+# not have: the modules that need these are native-only in `src/lib.rs`.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 horizon-theme-css = { path = "../theme" }
 horizon-acp = { path = "../../crates/horizon-acp" }
 horizon-agent = { path = "../../crates/horizon-agent" }
 horizon-agent-display = { path = "../../crates/horizon-agent-display" }
-horizon-board = { path = "../../crates/horizon-board" }
-horizon-board-view = { path = "../../crates/horizon-board-view" }
 horizon-config = { path = "../../crates/horizon-config" }
 horizon-control = { path = "../../crates/horizon-control" }
 horizon-theme = { path = "../../crates/horizon-theme" }
@@ -28,7 +33,6 @@ blitz-paint = { workspace = true }
 blitz-shell = { workspace = true, features = ["custom-widget"] }
 crossbeam-channel = "0.5"
 futures = "0.3"
-keyboard-types = "0.8"
 kurbo = "0.13"
 # The parser `horizon-wiki` reads a page with: a wiki page is drawn from the
 # same syntax tree its comments are anchored in.
@@ -45,6 +49,16 @@ tokio = { version = "1.52", features = ["rt", "net", "time", "macros", "io-util"
 termwiz = { version = "0.23.3", features = ["use_serde"] }
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4"] }
+# The runtime a preview's plugin runs in (`src/preview.rs`).
+wasmtime = { version = "36", default-features = false, features = [
+    "async",
+    "demangle",
+    "runtime",
+    "cranelift",
+    "component-model",
+    "parallel-compilation",
+] }
+wasmtime-wasi = "36"
 
 [dev-dependencies]
 # The terminal view's tests run the terminal core over a PTY of their own.

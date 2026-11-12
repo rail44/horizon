@@ -6,10 +6,18 @@ edition = "2024"
 publish = false
 
 [dependencies]
-blitz-dom = { workspace = true }
 blitz-traits = { workspace = true }
 reactive_graph = { workspace = true }
 any_spawner = { workspace = true }
+
+# The document is the host's: a view built into a wasm plugin reaches it
+# over `wit/plugin.wit` (`src/guest.rs`).
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+blitz-dom = { workspace = true }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+wit-bindgen = "0.41"
+keyboard-types = "0.8"
 
 [dev-dependencies]
 keyboard-types = "0.8"

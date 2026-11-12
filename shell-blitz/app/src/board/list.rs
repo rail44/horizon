@@ -15,7 +15,7 @@ use horizon_board_view::model::{
     visible_rows,
 };
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, DomEventData};
-use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue, on_cleanup};
+use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
@@ -23,7 +23,9 @@ use horizon_ui::reactive_graph::traits::{
 use horizon_ui::{El, dispatched, each_layout, el, prevent_default, relayout, stop_propagation};
 use keyboard_types::{Key, NamedKey};
 
-use super::{Job, Source, follow, run, tone, write_refusal};
+#[cfg(not(target_family = "wasm"))]
+use super::follow;
+use super::{Job, Source, run, tone, write_refusal};
 use crate::background::Background;
 
 // Every rule sits under the view's own class: the page's style sheet is one
@@ -495,10 +497,13 @@ pub fn view(
     let (root, scroll, field) = (state.element, state.scroll, state.field);
     let held = state.held();
     state.load();
+    #[cfg(not(target_family = "wasm"))]
     if let Source::Root(root) = source {
         let stop = follow(root, background.clone(), move || state.load());
-        on_cleanup(move || drop(stop));
+        horizon_ui::reactive_graph::owner::on_cleanup(move || drop(stop));
     }
+    #[cfg(target_family = "wasm")]
+    let _ = (source, background);
 
     // The row pressed and where, until the button comes up.
     let pressed = RwSignal::new(None::<(u64, f32, f32)>);

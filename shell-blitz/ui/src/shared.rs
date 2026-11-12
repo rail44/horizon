@@ -20,6 +20,10 @@ pub(crate) type PollWork = Box<dyn FnMut(&std::task::Waker)>;
 /// Work done after every layout, under the id it is taken back out by.
 pub(crate) type LayoutWork = (u64, Box<dyn FnMut(&mut BaseDocument)>);
 
+/// Work done whenever the signals' effects run, under the id it is taken
+/// back out by.
+pub(crate) type EffectsWork = (u64, Box<dyn FnMut()>);
+
 pub(crate) struct Shared {
     pub(crate) document: Rc<RefCell<BaseDocument>>,
     pub(crate) handlers: Handlers,
@@ -50,6 +54,10 @@ pub(crate) struct Shared {
     pub(crate) retired: RefCell<HashSet<u64>>,
     /// What runs when the shell polls the document.
     pub(crate) polled: RefCell<Vec<PollWork>>,
+    /// What runs whenever the signals' effects do, under the id it is
+    /// taken back out by: the effects of a graph that is not this
+    /// thread's own.
+    pub(crate) effects: RefCell<Vec<EffectsWork>>,
 }
 
 impl Shared {
@@ -68,6 +76,7 @@ impl Shared {
             laid_out: RefCell::default(),
             retired: RefCell::default(),
             polled: RefCell::default(),
+            effects: RefCell::default(),
         }
     }
 }
