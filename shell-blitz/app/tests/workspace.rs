@@ -824,3 +824,45 @@ fn the_theme_settings_apply_a_seed_as_it_changes_and_save_it_when_asked() {
     let status = opened.all("status");
     assert_eq!(status.len(), 1);
 }
+
+#[test]
+fn the_control_plane_opens_a_wiki_page_in_a_pane() {
+    use horizon_control::contract::{EnvelopeBody, Invoke};
+    use horizon_control::host::executor::ControlRequest;
+    use horizon_ui::reactive_graph::traits::GetUntracked;
+    use horizon_workspace::{PaneKind, ViewKind};
+
+    let directory = std::env::temp_dir().join(format!("hzb-wiki-{}", std::process::id()));
+    let store = horizon_wiki::Store::at(directory.join("project"));
+    store
+        .write_page("index", "---\ntitle: Overview\n---\nWhat the project is.\n")
+        .unwrap();
+    let page = store.page_path("index").unwrap();
+
+    let opened = open();
+    let answer = opened.shell.control(&ControlRequest::Invoke(Invoke {
+        command: "wiki".to_string(),
+        args: serde_json::json!({ "path": page, "activate": true }),
+    }));
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    opened.app.run_effects();
+    opened.app.resolve();
+    let pane = opened.panes()[0];
+    assert_eq!(
+        opened.model(|model| model.pane_kind(pane)),
+        Some(PaneKind::View(ViewKind::Wiki))
+    );
+    let view = opened.shell.wiki(pane).expect("a wiki view");
+    assert_eq!(view.path.get_untracked(), Some(page.clone()));
+    opened.until("the page", || opened.all("heading").len() == 1);
+    // The tab is named for the page's file, and the pane comes back on it.
+    assert_eq!(
+        opened.model(|model| model.tab_summaries()[1].title.clone()),
+        "index.md"
+    );
+    assert_eq!(
+        opened.model(|model| model.pane_document(pane).map(std::path::PathBuf::from)),
+        Some(page)
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}

@@ -61,3 +61,10 @@ pub fn click_at(app: &App, x: f32, y: f32) {
 pub fn move_to(app: &App, x: f32, y: f32) {
     pointer(app, x, y, Pointer::Move);
 }
+
+/// Selects text on the page as a drag over it would: from a byte of one
+/// element's own lines of text to a byte of another's (or the same's).
+pub fn select(app: &App, from: (crate::El, usize), to: (crate::El, usize)) {
+    let document = app.document();
+    (document.borrow_mut()).set_text_selection(from.0.0, from.1, to.0.0, to.1);
+}

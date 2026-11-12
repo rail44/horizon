@@ -21,7 +21,7 @@ use keyboard_types::{Key, NamedKey};
 use crate::wake::Wake;
 
 mod render;
-mod watch;
+pub(crate) mod watch;
 
 pub use render::render;
 

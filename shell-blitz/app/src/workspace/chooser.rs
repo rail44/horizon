@@ -1,6 +1,6 @@
 //! The view chooser: which view a new pane shows. A terminal, an agent,
 //! an agent in one of the roles a person can start one in, the theme
-//! settings, or the board.
+//! settings, the board, or the wiki.
 
 use horizon_agent::roles::{RoleId, user_launchable};
 use horizon_ui::El;
@@ -38,6 +38,7 @@ fn matching(query: &str) -> Vec<(String, Choice)> {
         Choice::View(ViewKind::ThemeSettings),
     ));
     choices.push(("Board".to_string(), Choice::View(ViewKind::BoardList)));
+    choices.push(("Wiki".to_string(), Choice::View(ViewKind::Wiki)));
     let query = query.trim().to_ascii_lowercase();
     choices.retain(|(title, ..)| query.is_empty() || title.to_ascii_lowercase().contains(&query));
     choices
@@ -64,6 +65,7 @@ pub(super) fn view(shell: Shell, placement: Placement) -> El {
             shell.modal.set(None);
             match choice {
                 Choice::Session(kind, role) => shell.create(kind, role, placement),
+                Choice::View(ViewKind::Wiki) => shell.create_wiki(placement),
                 Choice::View(kind) => shell.create_view(kind, placement),
             }
         }

@@ -73,6 +73,24 @@ impl Page<'_> {
         self.0.get_focussed_node_id() == Some(element.0)
     }
 
+    /// The text selected on the page outside any field: for each element
+    /// whose own lines of text the selection covers part of, the bytes of
+    /// that text ([`inline_text`](Self::inline_text)) it covers.
+    pub fn selection(&self) -> Vec<(El, usize, usize)> {
+        (self.0.get_text_selection_ranges().into_iter())
+            .map(|(node, start, end)| (El(node), start, end))
+            .collect()
+    }
+
+    /// The text an element lays out in lines of its own: its text nodes'
+    /// and its inline descendants', in order. `None` for an element that
+    /// lays out blocks, or has not been laid out.
+    pub fn inline_text(&self, element: El) -> Option<String> {
+        let node = self.0.get_node(element.0)?;
+        let layout = node.element_data()?.inline_layout_data.as_ref()?;
+        Some(layout.text.clone())
+    }
+
     /// Whether the keys go to this element or to something inside it.
     pub fn has_focus_within(&self, element: El) -> bool {
         let mut node = self.0.get_focussed_node_id();

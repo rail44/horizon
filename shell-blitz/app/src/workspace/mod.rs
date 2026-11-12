@@ -7,8 +7,9 @@
 //! pane, and lives until the model lets the pane go. Splitting, closing,
 //! resizing and changing tab change only the boxes around it.
 //!
-//! So far a pane shows a terminal, an agent, a Markdown file, or the
-//! board (its task list, or one task's thread). Creating one asks which,
+//! A pane shows a terminal, an agent, a Markdown file, a page of the
+//! project wiki, the theme settings, or the board (its task list, or one
+//! task's thread). Creating one asks which,
 //! in a shell with an agent runtime; a Markdown file is opened by naming
 //! it (`horizon markdown <path>`), and a thread from the list.
 //!
@@ -48,6 +49,7 @@ use crate::markdown::{self, Markdown};
 use crate::terminal::{self, Session, Terminal};
 use crate::theme_settings;
 use crate::wake::Wake;
+use crate::wiki::{self, Wiki};
 
 mod arrangement;
 mod chooser;
@@ -141,6 +143,7 @@ pub fn css() -> String {
         markdown::CSS,
         &board::css(),
         &theme_settings::css(),
+        wiki::CSS,
     ]
     .concat()
 }
@@ -292,6 +295,7 @@ struct PaneView {
     terminal: Option<(SessionId, Terminal)>,
     agent: Option<Agent>,
     markdown: Option<Markdown>,
+    wiki: Option<Wiki>,
     board_list: Option<BoardList>,
     board_thread: Option<BoardThread>,
 }
@@ -432,7 +436,7 @@ impl Shell {
         let (shell, kept) = (*self, self.kept());
         let owner = kept.owner.child();
         let (mut terminal, mut agent, mut document) = (None, None, None);
-        let (mut board_list, mut board_thread) = (None, None);
+        let (mut board_list, mut board_thread, mut wiki_page) = (None, None, None);
         let start = |session| {
             kept.starting
                 .borrow_mut()
@@ -525,6 +529,28 @@ impl Shell {
                     document = Some(view);
                     root
                 }
+                (PaneKind::View(ViewKind::Wiki), ..) => {
+                    let path = (self.model)
+                        .with_untracked(|model| model.pane_document(id).map(PathBuf::from));
+                    let (root, view) = wiki::view(path, kept.open_url.clone(), kept.wake.clone());
+                    // The page it shows is the pane's in the model, as a
+                    // Markdown pane's file is.
+                    Effect::new(move |_| {
+                        let Some(path) = view.path.get() else {
+                            return;
+                        };
+                        let kept = shell
+                            .model
+                            .with_untracked(|model| model.pane_document(id) == Some(&path));
+                        if !kept {
+                            shell.model.update(|model| {
+                                model.set_pane_document(id, path);
+                            });
+                        }
+                    });
+                    wiki_page = Some(view);
+                    root
+                }
                 (PaneKind::View(ViewKind::ThemeSettings), ..) => {
                     let config = kept.config.borrow().clone();
                     let scheme = self.theme.with_untracked(|theme| *theme.scheme());
@@ -606,6 +632,7 @@ impl Shell {
             terminal,
             agent,
             markdown: document,
+            wiki: wiki_page,
             board_list,
             board_thread,
         }
@@ -919,6 +946,37 @@ impl Shell {
             }
             model.exit_workspace_mode();
         });
+    }
+
+    /// The wiki view a pane shows.
+    pub fn wiki(&self, pane: PaneId) -> Option<Wiki> {
+        self.kept().panes.borrow().get(&pane)?.wiki
+    }
+
+    /// A new pane at `placement` on the overview of the wiki of the
+    /// project this shell was started in.
+    fn create_wiki(&self, placement: Placement) {
+        let page = (std::env::current_dir().ok())
+            .and_then(|directory| horizon_wiki::Store::for_dir(&directory))
+            .and_then(|store| store.page_path("index").ok());
+        // The pane's page is in the model before its view is made.
+        self.model_changed(|model| {
+            let pane = match placement {
+                Placement::NewTab => model.open_tab_with_view_activated(ViewKind::Wiki, true),
+                Placement::SplitRight => {
+                    model.split_active_tab_with_view(ViewKind::Wiki, SplitAxis::Horizontal)
+                }
+                Placement::SplitDown => {
+                    model.split_active_tab_with_view(ViewKind::Wiki, SplitAxis::Vertical)
+                }
+            };
+            if let Some(page) = page {
+                model.set_pane_document(pane, page);
+            }
+            model.exit_workspace_mode();
+        });
+        self.reconcile();
+        self.focus_active();
     }
 
     /// The Markdown view a pane shows.

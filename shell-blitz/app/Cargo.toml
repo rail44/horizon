@@ -18,6 +18,7 @@ horizon-control = { path = "../../crates/horizon-control" }
 horizon-theme = { path = "../../crates/horizon-theme" }
 horizon-shell-runtime = { path = "../../crates/horizon-shell-runtime" }
 horizon-terminal-core = { path = "../../crates/horizon-terminal-core" }
+horizon-wiki = { path = "../../crates/horizon-wiki" }
 horizon-workspace = { path = "../../crates/horizon-workspace" }
 anyrender = "0.14"
 anyrender_vello = "0.15"
@@ -29,6 +30,9 @@ crossbeam-channel = "0.5"
 futures = "0.3"
 keyboard-types = "0.8"
 kurbo = "0.13"
+# The parser `horizon-wiki` reads a page with: a wiki page is drawn from the
+# same syntax tree its comments are anchored in.
+markdown = "=1.0.0"
 notify = "8"
 # `complex-scripts`: the word breaker with its dictionary for Chinese and
 # Japanese. Without it a debug build writes a warning to stderr for each

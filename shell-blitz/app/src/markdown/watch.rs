@@ -16,12 +16,12 @@ const SETTLE: Duration = Duration::from_millis(300);
 
 /// When the file last changed, if that has not been taken in yet.
 #[derive(Clone, Default)]
-pub(super) struct Changed(Arc<Mutex<Option<Instant>>>);
+pub(crate) struct Changed(Arc<Mutex<Option<Instant>>>);
 
 impl Changed {
     /// Whether a change has sat still long enough to take in; it is then
     /// taken.
-    pub(super) fn settled(&self) -> bool {
+    pub(crate) fn settled(&self) -> bool {
         let mut changed = self.0.lock().unwrap();
         let settled = changed.is_some_and(|at| at.elapsed() >= SETTLE);
         if settled {
@@ -48,7 +48,7 @@ fn changes_content(kind: &EventKind) -> bool {
 /// directory: an editor that saves by replacing the file leaves a watch on
 /// the file itself behind. `None` when there is no such directory to
 /// watch; the view then shows the file as it was read.
-pub(super) fn on(file: PathBuf, changed: Changed, wake: Wake) -> Option<RecommendedWatcher> {
+pub(crate) fn on(file: PathBuf, changed: Changed, wake: Wake) -> Option<RecommendedWatcher> {
     let directory = (file
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty()))?
