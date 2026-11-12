@@ -3,6 +3,7 @@ members = [
     ".",
     "crates/horizon-acp",
     "crates/horizon-agent",
+    "crates/horizon-agent-display",
     "crates/horizon-agentd",
     "crates/horizon-daemon-testkit",
     "crates/horizon-shell-runtime",
@@ -103,6 +104,7 @@ horizon-theme = { path = "crates/horizon-theme" }
 # `horizon-workspace` is framework-free (serde/serde_json/uuid).
 horizon-board = { path = "crates/horizon-board" }
 horizon-workspace = { path = "crates/horizon-workspace" }
+horizon-agent-display = { path = "crates/horizon-agent-display" }
 # `theme::gpui_component` builds gpui-component's `ThemeConfig` as JSON and
 # deserializes it, so serde_json is on the wasm side of the split too.
 serde_json = "1.0"

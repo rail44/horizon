@@ -1,0 +1,10 @@
+# The agent pane's display model: what a pane draws, as plain data, and
+# its fixed labels. No dependencies, so that it builds for every target a
+# view of it does (both shells, and the preview plugin's wasm).
+[package]
+name = "horizon-agent-display"
+version = "0.1.0"
+edition = "2021"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

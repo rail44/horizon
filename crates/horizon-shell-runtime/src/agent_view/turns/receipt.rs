@@ -9,7 +9,7 @@ use horizon_acp::ToolOutcome;
 use super::{aggregate_receipt, pluralize, ToolCallView};
 
 /// Humanizes a duration: `38s`, `2m 05s`. Whole seconds only.
-pub(crate) fn humanize_duration(elapsed: Duration) -> String {
+pub fn humanize_duration(elapsed: Duration) -> String {
     let total_secs = elapsed.as_secs();
     let minutes = total_secs / 60;
     let seconds = total_secs % 60;
@@ -25,7 +25,7 @@ pub(crate) fn humanize_duration(elapsed: Duration) -> String {
 /// the calls that succeeded; a call still running or failed is counted by
 /// its tool as well. Calls that never ran (denied, cancelled) count only
 /// in the `{n} calls` fallback for a burst with nothing else to say.
-pub(crate) fn receipt_summary(calls: &[ToolCallView]) -> String {
+pub fn receipt_summary(calls: &[ToolCallView]) -> String {
     let aggregate = aggregate_receipt(calls);
     let mut reads = aggregate.read_file_count;
     let mut edits = aggregate.edited_file_count;

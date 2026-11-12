@@ -13,6 +13,7 @@ crossbeam-channel = "0.5"
 futures = "0.3"
 horizon-acp = { path = "../horizon-acp" }
 horizon-agent = { path = "../horizon-agent" }
+horizon-agent-display = { path = "../horizon-agent-display" }
 horizon-control = { path = "../horizon-control" }
 horizon-terminal-core = { path = "../horizon-terminal-core" }
 horizon-wire = { path = "../horizon-wire" }

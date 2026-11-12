@@ -13,8 +13,6 @@ pub(crate) mod auxiliary;
 pub(crate) use horizon_shell_runtime::agent_model as model;
 #[cfg(not(target_family = "wasm"))]
 mod session;
-#[cfg(not(target_family = "wasm"))]
-mod turns;
 pub(crate) mod view;
 
 #[cfg(not(target_family = "wasm"))]

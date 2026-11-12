@@ -9,9 +9,9 @@ use horizon_agent::contract::tool_output::{
 use horizon_agent::transcript::ToolCallClassification;
 use serde_json::Value;
 
-use super::super::model::AgentFrameItem;
 use super::{cap_lines_head, cap_lines_tail, reconstruct_line_diff, tool_call_source};
 use super::{classify, edit_entries, str_field, DiffLine, DiffLineKind, ToolCallView};
+use crate::agent_model::AgentFrameItem;
 
 /// A tool call's expanded-row body (stage D, decision 3's "each row
 /// expands further individually"), keyed off the tool id the same way
@@ -23,7 +23,7 @@ use super::{classify, edit_entries, str_field, DiffLine, DiffLineKind, ToolCallV
 /// machinery, so this and [`tool_call_body`] take a plain item slice +
 /// call id rather than anything receipt-specific.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ToolCallBody {
+pub enum ToolCallBody {
     /// fs.edit -- one reconstructed line diff per edit in the call's
     /// `edits` list, concatenated; `omitted` counts any lines trimmed by
     /// the cap.
@@ -158,11 +158,7 @@ fn raw_body(tool_id: &str, input: &Value, output: Option<&Value>) -> ToolCallBod
 /// reconstructed diff, fs.write a content preview, bash a command+output
 /// block, and every other known tool id a terse summary; a truly unknown
 /// id falls back to raw JSON.
-pub(crate) fn build_tool_call_body(
-    tool_id: &str,
-    input: &Value,
-    output: Option<&Value>,
-) -> ToolCallBody {
+pub fn build_tool_call_body(tool_id: &str, input: &Value, output: Option<&Value>) -> ToolCallBody {
     match tool_id {
         "fs.edit" => {
             // One diff per edit, concatenated in list order. A batch gets a
@@ -272,10 +268,7 @@ pub(crate) fn build_tool_call_body(
 
 /// Builds a row's body from the call item `build_tool_call_views` bound the
 /// view to. `items` must be the same slice used to build `call`.
-pub(crate) fn tool_call_body(
-    items: &[AgentFrameItem],
-    call: &ToolCallView,
-) -> Option<ToolCallBody> {
+pub fn tool_call_body(items: &[AgentFrameItem], call: &ToolCallView) -> Option<ToolCallBody> {
     let (tool_id, input, output) = tool_call_source(items, call)?;
     Some(build_tool_call_body(tool_id, input, output))
 }
@@ -602,11 +595,11 @@ mod tests {
             "first",
         );
         if let AgentFrameItem::ToolCall(call) = &mut first {
-            call.status = crate::agent::model::ToolCallStatus::Completed;
+            call.status = crate::agent_model::ToolCallStatus::Completed;
         }
         let mut first_approval = with_occurrence(approval_requested("dup"), "first");
         if let AgentFrameItem::Permission(permission) = &mut first_approval {
-            permission.decision = Some(crate::agent::model::PermissionDecision::Approved);
+            permission.decision = Some(crate::agent_model::PermissionDecision::Approved);
         }
         let items = vec![
             first,

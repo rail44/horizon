@@ -9,20 +9,20 @@
 mod receipt;
 mod tool_call;
 
-pub(crate) use receipt::*;
-pub(crate) use tool_call::*;
+pub use receipt::*;
+pub use tool_call::*;
 
-pub(crate) use super::model::{
+pub use crate::agent_model::{
     aggregate_receipt, build_tool_call_views, group_into_turns, segment_bursts, tool_call_source,
     ToolCallView,
 };
-pub(crate) use horizon_agent::transcript::{
+pub use horizon_agent::transcript::{
     cap_lines_head, cap_lines_tail, classify, edit_entries, reconstruct_line_diff, str_field,
     DiffLine, DiffLineKind,
 };
 
 /// `1 {singular}` / `{count} {plural}`.
-pub(crate) fn pluralize(count: usize, singular: &str, plural: &str) -> String {
+pub fn pluralize(count: usize, singular: &str, plural: &str) -> String {
     if count == 1 {
         format!("1 {singular}")
     } else {
@@ -31,17 +31,17 @@ pub(crate) fn pluralize(count: usize, singular: &str, plural: &str) -> String {
 }
 
 #[cfg(test)]
-pub(crate) mod test_support {
+pub mod test_support {
     use horizon_acp::{ToolCallMeta, ToolOutcome};
     use serde_json::Value;
 
-    use super::super::model::{
+    use super::{DiffLine, DiffLineKind};
+    use crate::agent_model::{
         AgentFrameItem, Message, MessageRole, Permission, Thought, ToolCall, ToolCallIdentity,
         ToolCallStatus,
     };
-    use super::{DiffLine, DiffLineKind};
 
-    pub(crate) fn user_message(text: &str) -> AgentFrameItem {
+    pub fn user_message(text: &str) -> AgentFrameItem {
         AgentFrameItem::Message(Message {
             id: format!("user:{text}"),
             role: MessageRole::User,
@@ -49,7 +49,7 @@ pub(crate) mod test_support {
         })
     }
 
-    pub(crate) fn assistant_delta(text: &str) -> AgentFrameItem {
+    pub fn assistant_delta(text: &str) -> AgentFrameItem {
         AgentFrameItem::Message(Message {
             id: "assistant".to_string(),
             role: MessageRole::Assistant,
@@ -57,7 +57,7 @@ pub(crate) mod test_support {
         })
     }
 
-    pub(crate) fn reasoning_delta(text: &str) -> AgentFrameItem {
+    pub fn reasoning_delta(text: &str) -> AgentFrameItem {
         AgentFrameItem::Thought(Thought {
             id: "thought".to_string(),
             text: text.to_string(),
@@ -81,12 +81,12 @@ pub(crate) mod test_support {
     }
 
     /// A requested call that has not started.
-    pub(crate) fn tool_requested(call_id: &str, tool_id: &str, input: Value) -> AgentFrameItem {
+    pub fn tool_requested(call_id: &str, tool_id: &str, input: Value) -> AgentFrameItem {
         AgentFrameItem::ToolCall(Box::new(call(call_id, tool_id, input)))
     }
 
     /// A finished call; an output with `is_error: true` reads as failed.
-    pub(crate) fn tool_finished(
+    pub fn tool_finished(
         call_id: &str,
         tool_id: &str,
         input: Value,
@@ -108,7 +108,7 @@ pub(crate) mod test_support {
         AgentFrameItem::ToolCall(Box::new(call))
     }
 
-    pub(crate) fn edit_result(path: &str) -> Value {
+    pub fn edit_result(path: &str) -> Value {
         use horizon_agent::contract::tool_output::{EditOutcome, EditReceipt, FileEdits};
         serde_json::to_value(FileEdits {
             edits: vec![EditReceipt {
@@ -124,7 +124,7 @@ pub(crate) mod test_support {
         .unwrap()
     }
 
-    pub(crate) fn approval_requested(call_id: &str) -> AgentFrameItem {
+    pub fn approval_requested(call_id: &str) -> AgentFrameItem {
         AgentFrameItem::Permission(Permission {
             identity: ToolCallIdentity {
                 call_id: call_id.to_string(),
@@ -135,7 +135,7 @@ pub(crate) mod test_support {
         })
     }
 
-    pub(crate) fn diff_texts(lines: &[DiffLine]) -> Vec<(DiffLineKind, &str)> {
+    pub fn diff_texts(lines: &[DiffLine]) -> Vec<(DiffLineKind, &str)> {
         lines
             .iter()
             .map(|line| (line.kind, line.text.as_str()))

@@ -4007,11 +4007,15 @@ dependencies = [
  "gpui-pre-platform",
  "horizon-acp",
  "horizon-agent",
+ "horizon-agent-display",
  "horizon-board",
  "horizon-cli",
  "horizon-config",
  "horizon-control",
+ "horizon-shell-runtime",
  "horizon-terminal-core",
+ "horizon-theme",
+ "horizon-wiki",
  "horizon-wire",
  "horizon-workspace",
  "log",
@@ -4070,6 +4074,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-agent-display"
+version = "0.1.0"
+
+[[package]]
 name = "horizon-board"
 version = "0.1.0"
 dependencies = [
@@ -4089,6 +4097,7 @@ version = "0.1.0"
 dependencies = [
  "horizon-board",
  "horizon-control",
+ "horizon-wiki",
  "serde_json",
  "tokio",
 ]
@@ -4154,6 +4163,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-shell-runtime"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "crossbeam-channel",
+ "futures",
+ "horizon-acp",
+ "horizon-agent",
+ "horizon-agent-display",
+ "horizon-control",
+ "horizon-terminal-core",
+ "horizon-wire",
+ "horizon-workspace",
+ "log",
+ "remoc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "horizon-terminal-core"
 version = "0.1.0"
 dependencies = [
@@ -4167,6 +4199,26 @@ dependencies = [
  "termwiz",
  "tracing",
  "unicode-width",
+ "uuid",
+]
+
+[[package]]
+name = "horizon-theme"
+version = "0.1.0"
+dependencies = [
+ "horizon-config",
+]
+
+[[package]]
+name = "horizon-wiki"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "markdown",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
  "uuid",
 ]
 

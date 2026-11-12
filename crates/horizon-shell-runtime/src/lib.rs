@@ -28,6 +28,7 @@
 
 mod agent;
 pub mod agent_model;
+pub mod agent_view;
 mod attachment;
 mod common;
 mod connection;
