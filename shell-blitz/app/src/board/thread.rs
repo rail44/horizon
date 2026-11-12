@@ -43,12 +43,12 @@ pub const CSS: &str = "
                     outline: none; background: var(--background); color: var(--text);
                     font-family: var(--font-family); font-size: var(--body-size);
                     line-height: var(--body-line);
-        &.none > .column, &.none > .composer { display: none; }
-        /* Not `display: none`: what is inside the band changes while there
-           is no task, and blitz-dom lays out a box whose children changed
+        /* Not `display: none`: what is inside these changes while there is
+           no task, and blitz-dom lays out a box whose children changed
            while it was not displayed from the children it had. */
-        &.none > .band { visibility: hidden; height: 0; padding: 0; border: none;
-                         overflow: hidden; }
+        &.none > .band, &.none > .column, &.none > .composer {
+            visibility: hidden; flex: none; height: 0; min-height: 0; padding: 0;
+            border: none; overflow: hidden; }
         .missing { padding: var(--u16); font-size: var(--meta-size);
                    line-height: var(--meta-line); color: var(--text-muted); }
         .band { position: relative; flex: none; display: flex; flex-direction: column;

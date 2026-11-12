@@ -391,3 +391,34 @@ fn the_dialog_keeps_a_new_thread_open_and_closes() {
     assert_eq!(opened.all("post").len(), 2);
     assert_eq!(opened.all("composer").len(), 1);
 }
+
+#[test]
+fn threads_move_between_the_margin_and_the_text_as_the_pane_is_resized() {
+    use horizon_ui::blitz_traits::shell::{ColorScheme, Viewport};
+
+    let opened = open("resized");
+    opened.comment_on("helper", "Which helper?");
+    opened.comment_on("nono", "Why first?");
+    let resize = |width: u32| {
+        let document = opened.app.document();
+        (document.borrow_mut()).set_viewport(Viewport::new(width, 700, 1., ColorScheme::Light));
+    };
+    // Narrower, wider, and again: the margin is not displayed while there
+    // is none, and its threads are made again each time it is.
+    for _ in 0..3 {
+        resize(500);
+        opened.until("no margin", || opened.wiki.margin.get_untracked().is_none());
+        opened.app.resolve();
+        assert_eq!(opened.all("thread").len(), 2);
+        assert!(opened.all("aside").is_empty());
+        resize(700);
+        opened.until("a margin", || opened.wiki.margin.get_untracked().is_some());
+        opened.app.resolve();
+        assert_eq!(opened.all("thread").len(), 2);
+        assert_eq!(opened.all("aside").len(), 2);
+    }
+    // A thread opened and shut in the margin after that.
+    opened.click(opened.all("head")[0]);
+    opened.click(opened.all("head")[0]);
+    assert_eq!(opened.all("thread").len(), 2);
+}

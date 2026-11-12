@@ -116,6 +116,7 @@ pub const CSS: &str = "
                   padding: var(--u24) var(--u16) var(--u32) var(--u16); }
         .unit { position: absolute; width: var(--u16); height: 0; visibility: hidden; }
         .row { flex: none; display: flex; align-items: flex-start; gap: var(--u24); }
+        .row.narrow { gap: 0; }
         .text { flex: 1; min-width: 0; display: flex; flex-direction: column;
                 gap: var(--u8); }
         .margin { flex: none; position: relative; }
@@ -1052,15 +1053,21 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
     // The margin: what starts a comment and the threads, in the order of
     // their blocks. Each is placed after layout, by its slot.
     let (listing, placing) = (held.clone(), held.clone());
+    // (Without a margin the column is of no width, and the row has no gap
+    // before it. It is not taken off the page with `display: none`: its
+    // items change while it is away, and blitz-dom lays out a box whose
+    // children changed while it was not displayed from the children it
+    // had.)
     let margin = el("div")
         .class("margin")
-        .style_dyn("display", move || {
-            if wide.get() { "block" } else { "none" }.to_string()
-        })
         .style_dyn("width", move || {
-            format!("{}px", state.margin.get().unwrap_or(0.))
+            let width = state.margin.get().filter(|_| wide.get());
+            format!("{}px", width.unwrap_or(0.))
         })
-        .style_dyn("min-height", move || format!("{}px", state.reach.get()))
+        .style_dyn("min-height", move || {
+            let reach = if wide.get() { state.reach.get() } else { 0. };
+            format!("{reach}px")
+        })
         .each(
             move || {
                 let page = state.page.get().filter(|_| wide.get());
@@ -1105,7 +1112,10 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
         );
 
     let unit = el("div").class("unit");
-    let row = el("div").class("row").child(text).child(margin);
+    let row = el("div")
+        .class_dyn(move || if wide.get() { "row" } else { "row narrow" }.to_string())
+        .child(text)
+        .child(margin);
     // After them, the threads whose passage has gone.
     scroll.child(unit).child(row).each(
         move || {
