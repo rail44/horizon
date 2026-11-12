@@ -984,3 +984,63 @@ fn a_notification_a_program_asks_for_is_posted_unless_its_pane_is_looked_at() {
     opened.app.resolve();
     assert!(opened.model(|model| model.is_active_pane(first)));
 }
+
+/// How many pixels of the page inside a node's box are not `background`.
+fn inked(opened: &Opened, node: NodeId, background: [u8; 3]) -> usize {
+    use anyrender::ImageRenderer as _;
+
+    let (width, height) = (1200, 800);
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut pixels = Vec::new();
+    let document = opened.app.document();
+    renderer.render_to_vec(
+        |scene| {
+            blitz_paint::paint_scene(scene, &mut document.borrow_mut(), 1.0, width, height, 0, 0)
+        },
+        &mut pixels,
+    );
+    let (x, y, wide, tall) = opened.bounds(node);
+    let mut inked = 0;
+    for row in (y as usize + 2)..((y + tall) as usize - 2) {
+        for column in (x as usize + 2)..((x + wide) as usize - 2) {
+            let at = (row * width as usize + column) * 4;
+            if [pixels[at], pixels[at + 1], pixels[at + 2]] != background {
+                inked += 1;
+            }
+        }
+    }
+    inked
+}
+
+#[test]
+fn a_terminal_that_was_there_before_a_split_is_still_drawn_after_it() {
+    let opened = open();
+    let first = opened.panes()[0];
+    opened.prompt(first);
+    opened.run("echo before-the-split");
+    opened.wait(first, "the output", |text| {
+        text.contains("before-the-split")
+    });
+    let background = opened
+        .shell
+        .theme
+        .with_untracked(|theme| theme.terminal().background);
+    let screen = |at: usize| opened.all("terminal")[at];
+    assert!(inked(&opened, screen(0), background) > 50, "drawn before");
+
+    opened.chord();
+    opened.character("s");
+    let second = opened.panes()[1];
+    opened.prompt(second);
+    opened.wait(first, "what it showed", |text| {
+        text.contains("before-the-split")
+    });
+    opened.app.resolve();
+    assert_eq!(opened.all("terminal").len(), 2);
+    let (left, right) = (
+        inked(&opened, screen(0), background),
+        inked(&opened, screen(1), background),
+    );
+    assert!(right > 5, "the new terminal is drawn: {right}");
+    assert!(left > 50, "the first terminal is still drawn: {left}");
+}

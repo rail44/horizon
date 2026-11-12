@@ -639,17 +639,21 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
                 area.look.borrow().line_height as f32,
             ))
         })
-        .widget(Screen {
-            state: state.clone(),
-            shaper: Shaper::with_font(
-                &state.look.borrow().font_family,
-                state.look.borrow().font_size,
-            ),
-            rows: Vec::new(),
-            history: (0, std::collections::HashMap::new()),
-            shaped_at: 0.,
-            baseline: 0.,
-            styled: 0,
+        .widget({
+            let state = state.clone();
+            move || Screen {
+                state: state.clone(),
+                shaper: Shaper::with_font(
+                    &state.look.borrow().font_family,
+                    state.look.borrow().font_size,
+                ),
+                rows: Vec::new(),
+                history: (0, std::collections::HashMap::new()),
+                shaped_at: 0.,
+                baseline: 0.,
+                // (The first paint takes the look as it is then.)
+                styled: u64::MAX,
+            }
         });
 
     // The session's frames and updates come in with every layout, and the

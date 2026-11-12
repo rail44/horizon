@@ -128,6 +128,21 @@ impl El {
             if mutator.node_has_parent(self.0) {
                 mutator.remove_node(self.0);
             }
+            drop(mutator);
+            // blitz-dom let go of the widgets of what was taken out: each
+            // is made again, to go with its element.
+            let shared = shared();
+            let mut pending = vec![self.0];
+            while let Some(id) = pending.pop() {
+                let Some(node) = document.get_node(id) else {
+                    continue;
+                };
+                pending.extend(node.children.iter().copied());
+                let maker = shared.widgets.borrow().get(&id).cloned();
+                if let Some(maker) = maker {
+                    document.set_custom_widget(id, maker());
+                }
+            }
         });
         self
     }
@@ -154,10 +169,14 @@ impl El {
         self
     }
 
-    /// Hands the element's box to `widget`, which paints it itself: the
-    /// place for content the document does not describe (a terminal's grid).
-    pub fn widget(self, widget: impl blitz_dom::Widget + 'static) -> Self {
-        with_document(|document| document.set_custom_widget(self.0, Box::new(widget)));
+    /// Hands the element's box to the widget `make` makes, which paints
+    /// it itself: the place for content the document does not describe (a
+    /// terminal's grid). The widget is made again when the element is put
+    /// somewhere else, so what it keeps is what it can make again.
+    pub fn widget<W: blitz_dom::Widget + 'static>(self, make: impl Fn() -> W + 'static) -> Self {
+        let make: crate::shared::WidgetMaker = Rc::new(move || Box::new(make()));
+        with_document(|document| document.set_custom_widget(self.0, make()));
+        shared().widgets.borrow_mut().insert(self.0, make);
         self
     }
 

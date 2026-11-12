@@ -16,6 +16,8 @@ pub(crate) type Deferred = Box<dyn FnOnce(&mut BaseDocument)>;
 /// the element's own box, or nowhere to show.
 pub(crate) type TextArea = Box<dyn Fn() -> Option<(f32, f32, f32, f32)>>;
 pub(crate) type PasteTaker = Rc<dyn Fn(&str)>;
+/// Makes the widget that paints an element.
+pub(crate) type WidgetMaker = Rc<dyn Fn() -> Box<dyn blitz_dom::Widget>>;
 pub(crate) type PollWork = Box<dyn FnMut(&std::task::Waker)>;
 /// Work done after every layout, under the id it is taken back out by.
 pub(crate) type LayoutWork = (u64, Box<dyn FnMut(&mut BaseDocument)>);
@@ -47,6 +49,10 @@ pub(crate) struct Shared {
     /// What takes a paste when the focus is on an element that is not a
     /// text field.
     pub(crate) pastes: RefCell<HashMap<NodeId, PasteTaker>>,
+    /// What makes the widget of each element that has one: blitz-dom lets
+    /// go of a node's widget when the node is taken out of its parent,
+    /// also to be put somewhere else.
+    pub(crate) widgets: RefCell<HashMap<NodeId, WidgetMaker>>,
     /// What runs after every layout, with the boxes that layout made.
     pub(crate) laid_out: RefCell<Vec<LayoutWork>>,
     /// The ids of the work whose owner has gone, to be dropped from
@@ -73,6 +79,7 @@ impl Shared {
             text_targets: RefCell::default(),
             composing_for: Cell::new(None),
             pastes: RefCell::default(),
+            widgets: RefCell::default(),
             laid_out: RefCell::default(),
             retired: RefCell::default(),
             polled: RefCell::default(),
@@ -141,6 +148,7 @@ pub(crate) fn drop_node(shared: &Shared, document: &mut BaseDocument, node: Node
         shared.captures.borrow_mut().remove(&id);
         shared.text_targets.borrow_mut().remove(&id);
         shared.pastes.borrow_mut().remove(&id);
+        shared.widgets.borrow_mut().remove(&id);
     }
     document.mutate().remove_and_drop_node(node);
 }
