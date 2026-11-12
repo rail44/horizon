@@ -8,6 +8,8 @@ edition = "2021"
 # W3C Web Annotation, and the skill that maintains it. Depends on neither
 # horizon-agent nor gpui; horizon-agentd and the shell compose it.
 [dependencies]
+# The front matter a page's view model splits off the body.
+horizon-workspace = { path = "../horizon-workspace" }
 libc = "0.2"
 # The parser gpui-component's TextView renders Markdown with, so the logical
 # text built here and the view's rendering read the same syntax tree.

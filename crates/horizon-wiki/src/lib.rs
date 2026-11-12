@@ -14,6 +14,7 @@ pub mod page;
 pub mod skill;
 pub mod store;
 pub mod thread;
+pub mod view_model;
 
 pub use page::{Edit, PageInfo};
 pub use store::Store;
