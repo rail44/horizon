@@ -23,6 +23,13 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
+The shell moves from GPUI to Blitz (signals over a CSS document, painted
+by Vello): a second binary in a workspace of its own until parity, then the
+GPUI shell is deleted. Decided on board #75; the stack, the route and the
+order are in [the migration design](ui-foundation-migration-design.md),
+and the survey and the spike behind it in
+[the research record](research/ui-foundation-candidates-2026-11-11.md).
+
 The containment perimeter moves from "spawned isolated" to the sandbox
 itself: one session kind, `bash` always sandboxed with the gitdir excluded
 from the writable root, host execution only as the no-sandbox fallback,
