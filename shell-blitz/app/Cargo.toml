@@ -8,8 +8,24 @@ publish = false
 [dependencies]
 horizon-ui = { path = "../ui" }
 horizon-theme-css = { path = "../theme" }
-blitz-shell = { workspace = true }
+horizon-shell-runtime = { path = "../../crates/horizon-shell-runtime" }
+horizon-terminal-core = { path = "../../crates/horizon-terminal-core" }
+anyrender = "0.14"
 anyrender_vello = "0.15"
+blitz-shell = { workspace = true }
+crossbeam-channel = "0.5"
+futures = "0.3"
+keyboard-types = "0.8"
+kurbo = "0.13"
+parley = "0.12"
+peniko = "0.6"
+termwiz = { version = "0.23.3", features = ["use_serde"] }
+unicode-width = "0.2"
+uuid = { version = "1.18", features = ["v4"] }
+
+[dev-dependencies]
+# The terminal view's tests run the terminal core over a PTY of their own.
+portable-pty = "0.9.0"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

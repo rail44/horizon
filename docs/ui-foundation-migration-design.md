@@ -79,6 +79,14 @@ shell hands each frame's layout to the layer (`set_frame`) instead of
 resolving the document itself. `blitz-dom`, `blitz-paint` and
 `blitz-traits` are pinned by revision. Nothing is posted upstream.
 
+Until it replaces the GPUI shell, the new shell does not share that
+shell's daemons. The runtime clients drain and restart a daemon whose build
+does not match theirs, so a shell under development reaching the terminal
+daemon in daily use would end every terminal running in it. Its sockets
+are in a directory of its own (`$XDG_RUNTIME_DIR/horizon-blitz/`, or
+`$HORIZON_BLITZ_RUNTIME_DIR`), where it starts daemons of its own from the
+root workspace's build.
+
 The workspace's crates:
 
 - `shell-blitz/ui` (`horizon-ui`): the layer.
