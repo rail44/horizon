@@ -1,6 +1,8 @@
 //! The wiki view: one page of the project wiki drawn as running text, with
-//! each comment thread marked where it points and read after the block
-//! its passage starts in.
+//! each comment thread marked where it points. On a pane wide enough for
+//! a margin, threads sit in a column beside the text, each at the top of
+//! the block its passage starts in and below the thread before it; on a
+//! narrower one they are in the text, after that block.
 //!
 //! A thread starts closed, as one line (its quote, how many comments,
 //! whether an agent is replying), and opens on a click; an open thread
@@ -14,9 +16,8 @@
 //! log and that list are watched, so an answer or an edit is drawn.
 //!
 //! The page as a view reads it is `horizon-wiki`'s `view_model`, as the
-//! GPUI shell's view uses it. That view also sets threads in a margin
-//! beside the text on a wide pane, and has a second layout with a dialog;
-//! here they are in the page at any width.
+//! GPUI shell's view uses it. That view also has a second layout, with a
+//! dialog over the page; this one does not.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -25,10 +26,13 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use horizon_ui::blitz_traits::events::DomEventData;
+use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue};
 use horizon_ui::reactive_graph::signal::RwSignal;
-use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, With, WithValue};
+use horizon_ui::reactive_graph::traits::{
+    Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
+};
 use horizon_ui::{
     El, Page, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
 };
@@ -87,6 +91,12 @@ pub const CSS: &str = "
         .scroll { flex: 1; min-height: 0; overflow-y: scroll; display: flex;
                   flex-direction: column; gap: var(--u8);
                   padding: var(--u24) var(--u16) var(--u32) var(--u16); }
+        .unit { position: absolute; width: var(--u16); height: 0; visibility: hidden; }
+        .row { flex: none; display: flex; align-items: flex-start; gap: var(--u24); }
+        .text { flex: 1; min-width: 0; display: flex; flex-direction: column;
+                gap: var(--u8); }
+        .margin { flex: none; position: relative; }
+        .aside { position: absolute; left: 0; right: 0; }
         .block { white-space: pre-wrap; }
         .block > :first-child { margin-top: 0; }
         .block > :last-child { margin-bottom: 0; }
@@ -158,6 +168,19 @@ pub const CSS: &str = "
     }
 ";
 
+/// The share of the width the margin takes.
+const MARGIN_SHARE: f64 = 0.4;
+
+/// The margin's width for `available` (the width the page's text and its
+/// margin share), or `None` when the text beside it would get too narrow.
+/// `unit` is what one pixel of the reference type size is drawn as.
+fn margin_for(available: f64, unit: f64) -> Option<f64> {
+    let margin = (available * MARGIN_SHARE)
+        .clamp(240. * unit, 560. * unit)
+        .round();
+    (available - margin - 24. * unit >= 280. * unit).then_some(margin)
+}
+
 /// What is outside the view: a URL handed to the desktop.
 pub type OpenUrl = Rc<dyn Fn(&str)>;
 
@@ -180,6 +203,10 @@ struct Held {
     /// Each block's runs of text, and its element.
     pieces: RefCell<HashMap<usize, Vec<Piece>>>,
     blocks: RefCell<HashMap<usize, El>>,
+    /// What is in the margin, in order: the block each item is beside and
+    /// the item's slot. And each slot's element.
+    beside: RefCell<Vec<(usize, String)>>,
+    asides: RefCell<HashMap<String, El>>,
     /// The block to bring into view at the next layout.
     reveal: Cell<Option<usize>>,
     /// Who comments here: the installation's owner.
@@ -202,6 +229,12 @@ pub struct Wiki {
     /// The pages left by following links, most recent last.
     pub history: RwSignal<Vec<PathBuf>>,
     typed: RwSignal<String>,
+    /// The margin's width, on a pane wide enough for one.
+    pub margin: RwSignal<Option<f64>>,
+    /// Where each item of the margin is from the margin's top, by slot,
+    /// and how far down the items reach.
+    tops: RwSignal<HashMap<String, f64>>,
+    reach: RwSignal<f64>,
     held: StoredValue<Rc<Held>, LocalStorage>,
     pub element: El,
     scroll: El,
@@ -222,6 +255,18 @@ enum Line {
         key: String,
     },
     Orphans,
+}
+
+impl Line {
+    /// What names the line's place in the margin, whatever it shows there
+    /// just now.
+    fn slot(&self) -> String {
+        match self {
+            Line::Thread { placed, .. } => placed.thread.root.id.clone(),
+            Line::New(_) | Line::Offer => "starting".to_string(),
+            Line::Block { .. } | Line::Orphans => String::new(),
+        }
+    }
 }
 
 fn one_line(text: &str) -> String {
@@ -647,6 +692,9 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
         notice: RwSignal::new(None),
         history: RwSignal::new(Vec::new()),
         typed: RwSignal::new(String::new()),
+        margin: RwSignal::new(None),
+        tops: RwSignal::new(HashMap::new()),
+        reach: RwSignal::new(0.),
         held: StoredValue::new_local(Rc::new(Held {
             background: Background::new(wake.clone()),
             wake,
@@ -655,6 +703,8 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
             watches: RefCell::default(),
             pieces: RefCell::default(),
             blocks: RefCell::default(),
+            beside: RefCell::default(),
+            asides: RefCell::default(),
             reveal: Cell::new(None),
             owner: Cell::new(None),
         })),
@@ -710,42 +760,106 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
             },
         );
 
-    // The page: its blocks in order, each followed by what is set after
-    // it, then the threads whose passage has gone.
+    // A thread's card as a line, and what starts a comment: both tracked.
+    let card = move |page: &WikiPage, placed: &PlacedThread| {
+        let root = &placed.thread.root.id;
+        let key = thread_key(
+            placed,
+            state.expanded.with(|expanded| expanded.contains(root)),
+            state.focused.with(|focused| focused.as_ref() == Some(root)),
+            state
+                .target
+                .with(|target| *target == Some(Target::Thread(root.clone()))),
+            placed.replying(&page.replying),
+        );
+        Line::Thread {
+            placed: Box::new(placed.clone()),
+            key,
+        }
+    };
+    let starting = move |page: &WikiPage| match state.target.get() {
+        Some(Target::Selection(chars)) => {
+            (page.block_of(chars.clone())).map(|block| (block, Line::New(chars)))
+        }
+        Some(Target::Thread(_)) => None,
+        None => (state.selection.get())
+            .and_then(|chars| page.block_of(chars))
+            .map(|block| (block, Line::Offer)),
+    };
+    let key_of = |line: &Line| match line {
+        Line::Block { key, .. } => format!("block {key}"),
+        Line::Offer => "offer".to_string(),
+        Line::New(chars) => format!("new {chars:?}"),
+        Line::Thread { key, .. } => format!("thread {key}"),
+        Line::Orphans => "orphans".to_string(),
+    };
+    let wide = Memo::new(move |_| state.margin.with(Option::is_some));
+
     let drawing = held.clone();
-    scroll.each(
+    let draw: Rc<dyn Fn(&Line) -> El> = Rc::new(move |line| {
+        let Some(page) = state.page.get_untracked() else {
+            return el("div");
+        };
+        match line {
+            Line::Block { index, .. } => {
+                let focused = state.focused.get_untracked();
+                let marks: Vec<render::Mark> = (page.threads.iter())
+                    .filter_map(|placed| {
+                        let lit = focused.as_ref() == Some(&placed.thread.root.id);
+                        Some((placed.anchor.range()?, lit))
+                    })
+                    .collect();
+                let Some(range) = page.blocks.get(*index).cloned() else {
+                    return el("div");
+                };
+                let on_link: Rc<dyn Fn(&str)> = Rc::new(move |target| state.follow_link(target));
+                let (element, pieces) = render::block(&page, range, &marks, on_link);
+                drawing.pieces.borrow_mut().insert(*index, pieces);
+                drawing.blocks.borrow_mut().insert(*index, element);
+                element
+            }
+            // (Pressed, not clicked: the press itself would take the
+            // selection it is an offer for.)
+            Line::Offer => el("div")
+                .class("offer")
+                .child(
+                    el("div")
+                        .class("button")
+                        .text(COMMENT)
+                        .on("pointerdown", move |_| {
+                            state.comment_on_selection();
+                            prevent_default();
+                            stop_propagation();
+                        }),
+                )
+                .child(el("span").class("key").text("c")),
+            Line::New(chars) => {
+                let quote = one_line(&page.quote_of(chars.clone()));
+                el("div")
+                    .class("new")
+                    .child(
+                        el("div").class("quoted").child(
+                            el("span")
+                                .class("quote")
+                                .text(&format!("{COMMENT_ON} “{quote}”")),
+                        ),
+                    )
+                    .child(composer(state))
+            }
+            Line::Thread { placed, .. } => thread(state, placed, placed.replying(&page.replying)),
+            Line::Orphans => el("div").class("orphans").text(ORPHANS),
+        }
+    });
+
+    // The page's text: its blocks in order, each followed, when there is
+    // no margin, by what is set after it.
+    let text = el("div").class("text").each(
         move || {
             let Some(page) = state.page.get() else {
                 return Vec::new();
             };
             let focused = state.focused.get();
-            let expanded = state.expanded.get();
-            let target = state.target.get();
-            let selection = state.selection.get();
-            let card = |placed: &PlacedThread| {
-                let root = &placed.thread.root.id;
-                let replying = placed.replying(&page.replying);
-                let key = thread_key(
-                    placed,
-                    expanded.contains(root),
-                    focused.as_ref() == Some(root),
-                    target == Some(Target::Thread(root.clone())),
-                    replying,
-                );
-                Line::Thread {
-                    placed: Box::new(placed.clone()),
-                    key,
-                }
-            };
-            let starting = match &target {
-                Some(Target::Selection(chars)) => {
-                    (page.block_of(chars.clone())).map(|block| (block, Line::New(chars.clone())))
-                }
-                Some(Target::Thread(_)) => None,
-                None => (selection.clone())
-                    .and_then(|chars| page.block_of(chars))
-                    .map(|block| (block, Line::Offer)),
-            };
+            let starting = (!wide.get()).then(|| starting(&page)).flatten();
             let mut lines = Vec::new();
             for (index, block) in page.blocks.iter().enumerate() {
                 // The block is drawn again when its text is another, or
@@ -763,86 +877,98 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
                     .collect();
                 let key = format!("{index} {} {marks:?}", &page.document.body[block.clone()]);
                 lines.push(Line::Block { index, key });
+                if wide.get() {
+                    continue;
+                }
                 if let Some((_, line)) = starting.as_ref().filter(|(at, _)| *at == index) {
                     lines.push(line.clone());
                 }
                 for placed in &page.threads {
                     if placed.block == Some(index) {
-                        lines.push(card(placed));
+                        lines.push(card(&page, placed));
                     }
                 }
             }
-            let orphans: Vec<Line> = page.orphans().map(|(_, placed)| card(placed)).collect();
-            if !orphans.is_empty() {
-                lines.push(Line::Orphans);
-                lines.extend(orphans);
-            }
             lines
         },
-        |line| match line {
-            Line::Block { key, .. } => format!("block {key}"),
-            Line::Offer => "offer".to_string(),
-            Line::New(chars) => format!("new {chars:?}"),
-            Line::Thread { key, .. } => format!("thread {key}"),
-            Line::Orphans => "orphans".to_string(),
+        key_of,
+        {
+            let draw = draw.clone();
+            move |line| draw(line)
         },
-        move |line| {
-            let Some(page) = state.page.get_untracked() else {
-                return el("div");
-            };
-            match line {
-                Line::Block { index, .. } => {
-                    let focused = state.focused.get_untracked();
-                    let marks: Vec<render::Mark> = (page.threads.iter())
-                        .filter_map(|placed| {
-                            let lit = focused.as_ref() == Some(&placed.thread.root.id);
-                            Some((placed.anchor.range()?, lit))
+    );
+
+    // The margin: what starts a comment and the threads, in the order of
+    // their blocks. Each is placed after layout, by its slot.
+    let (listing, placing) = (held.clone(), held.clone());
+    let margin = el("div")
+        .class("margin")
+        .style_dyn("display", move || {
+            if wide.get() { "block" } else { "none" }.to_string()
+        })
+        .style_dyn("width", move || {
+            format!("{}px", state.margin.get().unwrap_or(0.))
+        })
+        .style_dyn("min-height", move || format!("{}px", state.reach.get()))
+        .each(
+            move || {
+                let page = state.page.get().filter(|_| wide.get());
+                let mut lines: Vec<(usize, Line)> = (page.iter())
+                    .flat_map(|page| {
+                        (page.threads.iter())
+                            .filter_map(|placed| Some((placed.block?, card(page, placed))))
+                    })
+                    .collect();
+                if let Some((block, line)) = page.as_ref().and_then(|page| starting(page)) {
+                    let at = (lines.iter())
+                        .position(|(other, _)| *other >= block)
+                        .unwrap_or(lines.len());
+                    lines.insert(at, (block, line));
+                }
+                let beside: Vec<(usize, String)> = (lines.iter())
+                    .map(|(block, line)| (*block, line.slot()))
+                    .collect();
+                // The elements of what left the margin are let go of.
+                (listing.asides.borrow_mut())
+                    .retain(|slot, _| beside.iter().any(|(_, kept)| kept == slot));
+                *listing.beside.borrow_mut() = beside;
+                lines.into_iter().map(|(_, line)| line).collect::<Vec<_>>()
+            },
+            key_of,
+            {
+                let draw = draw.clone();
+                move |line| {
+                    let slot = line.slot();
+                    let at = slot.clone();
+                    let item = el("div")
+                        .class("aside")
+                        .style_dyn("top", move || {
+                            let top = state.tops.with(|tops| tops.get(&at).copied());
+                            format!("{}px", top.unwrap_or(0.))
                         })
-                        .collect();
-                    let Some(range) = page.blocks.get(*index).cloned() else {
-                        return el("div");
-                    };
-                    let on_link: Rc<dyn Fn(&str)> =
-                        Rc::new(move |target| state.follow_link(target));
-                    let (element, pieces) = render::block(&page, range, &marks, on_link);
-                    drawing.pieces.borrow_mut().insert(*index, pieces);
-                    drawing.blocks.borrow_mut().insert(*index, element);
-                    element
+                        .child(draw(line));
+                    placing.asides.borrow_mut().insert(slot, item);
+                    item
                 }
-                // (Pressed, not clicked: the press itself would take the
-                // selection it is an offer for.)
-                Line::Offer => {
-                    el("div")
-                        .class("offer")
-                        .child(el("div").class("button").text(COMMENT).on(
-                            "pointerdown",
-                            move |_| {
-                                state.comment_on_selection();
-                                prevent_default();
-                                stop_propagation();
-                            },
-                        ))
-                        .child(el("span").class("key").text("c"))
-                }
-                Line::New(chars) => {
-                    let quote = one_line(&page.quote_of(chars.clone()));
-                    el("div")
-                        .class("new")
-                        .child(
-                            el("div").class("quoted").child(
-                                el("span")
-                                    .class("quote")
-                                    .text(&format!("{COMMENT_ON} “{quote}”")),
-                            ),
-                        )
-                        .child(composer(state))
-                }
-                Line::Thread { placed, .. } => {
-                    thread(state, placed, placed.replying(&page.replying))
-                }
-                Line::Orphans => el("div").class("orphans").text(ORPHANS),
-            }
+            },
+        );
+
+    let unit = el("div").class("unit");
+    let row = el("div").class("row").child(text).child(margin);
+    // After them, the threads whose passage has gone.
+    scroll.child(unit).child(row).each(
+        move || {
+            let Some(page) = state.page.get() else {
+                return Vec::new();
+            };
+            let orphans: Vec<Line> = (page.orphans())
+                .map(|(_, placed)| card(&page, placed))
+                .collect();
+            let heading = (!orphans.is_empty()).then_some(Line::Orphans);
+            heading.into_iter().chain(orphans).collect::<Vec<_>>()
         },
+        key_of,
+        move |line| draw(line),
     );
 
     // After each layout: what was read off the UI thread, a change of the
@@ -863,6 +989,43 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
         if selected != state.selection.get_untracked() {
             state.selection.set(selected);
             relayout();
+        }
+        // Whether there is a margin, from the width the text and it share.
+        let scale = page.size(unit).map_or(1., |(width, _)| width / 16.);
+        let fits = (page.size(row)).and_then(|(width, _)| margin_for(width, scale.max(0.1)));
+        if fits != state.margin.get_untracked() {
+            state.margin.set(fits);
+            relayout();
+            return;
+        }
+        // Each item of the margin at the top of its block, or below the
+        // item before it.
+        if let Some(column) = fits.and_then(|_| page.bounds(margin)) {
+            let (blocks, asides) = (laid.blocks.borrow(), laid.asides.borrow());
+            let mut tops = HashMap::new();
+            let mut cursor = 0.;
+            for (block, slot) in laid.beside.borrow().iter() {
+                let Some(item) = asides.get(slot).and_then(|item| page.bounds(*item)) else {
+                    continue;
+                };
+                let beside = (blocks.get(block))
+                    .and_then(|block| page.bounds(*block))
+                    .map_or(0., |block| (block.y - column.y).max(0.));
+                let top = beside.max(cursor);
+                cursor = top + item.height + 8. * scale;
+                tops.insert(slot.clone(), top);
+            }
+            let moved = state.tops.with_untracked(|placed| {
+                placed.len() != tops.len()
+                    || (tops.iter()).any(|(slot, top)| {
+                        placed.get(slot).is_none_or(|was| (was - top).abs() > 0.5)
+                    })
+            });
+            if moved || (state.reach.get_untracked() - cursor).abs() > 0.5 {
+                state.tops.set(tops);
+                state.reach.set(cursor);
+                relayout();
+            }
         }
         if let Some(index) = laid.reveal.take() {
             let block = laid.blocks.borrow().get(&index).copied();

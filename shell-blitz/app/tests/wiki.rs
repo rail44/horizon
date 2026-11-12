@@ -38,6 +38,11 @@ Then the agent, see [the other page](other.md).\n\n\
 - one item\n- another item\n";
 
 fn open(name: &str) -> Opened {
+    open_at(name, 700)
+}
+
+/// A view `width` wide: 700 has room for a margin, 500 has not.
+fn open_at(name: &str, width: u32) -> Opened {
     // `<wiki root>/<project>/`: the owner's id is kept beside the stores.
     let scratch = Scratch(
         std::env::temp_dir().join(format!("horizon-blitz-wiki-{name}-{}", std::process::id())),
@@ -50,7 +55,7 @@ fn open(name: &str) -> Opened {
     let path = store.page_path("sandbox").unwrap();
     let mut wiki = None;
     let css = [horizon_theme_css::CSS, CSS].concat();
-    let app = App::new(700, 700, &css, || {
+    let app = App::new(width, 700, &css, || {
         let (root, state) = view(Some(path), Rc::new(|_| {}), Wake::default());
         wiki = Some(state);
         themed(Theme::built_in, root.focus())
@@ -123,6 +128,29 @@ impl Opened {
         let document = self.app.document();
         let document = document.borrow();
         El(document.get_node(block).unwrap().children[0])
+    }
+
+    /// A node's box: its left, top, width and height.
+    fn bounds(&self, node: NodeId) -> (f64, f64, f64, f64) {
+        let document = self.app.document();
+        let document = document.borrow();
+        let bounds = document.get_client_bounding_rect(node).expect("a box");
+        (bounds.x, bounds.y, bounds.width, bounds.height)
+    }
+
+    /// Selects `passage` in the first block and sends `comment` on it.
+    fn comment_on(&self, passage: &str, comment: &str) {
+        let threads = self.all("thread").len();
+        let root = self.text_root(0);
+        let at = (self.text_of(self.all("block")[0]).find(passage)).expect("the passage");
+        select(&self.app, (root, at), (root, at + passage.len()));
+        self.until("the selection", || {
+            self.wiki.selection.get_untracked().is_some()
+        });
+        self.key(Key::Character("c".into()));
+        self.commit(comment);
+        self.key(Key::Named(NamedKey::Enter));
+        self.until("the thread", || self.all("thread").len() > threads);
     }
 
     fn click(&self, node: NodeId) {
@@ -224,6 +252,16 @@ fn a_selected_passage_is_commented_on_and_its_thread_replied_in() {
         "The helper runs nono first."
     );
 
+    // The pane has room for a margin: the thread is beside the text, level
+    // with the block its passage is in.
+    assert!(opened.wiki.margin.get_untracked().is_some());
+    let (block, card) = (
+        opened.bounds(opened.all("block")[0]),
+        opened.bounds(opened.all("thread")[0]),
+    );
+    assert!(card.0 >= block.0 + block.2, "{block:?} {card:?}");
+    assert!((card.1 - block.1).abs() < 1., "{block:?} {card:?}");
+
     // The head shuts the thread and opens it; opened, it has the field,
     // and what is sent from it is a reply.
     opened.click(opened.all("head")[0]);
@@ -255,4 +293,38 @@ fn a_selected_passage_is_commented_on_and_its_thread_replied_in() {
     // Escape leaves the field.
     opened.key(Key::Named(NamedKey::Escape));
     assert_eq!(opened.wiki.target.get_untracked(), None);
+}
+
+#[test]
+fn threads_in_the_margin_do_not_cover_each_other() {
+    let opened = open("margin");
+    // Two threads on the same block.
+    opened.comment_on("helper", "Which helper?");
+    opened.comment_on("nono", "Why first?");
+    opened.until("the second below the first", || {
+        let threads = opened.all("thread");
+        let (first, second) = (opened.bounds(threads[0]), opened.bounds(threads[1]));
+        second.1 >= first.1 + first.3
+    });
+    // Both open, the margin runs past the end of the text, and the page
+    // scrolls to the end of it.
+    assert_eq!(opened.all("post").len(), 2);
+    let last = opened.bounds(opened.all("thread")[1]);
+    let row = opened.bounds(opened.all("row")[0]);
+    let text = opened.bounds(opened.all("text")[0]);
+    assert!(last.1 + last.3 > text.1 + text.3, "{last:?} {text:?}");
+    assert!(row.1 + row.3 >= last.1 + last.3 - 1., "{row:?} {last:?}");
+}
+
+#[test]
+fn a_narrow_pane_has_its_threads_in_the_text() {
+    let opened = open_at("narrow", 500);
+    opened.comment_on("helper", "Which helper?");
+    assert_eq!(opened.wiki.margin.get_untracked(), None);
+    let (block, card) = (
+        opened.bounds(opened.all("block")[0]),
+        opened.bounds(opened.all("thread")[0]),
+    );
+    assert!(card.1 >= block.1 + block.3, "{block:?} {card:?}");
+    assert!((card.0 - block.0).abs() < 1., "{block:?} {card:?}");
 }
