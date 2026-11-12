@@ -1,7 +1,8 @@
 //! Horizon's shell on Blitz.
 //!
 //! So far the workspace with terminals in its panes, sessions of this
-//! shell's own `horizon-terminald`, in this machine's theme. The other
+//! shell's own `horizon-terminald`, in this machine's theme, kept between
+//! runs in a file of this shell's own. The other
 //! views arrive in the order of `docs/ui-foundation-migration-design.md`.
 //! The terminal daemon is the root workspace's: build it there first
 //! (`cargo build --workspace` at the repository's root).
@@ -10,15 +11,16 @@ use std::cell::Cell;
 
 use anyrender_vello::VelloWindowRenderer;
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
-use horizon_blitz::paths::{daemon_binary, runtime_dir};
+use horizon_blitz::paths::{daemon_binary, runtime_dir, workspace_state};
 use horizon_blitz::terminal::Session;
-use horizon_blitz::workspace;
+use horizon_blitz::{restore, workspace};
 use horizon_shell_runtime::TerminaldHandle;
 use horizon_terminal_core::{
     DEFAULT_SCROLLBACK_LINES, TerminalColorScheme, TerminalSize, TerminalSpawnSpec,
 };
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::{App, Live};
+use horizon_workspace::store::WorkspaceStateStore;
 
 fn main() {
     let sockets = runtime_dir();
@@ -37,6 +39,8 @@ fn main() {
     // GPUI shell's.
     let control_socket = sockets.join("control.sock");
     let terminald = TerminaldHandle::start(&sockets.join("terminald.sock"), &control_socket);
+    let store = WorkspaceStateStore::new(workspace_state());
+    let opening = restore::opening(store, &terminald);
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let directory = (std::env::current_dir().ok().or(home)).unwrap_or_else(|| "/".into());
     let spawn: workspace::Spawn = Box::new(move |starting| {
@@ -60,7 +64,7 @@ fn main() {
     let css = [horizon_theme_css::CSS, &workspace::css()].concat();
     let mut shell = None;
     let app = App::new(1100, 720, &css, || {
-        let (root, built) = workspace::view(look.terminal(), spawn);
+        let (root, built) = workspace::view(look.terminal(), spawn, opening);
         built.set_keymap(workspace::Keymap::from_config(horizon_config::load()));
         shell = Some(built);
         themed(move || look.clone(), root)

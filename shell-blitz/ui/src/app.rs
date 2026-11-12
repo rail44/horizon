@@ -18,7 +18,16 @@ use crate::shared::{Shared, enter, with_document};
 /// A document, the view built into it, and the signals' effects.
 pub struct App {
     pub(crate) shared: Rc<Shared>,
-    _owner: Owner,
+    owner: Owner,
+}
+
+impl Drop for App {
+    /// Ends what the view made: its effects, and what it kept (a session's
+    /// attachment, a connection). The thread goes on holding the owner as
+    /// its current one, so letting go of it here would end nothing.
+    fn drop(&mut self) {
+        self.owner.cleanup();
+    }
 }
 
 impl App {
@@ -27,6 +36,11 @@ impl App {
     pub fn new(width: u32, height: u32, css: &str, view: impl FnOnce() -> El) -> Self {
         // One executor a thread; a second `App` on it finds it set.
         let _ = Executor::init_futures_executor();
+        // A root of its own: not a child of whatever owner the thread had
+        // last, an earlier app's.
+        if let Some(earlier) = Owner::current() {
+            earlier.unset();
+        }
         let owner = Owner::new();
         owner.set();
         let mut document = BaseDocument::new(DocumentConfig {
@@ -47,10 +61,7 @@ impl App {
         });
         let view = view();
         body.child(view);
-        let app = Self {
-            shared,
-            _owner: owner,
-        };
+        let app = Self { shared, owner };
         app.run_effects();
         app
     }

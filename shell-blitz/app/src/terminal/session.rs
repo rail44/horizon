@@ -31,7 +31,9 @@ impl Session {
         let (latest, waker) = (Latest::default(), Wake::default());
         let (kept, woken) = (Arc::clone(&latest), Arc::clone(&waker));
         let mut frames = handle.frames();
-        // The frames are a watch: its newest value is what a view draws.
+        // The frames are a watch: its newest value is what a view draws,
+        // and for a session attached to again it is there already.
+        keep(&kept, frames.borrow_and_update().clone());
         std::thread::spawn(move || {
             futures::executor::block_on(async {
                 while frames.changed().await.is_ok() {

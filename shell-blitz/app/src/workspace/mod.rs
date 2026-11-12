@@ -127,6 +127,30 @@ pub struct Starting {
 /// Starts a terminal session.
 pub type Spawn = Box<dyn Fn(Starting) -> Session>;
 
+/// Keeps the model for the next run.
+pub type Save = Box<dyn FnMut(&Workspace)>;
+
+/// What the shell opens with.
+pub struct Opening {
+    pub model: Workspace,
+    /// The sessions of `model` that are running already.
+    pub sessions: Vec<(SessionId, Session)>,
+    /// Told the model whenever it has changed, to keep it for the next
+    /// run.
+    pub save: Option<Save>,
+}
+
+impl Default for Opening {
+    /// One terminal, kept nowhere.
+    fn default() -> Self {
+        Self {
+            model: Workspace::mvp(),
+            sessions: Vec::new(),
+            save: None,
+        }
+    }
+}
+
 /// Where a session not yet started is to begin.
 enum Start {
     Beside(SessionId),
@@ -452,10 +476,13 @@ fn strip(shell: Shell) -> El {
     )
 }
 
-/// Builds the shell over one terminal; `spawn` starts the session of each
-/// terminal pane, drawn in `look`.
-pub fn view(look: TerminalLook, spawn: Spawn) -> (El, Shell) {
-    let model = RwSignal::new(Workspace::mvp());
+/// Builds the shell over `opening`; `spawn` starts the session of each
+/// terminal pane that has none running, drawn in `look`.
+pub fn view(look: TerminalLook, spawn: Spawn, opening: Opening) -> (El, Shell) {
+    let model = RwSignal::new(opening.model);
+    let sessions = (opening.sessions.into_iter())
+        .map(|(id, session)| (id, Rc::new(session)))
+        .collect();
     let shell = Shell {
         model,
         mode: Memo::new(move |_| model.with(Workspace::is_workspace_mode_active)),
@@ -466,7 +493,7 @@ pub fn view(look: TerminalLook, spawn: Spawn) -> (El, Shell) {
         resizing: RwSignal::new(None),
         kept: StoredValue::new_local(Rc::new(Kept {
             panes: RefCell::default(),
-            sessions: RefCell::default(),
+            sessions: RefCell::new(sessions),
             starting: RefCell::default(),
             keymap: RefCell::default(),
             spawn,
@@ -486,6 +513,18 @@ pub fn view(look: TerminalLook, spawn: Spawn) -> (El, Shell) {
         shell.reconcile();
     });
     each_layout(move |_| shell.take_in_sessions());
+    // The model is kept as it changes, though not at every step of a
+    // boundary being dragged.
+    if let Some(mut save) = opening.save {
+        Effect::new(move |_| {
+            let dragging = shell.resizing.with(Option::is_some);
+            shell.model.with(|model| {
+                if !dragging {
+                    save(model);
+                }
+            });
+        });
+    }
 
     root.attr("tabindex", "0")
         .class_dyn(move || match shell.resizing.with(Option::is_some) {

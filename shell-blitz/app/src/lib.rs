@@ -2,5 +2,6 @@
 //! binary and the tests share.
 
 pub mod paths;
+pub mod restore;
 pub mod terminal;
 pub mod workspace;

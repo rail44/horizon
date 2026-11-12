@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use horizon_blitz::workspace::{Keymap, Modal, Shell, Spawn, css, view};
+use horizon_blitz::workspace::{Keymap, Modal, Opening, Shell, Spawn, css, view};
 use horizon_terminal_core::TerminalSize;
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
@@ -27,7 +27,7 @@ fn open() -> Opened {
     let css = [horizon_theme_css::CSS, &css()].concat();
     let app = App::new(1200, 800, &css, || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
-        let (root, built) = view(Theme::built_in().terminal(), spawn);
+        let (root, built) = view(Theme::built_in().terminal(), spawn, Opening::default());
         shell = Some(built);
         themed(Theme::built_in, root)
     });

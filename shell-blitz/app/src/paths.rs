@@ -38,3 +38,18 @@ pub fn daemon_binary(name: &str, exe: &Path) -> Option<PathBuf> {
     let built = root.join("target").join(profile.file_name()?).join(name);
     built.is_file().then_some(built)
 }
+
+/// The file this shell keeps its workspace in: `$HORIZON_BLITZ_WORKSPACE_STATE`,
+/// else `horizon-blitz/workspace.json` under `$XDG_STATE_HOME`, else under
+/// `~/.local/state`, else under the system's temporary directory. Never
+/// the GPUI shell's file: the sessions in it are another daemon's.
+pub fn workspace_state() -> PathBuf {
+    let set = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    if let Some(explicit) = set("HORIZON_BLITZ_WORKSPACE_STATE") {
+        return PathBuf::from(explicit);
+    }
+    let base = (set("XDG_STATE_HOME").map(PathBuf::from))
+        .or_else(|| set("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("horizon-blitz").join("workspace.json")
+}
