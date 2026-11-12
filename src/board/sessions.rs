@@ -15,35 +15,28 @@ use horizon_workspace::SessionId;
 use super::activity::BoardSessionActivity;
 use crate::agent::AgentSession;
 
-impl From<SessionStatus> for BoardSessionActivity {
-    fn from(status: SessionStatus) -> Self {
-        match status {
-            SessionStatus::Starting => Self::Starting,
-            SessionStatus::Running => Self::Running,
-            SessionStatus::ToolRunning => Self::ToolRunning,
-            SessionStatus::WaitingForInput => Self::WaitingForInput,
-            SessionStatus::WaitingForApproval => Self::WaitingForApproval,
-            SessionStatus::Cancelled => Self::Cancelled,
-            SessionStatus::Completed => Self::Completed,
-            SessionStatus::Failed => Self::Failed,
-            SessionStatus::Paused => Self::Paused,
-            SessionStatus::Terminated => Self::Terminated,
-        }
+fn activity_of(status: SessionStatus) -> BoardSessionActivity {
+    match status {
+        SessionStatus::Starting => BoardSessionActivity::Starting,
+        SessionStatus::Running => BoardSessionActivity::Running,
+        SessionStatus::ToolRunning => BoardSessionActivity::ToolRunning,
+        SessionStatus::WaitingForInput => BoardSessionActivity::WaitingForInput,
+        SessionStatus::WaitingForApproval => BoardSessionActivity::WaitingForApproval,
+        SessionStatus::Cancelled => BoardSessionActivity::Cancelled,
+        SessionStatus::Completed => BoardSessionActivity::Completed,
+        SessionStatus::Failed => BoardSessionActivity::Failed,
+        SessionStatus::Paused => BoardSessionActivity::Paused,
+        SessionStatus::Terminated => BoardSessionActivity::Terminated,
     }
 }
 
-impl BoardSessionActivity {
-    pub(crate) fn from_session(session: &AgentSession) -> Self {
-        if session.runtime_unreachable() {
-            Self::Unavailable
-        } else {
-            session
-                .model
-                .frame
-                .status()
-                .map(Self::from)
-                .unwrap_or(Self::Loading)
-        }
+fn activity_from_session(session: &AgentSession) -> BoardSessionActivity {
+    if session.runtime_unreachable() {
+        BoardSessionActivity::Unavailable
+    } else {
+        (session.model.frame.status())
+            .map(activity_of)
+            .unwrap_or(BoardSessionActivity::Loading)
     }
 }
 
@@ -123,7 +116,7 @@ pub(crate) fn observe_sessions<V: SessionActivityHost>(
             view.set_session_activity(id, state, cx);
             continue;
         };
-        let state = BoardSessionActivity::from_session(session.read(cx));
+        let state = activity_from_session(session.read(cx));
         view.set_session_activity(id, state, cx);
         if view
             .session_watches()
@@ -133,7 +126,7 @@ pub(crate) fn observe_sessions<V: SessionActivityHost>(
             continue;
         }
         let changed = cx.observe(session, move |view, session, cx| {
-            let state = BoardSessionActivity::from_session(session.read(cx));
+            let state = activity_from_session(session.read(cx));
             view.set_session_activity(id, state, cx);
         });
         let released = cx.observe_release(session, move |view, _, cx| {
@@ -180,7 +173,7 @@ mod tests {
             (SessionStatus::Paused, BoardSessionActivity::Paused),
             (SessionStatus::Terminated, BoardSessionActivity::Terminated),
         ] {
-            assert_eq!(BoardSessionActivity::from(status), expected);
+            assert_eq!(super::activity_of(status), expected);
         }
     }
 }

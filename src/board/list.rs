@@ -16,7 +16,7 @@ use gpui_component::{h_flex, v_flex};
 use horizon_board::{Position, Store};
 use horizon_workspace::SessionId;
 
-use super::activity::{task_session_state, BoardSessionActivity};
+use super::activity::{activity_color, task_session_state, BoardSessionActivity};
 use super::chrome;
 use super::events::{BoardSessionsRefreshed, OpenTaskThread};
 use super::execute::{run_store_job, BoardStoreSource, StoreJob};
@@ -673,7 +673,7 @@ impl BoardListView {
                         ))
                     })
                     .when_some(activity, |line, activity| {
-                        line.child(chip(activity_label(activity), activity.color()))
+                        line.child(chip(activity_label(activity), activity_color(activity)))
                     })
                     .child(if row.finished || status.is_empty() {
                         div()

@@ -34,20 +34,7 @@ pub(super) fn status_tone(item: &Item) -> Hsla {
 
 /// A bound session's activity.
 pub(super) fn activity_label(activity: BoardSessionActivity) -> &'static str {
-    match activity {
-        BoardSessionActivity::Loading => chrome::LOADING,
-        BoardSessionActivity::Unavailable => chrome::UNREACHABLE,
-        BoardSessionActivity::Starting => chrome::STARTING,
-        BoardSessionActivity::Running => chrome::RUNNING,
-        BoardSessionActivity::ToolRunning => chrome::TOOL_RUNNING,
-        BoardSessionActivity::WaitingForInput => chrome::WAITING_FOR_INPUT,
-        BoardSessionActivity::WaitingForApproval => chrome::WAITING_FOR_APPROVAL,
-        BoardSessionActivity::Cancelled => chrome::CANCELLED,
-        BoardSessionActivity::Completed => chrome::COMPLETED,
-        BoardSessionActivity::Failed => chrome::FAILED,
-        BoardSessionActivity::Paused => chrome::PAUSED,
-        BoardSessionActivity::Terminated => chrome::TERMINATED,
-    }
+    activity.label()
 }
 
 /// Who wrote a post. An author the board does not
