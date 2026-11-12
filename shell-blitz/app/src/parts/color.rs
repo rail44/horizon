@@ -1,7 +1,14 @@
 //! A color picker: a swatch of the color, which opens a panel to choose
 //! one on: an area of saturation and brightness for a hue, a bar of the
 //! hues, and a field for the color written out.
+//!
+//! From the keyboard: Enter on the swatch opens the panel with the keys
+//! on the area, where the arrows move the color a hundredth of the way
+//! across or up (a tenth with Shift); Tab goes on to the bar, where left
+//! and right turn the hue a degree (ten with Shift), and to the field.
+//! Escape shuts the panel.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use horizon_ui::blitz_traits::events::DomEventData;
@@ -42,6 +49,9 @@ pub(super) const CSS: &str = "
         .written .swatch { flex: none; cursor: default; }
     }
     .color:focus > .swatch { border-color: var(--accent); }
+    .color .area, .color .hue { outline: none; }
+    .color .area:focus, .color .hue:focus { outline: 2px solid var(--accent);
+                                            outline-offset: 1px; }
 ";
 
 /// A color written `#rrggbb`.
@@ -103,6 +113,9 @@ pub fn color_picker(
     changed: impl Fn([u8; 3]) + 'static,
 ) -> El {
     let open = RwSignal::new(false);
+    // Opened from the keyboard, the panel takes the keys.
+    let from_keys = Rc::new(Cell::new(false));
+    let opened_by_key = from_keys.clone();
     // The color as the panel holds it: a gray has no hue of its own, and
     // the bar must not jump back to red while one is passed through.
     let held = RwSignal::new(to_hsv(value.get_untracked()));
@@ -131,6 +144,7 @@ pub fn color_picker(
         match (&key.key, open.get_untracked()) {
             (Key::Named(NamedKey::Enter), false) => {
                 held.set(to_hsv(value.get_untracked()));
+                opened_by_key.set(true);
                 open.set(true);
             }
             (Key::Named(NamedKey::Escape), true) => {
@@ -154,7 +168,48 @@ pub fn color_picker(
     .when(
         move || open.get(),
         move || {
-            let (area, bar) = (el("div").class("area"), el("div").class("hue"));
+            let area = el("div").class("area").attr("tabindex", "0");
+            let bar = el("div").class("hue").attr("tabindex", "0");
+            if from_keys.take() {
+                area.focus();
+            }
+            // The arrows, on the area and on the bar: how far across and
+            // how far up a key moves, in steps.
+            let arrow = |event: &horizon_ui::blitz_traits::events::DomEvent| {
+                let DomEventData::KeyDown(key) = &event.data else {
+                    return None;
+                };
+                let steps = if key.modifiers.shift() { 10. } else { 1. };
+                let moved = match &key.key {
+                    Key::Named(NamedKey::ArrowLeft) => (-steps, 0.),
+                    Key::Named(NamedKey::ArrowRight) => (steps, 0.),
+                    Key::Named(NamedKey::ArrowUp) => (0., steps),
+                    Key::Named(NamedKey::ArrowDown) => (0., -steps),
+                    _ => return None,
+                };
+                prevent_default();
+                stop_propagation();
+                Some(moved)
+            };
+            let (area_keys, bar_keys) = (set.clone(), set.clone());
+            area.on("keydown", move |event| {
+                if let Some((across, up)) = arrow(event) {
+                    let (hue, saturation, brightness) = held.get_untracked();
+                    area_keys((
+                        hue,
+                        (saturation + across / 100.).clamp(0., 1.),
+                        (brightness + up / 100.).clamp(0., 1.),
+                    ));
+                }
+            });
+            bar.on("keydown", move |event| {
+                if let Some((across, up)) = arrow(event) {
+                    let (hue, saturation, brightness) = held.get_untracked();
+                    // (The bar ends where it began: 360 is red again, and
+                    // is kept apart from 0 so the knob can rest at the end.)
+                    bar_keys(((hue + across + up).clamp(0., 360.), saturation, brightness));
+                }
+            });
             // The saturation and brightness under a point of the page.
             let on_area = {
                 let set = set.clone();

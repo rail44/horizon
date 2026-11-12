@@ -265,3 +265,54 @@ fn a_color_picker_chooses_on_its_area_and_its_bar_of_hues() {
     app.resolve();
     assert!(all(&app, "panel").is_empty());
 }
+
+#[test]
+fn a_color_picker_is_worked_from_the_keyboard() {
+    let value = RwSignal::new([255, 0, 0]);
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let log = heard.clone();
+    let app = open(|drags| color_picker(value, drags, move |color| log.borrow_mut().push(color)));
+    // The swatch has the keys (a click on it, and its panel shut again).
+    click(&app, all(&app, "swatch")[0], 0.5, 0.5);
+    named(&app, NamedKey::Escape);
+    assert!(all(&app, "panel").is_empty());
+
+    // Enter opens the panel with the keys on the area: the arrows move
+    // the color across it and up it.
+    named(&app, NamedKey::Enter);
+    app.resolve();
+    assert_eq!(all(&app, "panel").len(), 1);
+    named(&app, NamedKey::ArrowLeft);
+    let [r, g, b] = value.get_untracked();
+    assert!(
+        r == 255 && g == b && (1..=4).contains(&g),
+        "{:?}",
+        [r, g, b]
+    );
+    key(&app, Key::Named(NamedKey::ArrowDown), Modifiers::SHIFT);
+    let [r, g, b] = value.get_untracked();
+    assert!((228..=232).contains(&r) && g == b, "{:?}", [r, g, b]);
+    // At the area's edge a key does nothing more.
+    for _ in 0..3 {
+        key(&app, Key::Named(NamedKey::ArrowRight), Modifiers::SHIFT);
+    }
+    let [r, g, b] = value.get_untracked();
+    assert!(g == 0 && b == 0 && r > 200, "{:?}", [r, g, b]);
+
+    // Tab goes on to the bar of hues, where right turns the hue.
+    named(&app, NamedKey::Tab);
+    app.resolve();
+    let before = value.get_untracked();
+    for _ in 0..12 {
+        key(&app, Key::Named(NamedKey::ArrowRight), Modifiers::SHIFT);
+    }
+    let [r, g, b] = value.get_untracked();
+    assert_ne!([r, g, b], before);
+    assert!(g > 200 && r < 30 && b < 30, "green, not {:?}", [r, g, b]);
+    assert!(heard.borrow().len() >= 4);
+
+    // Escape shuts the panel, from wherever in it the keys are.
+    named(&app, NamedKey::Escape);
+    app.resolve();
+    assert!(all(&app, "panel").is_empty());
+}
