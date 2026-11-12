@@ -349,7 +349,7 @@ impl BoardList {
 }
 
 /// A key as the board's key maps name it.
-fn key_name(key: &BlitzKeyEvent) -> Option<String> {
+pub(super) fn key_name(key: &BlitzKeyEvent) -> Option<String> {
     Some(match &key.key {
         Key::Character(character) => character.to_lowercase(),
         Key::Named(NamedKey::ArrowDown) => "down".to_string(),

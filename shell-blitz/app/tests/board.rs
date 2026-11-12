@@ -7,7 +7,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use horizon_blitz::background::Background;
-use horizon_blitz::board::{Asked, BoardList, CSS, Source, view};
+use horizon_blitz::board::list::{Asked, CSS, view};
+use horizon_blitz::board::{BoardList, Source};
 use horizon_board::{BoardEvent, Comment, Item, Store, sample_envelopes};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;

@@ -1,5 +1,6 @@
-//! The board: the task list (and, to come, one task's thread) as views
-//! over `horizon-board`'s store.
+//! The board: the task list and one task's thread, as two views over
+//! `horizon-board`'s store. Neither holds the other: a pane split puts
+//! them side by side.
 //!
 //! What the views are built on is `horizon-board-view`'s: the tree order,
 //! folding, the selection, where a dragged row lands, the key maps and
@@ -16,9 +17,16 @@ use horizon_board_view::chrome;
 
 use crate::background::Background;
 
-mod list;
+pub mod list;
+pub mod thread;
 
-pub use list::{Asked, BoardList, CSS, view};
+pub use list::BoardList;
+pub use thread::BoardThread;
+
+/// The style sheet of both views.
+pub fn css() -> String {
+    [list::CSS, thread::CSS].concat()
+}
 
 /// Where a view's store is: a project's, by a directory in it, or one
 /// handed in whole (a test's, which refuses writes).
