@@ -23,12 +23,13 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
-The shell moves from GPUI to Blitz (signals over a CSS document, painted
-by Vello): a second binary in a workspace of its own until parity, then the
-GPUI shell is deleted. Decided on board #75; the stack, the route and the
-order are in [the migration design](ui-foundation-migration-design.md),
-and the survey and the spike behind it in
-[the research record](research/ui-foundation-candidates-2026-11-11.md).
+The shell moved from GPUI to Blitz (signals over a CSS document, painted
+by Vello), and the GPUI shell was deleted on 2026-11-13 (board #75; [the
+migration design](ui-foundation-migration-design.md), [the research
+record](research/ui-foundation-candidates-2026-11-11.md)). What that left
+open: a preview pane for the new stack (a prototype shows a view from a
+wasm plugin, `src/preview.rs`, with no pane kind or command yet), and
+macOS, where the new shell has not been run.
 
 The containment perimeter moves from "spawned isolated" to the sandbox
 itself: one session kind, `bash` always sandboxed with the gitdir excluded

@@ -190,7 +190,7 @@ font_size = 13.0
 # increase-font-size / decrease-font-size / reset-font-size (move the live
 # app-wide font size: terminal, agent transcript, board; already bound by default to the platform-standard zoom
 # chords -- cmd+= / cmd+- / cmd+0 on macOS, ctrl+= / ctrl+- / ctrl+0 on
-# Linux/Windows (one built-in set spelled via gpui's `secondary` modifier), so
+# Linux/Windows, so
 # an entry here overrides that default). The reserved pseudo-command
 # `open-palette` is also accepted here — it isn't a real `CommandId` (opening
 # the palette isn't an operation the palette itself can list or run), and

@@ -1,76 +1,41 @@
-//! The GPUI shell as a library — see docs/gpui-migration-design.md.
-//! `src/main.rs` is a wrapper around `run`; everything else lives in the
-//! modules below.
-//!
-//! The shell is a library so that code built for another target can import
-//! from it: a preview-pane plugin view compiles to `wasm32-wasip2` and
-//! links this crate for its colors ([`theme`]) and for the previews and
-//! host/guest vocabulary in [`preview`]. Modules that reach the
-//! host — daemon clients over Unix sockets, PTY-backed views, the
-//! control-plane listener, the native gpui platform backend — cannot build
-//! for that target and are gated at their declaration here rather than
-//! inside each file. `scripts/check-preview-wasm.sh` is what holds the
-//! split.
-//!
-//! A module that carries previews of its own view ([`board`], [`agent`]) is
-//! not gated here; its native-only halves are gated inside it instead.
+//! Horizon's shell on Blitz: the views and their wiring, as a library the
+//! binary and the tests share.
 
-#![recursion_limit = "256"]
+//!
+//! The library also builds for wasm, as what a preview plugin is made of
+//! (`../preview-plugin`): the views that can be shown from one, with the
+//! modules a plugin cannot have left out.
 
-// The agent pane. Its runtime-facing halves are gated inside it; the
-// view in `agent::view` builds for the plugin target too.
-mod agent;
-// The board's two views. Their shell-facing halves — the commands, the
-// session observation, the events the workspace subscribes to — have no
-// caller in a plugin build, which has no shell above a view.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-mod board;
 #[cfg(not(target_family = "wasm"))]
-mod control_plane;
+pub mod agent;
 #[cfg(not(target_family = "wasm"))]
-mod desktop_notify;
+pub mod agentd;
+pub mod background;
+pub mod board;
 #[cfg(not(target_family = "wasm"))]
-mod entry;
+pub mod control;
 #[cfg(not(target_family = "wasm"))]
-mod file_watch;
+pub mod desktop_notify;
 #[cfg(not(target_family = "wasm"))]
-mod input_trace;
+pub mod markdown;
 #[cfg(not(target_family = "wasm"))]
-mod keymap;
-// Built for the plugin target too: the board views use it.
-mod keystroke_input;
+pub mod parts;
 #[cfg(not(target_family = "wasm"))]
-mod markdown;
-#[cfg(not(target_family = "wasm"))]
-mod model_picker;
-#[cfg(not(target_family = "wasm"))]
-mod palette;
 pub mod preview;
 #[cfg(not(target_family = "wasm"))]
-mod runtime;
+pub mod primary;
 #[cfg(not(target_family = "wasm"))]
-mod session_manager;
+pub mod restore;
 #[cfg(not(target_family = "wasm"))]
-mod terminal;
+pub mod terminal;
 #[cfg(not(target_family = "wasm"))]
-mod terminal_focus;
-pub mod theme;
+pub mod terminald;
 #[cfg(not(target_family = "wasm"))]
-mod theme_settings;
+pub mod theme_settings;
+pub mod wake;
 #[cfg(not(target_family = "wasm"))]
-mod title;
-// The shared visual vocabulary. Built for the plugin target too; the font
-// commands that move the live size have no caller there.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-mod ui;
+pub mod wiki;
 #[cfg(not(target_family = "wasm"))]
-mod view_chooser;
+pub mod window;
 #[cfg(not(target_family = "wasm"))]
-mod wiki;
-#[cfg(not(target_family = "wasm"))]
-mod workspace;
-#[cfg(not(target_family = "wasm"))]
-mod workspace_state;
-
-#[cfg(not(target_family = "wasm"))]
-pub use entry::run;
+pub mod workspace;

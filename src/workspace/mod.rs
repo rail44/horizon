@@ -1,672 +1,1288 @@
-//! The GPUI projection of the shared workspace model
-//! (`crates/horizon-workspace`): tab strip, recursive split rendering as a
-//! plain flex tree with self-owned resize handles (weight-native, no
-//! `gpui_component::resizable` -- see `docs/split-resize-design.md`), pane
-//! focus, and workspace mode with spatial navigation. The model owns all
-//! layout truth; this module only renders it and translates GPUI actions
-//! into model operations.
+//! The shell around the views: the tab strip, the active tab's panes in
+//! their splits, workspace mode, and the palette of commands.
 //!
-//! `commands` owns command dispatch; `session_creation` resolves spawn intent;
-//! `session_events` routes asynchronous notifications; `runtime_reload` keeps
-//! the two daemon replacement contracts separate. `session_lifecycle` adopts
-//! sessions and reconciles views; `restore` owns persisted workspace recovery.
-//! `preview` handles session-less preview targets. The shell retains model,
-//! session and pane ownership, focus coordination and persistence.
+//! The model is `horizon-workspace`'s:
+//! every operation here is one of its operations, and what is on screen
+//! follows it. A pane's element is made once, when the model first has the
+//! pane, and lives until the model lets the pane go. Splitting, closing,
+//! resizing and changing tab change only the boxes around it.
+//!
+//! A pane shows a terminal, an agent, a Markdown file, a page of the
+//! project wiki, the theme settings, or the board (its task list, or one
+//! task's thread). Creating one asks which,
+//! in a shell with an agent runtime; a Markdown file is opened by naming
+//! it (`horizon markdown <path>`), and a thread from the list.
+//!
+//! Closing a pane lets go of its view and keeps its session, which the
+//! session manager lists and puts back in a pane; a session ends when it
+//! is terminated, or when the shell in it goes.
 
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::task::Waker;
 
-use gpui::*;
-use gpui_component::StyledExt as _;
-use horizon_terminal_core::TerminalNotification;
-use horizon_workspace::commands::CommandId;
-use horizon_workspace::{PaneId, SessionId, Workspace, WORKSPACE_STATE_VERSION};
+use horizon_agent::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+use horizon_agent::roles::RoleId;
+use horizon_config::RawConfig;
+use horizon_shell_runtime::AgentCommand;
+use horizon_terminal_core::{TerminalCommand, TerminalNotification, TerminalUpdate};
+use horizon_theme_css::{Theme, themed};
+use horizon_ui::reactive_graph::computed::Memo;
+use horizon_ui::reactive_graph::effect::Effect;
+use horizon_ui::reactive_graph::owner::{LocalStorage, Owner, StoredValue};
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::{
+    Get, GetUntracked, Set, Track, Update, With, WithUntracked, WithValue,
+};
+use horizon_ui::{El, each_layout, el, relayout, stop_propagation};
+use horizon_workspace::title::derive_session_title;
+use horizon_workspace::types::TabSummary;
+use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, ViewKind, Workspace};
 
-use crate::agent::{AgentPane, AgentSession};
-use crate::board::{BoardListView, BoardThreadView};
-use crate::markdown::MarkdownView;
-use crate::model_picker::ModelPickerDelegate;
-use crate::palette::PaletteDelegate;
-use crate::preview::{PreviewPane, PreviewTarget};
-use crate::runtime::{AgentdHandle, TerminaldHandle, TerminaldSlot};
-use crate::session_manager::SessionManagerDelegate;
-use crate::terminal::{TerminalSession, TerminalView};
-use crate::terminal_focus::focus_transition;
-use crate::theme_settings::ThemeSettingsView;
-use crate::view_chooser::{Placement, ViewChooserDelegate};
-use crate::wiki::WikiView;
-use crate::workspace_state::{InvalidState, LoadResult, WorkspaceStateStore};
+use crate::agent::{self, Agent, AgentSession};
+use crate::background::Background;
+use crate::board::{self, BoardList, BoardThread};
+use crate::markdown::{self, Markdown};
+use crate::terminal::{self, Session, Terminal};
+use crate::theme_settings;
+use crate::wake::Wake;
+use crate::wiki::{self, Wiki};
 
-mod bindings;
+mod arrangement;
+mod board_sessions;
+mod chooser;
 mod commands;
-mod modals;
-use modals::ListModal;
-mod markdown;
-mod navigation;
-mod preview;
-mod recovery;
-mod render;
-mod restore;
-mod wiki;
-use recovery::WorkspacePhase;
-mod runtime_reload;
-mod session_creation;
-mod session_events;
-mod session_lifecycle;
+mod control;
+mod keymap;
+mod keys;
+mod models;
+mod palette;
+mod picker;
+mod reload;
+mod sessions;
 
-use render::SplitDrag;
-use session_creation::{PendingAgentSpawn, PendingTerminalSpawn};
+// Every rule sits under the view's own class: the page's style sheet is one
+// for all the views on it.
+pub const CSS: &str = "
+    .workspace { position: relative; display: flex; flex-direction: column; height: 100%;
+                 outline: none; background: var(--background); color: var(--text);
+                 font-family: var(--font-family); font-size: var(--body-size);
+                 line-height: var(--body-line);
+        &.resizing { user-select: none; }
+        .tabs { flex: none; display: flex; gap: 4px; padding: 4px 28px 4px 8px;
+                background: var(--tab-track); border-top: 1px solid var(--border);
+                border-bottom: 1px solid var(--border); }
+        .tab-label { flex: 1; min-width: 0; display: flex; padding: 0 4px 0 8px;
+                     border-radius: 6px; line-height: 24px; color: var(--tab-text);
+                     cursor: pointer; }
+        .tab-label.active { background: var(--background); color: var(--text); }
+        .tab-label .title { flex: 1; min-width: 0; text-align: center; overflow: hidden;
+                            white-space: nowrap; text-overflow: ellipsis; }
+        .tab-label .close { flex: none; width: 16px; text-align: center; border-radius: 4px;
+                            opacity: 0; }
+        .tab-label:hover .close { opacity: 1; }
+        .tab-label .close:hover { background: var(--surface-selected); }
+        .tab { flex: 1; min-height: 0; display: flex; }
+        .split { flex: 1; min-width: 0; min-height: 0; display: flex; }
+        .split.down { flex-direction: column; }
+        .cell { flex-shrink: 1; flex-basis: 0; min-width: 0; min-height: 0; display: flex; }
+        .divider { flex: none; background: var(--surface-chrome); }
+        .split.across > .divider { width: 5px; cursor: col-resize; }
+        .split.down > .divider { height: 5px; cursor: row-resize; }
+        .pane { position: relative; flex: 1; min-width: 0; min-height: 0;
+                box-sizing: border-box; display: flex; flex-direction: column;
+                overflow: hidden; border: 2px solid var(--background);
+                background: var(--background); }
+        .pane.focused { border-color: var(--border); }
+        .pane.cursor { border-color: var(--accent); }
+        .pane > * { flex: 1; min-height: 0; }
+        .pane > .veil { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 50;
+                        background: var(--background); opacity: 0.5; pointer-events: none; }
+        .empty { flex: 1; display: flex; align-items: center; justify-content: center;
+                 color: var(--text-muted); outline: none; }
+        .scrim { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 100;
+                 display: flex; justify-content: center; align-items: flex-start;
+                 padding-top: 97px; }
+        .picker { width: 560px; max-height: 400px; display: flex; flex-direction: column;
+                  overflow: hidden; background: var(--background);
+                  border: 1px solid var(--border); border-radius: 8px;
+                  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1); }
+        .search { flex: none; position: relative; display: flex; align-items: center;
+                  height: 32px; padding: 0 12px; border-bottom: 1px solid var(--border); }
+        .search input { flex: 1; font-family: var(--font-family);
+                        font-size: var(--body-size); line-height: 20px; padding: 0;
+                        border: none; outline: none; background: transparent;
+                        color: var(--text); }
+        .search .placeholder { position: absolute; left: 12px; top: 6px; line-height: 20px;
+                               color: var(--text-muted); pointer-events: none; }
+        .items { flex: 1; min-height: 0; overflow-y: auto; }
+        .item { display: flex; padding: 7px 12px; cursor: pointer; }
+        .item.command { flex-direction: column; }
+        .item.session { align-items: baseline; gap: 8px; }
+        .item .name { line-height: 20px; }
+        .item .about, .item .attached, .item .detached {
+            font-size: var(--meta-size); line-height: var(--meta-line);
+            color: var(--text-muted); }
+        .item .attached { color: var(--success); }
+        .item.destructive .name { color: var(--danger); }
+        .item.disabled { cursor: default; }
+        .item.disabled .name { color: var(--text-muted); }
+        .item.chosen { background: var(--surface-selected); }
+    }
+";
 
-pub(crate) fn init(cx: &mut App) {
-    crate::agent::auxiliary::reload(horizon_config::load(), cx);
-    bindings::apply_bindings(cx, horizon_config::load());
-}
-
-actions!(
-    workspace,
+/// The page's style sheet with the theme's, this view's and those of the
+/// views its panes show.
+pub fn css() -> String {
     [
-        ToggleWorkspaceMode,
-        ModeMoveLeft,
-        ModeMoveDown,
-        ModeMoveUp,
-        ModeMoveRight,
-        ModeCommit,
-        ModeCancel,
-        NewTab,
-        NewAgentTab,
-        SplitPane,
-        ClosePane,
-        NextTab,
-        PrevTab,
-        OpenPalette,
-        // Session-manager row actions
-        // (`docs/session-relationship-design.md` decision 4b) -- scoped to
-        // `SESSION_MANAGER_CONTEXT` (see `bindings::derive_bindings`) and
-        // targeting whichever row is currently selected, rather than
-        // carrying a `SessionId` of their own: gpui actions built from a
-        // `KeyBinding` (unlike `RunCommand`, dispatched from the palette
-        // with the id already resolved) never carry per-invocation data.
-        OpenSessionDirectory,
-        TerminateSessionSubtree
+        horizon_theme_css::CSS,
+        CSS,
+        terminal::CSS,
+        agent::CSS,
+        markdown::CSS,
+        &board::css(),
+        &theme_settings::css(),
+        wiki::CSS,
     ]
-);
-
-/// Key context for the session manager modal's own row-scoped actions
-/// (`OpenSessionDirectory`/`TerminateSessionSubtree`), applied to the
-/// modal's backdrop `div` in `render.rs` alongside their `.on_action`
-/// handlers -- mirrors [`MODE_CONTEXT`]'s "context and handler live on the
-/// same element" shape rather than relying on cross-level action bubbling.
-const SESSION_MANAGER_CONTEXT: &str = "SessionManager";
-
-/// A `[keybindings]`-config-driven binding to a `CommandId` — gpui actions
-/// used with `KeyBinding` are compile-time types, so a config chord can't
-/// bind directly to one of the many `CommandId` variants the way a unit
-/// action binds to one fixed handler. `RunCommand` carries the resolved
-/// id as data instead, so a single action type covers every simple
-/// command a `[keybindings]` entry can name (see `keymap::command_for`).
-/// `no_json`: never built from a JSON keymap (only ever constructed
-/// directly in [`init`]), so it skips gpui's `Deserialize`/`JsonSchema`
-/// requirements for action fields.
-///
-/// `pub(crate)` (stage F, `docs/agent-output-ui-amendment.md`): the agent
-/// pane's stop button/status-line stop affordance dispatch this same
-/// action from `src/agent/view/pane.rs`, rather than reaching into
-/// `AgentSession::cancel` directly, so a pointer-driven cancel goes
-/// through the same command-model path as the palette and `[keybindings]`
-/// chords (AGENTS.md's "operations go through the command model").
-#[derive(Clone, PartialEq, Action)]
-#[action(namespace = workspace, no_json)]
-pub(crate) struct RunCommand {
-    pub(crate) id: CommandId,
+    .concat()
 }
 
-/// The tab strip's per-tab close button (`render_tab_close_button`):
-/// closes the tab the user clicked, by its render-time index. Carries the
-/// index the way [`RunCommand`] carries its `CommandId` -- gpui actions
-/// built from a `KeyBinding` never carry per-invocation data, so no config
-/// chord can target a specific tab; `CommandId::CloseActiveTab` stays the
-/// keyboard path and this action the pointer path. `no_json`: same
-/// reasoning as [`RunCommand`].
-#[derive(Clone, PartialEq, Action)]
-#[action(namespace = workspace, no_json)]
-pub(crate) struct CloseTab {
-    pub(crate) index: usize,
+pub use keymap::Keymap;
+
+/// A session the model has just made, to start. A terminal's shell
+/// begins where the terminal it was made from is, or in a directory named
+/// for it; an agent works in the directory named, in the role named.
+pub struct Starting {
+    pub session: SessionId,
+    pub from: Option<SessionId>,
+    pub directory: Option<PathBuf>,
+    pub role: Option<RoleId>,
 }
 
-const MODE_CONTEXT: &str = "WorkspaceMode";
+use horizon_theme::spec::{FONT_SIZE_STEP, MAX_FONT_SIZE, MIN_FONT_SIZE};
 
-fn load_workspace_state(store: &mut WorkspaceStateStore) -> (Workspace, WorkspacePhase) {
-    match store.load(u64::from(WORKSPACE_STATE_VERSION)) {
-        Ok(LoadResult::Valid(json)) => match Workspace::from_persisted_json(&json) {
-            Ok(workspace) => (workspace, WorkspacePhase::Restoring),
-            Err(horizon_workspace::WorkspaceStateError::UnsupportedVersion {
-                found,
-                supported,
-            }) => {
-                eprintln!(
-                    "workspace state version {found} is unsupported (expected {supported}); preserving the file"
-                );
-                (Workspace::mvp(), WorkspacePhase::PreservingFile)
+/// What summarizes a first message into a title under `config`.
+fn summarizer(config: &RawConfig) -> Option<Arc<AuxiliaryClient>> {
+    let small = config.resolved_small_model().ok()?;
+    Some(Arc::new(AuxiliaryClient::new(AuxiliaryConfig {
+        base_url: small.provider.base_url,
+        api_key_env: small.provider.api_key_env,
+        model: small.model,
+    })))
+}
+
+/// Hands a notification a program in a terminal session asked for to the
+/// desktop.
+pub type Notify = Rc<dyn Fn(SessionId, TerminalNotification)>;
+
+/// Starts a terminal session.
+pub type Spawn = Box<dyn Fn(Starting) -> Session>;
+
+/// Starts an agent session.
+pub type SpawnAgent = Box<dyn Fn(Starting) -> AgentSession>;
+
+/// The providers and models an agent session can be switched to, as the
+/// agent runtime has them. Each call waits for the runtime's answer, and
+/// is made off the UI thread.
+pub trait Models: Send + Sync {
+    fn providers(&self) -> Result<Vec<horizon_acp::ProviderSummary>, String>;
+    fn models(&self, provider: &str) -> Result<Vec<String>, String>;
+    fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String>;
+}
+
+/// What is done on the UI thread with what a thread came back with.
+type Arrived = Box<dyn FnOnce(Shell) + Send>;
+
+/// An agent session a runtime has, with what the runtime knows of it.
+pub struct RunningAgent {
+    pub session: SessionId,
+    pub directory: Option<PathBuf>,
+    /// The session it was derived from.
+    pub parent: Option<SessionId>,
+}
+
+/// What the runtime is asked off the UI thread.
+type Asks<Of, Answer> = Arc<dyn Fn(Of) -> Result<Answer, String> + Send + Sync>;
+
+/// The agent runtime beyond starting a session in it: what the reload
+/// command and the board need of it.
+pub struct AgentRuntime {
+    /// Ends the runtime, starts it again and lists its sessions. Called
+    /// off the UI thread.
+    pub restart: Asks<(), Vec<RunningAgent>>,
+    /// Attaches to a session of the runtime as it is now.
+    pub attach: Box<dyn Fn(SessionId) -> AgentSession>,
+    /// The organizer of the board of the project in a directory, started
+    /// if it is not running. Called off the UI thread.
+    pub organizer: Asks<PathBuf, RunningAgent>,
+    /// A session of the runtime, if it has it. Called off the UI thread.
+    pub find: Asks<SessionId, Option<RunningAgent>>,
+}
+
+/// What `Reload Terminal Runtime` does with the runtime: ends it, with
+/// every terminal in it, and starts it again. Called off the UI thread.
+pub type ReloadTerminals = Arc<dyn Fn() + Send + Sync>;
+
+/// The runtime being ended and started again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reloading {
+    Agents,
+    Terminals,
+}
+
+/// Writes a theme's seed where the configuration is kept, and says where.
+pub type SaveTheme = Rc<dyn Fn(&horizon_theme::seed::Seed) -> Result<PathBuf, String>>;
+
+/// Keeps the model for the next run.
+pub type Save = Box<dyn FnMut(&Workspace)>;
+
+/// Reads the configuration again.
+pub type Reload = Box<dyn Fn() -> Result<RawConfig, String>>;
+
+/// What the shell opens with.
+pub struct Opening {
+    /// The configuration: the theme, the font and its size, the chords.
+    pub config: RawConfig,
+    /// What `Reload Config` reads the configuration with.
+    pub reload: Option<Reload>,
+    pub model: Workspace,
+    /// The sessions of `model` that are running already.
+    pub sessions: Vec<(SessionId, Session)>,
+    pub agent_sessions: Vec<(SessionId, AgentSession)>,
+    /// What starts an agent session: without it this shell has terminals
+    /// only.
+    pub agents: Option<SpawnAgent>,
+    /// Hands a URL to the desktop: a link in a document that is not a
+    /// file.
+    pub open_url: Option<markdown::OpenUrl>,
+    /// Posts a desktop notification: without it none is posted.
+    pub notify: Option<Notify>,
+    /// What the model picker lists and switches with.
+    pub models: Option<Arc<dyn Models>>,
+    /// What the reload commands do with their runtimes, and what the
+    /// board asks of the agents'.
+    pub agent_runtime: Option<AgentRuntime>,
+    pub reload_terminals: Option<ReloadTerminals>,
+    /// The board's store, in place of the one of the project a board pane
+    /// is opened in: a test's.
+    pub board: Option<board::Source>,
+    /// Writes a theme's seed to the config file, in place of
+    /// `horizon-theme`'s own writing of it: a test's.
+    pub save_theme: Option<SaveTheme>,
+    /// Told the model whenever it has changed, to keep it for the next
+    /// run.
+    pub save: Option<Save>,
+}
+
+impl Default for Opening {
+    /// One terminal, kept nowhere, with no configuration.
+    fn default() -> Self {
+        Self {
+            config: RawConfig::default(),
+            reload: None,
+            model: Workspace::mvp(),
+            sessions: Vec::new(),
+            agent_sessions: Vec::new(),
+            agents: None,
+            open_url: None,
+            notify: None,
+            models: None,
+            agent_runtime: None,
+            reload_terminals: None,
+            board: None,
+            save_theme: None,
+            save: None,
+        }
+    }
+}
+
+/// How a session not yet started is to begin.
+#[derive(Default)]
+struct Start {
+    /// The session it was made from.
+    from: Option<SessionId>,
+    directory: Option<PathBuf>,
+    role: Option<RoleId>,
+}
+
+impl Start {
+    fn within(directory: PathBuf) -> Self {
+        Self {
+            directory: Some(directory),
+            ..Self::default()
+        }
+    }
+}
+
+/// Where a new pane goes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Placement {
+    NewTab,
+    SplitRight,
+    SplitDown,
+}
+
+/// The list over everything, when one is open.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Modal {
+    Palette,
+    Sessions,
+    /// Which view the new pane at this place shows.
+    Chooser(Placement),
+    /// Which model an agent session goes on with.
+    Models(SessionId),
+}
+
+/// A pane on the page.
+struct PaneView {
+    element: El,
+    /// What the pane's view made: effects that end with the pane.
+    owner: Owner,
+    terminal: Option<(SessionId, Terminal)>,
+    agent: Option<Agent>,
+    markdown: Option<Markdown>,
+    wiki: Option<Wiki>,
+    board_list: Option<BoardList>,
+    board_thread: Option<BoardThread>,
+}
+
+/// What the shell keeps beside the model.
+struct Kept {
+    panes: RefCell<HashMap<PaneId, PaneView>>,
+    /// The sessions of the model, whether a pane shows them or not:
+    /// closing a pane lets go of its view and keeps its session.
+    sessions: RefCell<HashMap<SessionId, Rc<Session>>>,
+    agents: RefCell<HashMap<SessionId, Rc<AgentSession>>>,
+    spawn_agent: Option<SpawnAgent>,
+    /// What summarizes an agent session's first message into its title:
+    /// the configuration's `small_model`, if it names a usable one.
+    summarizer: RefCell<Option<Arc<AuxiliaryClient>>>,
+    /// How the sessions made and not yet started are to begin.
+    starting: RefCell<HashMap<SessionId, Start>>,
+    keymap: RefCell<Keymap>,
+    spawn: Spawn,
+    reload: Option<Reload>,
+    /// The font size the configuration gives: what `Reset Font Size`
+    /// goes back to.
+    configured_size: Cell<f32>,
+    waker: RefCell<Option<Waker>>,
+    /// The same, for what wakes the page from another thread.
+    wake: Wake,
+    open_url: markdown::OpenUrl,
+    notify: Option<Notify>,
+    models: Option<Arc<dyn Models>>,
+    agent_runtime: Option<AgentRuntime>,
+    reload_terminals: Option<ReloadTerminals>,
+    reloading: Cell<Option<Reloading>>,
+    /// The sessions a board named that this workspace did not have, and
+    /// whether the agent runtime has answered about each.
+    looked_for: RefCell<HashMap<SessionId, bool>>,
+    /// The next arranging gives the active pane the keys.
+    refocus: Cell<bool>,
+    board: Option<board::Source>,
+    /// The configuration in use: what a theme's seed is read from, and
+    /// what one being edited replaces the theme of.
+    config: RefCell<RawConfig>,
+    save_theme: Option<SaveTheme>,
+    /// What threads came back with, to take in on the UI thread.
+    arrived: Arc<Mutex<Vec<Arrived>>>,
+    owner: Owner,
+}
+
+#[derive(Clone, Copy)]
+pub struct Shell {
+    pub model: RwSignal<Workspace>,
+    /// The colors, the font and its size, for every view.
+    pub theme: RwSignal<Theme>,
+    /// Workspace mode: keys are the shell's, not the focused view's.
+    mode: Memo<bool>,
+    /// The pane commands act on: the mode's cursor, and outside the mode
+    /// the pane with the focus.
+    cursor: Memo<Option<PaneId>>,
+    modal: RwSignal<Option<Modal>>,
+    /// What is typed into the open list, and which of its rows is chosen.
+    query: RwSignal<String>,
+    chosen: RwSignal<usize>,
+    /// The boundary being dragged.
+    resizing: RwSignal<Option<arrangement::Resize>>,
+    /// Changed to have the panes arranged again though the tab's shape is
+    /// the same: a pane's view was let go of, to be made again.
+    rearranged: RwSignal<u32>,
+    kept: StoredValue<Rc<Kept>, LocalStorage>,
+    root: El,
+}
+
+impl Shell {
+    fn kept(&self) -> Rc<Kept> {
+        self.kept.with_value(Rc::clone)
+    }
+
+    /// Changes the model, then brings the panes, the sessions and the
+    /// focus to it.
+    fn change(&self, change: impl FnOnce(&mut Workspace)) {
+        self.model.update(change);
+        self.reconcile();
+        self.focus_active();
+    }
+
+    /// [`change`](Self::change) that leaves the focus where it is: under
+    /// an open list.
+    fn model_changed(&self, change: impl FnOnce(&mut Workspace)) {
+        self.model.update(change);
+        self.reconcile();
+    }
+
+    /// Opens a list over everything, empty of what was typed before.
+    fn open(&self, modal: Modal) {
+        self.query.set(String::new());
+        self.chosen.set(0);
+        self.modal.set(Some(modal));
+    }
+
+    /// Makes a view for each pane the model has and the page does not,
+    /// lets go of the views of panes the model no longer has, and ends the
+    /// sessions it no longer has. Doing it again changes nothing.
+    fn reconcile(&self) {
+        let kept = self.kept();
+        let (panes, sessions) = self.model.with_untracked(|model| {
+            let panes: Vec<_> = (model.all_pane_ids().into_iter())
+                .filter_map(|id| {
+                    let session =
+                        (model.terminal_session_id(id)).or_else(|| model.agent_session_id(id));
+                    Some((id, model.pane_kind(id)?, session))
+                })
+                .collect();
+            let sessions: HashSet<SessionId> = (model.session_summaries().iter())
+                .map(|session| session.id)
+                .collect();
+            (panes, sessions)
+        });
+        kept.sessions.borrow_mut().retain(|id, session| {
+            let known = sessions.contains(id);
+            if !known {
+                session.send(TerminalCommand::Shutdown);
             }
-            Err(error) => {
-                eprintln!("ignoring invalid workspace state: {error}");
-                (Workspace::mvp(), WorkspacePhase::Ready)
+            known
+        });
+        kept.agents.borrow_mut().retain(|id, session| {
+            let known = sessions.contains(id);
+            if !known {
+                session.send(AgentCommand::Close);
             }
+            known
+        });
+        let gone: Vec<PaneId> = (kept.panes.borrow().keys())
+            .filter(|id| !panes.iter().any(|(pane, ..)| pane == *id))
+            .copied()
+            .collect();
+        for id in gone {
+            if let Some(view) = kept.panes.borrow_mut().remove(&id) {
+                view.owner.cleanup();
+                view.element.remove();
+            }
+        }
+        for (id, kind, session) in panes {
+            if kept.panes.borrow().contains_key(&id) {
+                continue;
+            }
+            let view = self.pane(id, kind, session);
+            kept.panes.borrow_mut().insert(id, view);
+        }
+    }
+
+    fn pane(&self, id: PaneId, kind: PaneKind, session: Option<SessionId>) -> PaneView {
+        let (shell, kept) = (*self, self.kept());
+        let owner = kept.owner.child();
+        let (mut terminal, mut agent, mut document) = (None, None, None);
+        let (mut board_list, mut board_thread, mut wiki_page) = (None, None, None);
+        let start = |session| {
+            kept.starting
+                .borrow_mut()
+                .remove(&session)
+                .unwrap_or_default()
+        };
+        let element = owner.with(|| {
+            let content = match (kind, session, &kept.spawn_agent) {
+                (PaneKind::Terminal, Some(session_id), _) => {
+                    let running = kept.sessions.borrow().get(&session_id).cloned();
+                    let session = running.unwrap_or_else(|| {
+                        let start = start(session_id);
+                        // The terminal runtime knows its own sessions only.
+                        let from =
+                            (start.from).filter(|from| kept.sessions.borrow().contains_key(from));
+                        let session = Rc::new((kept.spawn)(Starting {
+                            session: session_id,
+                            from,
+                            directory: start.directory,
+                            role: None,
+                        }));
+                        (kept.sessions.borrow_mut()).insert(session_id, session.clone());
+                        session
+                    });
+                    if let Some(waker) = kept.waker.borrow().clone() {
+                        session.set_waker(waker);
+                    }
+                    let look = self.theme.with_untracked(Theme::terminal);
+                    let (root, view) = terminal::view(session, look);
+                    view.on_open_url(kept.open_url.clone());
+                    terminal = Some((session_id, view));
+                    root
+                }
+                // (Its session is attached to again when the runtime is
+                // back, and the pane made again.)
+                (PaneKind::Agent, Some(_), _)
+                    if kept.reloading.get() == Some(Reloading::Agents) =>
+                {
+                    el("div")
+                        .class("empty")
+                        .attr("tabindex", "0")
+                        .text("Reloading the agent runtime")
+                }
+                (PaneKind::Agent, Some(session_id), Some(spawn)) => {
+                    let running = kept.agents.borrow().get(&session_id).cloned();
+                    let session = running.unwrap_or_else(|| {
+                        let start = start(session_id);
+                        // It works where the session it was made from is.
+                        let directory = start.directory.or_else(|| {
+                            let from = start.from?;
+                            (self.model).with_untracked(|model| {
+                                model.session_directory(from).map(PathBuf::from)
+                            })
+                        });
+                        let directory = directory.or_else(|| std::env::current_dir().ok());
+                        let session = Rc::new(spawn(Starting {
+                            session: session_id,
+                            from: start.from,
+                            directory: directory.clone(),
+                            role: start.role,
+                        }));
+                        (kept.agents.borrow_mut()).insert(session_id, session.clone());
+                        if let Some(directory) = directory {
+                            self.model.update(|model| {
+                                model.set_session_directory(session_id, directory);
+                            });
+                        }
+                        session
+                    });
+                    if let Some(waker) = kept.waker.borrow().clone() {
+                        session.set_waker(waker);
+                    }
+                    session.set_summarizer(kept.summarizer.borrow().clone());
+                    let (root, view) = agent::live(session, move || {
+                        shell.switch_model(session_id);
+                    });
+                    agent = Some(view);
+                    root
+                }
+                (PaneKind::View(ViewKind::Markdown), ..) => {
+                    let path = (self.model)
+                        .with_untracked(|model| model.pane_document(id).map(PathBuf::from));
+                    let (root, view) =
+                        markdown::view(path, kept.open_url.clone(), kept.wake.clone());
+                    // The file it shows is the pane's in the model, so
+                    // that it comes back on the same one: a link followed
+                    // moves it.
+                    Effect::new(move |_| {
+                        let Some(path) = view.path.get() else {
+                            return;
+                        };
+                        let kept = shell
+                            .model
+                            .with_untracked(|model| model.pane_document(id) == Some(&path));
+                        if !kept {
+                            shell.model.update(|model| {
+                                model.set_pane_document(id, path);
+                            });
+                        }
+                    });
+                    document = Some(view);
+                    root
+                }
+                (PaneKind::View(ViewKind::Wiki), ..) => {
+                    let path = (self.model)
+                        .with_untracked(|model| model.pane_document(id).map(PathBuf::from));
+                    let (root, view) = wiki::view(path, kept.open_url.clone(), kept.wake.clone());
+                    // The page it shows is the pane's in the model, as a
+                    // Markdown pane's file is.
+                    Effect::new(move |_| {
+                        let Some(path) = view.path.get() else {
+                            return;
+                        };
+                        let kept = shell
+                            .model
+                            .with_untracked(|model| model.pane_document(id) == Some(&path));
+                        if !kept {
+                            shell.model.update(|model| {
+                                model.set_pane_document(id, path);
+                            });
+                        }
+                    });
+                    wiki_page = Some(view);
+                    root
+                }
+                (PaneKind::View(ViewKind::ThemeSettings), ..) => {
+                    let config = kept.config.borrow().clone();
+                    let scheme = self.theme.with_untracked(|theme| *theme.scheme());
+                    let fallback = theme_settings::fallback(&scheme);
+                    let seed = horizon_theme::seed::Seed::from_current_config(&config, fallback);
+                    let save = kept.save_theme.clone();
+                    theme_settings::view(
+                        seed,
+                        self.theme,
+                        theme_settings::Host {
+                            // The seed's theme, at the font size in use.
+                            apply: Box::new(move |seed| {
+                                let kept = shell.kept();
+                                let mut config = kept.config.borrow().clone();
+                                config.theme = seed.to_raw_config().theme;
+                                let size = shell.theme.with_untracked(|theme| theme.font_size);
+                                let mut theme = Theme::from_config(&config);
+                                theme.font_size = size;
+                                *kept.config.borrow_mut() = config;
+                                shell.theme.set(theme);
+                            }),
+                            save: Box::new(move |seed| match &save {
+                                Some(save) => save(seed),
+                                None => horizon_theme::save::save(seed)
+                                    .map_err(|error| error.to_string()),
+                            }),
+                            path: horizon_config::resolved_path(),
+                        },
+                    )
+                }
+                (PaneKind::View(ViewKind::BoardList), ..) => {
+                    let background = Background::new(kept.wake.clone());
+                    let (root, view) = board::list::view(
+                        self.board_source(),
+                        background,
+                        move |asked| match asked {
+                            board::list::Asked::OpenThread(task) => shell.open_thread(id, task),
+                        },
+                    );
+                    board_list = Some(view);
+                    root
+                }
+                (PaneKind::View(ViewKind::BoardThread { task }), ..) => {
+                    let background = Background::new(kept.wake.clone());
+                    let (root, view) =
+                        board::thread::view(self.board_source(), background, task, move |asked| {
+                            match asked {
+                                board::thread::Asked::OpenSession(session) => {
+                                    if let Some(thread) = shell.board_thread(id) {
+                                        shell.open_task_session(session, thread.notice);
+                                    }
+                                }
+                            }
+                        });
+                    board_thread = Some(view);
+                    root
+                }
+                _ => el("div")
+                    .class("empty")
+                    .attr("tabindex", "0")
+                    .text("This view is not shown yet."),
+            };
+            el("div")
+                // The focused pane's border is the theme's quiet line; in
+                // workspace mode the cursor's is the accent, and every
+                // pane is veiled.
+                .class_dyn(
+                    move || match (shell.cursor.get() == Some(id), shell.mode.get()) {
+                        (true, true) => "pane cursor".to_string(),
+                        (true, false) => "pane focused".to_string(),
+                        (false, _) => "pane".to_string(),
+                    },
+                )
+                .on("pointerdown", move |_| shell.pane_pressed(id))
+                .child(content)
+                .when(move || shell.mode.get(), || el("div").class("veil"))
+        });
+        PaneView {
+            element,
+            owner,
+            terminal,
+            agent,
+            markdown: document,
+            wiki: wiki_page,
+            board_list,
+            board_thread,
+        }
+    }
+
+    /// A press in a pane takes the focus there, out of workspace mode if
+    /// it is on.
+    fn pane_pressed(&self, id: PaneId) {
+        let (mode, active) = self
+            .model
+            .with_untracked(|model| (model.is_workspace_mode_active(), model.is_active_pane(id)));
+        if mode {
+            self.model.update(|model| {
+                model.commit_workspace_mode_to(id);
+                model.activate_pane(id);
+            });
+        } else if !active {
+            self.model.update(|model| {
+                model.activate_pane(id);
+            });
+        }
+    }
+
+    /// Gives the keys to the view of the pane the model has active: the
+    /// first thing in it that takes focus. In workspace mode, and with no
+    /// pane, they go to the shell itself.
+    fn focus_active(&self) {
+        let pane = self.model.with_untracked(|model| {
+            (!model.is_workspace_mode_active())
+                .then(|| model.cursor_pane_id())
+                .flatten()
+        });
+        let element =
+            pane.and_then(|id| self.kept().panes.borrow().get(&id).map(|view| view.element));
+        match element {
+            Some(element) => element.focus_within(),
+            None => self.root.focus(),
+        };
+    }
+
+    /// Takes in what the terminals reported since the last layout: a
+    /// title, a working directory, and that the shell in one has gone,
+    /// which ends its session.
+    fn take_in_sessions(&self) {
+        let arrived = std::mem::take(&mut *self.kept().arrived.lock().unwrap());
+        if !arrived.is_empty() {
+            for arrived in arrived {
+                arrived(*self);
+            }
+            relayout();
+        }
+        self.tell_boards();
+        let (mut titles, mut directories, mut exited) = (Vec::new(), Vec::new(), Vec::new());
+        let mut notifications = Vec::new();
+        for view in self.kept().panes.borrow().values() {
+            let Some((session, terminal)) = &view.terminal else {
+                continue;
+            };
+            // A program's title is shaped as any title is; one that
+            // shapes to nothing is no title.
+            if let Some(title) = terminal.take_title() {
+                titles.push((*session, title.as_deref().and_then(derive_session_title)));
+            }
+            if let Some(directory) = terminal.take_directory() {
+                directories.push((*session, directory));
+            }
+            if terminal.exited() {
+                exited.push(*session);
+            }
+            for notification in terminal.take_notifications() {
+                notifications.push((*session, notification));
+            }
+        }
+        // A session no pane shows has no view to take its updates in.
+        let kept = self.kept();
+        let shown: HashSet<SessionId> = (kept.panes.borrow().values())
+            .filter_map(|view| view.terminal.as_ref().map(|(session, _)| *session))
+            .collect();
+        for (id, session) in kept.sessions.borrow().iter() {
+            if shown.contains(id) {
+                continue;
+            }
+            for update in session.take_updates() {
+                match update {
+                    TerminalUpdate::Exited => exited.push(*id),
+                    TerminalUpdate::Notification(notification) => {
+                        notifications.push((*id, notification));
+                    }
+                    TerminalUpdate::Title(title) => {
+                        titles.push((*id, title.as_deref().and_then(derive_session_title)));
+                    }
+                    TerminalUpdate::WorkingDirectory(directory) => {
+                        directories.push((*id, directory));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for (id, session) in kept.agents.borrow().iter() {
+            if let Some(title) = session.take_title() {
+                titles.push((*id, Some(title)));
+            }
+        }
+        // A notification is for a session the owner is not looking at:
+        // not the active pane's, or any while the window is away.
+        if let Some(notify) = kept.notify.as_ref() {
+            let looked_at = (self.model)
+                .with_untracked(Workspace::active_terminal_session_id)
+                .filter(|_| crate::window::active());
+            for (session, notification) in notifications {
+                if looked_at != Some(session) {
+                    notify(session, notification);
+                }
+            }
+        }
+        if titles.is_empty() && directories.is_empty() && exited.is_empty() {
+            return;
+        }
+        let ended = !exited.is_empty();
+        self.model.update(|model| {
+            for (session, title) in titles {
+                model.set_session_derived_title(session, title.as_deref());
+            }
+            for (session, directory) in directories {
+                model.set_session_directory(session, directory);
+            }
+            for session in exited {
+                model.terminate_session(session);
+            }
+        });
+        if ended && self.modal.get_untracked().is_none() {
+            self.focus_active();
+        }
+        // What follows the model is on the page before it is painted.
+        relayout();
+    }
+
+    /// Brings the pane a session is in to the front: the answer to a
+    /// click on its notification. A session no pane shows is left where
+    /// it is.
+    pub fn reveal_session(&self, session: SessionId) {
+        let shown =
+            (self.model).with_untracked(|model| model.pane_location_for_session(session).is_some());
+        if shown {
+            self.go_to_session(session);
+        }
+    }
+
+    /// Who the sessions wake when they have something to draw.
+    pub fn set_waker(&self, waker: Waker) {
+        let kept = self.kept();
+        for session in kept.sessions.borrow().values() {
+            session.set_waker(waker.clone());
+        }
+        for session in kept.agents.borrow().values() {
+            session.set_waker(waker.clone());
+        }
+        kept.wake.set(waker.clone());
+        *kept.waker.borrow_mut() = Some(waker);
+    }
+
+    /// A new pane at `placement` over a new session of `kind`, with the
+    /// focus. A split is of the active session's pane.
+    fn create(&self, kind: SessionKind, role: Option<RoleId>, placement: Placement) {
+        let kept = self.kept();
+        self.change(|model| {
+            let from = model.active_session_id();
+            let split = |model: &mut Workspace, axis| {
+                model.split_session_with_new_session(from?, kind, axis, true)
+            };
+            let made = match placement {
+                Placement::NewTab => Some(model.open_tab_with_new_session_activated(kind, true)),
+                Placement::SplitRight => split(model, SplitAxis::Horizontal),
+                Placement::SplitDown => split(model, SplitAxis::Vertical),
+            };
+            model.exit_workspace_mode();
+            if let Some(made) = made {
+                let start = Start {
+                    from,
+                    directory: None,
+                    role,
+                };
+                kept.starting.borrow_mut().insert(made, start);
+            }
+        });
+    }
+
+    /// A new pane at `placement`: of the view chosen, when there is more
+    /// than terminals to choose from.
+    fn place(&self, placement: Placement) {
+        match self.kept().spawn_agent {
+            Some(_) => self.open(Modal::Chooser(placement)),
+            None => self.create(SessionKind::Terminal, None, placement),
+        }
+    }
+
+    /// Runs `work` on a thread of its own, and `then` on the UI thread
+    /// with what it came back with.
+    fn in_background<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> T + Send + 'static,
+        then: impl FnOnce(Shell, T) + Send + 'static,
+    ) {
+        let kept = self.kept();
+        let (arrived, wake) = (kept.arrived.clone(), kept.wake.clone());
+        std::thread::spawn(move || {
+            let came = work();
+            (arrived.lock().unwrap()).push(Box::new(move |shell| then(shell, came)));
+            wake.wake();
+        });
+    }
+
+    /// Opens the model picker for an agent session, if there is a runtime
+    /// to ask.
+    fn switch_model(&self, session: SessionId) {
+        if self.kept().models.is_some() {
+            self.open(Modal::Models(session));
+        }
+    }
+
+    /// The agent session the commands act on: the cursor's.
+    fn active_agent(&self) -> Option<Rc<AgentSession>> {
+        let session = self.model.with_untracked(Workspace::active_session_id)?;
+        self.kept().agents.borrow().get(&session).cloned()
+    }
+
+    /// The store a board pane made now reads: the one handed in, else
+    /// that of the project the active session works in, else the one
+    /// this shell was started in.
+    fn board_source(&self) -> board::Source {
+        if let Some(source) = self.kept().board.clone() {
+            return source;
+        }
+        let directory = self.model.with_untracked(|model| {
+            let session = model.active_session_id()?;
+            model.session_directory(session).map(PathBuf::from)
+        });
+        match directory.or_else(|| std::env::current_dir().ok()) {
+            Some(directory) => board::Source::Root(directory),
+            None => board::Source::Ready(horizon_board::Store::in_memory(Vec::new())),
+        }
+    }
+
+    /// The board list a pane shows, and the thread.
+    pub fn board_list(&self, pane: PaneId) -> Option<BoardList> {
+        self.kept().panes.borrow().get(&pane)?.board_list
+    }
+
+    pub fn board_thread(&self, pane: PaneId) -> Option<BoardThread> {
+        self.kept().panes.borrow().get(&pane)?.board_thread
+    }
+
+    /// The board views of the pane the commands act on.
+    fn active_board_list(&self) -> Option<(PaneId, BoardList)> {
+        let pane = self.model.with_untracked(Workspace::cursor_pane_id)?;
+        Some((pane, self.board_list(pane)?))
+    }
+
+    fn active_board_thread(&self) -> Option<BoardThread> {
+        let pane = self.model.with_untracked(Workspace::cursor_pane_id)?;
+        self.board_thread(pane)
+    }
+
+    /// Shows `task`'s thread beside the list in `list`'s tab: in the
+    /// tab's thread pane if it has one, else in a split of the list's.
+    /// The thread takes the focus.
+    fn open_thread(&self, list: PaneId, task: u64) {
+        let thread = self.model.with_untracked(|model| {
+            (model.tab_pane_kinds(list).into_iter()).find_map(|(pane, kind)| {
+                matches!(kind, PaneKind::View(ViewKind::BoardThread { .. })).then_some(pane)
+            })
+        });
+        let kind = ViewKind::BoardThread { task };
+        self.change(|model| {
+            model.exit_workspace_mode();
+            model.activate_pane(list);
+            match thread {
+                Some(thread) => {
+                    model.retarget_view_pane(thread, kind);
+                    model.activate_pane(thread);
+                }
+                None => {
+                    model.split_active_tab_with_view(kind, SplitAxis::Horizontal);
+                }
+            }
+        });
+        if let Some(view) = thread.and_then(|thread| self.board_thread(thread)) {
+            view.show_task(task);
+        }
+    }
+
+    /// From a thread, back to the list in its tab.
+    fn back_to_board_list(&self) {
+        let list = self.model.with_untracked(|model| {
+            let pane = model.cursor_pane_id()?;
+            let thread = matches!(
+                model.pane_kind(pane),
+                Some(PaneKind::View(ViewKind::BoardThread { .. }))
+            );
+            (model.tab_pane_kinds(pane).into_iter())
+                .find(|(_, kind)| thread && *kind == PaneKind::View(ViewKind::BoardList))
+                .map(|(pane, _)| pane)
+        });
+        if let Some(list) = list {
+            self.change(|model| {
+                model.exit_workspace_mode();
+                model.activate_pane(list);
+            });
+        }
+    }
+
+    /// Goes to a session's pane, or puts a session no pane shows in one
+    /// beside the active pane. A session this workspace does not have is
+    /// left alone.
+    fn go_to_session(&self, session: SessionId) {
+        self.change(|model| {
+            match model.pane_location_for_session(session) {
+                Some((tab, pane)) => {
+                    model.activate_pane_index(tab, pane);
+                }
+                None => {
+                    model.attach_existing_session_to_split_activated(session, true);
+                }
+            }
+            model.exit_workspace_mode();
+        });
+    }
+
+    /// A new pane at `placement` showing a view that has no session.
+    pub fn create_view(&self, kind: ViewKind, placement: Placement) {
+        self.change(|model| {
+            match placement {
+                Placement::NewTab => {
+                    model.open_tab_with_view_activated(kind, true);
+                }
+                Placement::SplitRight => {
+                    model.split_active_tab_with_view(kind, SplitAxis::Horizontal);
+                }
+                Placement::SplitDown => {
+                    model.split_active_tab_with_view(kind, SplitAxis::Vertical);
+                }
+            }
+            model.exit_workspace_mode();
+        });
+    }
+
+    /// The wiki view a pane shows.
+    pub fn wiki(&self, pane: PaneId) -> Option<Wiki> {
+        self.kept().panes.borrow().get(&pane)?.wiki
+    }
+
+    /// A new pane at `placement` on the overview of the wiki of the
+    /// project this shell was started in.
+    fn create_wiki(&self, placement: Placement) {
+        let page = (std::env::current_dir().ok())
+            .and_then(|directory| horizon_wiki::Store::for_dir(&directory))
+            .and_then(|store| store.page_path("index").ok());
+        // The pane's page is in the model before its view is made.
+        self.model_changed(|model| {
+            let pane = match placement {
+                Placement::NewTab => model.open_tab_with_view_activated(ViewKind::Wiki, true),
+                Placement::SplitRight => {
+                    model.split_active_tab_with_view(ViewKind::Wiki, SplitAxis::Horizontal)
+                }
+                Placement::SplitDown => {
+                    model.split_active_tab_with_view(ViewKind::Wiki, SplitAxis::Vertical)
+                }
+            };
+            if let Some(page) = page {
+                model.set_pane_document(pane, page);
+            }
+            model.exit_workspace_mode();
+        });
+        self.reconcile();
+        self.focus_active();
+    }
+
+    /// The Markdown view a pane shows.
+    pub fn markdown(&self, pane: PaneId) -> Option<Markdown> {
+        self.kept().panes.borrow().get(&pane)?.markdown
+    }
+
+    /// The agent view a pane shows.
+    pub fn agent(&self, pane: PaneId) -> Option<Agent> {
+        self.kept().panes.borrow().get(&pane)?.agent
+    }
+
+    /// The terminal a pane shows.
+    pub fn terminal(&self, pane: PaneId) -> Option<Terminal> {
+        let kept = self.kept();
+        let panes = kept.panes.borrow();
+        let (_, terminal) = panes.get(&pane)?.terminal.as_ref()?;
+        Some(terminal.clone())
+    }
+
+    /// Takes a configuration in: its theme, its font and size, its
+    /// chords, in place of the ones in use.
+    pub fn apply_config(&self, config: &RawConfig) {
+        let theme = Theme::from_config(config);
+        let kept = self.kept();
+        *kept.config.borrow_mut() = config.clone();
+        kept.configured_size.set(theme.font_size);
+        *kept.keymap.borrow_mut() = Keymap::from_config(config);
+        let summarizer = summarizer(config);
+        for session in kept.agents.borrow().values() {
+            session.set_summarizer(summarizer.clone());
+        }
+        *kept.summarizer.borrow_mut() = summarizer;
+        self.theme.set(theme);
+    }
+
+    /// The font size, `steps` away from what it is: every view's text and
+    /// spacing scale with it.
+    fn step_font_size(&self, steps: f32) {
+        self.theme.update(|theme| {
+            theme.font_size =
+                (theme.font_size + steps * FONT_SIZE_STEP).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        });
+    }
+
+    /// The list open over everything.
+    pub fn modal(&self) -> Option<Modal> {
+        self.modal.get_untracked()
+    }
+}
+
+fn strip(shell: Shell) -> El {
+    let tabs = Memo::new(move |_| shell.model.with(Workspace::tab_summaries));
+    let tab = move |index: usize| tabs.with(|tabs: &Vec<TabSummary>| tabs.get(index).cloned());
+    el("div").class("tabs").each(
+        move || (0..tabs.with(Vec::len)).collect::<Vec<_>>(),
+        |index| *index,
+        move |index| {
+            let index = *index;
+            el("div")
+                .class_dyn(move || match tab(index) {
+                    Some(tab) if tab.active => "tab-label active".to_string(),
+                    _ => "tab-label".to_string(),
+                })
+                .child(
+                    el("div")
+                        .class("title")
+                        .text_dyn(move || tab(index).map(|tab| tab.title).unwrap_or_default()),
+                )
+                // Closing a tab detaches the sessions in it.
+                .child(el("div").class("close").text("×").on("click", move |_| {
+                    shell.change(|model| {
+                        model.exit_workspace_mode();
+                        model.close_tab_index(index);
+                    });
+                    stop_propagation();
+                }))
+                .on("click", move |_| {
+                    shell.change(|model| {
+                        model.exit_workspace_mode();
+                        model.activate_tab_index(index);
+                    });
+                })
         },
-        Ok(LoadResult::Missing) => (Workspace::mvp(), WorkspacePhase::Ready),
-        Ok(LoadResult::Invalid(InvalidState::UnsupportedVersion { found, supported })) => {
-            eprintln!(
-                "workspace state version {found} is unsupported (expected {supported}); preserving the file"
-            );
-            (Workspace::mvp(), WorkspacePhase::PreservingFile)
-        }
-        Ok(LoadResult::Invalid(InvalidState::Corrupt(error))) => {
-            eprintln!("ignoring corrupt workspace state: {error}");
-            (Workspace::mvp(), WorkspacePhase::Ready)
-        }
-        Err(error) => {
-            eprintln!("failed to load workspace state: {error}");
-            (Workspace::mvp(), WorkspacePhase::PreservingFile)
-        }
-    }
+    )
 }
 
-/// Bring the workspace back to a state with at least one pane after
-/// `Reload Terminal Runtime`
-/// (`session_lifecycle::reload_terminal_runtime`) terminates every terminal
-/// session ahead of restarting `horizon-terminald` -- its one remaining
-/// caller. (Before the terminald split this belonged to `Reload Session
-/// Runtime`, which killed the terminals as collateral; it now belongs to
-/// the command that kills them on purpose.) A zero-tab workspace is now a valid,
-/// persistable state (`WorkspaceState::validate` accepts it), so every
-/// *other* termination path (`TerminateActiveSession`, the session
-/// manager's secondary-confirm terminate, `control_plane_terminate`, a PTY
-/// exit via `handle_terminal_exited`) leaves the workspace empty as-is
-/// rather than calling this -- auto-creating a terminal there would
-/// silently work against a user closing or terminating everything on
-/// purpose (2026-07-18 owner clarification, superseding `704657b`'s
-/// blanket guard). The reload path is different: killing every terminal
-/// session is an operational side effect of restarting the runtime, not
-/// something the user asked to empty, so it still gets a pane back.
-fn ensure_workspace_has_pane(workspace: &mut Workspace) -> Option<SessionId> {
-    (workspace.tab_count() == 0).then(|| {
-        workspace
-            .open_tab_with_new_session_activated(horizon_workspace::SessionKind::Terminal, true)
-    })
-}
+/// Builds the shell over `opening`, in its configuration's theme; `spawn`
+/// starts the session of each terminal pane that has none running.
+pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
+    let model = RwSignal::new(opening.model);
+    let theme = Theme::from_config(&opening.config);
+    let configured_size = Cell::new(theme.font_size);
+    let sessions = (opening.sessions.into_iter())
+        .map(|(id, session)| (id, Rc::new(session)))
+        .collect();
+    let agents = (opening.agent_sessions.into_iter())
+        .map(|(id, session)| (id, Rc::new(session)))
+        .collect();
+    let shell = Shell {
+        model,
+        theme: RwSignal::new(theme),
+        mode: Memo::new(move |_| model.with(Workspace::is_workspace_mode_active)),
+        cursor: Memo::new(move |_| model.with(Workspace::cursor_pane_id)),
+        modal: RwSignal::new(None),
+        query: RwSignal::new(String::new()),
+        chosen: RwSignal::new(0),
+        resizing: RwSignal::new(None),
+        rearranged: RwSignal::new(0),
+        kept: StoredValue::new_local(Rc::new(Kept {
+            panes: RefCell::default(),
+            sessions: RefCell::new(sessions),
+            agents: RefCell::new(agents),
+            spawn_agent: opening.agents,
+            summarizer: RefCell::new(summarizer(&opening.config)),
+            starting: RefCell::default(),
+            keymap: RefCell::new(Keymap::from_config(&opening.config)),
+            spawn,
+            reload: opening.reload,
+            configured_size,
+            waker: RefCell::default(),
+            wake: Wake::default(),
+            open_url: opening.open_url.unwrap_or_else(|| Rc::new(|_| {})),
+            notify: opening.notify,
+            models: opening.models,
+            agent_runtime: opening.agent_runtime,
+            reload_terminals: opening.reload_terminals,
+            reloading: Cell::new(None),
+            looked_for: RefCell::default(),
+            refocus: Cell::new(false),
+            board: opening.board,
+            config: RefCell::new(opening.config.clone()),
+            save_theme: opening.save_theme,
+            arrived: Arc::default(),
+            owner: Owner::current().expect("an owner"),
+        })),
+        root: el("div"),
+    };
+    let root = shell.root;
+    shell.reconcile();
 
-/// One pane's view, by session kind -- plus one variant per first-party
-/// [`ViewKind`] (`docs/theme-settings-view-design.md`), which has no
-/// session at all.
-#[derive(Clone)]
-enum PaneView {
-    Cached(CachedPaneLeaf),
-    Composite(CompositePane),
-}
-
-/// A pane whose domain entity fills definite layout-tree bounds. Keeping
-/// these variants behind one type makes cached rendering the only element
-/// conversion available to fixed-size leaves.
-#[derive(Clone)]
-enum CachedPaneLeaf {
-    Terminal(Entity<TerminalView>),
-    ThemeSettings(Entity<ThemeSettingsView>),
-    BoardList(Entity<BoardListView>),
-    BoardThread(Entity<BoardThreadView>),
-    Preview(Entity<PreviewPane>),
-    Markdown(Entity<MarkdownView>),
-    Wiki(Entity<WikiView>),
-}
-
-/// A pane that owns narrower cache boundaries internally. Composite panes must
-/// remain ordinary entities: wrapping them in another cached ancestor would
-/// disable descendant reuse whenever that ancestor misses.
-#[derive(Clone)]
-enum CompositePane {
-    Agent(Entity<AgentPane>),
-}
-
-impl CachedPaneLeaf {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        match self {
-            Self::Terminal(view) => view.focus_handle(cx),
-            Self::ThemeSettings(view) => view.focus_handle(cx),
-            Self::BoardList(view) => view.focus_handle(cx),
-            Self::BoardThread(view) => view.focus_handle(cx),
-            Self::Preview(view) => view.focus_handle(cx),
-            Self::Markdown(view) => view.focus_handle(cx),
-            Self::Wiki(view) => view.focus_handle(cx),
-        }
-    }
-
-    fn element(&self) -> AnyElement {
-        let style = || StyleRefinement::default().v_flex().size_full();
-        match self {
-            Self::Terminal(view) => view.clone().cached(style()).into_any_element(),
-            Self::ThemeSettings(view) => view.clone().cached(style()).into_any_element(),
-            Self::BoardList(view) => view.clone().cached(style()).into_any_element(),
-            Self::BoardThread(view) => view.clone().cached(style()).into_any_element(),
-            Self::Preview(view) => view.clone().cached(style()).into_any_element(),
-            Self::Markdown(view) => view.clone().cached(style()).into_any_element(),
-            Self::Wiki(view) => view.clone().cached(style()).into_any_element(),
-        }
-    }
-}
-
-impl CompositePane {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        match self {
-            Self::Agent(view) => view.focus_handle(cx),
-        }
-    }
-
-    fn element(&self) -> AnyElement {
-        match self {
-            Self::Agent(view) => view.clone().into_any_element(),
-        }
-    }
-}
-
-impl PaneView {
-    fn terminal(view: Entity<TerminalView>) -> Self {
-        Self::Cached(CachedPaneLeaf::Terminal(view))
-    }
-
-    fn agent(view: Entity<AgentPane>) -> Self {
-        Self::Composite(CompositePane::Agent(view))
-    }
-
-    fn theme_settings(view: Entity<ThemeSettingsView>) -> Self {
-        Self::Cached(CachedPaneLeaf::ThemeSettings(view))
-    }
-
-    fn board_list(view: Entity<BoardListView>) -> Self {
-        Self::Cached(CachedPaneLeaf::BoardList(view))
-    }
-
-    fn board_thread(view: Entity<BoardThreadView>) -> Self {
-        Self::Cached(CachedPaneLeaf::BoardThread(view))
-    }
-
-    fn preview(view: Entity<PreviewPane>) -> Self {
-        Self::Cached(CachedPaneLeaf::Preview(view))
-    }
-
-    fn markdown(view: Entity<MarkdownView>) -> Self {
-        Self::Cached(CachedPaneLeaf::Markdown(view))
-    }
-
-    fn wiki(view: Entity<WikiView>) -> Self {
-        Self::Cached(CachedPaneLeaf::Wiki(view))
-    }
-
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        match self {
-            Self::Cached(view) => view.focus_handle(cx),
-            Self::Composite(view) => view.focus_handle(cx),
-        }
-    }
-
-    fn element(&self) -> AnyElement {
-        // This exhaustive type split is the cache-topology decision point for
-        // every future pane kind. Callers cannot render a fixed leaf without
-        // its cache or wrap a composite in an outer cache.
-        match self {
-            Self::Cached(view) => view.element(),
-            Self::Composite(view) => view.element(),
-        }
-    }
-}
-
-pub(crate) struct WorkspaceShell {
-    workspace: Workspace,
-    workspace_state: WorkspaceStateStore,
-    workspace_phase: WorkspacePhase,
-    // This instance's control socket — every spawned pane gets it as
-    // HORIZON_SOCKET so CLIs invoked inside reach back here.
-    socket_path: std::path::PathBuf,
-    // The session store — the GPUI shell's Registry counterpart: PTY
-    // sessions live here keyed by SessionId, independent of pane views,
-    // so closing a pane detaches (session survives, scrollback intact)
-    // and terminating is the explicit destructive path.
-    sessions: HashMap<SessionId, Entity<TerminalSession>>,
-    agent_sessions: HashMap<SessionId, Entity<AgentSession>>,
-    // Staged by `control_plane_new_session` (a role-tagged create, e.g.
-    // `new-agent --role config`) and consumed by `reconcile` when it actually
-    // starts the session — the model's `open_tab_with_new_session_*`
-    // call only yields a `SessionId`, so the role has nowhere else to
-    // ride until reconcile turns that id into a live agent session.
-    pending_roles: HashMap<SessionId, horizon_agent::roles::RoleId>,
-    // Staged before session-creating workspace mutations and consumed by
-    // reconcile. The daemon resolves the source session's live cwd; Horizon
-    // carries only the source id and fallback spawn input.
-    pending_terminal_spawns: HashMap<SessionId, PendingTerminalSpawn>,
-    // Same staging shape, for agent spawns' own two knobs (source pane +
-    // isolation) -- see `PendingAgentSpawn`.
-    pending_agent_spawns: HashMap<SessionId, PendingAgentSpawn>,
-    // Created eagerly before the first reconcile. Its op queue accepts
-    // agent requests while connect/hello proceeds in the background.
-    agentd: Option<AgentdHandle>,
-    // The terminal daemon's own client runtime, started alongside
-    // `agentd` and reloaded independently
-    // (`docs/terminald-split-design.md`): `Reload Agent Runtime` replaces
-    // only the field above, so every PTY -- and whatever interactive CLI is
-    // running in it -- survives an agent-runtime restart.
-    terminald: Option<TerminaldHandle>,
-    // A live-reading mirror of `terminald` above, kept in sync at every
-    // write site (`new`, `ReloadTerminalRuntime`,
-    // `reload_terminal_runtime`'s resume) -- handed to panes that can
-    // outlive a single runtime instance (the theme settings view, which
-    // re-pushes the terminal color scheme) so a clone captured mid-`Reload
-    // Terminal Runtime` never gets stuck on a stale `None`. See
-    // `TerminaldSlot`'s doc comment.
-    terminald_slot: TerminaldSlot,
-    // Guards both reload commands: one daemon restart at a time, whichever
-    // daemon it targets.
-    reload_in_progress: bool,
-    panes: HashMap<PaneId, PaneView>,
-    // What each `ViewKind::Preview` pane shows: the `.wasm` artifact and
-    // the name of the preview inside it. Keyed by pane id and kept out of
-    // the workspace model on purpose -- `ViewKind` stays `Copy` and the
-    // persisted schema stays a bare tag, so a restored preview pane comes
-    // back empty (see `ViewKindState::Preview`).
-    preview_targets: HashMap<PaneId, PreviewTarget>,
-    // What the shell listens to on each session-less view pane: a board
-    // view's request to open a thread or a task session and its report of
-    // the session ids the board binds, a Markdown view's move to another
-    // file. Held here rather than on the view because a board view is also
-    // built inside a preview plugin, where no shell exists to subscribe;
-    // pruned with `panes`.
-    view_subscriptions: HashMap<PaneId, Vec<Subscription>>,
-    // This window — needed by `Reload Agent Runtime`'s post-resume step,
-    // which rebuilds pane views from a background thread's async
-    // continuation (no `&mut Window` of its own to reuse).
-    window: AnyWindowHandle,
-    // Focused while workspace mode is active, so mode keys dispatch here
-    // instead of reaching the terminal.
-    focus_handle: FocusHandle,
-    palette: Option<ListModal<PaletteDelegate>>,
-    session_manager: Option<ListModal<SessionManagerDelegate>>,
-    view_chooser: Option<ListModal<ViewChooserDelegate, Placement>>,
-    model_picker: Option<ListModal<ModelPickerDelegate, Entity<AgentSession>>>,
-    // Live state for an in-progress split-handle drag (`render_node`'s
-    // `LayoutNode::Split` arm) -- set on a handle's `on_mouse_down`,
-    // updated on the split container's `on_mouse_move` (live reflow),
-    // cleared and persisted on `on_mouse_up`/`on_mouse_up_out`. View-only
-    // scratch state: never touches the `horizon_workspace` model
-    // directly, see `SplitDrag`'s own doc comment.
-    active_split_drag: Option<SplitDrag>,
-    // The terminal session `sync_terminal_focus` last sent `Focus(true)`
-    // to, so a transition can send `Focus(false)` to the one it's about
-    // to stop being true for. See `focus_transition`.
-    last_focused_terminal: Option<SessionId>,
-    // Handed to every `TerminalSession::spawn` (cloned per session) so a
-    // PTY-side shell exit can notify the shell to terminate that workspace
-    // session -- see the `terminal_exit_rx` pump spawned in `new`.
-    terminal_exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
-    // Handed to every `TerminalSession::spawn`/`AgentSession::new` (cloned
-    // per session) so a content-derived title (a terminal's OSC 0/2 title,
-    // an agent's first user message) reaches the workspace model -- the
-    // `session_title_rx` pump spawned in `new`
-    // (`wire_session_title_updates`).
-    session_title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
-    // Handed to every `TerminalSession::spawn` (cloned per session) so an
-    // OSC 9/777 desktop-notification request reaches the shell, which
-    // gates it on window/pane focus (`wire_terminal_notifications` +
-    // `should_surface_notification`) before the OS hop
-    // (`crate::desktop_notify`).
-    terminal_notify_tx: futures::channel::mpsc::UnboundedSender<(SessionId, TerminalNotification)>,
-    // Handed to every `TerminalSession::spawn` (cloned per session) so the
-    // cwd `horizon-terminald` publishes for a terminal reaches the model's
-    // `directory` slot (`wire_terminal_cwd_updates`).
-    terminal_cwd_tx: futures::channel::mpsc::UnboundedSender<(SessionId, std::path::PathBuf)>,
-}
-
-impl WorkspaceShell {
-    pub(crate) fn new(
-        socket_path: std::path::PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let mut workspace_state = WorkspaceStateStore::from_environment();
-        let (workspace, workspace_phase) = load_workspace_state(&mut workspace_state);
-        let (agentd, host_tool_rx, workspace_root_rx) = AgentdHandle::start(
-            &horizon_wire::socket::default_agentd_socket_path(),
-            &socket_path,
-        );
-        let terminald = TerminaldHandle::start(
-            &horizon_wire::socket::default_terminald_socket_path(),
-            &socket_path,
-        );
-        let (terminal_exit_tx, terminal_exit_rx) = futures::channel::mpsc::unbounded();
-        let (session_title_tx, session_title_rx) = futures::channel::mpsc::unbounded();
-        let (terminal_notify_tx, terminal_notify_rx) = futures::channel::mpsc::unbounded();
-        let (terminal_cwd_tx, terminal_cwd_rx) = futures::channel::mpsc::unbounded();
-        let mut shell = Self {
-            workspace,
-            workspace_state,
-            workspace_phase,
-            socket_path,
-            sessions: HashMap::new(),
-            agent_sessions: HashMap::new(),
-            pending_roles: HashMap::new(),
-            pending_terminal_spawns: HashMap::new(),
-            pending_agent_spawns: HashMap::new(),
-            agentd: Some(agentd.clone()),
-            terminald: Some(terminald.clone()),
-            terminald_slot: TerminaldSlot::new(Some(terminald.clone())),
-            reload_in_progress: false,
-            panes: HashMap::new(),
-            preview_targets: HashMap::new(),
-            view_subscriptions: HashMap::new(),
-            window: window.window_handle(),
-            focus_handle: cx.focus_handle(),
-            palette: None,
-            session_manager: None,
-            view_chooser: None,
-            model_picker: None,
-            active_split_drag: None,
-            last_focused_terminal: None,
-            terminal_exit_tx,
-            session_title_tx,
-            terminal_notify_tx,
-            terminal_cwd_tx,
-        };
-        // Window activation/deactivation doesn't otherwise touch the
-        // model, so it needs its own observer alongside `focus_active`'s
-        // call to `sync_terminal_focus` (every model mutation that can
-        // change the active pane).
-        cx.observe_window_activation(window, |shell, window, cx| {
-            shell.sync_terminal_focus(window, cx);
-        })
-        .detach();
-        shell.wire_host_tools(agentd.responder(), host_tool_rx, cx);
-        shell.wire_directory_updates(workspace_root_rx, cx);
-        shell.wire_terminal_exit(terminal_exit_rx, cx);
-        shell.wire_session_title_updates(session_title_rx, cx);
-        shell.wire_terminal_notifications(terminal_notify_rx, cx);
-        shell.wire_terminal_cwd_updates(terminal_cwd_rx, cx);
-        shell.wire_notification_responses(cx);
-        if shell.workspace_phase.blocks_mutation() {
-            shell.spawn_workspace_restore(agentd, terminald, cx);
-        } else {
-            shell.reconcile(window, cx);
-            shell.focus_active(window, cx);
-            shell.spawn_terminal_resume(terminald, cx);
-            shell.spawn_agent_resume(agentd, cx);
-        }
-        shell
-    }
-
-    fn persist_workspace(&mut self) {
-        if !self.workspace_phase.can_save() {
-            return;
-        }
-        let json = match self.workspace.to_persisted_json() {
-            Ok(json) => json,
-            Err(error) => {
-                eprintln!("workspace state is not persistable: {error}");
-                return;
+    // A change of the model that no handler made (a shell that has gone)
+    // reaches the panes and the sessions too.
+    Effect::new(move |_| {
+        shell.model.track();
+        shell.reconcile();
+    });
+    each_layout(move |_| shell.take_in_sessions());
+    // The terminals draw themselves: a change of theme is handed to each.
+    Effect::new(move |_| {
+        let look = shell.theme.with(Theme::terminal);
+        for view in shell.kept().panes.borrow().values() {
+            if let Some((_, terminal)) = &view.terminal {
+                terminal.set_look(look.clone());
             }
-        };
-        if let Err(error) = self.workspace_state.save(&json) {
-            eprintln!(
-                "failed to save workspace state to {}: {error}",
-                self.workspace_state.path().display()
-            );
         }
+    });
+    // The model is kept as it changes, though not at every step of a
+    // boundary being dragged.
+    if let Some(mut save) = opening.save {
+        Effect::new(move |_| {
+            let dragging = shell.resizing.with(Option::is_some);
+            shell.model.with(|model| {
+                if !dragging {
+                    save(model);
+                }
+            });
+        });
     }
 
-    fn fail_workspace_restore(&mut self, error: impl std::fmt::Display, cx: &mut Context<Self>) {
-        if !self.workspace_phase.fail_restore() {
-            return;
-        }
-        eprintln!("workspace restore failed: {error}");
-        cx.notify();
-    }
-
-    fn discard_failed_workspace_restore(&mut self) -> bool {
-        if !self.workspace_phase.discard_failed_restore() {
-            return false;
-        }
-        self.workspace = Workspace::mvp();
-        self.persist_workspace();
-        true
-    }
-
-    /// Focuses the cursor pane's view, or -- when there is none, e.g. an
-    /// empty (zero-tab) workspace -- the shell root's own `focus_handle`
-    /// instead of leaving focus wherever it happened to land. Reachability
-    /// depends on this: the root `div` (`render::render`) is the one
-    /// element `track_focus`-ing `focus_handle`, and both `ctrl+'` and `:`
-    /// opening the palette are registered on it, so with no pane left to
-    /// hold focus, window focus must still land somewhere that routes
-    /// those bindings. `:` no longer needs `ctrl+'` first once the
-    /// workspace is empty (2026-07-19 owner clarification, superseding
-    /// 2026-07-18's two-step version of this same guarantee: with zero
-    /// panes there is no pane input to protect, so the empty workspace is
-    /// an implicit command surface -- see `Workspace::
-    /// is_workspace_mode_active`'s doc comment); either way, the palette
-    /// is the only reachable path back to `New Tab…` once every pane is
-    /// gone, so it must stay reachable.
-    fn focus_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self
-            .workspace
-            .cursor_pane_id()
-            .and_then(|id| self.panes.get(&id))
-        {
-            Some(view) => window.focus(&view.focus_handle(cx), cx),
-            None => window.focus(&self.focus_handle, cx),
-        }
-        self.sync_terminal_focus(window, cx);
-        self.persist_workspace();
-    }
-
-    /// Composes Horizon's own window focus with which pane is active into
-    /// a single `TerminalCommand::Focus` transition to the session store
-    /// — the GPUI counterpart of the Floem shell's
-    /// `app::runtime::wire_focus_reporting`. Only the active pane's
-    /// terminal ever believes it has focus: an agent pane active (or the
-    /// window itself losing OS focus) means "no terminal focused," so the
-    /// previously-focused terminal (if any) gets `Focus(false)` and the
-    /// newly-focused one (if any) gets `Focus(true)` — never both to the
-    /// same session, and nothing at all when the composed target hasn't
-    /// changed. Called from every mutation that can change the active
-    /// pane ([`Self::focus_active`], `render::activate_pane`) and from
-    /// the window-activation observer registered in [`Self::new`].
-    fn sync_terminal_focus(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.workspace_phase.blocks_mutation() {
-            return;
-        }
-        let (unfocus, focus) = focus_transition(
-            window.is_window_active(),
-            self.workspace.active_terminal_session_id(),
-            self.last_focused_terminal,
+    root.attr("tabindex", "0")
+        .class_dyn(move || match shell.resizing.with(Option::is_some) {
+            true => "workspace resizing".to_string(),
+            false => "workspace".to_string(),
+        })
+        // On the keys' way in: a view with the focus, a terminal above
+        // all, would otherwise have the shell's chords before the shell.
+        .on_capture("keydown", move |event| keys::pressed(shell, event))
+        .on("pointermove", move |event| {
+            arrangement::dragged(shell, event)
+        })
+        .on("pointerup", move |_| {
+            if shell.resizing.with_untracked(Option::is_some) {
+                shell.resizing.update(|resizing| *resizing = None);
+            }
+        })
+        .child(strip(shell))
+        .child(arrangement::view(shell))
+        .each(
+            move || shell.modal.get().into_iter().collect::<Vec<_>>(),
+            |modal| *modal,
+            move |modal| match modal {
+                Modal::Palette => palette::view(shell),
+                Modal::Sessions => sessions::view(shell),
+                Modal::Chooser(placement) => chooser::view(shell, *placement),
+                Modal::Models(session) => match shell.kept().models.clone() {
+                    Some(source) => models::view(shell, *session, source),
+                    None => el("div"),
+                },
+            },
         );
-        if unfocus.is_none() && focus.is_none() {
-            return;
-        }
-        if let Some(session_id) = unfocus {
-            self.send_terminal_focus(session_id, false, cx);
-        }
-        if let Some(session_id) = focus {
-            self.send_terminal_focus(session_id, true, cx);
-        }
-        self.last_focused_terminal = focus;
-    }
-
-    /// Whether an OSC 9/777 notification from `session_id` should escalate
-    /// to the OS notification center. The rule mirrors how the terminal
-    /// itself treats focus: the user must not already be looking at the
-    /// session — either the window is inactive, or the session isn't the
-    /// active terminal pane (a background pane finishing a build while the
-    /// user works elsewhere still deserves its banner; the pane they are
-    /// typing in does not). Workspace restore is excluded like every other
-    /// session-driven reaction (`sync_terminal_focus`'s guard).
-    fn should_surface_notification(&self, session_id: SessionId, window: &Window) -> bool {
-        if self.workspace_phase.blocks_mutation() {
-            return false;
-        }
-        !window.is_window_active()
-            || self.workspace.active_terminal_session_id() != Some(session_id)
-    }
-
-    fn send_terminal_focus(&self, session_id: SessionId, focused: bool, cx: &mut Context<Self>) {
-        if let Some(session) = self.sessions.get(&session_id) {
-            session.read(cx).send_focus(focused);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{load_workspace_state, WorkspacePhase};
-    use horizon_workspace::Workspace;
-
-    use crate::workspace_state::WorkspaceStateStore;
-
-    fn state_path(label: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "horizon-workspace-shell-{label}-{}.json",
-            uuid::Uuid::new_v4()
-        ))
-    }
-
-    #[test]
-    fn missing_workspace_state_starts_fresh_and_enables_persistence() {
-        let path = state_path("missing");
-        let mut store = WorkspaceStateStore::new(path);
-        let (workspace, phase) = load_workspace_state(&mut store);
-
-        assert_eq!(workspace.tab_count(), 1);
-        assert_eq!(phase, WorkspacePhase::Ready);
-    }
-
-    #[test]
-    fn valid_workspace_state_enters_the_restore_barrier() {
-        let path = state_path("valid");
-        let source = Workspace::mvp();
-        let json = source.to_persisted_json().unwrap();
-        let mut store = WorkspaceStateStore::new(path.clone());
-        store.save(&json).unwrap();
-
-        let (workspace, phase) = load_workspace_state(&mut store);
-
-        assert_eq!(workspace.to_persisted_json().unwrap(), json);
-        assert_eq!(phase, WorkspacePhase::Restoring);
-        std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn unsupported_workspace_state_is_never_overwritten() {
-        let path = state_path("newer");
-        let contents = r#"{"version":999}"#;
-        std::fs::write(&path, contents).unwrap();
-        let mut store = WorkspaceStateStore::new(path.clone());
-
-        let (_, phase) = load_workspace_state(&mut store);
-
-        assert_eq!(phase, WorkspacePhase::PreservingFile);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
-        std::fs::remove_file(path).unwrap();
-    }
+    shell.focus_active();
+    (themed(move || shell.theme.get(), root), shell)
 }

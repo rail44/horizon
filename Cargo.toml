@@ -22,13 +22,14 @@ members = [
     "crates/horizon-board",
     "crates/horizon-logd",
     "crates/horizon-wiki",
+    "crates/horizon-ui",
+    "crates/horizon-theme-css",
+    "preview-plugin",
 ]
-# The preview plugin is a `wasm32-wasip2` cdylib with its own sub-workspace
-# and its own lockfile; it depends on the root package by path, so cargo
-# would otherwise pull it into this workspace and build it for the host.
-# The DuckDB extensions are a sub-workspace too (pinned to DuckDB's unstable
-# C API v2 and its own libduckdb-sys features; see duckdb-ext/README.md).
-exclude = ["preview-plugin", "duckdb-ext"]
+resolver = "3"
+# The DuckDB extensions are a sub-workspace (pinned to DuckDB's unstable C
+# API v2 and its own libduckdb-sys features; see duckdb-ext/README.md).
+exclude = ["duckdb-ext"]
 
 # The one workspace-wide remoc pin (docs/remoc-adoption-design.md §1,
 # "remoc version policy"): exact version (`=`), reviewed against the remoc
@@ -48,151 +49,103 @@ remoc = { version = "=0.18.3", default-features = false, features = ["rtc", "cod
 # (docs/acp-agentd-implementation-plan.md).
 agent-client-protocol = { version = "=2.2.0", features = ["unstable_protocol_v2"] }
 agent-client-protocol-schema = { version = "=1.9.1", features = ["unstable_protocol_v2"] }
+# The UI stack (`docs/ui-foundation-migration-design.md`): Blitz is a beta,
+# pinned to one release and patched below past it.
+blitz-dom = "=0.3.0-beta.4"
+blitz-traits = "=0.3.0-beta.4"
+blitz-paint = { version = "=0.3.0-beta.4", features = ["custom-widget"] }
+blitz-shell = "=0.3.0-beta.4"
+reactive_graph = { version = "0.2", features = ["effects"] }
+any_spawner = { version = "0.3", features = ["futures-executor"] }
+
+# Blitz at the head of upstream's fix for hit testing through a clip
+# (DioxusLabs/blitz#1324, 58 commits past 0.3.0-beta.4): content scrolled
+# out of a box does not take the clicks meant for what is drawn over it.
+# `blitz-shell` is Horizon's own copy of that revision's, changed where
+# marked.
+[patch.crates-io]
+blitz-shell = { path = "vendor/blitz-shell" }
+blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
+blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
+blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
 
 [package]
 name = "horizon"
+description = "Horizon: the shell's window and the control plane's client."
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+publish = false
 
-# Every dependency here must also build for `wasm32-wasip2`: the library
-# target is compiled for that target so a preview-pane plugin view can
-# import from it (`scripts/check-preview-wasm.sh`). Everything else lives
-# in the native-only section below.
 [dependencies]
-# GPUI running inside a wasm component, replayed by the native host: the
-# mechanism behind `src/preview/`. Compiled for both targets -- the host
-# runtime (wasmtime) on native, the guest platform on `wasm32-wasip2` --
-# because `preview::schema` and `preview::registry` are shared vocabulary.
-# It depends on the same crates.io `gpui-pre` family as this crate, so the
-# graph keeps one gpui.
-embedded_gpui = { git = "https://github.com/rail44/embedded_gpui", rev = "24b9f5ffdf27be85559df38b3f37e681a87f52b7" }
-# gpui ships to crates.io as the `gpui-pre` family -- the packaging the
-# gpui-component workspace itself is developed against (`gpui-pre`,
-# `gpui-pre-platform`, `gpui-pre-macros`, `gpui-pre-sum-tree`, ...). The
-# package renames keep our `use gpui::*` imports unchanged. This retires the
-# old floating-git-pin fragility (the committed lockfile used to be the only
-# pin, because a rev-pinned gpui edge next to gpui-component's floating one
-# split the graph into two incompatible `gpui` instances and a `[patch]`
-# was rejected by cargo): these are now ordinary crates.io requirements
-# resolved once into the committed lock like every other dependency.
-# `gpui-pre-platform` (the OS backend) is native-only, below.
-gpui = { package = "gpui-pre", version = "0.3.1" }
-# gpui-component (v0.9 workspace: crates/component) and the bundled icon
-# SVGs now ship as `gpui-kit-assets` (formerly gpui-component-assets); the
-# repository was renamed longbridge/gpui-component -> longbridge/gpui-kit.
-# Nothing else in the graph depends on them, so they carry an explicit rev
-# pin. Bump deliberately: update the rev here and on the other two gpui-kit
-# crates below (all three share one rev), then
-# `cargo update -p gpui-base -p gpui-component -p gpui-kit-assets`.
-gpui-component = { git = "https://github.com/longbridge/gpui-kit", rev = "7591a35eced761e3613c01e71ff04c10129dae1a" }
-# `preview::sample` bundles icon SVGs with `icon_assets!`, which the preview
-# guest hands to its runtime as the plugin's `AssetSource` -- the crate's
-# default wasm asset source fetches over HTTP, which a WASI guest cannot do.
-gpui-kit-assets = { git = "https://github.com/longbridge/gpui-kit", rev = "7591a35eced761e3613c01e71ff04c10129dae1a" }
-# `gpui-base`, gpui-component's foundation crate, holds `TextSelection` (the
-# window text-selection queries; `WindowExt::selected_text` is now just a
-# deprecated wrapper around it) and the base theme `TextView` reads its
-# monospace family from, which `theme::gpui_component` sets on both targets.
-# Same rev pin as gpui-component above; bump all three gpui-kit crates
-# together.
-gpui-base = { git = "https://github.com/longbridge/gpui-kit", rev = "7591a35eced761e3613c01e71ff04c10129dae1a" }
-horizon-config = { path = "crates/horizon-config" }
-horizon-theme = { path = "crates/horizon-theme" }
-# The board pane is previewable (`src/board_pane/previews.rs`), so its two
-# model crates compile for the plugin target as well. `horizon-board`'s
-# queries and its in-memory store source build anywhere; reaching the event
-# file, the git root and the logd socket is gated inside that crate.
-# `horizon-workspace` is framework-free (serde/serde_json/uuid).
+horizon-ui = { path = "crates/horizon-ui" }
 horizon-board = { path = "crates/horizon-board" }
-horizon-workspace = { path = "crates/horizon-workspace" }
-horizon-agent-display = { path = "crates/horizon-agent-display" }
 horizon-board-view = { path = "crates/horizon-board-view" }
-# `theme::gpui_component` builds gpui-component's `ThemeConfig` as JSON and
-# deserializes it, so serde_json is on the wasm side of the split too.
-serde_json = "1.0"
-# Board items carry their bound session ids as text; parsing one into a
-# `horizon_workspace::SessionId` happens in the shared half of the board
-# pane. Already in the graph via `horizon-workspace`.
-uuid = { version = "1.18", features = ["v4", "serde"] }
+horizon-workspace = { path = "crates/horizon-workspace" }
+keyboard-types = "0.8"
 
-# Native-only: each of these either reaches the host (sockets, PTYs, the
-# daemon clients, the OS window/renderer backend) or is used exclusively by
-# a module gated `#[cfg(not(target_family = "wasm"))]` in src/lib.rs.
+# What a view built into a preview plugin (`preview-plugin`, wasm) does
+# not have: the modules that need these are native-only in `src/lib.rs`.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-alacritty_terminal = "0.26.0"
-crossbeam-channel = "0.5"
-futures = "0.3"
-# The OS event loop, renderer, IME integration, and frame scheduling
-# (`lib.rs`'s `build_application`). Same `gpui-pre` family and version as
-# `gpui` above.
-gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
-    "font-kit",
-    "wayland",
-    "x11",
-] }
-# The shell is the ACP v2 client of `horizon-agentd`
-# (docs/acp-agentd-design.md); `horizon-acp` carries the extension vocabulary.
-agent-client-protocol = { workspace = true }
+horizon-theme-css = { path = "crates/horizon-theme-css" }
 horizon-acp = { path = "crates/horizon-acp" }
 horizon-agent = { path = "crates/horizon-agent" }
+horizon-agent-display = { path = "crates/horizon-agent-display" }
+horizon-config = { path = "crates/horizon-config" }
 horizon-cli = { path = "crates/horizon-cli" }
 horizon-control = { path = "crates/horizon-control" }
+horizon-wire = { path = "crates/horizon-wire" }
+horizon-theme = { path = "crates/horizon-theme" }
 horizon-shell-runtime = { path = "crates/horizon-shell-runtime" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
-# The project wiki's store, comment threads and anchoring, for the wiki view
-# (`src/wiki/`, docs/project-wiki-design.md).
 horizon-wiki = { path = "crates/horizon-wiki" }
-horizon-wire = { path = "crates/horizon-wire" }
-# The `log` facade backend lives in the shell library (`lib.rs`'s
-# StderrLogger): gpui and its platform crates — including the
-# system-notification stack — report diagnostics through `log`, and with
-# no backend installed they all vanish. Already in the graph via gpui, so
-# this adds no transitive dependencies.
-log = "0.4"
-# The preview pane watches its `.wasm` artifact for changes. cargo unlinks
-# and relinks the file rather than rewriting it in place, so the watch is on
-# the containing directory and the events are debounced (`preview::watch`).
+anyrender = "0.14"
+anyrender_vello = "0.15"
+# The terminal's screen is a widget that paints itself: both crates draw
+# one only with this feature on.
+blitz-paint = { workspace = true }
+blitz-shell = { workspace = true, features = ["custom-widget"] }
+crossbeam-channel = "0.5"
+futures = "0.3"
+kurbo = "0.13"
+# The parser `horizon-wiki` reads a page with: a wiki page is drawn from the
+# same syntax tree its comments are anchored in.
+markdown = "=1.0.0"
 notify = "8"
-remoc = { workspace = true }
-termwiz = "0.23.3"
-tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"] }
-# `ByteStreams` takes `futures::io` traits; `compat` adapts the agentd socket.
-tokio-util = { version = "0.7", features = ["compat"] }
-# The theme settings view's explicit-Save writer (`src/theme_settings/save.rs`):
-# edits only the `[theme]`/`[theme.ansi]` seed keys in the user's config
-# file, preserving every other section, comment, and ordering byte-for-byte
-# -- a plain `toml`-crate round trip (parse to a Rust struct, reserialize)
-# would lose exactly that. Default features (`display`+`parse`) are enough;
-# no `serde` feature needed since the writer edits the `DocumentMut` tree
-# directly rather than (de)serializing a typed struct through it.
-toml_edit = "0.25"
+# `complex-scripts`: the word breaker with its dictionary for Chinese and
+# Japanese. Without it a debug build writes a warning to stderr for each
+# such run of text it shapes.
+parley = { version = "0.12", features = ["complex-scripts"] }
+peniko = "0.6"
+pulldown-cmark = "0.13"
+serde_json = "1.0"
+tokio = { version = "1.52", features = ["rt", "net", "time", "macros", "io-util", "sync"] }
+termwiz = { version = "0.23.3", features = ["use_serde"] }
 unicode-width = "0.2"
+uuid = { version = "1.18", features = ["v4"] }
+# The desktop's notification service (`src/desktop_notify.rs`).
+notify-rust = "4"
+# The runtime a preview's plugin runs in (`src/preview.rs`).
+wasmtime = { version = "36", default-features = false, features = [
+    "async",
+    "demangle",
+    "runtime",
+    "cranelift",
+    "component-model",
+    "parallel-compilation",
+] }
+wasmtime-wasi = "36"
 
-# Desktop notifications (`src/desktop_notify.rs`, fed by OSC 9/777 via
-# horizon-terminal-core) go through gpui's unified system-notification
-# API (`App::show_system_notification` / `on_system_notification_response`)
-# — macOS via UNUserNotificationCenter, Linux via
-# org.freedesktop.Notifications (gpui's notify-rust/zbus backend). No
-# per-platform dependency here: both backends ship inside the gpui-pre
-# platform crates already in the graph, and both report failures through
-# the `log` facade (see entry.rs's StderrLogger). macOS still only
-# delivers from a bundled, (ad-hoc) code-signed .app (`just dev-bundle`);
-# gpui's bundle guard degrades to a log line instead of crashing.
-
-# The preview pane's end-to-end test drives a real wasmtime store through
-# GPUI's deterministic test executor (`preview::e2e`), which needs gpui's
-# `test-support` feature and `anyhow` for the `PlatformTextSystem` the test
-# substitutes.
 [dev-dependencies]
-anyhow = "1.0"
-gpui = { package = "gpui-pre", version = "0.3.1", features = ["test-support"] }
+# The terminal view's tests run the terminal core over a PTY of their own.
+portable-pty = "0.9.0"
+# The view painted into pixels, with no window and no GPU.
+anyrender_vello_cpu = "0.18"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 
 # Debug-build CPU profiles show the hot code lives almost entirely in
-# dependencies (gpui's Scene::push_layer/BoundsTree comparisons ~31%,
-# taffy layout ~16%), so optimize external crates even in dev builds.
+# dependencies (layout, shaping and rasterizing), so optimize external crates even in dev builds.
 # The `"*"` wildcard does not match workspace members, which keep the
 # default dev opt-level for debuggability and fast incremental builds.
 [profile.dev.package."*"]

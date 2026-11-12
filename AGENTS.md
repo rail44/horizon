@@ -1,6 +1,7 @@
 # Horizon — Agent Guide
 
-Horizon is a GPUI-based desktop shell for tabbed and split-pane applications:
+Horizon is a desktop shell for tabbed and split-pane applications, drawn
+with Blitz (`docs/ui-foundation-migration-design.md`):
 a keyboard-first command workspace where terminals, AI agent sessions, and
 (future) WASM plugin views run as sessions attached to panes. The product
 direction is recorded in `docs/ux-principles.md`; the implementation plan is
@@ -82,15 +83,6 @@ filter string. When a run dumps many failures, parse `cargo nextest run
 --format json` with `jq` rather than grepping the prose log — it is more
 reliable and cheaper.
 
-**The Blitz shell is a second workspace**, `shell-blitz/`, built beside
-the GPUI shell until it replaces it (`docs/ui-foundation-migration-design.md`).
-The root commands above do not reach it. Run the same three checks inside
-it when you change it — the pre-commit hook does:
-
-```sh
-(cd shell-blitz && cargo fmt --all && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo nextest run --workspace --locked)
-```
-
 The fourth step is the wire skew checker (`docs/remoc-adoption-design.md`
 §4). There is one committed wire-schema artifact per wire —
 `crates/horizon-acp/schema/acp-ext-wire.json` (the `_horizon/*` and
@@ -108,10 +100,9 @@ the artifacts first:
 is itself a red nextest test).
 
 The fifth step checks that the root package's library still builds for
-`wasm32-wasip2`, the target preview-pane plugins are compiled for
-(`docs/preview-pane-design.md`). It needs that target installed (see Build
-setup); the first run compiles gpui for it and takes minutes, later runs
-take seconds. When it fails, a module
+`wasm32-wasip2`, the target a preview's plugin is compiled for
+(`preview-plugin/`, `src/preview.rs`). It needs that target installed (see
+Build setup). When it fails, a module
 reachable from the plugin started using something a wasm guest does not
 have: mark the module `#[cfg(not(target_family = "wasm"))]` at its
 declaration in `src/lib.rs`, or move the dependency under the root
@@ -195,14 +186,14 @@ regardless.
 
 The quality gate's last step and the preview plugin build for
 `wasm32-wasip2`: install the target once with `rustup target add
-wasm32-wasip2`. No WASI C toolchain is needed. `preview-plugin/` is its own
-sub-workspace with its own `target/` and a tracked `Cargo.lock` seeded from
-the root lockfile; when a root dependency it shares is bumped, re-seed it
-(copy the root `Cargo.lock` over it and let cargo extend it —
-`cargo generate-lockfile` would discard the seed). The plugin depends on
-`rail44/embedded_gpui` branch `gpui-pre` pinned by revision in both
-`Cargo.toml` files; a `gpui-pre` bump needs that fork to build against the
-new snapshot first.
+wasm32-wasip2`. No WASI C toolchain is needed. `preview-plugin/` is a
+workspace member whose crate is empty for any other target.
+
+Blitz is a beta, pinned to one release and patched past it in the root
+`Cargo.toml` (`[patch.crates-io]`); `vendor/blitz-shell` is Horizon's own
+copy of that revision's `blitz-shell`, changed where its comments say
+"Added to upstream" or "Changed from upstream". A Blitz bump moves the pin,
+the patch revision and that copy together.
 
 Every worktree builds into its own `target/` — nothing is shared
 between checkouts at any level, so cross-worktree correctness is
@@ -262,37 +253,31 @@ rather than parsing the file itself (see that crate's `config` module doc).
 
 ## GUI Verification
 
-Agents cannot see the GUI directly. The shell has built-in headless taps
-(`HORIZON_GPUI_DUMP=<path>` mirrors every terminal frame plus a span
-color table to a file; `HORIZON_GPUI_DRIVE=<bytes>` types input into the
-first session shortly after startup), and `scripts/check-gpui-terminal.sh`
-drives them as a one-shot check (marker text plus 256-color and truecolor
-span assertions). Details live in the `gui-verify` skill
-(`.claude/skills/gui-verify/SKILL.md`). `HORIZON_INPUT_TRACE=1` (or a file
-path) traces the GPUI→PTY key/IME pipeline —
-distinct from `HORIZON_GPUI_DRIVE`, which bypasses that pipeline entirely
-— key names and event kinds only, never typed text (see
-`src/input_trace.rs`).
+Agents cannot see the window, and must not open one on a desktop a person
+is using. A view is checked without a window: the tests under `tests/`
+build a view (or the whole shell) into a document, feed it the document's
+own input events, and assert on the document; a test that is about what is
+drawn paints the page into pixels on the CPU and reads them
+(`tests/terminal.rs`, `tests/parts.rs`, `tests/workspace.rs`). The window
+itself does not open on a virtual display (Vello's window renderer finds
+no adapter that can present there), so what only a window shows is looked
+at by a person.
 
-`scripts/check-workspace-restore.sh` is the isolated UI-restart recovery
-check: it creates two terminal tabs plus a split, restarts the UI against the
-same agentd and persisted workspace, and verifies stable session ids,
-layout, and a restored terminal frame.
+The display's scale matters to what is drawn: a test about pixels at a
+scale other than one sets the document's viewport to it and paints at it
+(`block_art_has_no_seams_in_either_pane_of_a_split_at_a_fractional_scale`).
 
-`scripts/check-acp-agent-flow.sh` is the isolated agent-flow check on
-the local mock provider `scripts/mock-openai-provider.py`: one plain turn,
-one approval round trip through the shell, and a UI restart that resumes
-the agent session and runs a further turn.
+`tests/terminald.rs`, `tests/agentd.rs` and `tests/board_logd.rs` run the
+shell over real daemons, each started for the test on sockets and a data
+home of its own (the agent's provider is the local mock
+`scripts/mock-openai-provider.py`): a session created and typed into, the
+workspace coming back after the shell is closed, a runtime reloaded.
 
-A view under development can be checked before it is merged: register a
-named preview with sample data, build `preview-plugin/`, and run
-`scripts/check-preview-plugin.sh` (windowless, real wasmtime; builds the
-plugin first, so minutes when cold and not part of the gate). `horizon
-preview <wasm> --name <preview>` then shows it in a pane of the running
-Horizon, drawn by the real renderer and reloaded on every rebuild — that
-is how an agent asks a person to look, not a self-check. The steps are in
-the `preview-view` skill (`.claude/skills/preview-view/SKILL.md`); the
-design is `docs/preview-pane-design.md`.
+A view still being written can be shown from a wasm plugin
+(`preview-plugin/`, `src/preview.rs`): `scripts/check-preview-plugin.sh`
+builds the plugin and runs the windowless tests that draw and drive a view
+through it (not part of the gate). There is no pane kind or command for it
+yet.
 
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
 (`docs/workspace-mode-design.md`), then `:` to open the control surface —
@@ -306,95 +291,67 @@ README.md for the manual command checklist (`new tab`, `split pane`,
 ## Module Map (`src/`)
 
 Domain responsibilities (stable); browse each directory for its current
-contents:
+contents.
 
-The shell is GPUI-based (the Floem shell retired at tag
-`floem-shell-final`; the migration record is
-`docs/gpui-migration-design.md`). Domain logic lives in shared crates;
-`src/` holds only the view projections and wiring:
+A view is a function that builds elements once and follows signals
+afterwards. `crates/horizon-ui` is what a view builds and reads with
+(`El`, `Page`) and the only code that names Blitz's document;
+`crates/horizon-theme-css` is the theme and the type scale as CSS
+variables. Domain logic lives in shared crates; `src/` holds the views and
+their wiring:
 
-- `workspace/` — the shell root (`WorkspaceShell`): renders the shared
-  workspace model (tab strip, recursive splits on gpui-component's
-  resizable primitives), owns the session stores (terminal + agent, the
-  close-vs-detach seam), workspace mode, command dispatch (`execute`),
-  and the modals' lifecycles. The model itself — tabs, panes, layout
-  tree, session attachments, operations/queries, mode state, spatial
-  navigation, the pure command model, and the `workspace.snapshot`
-  payload — is `crates/horizon-workspace`.
-- `runtime/` — the GPUI-shaped half of the runtime clients: the
-  per-session machinery every view kind needs (`RuntimeLink`'s command
-  channel plus reachability and the `&self` notify pump, the
-  blocking-receiver→stream bridge). The clients themselves are
-  `crates/horizon-shell-runtime`, with no UI framework in them: the two
-  eager runtime clients (the ACP v2 client of `horizon-agentd`; the remoc
-  client of `horizon-terminald`), each with its own connection, op queue,
-  and route table — non-blocking connect/spawn, per-domain routing, and
-  explicit per-daemon drain (see `docs/terminald-split-design.md` for why
-  reloading one must not disturb the other) — the repaint coalescer the
-  agent pane uses, and the agent session model the agent routes carry.
-- `terminal/` — the terminal pane: the daemon-backed per-session model
-  entity and the view (grid painting, key/mouse/IME handling, input
-  mapping). PTY ownership lives in `crates/horizon-terminald`;
-  emulation and the session loop live in `crates/horizon-terminal-core` — see
-  `docs/session-daemon-design.md` and `docs/terminald-split-design.md`;
-  print the kitty conformance matrix with `cargo test -p
-  horizon-terminal-core print_compliance_matrix -- --nocapture`.
-- `agent/` — the agent pane: per-session model entities and the view
-  (what it draws and how it is fed: `docs/agent-pane-rendering.md`). The
-  fold from ACP session updates and `_horizon/*` notifications to the
-  pane's frame is `horizon-shell-runtime`'s `agent_model`.
-  Contract/providers/tools/persistence live in
-  `crates/horizon-agent`, hosted by `crates/horizon-agentd`; the
-  `_horizon/*` and `_meta.horizon` vocabulary shared by the shell and the
-  daemon is `crates/horizon-acp` — see `docs/acp-agentd-design.md` and
-  `docs/agent-runtime-split-design.md`.
-- `board/` — the task board as two session-less views: the list (the
-  rank-ordered task tree) and the thread (one task's posts), each taking
-  a pane of its own, with a pane split putting them side by side. They
-  read `crates/horizon-board` through one executor and reach the shell
-  only as events, so both also build for the preview plugin's wasm
-  target. See `docs/board-redesign-design.md`.
-- `palette.rs` / `session_manager.rs` / `view_chooser.rs` — the control
-  surface modals, all delegates over gpui-component's searchable List.
-- `control_plane.rs` — the GPUI-side bridge and dispatcher for the CLI
-  control plane; the transport is shared in `horizon-control::host`, the
-  client is `horizon <subcommand>` itself (`crates/horizon-cli`). Panes
-  get `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment. See
+- `workspace/` — the shell root (`Shell`): draws the shared workspace model
+  (tab strip, recursive splits), keeps the sessions (the close-vs-detach
+  seam), workspace mode, the key map, command dispatch (`execute`), the
+  modals (palette, session manager, view chooser, model picker), the
+  control plane's requests, and the runtime reloads. The model itself —
+  tabs, panes, layout tree, session attachments, mode state, the pure
+  command model, the `workspace.snapshot` payload — is
+  `crates/horizon-workspace`.
+- `terminald.rs` / `agentd.rs` — the two runtimes as the shell holds them:
+  a handle that a reload replaces. The clients themselves are
+  `crates/horizon-shell-runtime`, with no UI framework in them (see
+  `docs/terminald-split-design.md` for why reloading one must not disturb
+  the other).
+- `terminal/` — the terminal view: the session's frames painted by a
+  widget of its own (grid, box and block characters as shapes, the cursor,
+  the selection), key/mouse/IME handling, local scrollback. PTY ownership
+  lives in `crates/horizon-terminald`; emulation and the session loop in
+  `crates/horizon-terminal-core`; print the kitty conformance matrix with
+  `cargo test -p horizon-terminal-core print_compliance_matrix -- --nocapture`.
+- `agent/` — the agent view and its live session. The fold from ACP
+  session updates to what the pane shows is `horizon-shell-runtime`'s
+  `agent_model` and `agent_view`. Contract/providers/tools/persistence
+  live in `crates/horizon-agent`, hosted by `crates/horizon-agentd` — see
+  `docs/acp-agentd-design.md`.
+- `board/` — the task board as two session-less views, the list and the
+  thread, over `crates/horizon-board`; what they decide from is
+  `crates/horizon-board-view`. See `docs/board-redesign-design.md`.
+- `markdown/` — the Markdown view (`horizon markdown <path>`), and the
+  single-file watch other views share.
+- `wiki/` — a page of the project wiki (`crates/horizon-wiki`) with the
+  owner's comment threads anchored in it. See
+  `docs/project-wiki-design.md`.
+- `theme_settings.rs` / `parts/` — the theme settings view, and the parts
+  it is made of (slider, select, color picker).
+- `preview.rs` — a view shown from a wasm plugin (`preview-plugin/`): the
+  plugin has the view's signals and handlers, the document is the shell's.
+- `control.rs` — the bridge from the CLI control plane's listener to the
+  UI thread; the transport is `horizon-control::host`, the client is
+  `horizon <subcommand>` itself (`crates/horizon-cli`). Panes get
+  `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment. See
   `docs/cli-control-plane-design.md`.
-- `preview/` — the preview pane: a session-less view kind that loads a
-  `wasm32-wasip2` plugin (`preview-plugin/`, its own sub-workspace) and
-  replays its display lists through the native renderer. The named
-  previews, the sample, and the host/guest vocabulary compile for both
-  targets; the pane and theme publication are native-only. See
-  `docs/preview-pane-design.md`.
-- `markdown/` — the Markdown view: a session-less view kind showing one
-  Markdown file from disk (`horizon markdown <path>`), following relative
-  `.md` links in place. The file it shows is persisted on the model's
-  pane (`Pane::document`). `file_watch.rs` is the single-file watch it
-  shares with the preview pane.
-- `wiki/` — the wiki view: a page of the project wiki
-  (`crates/horizon-wiki`, an extension package outside the repository's
-  core) drawn like the Markdown view, with the owner's comment threads
-  anchored in it, opened with `horizon wiki [page]` or the view chooser.
-  Comments go straight to the page's thread log; `horizon-agentd`'s
-  `wiki_flow` answers them. See `docs/project-wiki-design.md`.
-- `keymap.rs` — `[keybindings]` chord/command translation;
-  `theme/` — config-driven color scheme; `terminal_focus.rs` — the
-  focus-reporting decision.
-- `lib.rs` / `entry.rs` / `main.rs` — the root package is a library plus a
-  thin binary: `lib.rs` declares the modules and marks the ones a
-  preview plugin cannot build (`#[cfg(not(target_family = "wasm"))]`),
-  `entry.rs` is the CLI-vs-GUI entry point, and `main.rs` only calls
-  `horizon::run()`.
-- `ui/` — the shared visual vocabulary every view draws from on top of
-  gpui-component's widgets and `theme/`: the app-wide live font size
-  (`[terminal] font_size`, moved by the font-size commands), the type
-  scale and rhythm scaled from it, and generic parts (chips, running
-  text). Builds for both targets, so preview plugins draw from it too.
-  Anything with a domain's structure (a post, a list row, a tool receipt)
-  stays next to its view. There is no plugin module: WASM plugin views are
-  a prospective third *runtime*, not a `src/` directory — see
-  `docs/view-runtime-principle.md`.
+- `restore.rs` — the workspace kept from the last run, as far as the
+  runtimes still have its sessions.
+- `desktop_notify.rs` / `window.rs` / `primary.rs` — what reaches the
+  desktop: notifications, whether the window has the focus, the primary
+  selection.
+- `background.rs` / `wake.rs` — work done off the UI thread, and what
+  wakes the page to take its answer in.
+- `lib.rs` / `main.rs` — the root package is a library plus a thin binary:
+  `lib.rs` declares the modules and marks the ones a preview plugin cannot
+  build (`#[cfg(not(target_family = "wasm"))]`); `main.rs` is the
+  CLI-vs-window entry.
 
 ## Conventions
 
@@ -408,17 +365,16 @@ The shell is GPUI-based (the Floem shell retired at tag
 - **Split modules by responsibility.** Domain directories hold small focused
   files rather than large monolith modules.
 - **Operations go through the command model.** User-visible operations are
-  `CommandId` variants executed via `WorkspaceShell::execute`
+  `CommandId` variants executed via `Shell::execute`
   (`src/workspace/commands.rs`). Buttons, keyboard shortcuts, and the palette
   are bindings to commands — do not add ad-hoc behavior in UI handlers.
 - **Close vs. terminate are distinct.** Closing a pane/tab detaches sessions;
   `Terminate Active Session` is the explicit destructive command. Preserve
   this separation (see `docs/ux-principles.md`).
-- **Tests are colocated** next to the code, either as an external `tests.rs`
-  declared via `#[cfg(test)] mod tests;` (e.g. `crates/horizon-workspace/src/tests.rs`,
-  `crates/horizon-agent/src/tests.rs`, `src/runtime/tests.rs`) or, more
-  commonly in `src/`, an inline `#[cfg(test)] mod tests { ... }` block at the
-  bottom of the file itself (e.g. `src/workspace/mod.rs`, `src/agent/session.rs`).
+- **Tests are colocated** next to the code in the crates (an external
+  `tests.rs` declared via `#[cfg(test)] mod tests;`, or an inline
+  `#[cfg(test)] mod tests { ... }` block). The root package's views are
+  tested from `tests/`, one file per view, through the document.
 - **Design decisions are recorded under `docs/`** (e.g.
   `agent-pane-design.md`, `agent-provider-contract.md`,
   `agent-duckdb-state-design.md`). Add or update a doc when making a

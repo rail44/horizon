@@ -6,7 +6,7 @@ set -euo pipefail
 # the theme from this crate rather than duplicating them.
 #
 # Everything in src/ that needs the host (sockets, PTYs, the daemon
-# clients, the native gpui platform backend) is gated
+# clients, the window and its renderer) is gated
 # `#[cfg(not(target_family = "wasm"))]` at its module declaration, and the
 # dependencies those modules pull in live under
 # [target.'cfg(not(target_family = "wasm"))'.dependencies] in Cargo.toml.

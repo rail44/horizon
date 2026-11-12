@@ -1,6 +1,10 @@
 # Preview pane
 
-Status: v1 implemented 2026-09-21.
+Status: v1 implemented 2026-09-21; removed with the GPUI shell on
+2026-11-13. What follows describes the pane as it was: a gpui view in a
+wasm plugin, replayed by the GPUI shell's renderer. Its successor is a
+prototype (`src/preview.rs`, `preview-plugin/`,
+`crates/horizon-ui/wit/plugin.wit`) with no pane kind or command yet.
 
 A preview pane shows a gpui view that is still being developed inside a pane
 of the running Horizon, without merging the branch and without restarting

@@ -1,7 +1,7 @@
 # The workspace domain model — tabs, panes, the N-ary layout tree,
 # session attachments, operations/queries, workspace-mode state, and
 # spatial navigation — extracted framework-free (no GPUI dependency) so
-# the GPUI shell's `src/` holds only view projections and wiring over
+# the shell's `src/` holds only views and wiring over
 # this crate's model. See docs/gpui-migration-design.md; mirrors the
 # horizon-terminal-core / horizon-agent extraction pattern.
 [package]

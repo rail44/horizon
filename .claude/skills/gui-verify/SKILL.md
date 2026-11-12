@@ -1,65 +1,70 @@
 ---
 name: gui-verify
-description: Use when verifying Horizon GUI changes end-to-end - launching the shell headless, capturing terminal frame dumps, or running the terminal check script. Trigger words: verify GUI, screenshot, smoke test, visual check, run the app.
+description: Use when verifying Horizon GUI changes end-to-end - checking a view without a window, painting it to pixels, or running the shell over real daemons in a test. Trigger words: verify GUI, screenshot, smoke test, visual check, run the app.
 ---
 
-# GUI Verification (GPUI shell)
+# GUI Verification
 
-Agents cannot see the GUI. The shell has built-in headless taps, read
-once at session spawn (`src/terminal/session.rs`):
+Agents cannot see the window, and must not open one on a desktop a person
+is using. Horizon's window also does not open on a virtual display (`Xvfb`):
+Vello's window renderer finds no adapter that can present there. So a view
+is verified without a window, in a test.
 
-- `HORIZON_GPUI_DUMP=<path>` — mirrors every terminal frame to `<path>`
-  on each update: the plain text, then a `--- spans ---` table with the
-  cursor position and each span's text + logical fg/bg colors (see
-  `dump_frame` in `src/terminal/diagnostics.rs`). Last writer wins when several
-  sessions share the path — the tap is per-process, so drive the pane
-  you assert on.
-  A `{session_id}` placeholder in the path writes one dump per session;
-  `check-workspace-restore.sh` uses this to await all initial frames before
-  restarting the UI.
-- `HORIZON_GPUI_DRIVE=<bytes>` — typed as raw PTY input into the first
-  session ~1.5s after startup. `HORIZON_GPUI_DRIVE_ENTER=1` sends the
-  trailing Enter through the key encoder (exercises the core-side kitty
-  path). This bypasses the real winit→gpui key/IME pipeline entirely
-  (writes straight to the session's command channel), so it cannot
-  verify that pipeline — use `HORIZON_INPUT_TRACE` for that.
-- `HORIZON_INPUT_TRACE=1` (or a file path) — traces every hop of the
-  real key/IME pipeline: winit's `KeyboardInput`/`Ime` arrival
-  (`crates/horizon-winit-platform`), `TerminalView::handle_key`/
-  `replace_text_in_range` entry and verdict (`src/terminal/keyboard.rs`), and
-  the PTY-send decision. One `input-trace:`-prefixed line per event, key
-  names and event kinds only — never the actual typed/composed text.
-  Zero cost when unset.
+## A view through its document
 
-One-shot check script:
+The tests under `tests/` build a view into a document with
+`horizon_ui::App::new(width, height, css, || view)`, feed it the document's
+own input events, and assert on the document.
 
-```sh
-scripts/check-gpui-terminal.sh [--binary <path>] [--out <dir>] [--force-kill]
+- Keys, the input method, a paste: `app.dispatch(UiEvent::KeyDown(..))`,
+  `UiEvent::Ime(BlitzImeEvent::Commit(..))`, `UiEvent::Paste(..)`.
+- The mouse: `horizon_ui::testing::{pointer, click_at, move_to, select}`.
+- After a change made outside a handler (a signal set from the test, a
+  command run through `Shell::execute`): `app.run_effects()` then
+  `app.resolve()`. `app.resolve()` alone lays out and takes in what
+  arrived from other threads.
+- What is on the page: walk `app.document()` by class, or ask a node's
+  `text_content()` and `get_client_bounding_rect`.
+
+Each view has a file to start from: `tests/terminal.rs`, `tests/agent/`,
+`tests/board.rs`, `tests/board_thread.rs`, `tests/markdown.rs`,
+`tests/wiki.rs`, `tests/parts.rs`, and `tests/workspace.rs` for the whole
+shell.
+
+## What is drawn
+
+A test about pixels paints the page on the CPU and reads them:
+
+```rust
+let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+let mut pixels = Vec::new();
+renderer.render_to_vec(
+    |scene| blitz_paint::paint_scene(scene, &mut document.borrow_mut(), scale, width, height, 0, 0),
+    &mut pixels,
+);
 ```
 
-Builds nothing itself — build first (`cargo build --workspace`). It
-launches the binary with the taps, types a marker plus 256-color,
-truecolor, and OSC 8 hyperlink samples, polls the dump up to ~10s, and
-asserts marker, `Indexed(208)`, `Rgb([`, and
-`url=https://example.com/horizon-check` appear. It refuses to run while
-another `horizon` process exists unless `--force-kill` is passed — never
-force it when the owner may be running Horizon. Its workspace state is
-isolated under the output directory.
+At a display scale other than one, set the document's viewport to that
+scale first (`document.set_viewport(Viewport::new(width, height, scale, ..))`)
+and paint at it: edges that are on whole pixels at one are not at 1.25.
 
-Caveats:
-- Pixel output is NOT verified — frame dumps prove the model/paint
-  inputs, not the pixels. Real visual checks need a human (macOS screen
-  capture requires Screen Recording permission the dev terminal usually
-  lacks).
-- The control socket is fixed per-uid (`/tmp/horizon-control-<uid>.sock`);
-  a second instance logs a bind failure and runs without external control.
-  Both one-shot scripts isolate the daemons, agent persistence, and workspace
-  state under their output directory (mind macOS's ~104-byte `SUN_LEN`
-  socket-path limit).
-- The launched window takes focus, so keys the owner types during the
-  ~10s run land in the checked terminal ahead of `HORIZON_GPUI_DRIVE`
-  and corrupt the driven command (seen on macOS: a romaji fragment glued
-  onto `printf` → `command not found` → every span assertion fails). If
-  the dump shows the drive line mangled, re-run while the keyboard is
-  idle.
-- Kill only processes your test started.
+To look at a picture yourself, write the pixels out from the test (the
+terminal and workspace tests do when `HORIZON_TEST_DUMP=<path>` is set, as
+raw RGBA), convert it to PNG, and read the PNG.
+
+## Over real daemons
+
+`tests/terminald.rs`, `tests/agentd.rs` and `tests/board_logd.rs` start
+`horizon-terminald`, `horizon-agentd` and `horizon-logd` on sockets and a
+data home of the test's own, never the ones in daily use. The agent's
+provider is `scripts/mock-openai-provider.py`. Build the daemons first
+(`cargo build --workspace`). A test that fails may leave its daemon
+running: find it by its socket under `/tmp/hzb*` and stop that process
+only.
+
+## What a person has to look at
+
+The window itself: text weight, a real display's scale, the input
+method's candidates, the clipboard and the primary selection, desktop
+notifications. Say plainly in the report what was verified in a test and
+what was not looked at.

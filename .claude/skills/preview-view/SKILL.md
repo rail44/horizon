@@ -1,81 +1,43 @@
 ---
 name: preview-view
-description: Use when implementing or changing a gpui view in Horizon and you want it checkable before merge - registering a named preview with sample data, building the preview plugin, checking it windowlessly, and showing it to the owner in a pane of the running Horizon. Trigger words: preview a view, preview pane, show the view to the owner, view feedback, horizon preview, make a view previewable.
+description: Use when implementing or changing a view in Horizon and you want it shown from the preview plugin - registering a named preview with sample data, building the plugin, and checking it windowlessly. Trigger words: preview a view, preview pane, show the view to the owner, view feedback, horizon preview, make a view previewable.
 ---
 
 # Previewing a view under development
 
-Horizon can show a gpui view from your branch inside a pane of the owner's
-running Horizon, drawn by the real renderer, without a merge or a restart.
-The view is compiled into a WebAssembly plugin (`preview-plugin/`). Design:
-`docs/preview-pane-design.md`.
+A view can be built into a WebAssembly plugin (`preview-plugin/`) and shown
+from it by `src/preview.rs`: the plugin has the view's signals, effects and
+handlers, and the document is the shell's. This is a prototype: there is
+no pane kind and no `horizon preview` command for it yet, so today it is a
+windowless check, not a way to show a person a view in their running
+Horizon.
 
-## 1. Make the view's code buildable for the plugin
+## Making a view previewable
 
-The plugin is `wasm32-wasip2`: no sockets, no subprocesses, no direct
-filesystem, no tokio runtime. Code that goes into the plugin must not
-reach them.
+1. The view's module has to build for `wasm32-wasip2`. In `src/lib.rs`,
+   leave it out of the `#[cfg(not(target_family = "wasm"))]` gate, and keep
+   what it needs of the host (a thread, a socket, a file, the daemon
+   clients) behind that gate inside it. `src/board/` is the example: the
+   store is handed in whole (`Source::Ready`), and following the log is
+   native-only. `Background::run` runs its work in place in a plugin.
+2. A view in a plugin uses `horizon_ui` as it does natively. What does not
+   cross: a paint widget, `takes_text`, `on_paste`, the clipboard, the
+   page's selection, `windowed`. The events that cross are keys, pointer
+   events and `input` (`crates/horizon-ui/wit/plugin.wit`).
+3. Add the preview to `preview-plugin/src/lib.rs`: a name in `names`, an arm
+   in `view` that builds the view over sample data, and the view's CSS in
+   `css`.
 
-- Whatever the view uses to reach the outside world must be replaceable
-  with sample data. A view backed by a session entity gets a sample
-  entity; a view that reads a store gets a store with sample contents.
-  Put that seam in the store or session entity, not in a new layer inside
-  the view. Keep it minimal.
-- In `src/lib.rs`, a module is native-only when its declaration carries
-  `#[cfg(not(target_family = "wasm"))]`. To preview a view, remove that
-  gate from the view's module and gate only the parts inside it that need
-  native-only dependencies. Dependencies that cannot build for wasm stay
-  under `[target.'cfg(not(target_family = "wasm"))'.dependencies]` in the
-  root `Cargo.toml`.
-- `./scripts/check-preview-wasm.sh` tells you whether the library still
-  builds for the plugin. It is part of the quality gate.
-
-## 2. Register a named preview next to the view
-
-Copy the shape of `src/preview/sample.rs`: a `NAME`, and a
-`build(&mut Window, &mut App) -> AnyView` that constructs the view with
-sample data. Add one entry to `PREVIEWS` in `src/preview/registry.rs`.
-Write one preview per state worth looking at (empty, long titles, error,
-many rows) rather than one preview with switches. `preview-plugin/` itself
-never changes.
-
-## 3. Build and check it yourself, windowlessly
+## Checking it
 
 ```sh
-(cd preview-plugin && cargo build --locked --profile quick --target wasm32-wasip2)
-./scripts/check-preview-plugin.sh
+scripts/check-preview-plugin.sh
 ```
 
-Use the `quick` profile: load time tracks component size, and a debug
-component loads several times slower. Your own verification is tests, not
-the pane — assert on what the preview paints and how it reacts to input
-the way `src/preview/e2e.rs` does. You cannot see the pane. Nothing draws
-a frame in those tests unless the harness drives one (`host_frames()`
-there), and a view with a repeating animation keeps asking for frames, so
-check an animated view the way `preview_plugin_paces_a_repeating_animation`
-checks the `animation` preview.
+builds the plugin and runs `tests/preview.rs` (`#[ignore]`d otherwise),
+which draws the preview through the plugin and drives it. Add a test there
+for a new preview, the way `tests/board.rs` drives the same view built
+natively. Needs `rustup target add wasm32-wasip2`. Not part of the gate.
 
-## 4. Ask the owner to look
-
-Only when you want a person's feedback on the view:
-
-```sh
-horizon preview preview-plugin/target/wasm32-wasip2/quick/horizon_preview_plugin.wasm --name <preview>
-```
-
-This opens a pane in the owner's running Horizon without taking focus
-(`--active` would take it; do not pass it unless asked). The pane appearing
-is itself the request to look, so do not open it for your own checks. It
-reloads by itself whenever you rebuild the artifact, and calling the
-command again for the same path reloads instead of opening a second pane.
-Say in your message which preview names to look at and what you want
-judged.
-
-## Limits
-
-IME composition, clipboard, and modifier-key state do not reach a preview;
-Latin typing, clicks, scrolling, hover, and focus do. A guest's window is
-the pane's rectangle; how popovers and modals behave inside it has not
-been checked. Animations advance once per host frame, but sprite
-transformations are painted untransformed, so a rotating icon does not
-rotate.
+`scripts/check-preview-wasm.sh` (in the gate) only checks that the library
+still builds for the plugin's target.

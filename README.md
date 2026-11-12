@@ -1,13 +1,13 @@
 # Horizon
 
-Horizon is a GPUI-based desktop shell for tabbed and split-pane
-applications: a keyboard-first command workspace where terminals, AI agent
+Horizon is a desktop shell for tabbed and split-pane applications, drawn
+with Blitz: a keyboard-first command workspace where terminals, AI agent
 sessions, and (future) plugin views run as sessions attached to panes.
 
 ## MVP Shape
 
-- GPUI (Zed's UI framework, with gpui-component) owns the native window;
-  Horizon's own N-ary layout tree drives tabs and split panes. Every
+- Blitz (an HTML and CSS engine: Stylo, Taffy, Parley, Vello) draws the
+  window; Horizon's own N-ary layout tree drives tabs and split panes. Every
   operation runs through one command model, surfaced today by workspace mode's
   `:` palette (`docs/workspace-mode-design.md`) and by the `horizon` CLI
   control plane (`docs/cli-control-plane-design.md`).
@@ -93,33 +93,15 @@ so a subcommand run from inside a pane targets the enclosing instance and
 `approve`/`deny <session-id> <call-id> <occurrence-id>`, `cancel-turn <session-id>`,
 `continue-turn <session-id>`,
 `reload-agent-runtime`, `reload-terminal-runtime`, `reload-config`,
-`preview <path-to-wasm> [--name <preview>]` (shows a view under development
-in a pane — see `docs/preview-pane-design.md`),
+`preview <path-to-wasm> [--name <preview>]` (the shell does not carry this
+one out yet: a preview is a windowless check for now, see the
+`preview-view` skill),
 `sessions`, `state` (each takes
 `--split`/`--active` where placement/focus applies). See
 `docs/cli-control-plane-design.md` for the full contract.
 
-For an automated headless check of the terminal pane:
-
-```sh
-scripts/check-gpui-terminal.sh
-```
-
-The script launches the freshly built binary with Horizon's built-in
-headless taps (`HORIZON_GPUI_DUMP`/`HORIZON_GPUI_DRIVE`), types a marker
-command, and asserts the frame dump recorded the marker plus 256-color and
-truecolor spans. It refuses to run while another Horizon instance is
-running unless `--force-kill` is passed.
-
-To verify UI-restart recovery with isolated sockets and state, run:
-
-```sh
-scripts/check-workspace-restore.sh
-```
-
-It creates a second terminal tab and a split through the CLI, restarts only
-the UI, and asserts that all terminal session ids, both tabs, the split, and
-a restored frame survive.
+The views are checked without a window, in tests (`cargo nextest run
+--workspace`); see "GUI Verification" in `AGENTS.md`.
 
 ## Next Integration Points
 

@@ -1,70 +1,205 @@
-//! The board: the task list and one task's thread, as two views.
+//! The board: the task list and one task's thread, as two views over
+//! `horizon-board`'s store. Neither holds the other: a pane split puts
+//! them side by side.
 //!
-//! [`BoardListView`] is the board's task list and [`BoardThreadView`] is
-//! one task's thread. Neither contains the other: each takes a pane's
-//! whole width and carries its own key map, and a pane split is what puts
-//! the two side by side.
-//!
-//! What they share is [`model`] (the tree order, folding, the post cursor,
-//! drag placement, both key maps), [`spec`] (the board-only measurements,
-//! scaled from the app-wide font size like `crate::ui::spec`), [`parts`]
-//! (the tones and labels they draw with, beside `crate::ui::parts`),
-//! [`chrome`] (every fixed label either view draws),
-//! [`activity`] (what
-//! a bound session reports), and the store hand-off: both read a
-//! [`Store`](horizon_board::Store) through the same
-//! [`BoardStoreSource`](execute::BoardStoreSource) /
-//! [`run_store_job`](execute::run_store_job) pair, so a preview's
-//! in-memory store and a log-backed one look the same from here; on the
-//! former every write answers `StoreError::ReadOnly`, which both views
-//! report on their notice line.
-//!
-//! # Native-only halves
-//!
-//! [`live`] (the logd subscribe pump that re-reads on an external write)
-//! and [`sessions`] (observing the shell's `AgentSession` entities) reach
-//! the host, so they are gated at their declaration below, as is each
-//! view's shell-facing block: `root`, `board_command`, `observe_sessions`,
-//! `finish_inventory_refresh`, the list's `selected_task`, and the
-//! thread's `task_session`/`show_task`. A store handed in whole — a
-//! preview's — has no project directory, so it gets no pump and no session
-//! observation.
-//!
-//! # What the views report upwards
-//!
-//! Neither view reaches the shell. Every request that needs a pane, a
-//! session, or the workspace's inventory leaves as an event:
-//!
-//! | Event | Emitted by | What the shell does with it |
-//! | --- | --- | --- |
-//! | [`events::OpenTaskThread`] | the list, on `Enter` | runs `CommandId::OpenBoardRelatedItem`, which opens that task's thread in a pane |
-//! | [`events::OpenTaskSession`] | the thread, on `Session` | runs `CommandId::OpenBoardTaskSession`, which resolves and attaches the bound agent session |
-//! | [`events::BoardSessionsRefreshed`] | both, after a load found new bindings | resolves the ids in its inventory, then calls `finish_inventory_refresh` and `observe_sessions` |
-//!
-//! # The list's keys
-//!
-//! `j`/`down` and `k`/`up` move the selection, `l`/`right` opens the
-//! selected parent and `h`/`left` closes it (on a leaf, `h` selects its
-//! parent), `o` folds the finished band open and shut, and `Enter` asks
-//! for the selected task's thread. The thread's own keys are `j`/`k` for
-//! the post cursor, `e` to fold the post under it, `Enter` for the
-//! composer, and `Esc` back out of it.
+//! What the views are built on is `horizon-board-view`'s: the tree order,
+//! folding, the selection, where a dragged row lands, the key maps and
+//! the fixed labels. A view reads and writes the store off the UI thread
+//! and takes the answers in at the page's next poll, and reads again when
+//! the store's log says something was written.
 
-pub(crate) mod activity;
-pub(crate) mod chrome;
-pub(crate) mod events;
-pub(crate) mod execute;
-mod list;
-pub(crate) mod model;
-mod parts;
-pub(crate) mod previews;
-mod spec;
-mod thread;
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
 
+use horizon_board::{Item, Store, StoreError};
+use horizon_board_view::activity::{BoardSessionActivity, task_session_state};
+use horizon_board_view::chrome;
+use horizon_ui::El;
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::With;
+use horizon_workspace::SessionId;
+
+use crate::background::Background;
+
+pub mod list;
 #[cfg(not(target_family = "wasm"))]
-pub(crate) mod live;
-#[cfg(not(target_family = "wasm"))]
-pub(crate) mod sessions;
+pub mod thread;
 
-pub(crate) use list::BoardListView;
-pub(crate) use thread::BoardThreadView;
+pub use list::BoardList;
+#[cfg(not(target_family = "wasm"))]
+pub use thread::BoardThread;
+
+/// The style sheet of both views.
+#[cfg(not(target_family = "wasm"))]
+pub fn css() -> String {
+    [list::CSS, thread::CSS].concat()
+}
+
+/// Where a view's store is: a project's, by a directory in it, or one
+/// handed in whole (a test's, which refuses writes).
+#[derive(Clone)]
+pub enum Source {
+    Root(PathBuf),
+    Ready(Store),
+}
+
+impl Source {
+    /// The directory the store is a project's by, if it is one's.
+    pub fn root(&self) -> Option<PathBuf> {
+        match self {
+            Self::Root(root) => Some(root.clone()),
+            Self::Ready(_) => None,
+        }
+    }
+
+    fn open(&self) -> Result<Store, StoreError> {
+        match self {
+            #[cfg(not(target_family = "wasm"))]
+            Self::Root(root) => Store::from_dir(root),
+            // (A plugin reaches no project: its stores are handed in.)
+            #[cfg(target_family = "wasm")]
+            Self::Root(_) => Err(StoreError::ReadOnly),
+            Self::Ready(store) => Ok(store.clone()),
+        }
+    }
+}
+
+/// A read or a write of the store.
+type Job<T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send>>;
+
+/// Runs `job` over `source`'s store on a thread of its own, and `then` on
+/// the UI thread with its answer.
+fn run<T: Send + 'static>(
+    background: &Background,
+    source: Source,
+    job: impl FnOnce(Store) -> Job<T> + Send + 'static,
+    then: impl FnOnce(Result<T, StoreError>) + Send + 'static,
+) {
+    background.run(
+        move || {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(StoreError::Io)?;
+                runtime.block_on(job(source.open()?))
+            }
+            // A store handed in whole answers without waiting on anything.
+            #[cfg(target_family = "wasm")]
+            {
+                let mut job = job(source.open()?);
+                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                loop {
+                    if let std::task::Poll::Ready(answer) = job.as_mut().poll(&mut context) {
+                        break answer;
+                    }
+                }
+            }
+        },
+        then,
+    );
+}
+
+/// Calls `written` on the UI thread whenever the log of the store at
+/// `root` takes a write, from this process or another, until what is
+/// returned is dropped.
+#[cfg(not(target_family = "wasm"))]
+fn follow(
+    root: PathBuf,
+    background: Background,
+    written: impl Fn() + Send + Sync + 'static,
+) -> tokio::sync::oneshot::Sender<()> {
+    let (stop, mut stopped) = tokio::sync::oneshot::channel::<()>();
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            return;
+        };
+        let written = std::sync::Arc::new(written);
+        runtime.block_on(async move {
+            let Ok(store) = Store::from_dir(&root) else {
+                return;
+            };
+            let mut lines = tokio::select! {
+                biased;
+                _ = &mut stopped => return,
+                lines = store.subscribe(None) => match lines {
+                    Ok(lines) => lines,
+                    Err(_) => return,
+                },
+            };
+            // The first line is the log as it stands, which the view has
+            // read already.
+            let _ = lines.next_line().await;
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut stopped => return,
+                    line = lines.next_line() => match line {
+                        Ok(Some(_)) => {
+                            let written = written.clone();
+                            background.tell(move || written());
+                        }
+                        _ => return,
+                    },
+                }
+            }
+        });
+    });
+    stop
+}
+
+/// The class of a task's status: the tone its chip or dot is drawn in.
+fn tone(item: &Item) -> &'static str {
+    if item.is_closed {
+        return "muted";
+    }
+    match item.status.trim() {
+        "done" => "success",
+        "review" => "info",
+        "blocked" | "見送り" => "warning",
+        "進行中" | "doing" | "設計中" => "accent",
+        _ => "muted",
+    }
+}
+
+/// What the sessions a board's tasks are bound to are doing, as whoever
+/// placed the view says: a view draws it and does not find it out.
+pub type Activity = RwSignal<std::collections::HashMap<SessionId, BoardSessionActivity>>;
+
+/// A chip in `into` for what the session `item` is bound to is doing,
+/// there while the task is bound to one.
+fn activity_chip(into: El, item: &Item, states: Activity) {
+    let item = item.clone();
+    into.each(
+        move || {
+            let state = states.with(|states| task_session_state(&item, states));
+            state.into_iter().collect::<Vec<_>>()
+        },
+        |state| *state,
+        |state| {
+            let tone = match state {
+                BoardSessionActivity::Failed => "danger",
+                BoardSessionActivity::Running
+                | BoardSessionActivity::ToolRunning
+                | BoardSessionActivity::WaitingForApproval => "accent",
+                _ => "muted",
+            };
+            horizon_ui::el("span")
+                .class(&format!("chip activity {tone}"))
+                .text(state.label())
+        },
+    );
+}
+
+/// A refused write, as the notice line says it.
+fn write_refusal(error: &StoreError) -> String {
+    match error {
+        StoreError::ReadOnly => chrome::READ_ONLY_REFUSAL.to_string(),
+        other => other.to_string(),
+    }
+}

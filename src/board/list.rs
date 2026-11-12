@@ -1,903 +1,758 @@
-//! The board list as a view of its own: one row per task, in the owner's
-//! own rank order as a tree, with the finished band folded behind one row
-//! and a pinned input for adding work.
-//!
-//! The list takes a whole pane, so a row spans the pane's width instead of
-//! a fixed column, and opening a task is reported rather than rendered —
-//! the thread it opens belongs to a pane of its own.
+//! The board's task list: the tasks as the tree their parents make, in
+//! rank order, the finished ones gathered behind one row at the bottom,
+//! with a field to add one. Rows are selected, folded and opened from the
+//! keyboard, and reordered among their siblings by dragging.
 
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::transparent_black;
-use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::{h_flex, v_flex};
-use horizon_board::{Position, Store};
-use horizon_workspace::SessionId;
+use horizon_board::{Item, Position};
+use horizon_board_view::chrome;
+use horizon_board_view::model::{
+    self, DropHalf, ListCommand, Row, drop_position_from_half, finished_summary,
+    list_command_for_key, parse_new_task, sibling_move, status_text, step_selection, tree_rows,
+    visible_rows,
+};
+use horizon_ui::blitz_traits::events::{BlitzKeyEvent, DomEventData};
+use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue};
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::{
+    Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
+};
+use horizon_ui::{El, dispatched, each_layout, el, prevent_default, relayout, stop_propagation};
+use keyboard_types::{Key, NamedKey};
 
-use super::activity::{activity_color, task_session_state, BoardSessionActivity};
-use super::chrome;
-use super::events::{BoardSessionsRefreshed, OpenTaskThread};
-use super::execute::{run_store_job, BoardStoreSource, StoreJob};
-use super::model::{self, BoardDragValue, DropHalf, ListCommand, Row};
-use super::parts::{activity_label, status_tone, write_refusal};
-use super::spec::*;
-use crate::theme;
-use crate::ui::parts::chip;
-use crate::ui::spec::*;
+#[cfg(not(target_family = "wasm"))]
+use super::follow;
+use super::{Activity, Job, Source, activity_chip, run, tone, write_refusal};
+use crate::background::Background;
 
-/// The board's task list.
-pub(crate) struct BoardListView {
-    store: BoardStoreSource,
-    /// The activity of every session the board binds, as the shell reports
-    /// it.
-    activity: HashMap<SessionId, BoardSessionActivity>,
-    /// Bindings reported to the shell whose inventory answer has not come
-    /// back yet: until it does, a session the shell does not hold reads as
-    /// loading rather than unreachable.
-    inventory_pending: HashSet<SessionId>,
-    /// Everything the last read returned, in no particular order. The
-    /// display order is [`rows`](Self::rows); moves and drops are decided
-    /// against this, so a hidden sibling still counts.
-    items: Vec<horizon_board::Item>,
-    rows: Vec<Row>,
-    positions: HashMap<u64, String>,
-    /// Parents whose children are hidden.
-    pub(super) collapsed: HashSet<u64>,
-    selected: Option<u64>,
-    finished_expanded: bool,
-    /// One line under the rows: what the last open asked for, or a read or
-    /// write that failed.
-    notice: Option<String>,
-    /// The row and half a drag is hovering over, or `None` when the cursor
-    /// is somewhere a drop would change nothing.
-    drop_indicator: Option<(u64, DropHalf)>,
-    /// The move a release decided on, waiting for [`ListCommand::Reorder`]
-    /// to carry it out.
-    pending_move: Option<(u64, Position)>,
-    new_task: Entity<InputState>,
-    _new_task_subscription: Subscription,
-    #[cfg(not(target_family = "wasm"))]
-    session_watches: HashMap<SessionId, super::sessions::SessionWatch>,
-    /// The live-update pump, started when the store resolved from a project
-    /// directory. Owned here (not detached) so the pane closing ends it.
-    #[cfg(not(target_family = "wasm"))]
-    _live_updates: Option<super::live::LiveUpdates>,
-    scroll: ScrollHandle,
-    focus_handle: FocusHandle,
+// Every rule sits under the view's own class: the page's style sheet is one
+// for all the views on it. The measurements are in the theme's scaled lengths (`--u8` is 8 px at
+// the reference type size).
+pub const CSS: &str = "
+    .board-list { position: relative; display: flex; flex-direction: column; height: 100%;
+                  min-width: calc(var(--u28) * 10); outline: none;
+                  background: var(--background); color: var(--text);
+                  font-family: var(--font-family); font-size: var(--body-size);
+                  line-height: var(--body-line);
+        .head, .band, .notice { flex: none; padding: var(--u4) var(--u16);
+                                font-size: var(--meta-size); line-height: var(--meta-line);
+                                color: var(--text-muted); }
+        .head { border-bottom: 1px solid var(--border); }
+        .rows { flex: 1; min-height: 0; overflow-y: scroll; }
+        .row { position: relative; display: flex; align-items: center; flex: none;
+               box-sizing: border-box; height: calc(var(--u24) * 2); cursor: pointer;
+               border: 1px solid transparent; }
+        .row:hover, .band:hover { background: var(--band); }
+        .row.selected { background: var(--selection); }
+        .row.carried { opacity: 0.5; }
+        .bar { flex: none; align-self: stretch; width: 2px; }
+        .row.selected .bar { background: var(--accent); }
+        .gutter { flex: none; width: var(--u8); display: flex; align-items: center;
+                  justify-content: center; }
+        .unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+        .disclosure { flex: none; width: var(--u12); text-align: center;
+                      font-size: var(--micro-size); line-height: var(--micro-line);
+                      color: var(--text-muted); }
+        .label { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+                 opacity: 0.85; }
+        .row.unread .title { opacity: 1; font-weight: 600; }
+        .row.finished .title { opacity: 1; color: var(--text-muted); }
+        .meta { overflow: hidden; white-space: nowrap; font-size: var(--micro-size);
+                line-height: var(--micro-line); color: var(--text-muted); }
+        .tail { flex: none; display: flex; align-items: center; gap: var(--u4);
+                padding: 0 var(--u16) 0 var(--u4); }
+        .chip { padding: 0 var(--u4); border-radius: 2px; font-size: var(--micro-size);
+                line-height: var(--micro-line); }
+        .chip.muted { background: var(--chip-muted-surface); color: var(--chip-muted-text); }
+        .chip.accent { background: var(--chip-accent-surface); color: var(--chip-accent-text); }
+        .chip.success { background: var(--chip-success-surface);
+                        color: var(--chip-success-text); }
+        .chip.info { background: var(--chip-info-surface); color: var(--chip-info-text); }
+        .chip.warning { background: var(--chip-warning-surface);
+                        color: var(--chip-warning-text); }
+        .chip.danger { background: var(--chip-muted-surface); color: var(--danger); }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; opacity: 0.55; }
+        .status-dot.muted { background: var(--text-muted); }
+        .status-dot.accent { background: var(--accent); }
+        .status-dot.success { background: var(--success); }
+        .status-dot.info { background: var(--info); }
+        .status-dot.warning { background: var(--warning); }
+        .line { position: absolute; left: 0; right: 0; height: 2px;
+                background: var(--accent); }
+        .line.above { top: -1px; }
+        .line.below { bottom: -1px; }
+        .band { display: flex; align-items: center; gap: var(--u4); cursor: pointer; }
+        .add { flex: none; position: relative; padding: var(--u4) var(--u16);
+               border-top: 1px solid var(--border); }
+        .add input { width: 100%; font-family: var(--font-family);
+                     font-size: var(--body-size); line-height: var(--body-line); padding: 0;
+                     border: none; outline: none; background: transparent;
+                     color: var(--text); }
+        .add .placeholder { position: absolute; left: var(--u16); top: var(--u4);
+                            color: var(--text-muted); pointer-events: none; }
+        .ghost { position: absolute; z-index: 10; padding: 4px 8px;
+                 background: var(--surface-selected); pointer-events: none; }
+    }
+    .board-list:focus .row.selected { border-color: var(--accent); }
+";
+
+/// How far the pointer moves with the button held before a press on a row
+/// is a drag of it.
+const SLOP: f32 = 4.;
+
+/// What the list asks of whatever holds it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Asked {
+    /// The selected task's thread.
+    OpenThread(u64),
 }
 
-impl BoardListView {
-    pub(crate) fn new(
-        store: BoardStoreSource,
-        activity: HashMap<SessionId, BoardSessionActivity>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let new_task = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(chrome::ADD_TASK)
-                .submit_on_enter(true)
-        });
-        let _new_task_subscription =
-            cx.subscribe_in(&new_task, window, |view, _input, event, window, cx| {
-                if let InputEvent::PressEnter { shift: false, .. } = event {
-                    view.execute(ListCommand::AddTask, window, cx);
-                }
-            });
-        let focus_handle = cx.focus_handle();
-        window.focus(&focus_handle, cx);
-        #[allow(unused_mut)]
-        let mut view = Self {
-            store,
-            activity,
-            inventory_pending: HashSet::new(),
-            items: Vec::new(),
-            rows: Vec::new(),
-            positions: HashMap::new(),
-            collapsed: HashSet::new(),
-            selected: None,
-            finished_expanded: false,
-            notice: None,
-            drop_indicator: None,
-            pending_move: None,
-            new_task,
-            _new_task_subscription,
-            #[cfg(not(target_family = "wasm"))]
-            session_watches: HashMap::new(),
-            #[cfg(not(target_family = "wasm"))]
-            _live_updates: None,
-            scroll: ScrollHandle::new(),
-            focus_handle,
-        };
-        // A store that resolved from a project directory has a log behind
-        // it, so anything else writing to the board pokes this view. A
-        // store handed in whole (a preview's) cannot change behind it.
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let root = view.store.root().map(std::path::Path::to_path_buf);
-            if let Some(root) = root {
-                view._live_updates =
-                    Some(super::live::start_live_updates(&root, Self::on_poke, cx));
-            }
-        }
-        view.load(cx);
-        view
+/// What the view keeps that is not a signal.
+struct Held {
+    source: Source,
+    background: Background,
+    ask: Box<dyn Fn(Asked)>,
+    /// Each task's row on the page.
+    rows: RefCell<HashMap<u64, El>>,
+    /// The task whose row is to be brought into view at the next layout.
+    reveal: Cell<Option<u64>>,
+}
+
+/// The view's state, for whoever placed it to read or drive.
+#[derive(Clone, Copy)]
+pub struct BoardList {
+    items: RwSignal<Vec<Item>>,
+    positions: RwSignal<HashMap<u64, String>>,
+    rows: RwSignal<Vec<Row>>,
+    /// The parents whose children are folded away.
+    pub collapsed: RwSignal<HashSet<u64>>,
+    pub selected: RwSignal<Option<u64>>,
+    pub finished_expanded: RwSignal<bool>,
+    /// A line above the field: a write refused, a store that did not open.
+    pub notice: RwSignal<Option<String>>,
+    /// What the sessions the tasks are bound to are doing.
+    pub activity: Activity,
+    /// The row being dragged, and the row and half it would land by.
+    carried: RwSignal<Option<u64>>,
+    indicator: RwSignal<Option<(u64, DropHalf)>>,
+    typed: RwSignal<String>,
+    held: StoredValue<Rc<Held>, LocalStorage>,
+    pub element: El,
+    field: El,
+    scroll: El,
+}
+
+/// The store as the list reads it: the tasks, and how far the owner has
+/// read each one's posts.
+type Read = (Vec<Item>, HashMap<u64, String>);
+
+/// One line of the list: a task's row, or the row the finished tasks are
+/// gathered behind.
+#[derive(Clone)]
+enum Line {
+    Task(Box<Row>, String),
+    Band {
+        count: usize,
+        unread: usize,
+        expanded: bool,
+    },
+}
+
+impl BoardList {
+    fn held(&self) -> Rc<Held> {
+        self.held.with_value(Rc::clone)
     }
 
-    /// Builds the list over a store the caller already holds, the way a
-    /// preview does.
-    pub(crate) fn over_store(
-        store: Store,
-        activity: HashMap<SessionId, BoardSessionActivity>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        Self::new(BoardStoreSource::Ready(store), activity, window, cx)
+    /// Every session the tasks are bound to, each once.
+    pub fn bound_sessions(&self) -> Vec<horizon_workspace::SessionId> {
+        self.items
+            .with_untracked(|items| model::bound_sessions(items))
     }
 
-    /// Opens with these parents folded. The first read has not landed when
-    /// a constructor returns, so the rows it derives already honour this.
-    pub(super) fn with_collapsed(mut self, parents: impl IntoIterator<Item = u64>) -> Self {
-        self.collapsed.extend(parents);
-        self
+    /// The directory of the project whose board this is.
+    pub fn root(&self) -> Option<std::path::PathBuf> {
+        self.held().source.root()
     }
 
-    // -- store ------------------------------------------------------------
-
-    fn load(&self, cx: &mut Context<Self>) {
-        let source = self.store.clone();
-        cx.spawn(async move |this, cx| {
-            let result = run_store_job(cx, source, |store| {
-                Box::pin(async move {
-                    Ok((
-                        store.list(None, true)?.items,
-                        store.read_positions("owner")?,
-                    ))
-                })
+    /// Reads the store again.
+    pub fn load(&self) {
+        let (this, held) = (*self, self.held());
+        let read: fn(horizon_board::Store) -> Job<Read> = |store| {
+            Box::pin(async move {
+                Ok((
+                    store.list(None, true)?.items,
+                    store.read_positions("owner")?,
+                ))
             })
-            .await;
-            let _ = this.update(cx, |view, cx| match result {
-                Ok((items, positions)) => view.set_loaded(items, positions, cx),
-                Err(error) => {
-                    view.notice = Some(error.to_string());
-                    cx.notify();
+        };
+        run(
+            &held.background,
+            held.source.clone(),
+            read,
+            move |read| match read {
+                Ok((items, positions)) => {
+                    this.items.set(items);
+                    this.positions.set(positions);
+                    this.rebuild();
                 }
-            });
-        })
-        .detach();
+                Err(error) => this.notice.set(Some(error.to_string())),
+            },
+        );
     }
 
-    fn set_loaded(
-        &mut self,
-        items: Vec<horizon_board::Item>,
-        positions: HashMap<u64, String>,
-        cx: &mut Context<Self>,
-    ) {
-        let fresh: Vec<SessionId> = model::bound_sessions(&items)
-            .into_iter()
-            .filter(|id| self.inventory_pending.insert(*id))
-            .collect();
-        cx.emit(BoardSessionsRefreshed(fresh));
-        self.items = items;
-        self.positions = positions;
-        self.rebuild(cx);
-    }
-
-    /// Re-derives the display rows from what is loaded. The single place
-    /// the tree order, the folds, and the selection clamp are applied.
-    fn rebuild(&mut self, cx: &mut Context<Self>) {
-        self.rows = model::tree_rows(&self.items, &self.positions, &self.collapsed);
-        self.clamp_selection();
-        cx.notify();
-    }
-
-    /// Runs one write and reloads on success. A store that takes no writes
-    /// lands in the notice line instead.
-    fn mutate(
-        &self,
-        cx: &mut Context<Self>,
-        job: impl FnOnce(Store) -> StoreJob<()> + Send + 'static,
-    ) {
-        let source = self.store.clone();
-        cx.spawn(async move |this, cx| {
-            let result = run_store_job(cx, source, job).await;
-            let _ = this.update(cx, |view, cx| match result {
+    /// Writes to the store, then reads it again; a write refused is said
+    /// on the notice line.
+    fn mutate(&self, job: impl FnOnce(horizon_board::Store) -> Job<()> + Send + 'static) {
+        let (this, held) = (*self, self.held());
+        run(
+            &held.background,
+            held.source.clone(),
+            job,
+            move |wrote| match wrote {
                 Ok(()) => {
-                    view.notice = None;
-                    view.load(cx);
+                    this.notice.set(None);
+                    this.load();
                 }
-                Err(error) => {
-                    view.notice = Some(write_refusal(&error));
-                    cx.notify();
-                }
-            });
+                Err(error) => this.notice.set(Some(write_refusal(&error))),
+            },
+        );
+    }
+
+    fn rebuild(&self) {
+        let rows = self.items.with_untracked(|items| {
+            (self.positions).with_untracked(|positions| {
+                (self.collapsed).with_untracked(|collapsed| tree_rows(items, positions, collapsed))
+            })
+        });
+        self.rows.set(rows);
+        self.clamp_selection();
+    }
+
+    /// The tasks whose rows are shown, in order.
+    pub fn visible(&self) -> Vec<u64> {
+        self.rows.with_untracked(|rows| {
+            (visible_rows(rows, self.finished_expanded.get_untracked()).into_iter())
+                .filter_map(|index| rows.get(index).map(|row| row.item.id))
+                .collect()
         })
-        .detach();
     }
 
-    /// One external write reached the board: re-read it.
-    #[cfg(not(target_family = "wasm"))]
-    fn on_poke(&mut self, cx: &mut Context<Self>) {
-        self.load(cx);
+    fn selected_row(&self) -> Option<Row> {
+        let id = self.selected.get_untracked()?;
+        (self.rows).with_untracked(|rows| rows.iter().find(|row| row.item.id == id).cloned())
     }
 
-    // -- selection --------------------------------------------------------
-
-    fn visible_ids(&self) -> Vec<u64> {
-        model::visible_rows(&self.rows, self.finished_expanded)
-            .into_iter()
-            .filter_map(|index| self.rows.get(index).map(|row| row.item.id))
-            .collect()
-    }
-
-    fn selected_row(&self) -> Option<&Row> {
-        let id = self.selected?;
-        self.rows.iter().find(|row| row.item.id == id)
-    }
-
-    fn clamp_selection(&mut self) {
-        let visible = self.visible_ids();
-        if !self.selected.is_some_and(|id| visible.contains(&id)) {
-            self.selected = visible.first().copied();
+    /// The selection is a row that is shown: the first, if the one it was
+    /// on is not.
+    fn clamp_selection(&self) {
+        let visible = self.visible();
+        if !(self.selected.get_untracked()).is_some_and(|id| visible.contains(&id)) {
+            self.selected.set(visible.first().copied());
         }
     }
 
-    fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let visible = self.visible_ids();
-        let next = model::step_selection(&visible, self.selected, forward);
-        if next != self.selected {
-            self.selected = next;
-            if let Some(index) = next.and_then(|id| self.scroll_index(&visible, id)) {
-                self.scroll.scroll_to_item(index);
-            }
-            cx.notify();
+    fn step(&self, forward: bool) {
+        let visible = self.visible();
+        let selected = self.selected.get_untracked();
+        let next = step_selection(&visible, selected, forward);
+        if next != selected {
+            self.selected.set(next);
+            self.held().reveal.set(next);
         }
     }
 
-    /// Where `id` sits among the scroll container's children. The finished
-    /// band is preceded by its one header row, which is a child of the same
-    /// container, so a row inside that band is one further down.
-    fn scroll_index(&self, visible: &[u64], id: u64) -> Option<usize> {
-        let position = visible.iter().position(|row| *row == id)?;
-        let in_finished_band = self
-            .rows
-            .iter()
-            .any(|row| row.item.id == id && row.in_finished_band);
-        Some(position + usize::from(in_finished_band))
-    }
-
-    // -- commands ---------------------------------------------------------
-
-    fn execute(&mut self, command: ListCommand, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn execute(&self, command: ListCommand) {
         match command {
-            ListCommand::SelectNext => self.step(true, cx),
-            ListCommand::SelectPrevious => self.step(false, cx),
+            ListCommand::SelectNext => self.step(true),
+            ListCommand::SelectPrevious => self.step(false),
             ListCommand::SelectTask(id) => {
-                self.selected = Some(id);
-                window.focus(&self.focus_handle, cx);
-                cx.notify();
+                self.selected.set(Some(id));
+                self.element.focus();
             }
             ListCommand::Expand => {
-                if let Some(id) = self
-                    .selected_row()
-                    .filter(|row| row.collapsed)
-                    .map(|row| row.item.id)
-                {
-                    self.collapsed.remove(&id);
-                    self.rebuild(cx);
+                if let Some(row) = self.selected_row().filter(|row| row.collapsed) {
+                    self.collapsed.update(|collapsed| {
+                        collapsed.remove(&row.item.id);
+                    });
+                    self.rebuild();
                 }
             }
+            // A parent closes; a leaf, or a parent closed already, hands
+            // the selection to its own parent.
             ListCommand::Collapse => {
                 let Some(row) = self.selected_row() else {
                     return;
                 };
                 if row.has_children && !row.collapsed {
-                    let id = row.item.id;
-                    self.collapsed.insert(id);
-                    self.rebuild(cx);
+                    self.collapsed.update(|collapsed| {
+                        collapsed.insert(row.item.id);
+                    });
+                    self.rebuild();
                 } else if let Some(parent) = row.item.parent {
-                    // A leaf's `h` is the way back up to the subtree it is
-                    // in, which is the row a second `h` collapses.
-                    self.selected = Some(parent);
-                    cx.notify();
+                    self.selected.set(Some(parent));
+                    self.held().reveal.set(Some(parent));
                 }
             }
             ListCommand::ToggleExpansion(id) => {
-                // Only a task with children folds, so a leaf never leaves
-                // an id behind that would fold it once it gains one.
-                if !self
-                    .rows
-                    .iter()
-                    .any(|row| row.item.id == id && row.has_children)
-                {
-                    return;
+                let parent = (self.rows).with_untracked(|rows| {
+                    rows.iter().any(|row| row.item.id == id && row.has_children)
+                });
+                if parent {
+                    self.collapsed.update(|collapsed| {
+                        if !collapsed.remove(&id) {
+                            collapsed.insert(id);
+                        }
+                    });
+                    self.rebuild();
                 }
-                if !self.collapsed.remove(&id) {
-                    self.collapsed.insert(id);
-                }
-                self.rebuild(cx);
             }
             ListCommand::ToggleFinished => {
-                self.finished_expanded = !self.finished_expanded;
+                self.finished_expanded
+                    .update(|expanded| *expanded = !*expanded);
                 self.clamp_selection();
-                cx.notify();
             }
             ListCommand::OpenThread => {
-                if self.selected_row().is_none() {
-                    return;
-                }
-                // A preview has nothing above it to route the request, so
-                // the guest build states it on the notice line instead.
-                #[cfg(target_family = "wasm")]
                 if let Some(row) = self.selected_row() {
-                    self.notice = Some(chrome::open_notice(&row.item.title));
+                    (self.held().ask)(Asked::OpenThread(row.item.id));
                 }
-                cx.emit(OpenTaskThread);
-                cx.notify();
             }
             ListCommand::MoveUp | ListCommand::MoveDown => {
-                let Some(id) = self.selected else {
+                let Some(id) = self.selected.get_untracked() else {
                     return;
                 };
-                if let Some(position) =
-                    model::sibling_move(&self.items, id, command == ListCommand::MoveUp)
-                {
-                    self.move_task(id, position, cx);
+                let up = command == ListCommand::MoveUp;
+                let position = self
+                    .items
+                    .with_untracked(|items| sibling_move(items, id, up));
+                if let Some(position) = position {
+                    self.move_task(id, position);
                 }
             }
             ListCommand::AddTask => {
-                let Some(title) = model::parse_new_task(&self.new_task.read(cx).value()) else {
+                let Some(title) = parse_new_task(&self.typed.get_untracked()) else {
                     return;
                 };
-                self.new_task
-                    .update(cx, |input, cx| input.set_value("", window, cx));
-                self.mutate(cx, move |store| {
+                self.typed.set(String::new());
+                self.field.set_value("");
+                self.mutate(move |store| {
                     Box::pin(async move {
-                        store
-                            .add(&title, "", None, Position::Bottom)
-                            .await
-                            .map(|_| ())
+                        (store.add(&title, "", None, Position::Bottom).await).map(|_| ())
                     })
                 });
             }
-            ListCommand::Reorder => {
-                if let Some((id, position)) = self.pending_move.take() {
-                    self.move_task(id, position, cx);
-                }
-            }
+            // A drop: carried out by `move_task` where it lands.
+            ListCommand::Reorder => {}
         }
     }
 
-    fn move_task(&mut self, id: u64, position: Position, cx: &mut Context<Self>) {
-        // Keep the moved task selected across the reload that follows.
-        self.selected = Some(id);
-        self.mutate(cx, move |store| {
+    /// The moved task stays the selected one.
+    fn move_task(&self, id: u64, position: Position) {
+        self.selected.set(Some(id));
+        self.mutate(move |store| {
             Box::pin(async move { store.move_item(id, position).await.map(|_| ()) })
         });
     }
 
-    // -- drag and drop ----------------------------------------------------
-
-    /// Records which edge of which row a drag is over. Only the row the
-    /// cursor is inside writes the shared indicator, and only where a drop
-    /// would really move something, so a line on screen always means a
-    /// release executes that move.
-    fn track_drag(
-        &mut self,
-        target_id: u64,
-        event: &DragMoveEvent<BoardDragValue>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(half) = model::drop_half_for_row(&event.event.position, &event.bounds) else {
-            return;
-        };
-        let dragged_id = event.drag(cx).item_id;
-        let next = model::drop_position_from_half(dragged_id, &self.items, target_id, half)
-            .map(|_| (target_id, half));
-        if self.drop_indicator != next {
-            self.drop_indicator = next;
-            cx.notify();
-        }
-    }
-
-    /// A release anywhere over the list: the insertion the indicator was
-    /// showing becomes the pending move, and the reorder command carries
-    /// it out.
-    fn handle_drop(&mut self, dragged_id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let position = self.drop_indicator.and_then(|(target, half)| {
-            model::drop_position_from_half(dragged_id, &self.items, target, half)
-        });
-        self.drop_indicator = None;
-        cx.notify();
-        if let Some(position) = position {
-            self.pending_move = Some((dragged_id, position));
-            self.execute(ListCommand::Reorder, window, cx);
-        }
-    }
-
-    // -- input ------------------------------------------------------------
-
-    /// Whether keystrokes belong to the add-task input rather than to the
-    /// key map. It is inside the focus path, so its keys bubble through the
-    /// root handler on their way to the input.
-    fn editing(&self, window: &Window, cx: &App) -> bool {
-        self.new_task.read(cx).focus_handle(cx).is_focused(window)
-    }
-
-    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = &event.keystroke;
-        if keystroke.modifiers.control || keystroke.modifiers.alt || keystroke.modifiers.platform {
-            return;
-        }
-        if self.editing(window, cx) {
-            if keystroke.key == "escape" {
-                window.focus(&self.focus_handle, cx);
-                cx.notify();
-                cx.stop_propagation();
-            }
-            return;
-        }
-        let Some(command) = model::list_command_for_key(&keystroke.key) else {
-            return;
-        };
-        self.execute(command, window, cx);
-        cx.stop_propagation();
+    /// The task ids the list was last read with, in store order.
+    pub fn tasks(&self) -> Vec<u64> {
+        (self.items).with_untracked(|items| items.iter().map(|item| item.id).collect())
     }
 }
 
-// ---------------------------------------------------------------------------
-// What the shell drives
-// ---------------------------------------------------------------------------
-
-/// The half a preview has no caller for: the commands the workspace
-/// executes on the focused pane, the session inventory hand-off, and the
-/// selection the shell opens a thread on.
-#[cfg(not(target_family = "wasm"))]
-impl BoardListView {
-    /// The task the shell opens a thread for. [`OpenTaskThread`] only
-    /// announces the request; `CommandId::OpenBoardRelatedItem` reads the
-    /// target from here,
-    /// so a palette invocation opens the selected row too.
-    pub(crate) fn selected_task(&self) -> Option<u64> {
-        self.selected
-    }
-
-    /// The workspace's command model, mapped onto this view's own.
-    /// `OpenBoardRelatedItem` is absent on purpose: opening a thread is a
-    /// pane operation the shell carries out, and routing it back into
-    /// `ListCommand::OpenThread` would re-emit the event that ran it.
-    pub(crate) fn board_command(
-        &mut self,
-        command: horizon_workspace::commands::CommandId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        use horizon_workspace::commands::CommandId;
-        let command = match command {
-            CommandId::AddBoardTask => ListCommand::AddTask,
-            CommandId::MoveBoardTaskUp => ListCommand::MoveUp,
-            CommandId::MoveBoardTaskDown => ListCommand::MoveDown,
-            CommandId::ReorderBoardTask => ListCommand::Reorder,
-            CommandId::ToggleBoardFinishedBand => ListCommand::ToggleFinished,
-            CommandId::ToggleBoardExpansion => match self.selected {
-                Some(id) => ListCommand::ToggleExpansion(id),
-                None => return,
-            },
-            _ => return,
-        };
-        self.execute(command, window, cx);
-    }
+/// A key as the board's key maps name it.
+pub(super) fn key_name(key: &BlitzKeyEvent) -> Option<String> {
+    Some(match &key.key {
+        Key::Character(character) => character.to_lowercase(),
+        Key::Named(NamedKey::ArrowDown) => "down".to_string(),
+        Key::Named(NamedKey::ArrowUp) => "up".to_string(),
+        Key::Named(NamedKey::ArrowLeft) => "left".to_string(),
+        Key::Named(NamedKey::ArrowRight) => "right".to_string(),
+        Key::Named(NamedKey::Enter) => "enter".to_string(),
+        Key::Named(NamedKey::Escape) => "escape".to_string(),
+        _ => return None,
+    })
 }
 
-#[cfg(not(target_family = "wasm"))]
-impl super::sessions::BoardShellView for BoardListView {
-    fn root(&self) -> Option<std::path::PathBuf> {
-        self.store.root().map(std::path::Path::to_path_buf)
-    }
-
-    fn set_notice(&mut self, notice: String, cx: &mut Context<Self>) {
-        self.notice = Some(notice);
-        cx.notify();
-    }
-
-    fn finish_inventory_refresh(&mut self, sessions: &[SessionId]) {
-        for id in sessions {
-            self.inventory_pending.remove(id);
-        }
-    }
-}
-
-#[cfg(not(target_family = "wasm"))]
-impl super::sessions::SessionActivityHost for BoardListView {
-    fn bound_session_ids(&self, _cx: &App) -> Vec<SessionId> {
-        model::bound_sessions(&self.items)
-    }
-
-    fn session_watches(&mut self) -> &mut HashMap<SessionId, super::sessions::SessionWatch> {
-        &mut self.session_watches
-    }
-
-    fn retain_session_activity(&mut self, bound: &[SessionId], cx: &mut Context<Self>) {
-        let before = self.activity.len();
-        self.activity.retain(|id, _| bound.contains(id));
-        if self.activity.len() != before {
-            cx.notify();
-        }
-    }
-
-    fn set_session_activity(
-        &mut self,
-        id: SessionId,
-        state: BoardSessionActivity,
-        cx: &mut Context<Self>,
-    ) {
-        if self.activity.insert(id, state) != Some(state) {
-            cx.notify();
-        }
-    }
-
-    fn inventory_pending(&self, id: SessionId) -> bool {
-        self.inventory_pending.contains(&id)
-    }
-}
-
-#[cfg(not(target_family = "wasm"))]
-impl Drop for BoardListView {
-    fn drop(&mut self) {
-        // Firing the shutdown oneshot wakes the background subscribe
-        // loop's blocked socket read, so the loop exits now rather than
-        // waiting for a poke that a silent logd may never send.
-        if let Some(live) = self._live_updates.take() {
-            let _ = live.shutdown.send(());
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The pieces
-// ---------------------------------------------------------------------------
-
-impl BoardListView {
-    /// One row: two lines in a fixed 48, indented by its depth, an unread
-    /// gutter on the left, and the status as a chip while the task is open
-    /// and a dot once it is not. The title takes whatever width the pane
-    /// leaves it and is cut with an ellipsis.
-    fn render_row(&self, row: &Row, focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let id = row.item.id;
-        let selected = self.selected == Some(id);
-        let unread = row.unread > 0;
-        let hidden_unread = row.subtree_unread.saturating_sub(row.unread);
-        let status = model::status_text(&row.item);
-        let tone = status_tone(&row.item);
-        let activity = task_session_state(&row.item, &self.activity);
-        let now = model::now_ms();
-        let last = row.item.comments.last().and_then(|comment| comment.at);
-        let title_color = if unread {
-            theme::text_primary()
-        } else if row.finished {
-            theme::text_muted()
-        } else {
-            theme::tint_over_background(theme::text_primary(), 0.85)
-        };
-        let dragging = cx.has_active_drag();
-        h_flex()
-            .id(("board-next-row", id))
-            .relative()
-            .w_full()
-            .h(row_height())
-            .flex_none()
-            .items_center()
-            .cursor_pointer()
-            .border_1()
-            .border_color(if selected && focused {
-                theme::accent()
-            } else {
-                transparent_black()
-            })
-            .when(selected, |line| {
-                line.bg(theme::tint_over_background(theme::accent(), SELECTION_TINT))
-            })
-            .when(!selected, |line| {
-                line.hover(|line| line.bg(theme::tint_over_background(theme::text_subtle(), 0.05)))
-            })
-            .when(
-                dragging && self.drop_indicator == Some((id, DropHalf::Above)),
-                |line| line.child(drop_line(true)),
-            )
-            .when(
-                dragging && self.drop_indicator == Some((id, DropHalf::Below)),
-                |line| line.child(drop_line(false)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .w(ACCENT_BAR)
-                    .h_full()
-                    .when(selected, |bar| bar.bg(theme::accent())),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .w(unread_gutter())
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .when(row.subtree_unread > 0, |gutter| {
-                        gutter.child(div().size(unread_dot()).rounded_full().bg(theme::accent()))
-                    }),
-            )
-            .child(div().flex_none().w(row_indent() * row.depth as f32))
-            .child(self.render_disclosure(row, cx))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(gap_label())
-                    .child(
-                        div()
-                            .w_full()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_size(body().size)
-                            .line_height(body().line_height)
-                            .font_weight(if unread { ANCHOR } else { REGULAR })
-                            .text_color(title_color)
-                            .child(row.item.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_size(micro().size)
-                            .line_height(micro().line_height)
-                            .text_color(theme::text_muted())
-                            .child(row_meta(last, row.item.comments.len(), now)),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .flex_none()
-                    .pl(gap_tight())
-                    .pr(pad_x())
-                    .gap(gap_label())
-                    .items_center()
-                    .when(hidden_unread > 0, |line| {
-                        line.child(chip(
-                            chrome::unread_count(row.subtree_unread),
-                            theme::accent(),
-                        ))
-                    })
-                    .when_some(activity, |line, activity| {
-                        line.child(chip(activity_label(activity), activity_color(activity)))
-                    })
-                    .child(if row.finished || status.is_empty() {
-                        div()
-                            .size(status_dot())
-                            .rounded_full()
-                            .bg(tone.alpha(0.55))
-                            .into_any_element()
-                    } else {
-                        chip(status, tone).into_any_element()
-                    }),
-            )
-            .on_drag(
-                BoardDragValue {
-                    item_id: id,
-                    title: row.item.title.clone(),
-                },
-                |drag: &BoardDragValue, _position, _window, cx: &mut App| cx.new(|_| drag.clone()),
-            )
-            .on_drag_move(cx.listener(
-                move |view, event: &DragMoveEvent<BoardDragValue>, _window, cx| {
-                    view.track_drag(id, event, cx);
-                },
-            ))
-            .on_click(cx.listener(move |view, _, window, cx| {
-                view.execute(ListCommand::SelectTask(id), window, cx);
-            }))
-    }
-
-    /// The disclosure affordance: a fixed cell so every row's title starts
-    /// at the same place, carrying a triangle only where there is a subtree
-    /// to fold.
-    fn render_disclosure(&self, row: &Row, cx: &mut Context<Self>) -> impl IntoElement {
-        let id = row.item.id;
-        div()
-            .id(("board-next-disclosure", id))
-            .flex_none()
-            .w(disclosure())
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(micro().size)
-            .line_height(micro().line_height)
-            .text_color(theme::text_muted())
-            .when(row.has_children, |cell| {
-                cell.cursor_pointer()
-                    .child(if row.collapsed { "▸" } else { "▾" })
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.execute(ListCommand::ToggleExpansion(id), window, cx);
-                    }))
-            })
-    }
-
-    /// The one row the finished band collapses into. It is part of the
-    /// scrolled content, so the rows it hides open in place under it.
-    fn render_finished_band(
-        &self,
-        count: usize,
-        unread: usize,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        h_flex()
-            .id("board-next-finished")
-            .w_full()
-            .flex_none()
-            .px(pad_x())
-            .py(gap_tight())
-            .gap(gap_label())
-            .items_center()
-            .cursor_pointer()
-            .text_size(meta().size)
-            .line_height(meta().line_height)
-            .text_color(theme::text_muted())
-            .hover(|line| line.bg(theme::tint_over_background(theme::text_subtle(), 0.05)))
-            .child(if self.finished_expanded { "▾" } else { "▸" })
-            .child(chrome::done_band(count))
-            .when(unread > 0, |line| {
-                line.child(chip(chrome::unread_count(unread), theme::accent()))
-            })
-            .on_click(cx.listener(|view, _, window, cx| {
-                view.execute(ListCommand::ToggleFinished, window, cx);
-            }))
-    }
-
-    /// The rows in display order, with the finished band's header row in
-    /// front of the work it holds.
-    fn render_rows(&self, focused: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let (finished_count, finished_unread) = model::finished_summary(&self.rows);
-        let mut lines: Vec<AnyElement> = Vec::new();
-        let mut band_placed = false;
-        for index in model::visible_rows(&self.rows, self.finished_expanded) {
-            let Some(row) = self.rows.get(index) else {
-                continue;
-            };
-            if row.in_finished_band && !band_placed {
-                band_placed = true;
-                lines.push(
-                    self.render_finished_band(finished_count, finished_unread, cx)
-                        .into_any_element(),
-                );
-            }
-            lines.push(self.render_row(row, focused, cx).into_any_element());
-        }
-        if finished_count > 0 && !band_placed {
-            lines.push(
-                self.render_finished_band(finished_count, finished_unread, cx)
-                    .into_any_element(),
-            );
-        }
-        lines
-    }
-
-    /// The pinned composer for new work. A title and Enter is the whole
-    /// interaction; a task lands at the bottom of the top level and is
-    /// moved from there.
-    fn render_add_task(&self) -> impl IntoElement {
-        div()
-            .w_full()
-            .flex_none()
-            .px(pad_x())
-            .py(gap_tight())
-            .border_t_1()
-            .border_color(theme::border())
-            .text_size(body().size)
-            .child(Input::new(&self.new_task).appearance(false))
-    }
-}
-
-/// The 2px line the drop indicator draws on the edge a release would insert
-/// at.
-fn drop_line(above: bool) -> impl IntoElement {
-    div()
-        .absolute()
-        .left_0()
-        .w_full()
-        .h(px(2.0))
-        .bg(theme::accent())
-        .when(above, |line| line.top(px(-1.0)))
-        .when(!above, |line| line.bottom(px(-1.0)))
-}
-
-/// A row's second line: when the thread last moved, and how long it is.
-fn row_meta(last: Option<u64>, messages: usize, now: u64) -> String {
+/// What a row shows of its task, as text: a row is built again when any
+/// of it changes.
+fn shown(row: &Row, now: u64) -> String {
+    let item = &row.item;
+    let last = item.comments.last().and_then(|comment| comment.at);
     let age = last.map(|at| chrome::relative_time(at, now));
-    chrome::row_meta(age.as_deref(), messages)
+    format!(
+        "{} {} {} {} {} {} {} {} {} {}",
+        row.depth,
+        item.title,
+        status_text(item),
+        super::tone(item),
+        row.unread,
+        row.subtree_unread,
+        row.has_children,
+        row.collapsed,
+        row.finished,
+        chrome::row_meta(age.as_deref(), item.comments.len()),
+    )
 }
 
-impl Focusable for BoardListView {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
+fn row(state: BoardList, row: &Row) -> El {
+    let (id, item) = (row.item.id, &row.item);
+    let now = model::now_ms();
+    let last = item.comments.last().and_then(|comment| comment.at);
+    let age = last.map(|at| chrome::relative_time(at, now));
+    let status = status_text(item);
+    let fixed = match (row.unread > 0, row.finished) {
+        (true, _) => "row unread",
+        (false, true) => "row finished",
+        (false, false) => "row",
+    };
+    let disclosure = el("div").class("disclosure");
+    if row.has_children {
+        disclosure
+            .text(if row.collapsed { "▸" } else { "▾" })
+            // The fold alone: not a press that selects or drags the row.
+            .on("pointerdown", |_| stop_propagation())
+            .on("click", move |_| {
+                state.execute(ListCommand::ToggleExpansion(id))
+            });
     }
+    let tail = el("div").class("tail");
+    // The unread posts folded away under the row, beside its own.
+    if row.subtree_unread > row.unread {
+        let unread = chrome::unread_count(row.subtree_unread);
+        tail.child(el("span").class("chip accent").text(&unread));
+    }
+    activity_chip(tail, item, state.activity);
+    let tone = tone(item);
+    tail.child(match row.finished || status.is_empty() {
+        true => el("div").class(&format!("status-dot {tone}")),
+        false => el("span").class(&format!("chip {tone}")).text(&status),
+    });
+    let gutter = el("div").class("gutter");
+    if row.subtree_unread > 0 {
+        gutter.child(el("div").class("unread-dot"));
+    }
+    el("div")
+        .class_dyn(move || {
+            let mut class = fixed.to_string();
+            if state.selected.get() == Some(id) {
+                class += " selected";
+            }
+            if state.carried.get() == Some(id) {
+                class += " carried";
+            }
+            class
+        })
+        .child(el("div").class("bar"))
+        .child(gutter)
+        .child(el("div").attr(
+            "style",
+            &format!("flex: none; width: calc(var(--u16) * {})", row.depth),
+        ))
+        .child(disclosure)
+        .child(
+            el("div")
+                .class("label")
+                .child(el("div").class("title").text(&item.title))
+                .child(
+                    el("div")
+                        .class("meta")
+                        .text(&chrome::row_meta(age.as_deref(), item.comments.len())),
+                ),
+        )
+        .child(tail)
+        .when(
+            move || state.indicator.get() == Some((id, DropHalf::Above)),
+            || el("div").class("line above"),
+        )
+        .when(
+            move || state.indicator.get() == Some((id, DropHalf::Below)),
+            || el("div").class("line below"),
+        )
 }
 
-impl Render for BoardListView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let focused = self.focus_handle.is_focused(window);
-        let unread_total: usize = self.rows.iter().map(|row| row.unread).sum();
-        v_flex()
-            .id("board-next-list")
-            .track_focus(&self.focus_handle)
-            .child(crate::keystroke_input::keystroke_only(&self.focus_handle))
-            .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
-                view.on_key(event, window, cx);
-            }))
-            .size_full()
-            .min_w(list_min_width())
-            .bg(rgb(theme::background()))
-            .text_color(theme::text_primary())
+/// Builds the list over `source`'s store, read at once and again whenever
+/// its log takes a write; `ask` hears what the list asks for.
+pub fn view(
+    source: Source,
+    background: Background,
+    ask: impl Fn(Asked) + 'static,
+) -> (El, BoardList) {
+    let state = BoardList {
+        items: RwSignal::new(Vec::new()),
+        positions: RwSignal::new(HashMap::new()),
+        rows: RwSignal::new(Vec::new()),
+        collapsed: RwSignal::new(HashSet::new()),
+        selected: RwSignal::new(None),
+        finished_expanded: RwSignal::new(false),
+        notice: RwSignal::new(None),
+        activity: RwSignal::new(HashMap::new()),
+        carried: RwSignal::new(None),
+        indicator: RwSignal::new(None),
+        typed: RwSignal::new(String::new()),
+        held: StoredValue::new_local(Rc::new(Held {
+            source: source.clone(),
+            background: background.clone(),
+            ask: Box::new(ask),
+            rows: RefCell::default(),
+            reveal: Cell::new(None),
+        })),
+        element: el("div").class("board-list").attr("tabindex", "0"),
+        field: el("input").attr("type", "text"),
+        scroll: el("div").class("rows"),
+    };
+    let (root, scroll, field) = (state.element, state.scroll, state.field);
+    let held = state.held();
+    state.load();
+    #[cfg(not(target_family = "wasm"))]
+    if let Source::Root(root) = source {
+        let stop = follow(root, background.clone(), move || state.load());
+        horizon_ui::reactive_graph::owner::on_cleanup(move || drop(stop));
+    }
+    #[cfg(target_family = "wasm")]
+    let _ = (source, background);
+
+    // The row pressed and where, until the button comes up.
+    let pressed = RwSignal::new(None::<(u64, f32, f32)>);
+    // Where the dragged row's copy is, in the view.
+    let ghost_at = RwSignal::new((0f32, 0f32));
+
+    let known = held.clone();
+    scroll.each(
+        move || {
+            let (count, unread) = state.rows.with(|rows| finished_summary(rows));
+            let expanded = state.finished_expanded.get();
+            let now = model::now_ms();
+            let band = Line::Band {
+                count,
+                unread,
+                expanded,
+            };
+            let mut lines = Vec::new();
+            let mut band_placed = false;
+            state.rows.with(|rows| {
+                for index in visible_rows(rows, expanded) {
+                    let Some(row) = rows.get(index) else {
+                        continue;
+                    };
+                    if row.in_finished_band && !band_placed {
+                        band_placed = true;
+                        lines.push(band.clone());
+                    }
+                    lines.push(Line::Task(Box::new(row.clone()), shown(row, now)));
+                }
+            });
+            if count > 0 && !band_placed {
+                lines.push(band);
+            }
+            lines
+        },
+        |line| match line {
+            Line::Task(row, shown) => format!("task {} {shown}", row.item.id),
+            Line::Band {
+                count,
+                unread,
+                expanded,
+            } => format!("band {count} {unread} {expanded}"),
+        },
+        move |line| match line {
+            Line::Task(task, _) => {
+                let id = task.item.id;
+                let element = row(state, task).on("pointerdown", move |event| {
+                    if let DomEventData::PointerDown(pointer) = &event.data {
+                        pressed.set(Some((id, pointer.page_x(), pointer.page_y())));
+                    }
+                });
+                known.rows.borrow_mut().insert(id, element);
+                element
+            }
+            Line::Band {
+                count,
+                unread,
+                expanded,
+            } => {
+                let band = el("div")
+                    .class("band")
+                    .child(el("span").text(if *expanded { "▾" } else { "▸" }))
+                    .child(el("span").text(&chrome::done_band(*count)))
+                    .on("click", move |_| state.execute(ListCommand::ToggleFinished));
+                if *unread > 0 {
+                    let unread = chrome::unread_count(*unread);
+                    band.child(el("span").class("chip accent").text(&unread));
+                }
+                band
+            }
+        },
+    );
+
+    // The selection is kept in view: a step from the keyboard scrolls the
+    // rows as far as its row needs.
+    let revealing = held.clone();
+    each_layout(move |page| {
+        if revealing.background.take_in() {
+            relayout();
+        }
+        let Some(id) = revealing.reveal.take() else {
+            return;
+        };
+        let row = revealing.rows.borrow().get(&id).copied();
+        let (Some(row), Some(view)) = (row.and_then(|row| page.bounds(row)), page.bounds(scroll))
+        else {
+            return;
+        };
+        let above = row.y - view.y;
+        let below = (row.y + row.height) - (view.y + view.height);
+        if above < 0. {
+            scroll.scroll_by(0., above);
+        } else if below > 0. {
+            scroll.scroll_by(0., below);
+        }
+    });
+
+    let dragged = held.clone();
+    root.on("keydown", move |event| {
+        let DomEventData::KeyDown(key) = &event.data else {
+            return;
+        };
+        if key.modifiers.ctrl() || key.modifiers.alt() || key.modifiers.meta() {
+            return;
+        }
+        if let Some(command) = key_name(key).and_then(|name| list_command_for_key(&name)) {
+            state.execute(command);
+            prevent_default();
+        }
+    })
+    .on("pointermove", move |event| {
+        let DomEventData::PointerMove(pointer) = &event.data else {
+            return;
+        };
+        let Some((id, from_x, from_y)) = pressed.get_untracked() else {
+            return;
+        };
+        let (x, y) = (pointer.page_x(), pointer.page_y());
+        if state.carried.get_untracked().is_none() {
+            if (x - from_x).abs().max((y - from_y).abs()) < SLOP {
+                return;
+            }
+            state.carried.set(Some(id));
+        }
+        let dragged = dragged.clone();
+        // What is under the pointer and where its box is, asked of the
+        // page once the event is done with.
+        dispatched(move |page| {
+            if let Some(origin) = page.bounds(root) {
+                ghost_at.set((x - origin.x as f32 + 12., y - origin.y as f32 + 12.));
+            }
+            let rows = dragged.rows.borrow();
+            let over = page.under(x, y).into_iter().find_map(|element| {
+                let (target, _) = rows.iter().find(|(_, row)| **row == element)?;
+                Some((element, *target))
+            });
+            // A row lands among its own siblings only.
+            let next = over.and_then(|(row, target)| {
+                let bounds = page.bounds(row)?;
+                let half = match (y as f64) < bounds.y + bounds.height / 2. {
+                    true => DropHalf::Above,
+                    false => DropHalf::Below,
+                };
+                (state.items)
+                    .with_untracked(|items| drop_position_from_half(id, items, target, half))
+                    .map(|_| (target, half))
+            });
+            if state.indicator.get_untracked() != next {
+                state.indicator.set(next);
+            }
+        });
+    })
+    .on("pointerup", move |_| {
+        let Some((id, ..)) = pressed.get_untracked() else {
+            return;
+        };
+        pressed.set(None);
+        if state.carried.get_untracked().is_none() {
+            // A press and a release in place: a click on the row.
+            state.execute(ListCommand::SelectTask(id));
+            return;
+        }
+        let indicator = state.indicator.get_untracked();
+        state.carried.set(None);
+        state.indicator.set(None);
+        let position = indicator.and_then(|(target, half)| {
+            (state.items).with_untracked(|items| drop_position_from_half(id, items, target, half))
+        });
+        if let Some(position) = position {
+            state.move_task(id, position);
+        }
+    })
+    .child(el("div").class("head").text_dyn(move || {
+        state.rows.with(|rows| {
+            let unread = rows.iter().map(|row| row.unread).sum();
+            chrome::list_header_text(rows.len(), unread)
+        })
+    }))
+    .child(scroll)
+    .when(
+        move || state.notice.with(Option::is_some),
+        move || {
+            el("div")
+                .class("notice")
+                .text_dyn(move || state.notice.get().unwrap_or_default())
+        },
+    )
+    .child(
+        // blitz-dom does not draw a field's `placeholder`.
+        el("div")
+            .class("add")
             .child(
-                h_flex()
-                    .w_full()
-                    .flex_none()
-                    .px(pad_x())
-                    .py(gap_tight())
-                    .border_b_1()
-                    .border_color(theme::border())
-                    .text_size(meta().size)
-                    .line_height(meta().line_height)
-                    .text_color(theme::text_muted())
-                    .child(chrome::list_header_text(self.rows.len(), unread_total)),
+                field
+                    .on("input", move |event| {
+                        if let DomEventData::Input(input) = &event.data {
+                            state.typed.set(input.value.clone());
+                        }
+                    })
+                    // The field's keys are its own: Enter adds the task,
+                    // Escape goes back to the rows.
+                    .on("keydown", move |event| {
+                        let DomEventData::KeyDown(key) = &event.data else {
+                            return;
+                        };
+                        match &key.key {
+                            Key::Named(NamedKey::Enter) => {
+                                state.execute(ListCommand::AddTask);
+                                prevent_default();
+                            }
+                            Key::Named(NamedKey::Escape) => {
+                                root.focus();
+                            }
+                            _ => {}
+                        }
+                        stop_propagation();
+                    }),
             )
-            .child(
-                v_flex()
-                    .id("board-next-list-rows")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    // Drop dispatch for the whole list: `on_drop` is
-                    // hit-tested per element, so a per-row handler misses
-                    // the gaps between rows and the padding around them —
-                    // exactly where the indicator line sits.
-                    .on_drop(cx.listener(|view, drag: &BoardDragValue, window, cx| {
-                        view.handle_drop(drag.item_id, window, cx);
-                    }))
-                    .children(self.render_rows(focused, cx)),
-            )
-            .when_some(self.notice.clone(), |column, notice| {
-                column.child(
-                    div()
-                        .w_full()
-                        .flex_none()
-                        .px(pad_x())
-                        .py(gap_tight())
-                        .text_size(meta().size)
-                        .line_height(meta().line_height)
-                        .text_color(theme::text_muted())
-                        .child(notice),
-                )
-            })
-            .child(self.render_add_task())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::row_meta;
-
-    #[test]
-    fn a_row_meta_line_is_an_age_and_a_count() {
-        let now = 10_000_000_000u64;
-        assert_eq!(
-            row_meta(Some(now - 3 * 3_600_000), 4, now),
-            "3h ago · 4 posts"
-        );
-        assert_eq!(row_meta(None, 0, now), "0 posts");
-    }
+            .when(
+                move || state.typed.with(String::is_empty),
+                || el("div").class("placeholder").text(chrome::ADD_TASK),
+            ),
+    )
+    .when(
+        move || state.carried.get().is_some(),
+        move || {
+            el("div")
+                .class("ghost")
+                .style_dyn("left", move || format!("{}px", ghost_at.get().0))
+                .style_dyn("top", move || format!("{}px", ghost_at.get().1))
+                .text_dyn(move || {
+                    let carried = state.carried.get();
+                    state.items.with(|items| {
+                        (items.iter().find(|item| Some(item.id) == carried))
+                            .map(|item| item.title.clone())
+                            .unwrap_or_default()
+                    })
+                })
+        },
+    );
+    (root, state)
 }

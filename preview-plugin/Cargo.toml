@@ -1,32 +1,19 @@
 [package]
 name = "horizon-preview-plugin"
+description = "Horizon's views as a wasm plugin a preview pane loads."
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish = false
 
-# Its own sub-workspace: this crate is built for `wasm32-wasip2`, and the
-# root workspace excludes it (`[workspace] exclude`) so a plain
-# `cargo build --workspace` never tries to build it for the host.
-[workspace]
-
+# Built for `wasm32-wasip2` (`scripts/check-preview.sh`); for any other
+# target the crate is empty.
 [lib]
-path = "src/lib.rs"
 crate-type = ["cdylib"]
 
-# Everything the plugin shows lives in the shell library's `preview`
-# module, which compiles for this target too; this crate is only the
-# component's entry point.
-[dependencies]
-embedded_gpui = { git = "https://github.com/rail44/embedded_gpui", rev = "24b9f5ffdf27be85559df38b3f37e681a87f52b7" }
+[target.'cfg(target_family = "wasm")'.dependencies]
+horizon-ui = { path = "../crates/horizon-ui" }
 horizon = { path = ".." }
+horizon-board = { path = "../crates/horizon-board" }
 
-# The build profile for the edit-to-visible loop. The time from load to the
-# first frame is almost entirely wasmtime compiling the component, and that
-# tracks module size, so a debug component is the slow one to load; LTO
-# shrinks it further but pays its link cost on every rebuild. This profile
-# is the middle: optimized, no LTO. `scripts/check-preview-plugin.sh` builds
-# with `--profile quick`.
-[profile.quick]
-inherits = "release"
-lto = false
-opt-level = 2
+[lints.clippy]
+all = { level = "warn", priority = -1 }
