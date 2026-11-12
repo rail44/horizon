@@ -11,7 +11,7 @@ use std::cell::Cell;
 
 use anyrender_vello::VelloWindowRenderer;
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
-use horizon_blitz::agentd::Agentd;
+use horizon_blitz::agentd::{Agentd, RuntimeModels};
 use horizon_blitz::paths::{daemon_binary, data_home, runtime_dir, workspace_state};
 use horizon_blitz::terminal::Session;
 use horizon_blitz::{control, restore, workspace};
@@ -74,6 +74,7 @@ fn main() {
         reload: Some(Box::new(horizon_config::reload)),
         agents: Some(agentd.spawn()),
         open_url: Some(std::rc::Rc::new(open_url)),
+        models: Some(std::sync::Arc::new(RuntimeModels(agentd.handle.clone()))),
         ..restore::opening(store, &terminald, Some(&agentd))
     };
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);

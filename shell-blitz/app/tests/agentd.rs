@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
-use horizon_blitz::agentd::Agentd;
-use horizon_blitz::workspace::{self, Opening};
+use horizon_blitz::agentd::{Agentd, RuntimeModels};
+use horizon_blitz::workspace::{self, Modal, Opening};
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
@@ -144,6 +144,7 @@ api_key_env = "HORIZON_BLITZ_TEST_MOCK_KEY"
         let spawn: workspace::Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let opening = Opening {
             agents: Some(agentd.spawn()),
+            models: Some(std::sync::Arc::new(RuntimeModels(agentd.handle.clone()))),
             ..Opening::default()
         };
         let (root, built) = workspace::view(spawn, opening);
@@ -198,6 +199,44 @@ api_key_env = "HORIZON_BLITZ_TEST_MOCK_KEY"
     until("a title", &|| {
         ["hello there", "ACP-OK"].contains(&title().as_str())
     });
+
+    // The model picker: the daemon's providers, then the chosen one's
+    // models, and the choice goes to the daemon.
+    let commit = |text: &str| {
+        app.dispatch(UiEvent::Ime(BlitzImeEvent::Commit(text.to_string())));
+        app.resolve();
+    };
+    let enter = || press(&app, Key::Named(NamedKey::Enter), Modifiers::default());
+    press(&app, Key::Character("'".into()), Modifiers::CONTROL);
+    press(&app, Key::Character(":".into()), Modifiers::default());
+    commit("switch model");
+    enter();
+    assert!(matches!(shell.modal(), Some(Modal::Models(_))));
+    let rows = || {
+        let document = app.document();
+        let document = document.borrow();
+        let mut names = Vec::new();
+        let mut pending = vec![document.root_element().id];
+        while let Some(id) = pending.pop() {
+            let node = document.get_node(id).unwrap();
+            let class = node.attr(horizon_ui::blitz_dom::local_name!("class"));
+            if class == Some("name") {
+                names.push(node.text_content());
+            }
+            pending.extend(node.children.iter().rev().copied());
+        }
+        names
+    };
+    until("the providers", &|| rows() == ["mock"]);
+    enter();
+    until("the provider's models", &|| rows() == ["mock-model"]);
+    // Escape goes back a step before it leaves.
+    press(&app, Key::Named(NamedKey::Escape), Modifiers::default());
+    assert_eq!(rows(), ["mock"]);
+    enter();
+    until("the provider's models", &|| rows() == ["mock-model"]);
+    enter();
+    assert_eq!(shell.modal(), None);
 
     // The daemon ends with the test.
     drop(app);

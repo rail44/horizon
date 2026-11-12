@@ -20,7 +20,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
 use horizon_agent::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
@@ -52,6 +52,7 @@ mod commands;
 mod control;
 mod keymap;
 mod keys;
+mod models;
 mod palette;
 mod picker;
 mod sessions;
@@ -172,6 +173,18 @@ pub type Spawn = Box<dyn Fn(Starting) -> Session>;
 /// Starts an agent session.
 pub type SpawnAgent = Box<dyn Fn(Starting) -> AgentSession>;
 
+/// The providers and models an agent session can be switched to, as the
+/// agent runtime has them. Each call waits for the runtime's answer, and
+/// is made off the UI thread.
+pub trait Models: Send + Sync {
+    fn providers(&self) -> Result<Vec<horizon_acp::ProviderSummary>, String>;
+    fn models(&self, provider: &str) -> Result<Vec<String>, String>;
+    fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String>;
+}
+
+/// What is done on the UI thread with what a thread came back with.
+type Arrived = Box<dyn FnOnce(Shell) + Send>;
+
 /// Keeps the model for the next run.
 pub type Save = Box<dyn FnMut(&Workspace)>;
 
@@ -194,6 +207,8 @@ pub struct Opening {
     /// Hands a URL to the desktop: a link in a document that is not a
     /// file.
     pub open_url: Option<markdown::OpenUrl>,
+    /// What the model picker lists and switches with.
+    pub models: Option<Arc<dyn Models>>,
     /// Told the model whenever it has changed, to keep it for the next
     /// run.
     pub save: Option<Save>,
@@ -210,6 +225,7 @@ impl Default for Opening {
             agent_sessions: Vec::new(),
             agents: None,
             open_url: None,
+            models: None,
             save: None,
         }
     }
@@ -248,6 +264,8 @@ pub enum Modal {
     Sessions,
     /// Which view the new pane at this place shows.
     Chooser(Placement),
+    /// Which model an agent session goes on with.
+    Models(SessionId),
 }
 
 /// A pane on the page.
@@ -283,6 +301,9 @@ struct Kept {
     /// The same, for what wakes the page from another thread.
     wake: Wake,
     open_url: markdown::OpenUrl,
+    models: Option<Arc<dyn Models>>,
+    /// What threads came back with, to take in on the UI thread.
+    arrived: Arc<Mutex<Vec<Arrived>>>,
     owner: Owner,
 }
 
@@ -450,7 +471,9 @@ impl Shell {
                         session.set_waker(waker);
                     }
                     session.set_summarizer(kept.summarizer.borrow().clone());
-                    let (root, view) = agent::live(session, || {});
+                    let (root, view) = agent::live(session, move || {
+                        shell.switch_model(session_id);
+                    });
                     agent = Some(view);
                     root
                 }
@@ -546,6 +569,13 @@ impl Shell {
     /// title, a working directory, and that the shell in one has gone,
     /// which ends its session.
     fn take_in_sessions(&self) {
+        let arrived = std::mem::take(&mut *self.kept().arrived.lock().unwrap());
+        if !arrived.is_empty() {
+            for arrived in arrived {
+                arrived(*self);
+            }
+            relayout();
+        }
         let (mut titles, mut directories, mut exited) = (Vec::new(), Vec::new(), Vec::new());
         for view in self.kept().panes.borrow().values() {
             let Some((session, terminal)) = &view.terminal else {
@@ -657,6 +687,30 @@ impl Shell {
         match self.kept().spawn_agent {
             Some(_) => self.open(Modal::Chooser(placement)),
             None => self.create(SessionKind::Terminal, None, placement),
+        }
+    }
+
+    /// Runs `work` on a thread of its own, and `then` on the UI thread
+    /// with what it came back with.
+    fn in_background<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> T + Send + 'static,
+        then: impl FnOnce(Shell, T) + Send + 'static,
+    ) {
+        let kept = self.kept();
+        let (arrived, wake) = (kept.arrived.clone(), kept.wake.clone());
+        std::thread::spawn(move || {
+            let came = work();
+            (arrived.lock().unwrap()).push(Box::new(move |shell| then(shell, came)));
+            wake.wake();
+        });
+    }
+
+    /// Opens the model picker for an agent session, if there is a runtime
+    /// to ask.
+    fn switch_model(&self, session: SessionId) {
+        if self.kept().models.is_some() {
+            self.open(Modal::Models(session));
         }
     }
 
@@ -784,6 +838,8 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             waker: RefCell::default(),
             wake: Wake::default(),
             open_url: opening.open_url.unwrap_or_else(|| Rc::new(|_| {})),
+            models: opening.models,
+            arrived: Arc::default(),
             owner: Owner::current().expect("an owner"),
         })),
         root: el("div"),
@@ -845,6 +901,10 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
                 Modal::Palette => palette::view(shell),
                 Modal::Sessions => sessions::view(shell),
                 Modal::Chooser(placement) => chooser::view(shell, *placement),
+                Modal::Models(session) => match shell.kept().models.clone() {
+                    Some(source) => models::view(shell, *session, source),
+                    None => el("div"),
+                },
             },
         );
     shell.focus_active();

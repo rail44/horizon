@@ -27,6 +27,7 @@ pub(super) const CARRIED_OUT: &[CommandId] = &[
     CommandId::DenyToolCall,
     CommandId::CancelAgentTurn,
     CommandId::ContinueAgentTurn,
+    CommandId::SwitchModel,
     CommandId::OpenSessionManager,
     CommandId::OpenTerminalInSessionDirectory,
     CommandId::ReloadConfig,
@@ -84,6 +85,18 @@ impl Shell {
             }),
             CommandId::CancelAgentTurn => agent(|_| Some(AgentCommand::Cancel)),
             CommandId::ContinueAgentTurn => agent(|_| Some(AgentCommand::ContinueTurn)),
+            CommandId::SwitchModel => {
+                let session = self.model.with_untracked(|model| {
+                    let session = model.active_session_id()?;
+                    kept.agents
+                        .borrow()
+                        .contains_key(&session)
+                        .then_some(session)
+                });
+                if let Some(session) = session {
+                    self.switch_model(session);
+                }
+            }
             CommandId::FocusNextPane => self.change(|model| model.focus_next()),
             CommandId::CloseActivePane => self.close_pane(),
             CommandId::CloseActiveTab => self.change(|model| {

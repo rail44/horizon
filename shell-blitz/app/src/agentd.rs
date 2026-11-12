@@ -17,7 +17,7 @@ use horizon_workspace::SessionId;
 use horizon_workspace::snapshot::workspace_snapshot;
 
 use crate::agent::AgentSession;
-use crate::workspace::{Shell, SpawnAgent};
+use crate::workspace::{Models, Shell, SpawnAgent};
 
 enum Told {
     HostTool(HostToolRequest),
@@ -120,5 +120,22 @@ impl Agentd {
                 }),
             }
         }
+    }
+}
+
+/// The model picker's source: the daemon's own listings and switch.
+pub struct RuntimeModels(pub AgentdHandle);
+
+impl Models for RuntimeModels {
+    fn providers(&self) -> Result<Vec<horizon_acp::ProviderSummary>, String> {
+        self.0.list_providers()
+    }
+
+    fn models(&self, provider: &str) -> Result<Vec<String>, String> {
+        self.0.list_provider_models(provider.to_string())
+    }
+
+    fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String> {
+        (self.0).set_session_model(agent_id(session), provider.to_string(), model.to_string())
     }
 }

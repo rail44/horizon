@@ -5,6 +5,7 @@
 
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, DomEventData};
 use horizon_ui::reactive_graph::computed::Memo;
+use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, WithUntracked};
 use horizon_ui::{El, el, prevent_default, stop_propagation};
 use keyboard_types::{Key, NamedKey};
@@ -41,6 +42,17 @@ pub(super) fn view(
     rows: impl Fn(&str) -> Vec<Row> + Send + Sync + 'static,
     picked: impl Fn(usize, Picked) + Clone + 'static,
 ) -> El {
+    view_in_steps(shell, rows, picked, || false)
+}
+
+/// [`view`] for a list of more than one step: Escape asks `back` first,
+/// which says whether there was a step to go back to.
+pub(super) fn view_in_steps(
+    shell: Shell,
+    rows: impl Fn(&str) -> Vec<Row> + Send + Sync + 'static,
+    picked: impl Fn(usize, Picked) + Clone + 'static,
+    back: impl Fn() -> bool + 'static,
+) -> El {
     let close = move || {
         shell.modal.set(None);
         shell.focus_active();
@@ -54,6 +66,12 @@ pub(super) fn view(
             }
         })
         .focus();
+    // What was typed is taken back by whoever empties it: a step taken.
+    Effect::new(move |_| {
+        if shell.query.get().is_empty() {
+            input.set_value("");
+        }
+    });
     let rows = Memo::new(move |_| rows(&shell.query.get()));
     let clicked = picked.clone();
     let items = el("div").class("items").each(
@@ -93,7 +111,11 @@ pub(super) fn view(
                 Key::Named(NamedKey::ArrowUp) => shell.chosen.set(up),
                 Key::Named(NamedKey::Tab) if key.modifiers.shift() => shell.chosen.set(up),
                 Key::Named(NamedKey::Tab) => shell.chosen.set(down),
-                Key::Named(NamedKey::Escape) => close(),
+                Key::Named(NamedKey::Escape) => {
+                    if !back() {
+                        close();
+                    }
+                }
                 _ if count == 0 => return,
                 Key::Named(NamedKey::Enter) if key.modifiers.ctrl() => {
                     picked(chosen, Picked::ConfirmedSecondary);
