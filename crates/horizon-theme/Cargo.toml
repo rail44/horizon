@@ -8,6 +8,7 @@ edition = "2021"
 # scheme and turns it into its own framework's colors.
 [dependencies]
 horizon-config = { path = "../horizon-config" }
+toml_edit = "0.25"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

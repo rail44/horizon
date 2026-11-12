@@ -6,7 +6,9 @@
 
 pub mod oklab;
 pub mod palette;
+pub mod save;
 pub mod scheme;
+pub mod seed;
 /// Config fixtures for theme tests, here and in the shells.
 pub mod test_support;
 pub mod warnings;
