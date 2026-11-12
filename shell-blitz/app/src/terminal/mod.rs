@@ -33,6 +33,7 @@ use peniko::{Color, Fill};
 use termwiz::input::{KeyCode, Modifiers};
 use unicode_width::UnicodeWidthChar;
 
+use horizon_shell_runtime::terminal_glyphs::{self as drawn_glyphs, GlyphShape};
 use horizon_shell_runtime::terminal_links::{is_openable_url, url_from_lines};
 use horizon_shell_runtime::terminal_scrollback::{ScrollIpc, Scrollback};
 use horizon_theme_css::TerminalLook;
@@ -755,11 +756,17 @@ struct Shaped {
     layout: Layout<Ink>,
     /// The byte each character starts at, and its column.
     columns: Vec<(usize, usize)>,
+    /// The characters drawn from shapes and not from a font (box drawing,
+    /// block elements, sextants, Braille): each one's column and color. A
+    /// font's glyph cannot fill a cell taller than its em box, and its
+    /// edges leave seams between cells.
+    drawn: Vec<(usize, char, [u8; 3])>,
 }
 
 fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, look: &TerminalLook) -> Shaped {
     let (mut text, mut colors, mut backgrounds, mut columns) =
         (String::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut drawn = Vec::new();
     let mut column = 0;
     for span in &line.spans {
         let start = text.len();
@@ -771,7 +778,13 @@ fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, look: &TerminalLo
                 false => character,
             };
             columns.push((text.len(), column));
-            text.push(character);
+            // What is drawn from shapes is a blank to the font.
+            if drawn_glyphs::is_geometric(character) {
+                drawn.push((column, character, rgb(span.fg, look)));
+                text.push(' ');
+            } else {
+                text.push(character);
+            }
             column += character.width().unwrap_or(0);
         }
         colors.push((start..text.len(), Ink(rgb(span.fg, look))));
@@ -796,6 +809,84 @@ fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, look: &TerminalLo
         line: line.clone(),
         row,
         columns,
+        drawn,
+    }
+}
+
+/// Draws a row's characters that are shapes, the row's top at `top`: each
+/// in its cell, `cell` wide and `line` tall, for a font of `font_size`,
+/// all in device pixels.
+fn shapes(
+    scene: &mut impl PaintScene,
+    shaped: &Shaped,
+    cell: f64,
+    top: f64,
+    line: f64,
+    font_size: f32,
+) {
+    for (column, character, [r, g, b]) in &shaped.drawn {
+        let bounds = drawn_glyphs::Bounds {
+            origin: drawn_glyphs::Point {
+                x: (*column as f64 * cell) as f32,
+                y: top as f32,
+            },
+            size: drawn_glyphs::Size {
+                width: cell as f32,
+                height: line as f32,
+            },
+        };
+        let at = |point: drawn_glyphs::Point<f32>| (point.x as f64, point.y as f64);
+        // (The lengths are device pixels already: the edges are snapped
+        // to them.)
+        drawn_glyphs::glyph_shapes(
+            bounds,
+            *character,
+            font_size,
+            1.,
+            &mut |shape| match shape {
+                GlyphShape::Fill { bounds, alpha } => {
+                    let (left, top) = at(bounds.origin);
+                    let rect = Rect::new(
+                        left,
+                        top,
+                        left + bounds.size.width as f64,
+                        top + bounds.size.height as f64,
+                    );
+                    let alpha = (alpha.clamp(0., 1.) * 255.).round() as u8;
+                    scene.fill(
+                        Fill::NonZero,
+                        Affine::IDENTITY,
+                        Color::from_rgba8(*r, *g, *b, alpha),
+                        None,
+                        &rect,
+                    );
+                }
+                GlyphShape::RoundedCorner(spec) => {
+                    let mut path = kurbo::BezPath::new();
+                    path.move_to(at(spec.start));
+                    path.line_to(at(spec.curve_start));
+                    path.curve_to(at(spec.control_a), at(spec.control_b), at(spec.curve_end));
+                    path.line_to(at(spec.end));
+                    scene.stroke(
+                        &Stroke::new(spec.stroke_width as f64),
+                        Affine::IDENTITY,
+                        Color::from_rgb8(*r, *g, *b),
+                        None,
+                        &path,
+                    );
+                }
+                GlyphShape::Diagonal(spec) => {
+                    let path = kurbo::Line::new(at(spec.start), at(spec.end));
+                    scene.stroke(
+                        &Stroke::new(spec.stroke_width as f64),
+                        Affine::IDENTITY,
+                        Color::from_rgb8(*r, *g, *b),
+                        None,
+                        &path,
+                    );
+                }
+            },
+        );
     }
 }
 
@@ -909,6 +1000,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             return scene;
         };
         let (cell, line) = (self.state.cells.get().0 * scale, look.line_height * scale);
+        let font_px = look.font_size * scale as f32;
         if self.shaped_at != scale {
             self.history.1.clear();
         }
@@ -954,6 +1046,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                     top,
                     self.baseline,
                 );
+                shapes(&mut scene, shaped, cell, top, line, font_px);
             }
             scene.pop_layer();
             return scene;
@@ -1012,6 +1105,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                 index as f64 * line,
                 self.baseline,
             );
+            shapes(&mut scene, shaped, cell, index as f64 * line, line, font_px);
         }
 
         if let Some(cursor) = frame.cursor {

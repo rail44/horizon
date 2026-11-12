@@ -626,3 +626,62 @@ fn a_selection_is_the_primary_selection_and_the_middle_button_pastes_it() {
     );
     assert_eq!(*ASKED.lock().unwrap(), 1);
 }
+
+#[test]
+fn block_characters_fill_their_cells_with_no_seam_between_them() {
+    use anyrender::ImageRenderer as _;
+
+    let opened = open();
+    // Two rows of three full blocks, then a row of lower halves, and the
+    // art a program draws with such characters.
+    opened.run(r"clear; printf '\342\226\210\342\226\210\342\226\210\n\342\226\210\342\226\210\342\226\210\n\342\226\204\342\226\204\342\226\204\n'; printf ' \342\226\220\342\226\233\342\226\210\342\226\210\342\226\210\342\226\234\342\226\214\n\342\226\235\342\226\234\342\226\210\342\226\210\342\226\210\342\226\210\342\226\210\342\226\233\342\226\230\n  \342\226\230\342\226\230 \342\226\235\342\226\235\n'");
+    opened.wait("the blocks", |text| text.contains("▘▘ ▝▝"));
+    let row = opened.row_of("███");
+    let (width, height) = (900, 540);
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut pixels = Vec::new();
+    let document = opened.app.document();
+    renderer.render_to_vec(
+        |scene| {
+            blitz_paint::paint_scene(scene, &mut document.borrow_mut(), 1.0, width, height, 0, 0)
+        },
+        &mut pixels,
+    );
+    // (For a person to look at: the page as raw RGBA.)
+    if let Some(path) = std::env::var_os("HORIZON_BLITZ_TEST_DUMP") {
+        std::fs::write(path, &pixels).unwrap();
+    }
+    let look = Theme::built_in().terminal();
+    let at = |x: usize, y: usize| {
+        let pixel = (y * width as usize + x) * 4;
+        [pixels[pixel], pixels[pixel + 1], pixels[pixel + 2]]
+    };
+    // The box of the six full blocks: from the first cell's left edge to
+    // the third's right, two rows tall.
+    let (left, top) = opened.cell(row, 0);
+    let (right, _) = opened.cell(row, 2);
+    let half = (right - left) / 4.;
+    // (The cells' edges are on whole pixels: the last column of pixels
+    // the estimate reaches may be the next cell's.)
+    let (x0, x1) = (
+        (left - half).round() as usize,
+        (right + half).round() as usize - 1,
+    );
+    let (y0, y1) = ((top - 9.).round() as usize, (top + 27.).round() as usize);
+    let mut other = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if at(x, y) != look.foreground {
+                other += 1;
+            }
+        }
+    }
+    assert_eq!(other, 0, "of {} pixels", (x1 - x0) * (y1 - y0));
+    // The lower halves under them: the row's top half is the background,
+    // its lower half the foreground, across all three cells.
+    let middle = (x0 + x1) / 2;
+    assert_eq!(at(middle, y1 + 3), look.background);
+    assert_eq!(at(middle, y1 + 14), look.foreground);
+    assert_eq!(at(x0 + 1, y1 + 14), look.foreground);
+    assert_eq!(at(x1 - 2, y1 + 14), look.foreground);
+}
