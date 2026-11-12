@@ -313,10 +313,49 @@ fn the_wheel_goes_back_through_what_scrolled_off() {
     opened.wait("what scrolled off", |text| {
         text.lines().any(|line| line == "150") && !text.lines().any(|line| line == "200")
     });
-    opened.wheel(-40. * 18.);
+    // The history is scrolled here, over a window of it the view holds:
+    // by a part of a row too, with the rows the same.
+    assert_eq!(opened.terminal.scrolled_into(), Some(0.));
+    let before = opened.terminal.text();
+    opened.wheel(9.);
+    opened.app.resolve();
+    assert_eq!(opened.terminal.scrolled_into(), Some(0.5));
+    let nudged = opened.terminal.text();
+    assert_eq!(
+        nudged.lines().nth(1),
+        before.lines().next(),
+        "a row further into history at the top, the row that was the top under it"
+    );
+    opened.wheel(-9.);
+    opened.app.resolve();
+    assert_eq!(opened.terminal.text(), before);
+    // Far up, past the window held: more of the history is asked for.
+    // (A turn ends at the edge of the window held; the next goes on in
+    // the one that arrives.)
+    let started = Instant::now();
+    while !opened.terminal.text().lines().any(|line| line == "1") {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "no first numbers in:\n{}",
+            opened.terminal.text()
+        );
+        opened.wheel(20. * 18.);
+        opened.app.resolve();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // What the shell goes on printing does not move the view.
+    let held = opened.terminal.text();
+    opened.type_text("echo below");
+    opened.enter();
+    std::thread::sleep(Duration::from_millis(200));
+    opened.app.resolve();
+    assert_eq!(opened.terminal.text(), held);
+
+    opened.wheel(-400. * 18.);
     opened.wait("the last number again", |text| {
         text.lines().any(|line| line == "200")
     });
+    assert_eq!(opened.terminal.scrolled_into(), None);
 }
 
 #[test]
@@ -378,4 +417,71 @@ fn the_screen_is_painted_and_not_only_held() {
     );
     let lit = of(look.foreground);
     assert!(lit > 20, "{lit} pixels of text");
+
+    // Scrolled back by rows and half a row, the history is painted: the
+    // rows of numbers, the top one cut by the box's edge.
+    opened.run("seq 1 100");
+    opened.wait("the last number", |text| {
+        text.lines().any(|line| line == "100")
+    });
+    opened.wheel(40. * 18. + 9.);
+    let started = Instant::now();
+    while opened.terminal.scrolled_into() != Some(0.5) {
+        assert!(started.elapsed() < Duration::from_secs(10), "not scrolled");
+        opened.app.resolve();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    renderer.render_to_vec(
+        |scene| {
+            blitz_paint::paint_scene(scene, &mut document.borrow_mut(), 1.0, width, height, 0, 0)
+        },
+        &mut pixels,
+    );
+    let (rgba, _) = pixels.as_chunks::<4>();
+    let text_in = |rows: std::ops::Range<usize>| {
+        (rgba[rows.start * width as usize..rows.end * width as usize].iter())
+            .filter(|pixel| [pixel[0], pixel[1], pixel[2]] == look.foreground)
+            .count()
+    };
+    assert!(text_in(0..height as usize) > 200, "the numbers");
+    // The first whole row starts half a row down: its glyphs are in the
+    // band a row would not have reached into from the top.
+    assert!(text_in(9..27) > text_in(0..9), "a row half a row down");
+}
+
+#[test]
+fn a_second_press_selects_the_word_and_a_third_the_line() {
+    let opened = open();
+    opened.run("echo one two three");
+    opened.wait("the line", |text| {
+        text.lines().any(|line| line == "one two three")
+    });
+    let row = opened.row_of("one two three");
+    let (x, y) = opened.cell(row, 5);
+    let press = || {
+        pointer(&opened.app, x, y, Pointer::Down);
+        pointer(&opened.app, x, y, Pointer::Up);
+    };
+    // The columns selected in the row, once they are `wanted`.
+    let selected = |what: &str, wanted: &dyn Fn(usize, usize) -> bool| {
+        let started = Instant::now();
+        loop {
+            opened.app.resolve();
+            let selection = opened.terminal.frame().and_then(|frame| frame.selection);
+            if let Some(selection) = selection
+                && selection.start.row == row
+                && wanted(selection.start.col, selection.end.col)
+            {
+                return;
+            }
+            assert!(started.elapsed() < Duration::from_secs(10), "no {what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    pointer(&opened.app, x, y, Pointer::Move);
+    press();
+    press();
+    selected("word", &|from, to| (from, to) == (4, 6));
+    press();
+    selected("line", &|from, to| from == 0 && to >= 12);
 }

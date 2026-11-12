@@ -23,7 +23,7 @@ use horizon_terminal_core::{
     TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalUpdate, fixed_palette_rgb,
 };
 use horizon_ui::blitz_traits::events::{
-    BlitzImeEvent, BlitzKeyEvent, BlitzWheelDelta, DomEventData,
+    BlitzImeEvent, BlitzKeyEvent, BlitzWheelDelta, DomEventData, MouseEventButton,
 };
 use keyboard_types::{Key, NamedKey};
 use kurbo::{Affine, Rect, Stroke};
@@ -32,6 +32,7 @@ use peniko::{Color, Fill};
 use termwiz::input::{KeyCode, Modifiers};
 use unicode_width::UnicodeWidthChar;
 
+use horizon_shell_runtime::terminal_scrollback::{ScrollIpc, Scrollback};
 use horizon_theme_css::TerminalLook;
 use horizon_ui::{El, copy, each_layout, el, prevent_default, request_paste};
 
@@ -105,8 +106,19 @@ struct State {
     /// and what it copied that the clipboard has not been given yet.
     copied: RefCell<Option<String>>,
     outgoing: RefCell<Option<String>>,
-    /// The part of a wheel's turn not yet a whole row.
+    /// The history being scrolled through, when the wheel is the
+    /// terminal's own and not the program's: a window of it held here and
+    /// moved over row by row and part of a row, with no word to the
+    /// daemon until its edge is near (`docs/terminal-scrollback-design.md`).
+    scrollback: RefCell<Scrollback>,
+    /// The part of a wheel's turn not yet a whole row, for a wheel that
+    /// is the program's.
     wheel: Cell<f64>,
+    /// The last press that began a selection: when, at which cell, and
+    /// how many presses in a row it made.
+    clicked: Cell<Option<(std::time::Instant, TerminalSelectionPoint, u8)>>,
+    /// The button a press reported to the program is for.
+    reporting: Cell<Option<TerminalMouseButton>>,
     /// Whether a button went down here and is still held, and whether what
     /// it drags is a selection (or, otherwise, a report to the program).
     dragging: Cell<Option<bool>>,
@@ -126,10 +138,15 @@ impl Terminal {
         pump(&self.state)
     }
 
-    /// The screen's rows, as text. A span's cells past its text are blank.
+    /// The rows on screen, as text: the live screen's, or while the view
+    /// is scrolled back the rows of history it is over. A span's cells
+    /// past its text are blank.
     pub fn text(&self) -> String {
         let frame = self.state.frame.borrow();
-        let lines = frame.iter().flat_map(|frame| &frame.lines);
+        let scrolled = (self.state.scrollback.borrow()).visible_lines(self.state.cells.get().2);
+        let history = (scrolled.as_ref()).map(|(window, range, _)| &window.lines[range.clone()]);
+        let live = frame.as_ref().map(|frame| &frame.lines[..]);
+        let lines = history.or(live).into_iter().flatten();
         let row = |line: &TerminalLine| {
             let mut row = String::new();
             for span in &line.spans {
@@ -147,6 +164,14 @@ impl Terminal {
             row.trim_end().to_string()
         };
         lines.map(row).collect::<Vec<_>>().join("\n")
+    }
+
+    /// How far into its top row the view is scrolled, as a part of a row,
+    /// while it is scrolled back.
+    pub fn scrolled_into(&self) -> Option<f32> {
+        (self.state.scrollback.borrow())
+            .visible_lines(self.state.cells.get().2)
+            .map(|(.., into)| into)
     }
 
     pub fn frame(&self) -> Option<TerminalFrame> {
@@ -205,6 +230,8 @@ impl Terminal {
 fn pump(state: &State) -> bool {
     let mut came = false;
     if let Some((number, frame)) = state.session.frame_after(state.seen.get()) {
+        // A program that takes the screen takes it from the history too.
+        (state.scrollback.borrow_mut()).on_live_frame(frame.scrollback_available);
         *state.frame.borrow_mut() = Some(frame);
         state.seen.set(number);
         came = true;
@@ -221,6 +248,16 @@ fn pump(state: &State) -> bool {
             }
             TerminalUpdate::Notification(notification) => {
                 state.notifications.borrow_mut().push(notification);
+            }
+            TerminalUpdate::ScrollWindow(window) => {
+                let install = state.scrollback.borrow_mut().install_window(window);
+                if let Some((anchor, height)) = install.request {
+                    (state.session).send(TerminalCommand::RequestScrollWindow { anchor, height });
+                }
+            }
+            // A runtime that failed serves no window.
+            TerminalUpdate::Error(_) => {
+                state.scrollback.borrow_mut().abandon();
             }
             TerminalUpdate::Exited => state.exited.set(true),
             TerminalUpdate::Title(title) => *state.titled.borrow_mut() = Some(title),
@@ -317,7 +354,10 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         directory: RefCell::new(None),
         copied: RefCell::new(None),
         outgoing: RefCell::new(None),
+        scrollback: RefCell::default(),
         wheel: Cell::new(0.),
+        clicked: Cell::new(None),
+        reporting: Cell::new(None),
         dragging: Cell::new(None),
     });
     let element = el("div").class("terminal").attr("tabindex", "0");
@@ -429,16 +469,46 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
                 return;
             };
             let point = cell_down(pointer.element.x, pointer.element.y);
+            let button = button(pointer.button);
             // A program that asked for the mouse gets it, unless Shift
             // keeps the press for a selection.
             let selects = !reports_down() || pointer.mods.shift();
-            pressed.dragging.set(Some(selects));
-            pressed.session.send(match selects {
-                true => TerminalCommand::SelectionStart {
+            if !selects {
+                pressed.dragging.set(Some(false));
+                pressed.reporting.set(Some(button));
+                (pressed.session).send(TerminalCommand::Mouse(TerminalMouseReport {
+                    kind: TerminalMouseKind::Press,
+                    button,
                     point,
-                    kind: TerminalSelectionKind::Simple,
+                    modifiers: mouse_modifiers(&pointer.mods),
+                }));
+                return;
+            }
+            if button != TerminalMouseButton::Left {
+                return;
+            }
+            pressed.dragging.set(Some(true));
+            // A second press at the same cell soon after the first selects
+            // by word, and a third by line.
+            let now = std::time::Instant::now();
+            let presses = match pressed.clicked.get() {
+                Some((at, cell, presses))
+                    if cell == point && now.duration_since(at) < MULTI_CLICK_WITHIN =>
+                {
+                    presses.saturating_add(1)
+                }
+                _ => 1,
+            };
+            pressed.clicked.set(Some((now, point, presses)));
+            // A selection is of the live screen, which the daemon holds.
+            pressed.scrollback.borrow_mut().abandon();
+            pressed.session.send(TerminalCommand::SelectionStart {
+                point,
+                kind: match presses {
+                    1 => TerminalSelectionKind::Simple,
+                    2 => TerminalSelectionKind::Word,
+                    _ => TerminalSelectionKind::Line,
                 },
-                false => TerminalCommand::Mouse(report(TerminalMouseKind::Press, point)),
             });
         })
         .on("pointermove", move |event| {
@@ -449,10 +519,17 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
                 return;
             };
             let point = cell_move(pointer.element.x, pointer.element.y);
-            moved.session.send(match selects {
-                true => TerminalCommand::SelectionUpdate(point),
-                false => TerminalCommand::Mouse(report(TerminalMouseKind::Drag, point)),
-            });
+            if selects {
+                moved.scrollback.borrow_mut().abandon();
+                moved.session.send(TerminalCommand::SelectionUpdate(point));
+            } else if let Some(button) = moved.reporting.get() {
+                (moved.session).send(TerminalCommand::Mouse(TerminalMouseReport {
+                    kind: TerminalMouseKind::Drag,
+                    button,
+                    point,
+                    modifiers: mouse_modifiers(&pointer.mods),
+                }));
+            }
         })
         .on("pointerup", move |event| {
             let DomEventData::PointerUp(pointer) = &event.data else {
@@ -460,19 +537,44 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
             };
             if lifted.dragging.take() == Some(false) {
                 let point = cell_up(pointer.element.x, pointer.element.y);
-                lifted.session.send(TerminalCommand::Mouse(report(
-                    TerminalMouseKind::Release,
+                let held = lifted.reporting.take();
+                (lifted.session).send(TerminalCommand::Mouse(TerminalMouseReport {
+                    kind: TerminalMouseKind::Release,
+                    button: held.unwrap_or_else(|| button(pointer.button)),
                     point,
-                )));
+                    modifiers: mouse_modifiers(&pointer.mods),
+                }));
             }
         })
         .on("wheel", move |event| {
             let DomEventData::Wheel(wheel) = &event.data else {
                 return;
             };
+            let line_height = wheeled.look.borrow().line_height;
+            let local =
+                (wheeled.frame.borrow().as_ref()).is_some_and(|frame| frame.scrollback_available);
+            if local {
+                // The history is the terminal's own to scroll: by the
+                // distance the wheel turned, a part of a row too.
+                wheeled.wheel.set(0.);
+                let rows = match wheel.delta {
+                    BlitzWheelDelta::Lines(_, lines) => lines * WHEEL_LINE / line_height,
+                    BlitzWheelDelta::Pixels(_, pixels) => pixels / line_height,
+                };
+                let viewport = wheeled.cells.get().2;
+                let decision = (wheeled.scrollback.borrow_mut()).on_wheel(rows as f32, viewport);
+                if let ScrollIpc::Request { anchor, height } = decision.ipc {
+                    (wheeled.session).send(TerminalCommand::RequestScrollWindow { anchor, height });
+                }
+                prevent_default();
+                return;
+            }
+            // The wheel is the program's (or the peer's): whole rows, told
+            // to it.
+            wheeled.scrollback.borrow_mut().abandon();
             let turned = match wheel.delta {
                 BlitzWheelDelta::Lines(_, lines) => lines * 3.,
-                BlitzWheelDelta::Pixels(_, pixels) => pixels / wheeled.look.borrow().line_height,
+                BlitzWheelDelta::Pixels(_, pixels) => pixels / line_height,
             };
             let turned = wheeled.wheel.get() + turned;
             let lines = turned.trunc();
@@ -506,6 +608,7 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
                 state.look.borrow().font_size,
             ),
             rows: Vec::new(),
+            history: (0, std::collections::HashMap::new()),
             shaped_at: 0.,
             baseline: 0.,
             styled: 0,
@@ -546,6 +649,8 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         let rows = (size.height / sized.look.borrow().line_height) as usize;
         if (columns, rows) != (sized.cells.get().1, sized.cells.get().2) && columns * rows > 0 {
             sized.cells.set((cell_width, columns, rows));
+            // A window of history was served for the old size.
+            sized.scrollback.borrow_mut().abandon();
             (sized.session).send(TerminalCommand::Resize(TerminalSize::new(
                 columns as u16,
                 rows as u16,
@@ -555,12 +660,26 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
     (element, Terminal { state, element })
 }
 
-fn report(kind: TerminalMouseKind, point: TerminalSelectionPoint) -> TerminalMouseReport {
-    TerminalMouseReport {
-        kind,
-        button: TerminalMouseButton::Left,
-        point,
-        modifiers: TerminalMouseModifiers::default(),
+/// How far one line of a wheel that turns in lines moves the history, in
+/// CSS pixels (`src/terminal/input.rs`'s unit).
+const WHEEL_LINE: f64 = 20.;
+
+/// How soon after a press another at the same cell is the same gesture.
+const MULTI_CLICK_WITHIN: std::time::Duration = std::time::Duration::from_millis(400);
+
+fn button(button: MouseEventButton) -> TerminalMouseButton {
+    match button {
+        MouseEventButton::Auxiliary => TerminalMouseButton::Middle,
+        MouseEventButton::Secondary => TerminalMouseButton::Right,
+        _ => TerminalMouseButton::Left,
+    }
+}
+
+fn mouse_modifiers(modifiers: &keyboard_types::Modifiers) -> TerminalMouseModifiers {
+    TerminalMouseModifiers {
+        shift: modifiers.shift(),
+        alt: modifiers.alt(),
+        control: modifiers.ctrl(),
     }
 }
 
@@ -621,6 +740,9 @@ struct Screen {
     state: Rc<State>,
     shaper: Shaper,
     rows: Vec<Shaped>,
+    /// The rows shaped of the window of history last drawn from: which
+    /// window, and each row by its place in it.
+    history: (usize, std::collections::HashMap<usize, Shaped>),
     /// The scale the rows were shaped at.
     shaped_at: f64,
     /// A row's baseline below its top, at that scale.
@@ -723,6 +845,55 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             return scene;
         };
         let (cell, line) = (self.state.cells.get().0 * scale, look.line_height * scale);
+        if self.shaped_at != scale {
+            self.history.1.clear();
+        }
+        // Scrolled back: rows of the window of history held, moved up by
+        // the part of a row the view is into its top one. No cursor and no
+        // selection: those are of the live screen.
+        let scrolled = (self.state.scrollback.borrow()).visible_lines(self.state.cells.get().2);
+        if let Some((window, range, into)) = scrolled {
+            if self.shaped_at != scale {
+                self.shaped_at = scale;
+                self.rows.clear();
+                self.baseline = (self.shaper).baseline(scale as f32, look.line_height);
+            }
+            // The rows shaped are this window's, by their place in it.
+            let held = std::sync::Arc::as_ptr(&window) as usize;
+            if self.history.0 != held {
+                self.history = (held, std::collections::HashMap::new());
+            }
+            let near = range.start.saturating_sub(range.len())..range.end + range.len();
+            self.history.1.retain(|row, _| near.contains(row));
+            let clip = Rect::new(0., 0., width as f64, height as f64);
+            scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &clip);
+            for (place, row) in range.enumerate() {
+                let top = (place as f64 - into as f64) * line;
+                let shaper = &mut self.shaper;
+                let shaped = (self.history.1.entry(row))
+                    .or_insert_with(|| shape(&window.lines[row], shaper, scale as f32, look));
+                for (columns, color) in &shaped.row.backgrounds {
+                    let behind = Rect::new(
+                        columns.start as f64 * cell,
+                        top,
+                        columns.end as f64 * cell,
+                        top + line,
+                    );
+                    fill(&mut scene, *color, behind);
+                }
+                glyphs(
+                    &mut scene,
+                    shaped,
+                    &shaped.columns,
+                    cell,
+                    0.,
+                    top,
+                    self.baseline,
+                );
+            }
+            scene.pop_layer();
+            return scene;
+        }
 
         // A row is shaped again only when it is not the row drawn before.
         if self.shaped_at != scale {
