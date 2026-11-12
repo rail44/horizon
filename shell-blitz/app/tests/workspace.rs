@@ -1044,3 +1044,92 @@ fn a_terminal_that_was_there_before_a_split_is_still_drawn_after_it() {
     assert!(right > 5, "the new terminal is drawn: {right}");
     assert!(left > 50, "the first terminal is still drawn: {left}");
 }
+
+#[test]
+fn block_art_has_no_seams_in_either_pane_of_a_split_at_a_fractional_scale() {
+    use anyrender::ImageRenderer as _;
+    use horizon_ui::blitz_traits::shell::{ColorScheme, Viewport};
+
+    let blocks = r"clear; printf '\342\226\210\342\226\210\342\226\210\342\226\210\n\342\226\210\342\226\210\342\226\210\342\226\210\n\342\226\210\342\226\210\342\226\210\342\226\210\n'";
+    for scale in [1.25f32, 1.5, 1.75, 2.] {
+        let opened = open();
+        {
+            let document = opened.app.document();
+            (document.borrow_mut()).set_viewport(Viewport::new(
+                1200,
+                800,
+                scale,
+                ColorScheme::Light,
+            ));
+        }
+        opened.app.resolve();
+        let first = opened.panes()[0];
+        opened.prompt(first);
+        opened.run(blocks);
+        opened.wait(first, "the blocks", |text| text.contains("████"));
+        opened.chord();
+        opened.character("s");
+        let second = opened.panes()[1];
+        opened.prompt(second);
+        opened.run(blocks);
+        opened.wait(second, "the blocks", |text| text.contains("████"));
+        opened.app.resolve();
+
+        let (width, height) = (1200u32, 800u32);
+        let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+        let mut pixels = Vec::new();
+        let document = opened.app.document();
+        renderer.render_to_vec(
+            |scene| {
+                let mut document = document.borrow_mut();
+                blitz_paint::paint_scene(scene, &mut document, scale as f64, width, height, 0, 0)
+            },
+            &mut pixels,
+        );
+        if let Some(path) = std::env::var_os("HORIZON_BLITZ_TEST_DUMP") {
+            let path = format!("{}-{scale}", path.to_string_lossy());
+            std::fs::write(path, &pixels).unwrap();
+        }
+        let foreground = opened
+            .shell
+            .theme
+            .with_untracked(|theme| theme.terminal().foreground);
+        let at = |x: usize, y: usize| {
+            let pixel = (y * width as usize + x) * 4;
+            [pixels[pixel], pixels[pixel + 1], pixels[pixel + 2]]
+        };
+        for (pane, screen) in opened.all("terminal").into_iter().enumerate() {
+            let (x, y, wide, _) = opened.bounds(screen);
+            // The blocks are at the box's top left: the foreground's box
+            // there, in device pixels.
+            let (x, y, wide) = (x * scale, y * scale, wide * scale);
+            let inked: Vec<(usize, usize)> = ((y as usize)..(y as usize + (50. * scale) as usize))
+                .flat_map(|row| {
+                    ((x as usize)..((x + wide / 2.) as usize)).map(move |column| (column, row))
+                })
+                .filter(|(column, row)| at(*column, *row) == foreground)
+                .collect();
+            assert!(
+                inked.len() > 100,
+                "pane {pane} at {scale}: {} pixels",
+                inked.len()
+            );
+            let (x0, x1) = (
+                inked.iter().map(|(x, _)| *x).min().unwrap(),
+                inked.iter().map(|(x, _)| *x).max().unwrap(),
+            );
+            let (y0, y1) = (
+                inked.iter().map(|(_, y)| *y).min().unwrap(),
+                inked.iter().map(|(_, y)| *y).max().unwrap(),
+            );
+            let seams = (y0..=y1)
+                .flat_map(|row| (x0..=x1).map(move |column| (column, row)))
+                .filter(|(column, row)| at(*column, *row) != foreground)
+                .count();
+            assert_eq!(
+                seams, 0,
+                "pane {pane} at scale {scale}: box {x0}..{x1} x {y0}..{y1}"
+            );
+        }
+    }
+}

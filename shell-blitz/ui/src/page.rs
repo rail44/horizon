@@ -34,6 +34,17 @@ impl Page<'_> {
         })
     }
 
+    /// Where an element's box is painted from, in CSS pixels: its place as
+    /// layout rounded it, which is what the painting goes by.
+    /// [`bounds`](Self::bounds) is its place before the rounding, and at a
+    /// display scale that is not whole the two differ by part of a device
+    /// pixel.
+    pub fn painted_at(&self, element: El) -> Option<(f64, f64)> {
+        let at = self.0.get_node(element.0)?.absolute_position(0., 0.);
+        let scroll = self.0.viewport_scroll();
+        Some((at.x as f64 - scroll.x, at.y as f64 - scroll.y))
+    }
+
     /// An element's width and height.
     pub fn size(&self, element: El) -> Option<(f64, f64)> {
         let size = self.0.get_node(element.0)?.final_layout().size;

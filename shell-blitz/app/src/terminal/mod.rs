@@ -690,8 +690,8 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         if let Some(text) = sized.outgoing.borrow_mut().take() {
             copy(text);
         }
-        if let Some(bounds) = page.bounds(element) {
-            sized.origin.set((bounds.x, bounds.y));
+        if let Some(origin) = page.painted_at(element) {
+            sized.origin.set(origin);
         }
         let Some(size) = page.size(element) else {
             return;
