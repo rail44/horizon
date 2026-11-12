@@ -26,7 +26,7 @@ fn open() -> Opened {
     let session = support::shell("sh", TerminalSize::new(80, 24));
     let mut terminal = None;
     let app = App::new(900, 540, CSS, || {
-        let (root, state) = view(session, Theme::built_in().terminal());
+        let (root, state) = view(session.into(), Theme::built_in().terminal());
         terminal = Some(state);
         root.focus()
     });

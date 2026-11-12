@@ -1,7 +1,7 @@
 //! Horizon's shell on Blitz.
 //!
-//! So far one terminal, a session of this shell's own `horizon-terminald`,
-//! filling the window in this machine's theme. The workspace and the other
+//! So far the workspace with terminals in its panes, sessions of this
+//! shell's own `horizon-terminald`, in this machine's theme. The other
 //! views arrive in the order of `docs/ui-foundation-migration-design.md`.
 //! The terminal daemon is the root workspace's: build it there first
 //! (`cargo build --workspace` at the repository's root).
@@ -11,7 +11,8 @@ use std::cell::Cell;
 use anyrender_vello::VelloWindowRenderer;
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
 use horizon_blitz::paths::{daemon_binary, runtime_dir};
-use horizon_blitz::terminal::{self, Session};
+use horizon_blitz::terminal::Session;
+use horizon_blitz::workspace;
 use horizon_shell_runtime::TerminaldHandle;
 use horizon_terminal_core::{
     DEFAULT_SCROLLBACK_LINES, TerminalColorScheme, TerminalSize, TerminalSpawnSpec,
@@ -37,34 +38,37 @@ fn main() {
     let control_socket = sockets.join("control.sock");
     let terminald = TerminaldHandle::start(&sockets.join("terminald.sock"), &control_socket);
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let handle = terminald.start_terminal(
-        uuid::Uuid::new_v4(),
-        TerminalSpawnSpec {
-            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
-            args: Vec::new(),
-            term: "xterm-256color".to_string(),
-            scrollback_lines: DEFAULT_SCROLLBACK_LINES,
-            color_scheme: TerminalColorScheme::default(),
-            control_socket,
-            fallback_cwd: (std::env::current_dir().ok().or(home)).unwrap_or_else(|| "/".into()),
-            spawn_source_session_id: None,
-            initial_size: TerminalSize::new(80, 24),
-        },
-    );
+    let directory = (std::env::current_dir().ok().or(home)).unwrap_or_else(|| "/".into());
+    let spawn: workspace::Spawn = Box::new(move |session| {
+        Session::attached(terminald.start_terminal(
+            session.as_uuid(),
+            TerminalSpawnSpec {
+                shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+                args: Vec::new(),
+                term: "xterm-256color".to_string(),
+                scrollback_lines: DEFAULT_SCROLLBACK_LINES,
+                color_scheme: TerminalColorScheme::default(),
+                control_socket: control_socket.clone(),
+                fallback_cwd: directory.clone(),
+                spawn_source_session_id: None,
+                initial_size: TerminalSize::new(80, 24),
+            },
+        ))
+    });
 
     let look = Theme::of_this_machine();
-    let css = [horizon_theme_css::CSS, terminal::CSS].concat();
-    let mut shown = None;
+    let css = [horizon_theme_css::CSS, &workspace::css()].concat();
+    let mut shell = None;
     let app = App::new(1100, 720, &css, || {
-        let (root, view) = terminal::view(Session::attached(handle), look.terminal());
-        shown = Some(view);
-        themed(move || look.clone(), root.focus())
+        let (root, built) = workspace::view(look.terminal(), spawn);
+        shell = Some(built);
+        themed(move || look.clone(), root)
     });
-    // A frame from the session wakes the window to draw it.
-    let (shown, woken) = (shown.expect("the view"), Cell::new(false));
+    // A frame from a session wakes the window to draw it.
+    let (shell, woken) = (shell.expect("the shell"), Cell::new(false));
     app.on_poll(move |waker| {
         if !woken.replace(true) {
-            shown.set_waker(waker.clone());
+            shell.set_waker(waker.clone());
         }
     });
 
@@ -77,8 +81,7 @@ fn main() {
         Box::new(Live(app)),
         VelloWindowRenderer::new(),
     ));
-    event_loop.run_app(application).expect("the event loop");
     // The terminal daemon and its sessions outlive the window, as the
     // GPUI shell's do.
-    drop(terminald);
+    event_loop.run_app(application).expect("the event loop");
 }

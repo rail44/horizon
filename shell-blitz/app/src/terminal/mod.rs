@@ -12,6 +12,7 @@
 //! holding wide characters stays on the grid.
 
 use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyrender::PaintScene;
@@ -78,7 +79,9 @@ fn rgb(color: TerminalColor, look: &TerminalLook) -> [u8; 3] {
 
 /// What the view and its widget share.
 struct State {
-    session: Session,
+    /// Shared with whoever placed the view: the session outlives a view
+    /// of it that is closed.
+    session: Rc<Session>,
     /// The theme's colors, font and row height.
     look: TerminalLook,
     /// The frame on screen.
@@ -89,6 +92,10 @@ struct State {
     preedit: RefCell<String>,
     focused: Cell<bool>,
     exited: Cell<bool>,
+    /// The title and the working directory the session reported since
+    /// they were last taken.
+    titled: RefCell<Option<Option<String>>>,
+    directory: RefCell<Option<PathBuf>>,
     /// What the session last copied, for whoever placed the view to see,
     /// and what it copied that the clipboard has not been given yet.
     copied: RefCell<Option<String>>,
@@ -156,6 +163,17 @@ impl Terminal {
         self.state.exited.get()
     }
 
+    /// The title the program set since the last call: `Some(None)` when
+    /// it took its title back.
+    pub fn take_title(&self) -> Option<Option<String>> {
+        self.state.titled.borrow_mut().take()
+    }
+
+    /// The shell's working directory, if it changed since the last call.
+    pub fn take_directory(&self) -> Option<PathBuf> {
+        self.state.directory.borrow_mut().take()
+    }
+
     /// What the session last copied, taken.
     pub fn take_copied(&self) -> Option<String> {
         self.state.copied.borrow_mut().take()
@@ -184,6 +202,10 @@ fn pump(state: &State) -> bool {
                 *state.copied.borrow_mut() = Some(text);
             }
             TerminalUpdate::Exited => state.exited.set(true),
+            TerminalUpdate::Title(title) => *state.titled.borrow_mut() = Some(title),
+            TerminalUpdate::WorkingDirectory(directory) => {
+                *state.directory.borrow_mut() = Some(directory);
+            }
             _ => {}
         }
     }
@@ -258,7 +280,7 @@ fn key_code(key: &BlitzKeyEvent) -> Option<(KeyCode, Option<String>)> {
 }
 
 /// Builds the view over `session`, in `look`.
-pub fn view(session: Session, look: TerminalLook) -> (El, Terminal) {
+pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
     let state = Rc::new(State {
         session,
         look,
@@ -267,6 +289,8 @@ pub fn view(session: Session, look: TerminalLook) -> (El, Terminal) {
         preedit: RefCell::new(String::new()),
         focused: Cell::new(false),
         exited: Cell::new(false),
+        titled: RefCell::new(None),
+        directory: RefCell::new(None),
         copied: RefCell::new(None),
         outgoing: RefCell::new(None),
         wheel: Cell::new(0.),

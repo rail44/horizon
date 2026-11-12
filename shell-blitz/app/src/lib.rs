@@ -3,3 +3,4 @@
 
 pub mod paths;
 pub mod terminal;
+pub mod workspace;

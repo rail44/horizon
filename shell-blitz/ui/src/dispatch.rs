@@ -42,8 +42,9 @@ impl EventHandler for Dispatch {
                 .map(|(_, handler)| handler.clone())
                 .collect::<Vec<Handler>>()
         };
-        // In from the outermost element to the target's parent.
-        for node in chain.iter().skip(1).rev() {
+        // In from the outermost element to the target, whose own capturing
+        // handlers run as the DOM's do.
+        for node in chain.iter().rev() {
             for handler in named(&self.0.captures, node, event.name()) {
                 handler(event);
             }

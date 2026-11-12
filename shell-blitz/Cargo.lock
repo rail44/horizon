@@ -2683,6 +2683,7 @@ dependencies = [
  "horizon-terminal-core",
  "horizon-theme-css",
  "horizon-ui",
+ "horizon-workspace",
  "keyboard-types",
  "kurbo",
  "parley",
@@ -2822,6 +2823,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "horizon-workspace"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
