@@ -16,6 +16,14 @@ pub enum BlitzShellEvent {
     RequestClipboardText {
         window_id: WindowId,
     },
+    /// Added to upstream's blitz-shell: the primary selection (X11's and
+    /// Wayland's second clipboard), set, and asked for as a paste.
+    SetPrimaryText {
+        text: String,
+    },
+    RequestPrimaryText {
+        window_id: WindowId,
+    },
     Poll {
         window_id: WindowId,
     },

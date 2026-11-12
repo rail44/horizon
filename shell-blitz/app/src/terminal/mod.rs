@@ -17,10 +17,11 @@ use std::rc::Rc;
 
 use anyrender::PaintScene;
 use horizon_terminal_core::{
-    ClipboardDestination, KeyEventKind, NamedColor, TerminalColor, TerminalCommand,
-    TerminalCursorShape, TerminalFrame, TerminalKeyInput, TerminalLine, TerminalMouseButton,
-    TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport, TerminalScroll,
-    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalUpdate, fixed_palette_rgb,
+    ClipboardDestination, KeyEventKind, NamedColor, TerminalColor, TerminalColorScheme,
+    TerminalCommand, TerminalCursorShape, TerminalFrame, TerminalKeyInput, TerminalLine,
+    TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport,
+    TerminalScroll, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalUpdate,
+    fixed_palette_rgb,
 };
 use horizon_ui::blitz_traits::events::{
     BlitzImeEvent, BlitzKeyEvent, BlitzWheelDelta, DomEventData, MouseEventButton,
@@ -32,6 +33,7 @@ use peniko::{Color, Fill};
 use termwiz::input::{KeyCode, Modifiers};
 use unicode_width::UnicodeWidthChar;
 
+use horizon_shell_runtime::terminal_links::{is_openable_url, url_from_lines};
 use horizon_shell_runtime::terminal_scrollback::{ScrollIpc, Scrollback};
 use horizon_theme_css::TerminalLook;
 use horizon_ui::{El, copy, each_layout, el, prevent_default, request_paste};
@@ -78,6 +80,9 @@ fn rgb(color: TerminalColor, look: &TerminalLook) -> [u8; 3] {
     }
 }
 
+/// Hands a URL to the desktop.
+pub type OpenUrl = Rc<dyn Fn(&str)>;
+
 /// What the view and its widget share.
 struct State {
     /// Shared with whoever placed the view: the session outlives a view
@@ -119,6 +124,8 @@ struct State {
     clicked: Cell<Option<(std::time::Instant, TerminalSelectionPoint, u8)>>,
     /// The button a press reported to the program is for.
     reporting: Cell<Option<TerminalMouseButton>>,
+    /// What a link clicked with the platform's key held is opened with.
+    open_url: RefCell<Option<OpenUrl>>,
     /// Whether a button went down here and is still held, and whether what
     /// it drags is a selection (or, otherwise, a report to the program).
     dragging: Cell<Option<bool>>,
@@ -215,8 +222,15 @@ impl Terminal {
         self.state.copied.borrow_mut().take()
     }
 
-    /// Draws the terminal in `look` from now on.
+    /// Opens a link clicked with the platform's key held with `open`.
+    pub fn on_open_url(&self, open: OpenUrl) {
+        *self.state.open_url.borrow_mut() = Some(open);
+    }
+
+    /// Draws the terminal in `look` from now on, and has the program
+    /// that asks what the colors are answered with its.
     pub fn set_look(&self, look: TerminalLook) {
+        (self.state.session).send(TerminalCommand::SetColorScheme(color_scheme(&look)));
         *self.state.look.borrow_mut() = look;
         self.state.restyled.set(self.state.restyled.get() + 1);
     }
@@ -246,6 +260,10 @@ fn pump(state: &State) -> bool {
                 *state.outgoing.borrow_mut() = Some(text.clone());
                 *state.copied.borrow_mut() = Some(text);
             }
+            TerminalUpdate::Clipboard {
+                text,
+                destination: ClipboardDestination::Primary,
+            } => crate::primary::set(text),
             TerminalUpdate::Notification(notification) => {
                 state.notifications.borrow_mut().push(notification);
             }
@@ -339,6 +357,9 @@ fn key_code(key: &BlitzKeyEvent) -> Option<(KeyCode, Option<String>)> {
 
 /// Builds the view over `session`, in `look`.
 pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
+    // The colors a program is told when it asks (OSC 4, 10, 11, 12) are
+    // the ones it is drawn in.
+    session.send(TerminalCommand::SetColorScheme(color_scheme(&look)));
     let state = Rc::new(State {
         session,
         look: RefCell::new(look),
@@ -358,6 +379,7 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         wheel: Cell::new(0.),
         clicked: Cell::new(None),
         reporting: Cell::new(None),
+        open_url: RefCell::new(None),
         dragging: Cell::new(None),
     });
     let element = el("div").class("terminal").attr("tabindex", "0");
@@ -470,6 +492,18 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
             };
             let point = cell_down(pointer.element.x, pointer.element.y);
             let button = button(pointer.button);
+            // A link clicked with the platform's key held is opened, and
+            // the press goes no further: not to the program, not into a
+            // selection.
+            if button == TerminalMouseButton::Left && pointer.mods.meta() {
+                let link = link_at(&pressed, pointer.element.x, pointer.element.y);
+                let open = pressed.open_url.borrow().clone();
+                if let (Some(link), Some(open)) = (link.filter(|link| is_openable_url(link)), open)
+                {
+                    open(&link);
+                    return;
+                }
+            }
             // A program that asked for the mouse gets it, unless Shift
             // keeps the press for a selection.
             let selects = !reports_down() || pointer.mods.shift();
@@ -483,6 +517,10 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
                     modifiers: mouse_modifiers(&pointer.mods),
                 }));
                 return;
+            }
+            // The middle button pastes the primary selection.
+            if button == TerminalMouseButton::Middle {
+                crate::primary::request_paste();
             }
             if button != TerminalMouseButton::Left {
                 return;
@@ -658,6 +696,28 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         }
     });
     (element, Terminal { state, element })
+}
+
+/// The colors a program in the terminal is answered with when it asks:
+/// those of `look`.
+pub fn color_scheme(look: &TerminalLook) -> TerminalColorScheme {
+    TerminalColorScheme::from_rgb(look.foreground, look.background, look.cursor, look.ansi)
+}
+
+/// The link at a point of the view's box, in the rows it is showing: the
+/// live screen's, or the history's while it is scrolled back.
+fn link_at(state: &State, x: f32, y: f32) -> Option<String> {
+    let (cell_width, ..) = state.cells.get();
+    let line_height = state.look.borrow().line_height;
+    let column = (x as f64 / cell_width).max(0.) as usize;
+    let row = y as f64 / line_height;
+    let scrolled = (state.scrollback.borrow()).visible_lines(state.cells.get().2);
+    if let Some((window, range, into)) = scrolled {
+        let row = (row + into as f64).max(0.) as usize;
+        return url_from_lines(&window.lines[range], row, column);
+    }
+    let frame = state.frame.borrow();
+    url_from_lines(&frame.as_ref()?.lines, row.max(0.) as usize, column)
 }
 
 /// How far one line of a wheel that turns in lines moves the history, in

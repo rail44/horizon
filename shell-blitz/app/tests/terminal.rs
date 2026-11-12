@@ -485,3 +485,144 @@ fn a_second_press_selects_the_word_and_a_third_the_line() {
     press();
     selected("line", &|from, to| from == 0 && to >= 12);
 }
+
+/// A press of `button` with `mods` held, at a point of the page.
+fn press_with(
+    app: &App,
+    x: f32,
+    y: f32,
+    button: horizon_ui::blitz_traits::events::MouseEventButton,
+    mods: keyboard_types::Modifiers,
+) {
+    use horizon_ui::blitz_traits::events::{BlitzPointerEvent, BlitzPointerId, MouseEventButtons};
+    let event = |buttons| BlitzPointerEvent {
+        id: BlitzPointerId::Mouse,
+        is_primary: true,
+        coords: PointerCoords {
+            page_x: x,
+            page_y: y,
+            screen_x: x,
+            screen_y: y,
+            client_x: x,
+            client_y: y,
+        },
+        button,
+        buttons,
+        mods,
+        details: Default::default(),
+        element: Default::default(),
+        active_pointers: Default::default(),
+    };
+    app.dispatch(UiEvent::PointerDown(event(MouseEventButtons::Primary)));
+    app.dispatch(UiEvent::PointerUp(event(MouseEventButtons::None)));
+}
+
+#[test]
+fn a_program_that_asks_the_colors_is_told_the_ones_it_is_drawn_in() {
+    let opened = open();
+    let look = Theme::built_in().terminal();
+    // The answer to OSC 11 comes in as if typed; the tty echoes it.
+    opened.run(r"printf '\033]11;?\007'; sleep 0.5");
+    let [r, g, b] = look.background;
+    let told = format!("11;rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}");
+    opened.wait("the background's color", |text| text.contains(&told));
+
+    // (The answer is on the shell's line: Enter has the shell be done
+    // with it.)
+    opened.enter();
+    opened.wait("the shell again", |text| text.trim_end().ends_with('$'));
+
+    // Another look: another answer.
+    let mut other = look.clone();
+    other.background = [0x12, 0x34, 0x56];
+    opened.terminal.set_look(other);
+    opened.run(r"printf '\033]11;?\007'; sleep 0.5");
+    opened.wait("the new background's color", |text| {
+        text.contains("11;rgb:1212/3434/5656")
+    });
+}
+
+#[test]
+fn a_link_clicked_with_the_platform_s_key_is_opened() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use horizon_ui::blitz_traits::events::MouseEventButton;
+
+    let opened = open();
+    let opened_urls = Rc::new(RefCell::new(Vec::new()));
+    let log = opened_urls.clone();
+    (opened.terminal).on_open_url(Rc::new(move |url| log.borrow_mut().push(url.to_string())));
+    opened.run(r"printf '\033]8;;https://example.com/x\033\\a-link\033]8;;\033\\ plain\n'");
+    opened.wait("the link", |text| {
+        text.lines().any(|line| line == "a-link plain")
+    });
+    let row = opened.row_of("a-link plain");
+    let meta = keyboard_types::Modifiers::META;
+
+    // On the link, with the key: opened, and nothing selected.
+    let (x, y) = opened.cell(row, 2);
+    pointer(&opened.app, x, y, Pointer::Move);
+    press_with(&opened.app, x, y, MouseEventButton::Main, meta);
+    assert_eq!(*opened_urls.borrow(), ["https://example.com/x"]);
+    // Beside the link, or without the key: not.
+    let (x, y) = opened.cell(row, 9);
+    pointer(&opened.app, x, y, Pointer::Move);
+    press_with(&opened.app, x, y, MouseEventButton::Main, meta);
+    let (x, y) = opened.cell(row, 2);
+    pointer(&opened.app, x, y, Pointer::Move);
+    press_with(
+        &opened.app,
+        x,
+        y,
+        MouseEventButton::Main,
+        Default::default(),
+    );
+    assert_eq!(opened_urls.borrow().len(), 1);
+}
+
+#[test]
+fn a_selection_is_the_primary_selection_and_the_middle_button_pastes_it() {
+    use std::sync::Mutex;
+
+    use horizon_ui::blitz_traits::events::MouseEventButton;
+
+    static SET: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static ASKED: Mutex<usize> = Mutex::new(0);
+    horizon_blitz::primary::connect(
+        |text| SET.lock().unwrap().push(text),
+        || *ASKED.lock().unwrap() += 1,
+    );
+
+    let opened = open();
+    opened.run("echo select-me-please");
+    opened.wait("the line", |text| {
+        text.lines().any(|line| line == "select-me-please")
+    });
+    let row = opened.row_of("select-me-please");
+    let (x, y) = opened.cell(row, 0);
+    pointer(&opened.app, x, y, Pointer::Move);
+    pointer(&opened.app, x, y, Pointer::Down);
+    let (x, y) = opened.cell(row, 5);
+    pointer(&opened.app, x, y, Pointer::Drag);
+    pointer(&opened.app, x, y, Pointer::Up);
+    let started = Instant::now();
+    while SET.lock().unwrap().last().map(String::as_str) != Some("select") {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "not the primary selection: {:?}",
+            SET.lock().unwrap()
+        );
+        opened.app.resolve();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    press_with(
+        &opened.app,
+        x,
+        y,
+        MouseEventButton::Auxiliary,
+        Default::default(),
+    );
+    assert_eq!(*ASKED.lock().unwrap(), 1);
+}

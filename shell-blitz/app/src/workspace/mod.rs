@@ -530,6 +530,7 @@ impl Shell {
                     }
                     let look = self.theme.with_untracked(Theme::terminal);
                     let (root, view) = terminal::view(session, look);
+                    view.on_open_url(kept.open_url.clone());
                     terminal = Some((session_id, view));
                     root
                 }

@@ -67,6 +67,23 @@ impl<Rend: WindowRenderer> BlitzApplication<Rend> {
                     self.pending_clipboard.insert(serial, window_id);
                 }
             }
+            BlitzShellEvent::SetPrimaryText { text } => {
+                if let Some(primary) = event_loop.primary_selection_ext() {
+                    let data = DataTransferSendBuilder::new(text)
+                        .with_type(TypeHint::Plaintext, |text, _| Some(text.clone()))
+                        .build();
+                    let _ = primary.set_primary_selection(data);
+                }
+            }
+            BlitzShellEvent::RequestPrimaryText { window_id } => {
+                // What arrives is handed over as the clipboard's is: a paste.
+                if let Some(primary) = event_loop.primary_selection_ext()
+                    && let Ok(Some(id)) = primary.primary_selection()
+                    && let Ok(serial) = event_loop.fetch_data_transfer(id, &TypeHint::Plaintext)
+                {
+                    self.pending_clipboard.insert(serial, window_id);
+                }
+            }
             BlitzShellEvent::Poll { window_id } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
                     window.poll();

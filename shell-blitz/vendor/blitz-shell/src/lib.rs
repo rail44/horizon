@@ -84,6 +84,34 @@ pub fn current_android_app() -> android_activity::AndroidApp {
     ANDROID_APP.get().unwrap().clone()
 }
 
+thread_local! {
+    /// The window the primary selection is reached through: the last made.
+    static PRIMARY: std::cell::RefCell<Option<(BlitzShellProxy, winit::window::WindowId)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Added to upstream's blitz-shell: makes `text` the primary selection,
+/// where the desktop has one.
+pub fn set_primary_selection_text(text: String) {
+    PRIMARY.with(|primary| {
+        if let Some((proxy, _)) = primary.borrow().as_ref() {
+            proxy.send_event(BlitzShellEvent::SetPrimaryText { text });
+        }
+    });
+}
+
+/// Added to upstream's blitz-shell: asks for the primary selection, which
+/// arrives at the document as a paste.
+pub fn request_primary_selection_text() {
+    PRIMARY.with(|primary| {
+        if let Some((proxy, window_id)) = primary.borrow().as_ref() {
+            proxy.send_event(BlitzShellEvent::RequestPrimaryText {
+                window_id: *window_id,
+            });
+        }
+    });
+}
+
 pub struct BlitzShellProvider {
     window: Arc<dyn Window>,
     proxy: BlitzShellProxy,
@@ -91,6 +119,7 @@ pub struct BlitzShellProvider {
 }
 impl BlitzShellProvider {
     pub fn new(window: Arc<dyn Window>, proxy: BlitzShellProxy, doc_id: usize) -> Self {
+        PRIMARY.with(|primary| *primary.borrow_mut() = Some((proxy.clone(), window.id())));
         Self {
             window,
             proxy,

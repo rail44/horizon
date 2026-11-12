@@ -25,6 +25,8 @@ pub mod paths;
 #[cfg(not(target_family = "wasm"))]
 pub mod preview;
 #[cfg(not(target_family = "wasm"))]
+pub mod primary;
+#[cfg(not(target_family = "wasm"))]
 pub mod restore;
 #[cfg(not(target_family = "wasm"))]
 pub mod terminal;

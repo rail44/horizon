@@ -129,6 +129,10 @@ fn main() {
     // The layer lays the document out for each frame.
     blitz_shell::set_frame(horizon_ui::frame);
     blitz_shell::set_window_focused(window::set_active);
+    horizon_blitz::primary::connect(
+        blitz_shell::set_primary_selection_text,
+        blitz_shell::request_primary_selection_text,
+    );
     let event_loop = create_default_event_loop();
     let (proxy, events) = BlitzShellProxy::new(event_loop.create_proxy());
     let mut application = BlitzApplication::new(proxy, events);
