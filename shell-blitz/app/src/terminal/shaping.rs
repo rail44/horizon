@@ -2,6 +2,7 @@
 //! that have a background, and the shaping of it.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::ops::Range;
 
 use parley::{FontContext, FontFamily, Layout, LayoutContext, PositionedLayoutItem, StyleProperty};
@@ -18,8 +19,13 @@ pub(super) struct Row {
     pub(super) backgrounds: Vec<(Range<usize>, [u8; 3])>,
 }
 
+thread_local! {
+    /// The system's fonts, read once for every terminal: reading them
+    /// takes a tenth of a second.
+    static FONTS: RefCell<FontContext> = RefCell::new(FontContext::new());
+}
+
 pub(super) struct Shaper {
-    fonts: FontContext,
     layouts: LayoutContext<Ink>,
     /// The font stack, as CSS writes one, and the size in CSS pixels.
     family: String,
@@ -29,7 +35,6 @@ pub(super) struct Shaper {
 impl Shaper {
     pub(super) fn with_font(family: &str, size: f32) -> Self {
         Self {
-            fonts: FontContext::new(),
             layouts: LayoutContext::new(),
             family: family.to_string(),
             size,
@@ -37,15 +42,15 @@ impl Shaper {
     }
 
     pub(super) fn shape(&mut self, row: &Row, scale: f32) -> Layout<Ink> {
-        let mut builder = self
-            .layouts
-            .ranged_builder(&mut self.fonts, &row.text, scale, true);
-        builder.push_default(FontFamily::Source(Cow::Borrowed(&self.family)));
-        builder.push_default(StyleProperty::FontSize(self.size));
-        for (range, ink) in &row.colors {
-            builder.push(StyleProperty::Brush(*ink), range.clone());
-        }
-        let mut layout = builder.build(&row.text);
+        let mut layout = FONTS.with_borrow_mut(|fonts| {
+            let mut builder = (self.layouts).ranged_builder(fonts, &row.text, scale, true);
+            builder.push_default(FontFamily::Source(Cow::Borrowed(&self.family)));
+            builder.push_default(StyleProperty::FontSize(self.size));
+            for (range, ink) in &row.colors {
+                builder.push(StyleProperty::Brush(*ink), range.clone());
+            }
+            builder.build(&row.text)
+        });
         layout.break_all_lines(None);
         layout
     }
