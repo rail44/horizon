@@ -132,8 +132,15 @@ impl Terminal {
         let row = |line: &TerminalLine| {
             let mut row = String::new();
             for span in &line.spans {
-                let width: usize = span.text.chars().filter_map(|c| c.width()).sum();
-                row += &span.text;
+                // A tab's cell holds the tab: a blank on the screen.
+                let shown: String = (span.text.chars())
+                    .map(|character| match character.is_control() {
+                        true => ' ',
+                        false => character,
+                    })
+                    .collect();
+                let width: usize = shown.chars().filter_map(|c| c.width()).sum();
+                row += &shown;
                 row += &" ".repeat(span.columns.saturating_sub(width));
             }
             row.trim_end().to_string()
@@ -429,6 +436,9 @@ pub fn view(session: Session) -> (El, Terminal) {
             let turned = wheeled.wheel.get() + turned;
             let lines = turned.trunc();
             wheeled.wheel.set(turned - lines);
+            if std::env::var_os("SPIKE_TRACE").is_some() {
+                eprintln!("wheel {:?} -> {lines} rows", wheel.delta);
+            }
             if lines != 0. {
                 wheeled
                     .session
@@ -519,6 +529,12 @@ fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32) -> Shaped {
     for span in &line.spans {
         let start = text.len();
         for character in span.text.chars() {
+            // A cell a tab was written to holds the tab itself: one blank
+            // cell on the screen, and no glyph in any font.
+            let character = match character.is_control() {
+                true => ' ',
+                false => character,
+            };
             columns.push((text.len(), column));
             text.push(character);
             column += character.width().unwrap_or(0);

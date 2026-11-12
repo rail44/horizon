@@ -328,3 +328,14 @@ fn the_view_knows_when_the_shell_has_gone() {
         std::thread::sleep(Duration::from_millis(5));
     }
 }
+
+#[test]
+fn a_tab_is_a_blank_cell_and_what_follows_it_is_at_the_tab_stop() {
+    let opened = open();
+    opened.run("printf 'a\\tb\\n'");
+    let text = opened.wait("the line", |text| {
+        text.lines().any(|line| line.starts_with("a "))
+    });
+    assert!(text.lines().any(|line| line == "a       b"), "{text}");
+    assert!(!text.contains('\t'), "{text}");
+}
