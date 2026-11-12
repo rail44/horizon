@@ -1,12 +1,14 @@
 //! What the control plane asks of the shell: the external commands this
-//! shell carries out so far, and the two queries.
+//! shell carries out so far (terminals, agents, sessions), and the two
+//! queries.
 
 use horizon_control::contract::{EnvelopeBody, Query, SessionEntry, Sessions, State};
 use horizon_control::host::executor::{ControlRequest, error_body};
+use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::control_invoke::{self, Command};
 use horizon_ui::reactive_graph::traits::WithUntracked;
 use horizon_workspace::commands::{CommandId, core_commands};
-use horizon_workspace::{PaneKind, SessionKind};
+use horizon_workspace::{SessionId, SessionKind};
 
 use super::commands::CARRIED_OUT;
 use super::{Shell, Start};
@@ -28,37 +30,44 @@ impl Shell {
         let done = Ok(EnvelopeBody::Ok { session_id: None });
         match command {
             Command::NewSession {
-                kind: SessionKind::Terminal,
+                kind,
+                role_id,
                 split,
                 issuer,
                 activate,
-                ..
+                prompt,
             } => {
                 let kept = self.kept();
+                if kind == SessionKind::Agent && kept.spawn_agent.is_none() {
+                    return Err(NOT_YET.to_string());
+                }
                 let mut made = None;
                 self.model_changed(|model| {
-                    made =
-                        match split {
-                            Some((target, axis)) => model.split_session_with_new_session(
-                                target,
-                                SessionKind::Terminal,
-                                axis,
-                                activate,
-                            ),
-                            None => Some(model.open_tab_with_new_session_activated(
-                                SessionKind::Terminal,
-                                activate,
-                            )),
+                    made = match split {
+                        Some((target, axis)) => {
+                            model.split_session_with_new_session(target, kind, axis, activate)
+                        }
+                        None => Some(model.open_tab_with_new_session_activated(kind, activate)),
+                    };
+                    // It starts where the session split, or else the one
+                    // that asked, is.
+                    if let Some(made) = made {
+                        let start = Start {
+                            from: split.map(|(target, _)| target).or(issuer),
+                            directory: None,
+                            role: role_id,
                         };
-                    // Its shell starts where the session split, or else
-                    // the one that asked, is: if that is a terminal.
-                    let from = (split.map(|(target, _)| target).or(issuer))
-                        .filter(|from| model.session_pane_kind(*from) == Some(PaneKind::Terminal));
-                    if let (Some(made), Some(from)) = (made, from) {
-                        (kept.starting.borrow_mut()).insert(made, Start::Beside(from));
+                        kept.starting.borrow_mut().insert(made, start);
                     }
                 });
+                // (The pane, and the session with it, exist from here.)
+                self.reconcile();
                 let made = made.ok_or("unknown split target session")?;
+                if let Some(text) = prompt
+                    && let Some(session) = kept.agents.borrow().get(&made)
+                {
+                    session.send(AgentCommand::Prompt { text });
+                }
                 if activate {
                     self.focus_active();
                 }
@@ -97,8 +106,31 @@ impl Shell {
                 self.execute(command);
                 done
             }
+            Command::Approve {
+                session_id,
+                identity,
+            } => self.tell(session_id, AgentCommand::Approve { identity }),
+            Command::Deny {
+                session_id,
+                identity,
+                reason,
+            } => self.tell(session_id, AgentCommand::Deny { identity, reason }),
+            Command::CancelTurn(session) => self.tell(session, AgentCommand::Cancel),
+            Command::ContinueTurn(session) => self.tell(session, AgentCommand::ContinueTurn),
+            Command::Send { session_id, text } => {
+                self.tell(session_id, AgentCommand::Prompt { text })
+            }
             _ => Err(NOT_YET.to_string()),
         }
+    }
+
+    /// Sends an agent session a command.
+    fn tell(&self, session: SessionId, command: AgentCommand) -> Result<EnvelopeBody, String> {
+        let kept = self.kept();
+        let agents = kept.agents.borrow();
+        let session = agents.get(&session).ok_or("unknown session")?;
+        session.send(command);
+        Ok(EnvelopeBody::Ok { session_id: None })
     }
 
     fn query(&self, query: &Query) -> EnvelopeBody {

@@ -1,17 +1,18 @@
 //! Horizon's shell on Blitz.
 //!
-//! So far the workspace with terminals in its panes, sessions of this
-//! shell's own `horizon-terminald`, in this machine's theme, kept between
-//! runs in a file of this shell's own. The other
+//! So far the workspace with terminals and agents in its panes, sessions
+//! of this shell's own `horizon-terminald` and `horizon-agentd`, in this
+//! machine's theme, kept between runs in a file of this shell's own. The other
 //! views arrive in the order of `docs/ui-foundation-migration-design.md`.
-//! The terminal daemon is the root workspace's: build it there first
+//! The daemons are the root workspace's: build them there first
 //! (`cargo build --workspace` at the repository's root).
 
 use std::cell::Cell;
 
 use anyrender_vello::VelloWindowRenderer;
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
-use horizon_blitz::paths::{daemon_binary, runtime_dir, workspace_state};
+use horizon_blitz::agentd::Agentd;
+use horizon_blitz::paths::{daemon_binary, data_home, runtime_dir, workspace_state};
 use horizon_blitz::terminal::Session;
 use horizon_blitz::{control, restore, workspace};
 use horizon_shell_runtime::TerminaldHandle;
@@ -25,12 +26,28 @@ fn main() {
     let sockets = runtime_dir();
     std::fs::create_dir_all(&sockets).expect("the runtime directory");
     let exe = std::env::current_exe().expect("this binary's path");
-    if std::env::var_os("HORIZON_TERMINALD_BINARY").is_none()
-        && let Some(binary) = daemon_binary("horizon-terminald", &exe)
-    {
-        // SAFETY: nothing else runs yet; no other thread reads the
-        // environment while this writes it.
-        unsafe { std::env::set_var("HORIZON_TERMINALD_BINARY", binary) };
+    // What the daemons this shell starts inherit: their binaries, and
+    // places of their own for what they keep. The agent sessions' log and
+    // projection are under the data home unless named, so they are not
+    // named.
+    // SAFETY: nothing else runs yet; no other thread reads the environment
+    // while this writes it.
+    unsafe {
+        for (name, variable) in [
+            ("horizon-terminald", "HORIZON_TERMINALD_BINARY"),
+            ("horizon-agentd", "HORIZON_AGENTD_BINARY"),
+            ("horizon-logd", "HORIZON_LOGD_BINARY"),
+        ] {
+            if std::env::var_os(variable).is_none()
+                && let Some(binary) = daemon_binary(name, &exe)
+            {
+                std::env::set_var(variable, binary);
+            }
+        }
+        std::env::set_var("HORIZON_DATA_HOME", data_home());
+        std::env::set_var("HORIZON_LOGD_SOCKET", sockets.join("logd.sock"));
+        std::env::remove_var("HORIZON_AGENT_EVENT_LOG");
+        std::env::remove_var("HORIZON_AGENT_STATE_DB");
     }
 
     // The socket a pane's `horizon` command reaches is this shell's own,
@@ -38,11 +55,13 @@ fn main() {
     let control_socket = sockets.join("control.sock");
     let requests = control::listen(control_socket.clone());
     let terminald = TerminaldHandle::start(&sockets.join("terminald.sock"), &control_socket);
+    let agentd = Agentd::start(&sockets.join("agentd.sock"), &control_socket);
     let store = WorkspaceStateStore::new(workspace_state());
     let opening = workspace::Opening {
         config: horizon_config::load().clone(),
         reload: Some(Box::new(horizon_config::reload)),
-        ..restore::opening(store, &terminald)
+        agents: Some(agentd.spawn()),
+        ..restore::opening(store, &terminald, Some(&agentd))
     };
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let directory = (std::env::current_dir().ok().or(home)).unwrap_or_else(|| "/".into());
@@ -70,13 +89,15 @@ fn main() {
         root
     });
     // A frame from a session wakes the window to draw it, and so does
-    // something asked over the control plane, which is answered here.
+    // something asked over the control plane or by the agent daemon,
+    // which is answered here.
     let (shell, woken) = (shell.expect("the shell"), Cell::new(false));
     app.on_poll(move |waker| {
         if !woken.replace(true) {
             shell.set_waker(waker.clone());
         }
         requests.answer(waker, &shell);
+        agentd.answer(waker, &shell);
     });
 
     // The layer lays the document out for each frame.

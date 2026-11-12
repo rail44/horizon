@@ -6,11 +6,11 @@ use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
 use horizon_ui::reactive_graph::traits::{GetUntracked, WithUntracked};
 use horizon_ui::{prevent_default, stop_propagation};
 use horizon_workspace::commands::CommandId;
-use horizon_workspace::{Direction, Workspace};
+use horizon_workspace::{Direction, SessionKind, Workspace};
 use keyboard_types::{Key, NamedKey};
 
 use super::keymap::Bound;
-use super::{Modal, Shell};
+use super::{Modal, Placement, Shell};
 
 /// A key on its way in to the view with the focus.
 pub(super) fn pressed(shell: Shell, event: &DomEvent) {
@@ -65,6 +65,9 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
             "l" => step(Direction::Right),
             "t" => shell.execute(CommandId::NewTab),
             "s" => shell.execute(CommandId::SplitRight),
+            "a" if kept.spawn_agent.is_some() => {
+                shell.create(SessionKind::Agent, None, Placement::NewTab);
+            }
             "x" => shell.close_pane(),
             ":" => shell.open(Modal::Palette),
             _ => {}

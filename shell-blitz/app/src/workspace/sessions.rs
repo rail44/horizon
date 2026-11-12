@@ -125,7 +125,7 @@ impl Shell {
         self.change(|model| {
             model.exit_workspace_mode();
             let session = model.open_tab_with_new_session_activated(SessionKind::Terminal, true);
-            (kept.starting.borrow_mut()).insert(session, super::Start::In(directory));
+            (kept.starting.borrow_mut()).insert(session, super::Start::within(directory));
         });
     }
 }

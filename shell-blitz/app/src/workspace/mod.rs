@@ -7,8 +7,8 @@
 //! pane, and lives until the model lets the pane go. Splitting, closing,
 //! resizing and changing tab change only the boxes around it.
 //!
-//! So far a pane shows a terminal. Creating one goes straight to a
-//! terminal, where the GPUI shell asks which view first.
+//! So far a pane shows a terminal or an agent. Creating one asks which,
+//! when there is an agent runtime to start one with.
 //!
 //! Closing a pane lets go of its view and keeps its session, which the
 //! session manager lists and puts back in a pane; a session ends when it
@@ -20,7 +20,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::task::Waker;
 
+use horizon_agent::roles::RoleId;
 use horizon_config::RawConfig;
+use horizon_shell_runtime::AgentCommand;
 use horizon_terminal_core::{TerminalCommand, TerminalUpdate};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::reactive_graph::computed::Memo;
@@ -32,11 +34,13 @@ use horizon_ui::reactive_graph::traits::{
 };
 use horizon_ui::{El, each_layout, el, relayout, stop_propagation};
 use horizon_workspace::types::TabSummary;
-use horizon_workspace::{PaneId, PaneKind, SessionId, Workspace};
+use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, Workspace};
 
+use crate::agent::{self, Agent, AgentSession};
 use crate::terminal::{self, Session, Terminal};
 
 mod arrangement;
+mod chooser;
 mod commands;
 mod control;
 mod keymap;
@@ -118,18 +122,19 @@ pub const CSS: &str = "
 /// The page's style sheet with the theme's, this view's and those of the
 /// views its panes show.
 pub fn css() -> String {
-    [horizon_theme_css::CSS, CSS, terminal::CSS].concat()
+    [horizon_theme_css::CSS, CSS, terminal::CSS, agent::CSS].concat()
 }
 
 pub use keymap::Keymap;
 
-/// A terminal session the model has just made, to start: its shell
-/// begins where the session it was made from is, or in a directory named
-/// for it.
+/// A session the model has just made, to start. A terminal's shell
+/// begins where the terminal it was made from is, or in a directory named
+/// for it; an agent works in the directory named, in the role named.
 pub struct Starting {
     pub session: SessionId,
     pub from: Option<SessionId>,
     pub directory: Option<PathBuf>,
+    pub role: Option<RoleId>,
 }
 
 /// The font sizes the font-size commands stay within, as the GPUI shell's
@@ -139,6 +144,9 @@ const MAX_FONT_SIZE: f32 = 40.;
 
 /// Starts a terminal session.
 pub type Spawn = Box<dyn Fn(Starting) -> Session>;
+
+/// Starts an agent session.
+pub type SpawnAgent = Box<dyn Fn(Starting) -> AgentSession>;
 
 /// Keeps the model for the next run.
 pub type Save = Box<dyn FnMut(&Workspace)>;
@@ -155,6 +163,10 @@ pub struct Opening {
     pub model: Workspace,
     /// The sessions of `model` that are running already.
     pub sessions: Vec<(SessionId, Session)>,
+    pub agent_sessions: Vec<(SessionId, AgentSession)>,
+    /// What starts an agent session: without it this shell has terminals
+    /// only.
+    pub agents: Option<SpawnAgent>,
     /// Told the model whenever it has changed, to keep it for the next
     /// run.
     pub save: Option<Save>,
@@ -168,15 +180,37 @@ impl Default for Opening {
             reload: None,
             model: Workspace::mvp(),
             sessions: Vec::new(),
+            agent_sessions: Vec::new(),
+            agents: None,
             save: None,
         }
     }
 }
 
-/// Where a session not yet started is to begin.
-enum Start {
-    Beside(SessionId),
-    In(PathBuf),
+/// How a session not yet started is to begin.
+#[derive(Default)]
+struct Start {
+    /// The session it was made from.
+    from: Option<SessionId>,
+    directory: Option<PathBuf>,
+    role: Option<RoleId>,
+}
+
+impl Start {
+    fn within(directory: PathBuf) -> Self {
+        Self {
+            directory: Some(directory),
+            ..Self::default()
+        }
+    }
+}
+
+/// Where a new pane goes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Placement {
+    NewTab,
+    SplitRight,
+    SplitDown,
 }
 
 /// The list over everything, when one is open.
@@ -184,6 +218,8 @@ enum Start {
 pub enum Modal {
     Palette,
     Sessions,
+    /// Which view the new pane at this place shows.
+    Chooser(Placement),
 }
 
 /// A pane on the page.
@@ -192,6 +228,7 @@ struct PaneView {
     /// What the pane's view made: effects that end with the pane.
     owner: Owner,
     terminal: Option<(SessionId, Terminal)>,
+    agent: Option<Agent>,
 }
 
 /// What the shell keeps beside the model.
@@ -200,7 +237,9 @@ struct Kept {
     /// The sessions of the model, whether a pane shows them or not:
     /// closing a pane lets go of its view and keeps its session.
     sessions: RefCell<HashMap<SessionId, Rc<Session>>>,
-    /// Where the sessions made and not yet started are to begin.
+    agents: RefCell<HashMap<SessionId, Rc<AgentSession>>>,
+    spawn_agent: Option<SpawnAgent>,
+    /// How the sessions made and not yet started are to begin.
     starting: RefCell<HashMap<SessionId, Start>>,
     keymap: RefCell<Keymap>,
     spawn: Spawn,
@@ -266,7 +305,11 @@ impl Shell {
         let kept = self.kept();
         let (panes, sessions) = self.model.with_untracked(|model| {
             let panes: Vec<_> = (model.all_pane_ids().into_iter())
-                .filter_map(|id| Some((id, model.pane_kind(id)?, model.terminal_session_id(id))))
+                .filter_map(|id| {
+                    let session =
+                        (model.terminal_session_id(id)).or_else(|| model.agent_session_id(id));
+                    Some((id, model.pane_kind(id)?, session))
+                })
                 .collect();
             let sessions: HashSet<SessionId> = (model.session_summaries().iter())
                 .map(|session| session.id)
@@ -277,6 +320,13 @@ impl Shell {
             let known = sessions.contains(id);
             if !known {
                 session.send(TerminalCommand::Shutdown);
+            }
+            known
+        });
+        kept.agents.borrow_mut().retain(|id, session| {
+            let known = sessions.contains(id);
+            if !known {
+                session.send(AgentCommand::Close);
             }
             known
         });
@@ -302,31 +352,70 @@ impl Shell {
     fn pane(&self, id: PaneId, kind: PaneKind, session: Option<SessionId>) -> PaneView {
         let (shell, kept) = (*self, self.kept());
         let owner = kept.owner.child();
-        let mut terminal = None;
+        let (mut terminal, mut agent) = (None, None);
+        let start = |session| {
+            kept.starting
+                .borrow_mut()
+                .remove(&session)
+                .unwrap_or_default()
+        };
         let element = owner.with(|| {
-            let content = match (kind, session) {
-                (PaneKind::Terminal, Some(session_id)) => {
-                    let session = (kept.sessions.borrow_mut().entry(session_id))
-                        .or_insert_with(|| {
-                            let start = kept.starting.borrow_mut().remove(&session_id);
-                            let (from, directory) = match start {
-                                Some(Start::Beside(from)) => (Some(from), None),
-                                Some(Start::In(directory)) => (None, Some(directory)),
-                                None => (None, None),
-                            };
-                            Rc::new((kept.spawn)(Starting {
-                                session: session_id,
-                                from,
-                                directory,
-                            }))
-                        })
-                        .clone();
+            let content = match (kind, session, &kept.spawn_agent) {
+                (PaneKind::Terminal, Some(session_id), _) => {
+                    let running = kept.sessions.borrow().get(&session_id).cloned();
+                    let session = running.unwrap_or_else(|| {
+                        let start = start(session_id);
+                        // The terminal runtime knows its own sessions only.
+                        let from =
+                            (start.from).filter(|from| kept.sessions.borrow().contains_key(from));
+                        let session = Rc::new((kept.spawn)(Starting {
+                            session: session_id,
+                            from,
+                            directory: start.directory,
+                            role: None,
+                        }));
+                        (kept.sessions.borrow_mut()).insert(session_id, session.clone());
+                        session
+                    });
                     if let Some(waker) = kept.waker.borrow().clone() {
                         session.set_waker(waker);
                     }
                     let look = self.theme.with_untracked(Theme::terminal);
                     let (root, view) = terminal::view(session, look);
                     terminal = Some((session_id, view));
+                    root
+                }
+                (PaneKind::Agent, Some(session_id), Some(spawn)) => {
+                    let running = kept.agents.borrow().get(&session_id).cloned();
+                    let session = running.unwrap_or_else(|| {
+                        let start = start(session_id);
+                        // It works where the session it was made from is.
+                        let directory = start.directory.or_else(|| {
+                            let from = start.from?;
+                            (self.model).with_untracked(|model| {
+                                model.session_directory(from).map(PathBuf::from)
+                            })
+                        });
+                        let directory = directory.or_else(|| std::env::current_dir().ok());
+                        let session = Rc::new(spawn(Starting {
+                            session: session_id,
+                            from: start.from,
+                            directory: directory.clone(),
+                            role: start.role,
+                        }));
+                        (kept.agents.borrow_mut()).insert(session_id, session.clone());
+                        if let Some(directory) = directory {
+                            self.model.update(|model| {
+                                model.set_session_directory(session_id, directory);
+                            });
+                        }
+                        session
+                    });
+                    if let Some(waker) = kept.waker.borrow().clone() {
+                        session.set_waker(waker);
+                    }
+                    let (root, view) = agent::live(session, || {});
+                    agent = Some(view);
                     root
                 }
                 _ => el("div")
@@ -353,6 +442,7 @@ impl Shell {
             element,
             owner,
             terminal,
+            agent,
         }
     }
 
@@ -452,13 +542,62 @@ impl Shell {
         relayout();
     }
 
-    /// Who the terminals wake when their shells have printed.
+    /// Who the sessions wake when they have something to draw.
     pub fn set_waker(&self, waker: Waker) {
         let kept = self.kept();
         for session in kept.sessions.borrow().values() {
             session.set_waker(waker.clone());
         }
+        for session in kept.agents.borrow().values() {
+            session.set_waker(waker.clone());
+        }
         *kept.waker.borrow_mut() = Some(waker);
+    }
+
+    /// A new pane at `placement` over a new session of `kind`, with the
+    /// focus. A split is of the active session's pane.
+    fn create(&self, kind: SessionKind, role: Option<RoleId>, placement: Placement) {
+        let kept = self.kept();
+        self.change(|model| {
+            let from = model.active_session_id();
+            let split = |model: &mut Workspace, axis| {
+                model.split_session_with_new_session(from?, kind, axis, true)
+            };
+            let made = match placement {
+                Placement::NewTab => Some(model.open_tab_with_new_session_activated(kind, true)),
+                Placement::SplitRight => split(model, SplitAxis::Horizontal),
+                Placement::SplitDown => split(model, SplitAxis::Vertical),
+            };
+            model.exit_workspace_mode();
+            if let Some(made) = made {
+                let start = Start {
+                    from,
+                    directory: None,
+                    role,
+                };
+                kept.starting.borrow_mut().insert(made, start);
+            }
+        });
+    }
+
+    /// A new pane at `placement`: of the view chosen, when there is more
+    /// than terminals to choose from.
+    fn place(&self, placement: Placement) {
+        match self.kept().spawn_agent {
+            Some(_) => self.open(Modal::Chooser(placement)),
+            None => self.create(SessionKind::Terminal, None, placement),
+        }
+    }
+
+    /// The agent session the commands act on: the cursor's.
+    fn active_agent(&self) -> Option<Rc<AgentSession>> {
+        let session = self.model.with_untracked(Workspace::active_session_id)?;
+        self.kept().agents.borrow().get(&session).cloned()
+    }
+
+    /// The agent view a pane shows.
+    pub fn agent(&self, pane: PaneId) -> Option<Agent> {
+        self.kept().panes.borrow().get(&pane)?.agent
     }
 
     /// The terminal a pane shows.
@@ -538,6 +677,9 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
     let sessions = (opening.sessions.into_iter())
         .map(|(id, session)| (id, Rc::new(session)))
         .collect();
+    let agents = (opening.agent_sessions.into_iter())
+        .map(|(id, session)| (id, Rc::new(session)))
+        .collect();
     let shell = Shell {
         model,
         theme: RwSignal::new(theme),
@@ -550,6 +692,8 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         kept: StoredValue::new_local(Rc::new(Kept {
             panes: RefCell::default(),
             sessions: RefCell::new(sessions),
+            agents: RefCell::new(agents),
+            spawn_agent: opening.agents,
             starting: RefCell::default(),
             keymap: RefCell::new(Keymap::from_config(&opening.config)),
             spawn,
@@ -616,6 +760,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             move |modal| match modal {
                 Modal::Palette => palette::view(shell),
                 Modal::Sessions => sessions::view(shell),
+                Modal::Chooser(placement) => chooser::view(shell, *placement),
             },
         );
     shell.focus_active();

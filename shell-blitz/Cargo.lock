@@ -2692,6 +2692,8 @@ dependencies = [
  "blitz-shell",
  "crossbeam-channel",
  "futures",
+ "horizon-acp",
+ "horizon-agent",
  "horizon-agent-display",
  "horizon-config",
  "horizon-control",

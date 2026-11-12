@@ -1,10 +1,13 @@
 //! What the shell opens with: the workspace kept from the last run, as
-//! far as the terminal runtime still has its sessions.
+//! far as the two runtimes still have its sessions.
 
 use horizon_shell_runtime::TerminaldHandle;
 use horizon_workspace::store::{InvalidState, LoadResult, WorkspaceStateStore};
-use horizon_workspace::{SessionId, SessionInventory, WORKSPACE_STATE_VERSION, Workspace};
+use horizon_workspace::{
+    SessionId, SessionInventory, SessionKind, WORKSPACE_STATE_VERSION, Workspace,
+};
 
+use crate::agentd::Agentd;
 use crate::terminal::Session;
 use crate::workspace::{Opening, Save};
 
@@ -53,12 +56,16 @@ fn kept(store: &mut WorkspaceStateStore) -> Kept {
     }
 }
 
-/// The workspace in `store` with the sessions `terminald` still runs
-/// attached to again, kept in `store` as it changes. A session the
+/// The workspace in `store` with the sessions the runtimes still run
+/// attached to again, kept in `store` as it changes. A session its
 /// runtime no longer has leaves the workspace with its pane, and one the
 /// workspace did not know arrives detached. With nothing kept, one new
-/// terminal.
-pub fn opening(mut store: WorkspaceStateStore, terminald: &TerminaldHandle) -> Opening {
+/// terminal. Without an agent runtime, the agent sessions leave.
+pub fn opening(
+    mut store: WorkspaceStateStore,
+    terminald: &TerminaldHandle,
+    agentd: Option<&Agentd>,
+) -> Opening {
     let save = |mut store: WorkspaceStateStore| -> Option<Save> {
         Some(Box::new(move |model| {
             let saved = (model.to_persisted_json().map_err(|error| error.to_string()))
@@ -94,16 +101,44 @@ pub fn opening(mut store: WorkspaceStateStore, terminald: &TerminaldHandle) -> O
     let running = (running.iter())
         .map(|terminal| SessionId::from_uuid(terminal.session_id))
         .collect();
-    // This shell has no agent runtime yet: an agent session kept by a
-    // later build of it would leave here.
-    if let Err(error) =
-        model.reconcile_session_inventory(&SessionInventory::new(running, Vec::new()))
-    {
+    let agents = match agentd.map(|agentd| agentd.handle.session_list()) {
+        Some(Ok(agents)) => agents,
+        Some(Err(error)) => return failed(error),
+        None => Vec::new(),
+    };
+    let inventory = SessionInventory::new(
+        running,
+        (agents.iter())
+            .map(|agent| SessionId::from_uuid(agent.session_id.as_uuid()))
+            .collect(),
+    );
+    if let Err(error) = model.reconcile_session_inventory(&inventory) {
         return failed(error.to_string());
     }
-    let known: Vec<SessionId> = (model.session_summaries().iter())
-        .map(|session| session.id)
-        .collect();
+    // What the daemon knows of each agent session: where it works, and
+    // what it was derived from.
+    for agent in agents {
+        let session = SessionId::from_uuid(agent.session_id.as_uuid());
+        if let Some(directory) = agent.workspace_root {
+            model.set_session_directory(session, directory);
+        }
+        if let Some(parent) = agent.parent_session_id {
+            model.set_session_parent(session, SessionId::from_uuid(parent.as_uuid()));
+        }
+    }
+    let of_kind = |model: &Workspace, kind: SessionKind| -> Vec<SessionId> {
+        (model.session_summaries().iter())
+            .filter(|session| session.kind == kind)
+            .map(|session| session.id)
+            .collect()
+    };
+    let agent_sessions = match agentd {
+        Some(agentd) => (of_kind(&model, SessionKind::Agent).into_iter())
+            .map(|session| (session, agentd.attach(session)))
+            .collect(),
+        None => Vec::new(),
+    };
+    let known = of_kind(&model, SessionKind::Terminal);
     let attached = terminald.attach_terminals(known.iter().map(|id| id.as_uuid()).collect());
     let sessions: Vec<(SessionId, Session)> = (attached.into_iter())
         .map(|(id, handle)| (SessionId::from_uuid(id), Session::attached(handle)))
@@ -117,6 +152,7 @@ pub fn opening(mut store: WorkspaceStateStore, terminald: &TerminaldHandle) -> O
     Opening {
         model,
         sessions,
+        agent_sessions,
         save: save(store),
         ..Opening::default()
     }

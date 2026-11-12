@@ -53,3 +53,20 @@ pub fn workspace_state() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir);
     base.join("horizon-blitz").join("workspace.json")
 }
+
+/// The data home of this shell's daemons (`HORIZON_DATA_HOME`: the agent
+/// sessions' log and projection, the knowledge store, the board's log,
+/// the wiki): `$HORIZON_BLITZ_DATA_HOME`, else `horizon-blitz` under
+/// `$XDG_DATA_HOME`, else under `~/.local/share`, else under the system's
+/// temporary directory. Never the GPUI shell's: two agent daemons would
+/// write the same files.
+pub fn data_home() -> PathBuf {
+    let set = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    if let Some(explicit) = set("HORIZON_BLITZ_DATA_HOME") {
+        return PathBuf::from(explicit);
+    }
+    let base = (set("XDG_DATA_HOME").map(PathBuf::from))
+        .or_else(|| set("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("horizon-blitz")
+}

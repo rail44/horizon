@@ -25,6 +25,12 @@ use horizon_agent_display::{
     Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };
 
+mod pane;
+mod session;
+
+pub use pane::live;
+pub use session::{AgentSession, Standing};
+
 const COMPOSER_MAX_ROWS: usize = 8;
 
 // Every rule sits under the view's own class: the page's style sheet is one

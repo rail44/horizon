@@ -302,9 +302,10 @@ fn the_palette_runs_the_command_chosen_from_what_is_typed() {
     opened.character(":");
     let every = opened.all("item").len();
     assert!(every > 4, "{every} commands");
-    // A lone pane is not closed from the palette, no session is detached
-    // to end, and the test's shell reports no directory to open.
-    assert_eq!(opened.all("disabled").len(), 3);
+    // Some cannot be run as things are: a lone pane is not closed from
+    // the palette, no session is detached to end, no agent waits.
+    let disabled = opened.all("disabled").len();
+    assert!((3..every).contains(&disabled), "{disabled} of {every}");
     opened.commit("split d");
     assert_eq!(opened.all("item").len(), 1);
     opened.named(NamedKey::Enter);

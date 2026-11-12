@@ -163,7 +163,11 @@ fn a_session_of_a_real_terminald_runs_what_is_typed_into_the_view() {
 /// The shell as its binary opens it: over what `state` keeps and the
 /// daemon still runs.
 fn open(daemon: &Daemon, terminald: &TerminaldHandle, state: &Path) -> (App, Shell) {
-    let opening = restore::opening(WorkspaceStateStore::new(state.to_path_buf()), terminald);
+    let opening = restore::opening(
+        WorkspaceStateStore::new(state.to_path_buf()),
+        terminald,
+        None,
+    );
     let (spawning, spec) = (terminald.clone(), daemon.spec());
     let spawn: workspace::Spawn = Box::new(move |starting| {
         Session::attached(spawning.start_terminal(starting.session.as_uuid(), spec.clone()))
