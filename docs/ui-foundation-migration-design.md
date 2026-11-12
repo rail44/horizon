@@ -125,8 +125,9 @@ The extension boundary comes after retirement.
 - The theme is read from `horizon-theme`. The spike read the GPUI shell's
   theme files in through a stand-in for gpui's color types.
 
-Still written out twice: the type scale. `shell-blitz/theme` repeats the
-table of `src/ui/spec.rs`, which is in gpui's units.
+The type scale, the tints and the font's defaults and bounds are
+`horizon-theme`'s `spec`, as plain numbers: `src/ui/spec.rs` puts them in
+gpui's units and `shell-blitz/theme` in CSS variables.
 
 ## Verification
 

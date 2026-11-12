@@ -19,10 +19,7 @@ use gpui::{font, Font, FontFallbacks};
 // resolved the way `fc-match` would resolve them, so only literal family
 // names (e.g. "DejaVu Sans Mono") actually work as stack entries; unknown
 // names are silently dropped rather than causing a resolution failure.
-#[cfg(target_os = "macos")]
-const DEFAULT_FONT_FAMILY: &str = "Menlo";
-#[cfg(not(target_os = "macos"))]
-const DEFAULT_FONT_FAMILY: &str = "DejaVu Sans Mono";
+use horizon_theme::spec::DEFAULT_FONT_FAMILY;
 
 /// Parse a comma-separated font stack into a `gpui::Font`: the first
 /// non-empty, trimmed entry becomes the primary family, any remaining
@@ -52,21 +49,14 @@ pub(crate) fn resolved_font() -> Font {
     .clone()
 }
 
-/// Built-in default for `[terminal] font_size`, documented (and drift-tested
-/// against) by `config.example.toml`'s active `font_size = 13.0` line -- see
-/// `src/theme/scheme.rs`'s `config_example_toml_matches_its_documented_defaults`.
-pub(crate) const DEFAULT_FONT_SIZE: f32 = 13.0;
-
-/// The px step `Increase Font Size`/`Decrease Font Size` move the live
-/// size by.
-pub(crate) const FONT_SIZE_STEP: f32 = 1.0;
-
-/// The smallest size the font-size commands can reach, in px -- below
-/// this the terminal grid is unreadable rather than merely small.
-pub(crate) const MIN_FONT_SIZE: f32 = 5.0;
-
-/// The largest size the font-size commands can reach, in px.
-pub(crate) const MAX_FONT_SIZE: f32 = 40.0;
+/// The font size's default, step and bounds are `horizon-theme`'s `spec`,
+/// shared with the Blitz shell. The default is documented (and
+/// drift-tested against) by `config.example.toml`'s active
+/// `font_size = 13.0` line -- see `src/theme/scheme.rs`'s
+/// `config_example_toml_matches_its_documented_defaults`.
+pub(crate) use horizon_theme::spec::{
+    DEFAULT_FONT_SIZE, FONT_SIZE_STEP, MAX_FONT_SIZE, MIN_FONT_SIZE,
+};
 
 /// The startup-configured font size: `[terminal] font_size`, or
 /// [`DEFAULT_FONT_SIZE`] when unset -- what [`reset_font_size`] restores

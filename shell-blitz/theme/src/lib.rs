@@ -1,25 +1,18 @@
 //! Horizon's theme and its type scale for the Blitz shell, as CSS
 //! variables.
 //!
-//! The colors are `horizon-theme`'s scheme for a config. The measurements
-//! are the table of the GPUI shell's `src/ui/spec.rs`, written out again
-//! here: that file is in gpui's units. A view's CSS names the variables; a
+//! The colors are `horizon-theme`'s scheme for a config, and the
+//! measurements its `spec`, which the GPUI shell draws to as well
+//! (`src/ui/spec.rs`). A view's CSS names the variables; a
 //! change of theme or of font size is a new set of them on the element the
 //! views are under.
 
 use horizon_config::RawConfig;
+use horizon_theme::spec::{
+    self, BAND_TINT, CHIP_TINT, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, SELECTION_TINT,
+};
 use horizon_theme::{palette, scheme};
 use horizon_ui::{El, el};
-
-/// `src/ui/spec.rs`: the body size its table is designed at.
-const REFERENCE_BODY: f32 = 14.;
-/// `src/ui/font.rs`: the size when the config sets none.
-const DEFAULT_FONT_SIZE: f32 = 13.;
-const DEFAULT_FONT_FAMILY: &str = "DejaVu Sans Mono";
-/// `src/ui/spec.rs`: the tints of a band, a selected row and a chip.
-const BAND_TINT: f32 = 0.03;
-const SELECTION_TINT: f32 = 0.07;
-const CHIP_TINT: f32 = 0.14;
 
 /// A terminal's colors, font and row height.
 #[derive(Clone, Debug)]
@@ -70,7 +63,7 @@ impl Theme {
     /// A measurement designed at the reference body size, at this size:
     /// `src/ui/spec.rs`'s `scaled`.
     pub fn scaled(&self, at_reference: f32) -> f32 {
-        (at_reference * self.font_size / REFERENCE_BODY).round()
+        spec::scaled(at_reference, self.font_size)
     }
 
     /// What a terminal takes of the theme.
@@ -150,17 +143,17 @@ impl Theme {
         color("on-accent", palette::primary_foreground_for(scheme.accent));
 
         // The type scale: a size and the line height that goes with it.
-        for (name, size, line) in [
-            ("t1", 17., 26.),
-            ("t2", 15., 24.),
-            ("body", REFERENCE_BODY, 26.),
-            ("meta", 12., 18.),
-            ("micro", 11., 16.),
+        for (name, step) in [
+            ("t1", spec::T1),
+            ("t2", spec::T2),
+            ("body", spec::BODY),
+            ("meta", spec::META),
+            ("micro", spec::MICRO),
         ] {
             out += &format!(
                 "--{name}-size: {}px; --{name}-line: {}px; ",
-                self.scaled(size),
-                self.scaled(line)
+                self.scaled(step.size),
+                self.scaled(step.line_height)
             );
         }
         // Lengths that scale with the type: `--u8` is 8 px at the

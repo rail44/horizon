@@ -9,6 +9,7 @@ pub mod palette;
 pub mod save;
 pub mod scheme;
 pub mod seed;
+pub mod spec;
 /// Config fixtures for theme tests, here and in the shells.
 pub mod test_support;
 pub mod warnings;

@@ -162,10 +162,7 @@ pub struct Starting {
     pub role: Option<RoleId>,
 }
 
-/// The font sizes the font-size commands stay within, as the GPUI shell's
-/// do (`src/ui/font.rs`).
-const MIN_FONT_SIZE: f32 = 5.;
-const MAX_FONT_SIZE: f32 = 40.;
+use horizon_theme::spec::{FONT_SIZE_STEP, MAX_FONT_SIZE, MIN_FONT_SIZE};
 
 /// What summarizes a first message into a title under `config`.
 fn summarizer(config: &RawConfig) -> Option<Arc<AuxiliaryClient>> {
@@ -1125,7 +1122,8 @@ impl Shell {
     /// spacing scale with it.
     fn step_font_size(&self, steps: f32) {
         self.theme.update(|theme| {
-            theme.font_size = (theme.font_size + steps).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+            theme.font_size =
+                (theme.font_size + steps * FONT_SIZE_STEP).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         });
     }
 

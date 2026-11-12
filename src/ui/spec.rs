@@ -14,8 +14,10 @@ use gpui::{px, FontWeight, Pixels};
 
 use crate::ui::font::font_size;
 
-/// The body size the table below is designed at.
-pub(crate) const REFERENCE_BODY: f32 = 14.0;
+/// The table itself, as plain numbers, is `horizon-theme`'s `spec`, shared
+/// with the Blitz shell.
+use horizon_theme::spec;
+pub(crate) use horizon_theme::spec::{BAND_TINT, CHIP_TINT, REFERENCE_BODY, SELECTION_TINT};
 
 /// How far the live font size is from the designed table.
 pub(crate) fn scale() -> f32 {
@@ -43,32 +45,32 @@ pub(crate) struct Step {
 }
 
 impl Step {
-    fn at(size: f32, line_height: f32, scale: f32) -> Self {
+    fn at(step: spec::Step, scale: f32) -> Self {
         Self {
-            size: scaled_at(size, scale),
-            line_height: scaled_at(line_height, scale),
+            size: scaled_at(step.size, scale),
+            line_height: scaled_at(step.line_height, scale),
         }
     }
 }
 
 fn t1_at(scale: f32) -> Step {
-    Step::at(17.0, 26.0, scale)
+    Step::at(spec::T1, scale)
 }
 
 fn t2_at(scale: f32) -> Step {
-    Step::at(15.0, 24.0, scale)
+    Step::at(spec::T2, scale)
 }
 
 fn body_at(scale: f32) -> Step {
-    Step::at(REFERENCE_BODY, 26.0, scale)
+    Step::at(spec::BODY, scale)
 }
 
 fn meta_at(scale: f32) -> Step {
-    Step::at(12.0, 18.0, scale)
+    Step::at(spec::META, scale)
 }
 
 fn micro_at(scale: f32) -> Step {
-    Step::at(11.0, 16.0, scale)
+    Step::at(spec::MICRO, scale)
 }
 
 /// A title: the task title on the board.
@@ -145,15 +147,6 @@ pub(crate) fn gap_composer() -> Pixels {
 // ---------------------------------------------------------------------------
 // Surfaces
 // ---------------------------------------------------------------------------
-
-/// The tint a header band and an owner reply sit on.
-pub(crate) const BAND_TINT: f32 = 0.03;
-
-/// A selected row's full-bleed tint.
-pub(crate) const SELECTION_TINT: f32 = 0.07;
-
-/// A status chip's tinted background.
-pub(crate) const CHIP_TINT: f32 = 0.14;
 
 /// A selected row's, and the cursored unit's, left accent bar.
 pub(crate) const ACCENT_BAR: Pixels = px(2.0);
