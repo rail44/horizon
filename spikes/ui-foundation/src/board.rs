@@ -27,26 +27,33 @@ const SLOP: f32 = 4.;
 pub const CSS: &str = "
     .board { position: relative; display: flex; flex-direction: column; height: 100%;
              min-width: 240px; outline: none; user-select: none;
-             font-family: sans-serif; font-size: 14px; line-height: 22px;
-             color: #202020; background: #fafafa;
-        .head { flex: none; padding: 8px 16px; border-bottom: 1px solid #d8d8d8;
-                font-size: 12px; line-height: 18px; color: #808080; }
-        .rows { flex: 1; min-height: 0; overflow-y: scroll; padding: 8px 0; }
-        .row { position: relative; display: flex; align-items: center; gap: 8px;
-               box-sizing: border-box; height: 28px; padding: 0 16px; border: 1px solid transparent;
-               cursor: pointer; }
-        .row.selected { background: #e9effd; border-color: #356df3; }
+             background: var(--background); color: var(--text);
+             font-family: var(--font-family); font-size: var(--body-size);
+             line-height: var(--body-line);
+        .head { flex: none; padding: var(--u8) var(--u16); font-size: var(--meta-size);
+                line-height: var(--meta-line); color: var(--text-muted);
+                border-bottom: 1px solid var(--border); }
+        .rows { flex: 1; min-height: 0; overflow-y: scroll; }
+        .row { position: relative; display: flex; align-items: center; gap: var(--u8);
+               box-sizing: border-box; height: 45px; padding: 0 var(--u16) 0 var(--u24);
+               border: 1px solid transparent; cursor: pointer; }
+        .row.selected { background: var(--selection); border-color: var(--accent); }
         .row.carried { opacity: 0.4; }
-        .title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
-        .chip { flex: none; padding: 0 4px; border-radius: 3px; font-size: 11px;
-                line-height: 16px; background: #ececec; color: #606060; }
+        .label { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+        .title { overflow: hidden; white-space: nowrap; line-height: 22px; }
+        .meta { font-size: var(--meta-size); line-height: var(--meta-line);
+                color: var(--text-muted); }
+        .chip { flex: none; padding: 0 var(--u4); border-radius: 2px;
+                font-size: var(--micro-size); line-height: var(--micro-line);
+                background: var(--chip-muted-surface); color: var(--chip-muted-text); }
+        .chip.review { background: var(--chip-info-surface); color: var(--chip-info-text); }
         .line { position: absolute; left: 8px; right: 8px; height: 2px;
-                background: #356df3; pointer-events: none; }
+                background: var(--accent); pointer-events: none; }
         .line.above { top: -2px; }
         .line.below { bottom: -2px; }
         .ghost { position: absolute; padding: 2px 8px; border-radius: 4px;
-                 background: #ffffff; border: 1px solid #356df3; white-space: nowrap;
-                 pointer-events: none; z-index: 10; }
+                 background: var(--background); border: 1px solid var(--accent);
+                 white-space: nowrap; pointer-events: none; z-index: 10; }
     }
 ";
 
@@ -127,8 +134,20 @@ pub fn view(tasks: Vec<Task>) -> (El, Board) {
                         pressed.set(Some((id, pointer.page_x(), pointer.page_y())));
                     }
                 })
-                .child(el("span").class("title").text(&task.title))
-                .child(el("span").class("chip").text(&task.status))
+                .child(
+                    el("div")
+                        .class("label")
+                        .child(el("div").class("title").text(&task.title))
+                        .child(el("div").class("meta").text("0 posts")),
+                )
+                .child(
+                    el("span")
+                        .class(match task.status.as_str() {
+                            "review" => "chip review",
+                            _ => "chip",
+                        })
+                        .text(&task.status),
+                )
                 .when(
                     move || state.indicator.get() == Some((id, Half::Above)),
                     || el("div").class("line above"),

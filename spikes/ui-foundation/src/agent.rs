@@ -14,7 +14,6 @@ use std::rc::Rc;
 
 use blitz_traits::events::DomEventData;
 use keyboard_types::{Key, NamedKey};
-use reactive_graph::effect::Effect;
 use reactive_graph::owner::{LocalStorage, StoredValue};
 use reactive_graph::signal::RwSignal;
 use reactive_graph::traits::{Get, GetUntracked, Set, Update, WithValue};
@@ -156,6 +155,7 @@ pub const CSS: &str = "
                           font-size: var(--meta-size); color: var(--text-muted); }
         .text code { font-family: var(--font-family); }
         .text :not(pre) > code { padding: 0 var(--u4); border-radius: 2px;
+                                 font-size: var(--meta-size);
                                  background: var(--surface-panel); }
         .link { color: var(--accent); }
     }
@@ -309,8 +309,7 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
     };
     match column {
         Column::Windowed => {
-            let built = windowed(state.column, units, key, unit, true);
-            Effect::new(move |_| state.built.set(built.get()));
+            windowed(state.column, units, key, unit, true, state.built);
         }
         Column::Whole => {
             state.column.each(units, key, unit);

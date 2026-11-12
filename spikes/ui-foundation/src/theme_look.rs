@@ -16,6 +16,20 @@ const BAND_TINT: f32 = 0.03;
 const SELECTION_TINT: f32 = 0.07;
 const CHIP_TINT: f32 = 0.14;
 
+/// A terminal's colors, font and row height.
+#[derive(Clone, Debug)]
+pub struct TerminalLook {
+    /// The sixteen colors a program names by number.
+    pub ansi: [[u8; 3]; 16],
+    pub foreground: [u8; 3],
+    pub background: [u8; 3],
+    pub cursor: [u8; 3],
+    pub selection: [u8; 3],
+    pub font_family: String,
+    pub font_size: f32,
+    pub line_height: f64,
+}
+
 #[derive(Clone)]
 pub struct Theme {
     scheme: scheme::Scheme,
@@ -49,16 +63,26 @@ impl Theme {
         (at_reference * self.font_size / REFERENCE_BODY).round()
     }
 
-    /// The terminal's sixteen colors, its foreground, background and
-    /// cursor.
-    pub fn terminal(&self) -> ([[u8; 3]; 16], [u8; 3], [u8; 3], [u8; 3]) {
+    /// What a terminal takes of the theme.
+    pub fn terminal(&self) -> TerminalLook {
         let rgb = |color: u32| [(color >> 16) as u8, (color >> 8) as u8, color as u8];
-        (
-            self.scheme.ansi.map(rgb),
-            rgb(self.scheme.foreground),
-            rgb(self.scheme.background),
-            rgb(self.scheme.cursor),
-        )
+        TerminalLook {
+            ansi: self.scheme.ansi.map(rgb),
+            foreground: rgb(self.scheme.foreground),
+            background: rgb(self.scheme.background),
+            cursor: rgb(self.scheme.cursor),
+            // `theme::terminal_selection` is the accent; it is drawn here
+            // as a tint of it, the text over it staying as it is.
+            selection: rgb(palette::blend(
+                self.scheme.background,
+                self.scheme.accent,
+                0.3,
+            )),
+            font_family: self.font_family.clone(),
+            font_size: self.font_size,
+            // `src/terminal/font.rs`: a row is 18 px at 13.
+            line_height: (self.font_size * 18. / 13.).round() as f64,
+        }
     }
 
     /// Every variable, as the declarations of a `style` attribute.
@@ -107,6 +131,11 @@ impl Theme {
                 palette::contrast_snap(tone, surface),
             );
         }
+        // The tab strip's track, and an unselected tab's label made
+        // readable on it (`src/theme/gpui_component.rs`).
+        let track = palette::blend(scheme.surface_chrome, scheme.surface_panel, 0.5);
+        color("tab-track", track);
+        color("tab-text", palette::contrast_snap(scheme.text_muted, track));
         // What is written on the accent itself: a primary button's label.
         color("on-accent", palette::primary_foreground_for(scheme.accent));
 

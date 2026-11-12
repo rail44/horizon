@@ -20,7 +20,7 @@ fn open() -> Opened {
     let mut workspace = None;
     let css = [theme::CSS, &css()].concat();
     let app = App::new(1200, 800, &css, || {
-        let (root, state) = view();
+        let (root, state) = view(Theme::built_in().terminal());
         workspace = Some(state);
         theme::themed(Theme::built_in, root)
     });
@@ -113,7 +113,8 @@ impl Opened {
         assert!(self.workspace.mode.get_untracked());
         self.character(":");
         assert!(self.workspace.palette.get_untracked());
-        assert!(!self.workspace.mode.get_untracked());
+        // The mode stays on under the palette, and ends with it.
+        assert!(self.workspace.mode.get_untracked());
     }
 
     /// Text as an input method commits it into the focused field.
@@ -183,7 +184,7 @@ fn four_views_share_a_page_each_under_its_own_rules() {
     // The views each have a `.chip`, `.title` or `.notice` of their own,
     // and each is laid out by its own view's rules: the board's rows and
     // the agent's field have the heights their views give them.
-    assert_eq!(opened.bounds(opened.all("row")[0]).3, 28.);
+    assert_eq!(opened.bounds(opened.all("row")[0]).3, 45.);
     assert_eq!(opened.bounds(opened.all("textarea")[0]).3, 24.);
     assert!(opened.bounds(opened.all("markdown")[0]).3 > 300.);
 }

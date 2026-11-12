@@ -32,35 +32,49 @@ const UNSUPPORTED_LINK: &str = "Not a Markdown file";
 // for all the views on it.
 pub const CSS: &str = "
     .markdown { display: flex; flex-direction: column; height: 100%; min-width: 240px;
-                outline: none; font-family: sans-serif; font-size: 14px;
-                line-height: 26px; color: #202020; background: #fafafa;
-        .header { flex: none; display: flex; flex-direction: column; gap: 8px;
-                  padding: 24px 16px 0 16px; }
-        .header:empty { display: none; }
+                outline: none; background: var(--background); color: var(--text);
+                font-family: var(--font-family); font-size: var(--body-size);
+                line-height: var(--body-line);
+        .header { flex: none; display: flex; flex-direction: column; gap: var(--u8);
+                  padding: 0 var(--u16); }
+        .header > :first-child { margin-top: var(--u24); }
         .body > :first-child { margin-top: 0; }
-        .back { align-self: flex-start; padding: 0 8px; border-radius: 4px; font-size: 12px;
-                line-height: 20px; color: #606060; cursor: pointer; }
-        .back:hover { background: #ececec; }
-        .title { font-size: 16px; line-height: 24px; font-weight: 600; }
-        .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-        .chip { padding: 0 4px; border-radius: 3px; background: #ececec; color: #606060;
-                font-size: 11px; line-height: 16px; }
-        .notice, .empty, .error { flex: none; padding: 8px 16px 0 16px; font-size: 12px;
-                                  line-height: 18px; color: #808080; }
-        .error { color: #c0392b; }
-        .scroll { flex: 1; min-height: 0; overflow-y: scroll; padding: 24px 16px 32px 16px; }
-        .scroll h1, .scroll h2, .scroll h3 { font-size: 14px; line-height: 22px;
-                                             font-weight: 600; margin: 24px 0 8px 0; }
-        .scroll h1 { font-size: 16px; line-height: 24px; }
+        .back { align-self: flex-start; padding: 0 var(--u8); border-radius: 4px;
+                font-size: var(--meta-size); line-height: 20px; color: var(--text-muted);
+                cursor: pointer; }
+        .back:hover { background: var(--surface-raised); }
+        .title { font-size: var(--t1-size); line-height: var(--t1-line); font-weight: 600; }
+        .chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--u4); }
+        .chip { padding: 0 var(--u4); border-radius: 2px;
+                background: var(--chip-muted-surface); color: var(--chip-muted-text);
+                font-size: var(--micro-size); line-height: var(--micro-line); }
+        .notice, .empty, .error { flex: none; padding: var(--u8) var(--u16) 0 var(--u16);
+                                  font-size: var(--meta-size); line-height: var(--meta-line);
+                                  color: var(--text-muted); }
+        .error { color: var(--danger); }
+        .scroll { flex: 1; min-height: 0; overflow-y: scroll;
+                  padding: var(--u24) var(--u16) var(--u32) var(--u16); }
+        .scroll h1 { font-size: var(--t2-size); line-height: var(--t2-line);
+                     font-weight: 600; margin: 16px 0 2px 0; }
+        .scroll h2, .scroll h3 { font-size: var(--body-size); line-height: var(--body-line);
+                                 font-weight: 600; margin: 16px 0 2px 0; }
         .scroll p, .scroll ul, .scroll ol, .scroll pre, .scroll blockquote, .scroll table {
             margin: 0 0 8px 0; }
-        .scroll pre { padding: 8px 12px; border-radius: 4px; background: #f0f0f0;
-                      font-size: 13px; line-height: 20px; overflow-x: scroll; }
-        .scroll code { font-family: monospace; font-size: 13px; }
-        .language { text-align: right; font-size: 12px; color: #808080; }
-        .scroll blockquote { padding-left: 12px; border-left: 2px solid #d0d0d0; color: #606060; }
-        .scroll td, .scroll th { padding: 2px 8px; border: 1px solid #d0d0d0; }
-        .link { color: #356df3; cursor: pointer; }
+        .scroll ul, .scroll ol { padding-left: 18px; }
+        .scroll li { margin-bottom: 3px; }
+        .scroll pre { padding: 16px; border: 1px solid var(--border); border-radius: 6px;
+                      line-height: 21px; background: var(--surface-panel);
+                      overflow-x: scroll; }
+        .scroll code { font-family: var(--font-family); }
+        .scroll :not(pre) > code { padding: 0 var(--u4); border-radius: 2px;
+                                   font-size: var(--meta-size);
+                                   background: var(--surface-panel); }
+        .language { margin: -11px 0 2px 0; text-align: right; font-size: var(--meta-size);
+                    color: var(--text-muted); }
+        .scroll blockquote { padding-left: 12px; border-left: 2px solid var(--border);
+                             color: var(--text-muted); }
+        .scroll td, .scroll th { padding: 2px 8px; border: 1px solid var(--border); }
+        .link { color: var(--accent); cursor: pointer; }
         .link:hover { text-decoration: underline; }
     }
 ";

@@ -29,64 +29,42 @@ use termwiz::input::{KeyCode, Modifiers};
 use unicode_width::UnicodeWidthChar;
 
 use crate::pty::Session;
-use crate::term::{Ink, LINE_HEIGHT, Row, Shaper};
+use crate::term::{Ink, Row, Shaper};
+use crate::theme::TerminalLook;
 use crate::{El, copy, each_layout, el, prevent_default, request_paste};
-
-const FOREGROUND: [u8; 3] = [0x20, 0x20, 0x20];
-const BACKGROUND: [u8; 3] = [0xfd, 0xf6, 0xe3];
-const CURSOR: [u8; 3] = [0x35, 0x6d, 0xf3];
-const SELECTION: [u8; 3] = [0xc9, 0xd8, 0xfb];
-/// The sixteen colors a program names by number: eight, then their bright
-/// forms.
-const PALETTE: [[u8; 3]; 16] = [
-    [0x20, 0x20, 0x20],
-    [0xc0, 0x39, 0x2b],
-    [0x2e, 0x8b, 0x3d],
-    [0xa0, 0x78, 0x00],
-    [0x20, 0x60, 0xc0],
-    [0x8e, 0x44, 0xad],
-    [0x16, 0x86, 0x8a],
-    [0xb8, 0xb8, 0xb8],
-    [0x60, 0x60, 0x60],
-    [0xe0, 0x50, 0x40],
-    [0x3a, 0xa8, 0x50],
-    [0xc0, 0x9a, 0x10],
-    [0x3d, 0x7d, 0xe0],
-    [0xa5, 0x5f, 0xc0],
-    [0x22, 0xa0, 0xa4],
-    [0xe8, 0xe8, 0xe8],
-];
 
 pub const CSS: &str = "
     .terminal { width: 100%; height: 100%; outline: none; }
 ";
 
-fn dim(color: [u8; 3]) -> [u8; 3] {
-    std::array::from_fn(|channel| ((color[channel] as u16 + BACKGROUND[channel] as u16) / 2) as u8)
+fn dim(color: [u8; 3], toward: [u8; 3]) -> [u8; 3] {
+    std::array::from_fn(|channel| ((color[channel] as u16 + toward[channel] as u16) / 2) as u8)
 }
 
-fn rgb(color: TerminalColor) -> [u8; 3] {
+/// A frame's logical color in the theme's.
+fn rgb(color: TerminalColor, look: &TerminalLook) -> [u8; 3] {
     use NamedColor::*;
+    let dim = |color| dim(color, look.background);
     match color {
         TerminalColor::Rgb(rgb) => rgb,
-        TerminalColor::Indexed(index) if index < 16 => PALETTE[index as usize],
-        TerminalColor::Indexed(index) => fixed_palette_rgb(index).unwrap_or(FOREGROUND),
+        TerminalColor::Indexed(index) if index < 16 => look.ansi[index as usize],
+        TerminalColor::Indexed(index) => fixed_palette_rgb(index).unwrap_or(look.foreground),
         TerminalColor::Named(named) => match named {
-            Foreground | BrightForeground => FOREGROUND,
-            DimForeground => dim(FOREGROUND),
-            Background => BACKGROUND,
-            Cursor => CURSOR,
+            Foreground | BrightForeground => look.foreground,
+            DimForeground => dim(look.foreground),
+            Background => look.background,
+            Cursor => look.cursor,
             Black | Red | Green | Yellow | Blue | Magenta | Cyan | White | BrightBlack
             | BrightRed | BrightGreen | BrightYellow | BrightBlue | BrightMagenta | BrightCyan
-            | BrightWhite => PALETTE[named.override_index().unwrap_or(0) as usize],
-            DimBlack => dim(PALETTE[0]),
-            DimRed => dim(PALETTE[1]),
-            DimGreen => dim(PALETTE[2]),
-            DimYellow => dim(PALETTE[3]),
-            DimBlue => dim(PALETTE[4]),
-            DimMagenta => dim(PALETTE[5]),
-            DimCyan => dim(PALETTE[6]),
-            DimWhite => dim(PALETTE[7]),
+            | BrightWhite => look.ansi[named.override_index().unwrap_or(0) as usize],
+            DimBlack => dim(look.ansi[0]),
+            DimRed => dim(look.ansi[1]),
+            DimGreen => dim(look.ansi[2]),
+            DimYellow => dim(look.ansi[3]),
+            DimBlue => dim(look.ansi[4]),
+            DimMagenta => dim(look.ansi[5]),
+            DimCyan => dim(look.ansi[6]),
+            DimWhite => dim(look.ansi[7]),
         },
     }
 }
@@ -94,6 +72,8 @@ fn rgb(color: TerminalColor) -> [u8; 3] {
 /// What the view and its widget share.
 struct State {
     session: Session,
+    /// The theme's colors, font and row height.
+    look: TerminalLook,
     /// The frame on screen.
     frame: RefCell<Option<TerminalFrame>>,
     /// A cell's width in CSS pixels, and how many columns and rows fit.
@@ -270,10 +250,11 @@ fn key_code(key: &BlitzKeyEvent) -> Option<(KeyCode, Option<String>)> {
     }
 }
 
-/// Builds the view over `session`.
-pub fn view(session: Session) -> (El, Terminal) {
+/// Builds the view over `session`, in `look`.
+pub fn view(session: Session, look: TerminalLook) -> (El, Terminal) {
     let state = Rc::new(State {
         session,
+        look,
         frame: RefCell::new(None),
         cells: Cell::new((1., 0, 0)),
         preedit: RefCell::new(String::new()),
@@ -292,7 +273,8 @@ pub fn view(session: Session) -> (El, Terminal) {
         move |x: f32, y: f32| {
             let (width, columns, rows) = state.cells.get();
             TerminalSelectionPoint {
-                row: ((y as f64 / LINE_HEIGHT).max(0.) as usize).min(rows.saturating_sub(1)),
+                row: ((y as f64 / state.look.line_height).max(0.) as usize)
+                    .min(rows.saturating_sub(1)),
                 col: ((x as f64 / width).max(0.) as usize).min(columns.saturating_sub(1)),
             }
         }
@@ -435,7 +417,7 @@ pub fn view(session: Session) -> (El, Terminal) {
             };
             let turned = match wheel.delta {
                 BlitzWheelDelta::Lines(_, lines) => lines * 3.,
-                BlitzWheelDelta::Pixels(_, pixels) => pixels / LINE_HEIGHT,
+                BlitzWheelDelta::Pixels(_, pixels) => pixels / wheeled.look.line_height,
             };
             let turned = wheeled.wheel.get() + turned;
             let lines = turned.trunc();
@@ -460,21 +442,23 @@ pub fn view(session: Session) -> (El, Terminal) {
             let cursor = frame.as_ref()?.cursor?;
             Some((
                 (cursor.col as f64 * width) as f32,
-                (cursor.row as f64 * LINE_HEIGHT) as f32,
+                (cursor.row as f64 * area.look.line_height) as f32,
                 width as f32,
-                LINE_HEIGHT as f32,
+                area.look.line_height as f32,
             ))
         })
         .widget(Screen {
             state: state.clone(),
-            shaper: Shaper::default(),
+            shaper: Shaper::with_font(&state.look.font_family, state.look.font_size),
             rows: Vec::new(),
             shaped_at: 0.,
+            baseline: 0.,
         });
 
     // The session's frames and updates come in with every layout, and the
     // box's size in cells goes out when it changes.
-    let (sized, mut shaper) = (state.clone(), Shaper::default());
+    let sized = state.clone();
+    let mut shaper = Shaper::with_font(&state.look.font_family, state.look.font_size);
     let cell_width = shaper.cell_width(1.);
     each_layout(move |page| {
         pump(&sized);
@@ -495,7 +479,7 @@ pub fn view(session: Session) -> (El, Terminal) {
         };
         let size = kurbo::Size::new(size.0, size.1);
         let columns = (size.width / cell_width) as usize;
-        let rows = (size.height / LINE_HEIGHT) as usize;
+        let rows = (size.height / sized.look.line_height) as usize;
         if (columns, rows) != (sized.cells.get().1, sized.cells.get().2) && columns * rows > 0 {
             sized.cells.set((cell_width, columns, rows));
             (sized.session).send(TerminalCommand::Resize(TerminalSize::new(
@@ -526,7 +510,7 @@ struct Shaped {
     columns: Vec<(usize, usize)>,
 }
 
-fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32) -> Shaped {
+fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, look: &TerminalLook) -> Shaped {
     let (mut text, mut colors, mut backgrounds, mut columns) =
         (String::new(), Vec::new(), Vec::new(), Vec::new());
     let mut column = 0;
@@ -543,15 +527,15 @@ fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32) -> Shaped {
             text.push(character);
             column += character.width().unwrap_or(0);
         }
-        colors.push((start..text.len(), Ink(rgb(span.fg))));
+        colors.push((start..text.len(), Ink(rgb(span.fg, look))));
         // The frame's count of the span's cells is what places the next
         // span, whatever the characters' own widths came to.
         let first = columns.iter().rev().find(|(byte, _)| *byte <= start);
         let from = first.map_or(column, |(_, column)| *column);
         let from = if text.len() == start { column } else { from };
         column = from + span.columns;
-        let background = rgb(span.bg);
-        if background != BACKGROUND {
+        let background = rgb(span.bg, look);
+        if background != look.background {
             backgrounds.push((from..column, background));
         }
     }
@@ -575,6 +559,8 @@ struct Screen {
     rows: Vec<Shaped>,
     /// The scale the rows were shaped at.
     shaped_at: f64,
+    /// A row's baseline below its top, at that scale.
+    baseline: f32,
 }
 
 fn fill(scene: &mut impl PaintScene, color: [u8; 3], rect: Rect) {
@@ -597,6 +583,7 @@ fn glyphs(
     cell: f64,
     left: f64,
     top: f64,
+    baseline: f32,
 ) {
     let column_of = |byte: usize| {
         let at = columns.partition_point(|(start, _)| *start <= byte);
@@ -607,7 +594,7 @@ fn glyphs(
             continue;
         };
         let [r, g, b] = run.style().brush.0;
-        let (font, baseline, style) = (run.run(), run.baseline(), run.style_index());
+        let (font, style) = (run.run(), run.style_index());
         let placed = (font.clusters())
             .filter(|cluster| cluster.style_index() == style && !columns.is_empty())
             .flat_map(|cluster| {
@@ -650,29 +637,32 @@ impl blitz_dom::Widget for Screen {
         height: u32,
         scale: f64,
     ) -> anyrender::Scene {
+        let state = self.state.clone();
+        let look = &state.look;
         let mut scene = anyrender::Scene::new();
         fill(
             &mut scene,
-            BACKGROUND,
+            look.background,
             Rect::new(0., 0., width as f64, height as f64),
         );
         let frame = self.state.frame.borrow();
         let Some(frame) = frame.as_ref() else {
             return scene;
         };
-        let (cell, line) = (self.state.cells.get().0 * scale, LINE_HEIGHT * scale);
+        let (cell, line) = (self.state.cells.get().0 * scale, look.line_height * scale);
 
         // A row is shaped again only when it is not the row drawn before.
         if self.shaped_at != scale {
             self.rows.clear();
             self.shaped_at = scale;
+            self.baseline = (self.shaper).baseline(scale as f32, look.line_height);
         }
         self.rows.truncate(frame.lines.len());
         for (index, wanted) in frame.lines.iter().enumerate() {
             match self.rows.get(index) {
                 Some(shaped) if shaped.line == *wanted => {}
-                Some(_) => self.rows[index] = shape(wanted, &mut self.shaper, scale as f32),
-                None => (self.rows).push(shape(wanted, &mut self.shaper, scale as f32)),
+                Some(_) => self.rows[index] = shape(wanted, &mut self.shaper, scale as f32, look),
+                None => (self.rows).push(shape(wanted, &mut self.shaper, scale as f32, look)),
             }
         }
 
@@ -701,7 +691,7 @@ impl blitz_dom::Widget for Screen {
                     true => selection.end.col + 1,
                     false => columns,
                 };
-                fill(&mut scene, SELECTION, cells(row, from, to));
+                fill(&mut scene, look.selection, cells(row, from, to));
             }
         }
         for (index, shaped) in self.rows.iter().enumerate() {
@@ -712,12 +702,13 @@ impl blitz_dom::Widget for Screen {
                 cell,
                 0.,
                 index as f64 * line,
+                self.baseline,
             );
         }
 
         if let Some(cursor) = frame.cursor {
             let place = cells(cursor.row, cursor.col, cursor.col + 1);
-            let [r, g, b] = CURSOR;
+            let [r, g, b] = look.cursor;
             let preedit = self.state.preedit.borrow();
             if !preedit.is_empty() {
                 // What is being composed, over the cells from the cursor,
@@ -735,10 +726,10 @@ impl blitz_dom::Widget for Screen {
                         url: None,
                     }],
                 };
-                let shaped = shape(&composing, &mut self.shaper, scale as f32);
+                let shaped = shape(&composing, &mut self.shaper, scale as f32, look);
                 let wide = shaped.line.spans[0].columns;
                 let over = cells(cursor.row, cursor.col, cursor.col + wide);
-                fill(&mut scene, BACKGROUND, over);
+                fill(&mut scene, look.background, over);
                 glyphs(
                     &mut scene,
                     &shaped,
@@ -746,9 +737,10 @@ impl blitz_dom::Widget for Screen {
                     cell,
                     place.x0,
                     place.y0,
+                    self.baseline,
                 );
                 let under = Rect::new(over.x0, over.y1 - 1.5 * scale, over.x1, over.y1);
-                fill(&mut scene, CURSOR, under);
+                fill(&mut scene, look.cursor, under);
             } else if !self.state.focused.get() {
                 // Without the focus, the cursor's outline.
                 scene.stroke(
@@ -771,7 +763,7 @@ impl blitz_dom::Widget for Screen {
                 scene.fill(
                     Fill::NonZero,
                     Affine::IDENTITY,
-                    Color::from_rgba8(r, g, b, 0x80),
+                    Color::from_rgba8(r, g, b, 0xc0),
                     None,
                     &shape,
                 );

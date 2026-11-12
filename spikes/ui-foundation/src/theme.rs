@@ -29,7 +29,7 @@ mod horizon {
     #[path = "../../spikes/ui-foundation/src/theme_look.rs"]
     pub mod look;
 }
-pub use horizon::look::Theme;
+pub use horizon::look::{TerminalLook, Theme};
 
 pub const CSS: &str = "
     .themed { height: 100%; background: var(--background); color: var(--text);

@@ -11,10 +11,7 @@ use std::time::{Duration, Instant};
 
 use anyrender::PaintScene;
 use kurbo::{Affine, Rect};
-use parley::{
-    FontContext, FontFamilyName, GenericFamily, Layout, LayoutContext, PositionedLayoutItem,
-    StyleProperty,
-};
+use parley::{FontContext, FontFamily, Layout, LayoutContext, PositionedLayoutItem, StyleProperty};
 use peniko::{Color, Fill};
 
 /// A run's color, as Parley carries it through shaping.
@@ -96,30 +93,59 @@ impl Row {
 pub struct Shaper {
     fonts: FontContext,
     layouts: LayoutContext<Ink>,
+    /// The font stack, as CSS writes one, and the size in CSS pixels.
+    family: String,
+    size: f32,
 }
 
 impl Default for Shaper {
     fn default() -> Self {
-        Self {
-            fonts: FontContext::new(),
-            layouts: LayoutContext::new(),
-        }
+        Self::with_font("monospace", FONT_SIZE)
     }
 }
 
 impl Shaper {
+    pub fn with_font(family: &str, size: f32) -> Self {
+        Self {
+            fonts: FontContext::new(),
+            layouts: LayoutContext::new(),
+            family: family.to_string(),
+            size,
+        }
+    }
+
     pub fn shape(&mut self, row: &Row, scale: f32) -> Layout<Ink> {
         let mut builder = self
             .layouts
             .ranged_builder(&mut self.fonts, &row.text, scale, true);
-        builder.push_default(FontFamilyName::Generic(GenericFamily::Monospace));
-        builder.push_default(StyleProperty::FontSize(FONT_SIZE));
+        builder.push_default(FontFamily::Source(std::borrow::Cow::Borrowed(&self.family)));
+        builder.push_default(StyleProperty::FontSize(self.size));
         for (range, ink) in &row.colors {
             builder.push(StyleProperty::Brush(*ink), range.clone());
         }
         let mut layout = builder.build(&row.text);
         layout.break_all_lines(None);
         layout
+    }
+
+    /// Where a row's baseline is below its top, in device pixels at
+    /// `scale`, for a row `line_height` CSS pixels tall: the primary font's
+    /// own ascent and descent, centered in the row. A row that falls back
+    /// to another font for some characters (Japanese) would otherwise sit
+    /// on that font's taller line (`src/terminal/font.rs` does the same).
+    pub fn baseline(&mut self, scale: f32, line_height: f64) -> f32 {
+        let sample = Row::plain("M".to_string());
+        let layout = self.shape(&sample, scale);
+        let run = (layout.lines().flat_map(|line| line.items())).find_map(|item| match item {
+            PositionedLayoutItem::GlyphRun(run) => Some(run),
+            _ => None,
+        });
+        let Some(run) = run else {
+            return 0.;
+        };
+        let metrics = run.run().font_metrics();
+        let padding = (line_height as f32 * scale - metrics.ascent - metrics.descent) / 2.;
+        padding + metrics.ascent
     }
 
     /// A cell's width in device pixels at `scale`.

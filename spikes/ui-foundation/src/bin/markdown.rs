@@ -14,6 +14,7 @@ use anyrender_vello::VelloWindowRenderer;
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
 use ui_foundation_spike::blitz_traits::shell::{ColorScheme, Viewport};
 use ui_foundation_spike::markdown::{CSS, OpenUrl, view};
+use ui_foundation_spike::theme::{self, Theme};
 use ui_foundation_spike::{App, Live};
 
 fn main() {
@@ -25,7 +26,12 @@ fn main() {
     let open_url: OpenUrl = Rc::new(|url| {
         let _ = std::process::Command::new("xdg-open").arg(url).spawn();
     });
-    let app = App::new(900, 700, CSS, move || view(Some(path), open_url).0.focus());
+    // The colors, the type scale and the font of this machine's config.
+    let look = Theme::of_this_machine();
+    let css = [theme::CSS, CSS].concat();
+    let app = App::new(900, 700, &css, move || {
+        theme::themed(move || look.clone(), view(Some(path), open_url).0.focus())
+    });
 
     if let Some(picture) = picture {
         // At 150 %, as a desktop set to it shows the view.

@@ -4,6 +4,7 @@
 use reactive_graph::traits::GetUntracked;
 use ui_foundation_spike::blitz_dom::{BaseDocument, NodeId, local_name};
 use ui_foundation_spike::board::{Board, CSS, Half, Task, view};
+use ui_foundation_spike::theme::{self, Theme};
 use ui_foundation_spike::{App, Pointer, click_at, pointer};
 
 fn open() -> (App, Board) {
@@ -15,10 +16,11 @@ fn open() -> (App, Board) {
         })
         .collect();
     let mut board = None;
-    let app = App::new(600, 400, CSS, || {
+    let css = [theme::CSS, CSS].concat();
+    let app = App::new(600, 400, &css, || {
         let (root, state) = view(tasks);
         board = Some(state);
-        root.focus()
+        theme::themed(Theme::built_in, root.focus())
     });
     app.resolve();
     (app, board.unwrap())
@@ -73,7 +75,7 @@ fn a_row_is_carried_to_where_the_line_shows_and_dropped_there() {
     let rows = boxes(&app, "row");
     assert_eq!(rows.len(), 5);
     // The style sheet's rules nested under the view's class apply.
-    assert_eq!(rows[0].3, 28.);
+    assert_eq!(rows[0].3, 45.);
     let middle = |row: usize| rows[row].1 + rows[row].3 / 2.;
 
     // Pressed, and not yet carried until it has moved.

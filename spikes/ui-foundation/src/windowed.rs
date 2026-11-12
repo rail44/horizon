@@ -77,15 +77,16 @@ impl<K: Eq + Hash + Clone> State<K> {
 /// as the list grows, until a scroll away from the end; a scroll back down
 /// to the end takes it up again.
 ///
-/// Returns the range of items built, for whoever wants to know.
+/// `built` is written with the range of items built whenever that changes:
+/// the list is built again for it, and whoever placed the list can read it.
 pub fn windowed<T, K>(
     scroller: El,
     items: impl Fn() -> Vec<T> + 'static,
     key: impl Fn(&T) -> K + Clone + 'static,
     view: impl Fn(&T) -> El + 'static,
     follow_tail: bool,
-) -> RwSignal<(usize, usize)>
-where
+    built: RwSignal<(usize, usize)>,
+) where
     T: Clone + 'static,
     K: Eq + Hash + Clone + 'static,
 {
@@ -101,7 +102,6 @@ where
         anchor: None,
     }));
     // Written when the range changes: the list is built again.
-    let built = RwSignal::new((0usize, 0usize));
 
     let above = el("div");
     let below = el("div");
@@ -247,7 +247,6 @@ where
             built.set(wanted);
         }
     });
-    built
 }
 
 /// Keeps a scrolling element at its end as its content grows, until a

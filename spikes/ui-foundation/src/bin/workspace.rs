@@ -9,7 +9,8 @@
 //! it, the arrows choose, Enter runs (`Split Right`, `Split Down`, `Close
 //! Pane`, `New Tab`, `Next Tab`, `Show ...`), Escape leaves. With an
 //! argument it draws one frame into that PNG and opens no window; a second
-//! argument, `palette`, draws it with the palette open.
+//! argument, `palette` (or `plain`), draws it with the palette open, and a
+//! third is the display scale (1.5 unless given).
 
 use anyrender::ImageRenderer as _;
 use anyrender_vello::VelloWindowRenderer;
@@ -24,20 +25,22 @@ fn main() {
     let mut arguments = std::env::args().skip(1);
     let picture = arguments.next();
     let palette = arguments.next().as_deref() == Some("palette");
+    let scale: f32 = (arguments.next())
+        .map(|scale| scale.parse().expect("a display scale"))
+        .unwrap_or(1.5);
 
     let mut workspace = None;
     // The colors, the type scale and the font of this machine's config.
     let look = Theme::of_this_machine();
     let css = [theme::CSS, &css()].concat();
     let app = App::new(1200, 800, &css, || {
-        let (root, state) = view();
+        let (root, state) = view(look.terminal());
         workspace = Some(state);
         theme::themed(move || look.clone(), root)
     });
 
     if let Some(picture) = picture {
-        // At 150 %, as a desktop set to it shows the page.
-        let (scale, width, height) = (1.5, 1800, 1200);
+        let (width, height) = ((1200. * scale) as u32, (800. * scale) as u32);
         (app.document().borrow_mut()).set_viewport(Viewport::new(
             width,
             height,
@@ -45,6 +48,8 @@ fn main() {
             ColorScheme::Light,
         ));
         if palette {
+            // As the keys open it: in workspace mode.
+            workspace.as_ref().unwrap().mode.set(true);
             workspace.as_ref().unwrap().palette.set(true);
             app.run_effects();
         }

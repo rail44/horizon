@@ -18,13 +18,15 @@ use ui_foundation_spike::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent
 use ui_foundation_spike::blitz_traits::shell::{ColorScheme, Viewport};
 use ui_foundation_spike::pty::Session;
 use ui_foundation_spike::terminal::{CSS, Terminal, view};
+use ui_foundation_spike::theme::Theme;
 use ui_foundation_spike::{App, Live};
 
 fn open(program: &str) -> (App, Terminal) {
     let session = Session::spawn(program, &[], TerminalSize::new(80, 24)).expect("a shell");
     let mut terminal = None;
     let app = App::new(1000, 600, CSS, || {
-        let (root, state) = view(session);
+        // The colors, the font and its size of this machine's config.
+        let (root, state) = view(session, Theme::of_this_machine().terminal());
         terminal = Some(state);
         root.focus()
     });

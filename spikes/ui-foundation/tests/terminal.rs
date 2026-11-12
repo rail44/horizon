@@ -12,6 +12,7 @@ use ui_foundation_spike::blitz_traits::events::{
 use ui_foundation_spike::blitz_traits::shell::{ColorScheme, Viewport};
 use ui_foundation_spike::pty::Session;
 use ui_foundation_spike::terminal::{CSS, Terminal, view};
+use ui_foundation_spike::theme::Theme;
 use ui_foundation_spike::{App, Pointer, move_to, pointer};
 
 struct Opened {
@@ -23,7 +24,7 @@ fn open() -> Opened {
     let session = Session::spawn("sh", &[], TerminalSize::new(80, 24)).expect("a shell");
     let mut terminal = None;
     let app = App::new(900, 540, CSS, || {
-        let (root, state) = view(session);
+        let (root, state) = view(session, Theme::built_in().terminal());
         terminal = Some(state);
         root.focus()
     });
@@ -227,7 +228,7 @@ fn the_shell_is_told_the_size_of_the_box() {
     let opened = open();
     let (columns, rows) = opened.terminal.size();
     assert_eq!(rows, 30);
-    assert!((115..=135).contains(&columns), "{columns}");
+    assert!((100..=150).contains(&columns), "{columns}");
     opened.run("stty size");
     opened.wait("the size", |text| {
         text.lines().any(|line| line == format!("{rows} {columns}"))

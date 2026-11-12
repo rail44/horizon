@@ -9,6 +9,7 @@ use reactive_graph::traits::GetUntracked;
 use ui_foundation_spike::blitz_dom::{BaseDocument, NodeId, local_name};
 use ui_foundation_spike::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
 use ui_foundation_spike::markdown::{CSS, Markdown, view};
+use ui_foundation_spike::theme::{self, Theme};
 use ui_foundation_spike::{App, click_at};
 
 struct Scratch(PathBuf);
@@ -47,13 +48,14 @@ fn open(path: &Path) -> Opened {
     let opened = Rc::new(RefCell::new(Vec::new()));
     let log = opened.clone();
     let mut state = None;
-    let app = App::new(800, 600, CSS, || {
+    let css = [theme::CSS, CSS].concat();
+    let app = App::new(800, 600, &css, || {
         let (root, markdown) = view(
             Some(path.to_path_buf()),
             Rc::new(move |url: &str| log.borrow_mut().push(url.to_owned())),
         );
         state = Some(markdown);
-        root.focus()
+        theme::themed(Theme::built_in, root.focus())
     });
     app.resolve();
     Opened {

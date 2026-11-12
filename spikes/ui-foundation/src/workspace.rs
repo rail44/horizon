@@ -23,6 +23,7 @@ use crate::agent::sample::Session;
 use crate::board::Task;
 use crate::pty::Session as Shell;
 use crate::terminal::{self, Terminal};
+use crate::theme::TerminalLook;
 use crate::{El, agent, board, dispatched, el, markdown, prevent_default, stop_propagation};
 use horizon_terminal_core::TerminalSize;
 
@@ -30,42 +31,57 @@ use horizon_terminal_core::TerminalSize;
 // for all the views on it.
 pub const CSS: &str = "
     .workspace { position: relative; display: flex; flex-direction: column; height: 100%;
-                 outline: none; font-family: sans-serif; font-size: 13px;
-                 line-height: 20px; color: #202020; background: #e4e4e4;
+                 outline: none; background: var(--background); color: var(--text);
+                 font-family: var(--font-family); font-size: var(--body-size);
+                 line-height: var(--body-line);
         &.resizing { user-select: none; }
-        .tabs { flex: none; display: flex; align-items: center; gap: 2px;
-                padding: 4px 8px 0 8px; }
-        .tab-label { padding: 2px 12px; border-radius: 4px 4px 0 0; color: #606060;
-                     cursor: pointer; }
-        .tab-label.active { background: #fafafa; color: #202020; }
-        .mode { margin-left: auto; padding: 0 6px; border-radius: 3px; background: #356df3;
-                color: white; font-size: 11px; line-height: 16px; }
+        .tabs { flex: none; display: flex; gap: 4px; padding: 4px 28px 4px 8px;
+                background: var(--tab-track); border-top: 1px solid var(--border);
+                border-bottom: 1px solid var(--border); }
+        .tab-label { flex: 1; min-width: 0; padding: 0 8px; border-radius: 6px;
+                     line-height: 24px; text-align: center; overflow: hidden;
+                     white-space: nowrap; text-overflow: ellipsis;
+                     color: var(--tab-text); cursor: pointer; }
+        .tab-label.active { background: var(--background); color: var(--text); }
+        .mode { display: none; }
         .tab { flex: 1; min-height: 0; display: flex; }
         .tab.hidden { display: none; }
         .split { flex: 1; min-width: 0; min-height: 0; display: flex; }
         .split.down { flex-direction: column; }
         .cell { flex-shrink: 1; flex-basis: 0; min-width: 0; min-height: 0; display: flex; }
-        .divider { flex: none; background: #c8c8c8; }
+        .divider { flex: none; background: var(--surface-chrome); }
         .split.across > .divider { width: 5px; cursor: col-resize; }
         .split.down > .divider { height: 5px; cursor: row-resize; }
-        .pane { flex: 1; min-width: 0; min-height: 0; box-sizing: border-box;
-                display: flex; flex-direction: column; overflow: hidden;
-                border: 1px solid transparent; background: #fafafa; }
-        .pane.focused { border-color: #356df3; }
+        .pane { position: relative; flex: 1; min-width: 0; min-height: 0;
+                box-sizing: border-box; display: flex; flex-direction: column;
+                overflow: hidden; border: 2px solid var(--background);
+                background: var(--background); }
+        .pane.focused { border-color: var(--border); }
+        .pane.cursor { border-color: var(--accent); }
         .pane > * { flex: 1; min-height: 0; }
+        .pane > .veil { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 50;
+                        background: var(--background); opacity: 0.5; pointer-events: none; }
         .empty { display: flex; align-items: center; justify-content: center;
-                 color: #808080; outline: none; }
-        .terminal { outline: none; }
+                 color: var(--text-muted); outline: none; }
         .scrim { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 100;
                  display: flex; justify-content: center; align-items: flex-start;
-                 padding-top: 80px; background: rgba(0, 0, 0, 0.15); }
-        .palette { width: 420px; display: flex; flex-direction: column; gap: 2px;
-                   padding: 6px; background: white; border: 1px solid #c0c0c0;
-                   border-radius: 6px; }
-        .palette input { font-size: 14px; line-height: 22px; padding: 4px 8px;
-                         border: none; outline: none; }
-        .item { padding: 2px 8px; border-radius: 4px; cursor: pointer; }
-        .item.chosen { background: #e9effd; }
+                 padding-top: 97px; }
+        .palette { width: 560px; display: flex; flex-direction: column; overflow: hidden;
+                   background: var(--background); border: 1px solid var(--border);
+                   border-radius: 8px;
+                   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1); }
+        .search { position: relative; display: flex; align-items: center; height: 32px;
+                  padding: 0 12px; border-bottom: 1px solid var(--border); }
+        .search input { flex: 1; font-family: var(--font-family);
+                        font-size: var(--body-size); line-height: 20px; padding: 0;
+                        border: none; outline: none; background: transparent;
+                        color: var(--text); }
+        .search .placeholder { position: absolute; left: 12px; top: 6px; line-height: 20px;
+                               color: var(--text-muted); pointer-events: none; }
+        .item { display: flex; flex-direction: column; padding: 7px 12px; cursor: pointer; }
+        .item .name { line-height: 20px; }
+        .item .about { font-size: var(--meta-size); line-height: var(--meta-line); }
+        .item.chosen { background: var(--surface-selected); }
     }
 ";
 
@@ -118,6 +134,19 @@ impl Command {
             Command::Show(Kind::Terminal) => "Show Terminal",
             Command::Show(Kind::Board) => "Show Board",
             Command::Show(Kind::Empty) => "Show Nothing",
+        }
+    }
+
+    /// What the command does, under its name in the palette.
+    fn about(self) -> &'static str {
+        match self {
+            Command::NewTab => "Open a new tab with an empty pane.",
+            Command::NextTab => "Show the next tab.",
+            Command::SplitRight => "Split the active pane horizontally.",
+            Command::SplitDown => "Split the active pane vertically.",
+            Command::ClosePane => "Close the active pane when another pane remains.",
+            Command::Show(Kind::Empty) => "Show nothing in the active pane.",
+            Command::Show(_) => "Show this view in the active pane.",
         }
     }
 
@@ -230,6 +259,7 @@ pub struct Workspace {
     next_id: RwSignal<u32>,
     panes: StoredValue<Panes, LocalStorage>,
     owner: StoredValue<Owner, LocalStorage>,
+    look: StoredValue<TerminalLook, LocalStorage>,
     /// The terminals in the panes, and who they wake when a frame comes.
     terminals: StoredValue<Rc<RefCell<Vec<Terminal>>>, LocalStorage>,
     waker: StoredValue<Rc<RefCell<Option<std::task::Waker>>>, LocalStorage>,
@@ -249,13 +279,16 @@ impl Workspace {
         let kind = RwSignal::new(kind);
         let element = owner.with(|| {
             el("div")
-                .class_dyn(move || {
-                    if workspace.focused.get() == id {
-                        "pane focused".to_string()
-                    } else {
-                        "pane".to_string()
-                    }
-                })
+                // The focused pane's border is the theme's quiet line; in
+                // workspace mode it is the accent, and every pane is veiled
+                // (`src/workspace/render.rs`'s `pane_border_role`).
+                .class_dyn(
+                    move || match (workspace.focused.get() == id, workspace.mode.get()) {
+                        (true, true) => "pane cursor".to_string(),
+                        (true, false) => "pane focused".to_string(),
+                        (false, _) => "pane".to_string(),
+                    },
+                )
                 .on("pointerdown", move |_| {
                     if workspace.focused.get_untracked() != id {
                         workspace.focused.set(id);
@@ -266,6 +299,7 @@ impl Workspace {
                     |kind| *kind,
                     move |kind| content(*kind, workspace),
                 )
+                .when(move || workspace.mode.get(), || el("div").class("veil"))
         });
         self.panes.with_value(|panes| {
             panes.borrow_mut().insert(
@@ -411,7 +445,8 @@ fn content(kind: Kind, workspace: Workspace) -> El {
         }
         Kind::Terminal => match Shell::spawn("sh", &[], TerminalSize::new(80, 24)) {
             Ok(session) => {
-                let (root, terminal) = terminal::view(session);
+                let look = workspace.look.with_value(Clone::clone);
+                let (root, terminal) = terminal::view(session, look);
                 let waker = workspace.waker.with_value(|waker| waker.borrow().clone());
                 if let Some(waker) = waker {
                     terminal.set_waker(waker);
@@ -499,12 +534,15 @@ fn arrange(tree: &Tree, workspace: Workspace) -> El {
 }
 
 fn palette(workspace: Workspace) -> El {
+    // Workspace mode stays on under the palette, and ends with it.
     let close = move || {
         workspace.palette.set(false);
+        workspace.mode.set(false);
         workspace.focus_pane();
     };
     let run = move |command: Command| {
         workspace.palette.set(false);
+        workspace.mode.set(false);
         workspace.execute(command);
         workspace.focus_pane();
     };
@@ -535,7 +573,8 @@ fn palette(workspace: Workspace) -> El {
                         "item".to_string()
                     }
                 })
-                .text(command.label())
+                .child(el("div").class("name").text(command.label()))
+                .child(el("div").class("about").text(command.about()))
                 .on("click", move |_| run(command))
         },
     );
@@ -566,13 +605,21 @@ fn palette(workspace: Workspace) -> El {
                 prevent_default();
                 stop_propagation();
             })
-            .child(input)
+            .child(
+                // blitz-dom does not draw a field's `placeholder`.
+                el("div").class("search").child(input).when(
+                    move || workspace.query.get().is_empty(),
+                    || el("div").class("placeholder").text("Search..."),
+                ),
+            )
             .child(items),
     )
 }
 
-pub fn view() -> (El, Workspace) {
+/// Builds the shell; its terminals are drawn in `look`.
+pub fn view(look: TerminalLook) -> (El, Workspace) {
     let workspace = Workspace {
+        look: StoredValue::new_local(look),
         tabs: RwSignal::new(Vec::new()),
         active: RwSignal::new(0),
         focused: RwSignal::new(0),
@@ -680,7 +727,6 @@ pub fn view() -> (El, Workspace) {
                 return;
             }
             if character == ":" {
-                workspace.mode.set(false);
                 workspace.query.set(String::new());
                 workspace.chosen.set(0);
                 workspace.palette.set(true);
