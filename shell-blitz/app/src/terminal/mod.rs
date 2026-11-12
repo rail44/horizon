@@ -98,6 +98,11 @@ struct State {
     seen: Cell<u64>,
     /// A cell's width in CSS pixels, and how many columns and rows fit.
     cells: Cell<(f64, usize, usize)>,
+    /// Where the box is on the page, in CSS pixels: on a display that is
+    /// not at one device pixel to the CSS pixel, the box may start part of
+    /// a device pixel in, which what is drawn to whole device pixels
+    /// allows for.
+    origin: Cell<(f64, f64)>,
     /// What the input method is composing, drawn at the cursor.
     preedit: RefCell<String>,
     focused: Cell<bool>,
@@ -368,6 +373,7 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         frame: RefCell::new(None),
         seen: Cell::new(0),
         cells: Cell::new((1., 0, 0)),
+        origin: Cell::new((0., 0.)),
         preedit: RefCell::new(String::new()),
         focused: Cell::new(false),
         notifications: RefCell::default(),
@@ -684,6 +690,9 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         if let Some(text) = sized.outgoing.borrow_mut().take() {
             copy(text);
         }
+        if let Some(bounds) = page.bounds(element) {
+            sized.origin.set((bounds.x, bounds.y));
+        }
         let Some(size) = page.size(element) else {
             return;
         };
@@ -813,9 +822,17 @@ fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, look: &TerminalLo
     }
 }
 
+/// A length in the box, moved to the nearest edge of a device pixel of
+/// the display, the box itself starting `inset` into one.
+fn on_pixel(length: f64, inset: f64) -> f64 {
+    (length + inset).round() - inset
+}
+
 /// Draws a row's characters that are shapes, the row's top at `top`: each
 /// in its cell, `cell` wide and `line` tall, for a font of `font_size`,
-/// all in device pixels.
+/// all in device pixels. `inset` is how far into a device pixel the box
+/// itself starts: the shapes' edges are on the display's pixels, not on
+/// the box's.
 fn shapes(
     scene: &mut impl PaintScene,
     shaped: &Shaped,
@@ -823,19 +840,21 @@ fn shapes(
     top: f64,
     line: f64,
     font_size: f32,
+    inset: (f64, f64),
 ) {
     for (column, character, [r, g, b]) in &shaped.drawn {
         let bounds = drawn_glyphs::Bounds {
             origin: drawn_glyphs::Point {
-                x: (*column as f64 * cell) as f32,
-                y: top as f32,
+                x: (inset.0 + *column as f64 * cell) as f32,
+                y: (inset.1 + top) as f32,
             },
             size: drawn_glyphs::Size {
                 width: cell as f32,
                 height: line as f32,
             },
         };
-        let at = |point: drawn_glyphs::Point<f32>| (point.x as f64, point.y as f64);
+        let at =
+            |point: drawn_glyphs::Point<f32>| (point.x as f64 - inset.0, point.y as f64 - inset.1);
         // (The lengths are device pixels already: the edges are snapped
         // to them.)
         drawn_glyphs::glyph_shapes(
@@ -1001,6 +1020,8 @@ impl horizon_ui::blitz_dom::Widget for Screen {
         };
         let (cell, line) = (self.state.cells.get().0 * scale, look.line_height * scale);
         let font_px = look.font_size * scale as f32;
+        let (left, above) = self.state.origin.get();
+        let inset = ((left * scale).fract(), (above * scale).fract());
         if self.shaped_at != scale {
             self.history.1.clear();
         }
@@ -1030,9 +1051,9 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                     .or_insert_with(|| shape(&window.lines[row], shaper, scale as f32, look));
                 for (columns, color) in &shaped.row.backgrounds {
                     let behind = Rect::new(
-                        columns.start as f64 * cell,
+                        on_pixel(columns.start as f64 * cell, inset.0),
                         top,
-                        columns.end as f64 * cell,
+                        on_pixel(columns.end as f64 * cell, inset.0),
                         top + line,
                     );
                     fill(&mut scene, *color, behind);
@@ -1046,7 +1067,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                     top,
                     self.baseline,
                 );
-                shapes(&mut scene, shaped, cell, top, line, font_px);
+                shapes(&mut scene, shaped, cell, top, line, font_px, inset);
             }
             scene.pop_layer();
             return scene;
@@ -1067,12 +1088,14 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             }
         }
 
+        // (Edges on the display's pixels: two fills that meet part of a
+        // pixel in leave a line between them.)
         let cells = |row: usize, from: usize, to: usize| {
             Rect::new(
-                from as f64 * cell,
-                row as f64 * line,
-                to as f64 * cell,
-                (row + 1) as f64 * line,
+                on_pixel(from as f64 * cell, inset.0),
+                on_pixel(row as f64 * line, inset.1),
+                on_pixel(to as f64 * cell, inset.0),
+                on_pixel((row + 1) as f64 * line, inset.1),
             )
         };
         for (index, shaped) in self.rows.iter().enumerate() {
@@ -1105,7 +1128,15 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                 index as f64 * line,
                 self.baseline,
             );
-            shapes(&mut scene, shaped, cell, index as f64 * line, line, font_px);
+            shapes(
+                &mut scene,
+                shaped,
+                cell,
+                index as f64 * line,
+                line,
+                font_px,
+                inset,
+            );
         }
 
         if let Some(cursor) = frame.cursor {

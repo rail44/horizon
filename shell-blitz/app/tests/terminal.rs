@@ -23,12 +23,23 @@ struct Opened {
 }
 
 fn open() -> Opened {
+    open_at("")
+}
+
+/// The view in a box with `style`: where on the page it is.
+fn open_at(style: &str) -> Opened {
     let session = support::shell("sh", TerminalSize::new(80, 24));
     let mut terminal = None;
     let app = App::new(900, 540, CSS, || {
         let (root, state) = view(session.into(), Theme::built_in().terminal());
         terminal = Some(state);
-        root.focus()
+        root.focus();
+        horizon_ui::el("div")
+            .attr(
+                "style",
+                &format!("height: 100%; box-sizing: border-box; {style}"),
+            )
+            .child(root)
     });
     app.resolve();
     let opened = Opened {
@@ -684,4 +695,70 @@ fn block_characters_fill_their_cells_with_no_seam_between_them() {
     assert_eq!(at(middle, y1 + 14), look.foreground);
     assert_eq!(at(x0 + 1, y1 + 14), look.foreground);
     assert_eq!(at(x1 - 2, y1 + 14), look.foreground);
+}
+
+#[test]
+fn blocks_have_no_seam_in_a_view_that_is_not_on_whole_pixels() {
+    use anyrender::ImageRenderer as _;
+
+    // A display that is not at one device pixel to the CSS pixel, and a
+    // view whose box starts at an odd CSS pixel: its place on the display
+    // is part of a device pixel in, as a pane's beside a split is.
+    let scale = 1.5;
+    let opened = open_at("padding: 21px 0 0 31px;");
+    {
+        use horizon_ui::blitz_traits::shell::{ColorScheme, Viewport};
+        let document = opened.app.document();
+        (document.borrow_mut()).set_viewport(Viewport::new(900, 540, scale, ColorScheme::Light));
+    }
+    opened.app.resolve();
+    opened.run(r"clear; printf '\342\226\210\342\226\210\342\226\210\342\226\210\n\342\226\210\342\226\210\342\226\210\342\226\210\n\342\226\210\342\226\210\342\226\210\342\226\210\n'; printf ' \342\226\220\342\226\233\342\226\210\342\226\210\342\226\210\342\226\234\342\226\214\n\342\226\235\342\226\234\342\226\210\342\226\210\342\226\210\342\226\210\342\226\210\342\226\233\342\226\230\n  \342\226\230\342\226\230 \342\226\235\342\226\235\n'");
+    opened.wait("the blocks", |text| text.contains("▘▘ ▝▝"));
+    opened.app.resolve();
+    let (width, height) = (900, 540);
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut pixels = Vec::new();
+    let document = opened.app.document();
+    renderer.render_to_vec(
+        |scene| {
+            let mut document = document.borrow_mut();
+            blitz_paint::paint_scene(scene, &mut document, scale as f64, width, height, 0, 0)
+        },
+        &mut pixels,
+    );
+    if let Some(path) = std::env::var_os("HORIZON_BLITZ_TEST_DUMP") {
+        std::fs::write(path, &pixels).unwrap();
+    }
+    let look = Theme::built_in().terminal();
+    let at = |x: usize, y: usize| {
+        let pixel = (y * width as usize + x) * 4;
+        [pixels[pixel], pixels[pixel + 1], pixels[pixel + 2]]
+    };
+    // The blocks' box: where the page is the foreground, in the rows the
+    // blocks are in (above the prompt's own text).
+    let inked: Vec<(usize, usize)> = (0..105)
+        .flat_map(|y| (0..300).map(move |x| (x, y)))
+        .filter(|(x, y)| at(*x, *y) == look.foreground)
+        .collect();
+    let (x0, x1) = (
+        inked.iter().map(|(x, _)| *x).min().unwrap(),
+        inked.iter().map(|(x, _)| *x).max().unwrap(),
+    );
+    let (y0, y1) = (
+        inked.iter().map(|(_, y)| *y).min().unwrap(),
+        inked.iter().map(|(_, y)| *y).max().unwrap(),
+    );
+    assert!(x1 - x0 > 20 && y1 - y0 > 40, "{x0}..{x1} {y0}..{y1}");
+    // Inside it every pixel is the foreground: no line where two cells
+    // meet.
+    let seams: Vec<(usize, usize)> = (y0..=y1)
+        .flat_map(|y| (x0..=x1).map(move |x| (x, y)))
+        .filter(|(x, y)| at(*x, *y) != look.foreground)
+        .collect();
+    assert!(
+        seams.is_empty(),
+        "{} pixels, the first at {:?}",
+        seams.len(),
+        seams[0]
+    );
 }
