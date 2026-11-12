@@ -17,6 +17,7 @@ mod session;
 mod session_id;
 pub mod snapshot;
 pub mod store;
+pub mod title;
 pub mod types;
 
 pub use mode::Direction;

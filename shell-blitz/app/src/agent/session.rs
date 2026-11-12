@@ -7,12 +7,16 @@ use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
 use crossbeam_channel::Sender;
+use horizon_agent::auxiliary::AuxiliaryClient;
+use horizon_agent::summarize::summarize_session_title;
 use horizon_shell_runtime::agent_model::{
     AgentModel, ToolCallIdentity, actionable_pending_approval_identities_in,
     state_indicates_turn_in_flight,
 };
 use horizon_shell_runtime::agent_view::adapter::{Adapted, SettledUnits, adapt, unix_epoch_ms};
+use horizon_shell_runtime::agent_view::title::{derive_title_from_items, first_user_message_text};
 use horizon_shell_runtime::{AgentCommand, AgentSessionHandle, AgentUpdate, AttachmentState};
+use horizon_workspace::title::derive_session_title;
 
 /// The model as folded so far, and how many updates went into it.
 #[derive(Default)]
@@ -24,9 +28,61 @@ struct Folded {
 
 type Wake = Arc<Mutex<Option<Waker>>>;
 
+/// The session's title from what it is about: its first message as it
+/// was sent, then, once, a summary of it by the small model.
+#[derive(Default)]
+struct Title {
+    derived: Option<String>,
+    /// Whether `derived` has changed since it was last taken.
+    fresh: bool,
+    summary_asked: bool,
+    /// What summarizes: none without a usable `small_model`.
+    summarizer: Option<Arc<AuxiliaryClient>>,
+}
+
+fn wake(waker: &Wake) {
+    if let Some(waker) = waker.lock().unwrap().as_ref() {
+        waker.wake_by_ref();
+    }
+}
+
+/// Gives the session its title when its first message has come, and asks
+/// for the summary that replaces it.
+fn title_from(folded: &Folded, title: &Arc<Mutex<Title>>, waker: &Wake) {
+    let mut held = title.lock().unwrap();
+    if held.derived.is_none() {
+        let Some(derived) = derive_title_from_items(&folded.model.frame.items) else {
+            return;
+        };
+        held.derived = Some(derived);
+        held.fresh = true;
+    }
+    let Some(summarizer) = held.summarizer.clone().filter(|_| !held.summary_asked) else {
+        return;
+    };
+    let Some(first) = first_user_message_text(&folded.model.frame.items) else {
+        return;
+    };
+    held.summary_asked = true;
+    let (title, waker) = (Arc::clone(title), Arc::clone(waker));
+    std::thread::spawn(move || {
+        // The model's reply is untrusted text: it is shaped as any title
+        // is. Any failure leaves the first message's title.
+        let summary = summarize_session_title(&summarizer, &first);
+        if let Some(summary) = summary.and_then(|text| derive_session_title(&text)) {
+            let mut held = title.lock().unwrap();
+            held.derived = Some(summary);
+            held.fresh = true;
+            drop(held);
+            wake(&waker);
+        }
+    });
+}
+
 pub struct AgentSession {
     commands: Sender<AgentCommand>,
     folded: Arc<Mutex<Folded>>,
+    title: Arc<Mutex<Title>>,
     waker: Wake,
     /// The attachment to the agent runtime: letting go of it detaches the
     /// session, which goes on.
@@ -46,16 +102,17 @@ impl AgentSession {
     pub fn attached(mut handle: AgentSessionHandle) -> Self {
         let (folded, waker) = (Arc::<Mutex<Folded>>::default(), Wake::default());
         let (folding, woken) = (Arc::clone(&folded), Arc::clone(&waker));
+        let title = Arc::<Mutex<Title>>::default();
+        let titled = Arc::clone(&title);
         let mut updates = handle.take_events();
         std::thread::spawn(move || {
             let changed = |change: &mut dyn FnMut(&mut Folded)| {
                 let mut folded = folding.lock().unwrap();
                 change(&mut folded);
                 folded.revision += 1;
+                title_from(&folded, &titled, &woken);
                 drop(folded);
-                if let Some(waker) = woken.lock().unwrap().as_ref() {
-                    waker.wake_by_ref();
-                }
+                wake(&woken);
             };
             while let Some(update) = updates.blocking_recv() {
                 let mut update = Some(update);
@@ -77,6 +134,7 @@ impl AgentSession {
         Self {
             commands: handle.sender(),
             folded,
+            title,
             waker,
             _attachment: handle,
         }
@@ -113,6 +171,19 @@ impl AgentSession {
             turn_in_flight: state_indicates_turn_in_flight(frame.state()),
             paused_turn: frame.halted_awaiting_continue(),
         }
+    }
+
+    /// The session's title, if it has one it has not given yet.
+    pub fn take_title(&self) -> Option<String> {
+        let mut title = self.title.lock().unwrap();
+        std::mem::take(&mut title.fresh)
+            .then(|| title.derived.clone())
+            .flatten()
+    }
+
+    /// What summarizes the first message into a title, if anything does.
+    pub fn set_summarizer(&self, summarizer: Option<Arc<AuxiliaryClient>>) {
+        self.title.lock().unwrap().summarizer = summarizer;
     }
 
     /// Who to wake when the session has changed.

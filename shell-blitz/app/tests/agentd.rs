@@ -188,6 +188,16 @@ api_key_env = "HORIZON_BLITZ_TEST_MOCK_KEY"
     press(&app, Key::Named(NamedKey::Enter), Modifiers::default());
     until("the message", &|| text().contains("hello there"));
     until("the answer", &|| text().contains("ACP-OK"));
+    // The tab is named for what the session is about: the message, and
+    // then the small model's summary of it (the stand-in's one reply).
+    let title = || {
+        shell
+            .model
+            .with_untracked(|model| model.tab_summaries()[1].title.clone())
+    };
+    until("a title", &|| {
+        ["hello there", "ACP-OK"].contains(&title().as_str())
+    });
 
     // The daemon ends with the test.
     drop(app);

@@ -18,8 +18,10 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::task::Waker;
 
+use horizon_agent::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
 use horizon_agent::roles::RoleId;
 use horizon_config::RawConfig;
 use horizon_shell_runtime::AgentCommand;
@@ -33,6 +35,7 @@ use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Track, Update, With, WithUntracked, WithValue,
 };
 use horizon_ui::{El, each_layout, el, relayout, stop_propagation};
+use horizon_workspace::title::derive_session_title;
 use horizon_workspace::types::TabSummary;
 use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, Workspace};
 
@@ -142,6 +145,16 @@ pub struct Starting {
 const MIN_FONT_SIZE: f32 = 5.;
 const MAX_FONT_SIZE: f32 = 40.;
 
+/// What summarizes a first message into a title under `config`.
+fn summarizer(config: &RawConfig) -> Option<Arc<AuxiliaryClient>> {
+    let small = config.resolved_small_model().ok()?;
+    Some(Arc::new(AuxiliaryClient::new(AuxiliaryConfig {
+        base_url: small.provider.base_url,
+        api_key_env: small.provider.api_key_env,
+        model: small.model,
+    })))
+}
+
 /// Starts a terminal session.
 pub type Spawn = Box<dyn Fn(Starting) -> Session>;
 
@@ -239,6 +252,9 @@ struct Kept {
     sessions: RefCell<HashMap<SessionId, Rc<Session>>>,
     agents: RefCell<HashMap<SessionId, Rc<AgentSession>>>,
     spawn_agent: Option<SpawnAgent>,
+    /// What summarizes an agent session's first message into its title:
+    /// the configuration's `small_model`, if it names a usable one.
+    summarizer: RefCell<Option<Arc<AuxiliaryClient>>>,
     /// How the sessions made and not yet started are to begin.
     starting: RefCell<HashMap<SessionId, Start>>,
     keymap: RefCell<Keymap>,
@@ -414,6 +430,7 @@ impl Shell {
                     if let Some(waker) = kept.waker.borrow().clone() {
                         session.set_waker(waker);
                     }
+                    session.set_summarizer(kept.summarizer.borrow().clone());
                     let (root, view) = agent::live(session, || {});
                     agent = Some(view);
                     root
@@ -490,8 +507,10 @@ impl Shell {
             let Some((session, terminal)) = &view.terminal else {
                 continue;
             };
+            // A program's title is shaped as any title is; one that
+            // shapes to nothing is no title.
             if let Some(title) = terminal.take_title() {
-                titles.push((*session, title));
+                titles.push((*session, title.as_deref().and_then(derive_session_title)));
             }
             if let Some(directory) = terminal.take_directory() {
                 directories.push((*session, directory));
@@ -512,12 +531,19 @@ impl Shell {
             for update in session.take_updates() {
                 match update {
                     TerminalUpdate::Exited => exited.push(*id),
-                    TerminalUpdate::Title(title) => titles.push((*id, title)),
+                    TerminalUpdate::Title(title) => {
+                        titles.push((*id, title.as_deref().and_then(derive_session_title)));
+                    }
                     TerminalUpdate::WorkingDirectory(directory) => {
                         directories.push((*id, directory));
                     }
                     _ => {}
                 }
+            }
+        }
+        for (id, session) in kept.agents.borrow().iter() {
+            if let Some(title) = session.take_title() {
+                titles.push((*id, Some(title)));
             }
         }
         if titles.is_empty() && directories.is_empty() && exited.is_empty() {
@@ -615,6 +641,11 @@ impl Shell {
         let kept = self.kept();
         kept.configured_size.set(theme.font_size);
         *kept.keymap.borrow_mut() = Keymap::from_config(config);
+        let summarizer = summarizer(config);
+        for session in kept.agents.borrow().values() {
+            session.set_summarizer(summarizer.clone());
+        }
+        *kept.summarizer.borrow_mut() = summarizer;
         self.theme.set(theme);
     }
 
@@ -694,6 +725,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             sessions: RefCell::new(sessions),
             agents: RefCell::new(agents),
             spawn_agent: opening.agents,
+            summarizer: RefCell::new(summarizer(&opening.config)),
             starting: RefCell::default(),
             keymap: RefCell::new(Keymap::from_config(&opening.config)),
             spawn,

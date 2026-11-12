@@ -4,4 +4,5 @@
 //! UI framework, as the model is.
 
 pub mod adapter;
+pub mod title;
 pub mod turns;
