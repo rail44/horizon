@@ -30,7 +30,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::pty::Session;
 use crate::term::{Ink, LINE_HEIGHT, Row, Shaper};
-use crate::{El, each_layout, el, later, prevent_default};
+use crate::{El, copy, each_layout, el, prevent_default, request_paste};
 
 const FOREGROUND: [u8; 3] = [0x20, 0x20, 0x20];
 const BACKGROUND: [u8; 3] = [0xfd, 0xf6, 0xe3];
@@ -102,8 +102,10 @@ struct State {
     preedit: RefCell<String>,
     focused: Cell<bool>,
     exited: Cell<bool>,
-    /// What the session put on the clipboard, until the shell is given it.
+    /// What the session last copied, for whoever placed the view to see,
+    /// and what it copied that the clipboard has not been given yet.
     copied: RefCell<Option<String>>,
+    outgoing: RefCell<Option<String>>,
     /// The part of a wheel's turn not yet a whole row.
     wheel: Cell<f64>,
     /// Whether a button went down here and is still held, and whether what
@@ -190,7 +192,10 @@ fn pump(state: &State) -> bool {
             TerminalUpdate::Clipboard {
                 text,
                 destination: ClipboardDestination::Clipboard,
-            } => *state.copied.borrow_mut() = Some(text),
+            } => {
+                *state.outgoing.borrow_mut() = Some(text.clone());
+                *state.copied.borrow_mut() = Some(text);
+            }
             TerminalUpdate::Exited => state.exited.set(true),
             _ => {}
         }
@@ -275,6 +280,7 @@ pub fn view(session: Session) -> (El, Terminal) {
         focused: Cell::new(false),
         exited: Cell::new(false),
         copied: RefCell::new(None),
+        outgoing: RefCell::new(None),
         wheel: Cell::new(0.),
         dragging: Cell::new(None),
     });
@@ -325,9 +331,7 @@ pub fn view(session: Session) -> (El, Terminal) {
                 return;
             }
             if key.modifiers.ctrl() && key.modifiers.shift() && character == "v" {
-                later(|document| {
-                    let _ = document.shell_provider.request_clipboard_text();
-                });
+                request_paste();
                 prevent_default();
                 return;
             }
@@ -472,26 +476,26 @@ pub fn view(session: Session) -> (El, Terminal) {
     // box's size in cells goes out when it changes.
     let (sized, mut shaper) = (state.clone(), Shaper::default());
     let cell_width = shaper.cell_width(1.);
-    each_layout(move |document| {
+    each_layout(move |page| {
         pump(&sized);
-        // Whether the keys come here: asked of the document, since a focus
-        // it was given from code is not announced by an event.
-        let focused = document.get_focussed_node_id() == Some(element.0);
+        // Whether the keys come here: asked of the page, since a focus
+        // given from code is not announced by an event.
+        let focused = page.has_focus(element);
         if focused != sized.focused.replace(focused) {
             if !focused {
                 sized.preedit.borrow_mut().clear();
             }
             sized.session.send(TerminalCommand::Focus(focused));
         }
-        if let Some(text) = sized.copied.borrow().clone() {
-            let _ = document.shell_provider.set_clipboard_text(text);
+        if let Some(text) = sized.outgoing.borrow_mut().take() {
+            copy(text);
         }
-        let Some(node) = document.get_node(element.0) else {
+        let Some(size) = page.size(element) else {
             return;
         };
-        let size = node.final_layout().size;
-        let columns = (size.width as f64 / cell_width) as usize;
-        let rows = (size.height as f64 / LINE_HEIGHT) as usize;
+        let size = kurbo::Size::new(size.0, size.1);
+        let columns = (size.width / cell_width) as usize;
+        let rows = (size.height / LINE_HEIGHT) as usize;
         if (columns, rows) != (sized.cells.get().1, sized.cells.get().2) && columns * rows > 0 {
             sized.cells.set((cell_width, columns, rows));
             (sized.session).send(TerminalCommand::Resize(TerminalSize::new(

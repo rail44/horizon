@@ -79,10 +79,81 @@ type Deferred = Box<dyn FnOnce(&mut BaseDocument)>;
 /// the element's own box, or nowhere to show.
 type TextArea = Box<dyn Fn() -> Option<(f32, f32, f32, f32)>>;
 
+/// A box on the page, in CSS pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// The page as it was last laid out, to ask things of. A view never has
+/// the document itself: it builds and changes elements through [`El`], and
+/// what it needs to know of the layout it asks here, at one of the two
+/// times the answer is sound ([`dispatched`], [`each_layout`]).
+pub struct Page<'a>(&'a BaseDocument);
+
+impl Page<'_> {
+    /// Where an element's box is on the page.
+    pub fn bounds(&self, element: El) -> Option<Bounds> {
+        let bounds = self.0.get_client_bounding_rect(element.0)?;
+        Some(Bounds {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+        })
+    }
+
+    /// An element's width and height.
+    pub fn size(&self, element: El) -> Option<(f64, f64)> {
+        let size = self.0.get_node(element.0)?.final_layout().size;
+        Some((size.width as f64, size.height as f64))
+    }
+
+    /// The element drawn at a point of the page and the elements around
+    /// it, innermost first.
+    pub fn under(&self, x: f32, y: f32) -> Vec<El> {
+        let mut path = Vec::new();
+        let mut node = self.0.hit(x, y).map(|hit| hit.node_id);
+        while let Some(id) = node {
+            path.push(El(id));
+            node = self.0.get_node(id).and_then(|node| node.parent);
+        }
+        path
+    }
+
+    /// How far a scrolling element is scrolled down, and how far it can be.
+    pub fn scrolled(&self, element: El) -> Option<(f64, f64)> {
+        let node = self.0.get_node(element.0)?;
+        Some((
+            node.scroll_offset().y,
+            node.final_layout().scroll_height() as f64,
+        ))
+    }
+
+    /// How many lines a text field's text takes, wrapped ones counted.
+    pub fn lines(&self, field: El) -> Option<usize> {
+        let node = self.0.get_node(field.0)?;
+        let input = node.element_data()?.text_input_data()?;
+        input.editor.try_layout().map(|layout| layout.len())
+    }
+
+    /// Whether the keys go to this element.
+    pub fn has_focus(&self, element: El) -> bool {
+        self.0.get_focussed_node_id() == Some(element.0)
+    }
+}
+
 /// Runs `work` after every layout from now on, before the page is painted:
-/// the place for what depends on the boxes a change produced (keeping a
-/// scrolled box at its end as its content grows).
-pub fn each_layout(work: impl FnMut(&mut BaseDocument) + 'static) {
+/// the place for what depends on the boxes a change produced.
+pub fn each_layout(mut work: impl FnMut(&Page) + 'static) {
+    each_layout_raw(move |document| work(&Page(document)));
+}
+
+/// [`each_layout`] with the document itself, for the layer's own parts.
+pub(crate) fn each_layout_raw(work: impl FnMut(&mut BaseDocument) + 'static) {
     shared().laid_out.borrow_mut().push(Box::new(work));
 }
 
@@ -131,22 +202,42 @@ pub fn stop_propagation() {
     STOPPED.set(true);
 }
 
-/// Does `work` on the document once the event being handled has been
-/// dispatched and the effects of what its handlers wrote have run: the
-/// place for acting on what those effects made (scrolling an element,
-/// giving the focus to something just built).
-pub fn later(work: impl FnOnce(&mut BaseDocument) + 'static) {
-    shared().later.borrow_mut().push(Box::new(work));
+/// Asks `work`'s questions of the page as soon as the event being handled
+/// has been dispatched, before any effect runs: the place for reading the
+/// layout from a handler (what is under a point, where a box is). Once
+/// effects have changed the document, its boxes are those of nodes that
+/// may be gone until the next layout.
+pub fn dispatched(work: impl FnOnce(&Page) + 'static) {
+    (shared().dispatched.borrow_mut()).push(Box::new(move |document| work(&Page(document))));
 }
 
-/// Does `work` on the document as soon as the event being handled has been
-/// dispatched, before any effect runs: the place for reading the layout
-/// (what is under a point, where a box is). A handler runs while the
-/// document is busy dispatching, so it cannot ask then; and once effects
-/// have changed the document, its boxes are those of nodes that may be
-/// gone until the next layout.
-pub fn dispatched(work: impl FnOnce(&mut BaseDocument) + 'static) {
-    shared().dispatched.borrow_mut().push(Box::new(work));
+/// Changes the document: now if it is free, and otherwise (from a handler
+/// the document is running, or from [`each_layout`] work) once it is.
+fn write(work: impl FnOnce(&mut BaseDocument) + 'static) {
+    if let Some(document) = LENT.get() {
+        // SAFETY: as in `with_document`.
+        return work(unsafe { &mut *document });
+    }
+    let shared = shared();
+    let Ok(mut document) = shared.document.try_borrow_mut() else {
+        shared.later.borrow_mut().push(Box::new(work));
+        return;
+    };
+    work(&mut document);
+}
+
+/// Puts `text` on the clipboard.
+pub fn copy(text: String) {
+    write(move |document| {
+        let _ = document.shell_provider.set_clipboard_text(text);
+    });
+}
+
+/// Asks for the clipboard's text, which arrives as a paste.
+pub fn request_paste() {
+    write(|document| {
+        let _ = document.shell_provider.request_clipboard_text();
+    });
 }
 
 thread_local! {
@@ -206,6 +297,12 @@ fn settle(shared: &Rc<Shared>, document: &mut BaseDocument, seconds: f64) {
         for work in shared.laid_out.borrow_mut().iter_mut() {
             work(document);
         }
+        // What that work asked to change (a scroll): nothing an effect
+        // waits on, and not something to leave for the next frame.
+        let later = std::mem::take(&mut *shared.later.borrow_mut());
+        for work in later {
+            work(document);
+        }
         if !shared.relayout.take() {
             break;
         }
@@ -223,7 +320,7 @@ fn name(local: &str) -> QualName {
 }
 
 /// An element being built: a node of the document already.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct El(pub NodeId);
 
 pub fn el(tag: &str) -> El {
@@ -303,6 +400,52 @@ impl El {
             with_document(|document| document.mutate().set_node_text(node, &text));
         });
         self
+    }
+
+    /// Scrolls a scrolling element to a place in its content.
+    pub fn scroll_to(self, x: f64, y: f64) -> Self {
+        write(move |document| document.scroll_to(self.0, x, y, blitz_dom::ScrollBehavior::Instant));
+        self
+    }
+
+    /// Scrolls a scrolling element by an amount.
+    pub fn scroll_by(self, x: f64, y: f64) -> Self {
+        write(move |document| document.scroll_by(self.0, x, y, blitz_dom::ScrollBehavior::Instant));
+        self
+    }
+
+    /// Replaces what a text field holds.
+    pub fn set_value(self, text: &str) -> Self {
+        let text = text.to_string();
+        write(move |document| {
+            (document.mutate()).set_attribute(self.0, name("value"), &text);
+        });
+        self
+    }
+
+    /// Takes the element out of where it is, whole, to be put somewhere
+    /// else: what it holds (typed text, a scroll position) goes with it.
+    pub fn detach(self) -> Self {
+        write(move |document| {
+            // (It may have been removed since: a pane closed.)
+            if document.get_node(self.0).is_none() {
+                return;
+            }
+            let mut mutator = document.mutate();
+            if mutator.node_has_parent(self.0) {
+                mutator.remove_node(self.0);
+            }
+        });
+        self
+    }
+
+    /// Takes the element out for good, with everything inside it.
+    pub fn remove(self) {
+        write(move |document| {
+            if document.get_node(self.0).is_some() {
+                document.mutate().remove_and_drop_node(self.0);
+            }
+        });
     }
 
     /// Has the input method on while this element has the focus, with its

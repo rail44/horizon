@@ -9,11 +9,9 @@
 //! elements; the turn in progress is a new allocation on every update and
 //! is built again.
 
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use blitz_dom::ScrollBehavior;
 use blitz_traits::events::DomEventData;
 use keyboard_types::{Key, NamedKey};
 use reactive_graph::effect::Effect;
@@ -21,8 +19,8 @@ use reactive_graph::owner::{LocalStorage, StoredValue};
 use reactive_graph::signal::RwSignal;
 use reactive_graph::traits::{Get, GetUntracked, Set, Update, WithValue};
 
-use crate::windowed::windowed;
-use crate::{El, each_layout, el, later, prevent_default, stop_propagation};
+use crate::windowed::{follow_tail, windowed};
+use crate::{El, dispatched, el, prevent_default, stop_propagation};
 
 #[allow(dead_code)]
 #[path = "../../../src/agent/view/chrome.rs"]
@@ -208,9 +206,7 @@ impl Agent {
         }
         self.typed.set(String::new());
         let field = self.field;
-        later(move |document| {
-            (document.mutate()).set_attribute(field.0, crate::name("value"), "");
-        });
+        field.set_value("");
         self.ask(Asked::Send(text));
     }
 
@@ -316,12 +312,8 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
             // The field is as tall as its lines, up to a bound; the lines
             // are the editor's own, so a wrapped line counts.
             let field = state.field;
-            later(move |document| {
-                let lines = document
-                    .get_node(field.0)
-                    .and_then(|node| node.element_data()?.text_input_data())
-                    .and_then(|input| input.editor.try_layout().map(|layout| layout.len()));
-                if let Some(lines) = lines {
+            dispatched(move |page| {
+                if let Some(lines) = page.lines(field) {
                     rows.set(lines.clamp(1, COMPOSER_MAX_ROWS));
                 }
             });
@@ -369,40 +361,15 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
         // field has the focus again once the press is over.
         .on("pointerup", move |_| {
             let field = state.field;
-            later(move |document| {
-                if document.get_focussed_node_id() != Some(field.0) {
-                    document.set_focus_to(field.0);
+            dispatched(move |page| {
+                if !page.has_focus(field) {
+                    field.focus();
                 }
             });
         })
         .child(state.column)
         .child(composer);
     (root, state)
-}
-
-/// Keeps `column` at its end as it grows, until a scroll away from the end;
-/// a scroll back down to the end takes it up again.
-fn follow_tail(column: El) {
-    let following = Cell::new(true);
-    // Where the column was and how far it could go, at the last layout.
-    let seen = Cell::new((0.0f64, 0.0f64));
-    each_layout(move |document| {
-        let Some(node) = document.get_node(column.0) else {
-            return;
-        };
-        let end = node.final_layout().scroll_height() as f64;
-        let at = node.scroll_offset().y;
-        let (was_at, was_end) = seen.get();
-        if (at - was_at).abs() > 0.5 {
-            // Not this function's doing: the owner scrolled.
-            following.set(at >= was_end.min(end) - 1.);
-        }
-        if following.get() && (end - at).abs() > 0.5 {
-            document.scroll_to(column.0, 0., end, ScrollBehavior::Instant);
-        }
-        let at = (document.get_node(column.0)).map_or(at, |node| node.scroll_offset().y);
-        seen.set((at, end));
-    });
 }
 
 fn placeholder(status: Status) -> &'static str {

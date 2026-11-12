@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use blitz_dom::NodeId;
 use blitz_traits::events::DomEventData;
 use keyboard_types::{Key, NamedKey};
 use reactive_graph::effect::Effect;
@@ -24,8 +23,7 @@ use crate::agent::sample::Session;
 use crate::board::Task;
 use crate::pty::Session as Shell;
 use crate::terminal::{self, Terminal};
-use crate::with_document;
-use crate::{El, agent, board, dispatched, el, later, markdown, prevent_default, stop_propagation};
+use crate::{El, agent, board, dispatched, el, markdown, prevent_default, stop_propagation};
 use horizon_terminal_core::TerminalSize;
 
 // Every rule sits under the view's own class: the page's style sheet is one
@@ -228,7 +226,7 @@ pub struct Workspace {
     query: RwSignal<String>,
     chosen: RwSignal<usize>,
     /// The split whose boundary is being dragged.
-    resizing: RwSignal<Option<(NodeId, bool, RwSignal<f32>)>>,
+    resizing: RwSignal<Option<(El, bool, RwSignal<f32>)>>,
     next_id: RwSignal<u32>,
     panes: StoredValue<Panes, LocalStorage>,
     owner: StoredValue<Owner, LocalStorage>,
@@ -331,9 +329,7 @@ impl Workspace {
                 if let Some(pane) = closed {
                     pane.owner.cleanup();
                     // Once the arrangement it was in has let go of it.
-                    later(move |document| {
-                        document.mutate().remove_and_drop_node(pane.element.0);
-                    });
+                    pane.element.remove();
                 }
             }
             Command::Show(kind) => {
@@ -450,30 +446,23 @@ fn tab(workspace: Workspace, id: u32, tree: RwSignal<Tree>) -> El {
     });
     // The outermost box of the last arrangement, when it was a split, and
     // the panes that were in it.
-    Effect::new(move |previous: Option<(Option<NodeId>, Vec<NodeId>)>| {
+    Effect::new(move |previous: Option<(Option<El>, Vec<El>)>| {
         let tree = tree.get();
         let (split, panes) = previous.unwrap_or_default();
-        with_document(|document| {
-            let mut mutator = document.mutate();
-            for pane in panes {
-                if mutator.node_has_parent(pane) {
-                    mutator.remove_node(pane);
-                }
-            }
-            // With the boxes inside it.
-            if let Some(split) = split {
-                mutator.remove_and_drop_node(split);
-            }
-        });
+        for pane in panes {
+            pane.detach();
+        }
+        // With the boxes inside it.
+        if let Some(split) = split {
+            split.remove();
+        }
         let top = arrange(&tree, workspace);
         root.child(top);
-        let panes: Vec<NodeId> = workspace.panes.with_value(|panes| {
+        let panes: Vec<El> = workspace.panes.with_value(|panes| {
             let panes = panes.borrow();
-            (tree.panes().iter())
-                .map(|id| panes[id].element.0)
-                .collect()
+            tree.panes().iter().map(|id| panes[id].element).collect()
         });
-        ((!panes.contains(&top.0)).then_some(top.0), panes)
+        ((!panes.contains(&top)).then_some(top), panes)
     });
     root
 }
@@ -500,7 +489,7 @@ fn arrange(tree: &Tree, workspace: Workspace) -> El {
             let first = cell(|ratio| ratio, first);
             let second = cell(|ratio| 1. - ratio, second);
             let divider = el("div").class("divider").on("pointerdown", move |_| {
-                workspace.resizing.set(Some((split.0, across, ratio)));
+                workspace.resizing.set(Some((split, across, ratio)));
                 // Not the start of a selection in the text around it.
                 prevent_default();
             });
@@ -710,8 +699,8 @@ pub fn view() -> (El, Workspace) {
                 return;
             };
             let (x, y) = (pointer.page_x() as f64, pointer.page_y() as f64);
-            dispatched(move |document| {
-                let Some(bounds) = document.get_client_bounding_rect(split) else {
+            dispatched(move |page| {
+                let Some(bounds) = page.bounds(split) else {
                     return;
                 };
                 let share = if across {

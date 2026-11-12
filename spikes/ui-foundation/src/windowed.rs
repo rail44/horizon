@@ -22,7 +22,7 @@ use blitz_dom::{BaseDocument, NodeId, ScrollBehavior};
 use reactive_graph::signal::RwSignal;
 use reactive_graph::traits::{Get, GetUntracked, Set};
 
-use crate::{El, each_layout, el, relayout};
+use crate::{El, each_layout_raw, el, relayout};
 
 /// How far past the box's edges items are kept built, so a scroll does not
 /// wait on them.
@@ -145,7 +145,7 @@ where
     );
     scroller.child(below);
 
-    each_layout(move |document| {
+    each_layout_raw(move |document| {
         let mut state = state.borrow_mut();
         let state = &mut *state;
         let count = state.order.len();
@@ -248,4 +248,29 @@ where
         }
     });
     built
+}
+
+/// Keeps a scrolling element at its end as its content grows, until a
+/// scroll away from the end; a scroll back down to the end takes it up
+/// again. ([`windowed`] does this itself when asked to.)
+pub fn follow_tail(scroller: El) {
+    let mut following = true;
+    // Where the box was and how far it could go, at the last layout.
+    let mut seen = (0.0f64, 0.0f64);
+    each_layout_raw(move |document| {
+        let Some(node) = document.get_node(scroller.0) else {
+            return;
+        };
+        let end = node.final_layout().scroll_height() as f64;
+        let at = node.scroll_offset().y;
+        if (at - seen.0).abs() > 0.5 {
+            // Not this function's doing: it was scrolled by hand.
+            following = at >= seen.1.min(end) - 1.;
+        }
+        if following && (end - at).abs() > 0.5 {
+            document.scroll_to(scroller.0, 0., end, ScrollBehavior::Instant);
+        }
+        let at = (document.get_node(scroller.0)).map_or(at, |node| node.scroll_offset().y);
+        seen = (at, end);
+    });
 }

@@ -12,7 +12,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use blitz_dom::NodeId;
 use blitz_traits::events::DomEventData;
 use keyboard_types::Key;
 use reactive_graph::signal::RwSignal;
@@ -102,7 +101,7 @@ pub fn view(tasks: Vec<Task>) -> (El, Board) {
     // Where the carried row's copy is, in the view.
     let ghost_at = RwSignal::new((0f32, 0f32));
     // Which task a row's element shows, for the element under the pointer.
-    let rows_by_node: Rc<RefCell<HashMap<NodeId, u64>>> = Rc::default();
+    let rows_by_node: Rc<RefCell<HashMap<El, u64>>> = Rc::default();
 
     let root = el("div").class("board").attr("tabindex", "0");
     let rows = el("div").class("rows");
@@ -138,7 +137,7 @@ pub fn view(tasks: Vec<Task>) -> (El, Board) {
                     move || state.indicator.get() == Some((id, Half::Below)),
                     || el("div").class("line below"),
                 );
-            known.borrow_mut().insert(row.0, id);
+            known.borrow_mut().insert(row, id);
             row
         },
     );
@@ -159,23 +158,18 @@ pub fn view(tasks: Vec<Task>) -> (El, Board) {
             state.carried.set(Some(id));
         }
         let known = known.clone();
-        // The document is busy with the event: what is under the pointer
-        // and where its box is are asked once it is done.
-        dispatched(move |document| {
-            if let Some(origin) = document.get_client_bounding_rect(root.0) {
+        // What is under the pointer and where its box is, asked of the
+        // page once the event is done with.
+        dispatched(move |page| {
+            if let Some(origin) = page.bounds(root) {
                 ghost_at.set((x - origin.x as f32 + 12., y - origin.y as f32 + 12.));
             }
-            let mut node = document.hit(x, y).map(|hit| hit.node_id);
-            let mut over = None;
-            while let Some(id) = node {
-                if let Some(task) = known.borrow().get(&id) {
-                    over = Some((id, *task));
-                    break;
-                }
-                node = document.get_node(id).and_then(|node| node.parent);
-            }
-            let next = over.and_then(|(node, target)| {
-                let bounds = document.get_client_bounding_rect(node)?;
+            // The row under the pointer, if it is over one.
+            let known = known.borrow();
+            let over = (page.under(x, y).into_iter())
+                .find_map(|element| Some((element, *known.get(&element)?)));
+            let next = over.and_then(|(row, target)| {
+                let bounds = page.bounds(row)?;
                 let half = if (y as f64) < bounds.y + bounds.height / 2. {
                     Half::Above
                 } else {

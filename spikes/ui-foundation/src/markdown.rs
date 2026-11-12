@@ -10,14 +10,13 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use blitz_dom::ScrollBehavior;
 use blitz_traits::events::DomEventData;
 use keyboard_types::{Key, NamedKey};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use reactive_graph::signal::RwSignal;
 use reactive_graph::traits::{Get, GetUntracked, Set, Update};
 
-use crate::{El, dispatched, el, later};
+use crate::{El, dispatched, el};
 
 #[allow(dead_code)]
 #[path = "../../../src/markdown/document.rs"]
@@ -211,7 +210,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl) -> (El, Markdown) {
     // A new file starts at its top.
     reactive_graph::effect::Effect::new(move |_| {
         state.path.get();
-        later(move |document| document.scroll_to(scroll.0, 0., 0., ScrollBehavior::Instant));
+        scroll.scroll_to(0., 0.);
     });
 
     let root = el("div").class("markdown").attr("tabindex", "0");
@@ -224,12 +223,9 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl) -> (El, Markdown) {
         }
         // A line is three of the body's lines; a page most of the box.
         let scroll_by = move |lines: f64, pages: f64| {
-            dispatched(move |document| {
-                let height = document
-                    .get_node(scroll.0)
-                    .map_or(0., |node| node.final_layout().size.height as f64);
-                let down = lines * 26. * 3. + pages * height * 0.8;
-                document.scroll_by(scroll.0, 0., down, ScrollBehavior::Instant);
+            dispatched(move |page| {
+                let height = page.size(scroll).map_or(0., |(_, height)| height);
+                scroll.scroll_by(0., lines * 26. * 3. + pages * height * 0.8);
             });
         };
         match &key.key {
