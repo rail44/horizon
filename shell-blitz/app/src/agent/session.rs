@@ -3,6 +3,8 @@
 //! changed. A session outlives a pane of it: the model is kept for the
 //! next pane to draw.
 
+use horizon_board_view::activity::BoardSessionActivity;
+use horizon_shell_runtime::agent_model::SessionStatus;
 use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
@@ -161,6 +163,27 @@ impl AgentSession {
     pub fn pending_approvals(&self) -> Vec<ToolCallIdentity> {
         let folded = self.folded.lock().unwrap();
         actionable_pending_approval_identities_in(&folded.model.frame.items)
+    }
+
+    /// What the session is doing, as a board row says it.
+    pub fn activity(&self) -> BoardSessionActivity {
+        let folded = self.folded.lock().unwrap();
+        if folded.attachment.is_closed() {
+            return BoardSessionActivity::Unavailable;
+        }
+        match folded.model.frame.status() {
+            None => BoardSessionActivity::Loading,
+            Some(SessionStatus::Starting) => BoardSessionActivity::Starting,
+            Some(SessionStatus::Running) => BoardSessionActivity::Running,
+            Some(SessionStatus::ToolRunning) => BoardSessionActivity::ToolRunning,
+            Some(SessionStatus::WaitingForInput) => BoardSessionActivity::WaitingForInput,
+            Some(SessionStatus::WaitingForApproval) => BoardSessionActivity::WaitingForApproval,
+            Some(SessionStatus::Cancelled) => BoardSessionActivity::Cancelled,
+            Some(SessionStatus::Completed) => BoardSessionActivity::Completed,
+            Some(SessionStatus::Failed) => BoardSessionActivity::Failed,
+            Some(SessionStatus::Paused) => BoardSessionActivity::Paused,
+            Some(SessionStatus::Terminated) => BoardSessionActivity::Terminated,
+        }
     }
 
     pub fn standing(&self) -> Standing {

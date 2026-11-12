@@ -267,3 +267,41 @@ fn a_dragged_row_shows_where_it_would_land_among_its_siblings() {
     assert!(opened.all("carried").is_empty());
     assert_eq!(opened.selected(), Some(4));
 }
+
+#[test]
+fn a_task_bound_to_a_session_says_what_the_session_is_doing() {
+    use horizon_board_view::activity::BoardSessionActivity;
+    use horizon_ui::reactive_graph::traits::Set;
+    use horizon_workspace::SessionId;
+
+    let session = SessionId::new();
+    let mut items = sample();
+    items[3].session_id = Some(session.as_uuid().to_string());
+    let opened = open(items);
+    assert_eq!(opened.list.bound_sessions(), [session]);
+    let said = || -> Vec<String> {
+        (opened.all("activity").into_iter())
+            .map(|chip| opened.text_of(chip))
+            .collect()
+    };
+    // Until whoever placed the view has said, the session is being found.
+    assert_eq!(said(), ["Loading"]);
+    let tell = |activity| {
+        opened.list.activity.set([(session, activity)].into());
+        opened.app.run_effects();
+        opened.app.resolve();
+    };
+    tell(BoardSessionActivity::Running);
+    assert_eq!(said(), ["Running"]);
+    assert_eq!(opened.all("accent").len(), 2, "the row's status and this");
+    tell(BoardSessionActivity::Failed);
+    assert_eq!(said(), ["Failed"]);
+    assert_eq!(opened.all("danger").len(), 1);
+    // The chip is before the row's own status, in the same row.
+    let row = opened.all("row")[3];
+    let document = opened.app.document();
+    let document = document.borrow();
+    let mut inside = Vec::new();
+    collect(&document, row, "activity", &mut inside);
+    assert_eq!(inside.len(), 1);
+}

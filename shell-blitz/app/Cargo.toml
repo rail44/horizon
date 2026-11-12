@@ -9,6 +9,7 @@ publish = false
 horizon-ui = { path = "../ui" }
 horizon-board = { path = "../../crates/horizon-board" }
 horizon-board-view = { path = "../../crates/horizon-board-view" }
+horizon-workspace = { path = "../../crates/horizon-workspace" }
 keyboard-types = "0.8"
 
 # What a view built into a preview plugin (`../preview-plugin`, wasm) does
@@ -24,7 +25,6 @@ horizon-theme = { path = "../../crates/horizon-theme" }
 horizon-shell-runtime = { path = "../../crates/horizon-shell-runtime" }
 horizon-terminal-core = { path = "../../crates/horizon-terminal-core" }
 horizon-wiki = { path = "../../crates/horizon-wiki" }
-horizon-workspace = { path = "../../crates/horizon-workspace" }
 anyrender = "0.14"
 anyrender_vello = "0.15"
 # The terminal's screen is a widget that paints itself: both crates draw

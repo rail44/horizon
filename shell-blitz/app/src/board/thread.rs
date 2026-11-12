@@ -23,7 +23,7 @@ use horizon_workspace::SessionId;
 use keyboard_types::{Key, NamedKey};
 
 use super::list::key_name;
-use super::{Job, Source, follow, run, tone, write_refusal};
+use super::{Activity, Job, Source, activity_chip, follow, run, tone, write_refusal};
 use crate::background::Background;
 use crate::markdown::render;
 
@@ -80,6 +80,7 @@ pub const CSS: &str = "
         .chip.info { background: var(--chip-info-surface); color: var(--chip-info-text); }
         .chip.warning { background: var(--chip-warning-surface);
                         color: var(--chip-warning-text); }
+        .chip.danger { background: var(--chip-muted-surface); color: var(--danger); }
         .notice { flex: none; padding: var(--u4) var(--u24) 0 var(--u24);
                   font-size: var(--meta-size); line-height: var(--meta-line);
                   color: var(--danger); }
@@ -151,6 +152,8 @@ pub struct BoardThread {
     /// The long posts opened in full.
     expanded: RwSignal<HashSet<String>>,
     pub notice: RwSignal<Option<String>>,
+    /// What the sessions the task is bound to are doing.
+    pub activity: Activity,
     typed: RwSignal<String>,
     status_typed: RwSignal<String>,
     held: StoredValue<Rc<Held>, LocalStorage>,
@@ -165,6 +168,15 @@ type Read = (Option<Item>, HashMap<u64, String>);
 impl BoardThread {
     fn held(&self) -> Rc<Held> {
         self.held.with_value(Rc::clone)
+    }
+
+    /// Every session the task is bound to, each once.
+    pub fn bound_sessions(&self) -> Vec<SessionId> {
+        self.item.with_untracked(|item| {
+            (item.as_ref()).map_or_else(Vec::new, |item| {
+                horizon_board_view::model::bound_sessions(std::slice::from_ref(item))
+            })
+        })
     }
 
     /// The directory of the project whose board this is.
@@ -395,6 +407,7 @@ fn band(state: BoardThread, item: &Item, unread: usize) -> El {
     if !status.is_empty() {
         line.child(chip(tone(item), &status));
     }
+    activity_chip(line, item, state.activity);
     if unread > 0 {
         line.child(chip("accent", &chrome::unread_count(unread)));
     }
@@ -512,6 +525,7 @@ pub fn view(
         cursor: RwSignal::new(None),
         expanded: RwSignal::new(HashSet::new()),
         notice: RwSignal::new(None),
+        activity: RwSignal::new(HashMap::new()),
         typed: RwSignal::new(String::new()),
         status_typed: RwSignal::new(String::new()),
         held: StoredValue::new_local(Rc::new(Held {

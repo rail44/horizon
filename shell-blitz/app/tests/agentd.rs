@@ -359,6 +359,64 @@ api_key_env = "HORIZON_BLITZ_TEST_MOCK_KEY"
     until("the refusal", &|| notice.get_untracked().is_some());
     assert_eq!(agents().len(), 3);
 
+    // The board says what the sessions its tasks are bound to are doing:
+    // one this workspace has, one only the daemon has (which is taken
+    // in), and one nobody runs.
+    use horizon_board_view::activity::BoardSessionActivity;
+    let only_the_daemon_s = horizon_workspace::SessionId::new();
+    let _running = (agentd.spawn())(workspace::Starting {
+        session: only_the_daemon_s,
+        from: None,
+        directory: Some(directory.join("project")),
+        role: None,
+    });
+    until("the daemon to have it", &|| {
+        let running = agentd.running().expect("the daemon's sessions");
+        running
+            .iter()
+            .any(|agent| agent.session == only_the_daemon_s)
+    });
+    let nobody_s = horizon_workspace::SessionId::new();
+    let board_store = horizon_board::Store::from_dir(&directory.join("project")).unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            for (title, session) in [
+                ("here", elsewhere),
+                ("there", only_the_daemon_s),
+                ("nowhere", nobody_s),
+            ] {
+                let task = (board_store.add(title, "", None, horizon_board::Position::Bottom))
+                    .await
+                    .unwrap();
+                (board_store.bind_session(task.id, &session.as_uuid().to_string()))
+                    .await
+                    .unwrap();
+            }
+        });
+    let list = shell.board_list(board).expect("the list");
+    let told = |session| list.activity.get_untracked().get(&session).copied();
+    let found = |activity: Option<BoardSessionActivity>| {
+        activity.is_some_and(|activity| {
+            !matches!(
+                activity,
+                BoardSessionActivity::Loading | BoardSessionActivity::Unavailable
+            )
+        })
+    };
+    until("what the workspace's session is doing", &|| {
+        found(told(elsewhere))
+    });
+    until("the daemon's session, taken in", &|| {
+        found(told(only_the_daemon_s)) && agents().contains(&only_the_daemon_s)
+    });
+    until("nobody's, out of reach", &|| {
+        told(nobody_s) == Some(BoardSessionActivity::Unavailable)
+    });
+    assert!(text().contains("Unreachable"), "{}", text());
+
     // The daemon ends with the test.
     drop(app);
     assert!(agentd.handle().begin_reload());

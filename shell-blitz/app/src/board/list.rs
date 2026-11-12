@@ -25,7 +25,7 @@ use keyboard_types::{Key, NamedKey};
 
 #[cfg(not(target_family = "wasm"))]
 use super::follow;
-use super::{Job, Source, run, tone, write_refusal};
+use super::{Activity, Job, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
 
 // Every rule sits under the view's own class: the page's style sheet is one
@@ -75,6 +75,7 @@ pub const CSS: &str = "
         .chip.info { background: var(--chip-info-surface); color: var(--chip-info-text); }
         .chip.warning { background: var(--chip-warning-surface);
                         color: var(--chip-warning-text); }
+        .chip.danger { background: var(--chip-muted-surface); color: var(--danger); }
         .status-dot { width: 8px; height: 8px; border-radius: 50%; opacity: 0.55; }
         .status-dot.muted { background: var(--text-muted); }
         .status-dot.accent { background: var(--accent); }
@@ -134,6 +135,8 @@ pub struct BoardList {
     pub finished_expanded: RwSignal<bool>,
     /// A line above the field: a write refused, a store that did not open.
     pub notice: RwSignal<Option<String>>,
+    /// What the sessions the tasks are bound to are doing.
+    pub activity: Activity,
     /// The row being dragged, and the row and half it would land by.
     carried: RwSignal<Option<u64>>,
     indicator: RwSignal<Option<(u64, DropHalf)>>,
@@ -163,6 +166,12 @@ enum Line {
 impl BoardList {
     fn held(&self) -> Rc<Held> {
         self.held.with_value(Rc::clone)
+    }
+
+    /// Every session the tasks are bound to, each once.
+    pub fn bound_sessions(&self) -> Vec<horizon_workspace::SessionId> {
+        self.items
+            .with_untracked(|items| model::bound_sessions(items))
     }
 
     /// The directory of the project whose board this is.
@@ -417,6 +426,7 @@ fn row(state: BoardList, row: &Row) -> El {
         let unread = chrome::unread_count(row.subtree_unread);
         tail.child(el("span").class("chip accent").text(&unread));
     }
+    activity_chip(tail, item, state.activity);
     let tone = tone(item);
     tail.child(match row.finished || status.is_empty() {
         true => el("div").class(&format!("status-dot {tone}")),
@@ -480,6 +490,7 @@ pub fn view(
         selected: RwSignal::new(None),
         finished_expanded: RwSignal::new(false),
         notice: RwSignal::new(None),
+        activity: RwSignal::new(HashMap::new()),
         carried: RwSignal::new(None),
         indicator: RwSignal::new(None),
         typed: RwSignal::new(String::new()),

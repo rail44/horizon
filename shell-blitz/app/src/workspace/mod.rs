@@ -372,6 +372,9 @@ struct Kept {
     agent_runtime: Option<AgentRuntime>,
     reload_terminals: Option<ReloadTerminals>,
     reloading: Cell<Option<Reloading>>,
+    /// The sessions a board named that this workspace did not have, and
+    /// whether the agent runtime has answered about each.
+    looked_for: RefCell<HashMap<SessionId, bool>>,
     /// The next arranging gives the active pane the keys.
     refocus: Cell<bool>,
     board: Option<board::Source>,
@@ -749,6 +752,7 @@ impl Shell {
             }
             relayout();
         }
+        self.tell_boards();
         let (mut titles, mut directories, mut exited) = (Vec::new(), Vec::new(), Vec::new());
         for view in self.kept().panes.borrow().values() {
             let Some((session, terminal)) = &view.terminal else {
@@ -1168,6 +1172,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             agent_runtime: opening.agent_runtime,
             reload_terminals: opening.reload_terminals,
             reloading: Cell::new(None),
+            looked_for: RefCell::default(),
             refocus: Cell::new(false),
             board: opening.board,
             config: RefCell::new(opening.config.clone()),

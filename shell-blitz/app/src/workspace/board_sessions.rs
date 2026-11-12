@@ -3,11 +3,14 @@
 //! yet, which the agent runtime is asked about off the UI thread and
 //! which is then taken into the workspace.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+
+use horizon_board_view::activity::BoardSessionActivity;
 
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Set, Update, WithUntracked};
+use horizon_ui::relayout;
 use horizon_workspace::{PaneKind, SessionId, SessionKind, Workspace};
 
 use super::{RunningAgent, Shell};
@@ -60,6 +63,74 @@ impl Shell {
             kept.agents.borrow_mut().insert(session, attached);
         }
         Ok(())
+    }
+
+    /// Tells each board view what the sessions its tasks are bound to are
+    /// doing, after a layout. A session this workspace does not have is
+    /// asked of the agent runtime once, and taken in detached if it runs
+    /// there; until the answer it reads as loading, and after it as out
+    /// of reach.
+    pub(super) fn tell_boards(&self) {
+        let kept = self.kept();
+        let mut unknown = Vec::new();
+        for view in kept.panes.borrow().values() {
+            let (bound, states) = match (&view.board_list, &view.board_thread) {
+                (Some(list), _) => (list.bound_sessions(), list.activity),
+                (_, Some(thread)) => (thread.bound_sessions(), thread.activity),
+                _ => continue,
+            };
+            let mut told = HashMap::new();
+            for session in bound {
+                let running = kept
+                    .agents
+                    .borrow()
+                    .get(&session)
+                    .map(|agent| agent.activity());
+                let activity = running.unwrap_or_else(|| {
+                    let answered = kept.looked_for.borrow().get(&session).copied();
+                    if answered.is_none() && kept.agent_runtime.is_some() {
+                        unknown.push(session);
+                    }
+                    match (answered, kept.agent_runtime.is_some()) {
+                        (Some(true), _) | (_, false) => BoardSessionActivity::Unavailable,
+                        _ => BoardSessionActivity::Loading,
+                    }
+                });
+                told.insert(session, activity);
+            }
+            if states.with_untracked(|states| *states != told) {
+                states.set(told);
+                relayout();
+            }
+        }
+        unknown.sort_unstable_by_key(|session| session.as_uuid());
+        unknown.dedup();
+        let Some(runtime) = kept.agent_runtime.as_ref().filter(|_| !unknown.is_empty()) else {
+            return;
+        };
+        for session in &unknown {
+            kept.looked_for.borrow_mut().insert(*session, false);
+        }
+        let find = runtime.find.clone();
+        self.in_background(
+            move || {
+                let found: Vec<_> = (unknown.iter())
+                    .filter_map(|session| find(*session).ok().flatten())
+                    .collect();
+                (unknown, found)
+            },
+            |shell, (asked, found)| {
+                for running in found {
+                    if let Err(error) = shell.adopt_agent(running) {
+                        eprintln!("a session a board names was not taken in: {error}");
+                    }
+                }
+                let kept = shell.kept();
+                for session in asked {
+                    kept.looked_for.borrow_mut().insert(session, true);
+                }
+            },
+        );
     }
 
     /// The organizer of the board the cursor is on, in a pane: started if

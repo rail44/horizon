@@ -60,6 +60,7 @@ impl Shell {
         // The sessions are let go of without a word to them: they are
         // the runtime's to keep. Their panes say what is going on.
         kept.agents.borrow_mut().clear();
+        kept.looked_for.borrow_mut().clear();
         self.remake_panes(PaneKind::Agent);
         let restart = reload.restart.clone();
         self.in_background(

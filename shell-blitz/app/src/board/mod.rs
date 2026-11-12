@@ -13,7 +13,12 @@ use std::path::PathBuf;
 use std::pin::Pin;
 
 use horizon_board::{Item, Store, StoreError};
+use horizon_board_view::activity::{BoardSessionActivity, task_session_state};
 use horizon_board_view::chrome;
+use horizon_ui::El;
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::With;
+use horizon_workspace::SessionId;
 
 use crate::background::Background;
 
@@ -160,6 +165,35 @@ fn tone(item: &Item) -> &'static str {
         "進行中" | "doing" | "設計中" => "accent",
         _ => "muted",
     }
+}
+
+/// What the sessions a board's tasks are bound to are doing, as whoever
+/// placed the view says: a view draws it and does not find it out.
+pub type Activity = RwSignal<std::collections::HashMap<SessionId, BoardSessionActivity>>;
+
+/// A chip in `into` for what the session `item` is bound to is doing,
+/// there while the task is bound to one.
+fn activity_chip(into: El, item: &Item, states: Activity) {
+    let item = item.clone();
+    into.each(
+        move || {
+            let state = states.with(|states| task_session_state(&item, states));
+            state.into_iter().collect::<Vec<_>>()
+        },
+        |state| *state,
+        |state| {
+            let tone = match state {
+                BoardSessionActivity::Failed => "danger",
+                BoardSessionActivity::Running
+                | BoardSessionActivity::ToolRunning
+                | BoardSessionActivity::WaitingForApproval => "accent",
+                _ => "muted",
+            };
+            horizon_ui::el("span")
+                .class(&format!("chip activity {tone}"))
+                .text(state.label())
+        },
+    );
 }
 
 /// A refused write, as the notice line says it.
