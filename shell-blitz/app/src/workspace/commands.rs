@@ -3,11 +3,12 @@
 
 use std::path::Path;
 
+use horizon_board_view::model::{ListCommand, ThreadCommand};
 use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::agent_model::ToolCallIdentity;
-use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
-use horizon_workspace::CloseCursorOutcome;
+use horizon_ui::reactive_graph::traits::{GetUntracked, Update, WithUntracked};
 use horizon_workspace::commands::{CommandId, CommandState};
+use horizon_workspace::{CloseCursorOutcome, ViewKind};
 
 use super::{Modal, Placement, Shell};
 use crate::agent::AgentSession;
@@ -30,6 +31,18 @@ pub(super) const CARRIED_OUT: &[CommandId] = &[
     CommandId::SwitchModel,
     CommandId::OpenSessionManager,
     CommandId::OpenTerminalInSessionDirectory,
+    CommandId::OpenBoard,
+    CommandId::ToggleBoardExpansion,
+    CommandId::ToggleBoardFinishedBand,
+    CommandId::OpenBoardRelatedItem,
+    CommandId::BackBoardList,
+    CommandId::OpenBoardTaskSession,
+    CommandId::AddBoardTask,
+    CommandId::PostBoardMessage,
+    CommandId::MoveBoardTaskUp,
+    CommandId::MoveBoardTaskDown,
+    CommandId::SaveBoardState,
+    CommandId::ToggleBoardClosed,
     CommandId::ReloadConfig,
     CommandId::IncreaseFontSize,
     CommandId::DecreaseFontSize,
@@ -114,6 +127,51 @@ impl Shell {
                     model.terminate_session(session.id);
                 }
             }),
+            CommandId::OpenBoard => self.create_view(ViewKind::BoardList, Placement::NewTab),
+            // What the board's own views carry out, each for the pane
+            // the cursor is on.
+            CommandId::ToggleBoardExpansion
+            | CommandId::ToggleBoardFinishedBand
+            | CommandId::AddBoardTask
+            | CommandId::MoveBoardTaskUp
+            | CommandId::MoveBoardTaskDown => {
+                let Some((_, list)) = self.active_board_list() else {
+                    return;
+                };
+                let selected = list.selected.get_untracked();
+                let asked = match command {
+                    CommandId::ToggleBoardExpansion => selected.map(ListCommand::ToggleExpansion),
+                    CommandId::ToggleBoardFinishedBand => Some(ListCommand::ToggleFinished),
+                    CommandId::AddBoardTask => Some(ListCommand::AddTask),
+                    CommandId::MoveBoardTaskUp => Some(ListCommand::MoveUp),
+                    _ => Some(ListCommand::MoveDown),
+                };
+                if let Some(asked) = asked {
+                    list.execute(asked);
+                }
+            }
+            CommandId::PostBoardMessage
+            | CommandId::ToggleBoardClosed
+            | CommandId::SaveBoardState
+            | CommandId::OpenBoardTaskSession => {
+                let Some(thread) = self.active_board_thread() else {
+                    return;
+                };
+                thread.execute(match command {
+                    CommandId::PostBoardMessage => ThreadCommand::PostMessage,
+                    CommandId::ToggleBoardClosed => ThreadCommand::ToggleClosed,
+                    CommandId::SaveBoardState => ThreadCommand::SaveStatus,
+                    _ => ThreadCommand::OpenTaskSession,
+                });
+            }
+            CommandId::OpenBoardRelatedItem => {
+                if let Some((pane, list)) = self.active_board_list()
+                    && let Some(task) = list.selected.get_untracked()
+                {
+                    self.open_thread(pane, task);
+                }
+            }
+            CommandId::BackBoardList => self.back_to_board_list(),
             CommandId::OpenSessionManager => self.open(Modal::Sessions),
             // A file that cannot be read leaves what is in use as it is.
             CommandId::ReloadConfig => match kept.reload.as_ref().map(|reload| reload()) {

@@ -699,3 +699,72 @@ fn the_control_plane_opens_a_markdown_file_in_a_pane_that_follows_its_links() {
     assert!(matches!(missing, EnvelopeBody::Error(_)), "{missing:?}");
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn the_board_opens_in_a_tab_and_a_task_s_thread_beside_its_list() {
+    use horizon_board::{BoardEvent, Item, Store, sample_envelopes};
+    use horizon_ui::reactive_graph::traits::GetUntracked;
+    use horizon_workspace::commands::CommandId;
+    use horizon_workspace::{PaneKind, ViewKind};
+
+    let tasks = [(1, "first", "a"), (2, "second", "b")].map(|(id, title, rank)| Item {
+        id,
+        title: title.to_string(),
+        rank: rank.to_string(),
+        ..Item::default()
+    });
+    let events = tasks
+        .into_iter()
+        .map(|item| BoardEvent::ItemStored { id: item.id, item });
+    let opened = open_with(Opening {
+        board: Some(horizon_blitz::board::Source::Ready(Store::in_memory(
+            sample_envelopes(events),
+        ))),
+        ..Opening::default()
+    });
+    let kinds = |opened: &Opened| -> Vec<PaneKind> {
+        opened.model(|model| model.visible_panes().iter().map(|pane| pane.kind).collect())
+    };
+
+    // The board's list, in a tab of its own, with the keys.
+    opened.chord();
+    opened.character(":");
+    opened.commit("open board");
+    opened.named(NamedKey::Enter);
+    assert_eq!(opened.model(Workspace::tab_count), 2);
+    assert_eq!(kinds(&opened), [PaneKind::View(ViewKind::BoardList)]);
+    let list_pane = opened.panes()[0];
+    let list = opened.shell.board_list(list_pane).expect("the list");
+    opened.until("the tasks", || list.tasks().len() == 2);
+    assert_eq!(list.selected.get_untracked(), Some(1));
+
+    // Enter on a task: its thread, beside the list, with the focus.
+    opened.named(NamedKey::Enter);
+    assert_eq!(
+        kinds(&opened),
+        [
+            PaneKind::View(ViewKind::BoardList),
+            PaneKind::View(ViewKind::BoardThread { task: 1 })
+        ]
+    );
+    let thread_pane = opened.panes()[1];
+    assert!(opened.model(|model| model.is_active_pane(thread_pane)));
+    let thread = opened.shell.board_thread(thread_pane).expect("the thread");
+    opened.until("the task", || opened.all("actions").len() == 1);
+
+    // Back to the list, and the next task's thread takes the same pane.
+    opened.shell.execute(CommandId::BackBoardList);
+    opened.app.run_effects();
+    opened.app.resolve();
+    assert!(opened.model(|model| model.is_active_pane(list_pane)));
+    opened.character("j");
+    assert_eq!(list.selected.get_untracked(), Some(2));
+    opened.named(NamedKey::Enter);
+    assert_eq!(opened.panes(), vec![list_pane, thread_pane]);
+    assert_eq!(thread.task.get_untracked(), 2);
+    assert_eq!(
+        opened.model(|model| model.pane_kind(thread_pane)),
+        Some(PaneKind::View(ViewKind::BoardThread { task: 2 }))
+    );
+    assert!(opened.model(|model| model.is_active_pane(thread_pane)));
+}

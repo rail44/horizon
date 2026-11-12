@@ -7,10 +7,10 @@
 //! pane, and lives until the model lets the pane go. Splitting, closing,
 //! resizing and changing tab change only the boxes around it.
 //!
-//! So far a pane shows a terminal, an agent or a Markdown file. Creating
-//! one asks which of the first two, when there is an agent runtime to
-//! start one with; a Markdown file is opened by naming it
-//! (`horizon markdown <path>`).
+//! So far a pane shows a terminal, an agent, a Markdown file, or the
+//! board (its task list, or one task's thread). Creating one asks which,
+//! in a shell with an agent runtime; a Markdown file is opened by naming
+//! it (`horizon markdown <path>`), and a thread from the list.
 //!
 //! Closing a pane lets go of its view and keeps its session, which the
 //! session manager lists and puts back in a pane; a session ends when it
@@ -42,6 +42,8 @@ use horizon_workspace::types::TabSummary;
 use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, ViewKind, Workspace};
 
 use crate::agent::{self, Agent, AgentSession};
+use crate::background::Background;
+use crate::board::{self, BoardList, BoardThread};
 use crate::markdown::{self, Markdown};
 use crate::terminal::{self, Session, Terminal};
 use crate::wake::Wake;
@@ -136,6 +138,7 @@ pub fn css() -> String {
         terminal::CSS,
         agent::CSS,
         markdown::CSS,
+        &board::css(),
     ]
     .concat()
 }
@@ -209,6 +212,9 @@ pub struct Opening {
     pub open_url: Option<markdown::OpenUrl>,
     /// What the model picker lists and switches with.
     pub models: Option<Arc<dyn Models>>,
+    /// The board's store, in place of the one of the project a board pane
+    /// is opened in: a test's.
+    pub board: Option<board::Source>,
     /// Told the model whenever it has changed, to keep it for the next
     /// run.
     pub save: Option<Save>,
@@ -226,6 +232,7 @@ impl Default for Opening {
             agents: None,
             open_url: None,
             models: None,
+            board: None,
             save: None,
         }
     }
@@ -276,6 +283,8 @@ struct PaneView {
     terminal: Option<(SessionId, Terminal)>,
     agent: Option<Agent>,
     markdown: Option<Markdown>,
+    board_list: Option<BoardList>,
+    board_thread: Option<BoardThread>,
 }
 
 /// What the shell keeps beside the model.
@@ -302,6 +311,7 @@ struct Kept {
     wake: Wake,
     open_url: markdown::OpenUrl,
     models: Option<Arc<dyn Models>>,
+    board: Option<board::Source>,
     /// What threads came back with, to take in on the UI thread.
     arrived: Arc<Mutex<Vec<Arrived>>>,
     owner: Owner,
@@ -409,6 +419,7 @@ impl Shell {
         let (shell, kept) = (*self, self.kept());
         let owner = kept.owner.child();
         let (mut terminal, mut agent, mut document) = (None, None, None);
+        let (mut board_list, mut board_thread) = (None, None);
         let start = |session| {
             kept.starting
                 .borrow_mut()
@@ -501,6 +512,31 @@ impl Shell {
                     document = Some(view);
                     root
                 }
+                (PaneKind::View(ViewKind::BoardList), ..) => {
+                    let background = Background::new(kept.wake.clone());
+                    let (root, view) = board::list::view(
+                        self.board_source(),
+                        background,
+                        move |asked| match asked {
+                            board::list::Asked::OpenThread(task) => shell.open_thread(id, task),
+                        },
+                    );
+                    board_list = Some(view);
+                    root
+                }
+                (PaneKind::View(ViewKind::BoardThread { task }), ..) => {
+                    let background = Background::new(kept.wake.clone());
+                    let (root, view) =
+                        board::thread::view(self.board_source(), background, task, move |asked| {
+                            match asked {
+                                board::thread::Asked::OpenSession(session) => {
+                                    shell.go_to_session(session);
+                                }
+                            }
+                        });
+                    board_thread = Some(view);
+                    root
+                }
                 _ => el("div")
                     .class("empty")
                     .attr("tabindex", "0")
@@ -527,6 +563,8 @@ impl Shell {
             terminal,
             agent,
             markdown: document,
+            board_list,
+            board_thread,
         }
     }
 
@@ -720,6 +758,126 @@ impl Shell {
         self.kept().agents.borrow().get(&session).cloned()
     }
 
+    /// The store a board pane made now reads: the one handed in, else
+    /// that of the project the active session works in, else the one
+    /// this shell was started in.
+    fn board_source(&self) -> board::Source {
+        if let Some(source) = self.kept().board.clone() {
+            return source;
+        }
+        let directory = self.model.with_untracked(|model| {
+            let session = model.active_session_id()?;
+            model.session_directory(session).map(PathBuf::from)
+        });
+        match directory.or_else(|| std::env::current_dir().ok()) {
+            Some(directory) => board::Source::Root(directory),
+            None => board::Source::Ready(horizon_board::Store::in_memory(Vec::new())),
+        }
+    }
+
+    /// The board list a pane shows, and the thread.
+    pub fn board_list(&self, pane: PaneId) -> Option<BoardList> {
+        self.kept().panes.borrow().get(&pane)?.board_list
+    }
+
+    pub fn board_thread(&self, pane: PaneId) -> Option<BoardThread> {
+        self.kept().panes.borrow().get(&pane)?.board_thread
+    }
+
+    /// The board views of the pane the commands act on.
+    fn active_board_list(&self) -> Option<(PaneId, BoardList)> {
+        let pane = self.model.with_untracked(Workspace::cursor_pane_id)?;
+        Some((pane, self.board_list(pane)?))
+    }
+
+    fn active_board_thread(&self) -> Option<BoardThread> {
+        let pane = self.model.with_untracked(Workspace::cursor_pane_id)?;
+        self.board_thread(pane)
+    }
+
+    /// Shows `task`'s thread beside the list in `list`'s tab: in the
+    /// tab's thread pane if it has one, else in a split of the list's.
+    /// The thread takes the focus.
+    fn open_thread(&self, list: PaneId, task: u64) {
+        let thread = self.model.with_untracked(|model| {
+            (model.tab_pane_kinds(list).into_iter()).find_map(|(pane, kind)| {
+                matches!(kind, PaneKind::View(ViewKind::BoardThread { .. })).then_some(pane)
+            })
+        });
+        let kind = ViewKind::BoardThread { task };
+        self.change(|model| {
+            model.exit_workspace_mode();
+            model.activate_pane(list);
+            match thread {
+                Some(thread) => {
+                    model.retarget_view_pane(thread, kind);
+                    model.activate_pane(thread);
+                }
+                None => {
+                    model.split_active_tab_with_view(kind, SplitAxis::Horizontal);
+                }
+            }
+        });
+        if let Some(view) = thread.and_then(|thread| self.board_thread(thread)) {
+            view.show_task(task);
+        }
+    }
+
+    /// From a thread, back to the list in its tab.
+    fn back_to_board_list(&self) {
+        let list = self.model.with_untracked(|model| {
+            let pane = model.cursor_pane_id()?;
+            let thread = matches!(
+                model.pane_kind(pane),
+                Some(PaneKind::View(ViewKind::BoardThread { .. }))
+            );
+            (model.tab_pane_kinds(pane).into_iter())
+                .find(|(_, kind)| thread && *kind == PaneKind::View(ViewKind::BoardList))
+                .map(|(pane, _)| pane)
+        });
+        if let Some(list) = list {
+            self.change(|model| {
+                model.exit_workspace_mode();
+                model.activate_pane(list);
+            });
+        }
+    }
+
+    /// Goes to a session's pane, or puts a session no pane shows in one
+    /// beside the active pane. A session this workspace does not have is
+    /// left alone.
+    fn go_to_session(&self, session: SessionId) {
+        self.change(|model| {
+            match model.pane_location_for_session(session) {
+                Some((tab, pane)) => {
+                    model.activate_pane_index(tab, pane);
+                }
+                None => {
+                    model.attach_existing_session_to_split_activated(session, true);
+                }
+            }
+            model.exit_workspace_mode();
+        });
+    }
+
+    /// A new pane at `placement` showing a view that has no session.
+    fn create_view(&self, kind: ViewKind, placement: Placement) {
+        self.change(|model| {
+            match placement {
+                Placement::NewTab => {
+                    model.open_tab_with_view_activated(kind, true);
+                }
+                Placement::SplitRight => {
+                    model.split_active_tab_with_view(kind, SplitAxis::Horizontal);
+                }
+                Placement::SplitDown => {
+                    model.split_active_tab_with_view(kind, SplitAxis::Vertical);
+                }
+            }
+            model.exit_workspace_mode();
+        });
+    }
+
     /// The Markdown view a pane shows.
     pub fn markdown(&self, pane: PaneId) -> Option<Markdown> {
         self.kept().panes.borrow().get(&pane)?.markdown
@@ -839,6 +997,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             wake: Wake::default(),
             open_url: opening.open_url.unwrap_or_else(|| Rc::new(|_| {})),
             models: opening.models,
+            board: opening.board,
             arrived: Arc::default(),
             owner: Owner::current().expect("an owner"),
         })),
