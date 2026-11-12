@@ -103,8 +103,11 @@ pub fn project_root(dir: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(common.parent()?).ok()
 }
 
+/// `$HORIZON_DATA_HOME`, else `$XDG_DATA_HOME`, else `~/.local/share`: as
+/// the board and the agent resolve theirs.
 fn data_home() -> Option<PathBuf> {
-    match std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
+    let named = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    match named("HORIZON_DATA_HOME").or_else(|| named("XDG_DATA_HOME")) {
         Some(value) => Some(PathBuf::from(value)),
         None => std::env::var_os("HOME")
             .filter(|value| !value.is_empty())

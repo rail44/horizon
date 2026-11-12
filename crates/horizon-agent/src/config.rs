@@ -89,6 +89,20 @@ const HOME_VAR: &str = "HOME";
 /// [`default_event_log_path_from`] and [`default_state_db_path_from`].
 const XDG_DATA_HOME_VAR: &str = "XDG_DATA_HOME";
 
+/// Names the data home for Horizon's own data alone, ahead of
+/// `XDG_DATA_HOME`: a second instance kept apart from the first sets it
+/// without moving the data home of every program it starts (the board's
+/// log and the wiki resolve theirs the same way).
+const HORIZON_DATA_HOME_VAR: &str = "HORIZON_DATA_HOME";
+
+/// The data home the environment names: `HORIZON_DATA_HOME` if set and
+/// not empty, else `XDG_DATA_HOME`.
+fn named_data_home() -> Option<String> {
+    (std::env::var(HORIZON_DATA_HOME_VAR).ok())
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var(XDG_DATA_HOME_VAR).ok())
+}
+
 // --- built-in defaults for the former `[agent]` tuning knobs ---------------
 //
 // These used to be file-configurable (a `[agent]` section in Horizon's
@@ -657,7 +671,7 @@ impl AgentPersistenceConfig {
     /// only override path.
     pub(crate) fn from_env() -> Self {
         let home = std::env::var(HOME_VAR).ok();
-        let xdg_data_home = std::env::var(XDG_DATA_HOME_VAR).ok();
+        let xdg_data_home = named_data_home();
         Self {
             event_log_path: resolve_event_log_path(
                 std::env::var(EVENT_LOG_PATH_VAR).ok(),
@@ -712,10 +726,7 @@ pub(crate) fn agent_data_home_from(xdg_data_home: Option<String>, home: Option<S
 /// resolve its base directory the same way the event log and DuckDB
 /// projection do.
 pub(crate) fn agent_data_home() -> PathBuf {
-    agent_data_home_from(
-        std::env::var(XDG_DATA_HOME_VAR).ok(),
-        std::env::var(HOME_VAR).ok(),
-    )
+    agent_data_home_from(named_data_home(), std::env::var(HOME_VAR).ok())
 }
 
 /// The event log's built-in default when `HORIZON_AGENT_EVENT_LOG` doesn't

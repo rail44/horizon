@@ -8,13 +8,17 @@
 
 use std::path::{Path, PathBuf};
 
-/// `$XDG_DATA_HOME` (if non-empty) → `~/.local/share` (if `$HOME`
-/// non-empty) → `std::env::temp_dir()`.  Mirrors
-/// `horizon-agent::config::agent_data_home_from` so this crate stays
-/// independent of `horizon-agent`.
+/// `$HORIZON_DATA_HOME` (if non-empty) → `$XDG_DATA_HOME` (if non-empty)
+/// → `~/.local/share` (if `$HOME` non-empty) → `std::env::temp_dir()`.
+/// Mirrors `horizon-agent::config::agent_data_home` so this crate stays
+/// independent of `horizon-agent`. `HORIZON_DATA_HOME` moves Horizon's
+/// own data alone: a process that sets it for a second instance does not
+/// move the data home of every program it starts.
 fn data_home() -> PathBuf {
     let non_empty = |value: Option<String>| value.filter(|v| !v.is_empty());
-    match non_empty(std::env::var("XDG_DATA_HOME").ok()) {
+    let named = non_empty(std::env::var("HORIZON_DATA_HOME").ok())
+        .or_else(|| non_empty(std::env::var("XDG_DATA_HOME").ok()));
+    match named {
         Some(dir) => PathBuf::from(dir),
         None => match non_empty(std::env::var("HOME").ok()) {
             Some(home) => PathBuf::from(home).join(".local").join("share"),
@@ -77,6 +81,17 @@ pub fn events_path(root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // nextest runs each test in a process of its own: the environment set
+    // here is this test's alone.
+    #[test]
+    fn horizon_data_home_is_named_ahead_of_the_xdg_one() {
+        std::env::set_var("XDG_DATA_HOME", "/xdg");
+        std::env::set_var("HORIZON_DATA_HOME", "/horizon");
+        assert_eq!(data_home(), PathBuf::from("/horizon"));
+        std::env::set_var("HORIZON_DATA_HOME", "");
+        assert_eq!(data_home(), PathBuf::from("/xdg"));
+    }
 
     #[test]
     fn sanitize_replaces_slashes() {
