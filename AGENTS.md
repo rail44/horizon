@@ -82,6 +82,15 @@ filter string. When a run dumps many failures, parse `cargo nextest run
 --format json` with `jq` rather than grepping the prose log — it is more
 reliable and cheaper.
 
+**The Blitz shell is a second workspace**, `shell-blitz/`, built beside
+the GPUI shell until it replaces it (`docs/ui-foundation-migration-design.md`).
+The root commands above do not reach it. Run the same three checks inside
+it when you change it — the pre-commit hook does:
+
+```sh
+(cd shell-blitz && cargo fmt --all && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo nextest run --workspace --locked)
+```
+
 The fourth step is the wire skew checker (`docs/remoc-adoption-design.md`
 §4). There is one committed wire-schema artifact per wire —
 `crates/horizon-acp/schema/acp-ext-wire.json` (the `_horizon/*` and

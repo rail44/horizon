@@ -1,0 +1,18 @@
+[package]
+name = "horizon-ui"
+description = "Horizon's layer between signals and a blitz-dom document."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+blitz-dom = { workspace = true }
+blitz-traits = { workspace = true }
+reactive_graph = { workspace = true }
+any_spawner = { workspace = true }
+
+[dev-dependencies]
+keyboard-types = "0.8"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

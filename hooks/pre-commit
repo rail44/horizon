@@ -51,6 +51,16 @@ else
   cargo nextest run --workspace --locked
 fi
 
+# The Blitz shell is a workspace of its own (AGENTS.md): the same three
+# checks, run inside it.
+echo "pre-commit: shell-blitz: cargo fmt --check, clippy, nextest"
+(
+  cd shell-blitz
+  cargo fmt --all -- --check
+  cargo clippy --workspace --all-targets --locked -- -D warnings
+  cargo nextest run --workspace --locked
+)
+
 echo "pre-commit: scripts/check-wire-schema.sh"
 ./scripts/check-wire-schema.sh
 

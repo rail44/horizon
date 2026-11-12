@@ -18,3 +18,4 @@
 .playwright-mcp/
 # A spike is its own workspace, with its own target/.
 /spikes/*/target/
+/shell-blitz/target/
