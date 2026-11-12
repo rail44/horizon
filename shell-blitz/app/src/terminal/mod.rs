@@ -82,8 +82,10 @@ struct State {
     /// Shared with whoever placed the view: the session outlives a view
     /// of it that is closed.
     session: Rc<Session>,
-    /// The theme's colors, font and row height.
-    look: TerminalLook,
+    /// The theme's colors, font and row height, and how many times they
+    /// have been given.
+    look: RefCell<TerminalLook>,
+    restyled: Cell<u64>,
     /// The frame on screen, and its number among the session's.
     frame: RefCell<Option<TerminalFrame>>,
     seen: Cell<u64>,
@@ -178,6 +180,12 @@ impl Terminal {
     /// What the session last copied, taken.
     pub fn take_copied(&self) -> Option<String> {
         self.state.copied.borrow_mut().take()
+    }
+
+    /// Draws the terminal in `look` from now on.
+    pub fn set_look(&self, look: TerminalLook) {
+        *self.state.look.borrow_mut() = look;
+        self.state.restyled.set(self.state.restyled.get() + 1);
     }
 
     /// Who to wake when the session has a frame.
@@ -285,7 +293,8 @@ fn key_code(key: &BlitzKeyEvent) -> Option<(KeyCode, Option<String>)> {
 pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
     let state = Rc::new(State {
         session,
-        look,
+        look: RefCell::new(look),
+        restyled: Cell::new(0),
         frame: RefCell::new(None),
         seen: Cell::new(0),
         cells: Cell::new((1., 0, 0)),
@@ -307,7 +316,7 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         move |x: f32, y: f32| {
             let (width, columns, rows) = state.cells.get();
             TerminalSelectionPoint {
-                row: ((y as f64 / state.look.line_height).max(0.) as usize)
+                row: ((y as f64 / state.look.borrow().line_height).max(0.) as usize)
                     .min(rows.saturating_sub(1)),
                 col: ((x as f64 / width).max(0.) as usize).min(columns.saturating_sub(1)),
             }
@@ -451,7 +460,7 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
             };
             let turned = match wheel.delta {
                 BlitzWheelDelta::Lines(_, lines) => lines * 3.,
-                BlitzWheelDelta::Pixels(_, pixels) => pixels / wheeled.look.line_height,
+                BlitzWheelDelta::Pixels(_, pixels) => pixels / wheeled.look.borrow().line_height,
             };
             let turned = wheeled.wheel.get() + turned;
             let lines = turned.trunc();
@@ -473,26 +482,37 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
             let cursor = frame.as_ref()?.cursor?;
             Some((
                 (cursor.col as f64 * width) as f32,
-                (cursor.row as f64 * area.look.line_height) as f32,
+                (cursor.row as f64 * area.look.borrow().line_height) as f32,
                 width as f32,
-                area.look.line_height as f32,
+                area.look.borrow().line_height as f32,
             ))
         })
         .widget(Screen {
             state: state.clone(),
-            shaper: Shaper::with_font(&state.look.font_family, state.look.font_size),
+            shaper: Shaper::with_font(
+                &state.look.borrow().font_family,
+                state.look.borrow().font_size,
+            ),
             rows: Vec::new(),
             shaped_at: 0.,
             baseline: 0.,
+            styled: 0,
         });
 
     // The session's frames and updates come in with every layout, and the
     // box's size in cells goes out when it changes.
     let sized = state.clone();
-    let mut shaper = Shaper::with_font(&state.look.font_family, state.look.font_size);
-    let cell_width = shaper.cell_width(1.);
+    // A cell's width in CSS pixels, in the look numbered `styled`.
+    let measure =
+        |look: &TerminalLook| Shaper::with_font(&look.font_family, look.font_size).cell_width(1.);
+    let mut cell_width = measure(&state.look.borrow());
+    let mut styled = 0;
     each_layout(move |page| {
         pump(&sized);
+        if styled != sized.restyled.get() {
+            styled = sized.restyled.get();
+            cell_width = measure(&sized.look.borrow());
+        }
         // Whether the keys come here: asked of the page, since a focus
         // given from code is not announced by an event.
         let focused = page.has_focus(element);
@@ -510,7 +530,7 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         };
         let size = kurbo::Size::new(size.0, size.1);
         let columns = (size.width / cell_width) as usize;
-        let rows = (size.height / sized.look.line_height) as usize;
+        let rows = (size.height / sized.look.borrow().line_height) as usize;
         if (columns, rows) != (sized.cells.get().1, sized.cells.get().2) && columns * rows > 0 {
             sized.cells.set((cell_width, columns, rows));
             (sized.session).send(TerminalCommand::Resize(TerminalSize::new(
@@ -592,6 +612,8 @@ struct Screen {
     shaped_at: f64,
     /// A row's baseline below its top, at that scale.
     baseline: f32,
+    /// Which of the looks given the rows were shaped in.
+    styled: u64,
 }
 
 fn fill(scene: &mut impl PaintScene, color: [u8; 3], rect: Rect) {
@@ -669,8 +691,15 @@ impl horizon_ui::blitz_dom::Widget for Screen {
         scale: f64,
     ) -> anyrender::Scene {
         let state = self.state.clone();
-        let look = &state.look;
+        let look = state.look.borrow();
+        let look = &*look;
         let mut scene = anyrender::Scene::new();
+        // Another font or size: nothing shaped before holds.
+        if self.styled != state.restyled.get() {
+            self.styled = state.restyled.get();
+            self.shaper = Shaper::with_font(&look.font_family, look.font_size);
+            self.shaped_at = 0.;
+        }
         fill(
             &mut scene,
             look.background,

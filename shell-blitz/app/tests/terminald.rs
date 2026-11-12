@@ -169,11 +169,10 @@ fn open(daemon: &Daemon, terminald: &TerminaldHandle, state: &Path) -> (App, She
         Session::attached(spawning.start_terminal(starting.session.as_uuid(), spec.clone()))
     });
     let mut shell = None;
-    let css = [horizon_theme_css::CSS, &workspace::css()].concat();
-    let app = App::new(1200, 800, &css, || {
-        let (root, built) = workspace::view(Theme::built_in().terminal(), spawn, opening);
+    let app = App::new(1200, 800, &workspace::css(), || {
+        let (root, built) = workspace::view(spawn, opening);
         shell = Some(built);
-        horizon_theme_css::themed(Theme::built_in, root)
+        root
     });
     app.resolve();
     (app, shell.unwrap())

@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use horizon_ui::reactive_graph::traits::WithUntracked;
+use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_workspace::commands::{CommandId, CommandState};
 use horizon_workspace::{CloseCursorOutcome, SessionId, SessionKind, SplitAxis};
 
@@ -22,6 +22,10 @@ pub(super) const CARRIED_OUT: &[CommandId] = &[
     CommandId::TerminateAllDetachedSessions,
     CommandId::OpenSessionManager,
     CommandId::OpenTerminalInSessionDirectory,
+    CommandId::ReloadConfig,
+    CommandId::IncreaseFontSize,
+    CommandId::DecreaseFontSize,
+    CommandId::ResetFontSize,
 ];
 
 impl Shell {
@@ -92,6 +96,18 @@ impl Shell {
                 }
             }),
             CommandId::OpenSessionManager => self.open(Modal::Sessions),
+            // A file that cannot be read leaves what is in use as it is.
+            CommandId::ReloadConfig => match kept.reload.as_ref().map(|reload| reload()) {
+                Some(Ok(config)) => self.apply_config(&config),
+                Some(Err(error)) => eprintln!("horizon config: reload failed: {error}"),
+                None => {}
+            },
+            CommandId::IncreaseFontSize => self.step_font_size(1.),
+            CommandId::DecreaseFontSize => self.step_font_size(-1.),
+            CommandId::ResetFontSize => {
+                let size = kept.configured_size.get();
+                self.theme.update(|theme| theme.font_size = size);
+            }
             CommandId::OpenTerminalInSessionDirectory => {
                 let directory = self.model.with_untracked(|model| {
                     let session = model.active_session_id()?;

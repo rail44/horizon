@@ -118,5 +118,6 @@ pub fn opening(mut store: WorkspaceStateStore, terminald: &TerminaldHandle) -> O
         model,
         sessions,
         save: save(store),
+        ..Opening::default()
     }
 }

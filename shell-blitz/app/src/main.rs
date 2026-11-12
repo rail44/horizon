@@ -18,7 +18,6 @@ use horizon_shell_runtime::TerminaldHandle;
 use horizon_terminal_core::{
     DEFAULT_SCROLLBACK_LINES, TerminalColorScheme, TerminalSize, TerminalSpawnSpec,
 };
-use horizon_theme_css::{Theme, themed};
 use horizon_ui::{App, Live};
 use horizon_workspace::store::WorkspaceStateStore;
 
@@ -40,7 +39,11 @@ fn main() {
     let control_socket = sockets.join("control.sock");
     let terminald = TerminaldHandle::start(&sockets.join("terminald.sock"), &control_socket);
     let store = WorkspaceStateStore::new(workspace_state());
-    let opening = restore::opening(store, &terminald);
+    let opening = workspace::Opening {
+        config: horizon_config::load().clone(),
+        reload: Some(Box::new(horizon_config::reload)),
+        ..restore::opening(store, &terminald)
+    };
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let directory = (std::env::current_dir().ok().or(home)).unwrap_or_else(|| "/".into());
     let spawn: workspace::Spawn = Box::new(move |starting| {
@@ -60,14 +63,11 @@ fn main() {
         ))
     });
 
-    let look = Theme::of_this_machine();
-    let css = [horizon_theme_css::CSS, &workspace::css()].concat();
     let mut shell = None;
-    let app = App::new(1100, 720, &css, || {
-        let (root, built) = workspace::view(look.terminal(), spawn, opening);
-        built.set_keymap(workspace::Keymap::from_config(horizon_config::load()));
+    let app = App::new(1100, 720, &workspace::css(), || {
+        let (root, built) = workspace::view(spawn, opening);
         shell = Some(built);
-        themed(move || look.clone(), root)
+        root
     });
     // A frame from a session wakes the window to draw it.
     let (shell, woken) = (shell.expect("the shell"), Cell::new(false));

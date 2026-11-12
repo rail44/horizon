@@ -14,14 +14,15 @@
 //! session manager lists and puts back in a pane; a session ends when it
 //! is terminated, or when the shell in it goes.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::task::Waker;
 
+use horizon_config::RawConfig;
 use horizon_terminal_core::{TerminalCommand, TerminalUpdate};
-use horizon_theme_css::TerminalLook;
+use horizon_theme_css::{Theme, themed};
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::{LocalStorage, Owner, StoredValue};
@@ -29,7 +30,7 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Track, Update, With, WithUntracked, WithValue,
 };
-use horizon_ui::{El, each_layout, el, relayout};
+use horizon_ui::{El, each_layout, el, relayout, stop_propagation};
 use horizon_workspace::types::TabSummary;
 use horizon_workspace::{PaneId, PaneKind, SessionId, Workspace};
 
@@ -54,11 +55,16 @@ pub const CSS: &str = "
         .tabs { flex: none; display: flex; gap: 4px; padding: 4px 28px 4px 8px;
                 background: var(--tab-track); border-top: 1px solid var(--border);
                 border-bottom: 1px solid var(--border); }
-        .tab-label { flex: 1; min-width: 0; padding: 0 8px; border-radius: 6px;
-                     line-height: 24px; text-align: center; overflow: hidden;
-                     white-space: nowrap; text-overflow: ellipsis;
-                     color: var(--tab-text); cursor: pointer; }
+        .tab-label { flex: 1; min-width: 0; display: flex; padding: 0 4px 0 8px;
+                     border-radius: 6px; line-height: 24px; color: var(--tab-text);
+                     cursor: pointer; }
         .tab-label.active { background: var(--background); color: var(--text); }
+        .tab-label .title { flex: 1; min-width: 0; text-align: center; overflow: hidden;
+                            white-space: nowrap; text-overflow: ellipsis; }
+        .tab-label .close { flex: none; width: 16px; text-align: center; border-radius: 4px;
+                            opacity: 0; }
+        .tab-label:hover .close { opacity: 1; }
+        .tab-label .close:hover { background: var(--surface-selected); }
         .tab { flex: 1; min-height: 0; display: flex; }
         .split { flex: 1; min-width: 0; min-height: 0; display: flex; }
         .split.down { flex-direction: column; }
@@ -108,9 +114,10 @@ pub const CSS: &str = "
     }
 ";
 
-/// The page's style sheet with this view and the views its panes show.
+/// The page's style sheet with the theme's, this view's and those of the
+/// views its panes show.
 pub fn css() -> String {
-    [CSS, terminal::CSS].concat()
+    [horizon_theme_css::CSS, CSS, terminal::CSS].concat()
 }
 
 pub use keymap::Keymap;
@@ -124,14 +131,26 @@ pub struct Starting {
     pub directory: Option<PathBuf>,
 }
 
+/// The font sizes the font-size commands stay within, as the GPUI shell's
+/// do (`src/ui/font.rs`).
+const MIN_FONT_SIZE: f32 = 5.;
+const MAX_FONT_SIZE: f32 = 40.;
+
 /// Starts a terminal session.
 pub type Spawn = Box<dyn Fn(Starting) -> Session>;
 
 /// Keeps the model for the next run.
 pub type Save = Box<dyn FnMut(&Workspace)>;
 
+/// Reads the configuration again.
+pub type Reload = Box<dyn Fn() -> Result<RawConfig, String>>;
+
 /// What the shell opens with.
 pub struct Opening {
+    /// The configuration: the theme, the font and its size, the chords.
+    pub config: RawConfig,
+    /// What `Reload Config` reads the configuration with.
+    pub reload: Option<Reload>,
     pub model: Workspace,
     /// The sessions of `model` that are running already.
     pub sessions: Vec<(SessionId, Session)>,
@@ -141,9 +160,11 @@ pub struct Opening {
 }
 
 impl Default for Opening {
-    /// One terminal, kept nowhere.
+    /// One terminal, kept nowhere, with no configuration.
     fn default() -> Self {
         Self {
+            config: RawConfig::default(),
+            reload: None,
             model: Workspace::mvp(),
             sessions: Vec::new(),
             save: None,
@@ -182,7 +203,10 @@ struct Kept {
     starting: RefCell<HashMap<SessionId, Start>>,
     keymap: RefCell<Keymap>,
     spawn: Spawn,
-    look: TerminalLook,
+    reload: Option<Reload>,
+    /// The font size the configuration gives: what `Reset Font Size`
+    /// goes back to.
+    configured_size: Cell<f32>,
     waker: RefCell<Option<Waker>>,
     owner: Owner,
 }
@@ -190,6 +214,8 @@ struct Kept {
 #[derive(Clone, Copy)]
 pub struct Shell {
     pub model: RwSignal<Workspace>,
+    /// The colors, the font and its size, for every view.
+    pub theme: RwSignal<Theme>,
     /// Workspace mode: keys are the shell's, not the focused view's.
     mode: Memo<bool>,
     /// The pane commands act on: the mode's cursor, and outside the mode
@@ -297,7 +323,8 @@ impl Shell {
                     if let Some(waker) = kept.waker.borrow().clone() {
                         session.set_waker(waker);
                     }
-                    let (root, view) = terminal::view(session, kept.look.clone());
+                    let look = self.theme.with_untracked(Theme::terminal);
+                    let (root, view) = terminal::view(session, look);
                     terminal = Some((session_id, view));
                     root
                 }
@@ -441,9 +468,22 @@ impl Shell {
         Some(terminal.clone())
     }
 
-    /// Binds the configuration's chords, in place of the ones bound.
-    pub fn set_keymap(&self, keymap: Keymap) {
-        *self.kept().keymap.borrow_mut() = keymap;
+    /// Takes a configuration in: its theme, its font and size, its
+    /// chords, in place of the ones in use.
+    pub fn apply_config(&self, config: &RawConfig) {
+        let theme = Theme::from_config(config);
+        let kept = self.kept();
+        kept.configured_size.set(theme.font_size);
+        *kept.keymap.borrow_mut() = Keymap::from_config(config);
+        self.theme.set(theme);
+    }
+
+    /// The font size, `steps` away from what it is: every view's text and
+    /// spacing scale with it.
+    fn step_font_size(&self, steps: f32) {
+        self.theme.update(|theme| {
+            theme.font_size = (theme.font_size + steps).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        });
     }
 
     /// The list open over everything.
@@ -465,7 +505,19 @@ fn strip(shell: Shell) -> El {
                     Some(tab) if tab.active => "tab-label active".to_string(),
                     _ => "tab-label".to_string(),
                 })
-                .text_dyn(move || tab(index).map(|tab| tab.title).unwrap_or_default())
+                .child(
+                    el("div")
+                        .class("title")
+                        .text_dyn(move || tab(index).map(|tab| tab.title).unwrap_or_default()),
+                )
+                // Closing a tab detaches the sessions in it.
+                .child(el("div").class("close").text("×").on("click", move |_| {
+                    shell.change(|model| {
+                        model.exit_workspace_mode();
+                        model.close_tab_index(index);
+                    });
+                    stop_propagation();
+                }))
                 .on("click", move |_| {
                     shell.change(|model| {
                         model.exit_workspace_mode();
@@ -476,15 +528,18 @@ fn strip(shell: Shell) -> El {
     )
 }
 
-/// Builds the shell over `opening`; `spawn` starts the session of each
-/// terminal pane that has none running, drawn in `look`.
-pub fn view(look: TerminalLook, spawn: Spawn, opening: Opening) -> (El, Shell) {
+/// Builds the shell over `opening`, in its configuration's theme; `spawn`
+/// starts the session of each terminal pane that has none running.
+pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
     let model = RwSignal::new(opening.model);
+    let theme = Theme::from_config(&opening.config);
+    let configured_size = Cell::new(theme.font_size);
     let sessions = (opening.sessions.into_iter())
         .map(|(id, session)| (id, Rc::new(session)))
         .collect();
     let shell = Shell {
         model,
+        theme: RwSignal::new(theme),
         mode: Memo::new(move |_| model.with(Workspace::is_workspace_mode_active)),
         cursor: Memo::new(move |_| model.with(Workspace::cursor_pane_id)),
         modal: RwSignal::new(None),
@@ -495,9 +550,10 @@ pub fn view(look: TerminalLook, spawn: Spawn, opening: Opening) -> (El, Shell) {
             panes: RefCell::default(),
             sessions: RefCell::new(sessions),
             starting: RefCell::default(),
-            keymap: RefCell::default(),
+            keymap: RefCell::new(Keymap::from_config(&opening.config)),
             spawn,
-            look,
+            reload: opening.reload,
+            configured_size,
             waker: RefCell::default(),
             owner: Owner::current().expect("an owner"),
         })),
@@ -513,6 +569,15 @@ pub fn view(look: TerminalLook, spawn: Spawn, opening: Opening) -> (El, Shell) {
         shell.reconcile();
     });
     each_layout(move |_| shell.take_in_sessions());
+    // The terminals draw themselves: a change of theme is handed to each.
+    Effect::new(move |_| {
+        let look = shell.theme.with(Theme::terminal);
+        for view in shell.kept().panes.borrow().values() {
+            if let Some((_, terminal)) = &view.terminal {
+                terminal.set_look(look.clone());
+            }
+        }
+    });
     // The model is kept as it changes, though not at every step of a
     // boundary being dragged.
     if let Some(mut save) = opening.save {
@@ -553,5 +618,5 @@ pub fn view(look: TerminalLook, spawn: Spawn, opening: Opening) -> (El, Shell) {
             },
         );
     shell.focus_active();
-    (root, shell)
+    (themed(move || shell.theme.get(), root), shell)
 }

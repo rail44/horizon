@@ -4,9 +4,8 @@
 
 use std::time::{Duration, Instant};
 
-use horizon_blitz::workspace::{Keymap, Modal, Opening, Shell, Spawn, css, view};
+use horizon_blitz::workspace::{Modal, Opening, Shell, Spawn, css, view};
 use horizon_terminal_core::TerminalSize;
-use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
@@ -23,13 +22,16 @@ struct Opened {
 }
 
 fn open() -> Opened {
+    open_with(Opening::default())
+}
+
+fn open_with(opening: Opening) -> Opened {
     let mut shell = None;
-    let css = [horizon_theme_css::CSS, &css()].concat();
-    let app = App::new(1200, 800, &css, || {
+    let app = App::new(1200, 800, &css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
-        let (root, built) = view(Theme::built_in().terminal(), spawn, Opening::default());
+        let (root, built) = view(spawn, opening);
         shell = Some(built);
-        themed(Theme::built_in, root)
+        root
     });
     app.resolve();
     Opened {
@@ -430,7 +432,7 @@ fn the_configurations_chords_run_commands_and_replace_the_modes() {
         "#,
     )
     .unwrap();
-    opened.shell.set_keymap(Keymap::from_config(&config));
+    opened.shell.apply_config(&config);
 
     // A bound chord runs its command with no mode on, and is not typed
     // into the terminal.
@@ -458,4 +460,83 @@ fn the_configurations_chords_run_commands_and_replace_the_modes() {
     assert!(!opened.mode());
     opened.key(Key::Character("m".into()), Modifiers::ALT);
     assert!(opened.mode());
+}
+
+#[test]
+fn the_font_size_moves_and_a_reload_takes_the_configuration_in() {
+    let reload = || {
+        horizon_config::parse(
+            r#"
+            [terminal]
+            font_size = 16.0
+            [keybindings]
+            "Alt+M" = "workspace-mode"
+            "#,
+        )
+    };
+    let opened = open_with(Opening {
+        reload: Some(Box::new(reload)),
+        ..Opening::default()
+    });
+    let pane = opened.panes()[0];
+    opened.prompt(pane);
+    let font_size = || opened.shell.theme.with_untracked(|theme| theme.font_size);
+    let columns = || opened.shell.terminal(pane).unwrap().size().0;
+    let at_thirteen = columns();
+
+    // A step up: larger cells, so fewer of them across the same pane.
+    opened.key(Key::Character("=".into()), Modifiers::CONTROL);
+    assert_eq!(font_size(), 14.);
+    opened.until("fewer columns", || columns() < at_thirteen);
+    opened.key(Key::Character("-".into()), Modifiers::CONTROL);
+    opened.key(Key::Character("-".into()), Modifiers::CONTROL);
+    assert_eq!(font_size(), 12.);
+    opened.until("more columns", || columns() > at_thirteen);
+    opened.key(Key::Character("0".into()), Modifiers::CONTROL);
+    assert_eq!(font_size(), 13.);
+    opened.until("the columns it had", || columns() == at_thirteen);
+
+    // Reload Config: the file's font size and chords, in place of those
+    // in use.
+    opened.chord();
+    opened.character(":");
+    opened.commit("reload config");
+    opened.named(NamedKey::Enter);
+    assert!(!opened.mode());
+    assert_eq!(font_size(), 16.);
+    opened.until("fewer columns", || columns() < at_thirteen);
+    opened.chord();
+    assert!(!opened.mode());
+    opened.key(Key::Character("m".into()), Modifiers::ALT);
+    assert!(opened.mode());
+    opened.named(NamedKey::Escape);
+    // What Reset goes back to is the file's size now.
+    opened.key(Key::Character("=".into()), Modifiers::CONTROL);
+    opened.key(Key::Character("0".into()), Modifiers::CONTROL);
+    assert_eq!(font_size(), 16.);
+}
+
+#[test]
+fn a_tabs_close_button_closes_it_and_keeps_its_session() {
+    let opened = open();
+    opened.chord();
+    opened.character("t");
+    assert_eq!(opened.model(Workspace::tab_count), 2);
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
+
+    // The first tab's, while the second is the one shown.
+    let (x, y) = opened.middle(opened.all("close")[0]);
+    click_at(&opened.app, x, y);
+    opened.app.resolve();
+    assert_eq!(opened.model(Workspace::tab_count), 1);
+    assert_eq!(opened.all("tab-label").len(), 1);
+    assert_eq!(opened.sessions(), 2);
+    assert_eq!(opened.model(Workspace::detached_session_count), 1);
+    // The tab that stays is the one that was shown, with the keys.
+    let pane = opened.panes()[0];
+    opened.prompt(pane);
+    opened.run("echo here");
+    opened.wait(pane, "the output", |text| {
+        text.lines().any(|line| line == "here")
+    });
 }

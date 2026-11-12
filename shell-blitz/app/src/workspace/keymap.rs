@@ -131,11 +131,22 @@ pub struct Keymap {
     bindings: Vec<(Chord, Bound)>,
 }
 
+/// The chords bound with no configuration: the font size's.
+const BUILT_IN: [(&str, CommandId); 4] = [
+    ("ctrl+=", CommandId::IncreaseFontSize),
+    ("ctrl++", CommandId::IncreaseFontSize),
+    ("ctrl+-", CommandId::DecreaseFontSize),
+    ("ctrl+0", CommandId::ResetFontSize),
+];
+
 impl Default for Keymap {
     fn default() -> Self {
+        let chord = |chord| Chord::parse(chord).expect("a chord");
         Self {
-            workspace_mode: Chord::parse(DEFAULT_WORKSPACE_MODE).expect("a chord"),
-            bindings: Vec::new(),
+            workspace_mode: chord(DEFAULT_WORKSPACE_MODE),
+            bindings: (BUILT_IN.iter())
+                .map(|(keys, command)| (chord(keys), Bound::Command(*command)))
+                .collect(),
         }
     }
 }
@@ -145,6 +156,9 @@ impl Keymap {
     /// names no command, is left out with a line on stderr.
     pub fn from_config(config: &RawConfig) -> Self {
         let mut keymap = Self::default();
+        // The configuration's come first: one of them on a built-in chord
+        // takes it.
+        let built_in = std::mem::take(&mut keymap.bindings);
         for (chord, command) in &config.keybindings {
             let skipped = |why: &str| {
                 eprintln!("horizon config: skipping keybinding `{chord}` = `{command}`: {why}");
@@ -163,6 +177,7 @@ impl Keymap {
                 },
             }
         }
+        keymap.bindings.extend(built_in);
         keymap
     }
 
