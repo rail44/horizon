@@ -35,6 +35,16 @@ const CLOSING: &str =
     "修正しました。ボードの一覧とスレッドの両方で、文字サイズの変更がすぐに反映されます。";
 
 impl Session {
+    /// The sample of Horizon's own agent previews: with `running`, a turn
+    /// in progress waiting on an approval (`agent`); without, the session
+    /// idle (`agent-idle`).
+    pub fn preview(running: bool) -> Self {
+        Self {
+            transcript: super::preview_sample::sample(running),
+            next_key: 100,
+        }
+    }
+
     /// A session with `turns` ended turns, each a request and its answer:
     /// text, a receipt of four calls, text.
     pub fn long(turns: usize) -> Self {

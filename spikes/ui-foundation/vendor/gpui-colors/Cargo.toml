@@ -1,0 +1,6 @@
+[package]
+name = "gpui-colors"
+description = "The color types of gpui that Horizon's theme code names, with gpui's own conversions: what lets that code be read as it is, without gpui."
+version = "0.1.0"
+edition = "2024"
+publish = false

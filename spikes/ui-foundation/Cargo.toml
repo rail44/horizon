@@ -8,6 +8,12 @@ publish = false
 # Its own workspace: nothing here is part of Horizon's build or its gate.
 [workspace]
 
+# No unit tests of the library itself: it reads in Horizon's own files
+# (the theme, the Markdown document), whose tests are Horizon's to run and
+# name things only Horizon has.
+[lib]
+test = false
+
 [dependencies]
 blitz-dom = "=0.3.0-beta.4"
 blitz-traits = "=0.3.0-beta.4"
@@ -33,6 +39,10 @@ portable-pty = "0.9.0"
 crossbeam-channel = "0.5"
 termwiz = { version = "0.23.3", features = ["use_serde"] }
 unicode-width = "0.2"
+# The theme: Horizon's config loader, and the three color types of gpui
+# that Horizon's theme code names, under gpui's name.
+horizon-config = { path = "../../crates/horizon-config" }
+gpui = { package = "gpui-colors", path = "vendor/gpui-colors" }
 
 [profile.release]
 opt-level = 3

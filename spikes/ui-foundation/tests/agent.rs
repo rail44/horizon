@@ -12,6 +12,7 @@ use ui_foundation_spike::blitz_traits::events::{
     BlitzImeEvent, BlitzKeyEvent, BlitzWheelDelta, BlitzWheelEvent, KeyState, PointerCoords,
     UiEvent,
 };
+use ui_foundation_spike::theme::{self, Theme};
 use ui_foundation_spike::{App, click_at, move_to};
 
 struct Opened {
@@ -24,11 +25,14 @@ fn open(session: &Session) -> Opened {
     let asked = Rc::new(RefCell::new(Vec::new()));
     let log = asked.clone();
     let mut agent = None;
-    let app = App::new(900, 700, CSS, || {
+    // The theme with no config file, at its 13 px: the measurements below
+    // are the type scale's at that size.
+    let css = [theme::CSS, CSS].concat();
+    let app = App::new(900, 700, &css, || {
         let (root, state) = view(move |asked| log.borrow_mut().push(asked));
         state.field.focus();
         agent = Some(state);
-        root
+        theme::themed(Theme::built_in, root)
     });
     let opened = Opened {
         app,
@@ -176,7 +180,7 @@ fn a_history_opens_at_its_end_and_follows_what_streams_in() {
     assert_eq!(units.len(), end - start);
     assert!((4..30).contains(&units.len()), "{}", units.len());
     // The column ends where the composer starts, less its own padding.
-    let column_bottom = opened.span(opened.all("composer")[0]).0 - 16.;
+    let column_bottom = opened.span(opened.all("composer")[0]).0 - 30.;
     let (_, last_bottom) = opened.span(*units.last().unwrap());
     assert!(
         last_bottom <= column_bottom + 1.,
@@ -226,7 +230,7 @@ fn a_scroll_away_from_the_end_stops_the_following_and_back_resumes_it() {
     // also moves when units above the view are built at their real
     // heights in place of guessed ones.)
     let last_bottom = || opened.span(*opened.all("unit").last().unwrap()).1;
-    let column_bottom = opened.span(opened.all("composer")[0]).0 - 16.;
+    let column_bottom = opened.span(opened.all("composer")[0]).0 - 30.;
     let at_end = |bottom: f64| (bottom - column_bottom).abs() <= 1.;
     assert!(at_end(last_bottom()), "{} {column_bottom}", last_bottom());
 
@@ -347,7 +351,7 @@ fn the_composer_sends_on_enter_and_grows_with_its_lines() {
     let session = Session::long(1);
     let opened = open(&session);
     let one_row = opened.field_height();
-    assert_eq!(one_row, 22.);
+    assert_eq!(one_row, 24.);
 
     opened.commit("日本語の");
     opened.commit("依頼");
@@ -360,7 +364,7 @@ fn the_composer_sends_on_enter_and_grows_with_its_lines() {
     );
     opened.commit("二行目");
     assert_eq!(opened.agent.typed.get_untracked(), "日本語の依頼\n二行目");
-    assert_eq!(opened.field_height(), 44.);
+    assert_eq!(opened.field_height(), 48.);
     assert!(opened.asked.borrow().is_empty());
 
     opened.enter();
@@ -369,7 +373,7 @@ fn the_composer_sends_on_enter_and_grows_with_its_lines() {
         [Asked::Send("日本語の依頼\n二行目".to_string())]
     );
     assert_eq!(opened.agent.typed.get_untracked(), "");
-    assert_eq!(opened.field_height(), 22.);
+    assert_eq!(opened.field_height(), 24.);
     // The field itself is empty, not only the view's copy of it.
     opened.commit("次");
     assert_eq!(opened.agent.typed.get_untracked(), "次");
@@ -438,7 +442,7 @@ fn a_long_history_is_scrolled_through_with_few_units_built() {
     assert_eq!(built().0, 0);
     assert!(opened.text().contains("0 番目の依頼"));
     let first = opened.all("unit")[0];
-    assert_eq!(opened.span(first).0, 24.);
+    assert_eq!(opened.span(first).0, 22.);
 
     // A receipt opened here is open again when the view comes back to it,
     // its elements having been dropped and built in between.

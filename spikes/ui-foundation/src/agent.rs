@@ -28,6 +28,7 @@ mod chrome;
 #[allow(dead_code)]
 #[path = "../../../src/agent/view/display.rs"]
 mod display;
+mod preview_sample;
 pub mod sample;
 
 use display::{
@@ -36,89 +37,120 @@ use display::{
 };
 
 const COMPOSER_MAX_ROWS: usize = 8;
-const COMPOSER_LINE: usize = 22;
 
 // Every rule sits under the view's own class: the page's style sheet is one
-// for all the views on it.
+// for all the views on it. Colors and lengths are the theme's variables
+// ([`crate::theme`]); `--u8` is 8 px at the reference type size. The
+// arrangement follows `src/agent/view/{mod,units}.rs` measure for measure;
+// where gpui-component draws a part itself (a button, Markdown's own
+// spacing), the values here are by eye.
 pub const CSS: &str = "
     .agent { display: flex; flex-direction: column; height: 100%; min-width: 240px;
-             outline: none; font-family: sans-serif; font-size: 14px; line-height: 22px;
-             color: #202020; background: #fafafa;
-        .column { flex: 1; min-height: 0; overflow-y: scroll; padding: 24px 24px 16px 24px; }
-        .unit { padding-bottom: 8px; }
-        .user { margin-left: 24px; padding: 8px 12px; border-radius: 4px; background: #efefef;
-                white-space: pre-wrap; }
-        .user.muted { color: #808080; }
-        .turn { position: relative; display: flex; flex-direction: column; gap: 4px;
-                padding: 8px 12px; border: 1px solid #d8d8d8; border-radius: 4px; }
-        .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: #356df3; }
-        .notice, .task { padding: 0 12px; font-size: 12px; line-height: 18px; color: #808080; }
-        .footer { display: flex; flex-direction: column; gap: 8px; }
-        .warning { color: #b7791f; }
-        .danger { color: #c0392b; }
-        .line { display: flex; align-items: center; gap: 8px; }
+             outline: none; background: var(--background); color: var(--text);
+             font-family: var(--font-family); font-size: var(--body-size);
+             line-height: var(--body-line);
+        .column { flex: 1; min-height: 0; overflow-y: scroll;
+                  padding: var(--u24) var(--u24) var(--u32) var(--u24); }
+        .unit { padding-bottom: var(--u8); }
+        .user { margin-left: var(--u24); padding: var(--u8) var(--u16); border-radius: 4px;
+                background: var(--band); white-space: pre-wrap; }
+        .user.muted { color: var(--text-muted); }
+        .turn { position: relative; display: flex; flex-direction: column;
+                gap: var(--u4); padding: var(--u8) var(--u16);
+                border: 1px solid var(--border); border-radius: 4px; }
+        .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+               background: var(--accent); }
+        .notice, .task { padding: 0 var(--u16); font-size: var(--meta-size);
+                         line-height: var(--meta-line); color: var(--text-muted); }
+        .footer { display: flex; flex-direction: column; gap: var(--u8); }
+        .warning { color: var(--warning); }
+        .danger { color: var(--danger); }
+        .line { display: flex; align-items: center; gap: var(--u8); }
         .spacer { flex: 1; min-width: 0; }
-        .chip { flex: none; padding: 0 4px; border-radius: 3px; font-size: 11px;
-                line-height: 16px; background: #ececec; color: #606060; }
-        .chip.accent { background: #e3ebfd; color: #2a56c6; }
-        .chip.danger { background: #fbe9e7; color: #c0392b; }
-        .button { flex: none; padding: 0 8px; border-radius: 4px; font-size: 12px;
-                  line-height: 20px; color: #606060; cursor: pointer; }
-        .button:hover { background: #ececec; }
-        .button.primary { padding: 0 12px; line-height: 28px; background: #356df3; color: white; }
-        .button.primary:hover { background: #477df8; }
-        .receipt { display: flex; flex-direction: column; gap: 4px; }
-        .receipt-line { display: flex; align-items: center; gap: 8px; cursor: pointer;
-                        font-size: 12px; line-height: 18px; color: #808080; }
-        .calls { display: flex; flex-direction: column; gap: 4px; margin-left: 8px;
-                 padding-left: 12px; border-left: 1px solid #d8d8d8; }
-        .call { display: flex; flex-direction: column; gap: 4px; }
-        .call-row { display: flex; align-items: center; gap: 8px; font-size: 12px;
-                    line-height: 18px; }
+        .chip { flex: none; padding: 0 var(--u4); border-radius: 2px;
+                font-size: var(--micro-size); line-height: var(--micro-line);
+                background: var(--chip-muted-surface); color: var(--chip-muted-text); }
+        .chip.accent { background: var(--chip-accent-surface);
+                       color: var(--chip-accent-text); }
+        .chip.danger { background: var(--chip-danger-surface);
+                       color: var(--chip-danger-text); }
+        .button { flex: none; padding: 0 var(--u8); border-radius: 4px;
+                  font-size: var(--meta-size); line-height: var(--u24);
+                  color: var(--text); cursor: pointer; }
+        .button:hover { background: var(--surface-raised); }
+        .button.primary { padding: 0 var(--u12); line-height: var(--u28);
+                          background: var(--accent); color: var(--on-accent); }
+        .button.deny { line-height: var(--u28); }
+        .receipt { display: flex; flex-direction: column; gap: var(--u4); }
+        .receipt-line { display: flex; align-items: center; gap: var(--u8); cursor: pointer;
+                        font-size: var(--meta-size); line-height: var(--meta-line);
+                        color: var(--text-muted); }
+        .calls { display: flex; flex-direction: column; gap: var(--u4);
+                 margin-left: var(--u8); padding-left: var(--u16);
+                 border-left: 1px solid var(--border); }
+        .call { display: flex; flex-direction: column; gap: var(--u4); }
+        .call-row { display: flex; align-items: center; gap: var(--u8);
+                    font-size: var(--meta-size); line-height: var(--meta-line); }
         .call-row.opens { cursor: pointer; }
-        .dot-cell { flex: none; width: 16px; display: flex; align-items: center;
+        .dot-cell { flex: none; width: var(--u16); display: flex; align-items: center;
                     justify-content: center; }
-        .dot { width: 8px; height: 8px; border-radius: 4px; background: #a0a0a0; }
-        .dot.failed { background: #c0392b; }
-        .dot.running { background: #356df3; }
-        .dot.denied { background: #b7791f; }
-        .verb { flex: none; color: #808080; }
+        .dot { width: var(--u8); height: var(--u8); border-radius: var(--u4);
+               background: var(--text-muted); }
+        .dot.failed { background: var(--danger); }
+        .dot.running { background: var(--accent); }
+        .dot.denied { background: var(--warning); }
+        .verb { flex: none; color: var(--text-muted); }
         .target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-                  white-space: nowrap; font-family: monospace; }
-        .mono { font-family: monospace; font-size: 12px; line-height: 18px; white-space: pre; }
-        .diff-line { display: flex; color: #808080; }
-        .diff-line.added { background: #e6f4ea; color: #1e7b34; }
-        .diff-line.removed { background: #fbe9e7; color: #c0392b; }
-        .mark { flex: none; width: 16px; }
-        .output { overflow-x: scroll; color: #808080; }
-        .more { font-size: 11px; line-height: 16px; color: #808080; }
-        .approval { display: flex; align-items: center; gap: 8px; font-size: 12px;
-                    line-height: 18px; }
+                  white-space: nowrap; }
+        .mono { font-size: var(--meta-size); line-height: var(--meta-line);
+                white-space: pre; }
+        .diff-line { display: flex; color: var(--text-muted); }
+        .diff-line.added { background: var(--diff-added-surface);
+                           color: var(--diff-added-text); }
+        .diff-line.removed { background: var(--diff-removed-surface);
+                             color: var(--diff-removed-text); }
+        .mark { flex: none; width: var(--u16); }
+        .output { overflow-x: scroll; color: var(--text-muted); }
+        .more { font-size: var(--micro-size); line-height: var(--micro-line);
+                color: var(--text-muted); }
+        .approval { display: flex; align-items: center; gap: var(--u8);
+                    font-size: var(--meta-size); line-height: var(--meta-line); }
         .reason { flex: 1; min-width: 0; }
-        .end { display: flex; justify-content: flex-end; align-items: baseline; gap: 8px;
-               font-size: 12px; line-height: 18px; color: #808080; }
-        .thinking { display: flex; font-size: 11px; line-height: 16px; color: #808080; }
+        .end { display: flex; justify-content: flex-end; align-items: baseline;
+               gap: var(--u8); font-size: var(--meta-size); line-height: var(--meta-line);
+               color: var(--text-muted); }
+        .thinking { display: flex; font-size: var(--micro-size);
+                    line-height: var(--micro-line); color: var(--text-muted); }
         .thinking .d { animation: thinking 1.2s linear infinite; }
         .thinking .d1 { animation-delay: -0.8s; }
         .thinking .d2 { animation-delay: -0.4s; }
-        .composer { flex: none; padding: 0 24px 12px 24px; }
-        .box { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px;
-               border: 1px solid #d8d8d8; border-radius: 4px; }
-        textarea { font-family: sans-serif; font-size: 14px; line-height: 22px; border: none;
-                   outline: none; padding: 0; margin: 0; background: transparent; resize: none; }
+        .composer { flex: none; padding: 0 var(--u24) var(--u12) var(--u24); }
+        .box { display: flex; flex-direction: column; gap: var(--u4);
+               padding: var(--u8) var(--u16); border: 1px solid var(--border);
+               border-radius: 4px; }
+        textarea { font-family: var(--font-family); font-size: var(--body-size);
+                   line-height: var(--body-line); color: var(--text); border: none;
+                   outline: none; padding: 0; margin: 0; background: transparent;
+                   resize: none; }
         textarea:focus { outline: none; }
-        .hints { display: flex; align-items: center; gap: 4px; font-size: 11px;
-                 line-height: 16px; color: #808080; }
+        .hints { display: flex; align-items: center; gap: var(--u4);
+                 font-size: var(--micro-size); line-height: var(--micro-line);
+                 color: var(--text-muted); }
         .model { cursor: pointer; }
-        .text h1, .text h2, .text h3 { font-size: 14px; line-height: 22px; font-weight: 600;
-                                       margin: 8px 0 4px 0; }
+        .text h1 { font-size: var(--t2-size); line-height: var(--t2-line); font-weight: 600;
+                   margin: var(--u8) 0; }
+        .text h2, .text h3 { font-size: var(--body-size); line-height: var(--body-line);
+                             font-weight: 600; margin: var(--u8) 0; }
         .text p, .text ul, .text ol, .text pre, .text blockquote { margin: 0 0 8px 0; }
+        .text ul, .text ol { padding-left: var(--u24); }
         .text .body > :first-child { margin-top: 0; }
         .text .body > :last-child { margin-bottom: 0; }
-        .text pre { padding: 8px 12px; border-radius: 4px; background: #f0f0f0;
-                    font-size: 13px; line-height: 20px; overflow-x: scroll; }
-        .text code { font-family: monospace; font-size: 13px; }
-        .link { color: #356df3; }
+        .text pre { padding: var(--u8) var(--u12); border-radius: 4px;
+                    background: var(--surface-panel); overflow-x: scroll; }
+        .text code { font-family: var(--font-family); }
+        .text :not(pre) > code { padding: 0 var(--u4); border-radius: 2px;
+                                 background: var(--surface-panel); }
+        .link { color: var(--accent); }
     }
     @keyframes thinking { from { opacity: 1; } to { opacity: 0.25; } }
 ";
@@ -303,7 +335,7 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
             placeholder(state.status.get()).to_string()
         })
         .attr_dyn("style", move || {
-            format!("height: {}px", rows.get() * COMPOSER_LINE)
+            format!("height: calc(var(--body-line) * {})", rows.get())
         })
         .on("input", move |event| {
             if let DomEventData::Input(input) = &event.data {

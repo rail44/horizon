@@ -16,6 +16,7 @@ use anyrender_vello::VelloWindowRenderer;
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
 use reactive_graph::traits::Set;
 use ui_foundation_spike::blitz_traits::shell::{ColorScheme, Viewport};
+use ui_foundation_spike::theme::{self, Theme};
 use ui_foundation_spike::workspace::{css, view};
 use ui_foundation_spike::{App, Live};
 
@@ -25,10 +26,13 @@ fn main() {
     let palette = arguments.next().as_deref() == Some("palette");
 
     let mut workspace = None;
-    let app = App::new(1200, 800, &css(), || {
+    // The colors, the type scale and the font of this machine's config.
+    let look = Theme::of_this_machine();
+    let css = [theme::CSS, &css()].concat();
+    let app = App::new(1200, 800, &css, || {
         let (root, state) = view();
         workspace = Some(state);
-        root
+        theme::themed(move || look.clone(), root)
     });
 
     if let Some(picture) = picture {

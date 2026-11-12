@@ -2,7 +2,7 @@
 //!
 //!     cargo run --release --bin agent -- window [turns] [whole]
 //!     cargo run --release --bin agent -- measure [scale]
-//!     cargo run --release --bin agent -- picture out.png
+//!     cargo run --release --bin agent -- picture out.png [idle]
 //!
 //! `window` shows a made-up session of `turns` ended turns (200 unless
 //! given; with `whole`, every unit an element, in view or not, and
@@ -25,6 +25,7 @@ use ui_foundation_spike::blitz_traits::events::{
     BlitzWheelDelta, BlitzWheelEvent, PointerCoords, UiEvent,
 };
 use ui_foundation_spike::blitz_traits::shell::{ColorScheme, Viewport};
+use ui_foundation_spike::theme::{self, Theme};
 use ui_foundation_spike::{App, Live};
 
 const STREAMED: &str = "承知しました。まず `cargo clippy --workspace` の出力を確認します。\n\n\
@@ -36,11 +37,14 @@ const STREAMED: &str = "承知しました。まず `cargo clippy --workspace` �
 
 fn open(asked: impl Fn(Asked) + 'static, column: Column) -> (App, Agent) {
     let mut agent = None;
-    let app = App::new(900, 700, CSS, || {
+    // The colors, the type scale and the font of this machine's config.
+    let look = Theme::of_this_machine();
+    let css = [theme::CSS, CSS].concat();
+    let app = App::new(900, 700, &css, || {
         let (root, state) = view_with(asked, column);
         state.field.focus();
         agent = Some(state);
-        root
+        theme::themed(move || look.clone(), root)
     });
     (app, agent.unwrap())
 }
@@ -200,40 +204,30 @@ fn measure_column(scale: f32, column: Column, lengths: &[usize]) {
     }
 }
 
-/// A session with a turn in progress that has text, an open receipt and a
-/// pending approval.
-fn staged(turns: usize) -> Session {
-    let mut session = Session::long(turns);
-    session.begin_turn("clippy の警告も直してください");
-    session.stream(STREAMED);
-    session.call("Run", "cargo clippy --workspace --all-targets", None);
-    session.finish_call();
-    session.call(
-        "Write",
-        "~/.config/horizon/config.toml",
-        Some("リポジトリの外のファイルを書き換えます"),
-    );
-    session
-}
-
-fn picture(path: &str) {
-    let session = staged(3);
+/// The sample of Horizon's own agent previews: a turn in progress waiting
+/// on an approval, or with `idle` the session idle with the long turn's
+/// edit and its failed command open, as the `agent-idle` preview has them.
+fn picture(path: &str, idle: bool) {
+    let session = Session::preview(!idle);
     let (app, agent) = open(|_| {}, Column::Windowed);
-    let (width, height, scale) = (1350, 1050, 1.5);
+    let (width, height, scale) = (1350, 1800, 1.5);
     (app.document().borrow_mut()).set_viewport(Viewport::new(
         width,
         height,
         scale,
         ColorScheme::Light,
     ));
-    // The last ended turn's receipt open, and its diff.
-    let key = session.receipt_keys(5)[0];
-    agent.expanded.update(|expanded| {
-        expanded.insert(key);
-    });
-    agent.open_bodies.update(|open| {
-        open.insert((key, 2));
-    });
+    if idle {
+        // The long turn's last receipt, its edit's diff and its failed
+        // command's output.
+        let key = *session.receipt_keys(1).last().expect("a receipt");
+        agent.expanded.update(|expanded| {
+            expanded.insert(key);
+        });
+        agent.open_bodies.update(|open| {
+            open.extend([(key, 0), (key, 1)]);
+        });
+    }
     session.show(&agent);
     app.run_effects();
     app.resolve_at(0.3);
@@ -381,7 +375,10 @@ fn main() {
                 .map(|scale| scale.parse().expect("a display scale"))
                 .unwrap_or(1.5),
         ),
-        Some("picture") => picture(arguments.get(1).expect("a PNG path")),
+        Some("picture") => picture(
+            arguments.get(1).expect("a PNG path"),
+            arguments.get(2).map(String::as_str) == Some("idle"),
+        ),
         Some("window") | None => window(
             (arguments.get(1))
                 .map(|turns| turns.parse().expect("a number of turns"))

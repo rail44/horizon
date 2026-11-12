@@ -33,6 +33,7 @@ pub mod markdown;
 pub mod pty;
 pub mod term;
 pub mod terminal;
+pub mod theme;
 pub mod windowed;
 pub mod workspace;
 

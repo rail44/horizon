@@ -7,6 +7,7 @@ use ui_foundation_spike::blitz_traits::events::{
     BlitzImeEvent, BlitzKeyEvent, BlitzWheelDelta, BlitzWheelEvent, KeyState, PointerCoords,
     UiEvent,
 };
+use ui_foundation_spike::theme::{self, Theme};
 use ui_foundation_spike::workspace::{Command, Workspace, css, view};
 use ui_foundation_spike::{App, Pointer, click_at, move_to, pointer};
 
@@ -17,10 +18,11 @@ struct Opened {
 
 fn open() -> Opened {
     let mut workspace = None;
-    let app = App::new(1200, 800, &css(), || {
+    let css = [theme::CSS, &css()].concat();
+    let app = App::new(1200, 800, &css, || {
         let (root, state) = view();
         workspace = Some(state);
-        root
+        theme::themed(Theme::built_in, root)
     });
     app.resolve();
     Opened {
@@ -182,7 +184,7 @@ fn four_views_share_a_page_each_under_its_own_rules() {
     // and each is laid out by its own view's rules: the board's rows and
     // the agent's field have the heights their views give them.
     assert_eq!(opened.bounds(opened.all("row")[0]).3, 28.);
-    assert_eq!(opened.bounds(opened.all("textarea")[0]).3, 22.);
+    assert_eq!(opened.bounds(opened.all("textarea")[0]).3, 24.);
     assert!(opened.bounds(opened.all("markdown")[0]).3 > 300.);
 }
 
