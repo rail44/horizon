@@ -163,6 +163,11 @@ impl BoardList {
         self.held.with_value(Rc::clone)
     }
 
+    /// The directory of the project whose board this is.
+    pub fn root(&self) -> Option<std::path::PathBuf> {
+        self.held().source.root()
+    }
+
     /// Reads the store again.
     pub fn load(&self) {
         let (this, held) = (*self, self.held());

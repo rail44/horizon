@@ -75,7 +75,7 @@ fn main() {
         agents: Some(agentd.spawn()),
         open_url: Some(std::rc::Rc::new(open_url)),
         models: Some(std::sync::Arc::new(RuntimeModels(agentd.clone()))),
-        reload_agents: Some(agentd.reload()),
+        agent_runtime: Some(agentd.runtime()),
         reload_terminals: Some(terminald.reload()),
         ..restore::opening(store, &terminald, Some(&agentd))
     };

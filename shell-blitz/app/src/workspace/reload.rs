@@ -45,7 +45,7 @@ impl Shell {
 
     pub(super) fn reload_agent_runtime(&self) {
         let kept = self.kept();
-        let Some(reload) = kept.reload_agents.as_ref() else {
+        let Some(reload) = kept.agent_runtime.as_ref() else {
             return;
         };
         if kept.reloading.get().is_some() {
@@ -63,14 +63,14 @@ impl Shell {
         self.remake_panes(PaneKind::Agent);
         let restart = reload.restart.clone();
         self.in_background(
-            move || restart(),
+            move || restart(()),
             |shell, running| shell.agents_reloaded(running),
         );
     }
 
     fn agents_reloaded(&self, running: Result<Vec<RunningAgent>, String>) {
         let kept = self.kept();
-        let Some(reload) = kept.reload_agents.as_ref() else {
+        let Some(reload) = kept.agent_runtime.as_ref() else {
             return;
         };
         let running = match running {

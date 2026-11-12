@@ -16,8 +16,9 @@ use horizon_blitz::workspace::{self, Modal, Opening};
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
-use horizon_ui::reactive_graph::traits::WithUntracked;
+use horizon_ui::reactive_graph::traits::{GetUntracked, WithUntracked};
 use horizon_workspace::Workspace;
+use horizon_workspace::commands::CommandId;
 use keyboard_types::{Key, Modifiers, NamedKey};
 
 mod support;
@@ -32,10 +33,23 @@ impl Drop for Provider {
     }
 }
 
+/// The test's directory; the log daemon the board started on a socket in
+/// it is ended with it.
 struct Scratch(PathBuf);
 
 impl Drop for Scratch {
     fn drop(&mut self) {
+        let socket = self.0.join("logd.sock");
+        // The daemon is the process started with this socket.
+        for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+            let Ok(command) = std::fs::read(entry.path().join("cmdline")) else {
+                continue;
+            };
+            let command = String::from_utf8_lossy(&command);
+            if command.contains("horizon-logd") && command.contains(&*socket.to_string_lossy()) {
+                let _ = Command::new("kill").arg(entry.file_name()).status();
+            }
+        }
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
@@ -70,6 +84,13 @@ fn a_message_typed_into_an_agent_pane_is_answered_by_a_real_agentd() {
     let scratch = Scratch(std::env::temp_dir().join(format!("hzba-{}", std::process::id())));
     let directory = scratch.0.clone();
     std::fs::create_dir_all(directory.join("project")).unwrap();
+    // (A board's organizer works in a Git repository.)
+    let made = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(directory.join("project"))
+        .status()
+        .expect("git");
+    assert!(made.success());
 
     // A port nothing listens on, for the provider.
     let port = {
@@ -122,6 +143,16 @@ api_key_env = "HORIZON_BLITZ_TEST_MOCK_KEY"
         std::env::set_var("HORIZON_DATA_HOME", directory.join("data"));
         std::env::set_var("XDG_RUNTIME_DIR", directory.join("run"));
         std::env::set_var("HORIZON_LOGD_SOCKET", directory.join("logd.sock"));
+        // The model catalog is not fetched from the network: the stand-in
+        // has none, and the copy kept is the test's own.
+        std::env::set_var(
+            "HORIZON_MODEL_CATALOG_URL",
+            format!("http://127.0.0.1:{port}/model-catalog.json"),
+        );
+        std::env::set_var(
+            "HORIZON_MODEL_CATALOG_CACHE",
+            directory.join("model-catalog.json"),
+        );
         for unset in [
             "OPENAI_API_KEY",
             "HORIZON_AGENT_EVENT_LOG",
@@ -145,7 +176,7 @@ api_key_env = "HORIZON_BLITZ_TEST_MOCK_KEY"
         let opening = Opening {
             agents: Some(agentd.spawn()),
             models: Some(std::sync::Arc::new(RuntimeModels(agentd.clone()))),
-            reload_agents: Some(agentd.reload()),
+            agent_runtime: Some(agentd.runtime()),
             ..Opening::default()
         };
         let (root, built) = workspace::view(spawn, opening);
@@ -243,7 +274,7 @@ api_key_env = "HORIZON_BLITZ_TEST_MOCK_KEY"
     // so, then it is back on the same session, with what was said in it,
     // and a further message is answered by the new daemon.
     let before = agentd.handle();
-    shell.execute(horizon_workspace::commands::CommandId::ReloadAgentRuntime);
+    shell.execute(CommandId::ReloadAgentRuntime);
     app.run_effects();
     app.resolve();
     assert!(text().contains("Reloading the agent runtime"), "{}", text());
@@ -257,6 +288,76 @@ api_key_env = "HORIZON_BLITZ_TEST_MOCK_KEY"
     until("the second answer", &|| {
         text().matches("ACP-OK").count() >= 2
     });
+
+    // The board's organizer: a session the daemon starts, which the
+    // workspace did not have, in a pane beside the board.
+    let agents = || {
+        shell.model.with_untracked(|model| {
+            (model.session_summaries().iter())
+                .filter(|session| session.kind == horizon_workspace::SessionKind::Agent)
+                .map(|session| session.id)
+                .collect::<Vec<_>>()
+        })
+    };
+    let shown = || {
+        shell.model.with_untracked(|model| {
+            (model.visible_panes().iter())
+                .map(|pane| (pane.id, pane.session_id))
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(agents().len(), 1);
+    shell.execute(CommandId::OpenBoard);
+    app.run_effects();
+    app.resolve();
+    let board = shown()[0].0;
+    assert!(shell.board_list(board).is_some());
+    shell.execute(CommandId::OpenBoardOrganizer);
+    until("the organizer", &|| agents().len() == 2);
+    until("the organizer's pane", &|| {
+        shown().len() == 2 && shell.agent(shown()[1].0).is_some()
+    });
+    let organizer = shown()[1].1.expect("a session");
+    assert_ne!(
+        Some(organizer),
+        shell
+            .model
+            .with_untracked(|model| model.agent_session_id(pane))
+    );
+    // Asked for again, it is the same session, in the pane it has.
+    shell.execute(CommandId::OpenBoardOrganizer);
+    app.run_effects();
+    app.resolve();
+    std::thread::sleep(Duration::from_millis(300));
+    app.resolve();
+    assert_eq!(agents().len(), 2);
+    assert_eq!(shown().len(), 2);
+
+    // A task's session this workspace does not have: one the daemon
+    // runs is taken in and shown; one it does not run is said so.
+    let elsewhere = horizon_workspace::SessionId::new();
+    let _elsewhere = (agentd.spawn())(workspace::Starting {
+        session: elsewhere,
+        from: None,
+        directory: Some(directory.join("project")),
+        role: None,
+    });
+    until("the daemon to have it", &|| {
+        let running = agentd.running().expect("the daemon's sessions");
+        running.iter().any(|agent| agent.session == elsewhere)
+    });
+    let notice = horizon_ui::reactive_graph::signal::RwSignal::new(None);
+    shell.open_task_session(elsewhere, notice);
+    until("the task's session", &|| agents().contains(&elsewhere));
+    until("its pane", &|| {
+        shown()
+            .iter()
+            .any(|(_, session)| *session == Some(elsewhere))
+    });
+    assert_eq!(notice.get_untracked(), None);
+    shell.open_task_session(horizon_workspace::SessionId::new(), notice);
+    until("the refusal", &|| notice.get_untracked().is_some());
+    assert_eq!(agents().len(), 3);
 
     // The daemon ends with the test.
     drop(app);

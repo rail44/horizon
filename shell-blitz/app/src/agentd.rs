@@ -17,7 +17,7 @@ use horizon_workspace::SessionId;
 use horizon_workspace::snapshot::workspace_snapshot;
 
 use crate::agent::AgentSession;
-use crate::workspace::{Models, ReloadAgents, RunningAgent, Shell, SpawnAgent};
+use crate::workspace::{AgentRuntime, Models, RunningAgent, Shell, SpawnAgent};
 
 enum Told {
     HostTool(HostToolRequest),
@@ -129,15 +129,42 @@ impl Agentd {
         *self.handle.lock().unwrap() = new;
     }
 
-    /// What `Reload Agent Runtime` does with this runtime.
-    pub fn reload(&self) -> ReloadAgents {
-        let (restarted, attached) = (self.clone(), self.clone());
-        ReloadAgents {
-            restart: Arc::new(move || {
+    /// A session of the runtime, looked for until the runtime lists it:
+    /// it says a session is made a moment before it lists it.
+    fn listed(&self, session: SessionId) -> Result<Option<RunningAgent>, String> {
+        for attempt in 0..20 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            let found = (self.running()?.into_iter()).find(|agent| agent.session == session);
+            if found.is_some() {
+                return Ok(found);
+            }
+        }
+        Ok(None)
+    }
+
+    /// This runtime as the shell's reload command and board use it.
+    pub fn runtime(&self) -> AgentRuntime {
+        let (restarted, attached, organized, found) =
+            (self.clone(), self.clone(), self.clone(), self.clone());
+        AgentRuntime {
+            restart: Arc::new(move |()| {
                 restarted.restart();
                 restarted.running()
             }),
             attach: Box::new(move |session| attached.attach(session)),
+            organizer: Arc::new(move |root| {
+                let made = organized.handle().ensure_board_organizer(root)?;
+                (organized.listed(session_id(made))?)
+                    .ok_or_else(|| "The board organizer is not available yet".to_string())
+            }),
+            find: Arc::new(move |session| {
+                Ok(found
+                    .running()?
+                    .into_iter()
+                    .find(|agent| agent.session == session))
+            }),
         }
     }
 

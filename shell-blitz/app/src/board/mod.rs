@@ -37,6 +37,14 @@ pub enum Source {
 }
 
 impl Source {
+    /// The directory the store is a project's by, if it is one's.
+    pub fn root(&self) -> Option<PathBuf> {
+        match self {
+            Self::Root(root) => Some(root.clone()),
+            Self::Ready(_) => None,
+        }
+    }
+
     fn open(&self) -> Result<Store, StoreError> {
         match self {
             Self::Root(root) => Store::from_dir(root),

@@ -8,7 +8,7 @@ use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::agent_model::ToolCallIdentity;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Update, WithUntracked};
 use horizon_workspace::commands::{CommandId, CommandState};
-use horizon_workspace::{CloseCursorOutcome, ViewKind};
+use horizon_workspace::{CloseCursorOutcome, ViewKind, Workspace};
 
 use super::{Modal, Placement, Shell};
 use crate::agent::AgentSession;
@@ -41,6 +41,8 @@ pub(super) const CARRIED_OUT: &[CommandId] = &[
     CommandId::PostBoardMessage,
     CommandId::MoveBoardTaskUp,
     CommandId::MoveBoardTaskDown,
+    CommandId::ReorderBoardTask,
+    CommandId::OpenBoardOrganizer,
     CommandId::SaveBoardState,
     CommandId::ToggleBoardClosed,
     CommandId::ReloadConfig,
@@ -57,11 +59,14 @@ impl Shell {
         let standing = (self.active_agent())
             .map(|session| session.standing())
             .unwrap_or_default();
+        let on_board = (self.model.with_untracked(Workspace::cursor_pane_id)).is_some_and(|pane| {
+            self.board_list(pane).is_some() || self.board_thread(pane).is_some()
+        });
         self.model.with_untracked(|model| CommandState {
             tab_count: model.tab_count(),
             visible_pane_count: model.visible_panes().len(),
             has_active_session: model.active_session_id().is_some(),
-            has_cursor_board: false,
+            has_cursor_board: on_board,
             detached_session_count: model.detached_session_count(),
             has_pending_approval: standing.pending_approval,
             has_turn_in_flight: standing.turn_in_flight,
@@ -136,7 +141,8 @@ impl Shell {
             | CommandId::ToggleBoardFinishedBand
             | CommandId::AddBoardTask
             | CommandId::MoveBoardTaskUp
-            | CommandId::MoveBoardTaskDown => {
+            | CommandId::MoveBoardTaskDown
+            | CommandId::ReorderBoardTask => {
                 let Some((_, list)) = self.active_board_list() else {
                     return;
                 };
@@ -146,7 +152,9 @@ impl Shell {
                     CommandId::ToggleBoardFinishedBand => Some(ListCommand::ToggleFinished),
                     CommandId::AddBoardTask => Some(ListCommand::AddTask),
                     CommandId::MoveBoardTaskUp => Some(ListCommand::MoveUp),
-                    _ => Some(ListCommand::MoveDown),
+                    CommandId::MoveBoardTaskDown => Some(ListCommand::MoveDown),
+                    // (A drop carries its own move out where it lands.)
+                    _ => Some(ListCommand::Reorder),
                 };
                 if let Some(asked) = asked {
                     list.execute(asked);
@@ -181,6 +189,7 @@ impl Shell {
                 Some(Err(error)) => eprintln!("horizon config: reload failed: {error}"),
                 None => {}
             },
+            CommandId::OpenBoardOrganizer => self.open_board_organizer(),
             CommandId::ReloadAgentRuntime => self.reload_agent_runtime(),
             CommandId::ReloadTerminalRuntime => self.reload_terminal_runtime(),
             CommandId::IncreaseFontSize => self.step_font_size(1.),

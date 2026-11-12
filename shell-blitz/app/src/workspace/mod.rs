@@ -52,6 +52,7 @@ use crate::wake::Wake;
 use crate::wiki::{self, Wiki};
 
 mod arrangement;
+mod board_sessions;
 mod chooser;
 mod commands;
 mod control;
@@ -202,13 +203,22 @@ pub struct RunningAgent {
     pub parent: Option<SessionId>,
 }
 
-/// What `Reload Agent Runtime` does with the runtime.
-pub struct ReloadAgents {
+/// What the runtime is asked off the UI thread.
+type Asks<Of, Answer> = Arc<dyn Fn(Of) -> Result<Answer, String> + Send + Sync>;
+
+/// The agent runtime beyond starting a session in it: what the reload
+/// command and the board need of it.
+pub struct AgentRuntime {
     /// Ends the runtime, starts it again and lists its sessions. Called
     /// off the UI thread.
-    pub restart: Arc<dyn Fn() -> Result<Vec<RunningAgent>, String> + Send + Sync>,
+    pub restart: Asks<(), Vec<RunningAgent>>,
     /// Attaches to a session of the runtime as it is now.
     pub attach: Box<dyn Fn(SessionId) -> AgentSession>,
+    /// The organizer of the board of the project in a directory, started
+    /// if it is not running. Called off the UI thread.
+    pub organizer: Asks<PathBuf, RunningAgent>,
+    /// A session of the runtime, if it has it. Called off the UI thread.
+    pub find: Asks<SessionId, Option<RunningAgent>>,
 }
 
 /// What `Reload Terminal Runtime` does with the runtime: ends it, with
@@ -249,8 +259,9 @@ pub struct Opening {
     pub open_url: Option<markdown::OpenUrl>,
     /// What the model picker lists and switches with.
     pub models: Option<Arc<dyn Models>>,
-    /// What the two reload commands do with their runtimes.
-    pub reload_agents: Option<ReloadAgents>,
+    /// What the reload commands do with their runtimes, and what the
+    /// board asks of the agents'.
+    pub agent_runtime: Option<AgentRuntime>,
     pub reload_terminals: Option<ReloadTerminals>,
     /// The board's store, in place of the one of the project a board pane
     /// is opened in: a test's.
@@ -275,7 +286,7 @@ impl Default for Opening {
             agents: None,
             open_url: None,
             models: None,
-            reload_agents: None,
+            agent_runtime: None,
             reload_terminals: None,
             board: None,
             save_theme: None,
@@ -358,7 +369,7 @@ struct Kept {
     wake: Wake,
     open_url: markdown::OpenUrl,
     models: Option<Arc<dyn Models>>,
-    reload_agents: Option<ReloadAgents>,
+    agent_runtime: Option<AgentRuntime>,
     reload_terminals: Option<ReloadTerminals>,
     reloading: Cell<Option<Reloading>>,
     /// The next arranging gives the active pane the keys.
@@ -651,7 +662,9 @@ impl Shell {
                         board::thread::view(self.board_source(), background, task, move |asked| {
                             match asked {
                                 board::thread::Asked::OpenSession(session) => {
-                                    shell.go_to_session(session);
+                                    if let Some(thread) = shell.board_thread(id) {
+                                        shell.open_task_session(session, thread.notice);
+                                    }
                                 }
                             }
                         });
@@ -1152,7 +1165,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             wake: Wake::default(),
             open_url: opening.open_url.unwrap_or_else(|| Rc::new(|_| {})),
             models: opening.models,
-            reload_agents: opening.reload_agents,
+            agent_runtime: opening.agent_runtime,
             reload_terminals: opening.reload_terminals,
             reloading: Cell::new(None),
             refocus: Cell::new(false),

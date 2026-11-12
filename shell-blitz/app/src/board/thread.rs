@@ -167,6 +167,11 @@ impl BoardThread {
         self.held.with_value(Rc::clone)
     }
 
+    /// The directory of the project whose board this is.
+    pub fn root(&self) -> Option<std::path::PathBuf> {
+        self.held().source.root()
+    }
+
     /// Reads the task again.
     pub fn load(&self) {
         let (this, held) = (*self, self.held());
