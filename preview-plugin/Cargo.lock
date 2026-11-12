@@ -4009,6 +4009,7 @@ dependencies = [
  "horizon-agent",
  "horizon-agent-display",
  "horizon-board",
+ "horizon-board-view",
  "horizon-cli",
  "horizon-config",
  "horizon-control",
@@ -4089,6 +4090,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "horizon-board-view"
+version = "0.1.0"
+dependencies = [
+ "horizon-board",
+ "horizon-workspace",
+ "uuid",
 ]
 
 [[package]]

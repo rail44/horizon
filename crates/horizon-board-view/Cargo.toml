@@ -1,0 +1,15 @@
+# The board views' framework-free half: labels, the list's and the thread's
+# decisions, text measure. No UI framework, so that both shells and the
+# preview plugin's wasm build it.
+[package]
+name = "horizon-board-view"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+horizon-board = { path = "../horizon-board" }
+horizon-workspace = { path = "../horizon-workspace" }
+uuid = { version = "1.18", features = ["v4"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

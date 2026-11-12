@@ -5,7 +5,7 @@
 /// How many cells `ch` occupies: two for the full-width ranges Japanese is
 /// written in, one otherwise. The ranges are the East Asian Wide and
 /// Fullwidth blocks.
-pub(crate) fn cell_width(ch: char) -> usize {
+pub fn cell_width(ch: char) -> usize {
     let code = ch as u32;
     let wide = matches!(code,
         0x1100..=0x115F      // Hangul Jamo
@@ -28,7 +28,7 @@ pub(crate) fn cell_width(ch: char) -> usize {
 }
 
 /// How many cells `line` occupies.
-pub(crate) fn display_width(line: &str) -> usize {
+pub fn display_width(line: &str) -> usize {
     line.chars().map(cell_width).sum()
 }
 
@@ -37,7 +37,7 @@ pub(crate) fn display_width(line: &str) -> usize {
 /// row. A word-wrap boundary can move a character to the next row, so this
 /// is the length the fold decision is made on rather than a promise about
 /// the laid-out text.
-pub(crate) fn rendered_lines(text: &str, cells: usize) -> usize {
+pub fn rendered_lines(text: &str, cells: usize) -> usize {
     let cells = cells.max(1);
     text.lines()
         .map(|line| display_width(line).div_ceil(cells).max(1))
