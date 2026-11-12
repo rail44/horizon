@@ -3,6 +3,8 @@
 
 pub mod agent;
 pub mod agentd;
+pub mod background;
+pub mod board;
 pub mod control;
 pub mod markdown;
 pub mod paths;

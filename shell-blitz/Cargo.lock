@@ -2695,6 +2695,8 @@ dependencies = [
  "horizon-acp",
  "horizon-agent",
  "horizon-agent-display",
+ "horizon-board",
+ "horizon-board-view",
  "horizon-config",
  "horizon-control",
  "horizon-shell-runtime",
@@ -2711,7 +2713,31 @@ dependencies = [
  "pulldown-cmark",
  "serde_json",
  "termwiz",
+ "tokio",
  "unicode-width",
+ "uuid",
+]
+
+[[package]]
+name = "horizon-board"
+version = "0.1.0"
+dependencies = [
+ "horizon-wire",
+ "libc",
+ "remoc",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "horizon-board-view"
+version = "0.1.0"
+dependencies = [
+ "horizon-board",
+ "horizon-workspace",
  "uuid",
 ]
 
