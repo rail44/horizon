@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 horizon-ui = { path = "../ui" }
 horizon-theme-css = { path = "../theme" }
+horizon-agent-display = { path = "../../crates/horizon-agent-display" }
 horizon-config = { path = "../../crates/horizon-config" }
 horizon-control = { path = "../../crates/horizon-control" }
 horizon-shell-runtime = { path = "../../crates/horizon-shell-runtime" }
@@ -28,6 +29,7 @@ kurbo = "0.13"
 # such run of text it shapes.
 parley = { version = "0.12", features = ["complex-scripts"] }
 peniko = "0.6"
+pulldown-cmark = "0.13"
 termwiz = { version = "0.23.3", features = ["use_serde"] }
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4"] }
