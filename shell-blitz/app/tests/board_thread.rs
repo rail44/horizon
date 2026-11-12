@@ -64,6 +64,11 @@ fn sample(session: SessionId) -> Vec<Item> {
 }
 
 fn open(items: Vec<Item>, task: u64) -> Opened {
+    open_at(items, task, 700)
+}
+
+/// The view `width` wide.
+fn open_at(items: Vec<Item>, task: u64, width: u32) -> Opened {
     let asked = Rc::new(RefCell::new(Vec::new()));
     let log = asked.clone();
     let events = items
@@ -72,7 +77,7 @@ fn open(items: Vec<Item>, task: u64) -> Opened {
     let source = Source::Ready(Store::in_memory(sample_envelopes(events)));
     let mut thread = None;
     let css = [horizon_theme_css::CSS, CSS].concat();
-    let app = App::new(700, 600, &css, || {
+    let app = App::new(width, 600, &css, || {
         let (root, state) = view(source, Background::default(), task, move |asked| {
             log.borrow_mut().push(asked)
         });
@@ -260,4 +265,40 @@ fn a_task_that_is_not_there_says_so_and_another_is_shown_in_its_place() {
     opened.thread.show_task(7);
     opened.until("the first task", || opened.texts("title") == ["the task"]);
     assert_eq!(opened.all("post").len(), 3);
+}
+
+#[test]
+fn the_actions_are_beside_the_title_or_in_a_narrow_band_under_it() {
+    let bounds = |opened: &Opened, class: &str| {
+        let node = opened.all(class)[0];
+        let document = opened.app.document();
+        let document = document.borrow();
+        let bounds = document.get_client_bounding_rect(node).expect("a box");
+        (bounds.x, bounds.y, bounds.width, bounds.height)
+    };
+    // Wide enough for both: the actions at the title's right, level with
+    // it, and the field for a status at the end of the line under them.
+    let opened = open(sample(SessionId::new()), 7);
+    opened.app.resolve();
+    assert!(!opened.thread.stacked.get_untracked());
+    let (title, actions) = (bounds(&opened, "title"), bounds(&opened, "actions"));
+    assert!(actions.0 >= title.0 + title.2, "{title:?} {actions:?}");
+    assert!((actions.1 - title.1).abs() < 2., "{title:?} {actions:?}");
+    let (chips, status) = (bounds(&opened, "chips"), bounds(&opened, "status"));
+    assert!(status.0 > chips.0 + chips.2, "{chips:?} {status:?}");
+    assert!(chips.1 >= title.1 + title.3, "{title:?} {chips:?}");
+    assert_eq!(opened.all("actions").len(), 1);
+
+    // Too narrow: the title has the row, and the actions are at the end
+    // of the line under it, after the field.
+    let opened = open_at(sample(SessionId::new()), 7, 420);
+    opened.until("the band stacked", || opened.thread.stacked.get_untracked());
+    opened.app.resolve();
+    let (title, actions) = (bounds(&opened, "title"), bounds(&opened, "actions"));
+    assert!(actions.1 >= title.1 + title.3, "{title:?} {actions:?}");
+    let status = bounds(&opened, "status");
+    assert!(actions.0 >= status.0 + status.2, "{status:?} {actions:?}");
+    assert!(title.2 > 300., "the title has the row: {title:?}");
+    assert_eq!(opened.all("actions").len(), 1);
+    assert_eq!(opened.texts("button"), ["Reply", "Close", "Session"]);
 }

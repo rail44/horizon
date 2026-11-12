@@ -146,6 +146,10 @@ so what only a window shows is looked at on a real desktop.
 - Not yet exercised on this stack: selecting and copying text in a
   transcript, accessibility, desktop notifications, window decorations.
 - macOS: the GPUI shell has macOS branches; the spike ran on Linux only.
+- An element whose children change while an ancestor is `display: none`
+  is laid out, once displayed again, from the children it had, and
+  blitz-dom panics on one that is gone. A view hides such a part another
+  way (the board thread's band: no height, not visible).
 - Blitz is a beta. Each problem met so far (thin borders, hit testing
   through a clip, the input method's position, focus) was worked around
   from Horizon's side.

@@ -43,22 +43,32 @@ pub const CSS: &str = "
                     outline: none; background: var(--background); color: var(--text);
                     font-family: var(--font-family); font-size: var(--body-size);
                     line-height: var(--body-line);
-        &.none > .band, &.none > .column, &.none > .composer { display: none; }
+        &.none > .column, &.none > .composer { display: none; }
+        /* Not `display: none`: what is inside the band changes while there
+           is no task, and blitz-dom lays out a box whose children changed
+           while it was not displayed from the children it had. */
+        &.none > .band { visibility: hidden; height: 0; padding: 0; border: none;
+                         overflow: hidden; }
         .missing { padding: var(--u16); font-size: var(--meta-size);
                    line-height: var(--meta-line); color: var(--text-muted); }
-        .band { flex: none; display: flex; flex-direction: column; gap: var(--u4);
-                padding: var(--u16); background: var(--band);
+        .band { position: relative; flex: none; display: flex; flex-direction: column;
+                gap: var(--u8); padding: var(--u16); background: var(--band);
                 border-bottom: 1px solid var(--border); }
-        .top { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--u8); }
-        .title { flex: 1; min-width: calc(var(--t1-size) * 12); overflow: hidden;
+        .top { display: flex; align-items: flex-start; gap: var(--u16); }
+        .title { flex: 1; min-width: 0; overflow: hidden;
+                 max-height: calc(var(--t1-line) * 2);
                  font-size: var(--t1-size); line-height: var(--t1-line); font-weight: 600; }
+        .floor { position: absolute; visibility: hidden; height: 0;
+                 width: calc(var(--t1-size) * 12 + var(--u16)); }
+        .chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--u8);
+                 min-width: 0; }
         .actions { flex: none; display: flex; align-items: center; gap: var(--u4); }
         .button { padding: 0 var(--u12); border-radius: 4px; line-height: var(--u28);
                   font-size: var(--meta-size); cursor: pointer; }
         .button.primary { background: var(--accent); color: var(--on-accent); }
         .button:hover { background: var(--surface-raised); }
         .button.primary:hover { background: var(--accent); opacity: 0.9; }
-        .state { display: flex; flex-wrap: wrap; align-items: center; gap: var(--u4); }
+        .state { display: flex; align-items: center; gap: var(--u8); }
         .updated, .time, .hint, .more, .on-hover { font-size: var(--meta-size);
                                                    line-height: var(--meta-line);
                                                    color: var(--text-muted); }
@@ -139,6 +149,8 @@ struct Held {
     posts: RefCell<HashMap<String, El>>,
     /// The post to bring into view at the next layout.
     reveal: Cell<Option<usize>>,
+    /// The actions as last built.
+    actions: Cell<Option<El>>,
 }
 
 /// The view's state, for whoever placed it to read or drive.
@@ -156,6 +168,9 @@ pub struct BoardThread {
     pub activity: Activity,
     typed: RwSignal<String>,
     status_typed: RwSignal<String>,
+    /// Whether the band is too narrow for its title and its actions on
+    /// one row, so that the actions are on the line under the title.
+    pub stacked: RwSignal<bool>,
     held: StoredValue<Rc<Held>, LocalStorage>,
     pub element: El,
     reply: El,
@@ -374,8 +389,8 @@ fn button(class: &str, label: &str, state: BoardThread, command: ThreadCommand) 
         .on("click", move |_| state.execute(command.clone()))
 }
 
-/// The band's parts that follow the task: built again when it changes.
-fn band(state: BoardThread, item: &Item, unread: usize) -> El {
+/// The task's actions: the same wherever in the band they are.
+fn actions(state: BoardThread, closed: bool, has_session: bool) -> El {
     let actions = el("div")
         .class("actions")
         .child(button(
@@ -386,7 +401,7 @@ fn band(state: BoardThread, item: &Item, unread: usize) -> El {
         ))
         .child(button(
             "button",
-            if item.is_closed {
+            if closed {
                 chrome::REOPEN
             } else {
                 chrome::CLOSE
@@ -394,7 +409,7 @@ fn band(state: BoardThread, item: &Item, unread: usize) -> El {
             state,
             ThreadCommand::ToggleClosed,
         ));
-    if item.session_id.is_some() {
+    if has_session {
         actions.child(button(
             "button",
             chrome::SESSION,
@@ -402,7 +417,15 @@ fn band(state: BoardThread, item: &Item, unread: usize) -> El {
             ThreadCommand::OpenTaskSession,
         ));
     }
-    let line = el("div").class("state");
+    state.held().actions.set(Some(actions));
+    actions
+}
+
+/// What the band says of the task under its title: its status, what its
+/// session is doing, how much of it is unread and when it was last
+/// written to. Built again when the task changes.
+fn chips(state: BoardThread, item: &Item, unread: usize) -> El {
+    let line = el("div").class("chips");
     let status = status_text(item);
     if !status.is_empty() {
         line.child(chip(tone(item), &status));
@@ -415,17 +438,7 @@ fn band(state: BoardThread, item: &Item, unread: usize) -> El {
         let updated = chrome::updated(&chrome::relative_time(at, model::now_ms()));
         line.child(el("span").class("updated").text(&updated));
     }
-    el("div")
-        .class("task")
-        // The actions go under the title when the band is too narrow for
-        // both.
-        .child(
-            el("div")
-                .class("top")
-                .child(el("div").class("title").text(&item.title))
-                .child(actions),
-        )
-        .child(line)
+    line
 }
 
 /// One post. What it shows of its own state (unread, folded) is fixed
@@ -526,6 +539,7 @@ pub fn view(
         expanded: RwSignal::new(HashSet::new()),
         notice: RwSignal::new(None),
         activity: RwSignal::new(HashMap::new()),
+        stacked: RwSignal::new(false),
         typed: RwSignal::new(String::new()),
         status_typed: RwSignal::new(String::new()),
         held: StoredValue::new_local(Rc::new(Held {
@@ -534,6 +548,7 @@ pub fn view(
             ask: Box::new(ask),
             posts: RefCell::default(),
             reveal: Cell::new(None),
+            actions: Cell::new(None),
         })),
         element: el("div").attr("tabindex", "0"),
         reply: el("textarea"),
@@ -549,36 +564,32 @@ pub fn view(
     }
     let found = move || state.item.with(Option::is_some);
 
-    // The band: what follows the task, then the field for a new status.
-    let task_band = el("div")
-        .class("band")
-        .each(
-            move || {
-                let item = state.item.get();
-                let unread = item.as_ref().map_or(0, |item| {
-                    state
-                        .positions
-                        .with(|positions| unread_count(item, positions))
-                });
-                item.map(|item| (item, unread))
-                    .into_iter()
-                    .collect::<Vec<_>>()
-            },
-            |(item, unread)| {
-                let updated = item.comments.last().map(|comment| comment.id.clone());
-                (
-                    item.title.clone(),
-                    item.status.clone(),
-                    item.is_closed,
-                    item.session_id.is_some(),
-                    updated,
-                    *unread,
-                )
-            },
-            move |(item, unread)| band(state, item, *unread),
-        )
-        .child(
-            // blitz-dom does not draw a field's `placeholder`.
+    // The band: the title with the actions beside it, or, in a band too
+    // narrow for both, at the end of the line under it; that line, of what
+    // is said of the task and the field for a new status.
+    let slot = move |stacked: bool| {
+        move || {
+            let shown = (state.item).with(|item| {
+                (item.as_ref()).map(|item| (item.is_closed, item.session_id.is_some()))
+            });
+            (shown.filter(|_| state.stacked.get() == stacked))
+                .into_iter()
+                .collect::<Vec<_>>()
+        }
+    };
+    let title = el("div").class("title").text_dyn(move || {
+        (state.item).with(|item| {
+            item.as_ref()
+                .map_or_else(String::new, |item| item.title.clone())
+        })
+    });
+    let top = el("div").class("top").child(title).each(
+        slot(false),
+        |shown| *shown,
+        move |(closed, has_session)| actions(state, *closed, *has_session),
+    );
+    let status_field =
+        // blitz-dom does not draw a field's `placeholder`.
             el("div")
                 .class("status")
                 .child(
@@ -609,8 +620,45 @@ pub fn view(
                 .when(
                     move || state.status_typed.with(String::is_empty),
                     || el("div").class("placeholder").text(chrome::CHANGE_STATUS),
-                ),
+                );
+    let line = el("div")
+        .class("state")
+        .each(
+            move || {
+                let item = state.item.get();
+                let unread = item.as_ref().map_or(0, |item| {
+                    state
+                        .positions
+                        .with(|positions| unread_count(item, positions))
+                });
+                item.map(|item| (item, unread))
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            },
+            |(item, unread)| {
+                let updated = item.comments.last().map(|comment| comment.id.clone());
+                (
+                    item.status.clone(),
+                    item.is_closed,
+                    item.session_id.clone(),
+                    item.review_session_id.clone(),
+                    updated,
+                    *unread,
+                )
+            },
+            move |(item, unread)| chips(state, item, *unread),
+        )
+        .child(el("div").class("spacer"))
+        .child(status_field)
+        .each(
+            slot(true),
+            |shown| *shown,
+            move |(closed, has_session)| actions(state, *closed, *has_session),
         );
+    // (As wide as the title is let get before the band stacks, with the
+    // gap to the actions: what the stacking is decided by.)
+    let floor = el("div").class("floor");
+    let task_band = el("div").class("band").child(top).child(line).child(floor);
 
     // The column: the task's body, then its posts.
     let known = held.clone();
@@ -723,6 +771,17 @@ pub fn view(
         // (Not drawn, the column's box is whatever it last was.)
         if state.item.with_untracked(Option::is_none) {
             return;
+        }
+        // The band stacks when the title would get narrower than its
+        // floor beside the actions.
+        let wide = |element: El| page.size(element).map(|(width, _)| width);
+        if let (Some(row), Some(least)) = (wide(top), wide(floor)) {
+            let beside = laid.actions.get().and_then(wide).unwrap_or(0.);
+            let stacked = row < least + beside;
+            if stacked != state.stacked.get_untracked() {
+                state.stacked.set(stacked);
+                relayout();
+            }
         }
         let Some(view) = page.bounds(column) else {
             return;
