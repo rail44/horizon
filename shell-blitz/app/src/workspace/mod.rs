@@ -60,6 +60,7 @@ mod keys;
 mod models;
 mod palette;
 mod picker;
+mod reload;
 mod sessions;
 
 // Every rule sits under the view's own class: the page's style sheet is one
@@ -193,6 +194,34 @@ pub trait Models: Send + Sync {
 /// What is done on the UI thread with what a thread came back with.
 type Arrived = Box<dyn FnOnce(Shell) + Send>;
 
+/// An agent session a runtime has, with what the runtime knows of it.
+pub struct RunningAgent {
+    pub session: SessionId,
+    pub directory: Option<PathBuf>,
+    /// The session it was derived from.
+    pub parent: Option<SessionId>,
+}
+
+/// What `Reload Agent Runtime` does with the runtime.
+pub struct ReloadAgents {
+    /// Ends the runtime, starts it again and lists its sessions. Called
+    /// off the UI thread.
+    pub restart: Arc<dyn Fn() -> Result<Vec<RunningAgent>, String> + Send + Sync>,
+    /// Attaches to a session of the runtime as it is now.
+    pub attach: Box<dyn Fn(SessionId) -> AgentSession>,
+}
+
+/// What `Reload Terminal Runtime` does with the runtime: ends it, with
+/// every terminal in it, and starts it again. Called off the UI thread.
+pub type ReloadTerminals = Arc<dyn Fn() + Send + Sync>;
+
+/// The runtime being ended and started again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reloading {
+    Agents,
+    Terminals,
+}
+
 /// Writes a theme's seed where the configuration is kept, and says where.
 pub type SaveTheme = Rc<dyn Fn(&horizon_theme::seed::Seed) -> Result<PathBuf, String>>;
 
@@ -220,6 +249,9 @@ pub struct Opening {
     pub open_url: Option<markdown::OpenUrl>,
     /// What the model picker lists and switches with.
     pub models: Option<Arc<dyn Models>>,
+    /// What the two reload commands do with their runtimes.
+    pub reload_agents: Option<ReloadAgents>,
+    pub reload_terminals: Option<ReloadTerminals>,
     /// The board's store, in place of the one of the project a board pane
     /// is opened in: a test's.
     pub board: Option<board::Source>,
@@ -243,6 +275,8 @@ impl Default for Opening {
             agents: None,
             open_url: None,
             models: None,
+            reload_agents: None,
+            reload_terminals: None,
             board: None,
             save_theme: None,
             save: None,
@@ -324,6 +358,11 @@ struct Kept {
     wake: Wake,
     open_url: markdown::OpenUrl,
     models: Option<Arc<dyn Models>>,
+    reload_agents: Option<ReloadAgents>,
+    reload_terminals: Option<ReloadTerminals>,
+    reloading: Cell<Option<Reloading>>,
+    /// The next arranging gives the active pane the keys.
+    refocus: Cell<bool>,
     board: Option<board::Source>,
     /// The configuration in use: what a theme's seed is read from, and
     /// what one being edited replaces the theme of.
@@ -350,6 +389,9 @@ pub struct Shell {
     chosen: RwSignal<usize>,
     /// The boundary being dragged.
     resizing: RwSignal<Option<arrangement::Resize>>,
+    /// Changed to have the panes arranged again though the tab's shape is
+    /// the same: a pane's view was let go of, to be made again.
+    rearranged: RwSignal<u32>,
     kept: StoredValue<Rc<Kept>, LocalStorage>,
     root: El,
 }
@@ -468,6 +510,16 @@ impl Shell {
                     let (root, view) = terminal::view(session, look);
                     terminal = Some((session_id, view));
                     root
+                }
+                // (Its session is attached to again when the runtime is
+                // back, and the pane made again.)
+                (PaneKind::Agent, Some(_), _)
+                    if kept.reloading.get() == Some(Reloading::Agents) =>
+                {
+                    el("div")
+                        .class("empty")
+                        .attr("tabindex", "0")
+                        .text("Reloading the agent runtime")
                 }
                 (PaneKind::Agent, Some(session_id), Some(spawn)) => {
                     let running = kept.agents.borrow().get(&session_id).cloned();
@@ -1084,6 +1136,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         query: RwSignal::new(String::new()),
         chosen: RwSignal::new(0),
         resizing: RwSignal::new(None),
+        rearranged: RwSignal::new(0),
         kept: StoredValue::new_local(Rc::new(Kept {
             panes: RefCell::default(),
             sessions: RefCell::new(sessions),
@@ -1099,6 +1152,10 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             wake: Wake::default(),
             open_url: opening.open_url.unwrap_or_else(|| Rc::new(|_| {})),
             models: opening.models,
+            reload_agents: opening.reload_agents,
+            reload_terminals: opening.reload_terminals,
+            reloading: Cell::new(None),
+            refocus: Cell::new(false),
             board: opening.board,
             config: RefCell::new(opening.config.clone()),
             save_theme: opening.save_theme,

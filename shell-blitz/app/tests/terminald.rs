@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use horizon_blitz::restore;
 use horizon_blitz::terminal::{CSS, Session, view};
+use horizon_blitz::terminald::Terminald;
 use horizon_blitz::workspace::{self, Shell};
 use horizon_shell_runtime::{TerminaldHandle, wait_for_drain};
 use horizon_terminal_core::{
@@ -57,6 +58,11 @@ impl Daemon {
     /// A client of the daemon, which is started if it is not running.
     fn connect(&self) -> TerminaldHandle {
         TerminaldHandle::start(&self.socket, &self.control_socket)
+    }
+
+    /// The same, as the shell holds it.
+    fn runtime(&self) -> Terminald {
+        Terminald::start(&self.socket, &self.control_socket)
     }
 
     fn spec(&self) -> TerminalSpawnSpec {
@@ -162,15 +168,20 @@ fn a_session_of_a_real_terminald_runs_what_is_typed_into_the_view() {
 
 /// The shell as its binary opens it: over what `state` keeps and the
 /// daemon still runs.
-fn open(daemon: &Daemon, terminald: &TerminaldHandle, state: &Path) -> (App, Shell) {
-    let opening = restore::opening(
-        WorkspaceStateStore::new(state.to_path_buf()),
-        terminald,
-        None,
-    );
+fn open(daemon: &Daemon, terminald: &Terminald, state: &Path) -> (App, Shell) {
+    let opening = workspace::Opening {
+        reload_terminals: Some(terminald.reload()),
+        ..restore::opening(
+            WorkspaceStateStore::new(state.to_path_buf()),
+            terminald,
+            None,
+        )
+    };
     let (spawning, spec) = (terminald.clone(), daemon.spec());
     let spawn: workspace::Spawn = Box::new(move |starting| {
-        Session::attached(spawning.start_terminal(starting.session.as_uuid(), spec.clone()))
+        Session::attached(
+            (spawning.handle()).start_terminal(starting.session.as_uuid(), spec.clone()),
+        )
     });
     let mut shell = None;
     let app = App::new(1200, 800, &workspace::css(), || {
@@ -198,7 +209,7 @@ fn the_workspace_comes_back_with_its_sessions_after_the_shell_is_closed() {
     let state = daemon.directory.join("workspace.json");
 
     // A first run: something printed, then a second pane.
-    let terminald = daemon.connect();
+    let terminald = daemon.runtime();
     let (app, shell) = open(&daemon, &terminald, &state);
     let first = panes(&shell);
     assert_eq!(first.len(), 1);
@@ -224,7 +235,7 @@ fn the_workspace_comes_back_with_its_sessions_after_the_shell_is_closed() {
 
     // A second run finds the same panes over the same sessions, with
     // what the first one printed.
-    let terminald = daemon.connect();
+    let terminald = daemon.runtime();
     let (app, shell) = open(&daemon, &terminald, &state);
     assert_eq!(panes(&shell), kept);
     until(&app, "what the session showed", || {
@@ -241,5 +252,43 @@ fn the_workspace_comes_back_with_its_sessions_after_the_shell_is_closed() {
     assert!(!text(&shell, kept[0].0).contains("second-16"));
 
     drop(app);
-    daemon.stop(terminald);
+    daemon.stop(terminald.handle());
+}
+
+#[test]
+fn reloading_the_terminal_runtime_ends_its_terminals_and_leaves_a_new_one() {
+    use horizon_workspace::commands::CommandId;
+
+    let daemon = Daemon::prepare();
+    let state = daemon.directory.join("workspace.json");
+    let terminald = daemon.runtime();
+    let (app, shell) = open(&daemon, &terminald, &state);
+    let first = panes(&shell);
+    let text = |pane: PaneId| shell.terminal(pane).expect("a terminal").text();
+    until(&app, "a prompt", || {
+        text(first[0].0).trim_end().ends_with('$')
+    });
+    run(&app, "echo before-$((2*2))");
+    until(&app, "the output", || text(first[0].0).contains("before-4"));
+
+    // The terminals leave the workspace at once; when the daemon is back
+    // the workspace, left empty, has one new terminal, with the keys.
+    shell.execute(CommandId::ReloadTerminalRuntime);
+    app.run_effects();
+    app.resolve();
+    assert_eq!(panes(&shell), []);
+    // (Asked again while it goes on, nothing more happens.)
+    shell.execute(CommandId::ReloadTerminalRuntime);
+    until(&app, "a new terminal", || panes(&shell).len() == 1);
+    let new = panes(&shell);
+    assert_ne!(new[0].1, first[0].1);
+    until(&app, "a prompt", || {
+        text(new[0].0).trim_end().ends_with('$')
+    });
+    run(&app, "echo after-$((5*5))");
+    until(&app, "the output", || text(new[0].0).contains("after-25"));
+    assert!(!text(new[0].0).contains("before-4"));
+
+    drop(app);
+    daemon.stop(terminald.handle());
 }

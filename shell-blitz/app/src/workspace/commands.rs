@@ -44,6 +44,8 @@ pub(super) const CARRIED_OUT: &[CommandId] = &[
     CommandId::SaveBoardState,
     CommandId::ToggleBoardClosed,
     CommandId::ReloadConfig,
+    CommandId::ReloadAgentRuntime,
+    CommandId::ReloadTerminalRuntime,
     CommandId::IncreaseFontSize,
     CommandId::DecreaseFontSize,
     CommandId::ResetFontSize,
@@ -179,6 +181,8 @@ impl Shell {
                 Some(Err(error)) => eprintln!("horizon config: reload failed: {error}"),
                 None => {}
             },
+            CommandId::ReloadAgentRuntime => self.reload_agent_runtime(),
+            CommandId::ReloadTerminalRuntime => self.reload_terminal_runtime(),
             CommandId::IncreaseFontSize => self.step_font_size(1.),
             CommandId::DecreaseFontSize => self.step_font_size(-1.),
             CommandId::ResetFontSize => {

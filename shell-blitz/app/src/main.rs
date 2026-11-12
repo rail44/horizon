@@ -14,8 +14,8 @@ use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_defaul
 use horizon_blitz::agentd::{Agentd, RuntimeModels};
 use horizon_blitz::paths::{daemon_binary, data_home, runtime_dir, workspace_state};
 use horizon_blitz::terminal::Session;
+use horizon_blitz::terminald::Terminald;
 use horizon_blitz::{control, restore, workspace};
-use horizon_shell_runtime::TerminaldHandle;
 use horizon_terminal_core::{
     DEFAULT_SCROLLBACK_LINES, TerminalColorScheme, TerminalSize, TerminalSpawnSpec,
 };
@@ -66,7 +66,7 @@ fn main() {
     // not the GPUI shell's.
     let control_socket = sockets.join("control.sock");
     let requests = control::listen(control_socket.clone());
-    let terminald = TerminaldHandle::start(&sockets.join("terminald.sock"), &control_socket);
+    let terminald = Terminald::start(&sockets.join("terminald.sock"), &control_socket);
     let agentd = Agentd::start(&sockets.join("agentd.sock"), &control_socket);
     let store = WorkspaceStateStore::new(workspace_state());
     let opening = workspace::Opening {
@@ -74,13 +74,15 @@ fn main() {
         reload: Some(Box::new(horizon_config::reload)),
         agents: Some(agentd.spawn()),
         open_url: Some(std::rc::Rc::new(open_url)),
-        models: Some(std::sync::Arc::new(RuntimeModels(agentd.handle.clone()))),
+        models: Some(std::sync::Arc::new(RuntimeModels(agentd.clone()))),
+        reload_agents: Some(agentd.reload()),
+        reload_terminals: Some(terminald.reload()),
         ..restore::opening(store, &terminald, Some(&agentd))
     };
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let directory = (std::env::current_dir().ok().or(home)).unwrap_or_else(|| "/".into());
     let spawn: workspace::Spawn = Box::new(move |starting| {
-        Session::attached(terminald.start_terminal(
+        Session::attached(terminald.handle().start_terminal(
             starting.session.as_uuid(),
             TerminalSpawnSpec {
                 shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),

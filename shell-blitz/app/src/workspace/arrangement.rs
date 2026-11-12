@@ -95,6 +95,7 @@ pub(super) fn view(shell: Shell) -> El {
     // the panes that were in it.
     Effect::new(move |previous: Option<(Option<El>, Vec<El>)>| {
         let shown = shown.get();
+        shell.rearranged.get();
         shell.reconcile();
         let (split, panes) = previous.unwrap_or_default();
         for pane in panes {
@@ -110,6 +111,9 @@ pub(super) fn view(shell: Shell) -> El {
         let top = arrange(&shape, &[], tab, shell);
         root.child(top);
         let kept = shell.kept();
+        if kept.refocus.take() {
+            shell.focus_active();
+        }
         let panes: Vec<El> = (shape.panes().iter())
             .filter_map(|id| kept.panes.borrow().get(id).map(|view| view.element))
             .collect();

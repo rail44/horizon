@@ -1,7 +1,6 @@
 //! What the shell opens with: the workspace kept from the last run, as
 //! far as the two runtimes still have its sessions.
 
-use horizon_shell_runtime::TerminaldHandle;
 use horizon_workspace::store::{InvalidState, LoadResult, WorkspaceStateStore};
 use horizon_workspace::{
     SessionId, SessionInventory, SessionKind, WORKSPACE_STATE_VERSION, Workspace,
@@ -9,6 +8,7 @@ use horizon_workspace::{
 
 use crate::agentd::Agentd;
 use crate::terminal::Session;
+use crate::terminald::Terminald;
 use crate::workspace::{Opening, Save};
 
 /// The kept workspace, if there is one to go on from.
@@ -63,7 +63,7 @@ fn kept(store: &mut WorkspaceStateStore) -> Kept {
 /// terminal. Without an agent runtime, the agent sessions leave.
 pub fn opening(
     mut store: WorkspaceStateStore,
-    terminald: &TerminaldHandle,
+    terminald: &Terminald,
     agentd: Option<&Agentd>,
 ) -> Opening {
     let save = |mut store: WorkspaceStateStore| -> Option<Save> {
@@ -94,6 +94,7 @@ pub fn opening(
         eprintln!("workspace restore failed: {error}");
         Opening::default()
     };
+    let terminald = terminald.handle();
     let running = match terminald.terminal_list() {
         Ok(running) => running,
         Err(error) => return failed(error),
@@ -101,29 +102,24 @@ pub fn opening(
     let running = (running.iter())
         .map(|terminal| SessionId::from_uuid(terminal.session_id))
         .collect();
-    let agents = match agentd.map(|agentd| agentd.handle.session_list()) {
+    let agents = match agentd.map(Agentd::running) {
         Some(Ok(agents)) => agents,
         Some(Err(error)) => return failed(error),
         None => Vec::new(),
     };
-    let inventory = SessionInventory::new(
-        running,
-        (agents.iter())
-            .map(|agent| SessionId::from_uuid(agent.session_id.as_uuid()))
-            .collect(),
-    );
+    let inventory =
+        SessionInventory::new(running, agents.iter().map(|agent| agent.session).collect());
     if let Err(error) = model.reconcile_session_inventory(&inventory) {
         return failed(error.to_string());
     }
     // What the daemon knows of each agent session: where it works, and
     // what it was derived from.
     for agent in agents {
-        let session = SessionId::from_uuid(agent.session_id.as_uuid());
-        if let Some(directory) = agent.workspace_root {
-            model.set_session_directory(session, directory);
+        if let Some(directory) = agent.directory {
+            model.set_session_directory(agent.session, directory);
         }
-        if let Some(parent) = agent.parent_session_id {
-            model.set_session_parent(session, SessionId::from_uuid(parent.as_uuid()));
+        if let Some(parent) = agent.parent {
+            model.set_session_parent(agent.session, parent);
         }
     }
     let of_kind = |model: &Workspace, kind: SessionKind| -> Vec<SessionId> {

@@ -144,7 +144,8 @@ api_key_env = "HORIZON_BLITZ_TEST_MOCK_KEY"
         let spawn: workspace::Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let opening = Opening {
             agents: Some(agentd.spawn()),
-            models: Some(std::sync::Arc::new(RuntimeModels(agentd.handle.clone()))),
+            models: Some(std::sync::Arc::new(RuntimeModels(agentd.clone()))),
+            reload_agents: Some(agentd.reload()),
             ..Opening::default()
         };
         let (root, built) = workspace::view(spawn, opening);
@@ -238,10 +239,29 @@ api_key_env = "HORIZON_BLITZ_TEST_MOCK_KEY"
     enter();
     assert_eq!(shell.modal(), None);
 
+    // `Reload Agent Runtime`: while the daemon is replaced the pane says
+    // so, then it is back on the same session, with what was said in it,
+    // and a further message is answered by the new daemon.
+    let before = agentd.handle();
+    shell.execute(horizon_workspace::commands::CommandId::ReloadAgentRuntime);
+    app.run_effects();
+    app.resolve();
+    assert!(text().contains("Reloading the agent runtime"), "{}", text());
+    assert!(shell.agent(pane).is_none());
+    until("the pane again", &|| shell.agent(pane).is_some());
+    assert!(!agentd.handle().same_runtime(&before));
+    assert_eq!(shell.model.with_untracked(Workspace::tab_count), 2);
+    until("what was said", &|| text().contains("hello there"));
+    commit("and again");
+    enter();
+    until("the second answer", &|| {
+        text().matches("ACP-OK").count() >= 2
+    });
+
     // The daemon ends with the test.
     drop(app);
-    assert!(agentd.handle.begin_reload());
+    assert!(agentd.handle().begin_reload());
     horizon_shell_runtime::wait_for_drain(&directory.join("agentd.sock"))
         .expect("the daemon drained");
-    agentd.handle.stop_and_wait();
+    agentd.handle().stop_and_wait();
 }

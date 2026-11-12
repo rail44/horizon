@@ -11,6 +11,7 @@ pub mod parts;
 pub mod paths;
 pub mod restore;
 pub mod terminal;
+pub mod terminald;
 pub mod theme_settings;
 pub mod wake;
 pub mod wiki;
