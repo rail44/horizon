@@ -7,6 +7,7 @@ pub mod background;
 pub mod board;
 pub mod control;
 pub mod markdown;
+pub mod parts;
 pub mod paths;
 pub mod restore;
 pub mod terminal;

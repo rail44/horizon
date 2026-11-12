@@ -72,6 +72,18 @@ impl Page<'_> {
     pub fn has_focus(&self, element: El) -> bool {
         self.0.get_focussed_node_id() == Some(element.0)
     }
+
+    /// Whether the keys go to this element or to something inside it.
+    pub fn has_focus_within(&self, element: El) -> bool {
+        let mut node = self.0.get_focussed_node_id();
+        while let Some(id) = node {
+            if id == element.0 {
+                return true;
+            }
+            node = self.0.get_node(id).and_then(|node| node.parent);
+        }
+        false
+    }
 }
 
 /// Runs `work` after every layout from now on, before the page is painted:
