@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use horizon_blitz::wake::Wake;
-use horizon_blitz::wiki::{CSS, Target, Wiki, view};
+use horizon_blitz::wiki::{CSS, CommentLayout, Target, Wiki, view};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
@@ -327,4 +327,67 @@ fn a_narrow_pane_has_its_threads_in_the_text() {
     );
     assert!(card.1 >= block.1 + block.3, "{block:?} {card:?}");
     assert!((card.0 - block.0).abs() < 1., "{block:?} {card:?}");
+}
+
+#[test]
+fn the_dialog_keeps_a_new_thread_open_and_closes() {
+    let opened = open("dialog");
+    // The header's button goes to the other layout, and says the way back.
+    assert_eq!(
+        opened.text_of(opened.all("layout")[0]),
+        "Comments in a dialog"
+    );
+    opened.click(opened.all("layout")[0]);
+    assert_eq!(opened.wiki.layout.get_untracked(), CommentLayout::Dialog);
+    assert_eq!(
+        opened.text_of(opened.all("layout")[0]),
+        "Comments in the margin"
+    );
+
+    // A new comment is written in the dialog, which stays open on the
+    // thread it starts; in the page the thread is its head line alone, in
+    // the text and not beside it.
+    opened.comment_on("helper", "Which helper?");
+    let dialog = opened.all("dialog");
+    assert_eq!(dialog.len(), 1);
+    assert!(opened.text_of(dialog[0]).contains("“helper”"));
+    assert!(opened.text_of(dialog[0]).contains("Which helper?"));
+    let root = match opened.wiki.target.get_untracked() {
+        Some(Target::Thread(root)) => root,
+        other => panic!("{other:?}"),
+    };
+    let thread = opened.all("thread")[0];
+    assert!(!opened.text_of(thread).contains("Which helper?"));
+    let (block, card) = (opened.bounds(opened.all("block")[0]), opened.bounds(thread));
+    assert!(card.1 >= block.1 + block.3, "{block:?} {card:?}");
+
+    // A reply goes to the thread, and shows in the dialog.
+    opened.commit("And why?");
+    opened.key(Key::Named(NamedKey::Enter));
+    opened.until("the reply", || opened.all("post").len() == 2);
+    let page = horizon_wiki::page::page_id(&opened.store.read_page("sandbox").unwrap()).unwrap();
+    let threads = opened.store.threads(page).unwrap();
+    assert_eq!(threads[0].root.id, root);
+    assert_eq!(threads[0].replies[0].body.value, "And why?");
+
+    // `Close` leaves nothing open; the thread's head opens it again, and
+    // a press outside the dialog closes it.
+    opened.click(opened.all("close")[0]);
+    assert_eq!(opened.wiki.target.get_untracked(), None);
+    assert!(opened.all("dialog").is_empty());
+    opened.click(opened.all("head")[0]);
+    assert_eq!(opened.all("dialog").len(), 1);
+    click_at(&opened.app, 5., 690.);
+    opened.app.resolve();
+    assert!(opened.all("dialog").is_empty());
+
+    // Back in the margin, a thread being worked on is open there. (The
+    // dialog is over the header's button while it is open.)
+    opened.click(opened.all("head")[0]);
+    opened.wiki.switch_layout();
+    opened.app.run_effects();
+    opened.app.resolve();
+    assert!(opened.all("dialog").is_empty());
+    assert_eq!(opened.all("post").len(), 2);
+    assert_eq!(opened.all("composer").len(), 1);
 }

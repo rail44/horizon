@@ -16,8 +16,11 @@
 //! log and that list are watched, so an answer or an edit is drawn.
 //!
 //! The page as a view reads it is `horizon-wiki`'s `view_model`, as the
-//! GPUI shell's view uses it. That view also has a second layout, with a
-//! dialog over the page; this one does not.
+//! GPUI shell's view uses it.
+//!
+//! There is a second layout, switched to from the header: each thread is
+//! only its head line in the page, and the thread or new comment being
+//! worked on is in a dialog over the view.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -62,20 +65,40 @@ const REPLYING: &str = "Replying";
 const UNSUPPORTED_LINK: &str = "Not a wiki page";
 const BACK: &str = "Back";
 const COMMENT: &str = "Comment";
+const TO_DIALOG: &str = "Comments in a dialog";
+const TO_MARGIN: &str = "Comments in the margin";
+const CLOSE: &str = "Close";
 
 // Every rule sits under the view's own class: the page's style sheet is one
 // for all the views on it. The arrangement follows `src/wiki/view.rs`.
 pub const CSS: &str = "
-    .wiki { display: flex; flex-direction: column; height: 100%; min-width: 240px;
+    .wiki { position: relative; display: flex; flex-direction: column; height: 100%;
+            min-width: 240px;
             outline: none; background: var(--background); color: var(--text);
             font-family: var(--font-family); font-size: var(--body-size);
             line-height: var(--body-line);
         .header { flex: none; display: flex; flex-direction: column; gap: var(--u8);
                   padding: var(--u24) var(--u16) 0 var(--u16); }
-        .back { align-self: flex-start; padding: 0 var(--u8); border-radius: 4px;
-                font-size: var(--meta-size); line-height: 20px; color: var(--text-muted);
-                cursor: pointer; }
-        .back:hover { background: var(--surface-raised); }
+        .bar { display: flex; align-items: center; gap: var(--u8); }
+        .bar .space { flex: 1; }
+        .back, .layout, .close { flex: none; padding: 0 var(--u8); border-radius: 4px;
+                                 font-size: var(--meta-size); line-height: 20px;
+                                 color: var(--text-muted); cursor: pointer; }
+        .back:hover, .layout:hover, .close:hover { background: var(--surface-raised); }
+        .scrim { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 10;
+                 display: flex; justify-content: center; align-items: flex-start;
+                 padding-top: calc(var(--u24) * 2); }
+        .dialog { display: flex; flex-direction: column; gap: var(--u8);
+                  width: calc(var(--u24) * 30); max-width: 92%; max-height: 85%;
+                  box-sizing: border-box; padding: var(--u16);
+                  background: var(--background); border: 1px solid var(--border);
+                  border-radius: 6px;
+                  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1); }
+        .dialog .top { flex: none; display: flex; align-items: flex-start; gap: var(--u8); }
+        .dialog .passage { flex: 1; min-width: 0; font-size: var(--meta-size);
+                           line-height: var(--meta-line); color: var(--text-muted); }
+        .dialog .posts { flex: 1; min-height: 0; overflow-y: scroll; display: flex;
+                         flex-direction: column; gap: var(--u8); }
         .heading { font-size: var(--t1-size); line-height: var(--t1-line); font-weight: 600; }
         .fields { display: flex; flex-wrap: wrap; gap: var(--u4); }
         .chip { padding: 0 var(--u4); border-radius: 2px; font-size: var(--micro-size);
@@ -192,6 +215,15 @@ pub enum Target {
     Thread(String),
 }
 
+/// Where an open thread is read: in a margin beside the text (in the page
+/// on a narrow pane), or in a dialog over the page, with only each
+/// thread's head line in the page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommentLayout {
+    Margin,
+    Dialog,
+}
+
 /// What the view keeps that is not a signal.
 struct Held {
     background: Background,
@@ -229,6 +261,7 @@ pub struct Wiki {
     /// The pages left by following links, most recent last.
     pub history: RwSignal<Vec<PathBuf>>,
     typed: RwSignal<String>,
+    pub layout: RwSignal<CommentLayout>,
     /// The margin's width, on a pane wide enough for one.
     pub margin: RwSignal<Option<f64>>,
     /// Where each item of the margin is from the margin's top, by slot,
@@ -403,7 +436,35 @@ impl Wiki {
         self.target.set(Some(Target::Thread(root)));
     }
 
+    /// Goes to the other layout. A thread or form being worked on carries
+    /// over: the dialog shows it, or it opens in the margin.
+    pub fn switch_layout(&self) {
+        self.layout.update(|layout| {
+            *layout = match layout {
+                CommentLayout::Margin => CommentLayout::Dialog,
+                CommentLayout::Dialog => CommentLayout::Margin,
+            }
+        });
+        match self.target.get_untracked() {
+            Some(Target::Thread(root)) => self.expanded.update(|expanded| {
+                expanded.insert(root);
+            }),
+            Some(Target::Selection(_)) => {}
+            None => {
+                self.element.focus();
+            }
+        }
+    }
+
+    fn in_dialog(&self) -> bool {
+        self.layout.get_untracked() == CommentLayout::Dialog
+    }
+
     fn toggle_thread(&self, root: String) {
+        if self.in_dialog() {
+            self.focus_thread(root);
+            return;
+        }
         if !self.expanded.with(|expanded| expanded.contains(&root)) {
             self.focus_thread(root);
             return;
@@ -477,9 +538,14 @@ impl Wiki {
                     self.expanded.update(|expanded| {
                         expanded.insert(root.clone());
                     });
-                    self.focused.set(Some(root));
-                    self.target.set(None);
-                    self.element.focus();
+                    self.focused.set(Some(root.clone()));
+                    if self.in_dialog() {
+                        // The dialog stays open on the thread just made.
+                        self.target.set(Some(Target::Thread(root)));
+                    } else {
+                        self.target.set(None);
+                        self.element.focus();
+                    }
                 } else {
                     // (The field is built again, empty, with the thread.)
                     self.target.update(|_| {});
@@ -628,9 +694,77 @@ fn thread_key(
     )
 }
 
+fn replying_line() -> El {
+    el("div")
+        .class("replying")
+        .child(el("div").class("bar"))
+        .child(el("span").text(REPLYING))
+}
+
+/// The thread or new comment being worked on, over the view: the whole
+/// quote, the posts and the field. Escape, `Close` or a press outside
+/// closes it.
+fn dialog(state: Wiki) -> El {
+    let scrim = el("div").class("scrim").on("pointerdown", move |_| {
+        state.cancel();
+    });
+    let Some(page) = state.page.get_untracked() else {
+        return scrim;
+    };
+    let (quote, posts, replying) = match state.target.get_untracked() {
+        Some(Target::Selection(chars)) => (
+            format!("{COMMENT_ON} “{}”", page.quote_of(chars)),
+            Vec::new(),
+            false,
+        ),
+        Some(Target::Thread(root)) => match state.placed(&root) {
+            Some(placed) => {
+                let posts: Vec<Annotation> = std::iter::once(&placed.thread.root)
+                    .chain(&placed.thread.replies)
+                    .cloned()
+                    .collect();
+                (
+                    format!("“{}”", placed.quote()),
+                    posts,
+                    placed.replying(&page.replying),
+                )
+            }
+            None => return scrim,
+        },
+        None => return scrim,
+    };
+    let list = el("div").class("posts");
+    for annotation in &posts {
+        list.child(post(annotation));
+    }
+    if replying {
+        list.child(replying_line());
+    }
+    scrim.child(
+        el("div")
+            .class("dialog")
+            // A press in the dialog is not a press outside it.
+            .on("pointerdown", |_| stop_propagation())
+            .child(
+                el("div")
+                    .class("top")
+                    .child(el("div").class("passage").text(&quote))
+                    .child(el("span").class("key").text("Esc"))
+                    .child(
+                        el("div")
+                            .class("close")
+                            .text(CLOSE)
+                            .on("click", move |_| state.cancel()),
+                    ),
+            )
+            .child(list)
+            .child(composer(state)),
+    )
+}
+
 fn thread(state: Wiki, placed: &PlacedThread, replying: bool) -> El {
     let root = placed.thread.root.id.clone();
-    let open = state.expanded.with(|expanded| expanded.contains(&root));
+    let open = !state.in_dialog() && state.expanded.with(|expanded| expanded.contains(&root));
     let focused = state.focused.get_untracked().as_ref() == Some(&root);
     let editing = state.target.get_untracked() == Some(Target::Thread(root.clone()));
     let posts: Vec<&Annotation> = std::iter::once(&placed.thread.root)
@@ -665,12 +799,7 @@ fn thread(state: Wiki, placed: &PlacedThread, replying: bool) -> El {
             card.child(post(annotation));
         }
         if replying {
-            card.child(
-                el("div")
-                    .class("replying")
-                    .child(el("div").class("bar"))
-                    .child(el("span").text(REPLYING)),
-            );
+            card.child(replying_line());
         }
         if editing {
             card.child(composer(state));
@@ -692,6 +821,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
         notice: RwSignal::new(None),
         history: RwSignal::new(Vec::new()),
         typed: RwSignal::new(String::new()),
+        layout: RwSignal::new(CommentLayout::Margin),
         margin: RwSignal::new(None),
         tops: RwSignal::new(HashMap::new()),
         reach: RwSignal::new(0.),
@@ -717,8 +847,8 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
         state.show(path);
     }
 
-    let header = el("div")
-        .class("header")
+    let bar = el("div")
+        .class("bar")
         .when(
             move || !state.history.with(Vec::is_empty),
             move || {
@@ -728,6 +858,22 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
                     .on("click", move |_| state.back())
             },
         )
+        .child(el("div").class("space"))
+        .child(
+            el("div")
+                .class("layout")
+                .text_dyn(move || {
+                    match state.layout.get() {
+                        CommentLayout::Margin => TO_DIALOG,
+                        CommentLayout::Dialog => TO_MARGIN,
+                    }
+                    .to_string()
+                })
+                .on("click", move |_| state.switch_layout()),
+        );
+    let header = el("div")
+        .class("header")
+        .child(bar)
         .each(
             move || {
                 let page = state.page.get();
@@ -763,9 +909,10 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
     // A thread's card as a line, and what starts a comment: both tracked.
     let card = move |page: &WikiPage, placed: &PlacedThread| {
         let root = &placed.thread.root.id;
+        let in_page = state.layout.get() == CommentLayout::Margin;
         let key = thread_key(
             placed,
-            state.expanded.with(|expanded| expanded.contains(root)),
+            in_page && state.expanded.with(|expanded| expanded.contains(root)),
             state.focused.with(|focused| focused.as_ref() == Some(root)),
             state
                 .target
@@ -778,6 +925,8 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
         }
     };
     let starting = move |page: &WikiPage| match state.target.get() {
+        // (In the dialog, when that is where comments are written.)
+        Some(Target::Selection(_)) if state.layout.get() == CommentLayout::Dialog => None,
         Some(Target::Selection(chars)) => {
             (page.block_of(chars.clone())).map(|block| (block, Line::New(chars)))
         }
@@ -793,7 +942,9 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
         Line::Thread { key, .. } => format!("thread {key}"),
         Line::Orphans => "orphans".to_string(),
     };
-    let wide = Memo::new(move |_| state.margin.with(Option::is_some));
+    let wide = Memo::new(move |_| {
+        state.layout.get() == CommentLayout::Margin && state.margin.with(Option::is_some)
+    });
 
     let drawing = held.clone();
     let draw: Rc<dyn Fn(&Line) -> El> = Rc::new(move |line| {
@@ -1104,6 +1255,32 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
         }
         prevent_default();
     })
+    // The dialog, built again when what it shows is other.
+    .each(
+        move || {
+            let shown = (state.layout.get() == CommentLayout::Dialog)
+                .then(|| state.target.get())
+                .flatten()
+                .zip(state.page.get());
+            let key = shown.map(|(target, page)| match target {
+                Target::Selection(chars) => format!("new {chars:?}"),
+                Target::Thread(root) => {
+                    let placed = (page.threads.iter()).find(|placed| placed.thread.root.id == root);
+                    let shows = placed.map(|placed| {
+                        (
+                            placed.thread.replies.len(),
+                            placed.thread.last().id.clone(),
+                            placed.replying(&page.replying),
+                        )
+                    });
+                    format!("thread {root} {shows:?}")
+                }
+            });
+            key.into_iter().collect::<Vec<_>>()
+        },
+        |key| key.clone(),
+        move |_| dialog(state),
+    )
     .child(header)
     .when(
         move || state.notice.with(Option::is_some),
