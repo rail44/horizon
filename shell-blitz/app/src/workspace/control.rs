@@ -8,7 +8,7 @@ use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::control_invoke::{self, Command};
 use horizon_ui::reactive_graph::traits::WithUntracked;
 use horizon_workspace::commands::{CommandId, core_commands};
-use horizon_workspace::{SessionId, SessionKind};
+use horizon_workspace::{SessionId, SessionKind, ViewKind};
 
 use super::commands::CARRIED_OUT;
 use super::{Shell, Start};
@@ -104,6 +104,55 @@ impl Shell {
             }
             Command::Execute(command) if CARRIED_OUT.contains(&command) => {
                 self.execute(command);
+                done
+            }
+            Command::Markdown {
+                path,
+                split,
+                activate,
+            } => {
+                if !path.is_file() {
+                    return Err(format!("not a file: {}", path.display()));
+                }
+                // A pane that shows the file already reads it again.
+                let shown = (self.model)
+                    .with_untracked(|model| model.document_pane(ViewKind::Markdown, &path));
+                if let Some(pane) = shown {
+                    if let Some(view) = self.markdown(pane) {
+                        view.open(path);
+                    }
+                    if activate {
+                        self.change(|model| {
+                            if let Some((tab, pane)) = model.pane_position(pane) {
+                                model.activate_pane_index(tab, pane);
+                            }
+                        });
+                    }
+                    return done;
+                }
+                let mut opened = None;
+                self.model_changed(|model| {
+                    opened = match split {
+                        Some((target, axis)) => model.split_session_with_view(
+                            target,
+                            ViewKind::Markdown,
+                            axis,
+                            activate,
+                        ),
+                        None => {
+                            Some(model.open_tab_with_view_activated(ViewKind::Markdown, activate))
+                        }
+                    };
+                    if let Some(pane) = opened {
+                        model.set_pane_document(pane, path);
+                    }
+                });
+                // (The model has the pane's file before its view is made.)
+                self.reconcile();
+                opened.ok_or("unknown split target session")?;
+                if activate {
+                    self.focus_active();
+                }
                 done
             }
             Command::Approve {

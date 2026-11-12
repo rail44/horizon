@@ -8,4 +8,5 @@ pub mod markdown;
 pub mod paths;
 pub mod restore;
 pub mod terminal;
+pub mod wake;
 pub mod workspace;

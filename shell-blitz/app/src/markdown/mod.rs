@@ -1,0 +1,295 @@
+//! The Markdown view: one file read from disk, drawn as running text,
+//! with links to other Markdown files followed in place, and read again
+//! when it changes on disk.
+//!
+//! What the view holds is a handful of signals (the file, the way back,
+//! the parts of the document, a notice). The elements are built once; each
+//! reads the signals it shows. Reading the front matter and resolving
+//! links is `horizon-workspace`'s, as the GPUI shell's view uses it.
+
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use horizon_ui::blitz_traits::events::DomEventData;
+use horizon_ui::reactive_graph::effect::Effect;
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
+use horizon_ui::{El, dispatched, each_layout, el, relayout};
+use horizon_workspace::markdown::{LinkTarget, parse, resolve_link};
+use keyboard_types::{Key, NamedKey};
+
+use crate::wake::Wake;
+
+mod render;
+mod watch;
+
+pub use render::render;
+
+const BACK: &str = "Back";
+const NO_DOCUMENT: &str = "No document";
+const UNSUPPORTED_LINK: &str = "Not a Markdown file";
+
+// Every rule sits under the view's own class: the page's style sheet is one
+// for all the views on it.
+pub const CSS: &str = "
+    .markdown { display: flex; flex-direction: column; height: 100%; min-width: 240px;
+                outline: none; background: var(--background); color: var(--text);
+                font-family: var(--font-family); font-size: var(--body-size);
+                line-height: var(--body-line);
+        .header { flex: none; display: flex; flex-direction: column; gap: var(--u8);
+                  padding: 0 var(--u16); }
+        .header > :first-child { margin-top: var(--u24); }
+        .body > :first-child { margin-top: 0; }
+        .back { align-self: flex-start; padding: 0 var(--u8); border-radius: 4px;
+                font-size: var(--meta-size); line-height: 20px; color: var(--text-muted);
+                cursor: pointer; }
+        .back:hover { background: var(--surface-raised); }
+        .title { font-size: var(--t1-size); line-height: var(--t1-line); font-weight: 600; }
+        .chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--u4); }
+        .chip { padding: 0 var(--u4); border-radius: 2px;
+                background: var(--chip-muted-surface); color: var(--chip-muted-text);
+                font-size: var(--micro-size); line-height: var(--micro-line); }
+        .notice, .empty, .error { flex: none; padding: var(--u8) var(--u16) 0 var(--u16);
+                                  font-size: var(--meta-size); line-height: var(--meta-line);
+                                  color: var(--text-muted); }
+        .error { color: var(--danger); }
+        .scroll { flex: 1; min-height: 0; overflow-y: scroll;
+                  padding: var(--u24) var(--u16) var(--u32) var(--u16); }
+        .scroll h1 { font-size: var(--t2-size); line-height: var(--t2-line);
+                     font-weight: 600; margin: 16px 0 2px 0; }
+        .scroll h2, .scroll h3 { font-size: var(--body-size); line-height: var(--body-line);
+                                 font-weight: 600; margin: 16px 0 2px 0; }
+        .scroll p, .scroll ul, .scroll ol, .scroll pre, .scroll blockquote, .scroll table {
+            margin: 0 0 8px 0; }
+        .scroll ul, .scroll ol { padding-left: 18px; }
+        .scroll li { margin-bottom: 3px; }
+        .scroll pre { padding: 16px; border: 1px solid var(--border); border-radius: 6px;
+                      line-height: 21px; background: var(--surface-panel);
+                      overflow-x: scroll; }
+        .scroll code { font-family: var(--font-family); }
+        .scroll :not(pre) > code { padding: 0 var(--u4); border-radius: 2px;
+                                   font-size: var(--meta-size);
+                                   background: var(--surface-panel); }
+        .language { margin: -11px 0 2px 0; text-align: right; font-size: var(--meta-size);
+                    color: var(--text-muted); }
+        .scroll blockquote { padding-left: 12px; border-left: 2px solid var(--border);
+                             color: var(--text-muted); }
+        .scroll td, .scroll th { padding: 2px 8px; border: 1px solid var(--border); }
+        .link { color: var(--accent); cursor: pointer; }
+        .link:hover { text-decoration: underline; }
+    }
+";
+
+/// What is outside the view: a URL handed to the desktop.
+pub type OpenUrl = Rc<dyn Fn(&str)>;
+
+/// The view's state, for whoever placed it to read or drive.
+#[derive(Clone, Copy)]
+pub struct Markdown {
+    pub path: RwSignal<Option<PathBuf>>,
+    /// The files left by following links, most recent last.
+    pub history: RwSignal<Vec<PathBuf>>,
+    title: RwSignal<Option<String>>,
+    fields: RwSignal<Vec<(String, String)>>,
+    body: RwSignal<String>,
+    error: RwSignal<Option<String>>,
+    /// A line under the header: a link the view did not follow.
+    pub notice: RwSignal<Option<String>>,
+}
+
+impl Markdown {
+    /// Points the view at `path` from outside: the history is left as it
+    /// is, since the jump was not a link followed here.
+    pub fn open(&self, path: PathBuf) {
+        if self.path.get_untracked().as_ref() == Some(&path) {
+            self.reload();
+        } else {
+            self.show(path);
+        }
+    }
+
+    fn show(&self, path: PathBuf) {
+        self.notice.set(None);
+        self.path.set(Some(path));
+        self.reload();
+    }
+
+    /// Reads the file again.
+    pub fn reload(&self) {
+        let Some(path) = self.path.get_untracked() else {
+            return;
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(source) => {
+                let document = parse(&source);
+                self.error.set(None);
+                self.title.set(document.title);
+                self.fields.set(document.fields);
+                self.body.set(document.body);
+            }
+            Err(error) => {
+                self.error.set(Some(format!("{}: {error}", path.display())));
+                self.title.set(None);
+                self.fields.set(Vec::new());
+                self.body.set(String::new());
+            }
+        }
+    }
+
+    fn follow_link(&self, target: &str, open_url: &OpenUrl) {
+        let Some(current) = self.path.get_untracked() else {
+            return;
+        };
+        match resolve_link(&current, target) {
+            LinkTarget::Document(path) => {
+                if path != current {
+                    self.history.update(|history| history.push(current));
+                    self.show(path);
+                }
+            }
+            LinkTarget::External(url) => open_url(&url),
+            LinkTarget::Unsupported => {
+                self.notice
+                    .set(Some(format!("{UNSUPPORTED_LINK}: {target}")));
+            }
+        }
+    }
+
+    fn back(&self) {
+        let mut previous = None;
+        self.history.update(|history| previous = history.pop());
+        if let Some(previous) = previous {
+            self.show(previous);
+        }
+    }
+}
+
+/// Builds the view, opened on `path`. A change of the file it shows is
+/// read in once the file has sat still, `wake` making the page take it in.
+pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Markdown) {
+    let state = Markdown {
+        path: RwSignal::new(None),
+        history: RwSignal::new(Vec::new()),
+        title: RwSignal::new(None),
+        fields: RwSignal::new(Vec::new()),
+        body: RwSignal::new(String::new()),
+        error: RwSignal::new(None),
+        notice: RwSignal::new(None),
+    };
+    if let Some(path) = path {
+        state.show(path);
+    }
+
+    let header = el("div")
+        .class("header")
+        .when(
+            move || !state.history.get().is_empty(),
+            move || {
+                el("div")
+                    .class("back")
+                    .text(BACK)
+                    .on("click", move |_| state.back())
+            },
+        )
+        .when(
+            move || state.title.get().is_some(),
+            move || {
+                el("div")
+                    .class("title")
+                    .text_dyn(move || state.title.get().unwrap_or_default())
+            },
+        )
+        .when(
+            move || !state.fields.get().is_empty(),
+            move || {
+                el("div").class("chips").each(
+                    move || state.fields.get(),
+                    |field| field.clone(),
+                    |(key, value)| el("span").class("chip").text(&format!("{key} {value}")),
+                )
+            },
+        );
+
+    let link_state = state;
+    let scroll = el("div").class("scroll").each(
+        // The whole body again when the text changes: Markdown has no
+        // parts that stay the same from one text to the next.
+        move || vec![state.body.get()],
+        |body| body.clone(),
+        move |body| {
+            let open_url = open_url.clone();
+            render(
+                body,
+                Rc::new(move |target: &str| link_state.follow_link(target, &open_url)),
+            )
+        },
+    );
+    // A new file starts at its top, and is the one watched from then on.
+    let changed = watch::Changed::default();
+    let noted = changed.clone();
+    // (The watch is what the effect keeps: the one before it ends when
+    // the next takes its place.)
+    Effect::new(move |_| {
+        let path = state.path.get();
+        scroll.scroll_to(0., 0.);
+        path.and_then(|path| watch::on(path, noted.clone(), wake.clone()))
+    });
+    each_layout(move |_| {
+        if changed.settled() {
+            state.reload();
+            relayout();
+        }
+    });
+
+    let root = el("div").class("markdown").attr("tabindex", "0");
+    root.on("keydown", move |event| {
+        let DomEventData::KeyDown(key) = &event.data else {
+            return;
+        };
+        if key.modifiers.ctrl() || key.modifiers.alt() || key.modifiers.meta() {
+            return;
+        }
+        // A line is three of the body's lines; a page most of the box.
+        let scroll_by = move |lines: f64, pages: f64| {
+            dispatched(move |page| {
+                let height = page.size(scroll).map_or(0., |(_, height)| height);
+                scroll.scroll_by(0., lines * 26. * 3. + pages * height * 0.8);
+            });
+        };
+        match &key.key {
+            Key::Character(character) if character == "j" => scroll_by(1., 0.),
+            Key::Character(character) if character == "k" => scroll_by(-1., 0.),
+            Key::Character(character) if character == " " => scroll_by(0., 1.),
+            Key::Character(character) if character == "h" => state.back(),
+            Key::Named(NamedKey::ArrowDown) => scroll_by(1., 0.),
+            Key::Named(NamedKey::ArrowUp) => scroll_by(-1., 0.),
+            Key::Named(NamedKey::PageDown) => scroll_by(0., 1.),
+            Key::Named(NamedKey::PageUp) => scroll_by(0., -1.),
+            Key::Named(NamedKey::Backspace | NamedKey::ArrowLeft) => state.back(),
+            _ => {}
+        }
+    })
+    .child(header)
+    .when(
+        move || state.notice.get().is_some(),
+        move || {
+            el("div")
+                .class("notice")
+                .text_dyn(move || state.notice.get().unwrap_or_default())
+        },
+    )
+    .when(
+        move || state.path.get().is_none(),
+        || el("div").class("empty").text(NO_DOCUMENT),
+    )
+    .when(
+        move || state.error.get().is_some(),
+        move || {
+            el("div")
+                .class("error")
+                .text_dyn(move || state.error.get().unwrap_or_default())
+        },
+    )
+    .child(scroll);
+    (root, state)
+}

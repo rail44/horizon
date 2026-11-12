@@ -22,6 +22,18 @@ use horizon_terminal_core::{
 use horizon_ui::{App, Live};
 use horizon_workspace::store::WorkspaceStateStore;
 
+/// Hands a URL to the desktop.
+fn open_url(url: &str) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if let Err(error) = std::process::Command::new(opener).arg(url).spawn() {
+        eprintln!("could not open {url} with {opener}: {error}");
+    }
+}
+
 fn main() {
     let sockets = runtime_dir();
     std::fs::create_dir_all(&sockets).expect("the runtime directory");
@@ -61,6 +73,7 @@ fn main() {
         config: horizon_config::load().clone(),
         reload: Some(Box::new(horizon_config::reload)),
         agents: Some(agentd.spawn()),
+        open_url: Some(std::rc::Rc::new(open_url)),
         ..restore::opening(store, &terminald, Some(&agentd))
     };
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);

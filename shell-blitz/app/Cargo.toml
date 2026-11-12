@@ -26,6 +26,7 @@ crossbeam-channel = "0.5"
 futures = "0.3"
 keyboard-types = "0.8"
 kurbo = "0.13"
+notify = "8"
 # `complex-scripts`: the word breaker with its dictionary for Chinese and
 # Japanese. Without it a debug build writes a warning to stderr for each
 # such run of text it shapes.

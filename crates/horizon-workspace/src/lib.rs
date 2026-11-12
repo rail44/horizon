@@ -8,6 +8,7 @@
 pub mod commands;
 mod layout;
 pub mod lineage;
+pub mod markdown;
 mod mode;
 mod nav;
 mod operations;

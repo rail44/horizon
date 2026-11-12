@@ -645,3 +645,57 @@ fn the_control_plane_makes_lists_attaches_and_ends_sessions() {
         );
     }
 }
+
+#[test]
+fn the_control_plane_opens_a_markdown_file_in_a_pane_that_follows_its_links() {
+    use horizon_control::contract::{EnvelopeBody, Invoke};
+    use horizon_control::host::executor::ControlRequest;
+    use horizon_ui::reactive_graph::traits::GetUntracked;
+
+    let directory = std::env::temp_dir().join(format!("hzb-md-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let (first, second) = (directory.join("first.md"), directory.join("second.md"));
+    std::fs::write(&first, "# One\n\n[to the second](second.md)\n").unwrap();
+    std::fs::write(&second, "# Two\n").unwrap();
+
+    let opened = open();
+    // As at a poll of the page: the request answered, then the effects of
+    // what it changed.
+    let open_file = |path: &std::path::Path| {
+        let answer = opened.shell.control(&ControlRequest::Invoke(Invoke {
+            command: "markdown".to_string(),
+            args: serde_json::json!({ "path": path, "activate": true }),
+        }));
+        opened.app.run_effects();
+        opened.app.resolve();
+        answer
+    };
+    let answer = open_file(&first);
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    assert_eq!(opened.model(Workspace::tab_count), 2);
+    let pane = opened.panes()[0];
+    let view = opened.shell.markdown(pane).expect("a Markdown view");
+    assert_eq!(view.path.get_untracked(), Some(first.clone()));
+    // The tab is named for the file.
+    let title = |opened: &Opened| opened.model(|model| model.tab_summaries()[1].title.clone());
+    assert_eq!(title(&opened), "first.md");
+
+    // A link followed moves the pane's file in the model with it.
+    let (x, y) = opened.middle(opened.all("link")[0]);
+    click_at(&opened.app, x, y);
+    opened.app.resolve();
+    assert_eq!(view.path.get_untracked(), Some(second.clone()));
+    assert_eq!(
+        opened.model(|model| model.pane_document(pane).map(std::path::PathBuf::from)),
+        Some(second.clone())
+    );
+    assert_eq!(title(&opened), "second.md");
+
+    // Asked for a file a pane shows already, that pane is the one.
+    let answer = open_file(&second);
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    assert_eq!(opened.model(Workspace::tab_count), 2);
+    let missing = open_file(&directory.join("none.md"));
+    assert!(matches!(missing, EnvelopeBody::Error(_)), "{missing:?}");
+    let _ = std::fs::remove_dir_all(&directory);
+}

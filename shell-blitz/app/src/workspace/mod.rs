@@ -7,8 +7,10 @@
 //! pane, and lives until the model lets the pane go. Splitting, closing,
 //! resizing and changing tab change only the boxes around it.
 //!
-//! So far a pane shows a terminal or an agent. Creating one asks which,
-//! when there is an agent runtime to start one with.
+//! So far a pane shows a terminal, an agent or a Markdown file. Creating
+//! one asks which of the first two, when there is an agent runtime to
+//! start one with; a Markdown file is opened by naming it
+//! (`horizon markdown <path>`).
 //!
 //! Closing a pane lets go of its view and keeps its session, which the
 //! session manager lists and puts back in a pane; a session ends when it
@@ -37,10 +39,12 @@ use horizon_ui::reactive_graph::traits::{
 use horizon_ui::{El, each_layout, el, relayout, stop_propagation};
 use horizon_workspace::title::derive_session_title;
 use horizon_workspace::types::TabSummary;
-use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, Workspace};
+use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, ViewKind, Workspace};
 
 use crate::agent::{self, Agent, AgentSession};
+use crate::markdown::{self, Markdown};
 use crate::terminal::{self, Session, Terminal};
+use crate::wake::Wake;
 
 mod arrangement;
 mod chooser;
@@ -125,7 +129,14 @@ pub const CSS: &str = "
 /// The page's style sheet with the theme's, this view's and those of the
 /// views its panes show.
 pub fn css() -> String {
-    [horizon_theme_css::CSS, CSS, terminal::CSS, agent::CSS].concat()
+    [
+        horizon_theme_css::CSS,
+        CSS,
+        terminal::CSS,
+        agent::CSS,
+        markdown::CSS,
+    ]
+    .concat()
 }
 
 pub use keymap::Keymap;
@@ -180,6 +191,9 @@ pub struct Opening {
     /// What starts an agent session: without it this shell has terminals
     /// only.
     pub agents: Option<SpawnAgent>,
+    /// Hands a URL to the desktop: a link in a document that is not a
+    /// file.
+    pub open_url: Option<markdown::OpenUrl>,
     /// Told the model whenever it has changed, to keep it for the next
     /// run.
     pub save: Option<Save>,
@@ -195,6 +209,7 @@ impl Default for Opening {
             sessions: Vec::new(),
             agent_sessions: Vec::new(),
             agents: None,
+            open_url: None,
             save: None,
         }
     }
@@ -242,6 +257,7 @@ struct PaneView {
     owner: Owner,
     terminal: Option<(SessionId, Terminal)>,
     agent: Option<Agent>,
+    markdown: Option<Markdown>,
 }
 
 /// What the shell keeps beside the model.
@@ -264,6 +280,9 @@ struct Kept {
     /// goes back to.
     configured_size: Cell<f32>,
     waker: RefCell<Option<Waker>>,
+    /// The same, for what wakes the page from another thread.
+    wake: Wake,
+    open_url: markdown::OpenUrl,
     owner: Owner,
 }
 
@@ -368,7 +387,7 @@ impl Shell {
     fn pane(&self, id: PaneId, kind: PaneKind, session: Option<SessionId>) -> PaneView {
         let (shell, kept) = (*self, self.kept());
         let owner = kept.owner.child();
-        let (mut terminal, mut agent) = (None, None);
+        let (mut terminal, mut agent, mut document) = (None, None, None);
         let start = |session| {
             kept.starting
                 .borrow_mut()
@@ -435,6 +454,30 @@ impl Shell {
                     agent = Some(view);
                     root
                 }
+                (PaneKind::View(ViewKind::Markdown), ..) => {
+                    let path = (self.model)
+                        .with_untracked(|model| model.pane_document(id).map(PathBuf::from));
+                    let (root, view) =
+                        markdown::view(path, kept.open_url.clone(), kept.wake.clone());
+                    // The file it shows is the pane's in the model, so
+                    // that it comes back on the same one: a link followed
+                    // moves it.
+                    Effect::new(move |_| {
+                        let Some(path) = view.path.get() else {
+                            return;
+                        };
+                        let kept = shell
+                            .model
+                            .with_untracked(|model| model.pane_document(id) == Some(&path));
+                        if !kept {
+                            shell.model.update(|model| {
+                                model.set_pane_document(id, path);
+                            });
+                        }
+                    });
+                    document = Some(view);
+                    root
+                }
                 _ => el("div")
                     .class("empty")
                     .attr("tabindex", "0")
@@ -460,6 +503,7 @@ impl Shell {
             owner,
             terminal,
             agent,
+            markdown: document,
         }
     }
 
@@ -577,6 +621,7 @@ impl Shell {
         for session in kept.agents.borrow().values() {
             session.set_waker(waker.clone());
         }
+        kept.wake.set(waker.clone());
         *kept.waker.borrow_mut() = Some(waker);
     }
 
@@ -619,6 +664,11 @@ impl Shell {
     fn active_agent(&self) -> Option<Rc<AgentSession>> {
         let session = self.model.with_untracked(Workspace::active_session_id)?;
         self.kept().agents.borrow().get(&session).cloned()
+    }
+
+    /// The Markdown view a pane shows.
+    pub fn markdown(&self, pane: PaneId) -> Option<Markdown> {
+        self.kept().panes.borrow().get(&pane)?.markdown
     }
 
     /// The agent view a pane shows.
@@ -732,6 +782,8 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             reload: opening.reload,
             configured_size,
             waker: RefCell::default(),
+            wake: Wake::default(),
+            open_url: opening.open_url.unwrap_or_else(|| Rc::new(|_| {})),
             owner: Owner::current().expect("an owner"),
         })),
         root: el("div"),
