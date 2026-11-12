@@ -59,7 +59,10 @@ impl Requests {
     pub fn answer(&self, waker: &Waker, shell: &Shell) {
         *self.waker.lock().unwrap() = Some(waker.clone());
         for pending in self.pending.try_iter() {
-            let _ = pending.reply.send(shell.control(&pending.request));
+            let reply = pending.reply;
+            shell.control_answering(&pending.request, move |answer| {
+                let _ = reply.send(answer);
+            });
         }
     }
 }

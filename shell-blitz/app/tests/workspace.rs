@@ -866,3 +866,66 @@ fn the_control_plane_opens_a_wiki_page_in_a_pane() {
     );
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn the_control_plane_switches_a_sessions_model_through_the_runtime() {
+    use std::sync::{Arc, Mutex, mpsc};
+
+    use horizon_blitz::workspace::Models;
+    use horizon_control::contract::{EnvelopeBody, Invoke};
+    use horizon_control::host::executor::ControlRequest;
+
+    #[derive(Default)]
+    struct Switched(Mutex<Vec<(SessionId, String, String)>>);
+    impl Models for Switched {
+        fn providers(&self) -> Result<Vec<horizon_acp::ProviderSummary>, String> {
+            Ok(Vec::new())
+        }
+        fn models(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(Vec::new())
+        }
+        fn switch(&self, session: SessionId, provider: &str, model: &str) -> Result<(), String> {
+            if model == "gone" {
+                return Err("no such model".to_string());
+            }
+            (self.0.lock().unwrap()).push((session, provider.to_string(), model.to_string()));
+            Ok(())
+        }
+    }
+
+    let switched = Arc::new(Switched::default());
+    let opened = open_with(Opening {
+        models: Some(switched.clone()),
+        ..Opening::default()
+    });
+    let session = SessionId::new();
+    let ask = |model: &str| {
+        let (reply, answer) = mpsc::channel();
+        opened.shell.control_answering(
+            &ControlRequest::Invoke(Invoke {
+                command: "set-model".to_string(),
+                args: serde_json::json!({
+                    "session_id": session.as_uuid().to_string(),
+                    "provider": "local",
+                    "model": model,
+                }),
+            }),
+            move |body| reply.send(body).unwrap(),
+        );
+        answer
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("an answer")
+    };
+    let answer = ask("small");
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    assert_eq!(
+        *switched.0.lock().unwrap(),
+        [(session, "local".to_string(), "small".to_string())]
+    );
+    // What the runtime refuses is the answer.
+    let answer = ask("gone");
+    assert!(
+        matches!(&answer, EnvelopeBody::Error(error) if error.message.contains("no such model")),
+        "{answer:?}"
+    );
+}

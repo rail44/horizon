@@ -26,6 +26,36 @@ impl Shell {
         }
     }
 
+    /// Carries out what the control plane asks and answers through
+    /// `reply`: at once, or, for what is a round trip to the agent
+    /// runtime, from a thread when that is back.
+    pub fn control_answering(
+        &self,
+        request: &ControlRequest,
+        reply: impl FnOnce(EnvelopeBody) + Send + 'static,
+    ) {
+        if let ControlRequest::Invoke(invoke) = request
+            && let Ok(Command::SetModel {
+                session_id,
+                provider,
+                model,
+            }) = control_invoke::parse(invoke)
+        {
+            let Some(models) = self.kept().models.clone() else {
+                reply(error_body("the agent runtime is not running"));
+                return;
+            };
+            std::thread::spawn(move || {
+                reply(match models.switch(session_id, &provider, &model) {
+                    Ok(()) => EnvelopeBody::Ok { session_id: None },
+                    Err(error) => error_body(format!("model switch failed: {error}")),
+                });
+            });
+            return;
+        }
+        reply(self.control(request));
+    }
+
     fn invoke(&self, command: Command) -> Result<EnvelopeBody, String> {
         let done = Ok(EnvelopeBody::Ok { session_id: None });
         match command {
