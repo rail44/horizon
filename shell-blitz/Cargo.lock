@@ -2701,6 +2701,7 @@ dependencies = [
  "horizon-control",
  "horizon-shell-runtime",
  "horizon-terminal-core",
+ "horizon-theme",
  "horizon-theme-css",
  "horizon-ui",
  "horizon-workspace",
@@ -2838,6 +2839,7 @@ name = "horizon-theme"
 version = "0.1.0"
 dependencies = [
  "horizon-config",
+ "toml_edit",
 ]
 
 [[package]]
@@ -7357,6 +7359,7 @@ dependencies = [
  "indexmap 2.14.2",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

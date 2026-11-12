@@ -46,6 +46,7 @@ use crate::background::Background;
 use crate::board::{self, BoardList, BoardThread};
 use crate::markdown::{self, Markdown};
 use crate::terminal::{self, Session, Terminal};
+use crate::theme_settings;
 use crate::wake::Wake;
 
 mod arrangement;
@@ -139,6 +140,7 @@ pub fn css() -> String {
         agent::CSS,
         markdown::CSS,
         &board::css(),
+        &theme_settings::css(),
     ]
     .concat()
 }
@@ -188,6 +190,9 @@ pub trait Models: Send + Sync {
 /// What is done on the UI thread with what a thread came back with.
 type Arrived = Box<dyn FnOnce(Shell) + Send>;
 
+/// Writes a theme's seed where the configuration is kept, and says where.
+pub type SaveTheme = Rc<dyn Fn(&horizon_theme::seed::Seed) -> Result<PathBuf, String>>;
+
 /// Keeps the model for the next run.
 pub type Save = Box<dyn FnMut(&Workspace)>;
 
@@ -215,6 +220,9 @@ pub struct Opening {
     /// The board's store, in place of the one of the project a board pane
     /// is opened in: a test's.
     pub board: Option<board::Source>,
+    /// Writes a theme's seed to the config file, in place of
+    /// `horizon-theme`'s own writing of it: a test's.
+    pub save_theme: Option<SaveTheme>,
     /// Told the model whenever it has changed, to keep it for the next
     /// run.
     pub save: Option<Save>,
@@ -233,6 +241,7 @@ impl Default for Opening {
             open_url: None,
             models: None,
             board: None,
+            save_theme: None,
             save: None,
         }
     }
@@ -312,6 +321,10 @@ struct Kept {
     open_url: markdown::OpenUrl,
     models: Option<Arc<dyn Models>>,
     board: Option<board::Source>,
+    /// The configuration in use: what a theme's seed is read from, and
+    /// what one being edited replaces the theme of.
+    config: RefCell<RawConfig>,
+    save_theme: Option<SaveTheme>,
     /// What threads came back with, to take in on the UI thread.
     arrived: Arc<Mutex<Vec<Arrived>>>,
     owner: Owner,
@@ -511,6 +524,36 @@ impl Shell {
                     });
                     document = Some(view);
                     root
+                }
+                (PaneKind::View(ViewKind::ThemeSettings), ..) => {
+                    let config = kept.config.borrow().clone();
+                    let scheme = self.theme.with_untracked(|theme| *theme.scheme());
+                    let fallback = theme_settings::fallback(&scheme);
+                    let seed = horizon_theme::seed::Seed::from_current_config(&config, fallback);
+                    let save = kept.save_theme.clone();
+                    theme_settings::view(
+                        seed,
+                        self.theme,
+                        theme_settings::Host {
+                            // The seed's theme, at the font size in use.
+                            apply: Box::new(move |seed| {
+                                let kept = shell.kept();
+                                let mut config = kept.config.borrow().clone();
+                                config.theme = seed.to_raw_config().theme;
+                                let size = shell.theme.with_untracked(|theme| theme.font_size);
+                                let mut theme = Theme::from_config(&config);
+                                theme.font_size = size;
+                                *kept.config.borrow_mut() = config;
+                                shell.theme.set(theme);
+                            }),
+                            save: Box::new(move |seed| match &save {
+                                Some(save) => save(seed),
+                                None => horizon_theme::save::save(seed)
+                                    .map_err(|error| error.to_string()),
+                            }),
+                            path: horizon_config::resolved_path(),
+                        },
+                    )
                 }
                 (PaneKind::View(ViewKind::BoardList), ..) => {
                     let background = Background::new(kept.wake.clone());
@@ -861,7 +904,7 @@ impl Shell {
     }
 
     /// A new pane at `placement` showing a view that has no session.
-    fn create_view(&self, kind: ViewKind, placement: Placement) {
+    pub fn create_view(&self, kind: ViewKind, placement: Placement) {
         self.change(|model| {
             match placement {
                 Placement::NewTab => {
@@ -901,6 +944,7 @@ impl Shell {
     pub fn apply_config(&self, config: &RawConfig) {
         let theme = Theme::from_config(config);
         let kept = self.kept();
+        *kept.config.borrow_mut() = config.clone();
         kept.configured_size.set(theme.font_size);
         *kept.keymap.borrow_mut() = Keymap::from_config(config);
         let summarizer = summarizer(config);
@@ -998,6 +1042,8 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             open_url: opening.open_url.unwrap_or_else(|| Rc::new(|_| {})),
             models: opening.models,
             board: opening.board,
+            config: RefCell::new(opening.config.clone()),
+            save_theme: opening.save_theme,
             arrived: Arc::default(),
             owner: Owner::current().expect("an owner"),
         })),

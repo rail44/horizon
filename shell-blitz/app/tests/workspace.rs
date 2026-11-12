@@ -768,3 +768,59 @@ fn the_board_opens_in_a_tab_and_a_task_s_thread_beside_its_list() {
     );
     assert!(opened.model(|model| model.is_active_pane(thread_pane)));
 }
+
+#[test]
+fn the_theme_settings_apply_a_seed_as_it_changes_and_save_it_when_asked() {
+    use horizon_blitz::workspace::Placement;
+    use horizon_workspace::ViewKind;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let saved = Rc::new(RefCell::new(Vec::new()));
+    let log = saved.clone();
+    let opened = open_with(Opening {
+        save_theme: Some(Rc::new(move |seed: &horizon_theme::seed::Seed| {
+            log.borrow_mut().push(seed.accent_config_value());
+            Ok(std::path::PathBuf::from("/somewhere/config.toml"))
+        })),
+        ..Opening::default()
+    });
+    let scheme = |opened: &Opened| opened.shell.theme.with_untracked(|theme| *theme.scheme());
+    let before = scheme(&opened);
+    opened
+        .shell
+        .create_view(ViewKind::ThemeSettings, Placement::NewTab);
+    opened.app.run_effects();
+    opened.app.resolve();
+    // The derived colors, as swatches: sixteen, three, five, four, four.
+    assert_eq!(opened.all("chip").len(), 32);
+    assert!(opened.all("unsaved").is_empty());
+
+    // The accent, chosen by name: the theme is drawn with that hue at
+    // once, and nothing is written.
+    let click = |class: &str, index: usize| {
+        let (x, y) = opened.middle(opened.all(class)[index]);
+        click_at(&opened.app, x, y);
+        opened.app.resolve();
+    };
+    click("trigger", 0);
+    click("option", 0);
+    let after = scheme(&opened);
+    assert_ne!(after.accent, before.accent);
+    assert_eq!(opened.all("unsaved").len(), 1);
+    assert!(saved.borrow().is_empty());
+
+    // The text contrast, from the keys of its slider.
+    click("track", 0);
+    opened.named(NamedKey::Home);
+    let low = scheme(&opened).foreground;
+    opened.named(NamedKey::End);
+    assert_ne!(scheme(&opened).foreground, low);
+
+    // Save writes the seed, and says where.
+    click("save", 0);
+    assert_eq!(*saved.borrow(), ["red"]);
+    assert!(opened.all("unsaved").is_empty());
+    let status = opened.all("status");
+    assert_eq!(status.len(), 1);
+}

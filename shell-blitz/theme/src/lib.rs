@@ -57,6 +57,11 @@ impl Theme {
         Self::from_config(horizon_config::load())
     }
 
+    /// The colors themselves, packed.
+    pub fn scheme(&self) -> &scheme::Scheme {
+        &self.scheme
+    }
+
     /// The theme with no config file.
     pub fn built_in() -> Self {
         Self::from_config(&RawConfig::default())

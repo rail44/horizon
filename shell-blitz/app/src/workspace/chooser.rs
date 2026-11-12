@@ -1,5 +1,6 @@
 //! The view chooser: which view a new pane shows. A terminal, an agent,
-//! an agent in one of the roles a person can start one in, or the board.
+//! an agent in one of the roles a person can start one in, the theme
+//! settings, or the board.
 
 use horizon_agent::roles::{RoleId, user_launchable};
 use horizon_ui::El;
@@ -32,6 +33,10 @@ fn matching(query: &str) -> Vec<(String, Choice)> {
         let choice = Choice::Session(SessionKind::Agent, Some(id));
         choices.push((role.title.to_string(), choice));
     }
+    choices.push((
+        "Theme Settings".to_string(),
+        Choice::View(ViewKind::ThemeSettings),
+    ));
     choices.push(("Board".to_string(), Choice::View(ViewKind::BoardList)));
     let query = query.trim().to_ascii_lowercase();
     choices.retain(|(title, ..)| query.is_empty() || title.to_ascii_lowercase().contains(&query));

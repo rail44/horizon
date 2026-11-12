@@ -15,6 +15,7 @@ horizon-board = { path = "../../crates/horizon-board" }
 horizon-board-view = { path = "../../crates/horizon-board-view" }
 horizon-config = { path = "../../crates/horizon-config" }
 horizon-control = { path = "../../crates/horizon-control" }
+horizon-theme = { path = "../../crates/horizon-theme" }
 horizon-shell-runtime = { path = "../../crates/horizon-shell-runtime" }
 horizon-terminal-core = { path = "../../crates/horizon-terminal-core" }
 horizon-workspace = { path = "../../crates/horizon-workspace" }
