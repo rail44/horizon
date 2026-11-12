@@ -47,6 +47,8 @@ type Handler = Rc<dyn Fn(&DomEvent)>;
 struct Shared {
     document: Rc<RefCell<BaseDocument>>,
     handlers: RefCell<HashMap<NodeId, Vec<(&'static str, Handler)>>>,
+    /// The handlers that hear an event on its way in, before its target.
+    captures: RefCell<HashMap<NodeId, Vec<(&'static str, Handler)>>>,
     /// What handlers asked to do with the document itself, done once the
     /// event that ran them has been dispatched.
     later: RefCell<Vec<Deferred>>,
@@ -336,6 +338,21 @@ impl El {
         self
     }
 
+    /// Runs `handler` for the DOM event `event` on its way in to an
+    /// element inside this one, before that element's own handlers: an
+    /// outer element's say over what its contents get to hear (a shell's
+    /// chords over a terminal's keys). [`stop_propagation`] from it keeps
+    /// the event from everything further in.
+    ///
+    /// blitz-dom runs handlers from the target outwards only; it hands the
+    /// whole path over at once, and this layer walks it inwards first.
+    pub fn on_capture(self, event: &'static str, handler: impl Fn(&DomEvent) + 'static) -> Self {
+        let shared = shared();
+        let mut captures = shared.captures.borrow_mut();
+        (captures.entry(self.0).or_default()).push((event, Rc::new(handler)));
+        self
+    }
+
     /// A child that is there while `shown` says so, built by `view` each
     /// time it appears.
     pub fn when(self, shown: impl Fn() -> bool + 'static, view: impl Fn() -> El + 'static) -> Self {
@@ -460,6 +477,7 @@ impl App {
         let shared = Rc::new(Shared {
             document: Rc::new(RefCell::new(document)),
             handlers: RefCell::new(HashMap::new()),
+            captures: RefCell::new(HashMap::new()),
             later: RefCell::new(Vec::new()),
             dispatched: RefCell::new(Vec::new()),
             focus: Cell::new(None),
@@ -705,12 +723,29 @@ impl EventHandler for Handlers {
         _document: &mut dyn Document,
         state: &mut EventState,
     ) {
-        for node in chain {
-            // Cloned out: a handler may add handlers (a row made in it).
-            let handlers: Vec<Handler> = (self.0.handlers.borrow().get(node).into_iter().flatten())
-                .filter(|(name, _)| *name == event.name())
+        // Cloned out: a handler may add handlers (a row made in it).
+        let named = |handlers: &RefCell<HashMap<NodeId, Vec<(&'static str, Handler)>>>,
+                     node: &NodeId,
+                     name: &str| {
+            (handlers.borrow().get(node).into_iter().flatten())
+                .filter(|(event, _)| *event == name)
                 .map(|(_, handler)| handler.clone())
-                .collect();
+                .collect::<Vec<Handler>>()
+        };
+        // In from the outermost element to the target's parent.
+        for node in chain.iter().skip(1).rev() {
+            for handler in named(&self.0.captures, node, event.name()) {
+                handler(event);
+            }
+            if PREVENTED.replace(false) {
+                state.prevent_default();
+            }
+            if STOPPED.replace(false) {
+                return;
+            }
+        }
+        for node in chain {
+            let handlers = named(&self.0.handlers, node, event.name());
             for handler in handlers {
                 handler(event);
             }

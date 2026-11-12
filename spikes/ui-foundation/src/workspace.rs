@@ -22,9 +22,11 @@ use reactive_graph::traits::{Get, GetUntracked, Set, Update, WithValue};
 
 use crate::agent::sample::Session;
 use crate::board::Task;
-use crate::term::{Motion, Screen};
+use crate::pty::Session as Shell;
+use crate::terminal::{self, Terminal};
 use crate::with_document;
 use crate::{El, agent, board, dispatched, el, later, markdown, prevent_default, stop_propagation};
+use horizon_terminal_core::TerminalSize;
 
 // Every rule sits under the view's own class: the page's style sheet is one
 // for all the views on it.
@@ -71,7 +73,7 @@ pub const CSS: &str = "
 
 /// The page's style sheet with this view and the views its panes show.
 pub fn css() -> String {
-    [CSS, agent::CSS, markdown::CSS, board::CSS].concat()
+    [CSS, agent::CSS, markdown::CSS, board::CSS, terminal::CSS].concat()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -230,6 +232,9 @@ pub struct Workspace {
     next_id: RwSignal<u32>,
     panes: StoredValue<Panes, LocalStorage>,
     owner: StoredValue<Owner, LocalStorage>,
+    /// The terminals in the panes, and who they wake when a frame comes.
+    terminals: StoredValue<Rc<RefCell<Vec<Terminal>>>, LocalStorage>,
+    waker: StoredValue<Rc<RefCell<Option<std::task::Waker>>>, LocalStorage>,
     root: El,
 }
 
@@ -261,7 +266,7 @@ impl Workspace {
                 .each(
                     move || vec![kind.get()],
                     |kind| *kind,
-                    |kind| content(*kind),
+                    move |kind| content(*kind, workspace),
                 )
         });
         self.panes.with_value(|panes| {
@@ -347,6 +352,22 @@ impl Workspace {
         self.focused.set(tree.get_untracked().panes()[0]);
     }
 
+    /// Who the panes' terminals wake when their shells have printed.
+    pub fn set_waker(&self, waker: std::task::Waker) {
+        self.terminals.with_value(|terminals| {
+            for terminal in terminals.borrow().iter() {
+                terminal.set_waker(waker.clone());
+            }
+        });
+        self.waker
+            .with_value(|kept| *kept.borrow_mut() = Some(waker));
+    }
+
+    /// The screen of the terminal made last, as text.
+    pub fn terminal_text(&self) -> Option<String> {
+        (self.terminals).with_value(|terminals| terminals.borrow().last().map(Terminal::text))
+    }
+
     /// The active tab's arrangement, in words.
     pub fn describe(&self) -> String {
         let active = self.active.get_untracked();
@@ -371,7 +392,7 @@ impl Workspace {
     }
 }
 
-fn content(kind: Kind) -> El {
+fn content(kind: Kind, workspace: Workspace) -> El {
     match kind {
         Kind::Empty => el("div")
             .class("empty")
@@ -392,10 +413,18 @@ fn content(kind: Kind) -> El {
             ));
             markdown::view(Some(path), Rc::new(|_| {})).0
         }
-        Kind::Terminal => el("div")
-            .class("terminal")
-            .attr("tabindex", "0")
-            .widget(Screen::new(Motion::Still)),
+        Kind::Terminal => match Shell::spawn("sh", &[], TerminalSize::new(80, 24)) {
+            Ok(session) => {
+                let (root, terminal) = terminal::view(session);
+                let waker = workspace.waker.with_value(|waker| waker.borrow().clone());
+                if let Some(waker) = waker {
+                    terminal.set_waker(waker);
+                }
+                (workspace.terminals).with_value(|terminals| terminals.borrow_mut().push(terminal));
+                root
+            }
+            Err(error) => el("div").class("empty").text(&error.to_string()),
+        },
         Kind::Board => {
             let tasks = (1..=8)
                 .map(|id| Task {
@@ -566,6 +595,8 @@ pub fn view() -> (El, Workspace) {
         next_id: RwSignal::new(0),
         panes: StoredValue::new_local(Rc::default()),
         owner: StoredValue::new_local(Owner::current().expect("an owner")),
+        terminals: StoredValue::new_local(Rc::default()),
+        waker: StoredValue::new_local(Rc::default()),
         root: el("div"),
     };
     let root = workspace.root;
@@ -637,7 +668,9 @@ pub fn view() -> (El, Workspace) {
                 "workspace".to_string()
             }
         })
-        .on("keydown", move |event| {
+        // On the keys' way in: a view with the focus, a terminal above
+        // all, would otherwise have the shell's chords before the shell.
+        .on_capture("keydown", move |event| {
             let DomEventData::KeyDown(key) = &event.data else {
                 return;
             };
@@ -649,17 +682,9 @@ pub fn view() -> (El, Workspace) {
                 _ => "",
             };
             if key.modifiers.ctrl() && character == "'" {
-                let mode = !workspace.mode.get_untracked();
-                workspace.mode.set(mode);
-                if mode {
-                    // The document hands a key to the focused element and
-                    // then outwards: for the shell to have the keys before
-                    // a view does, the focus is the shell's own.
-                    root.focus();
-                } else {
-                    workspace.focus_pane();
-                }
+                workspace.mode.set(!workspace.mode.get_untracked());
                 prevent_default();
+                stop_propagation();
                 return;
             }
             if !workspace.mode.get_untracked() {
@@ -672,9 +697,10 @@ pub fn view() -> (El, Workspace) {
                 workspace.palette.set(true);
             } else if key.key == Key::Named(NamedKey::Escape) {
                 workspace.mode.set(false);
-                workspace.focus_pane();
             }
+            // In the mode, no key is the view's.
             prevent_default();
+            stop_propagation();
         })
         .on("pointermove", move |event| {
             let DomEventData::PointerMove(pointer) = &event.data else {

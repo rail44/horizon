@@ -41,7 +41,7 @@ fn main() {
             ColorScheme::Light,
         ));
         if palette {
-            workspace.unwrap().palette.set(true);
+            workspace.as_ref().unwrap().palette.set(true);
             app.run_effects();
         }
         app.resolve();
@@ -73,6 +73,14 @@ fn main() {
         return;
     }
 
+    // A terminal's shell printing wakes the window to draw it.
+    let workspace = workspace.unwrap();
+    let started = std::cell::Cell::new(false);
+    app.on_poll(move |waker| {
+        if !started.replace(true) {
+            workspace.set_waker(waker.clone());
+        }
+    });
     blitz_shell::set_after_resolve(ui_foundation_spike::after_resolve);
     let event_loop = create_default_event_loop();
     let (proxy, events) = BlitzShellProxy::new(event_loop.create_proxy());

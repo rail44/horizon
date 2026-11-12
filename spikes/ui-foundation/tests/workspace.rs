@@ -344,3 +344,42 @@ fn a_tab_shows_its_own_panes_and_a_new_one_opens_empty() {
     opened.app.resolve();
     assert_eq!(opened.workspace.describe(), OPENING);
 }
+
+#[test]
+fn the_shells_chord_and_its_mode_are_kept_from_a_terminal_with_the_focus() {
+    let opened = open();
+    // The second tab's pane is a terminal on a real shell.
+    opened.click(opened.all("tab-label")[1]);
+    let wait = |what: &str, met: &dyn Fn(&str) -> bool| {
+        let started = std::time::Instant::now();
+        loop {
+            opened.app.resolve();
+            let text = opened.workspace.terminal_text().unwrap_or_default();
+            if met(&text) {
+                return text;
+            }
+            assert!(started.elapsed().as_secs() < 10, "no {what} in:\n{text}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    wait("a prompt", &|text| text.trim_end().ends_with('$'));
+
+    for character in ["e", "c", "h", "o", " ", "a"] {
+        opened.character(character);
+    }
+    // The chord is the shell's: the terminal, which has the focus and takes
+    // every key it is given, does not get it, nor what is typed in the mode.
+    opened.key(keyboard_types::Key::Character("'".into()), true);
+    assert!(opened.workspace.mode.get_untracked());
+    opened.character("x");
+    opened.named(keyboard_types::NamedKey::Escape);
+    assert!(!opened.workspace.mode.get_untracked());
+    // Out of the mode, the keys are the terminal's again.
+    opened.character("b");
+    opened.named(keyboard_types::NamedKey::Enter);
+    let text = wait("the command's output", &|text| {
+        text.lines().any(|line| line == "ab")
+    });
+    assert!(text.contains("$ echo ab"), "{text}");
+    assert!(!text.contains('x') && !text.contains('\''), "{text}");
+}
