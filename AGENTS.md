@@ -321,17 +321,17 @@ The shell is GPUI-based (the Floem shell retired at tag
   tree, session attachments, operations/queries, mode state, spatial
   navigation, the pure command model, and the `workspace.snapshot`
   payload — is `crates/horizon-workspace`.
-- `runtime/` — the shell's two eager runtime clients (the ACP v2 client
-  of `horizon-agentd`; the remoc client of `horizon-terminald`), each with
-  its own connection, op queue, and route table: non-blocking
-  connect/spawn, per-domain routing, and explicit per-daemon drain. See
-  `docs/terminald-split-design.md` for why reloading one must not disturb
-  the other. The same directory holds the view-facing half — the
+- `runtime/` — the GPUI-shaped half of the runtime clients: the
   per-session machinery every view kind needs (`RuntimeLink`'s command
   channel plus reachability and the `&self` notify pump, the
-  blocking-receiver→stream bridge) and the optional repaint coalescer the
-  agent pane uses — so a third view kind inherits them instead of copying
-  the second one's copy.
+  blocking-receiver→stream bridge). The clients themselves are
+  `crates/horizon-shell-runtime`, with no UI framework in them: the two
+  eager runtime clients (the ACP v2 client of `horizon-agentd`; the remoc
+  client of `horizon-terminald`), each with its own connection, op queue,
+  and route table — non-blocking connect/spawn, per-domain routing, and
+  explicit per-daemon drain (see `docs/terminald-split-design.md` for why
+  reloading one must not disturb the other) — the repaint coalescer the
+  agent pane uses, and the agent session model the agent routes carry.
 - `terminal/` — the terminal pane: the daemon-backed per-session model
   entity and the view (grid painting, key/mouse/IME handling, input
   mapping). PTY ownership lives in `crates/horizon-terminald`;
@@ -339,9 +339,10 @@ The shell is GPUI-based (the Floem shell retired at tag
   `docs/session-daemon-design.md` and `docs/terminald-split-design.md`;
   print the kitty conformance matrix with `cargo test -p
   horizon-terminal-core print_compliance_matrix -- --nocapture`.
-- `agent/` — the agent pane: per-session model entities, the fold from
-  ACP session updates and `_horizon/*` notifications to the pane's frame,
-  and the view (what it draws and how it is fed: `docs/agent-pane-rendering.md`).
+- `agent/` — the agent pane: per-session model entities and the view
+  (what it draws and how it is fed: `docs/agent-pane-rendering.md`). The
+  fold from ACP session updates and `_horizon/*` notifications to the
+  pane's frame is `horizon-shell-runtime`'s `agent_model`.
   Contract/providers/tools/persistence live in
   `crates/horizon-agent`, hosted by `crates/horizon-agentd`; the
   `_horizon/*` and `_meta.horizon` vocabulary shared by the shell and the

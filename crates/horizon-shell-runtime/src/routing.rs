@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use super::attachment::{AgentUpdate, AttachmentState, Inbound};
-use crate::agent::model::AgentEvent;
+use crate::agent_model::AgentEvent;
 use agent_client_protocol::schema::v2;
 use agent_client_protocol::Responder;
 use crossbeam_channel::Sender;
@@ -50,9 +50,9 @@ impl<I: Copy> RouteKey<I> {
 /// `SessionInfoMeta` on `session/new`'s response or a
 /// `session_info_update`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WorkspaceRootUpdate {
-    pub(crate) workspace_root: PathBuf,
-    pub(crate) parent_session_id: Option<SessionId>,
+pub struct WorkspaceRootUpdate {
+    pub workspace_root: PathBuf,
+    pub parent_session_id: Option<SessionId>,
 }
 
 struct AgentRoute {

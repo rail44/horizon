@@ -1,0 +1,31 @@
+[package]
+name = "horizon-shell-runtime"
+version = "0.1.0"
+edition = "2021"
+
+# The shell's side of the two daemons, apart from any UI framework: the
+# eager clients of `horizon-agentd` and `horizon-terminald`, their route
+# tables, and the agent session model the agent routes carry. A shell
+# bridges an attachment's channels into its own framework's tasks.
+[dependencies]
+agent-client-protocol = { workspace = true }
+crossbeam-channel = "0.5"
+futures = "0.3"
+horizon-acp = { path = "../horizon-acp" }
+horizon-agent = { path = "../horizon-agent" }
+horizon-control = { path = "../horizon-control" }
+horizon-terminal-core = { path = "../horizon-terminal-core" }
+horizon-wire = { path = "../horizon-wire" }
+log = "0.4"
+remoc = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+uuid = { version = "1.18", features = ["v4", "serde"] }
+
+[dev-dependencies]
+anyhow = "1.0"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -180,14 +180,11 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # stopped at `TcpListener::bind`. The module's parsing tests are pure logic
 # and stay in.
 #
-# `horizon`'s `runtime::tests::` -- the root package's test binary has the
-# bare id `horizon` (its lib and bin share the name), NOT
-# `horizon::bin/horizon`. That term matched no tests at all, so these
-# socket-binding tests were never actually skipped and failed under
-# containment with the SUN_LEN `InvalidInput` bind error at the
-# $TMPDIR-under-the-worktree path (the same mechanism as
-# `host::listener::tests` above). Corrected 2026-09-21 -- AGENTS.md's
-# "the skip set is not self-maintaining".
+# `horizon-shell-runtime`'s `tests::` -- the runtime clients' tests bind
+# sockets, and fail under containment with the SUN_LEN `InvalidInput` bind
+# error at the $TMPDIR-under-the-worktree path (the same mechanism as
+# `host::listener::tests` above). They were the root package's
+# `runtime::tests::` until the clients moved to a crate of their own.
 # The auxiliary-client routing test binds two real HTTP listeners to check
 # endpoint, key-variable, and reload behavior for both titles and judgments.
 # Provider HTTP/SSE lifecycle tests (provider_wire_ prefix) bind loopback listeners
@@ -215,7 +212,7 @@ default-filter = '''
         + binary_id(horizon-agentd::e2e)
         + binary_id(horizon-terminald::e2e)
         + binary_id(horizon-logd::e2e)
-        + (binary_id(horizon) & test(/^runtime::tests::/))
+        + (binary_id(horizon-shell-runtime) & test(/^tests::/))
         + test(/^tools::network::/)
         + test(/^tools::tests::bash_auto_executes_sandboxed/)
         + test(/^tools::tests::tier1_sandboxed_bash/)

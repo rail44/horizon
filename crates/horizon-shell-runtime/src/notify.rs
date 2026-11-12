@@ -26,7 +26,7 @@ const NOTIFY_COALESCE_WINDOW: Duration = Duration::from_millis(16);
 /// `cx.notify()` (re-layout + repaint request) is coalesced, never the state
 /// application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NotifyDecision {
+pub enum NotifyDecision {
     /// Leading edge: notify immediately (a lone event renders with no added
     /// latency).
     Notify,
@@ -44,14 +44,14 @@ pub(crate) enum NotifyDecision {
 /// collapses per-event `cx.notify()` calls -- each of which drives a full
 /// window re-layout and repaint -- to at most one per window.
 #[derive(Debug, Default)]
-pub(crate) struct NotifyCoalescer {
+pub struct NotifyCoalescer {
     last_notify: Option<Instant>,
     trailing_armed: bool,
 }
 
 impl NotifyCoalescer {
     /// Decides how the notify for an event folded at `now` is delivered.
-    pub(crate) fn on_event(&mut self, now: Instant) -> NotifyDecision {
+    pub fn on_event(&mut self, now: Instant) -> NotifyDecision {
         if self.trailing_armed {
             return NotifyDecision::Pending;
         }
@@ -73,7 +73,7 @@ impl NotifyCoalescer {
     /// Records the armed trailing flush firing at `now` (the caller notifies
     /// alongside). The window restarts from the flush, so a continuous stream
     /// settles at exactly one notify per window.
-    pub(crate) fn on_flush(&mut self, now: Instant) {
+    pub fn on_flush(&mut self, now: Instant) {
         self.trailing_armed = false;
         self.last_notify = Some(now);
     }

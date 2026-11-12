@@ -15,28 +15,28 @@ use serde_json::Value;
 
 use super::types::*;
 
-pub(crate) use horizon_agent::transcript::Burst;
+pub use horizon_agent::transcript::Burst;
 
 /// One turn's items, `[start, end)` into the frame's items. `ended` is
 /// `None` for the turn still in progress.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TurnSpan {
-    pub(crate) start: usize,
-    pub(crate) end: usize,
-    pub(crate) ended: Option<TurnEnd>,
+pub struct TurnSpan {
+    pub start: usize,
+    pub end: usize,
+    pub ended: Option<TurnEnd>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TurnEnd {
-    pub(crate) reason: TurnEndReason,
-    pub(crate) elapsed: Duration,
+pub struct TurnEnd {
+    pub reason: TurnEndReason,
+    pub elapsed: Duration,
 }
 
 /// Groups `items` into turn spans: a span opens at any item while none is
 /// open and closes at the next `TurnEnded` (inclusive). Every item falls
 /// in exactly one span; a trailing span without a `TurnEnded` is the turn
 /// in progress.
-pub(crate) fn group_into_turns(items: &[AgentFrameItem]) -> Vec<TurnSpan> {
+pub fn group_into_turns(items: &[AgentFrameItem]) -> Vec<TurnSpan> {
     let mut spans = Vec::new();
     let mut current_start: Option<usize> = None;
     for (index, item) in items.iter().enumerate() {
@@ -89,7 +89,7 @@ fn is_assistant_text(item: &AgentFrameItem) -> bool {
 /// items until assistant text arrives with every call in it finished, or
 /// the turn end or a compaction divider is reached. A closed burst never
 /// reopens; later tool activity opens a new one.
-pub(crate) fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
+pub fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
     let mut bursts = Vec::new();
     let mut open: Option<Burst> = None;
 
@@ -127,44 +127,44 @@ pub(crate) fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
 /// One tool call's view-model, shared by the running card's rows and the
 /// receipt's chips.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ToolCallView {
-    pub(crate) call_id: String,
-    pub(crate) occurrence_id: String,
+pub struct ToolCallView {
+    pub call_id: String,
+    pub occurrence_id: String,
     /// Position of the call's item in the slice passed to
     /// [`build_tool_call_views`].
-    pub(crate) request_index: usize,
+    pub request_index: usize,
     /// The same position once the call has an output.
-    pub(crate) result_index: Option<usize>,
-    pub(crate) tool_id: String,
-    pub(crate) verb: String,
-    pub(crate) target: Option<String>,
-    pub(crate) affected_files: Vec<FileEffect>,
-    pub(crate) outcome: Option<ToolOutcome>,
+    pub result_index: Option<usize>,
+    pub tool_id: String,
+    pub verb: String,
+    pub target: Option<String>,
+    pub affected_files: Vec<FileEffect>,
+    pub outcome: Option<ToolOutcome>,
 }
 
 impl ToolCallView {
-    pub(crate) fn identity(&self) -> ToolCallIdentity {
+    pub fn identity(&self) -> ToolCallIdentity {
         ToolCallIdentity {
             call_id: self.call_id.clone(),
             occurrence_id: self.occurrence_id.clone(),
         }
     }
 
-    pub(crate) fn finished(&self) -> bool {
+    pub fn finished(&self) -> bool {
         self.outcome.is_some()
     }
 
-    pub(crate) fn is_success(&self) -> bool {
+    pub fn is_success(&self) -> bool {
         self.outcome == Some(ToolOutcome::Succeeded)
     }
 
-    pub(crate) fn superseded(&self) -> bool {
+    pub fn superseded(&self) -> bool {
         matches!(self.outcome, Some(ToolOutcome::Superseded { .. }))
     }
 }
 
 /// Builds one view per tool call in `items`, in first-seen order.
-pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
+pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
     items
         .iter()
         .enumerate()
@@ -268,15 +268,15 @@ fn classify_call(tool_id: &str) -> CallClass {
 /// The collapsed receipt line's counts. Failed or unfinished calls stay
 /// individual; superseded attempts are left out.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct ReceiptAggregate {
-    pub(crate) query_count: usize,
-    pub(crate) read_file_count: usize,
-    pub(crate) edited_file_count: usize,
-    pub(crate) bash_count: usize,
-    pub(crate) individual_calls: Vec<ToolCallView>,
+pub struct ReceiptAggregate {
+    pub query_count: usize,
+    pub read_file_count: usize,
+    pub edited_file_count: usize,
+    pub bash_count: usize,
+    pub individual_calls: Vec<ToolCallView>,
 }
 
-pub(crate) fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate {
+pub fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate {
     let mut aggregate = ReceiptAggregate::default();
     let mut read_paths: HashSet<String> = HashSet::new();
     let mut edited_paths: HashSet<String> = HashSet::new();
@@ -312,7 +312,7 @@ pub(crate) fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate
 
 /// The item a view's `request_index` points at, with its output when the
 /// call has finished.
-pub(crate) fn tool_call_source<'a>(
+pub fn tool_call_source<'a>(
     items: &'a [AgentFrameItem],
     call: &ToolCallView,
 ) -> Option<(&'a str, &'a Value, Option<&'a Value>)> {

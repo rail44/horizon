@@ -13,7 +13,7 @@ use super::types::*;
 
 /// One inbound item for a session, in connection order.
 #[derive(Clone, Debug)]
-pub(crate) enum AgentEvent {
+pub enum AgentEvent {
     Update(Box<v2::SessionUpdate>),
     TaskProgress(TaskProgressNotification),
     ToolCallProgress(ToolCallProgressEvent),
@@ -37,11 +37,11 @@ struct TurnClock {
 
 /// Everything the pane reads from one attachment's traffic.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct AgentModel {
-    pub(crate) frame: AgentFrame,
-    pub(crate) selection: Option<ModelSelection>,
+pub struct AgentModel {
+    pub frame: AgentFrame,
+    pub selection: Option<ModelSelection>,
     /// Running background-task rows in launch order.
-    pub(crate) tasks: Vec<TaskProgressNotification>,
+    pub tasks: Vec<TaskProgressNotification>,
     clock: TurnClock,
 }
 
@@ -49,7 +49,7 @@ impl AgentModel {
     /// Starts the fold over for a new bootstrap of the attachment. The
     /// settled revision moves on, so a reader holding units built from the
     /// old items rebuilds them.
-    pub(crate) fn restart(&mut self) {
+    pub fn restart(&mut self) {
         let revision = self.frame.settled_revision + 1;
         *self = Self::default();
         self.frame.settled_revision = revision;
@@ -70,7 +70,7 @@ impl AgentModel {
         }
     }
 
-    pub(crate) fn apply(&mut self, event: AgentEvent) {
+    pub fn apply(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::Update(update) => self.apply_update(*update),
             AgentEvent::TaskProgress(progress) => apply_task_progress(&mut self.tasks, progress),
@@ -477,7 +477,7 @@ fn blocks_text(blocks: &[v2::ContentBlock]) -> String {
 /// The provider and model of the `model` config option, if the set carries
 /// one: from its current entry's `ModelOptionMeta`, else by decoding the
 /// current value id.
-pub(crate) fn model_selection(options: &[v2::SessionConfigOption]) -> Option<ModelSelection> {
+pub fn model_selection(options: &[v2::SessionConfigOption]) -> Option<ModelSelection> {
     let option = options
         .iter()
         .find(|option| option.config_id.0.as_ref() == MODEL_CONFIG_ID)?;
@@ -508,7 +508,7 @@ pub(crate) fn model_selection(options: &[v2::SessionConfigOption]) -> Option<Mod
 
 /// A running observation upserts the child's row in launch order; a
 /// finished one retires it.
-pub(crate) fn apply_task_progress(
+pub fn apply_task_progress(
     tasks: &mut Vec<TaskProgressNotification>,
     progress: TaskProgressNotification,
 ) {
@@ -529,7 +529,7 @@ pub(crate) fn apply_task_progress(
 impl Permission {
     /// Reads a `session/request_permission` into a held permission. `None`
     /// when the request carries no readable `ApprovalMeta`.
-    pub(crate) fn from_request(request: &v2::RequestPermissionRequest) -> Option<Self> {
+    pub fn from_request(request: &v2::RequestPermissionRequest) -> Option<Self> {
         let meta = read_horizon_meta::<horizon_acp::ApprovalMeta>(request.meta.as_ref())?.ok()?;
         let reason = match &request.description {
             Some(description) if !description.is_empty() => {

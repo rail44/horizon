@@ -5,7 +5,7 @@ use super::types::*;
 impl AgentFrame {
     /// The execution state: the phase, with a running phase that has a tool
     /// call in progress read as `ToolRunning`.
-    pub(crate) fn state(&self) -> Option<SessionState> {
+    pub fn state(&self) -> Option<SessionState> {
         Some(match self.phase? {
             SessionPhase::Running => {
                 let tool_running = self.items.iter().any(|item| {
@@ -27,7 +27,7 @@ impl AgentFrame {
     /// failed, cancelled or halted result survives idle until the session
     /// runs again; idle without a result reads as starting until the
     /// session has a message.
-    pub(crate) fn status(&self) -> Option<SessionStatus> {
+    pub fn status(&self) -> Option<SessionStatus> {
         Some(match self.state()? {
             SessionState::Running => SessionStatus::Running,
             SessionState::ToolRunning => SessionStatus::ToolRunning,
@@ -55,7 +55,7 @@ impl AgentFrame {
     /// Whether the session is idle on a guard-halted turn (`max_turn_requests`
     /// or `_horizon/doom_loop`), i.e. `_horizon/continue_turn` has a turn to
     /// resume.
-    pub(crate) fn halted_awaiting_continue(&self) -> bool {
+    pub fn halted_awaiting_continue(&self) -> bool {
         self.phase == Some(SessionPhase::Idle)
             && matches!(
                 self.turn_end_reason,
@@ -66,7 +66,7 @@ impl AgentFrame {
 
 /// Whether a turn is in flight and therefore cancellable: running, running
 /// a tool, or waiting on an approval.
-pub(crate) fn state_indicates_turn_in_flight(state: Option<SessionState>) -> bool {
+pub fn state_indicates_turn_in_flight(state: Option<SessionState>) -> bool {
     matches!(
         state,
         Some(SessionState::Running | SessionState::ToolRunning | SessionState::WaitingForApproval)
@@ -75,7 +75,7 @@ pub(crate) fn state_indicates_turn_in_flight(state: Option<SessionState>) -> boo
 
 /// Permission requests still awaiting the shell's answer, oldest first,
 /// excluding any whose turn has since ended.
-pub(crate) fn actionable_pending_approval_identities_in(
+pub fn actionable_pending_approval_identities_in(
     items: &[AgentFrameItem],
 ) -> Vec<ToolCallIdentity> {
     let start = items
@@ -86,7 +86,7 @@ pub(crate) fn actionable_pending_approval_identities_in(
 }
 
 /// Every unanswered permission request in `items`, oldest first.
-pub(crate) fn pending_approval_identities_in(items: &[AgentFrameItem]) -> Vec<ToolCallIdentity> {
+pub fn pending_approval_identities_in(items: &[AgentFrameItem]) -> Vec<ToolCallIdentity> {
     items
         .iter()
         .filter_map(|item| match item {

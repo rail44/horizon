@@ -5,6 +5,7 @@ members = [
     "crates/horizon-agent",
     "crates/horizon-agentd",
     "crates/horizon-daemon-testkit",
+    "crates/horizon-shell-runtime",
     "crates/horizon-terminald",
     "crates/horizon-theme",
     "crates/horizon-control",
@@ -132,6 +133,7 @@ horizon-acp = { path = "crates/horizon-acp" }
 horizon-agent = { path = "crates/horizon-agent" }
 horizon-cli = { path = "crates/horizon-cli" }
 horizon-control = { path = "crates/horizon-control" }
+horizon-shell-runtime = { path = "crates/horizon-shell-runtime" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
 # The project wiki's store, comment threads and anchoring, for the wiki view
 # (`src/wiki/`, docs/project-wiki-design.md).

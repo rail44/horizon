@@ -16,13 +16,13 @@ use horizon_acp::{
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::routing::{cancelled_permission, AgentRoutes, RouteKey};
-use crate::agent::model::{AgentEvent, Permission, PermissionDecision, ToolCallIdentity};
+use crate::agent_model::{AgentEvent, Permission, PermissionDecision, ToolCallIdentity};
 
 /// How long an attachment may stay short of ready.
 const RESTORE_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) enum AttachmentState {
+pub enum AttachmentState {
     #[default]
     Connecting,
     Restoring,
@@ -49,7 +49,7 @@ fn attachment_end_state(reason: AttachmentEnd) -> AttachmentState {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum AgentUpdate {
+pub enum AgentUpdate {
     Event(Box<AgentEvent>),
     /// `Restoring` also tells the pane to start its fold over: everything
     /// the session sends from here on is the attachment's bootstrap.
@@ -58,7 +58,7 @@ pub(crate) enum AgentUpdate {
 
 /// What a pane asks of its session.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum AgentCommand {
+pub enum AgentCommand {
     Prompt {
         text: String,
     },
@@ -75,7 +75,7 @@ pub(crate) enum AgentCommand {
 }
 
 /// One item of a session's inbound traffic, in connection order.
-pub(crate) enum Inbound {
+pub enum Inbound {
     Event(AgentEvent),
     Permission(
         Box<v2::RequestPermissionRequest>,
@@ -88,11 +88,11 @@ pub(crate) enum Inbound {
 }
 
 impl AttachmentState {
-    pub(crate) fn is_ready(&self) -> bool {
+    pub fn is_ready(&self) -> bool {
         matches!(self, Self::Ready)
     }
 
-    pub(crate) fn is_closed(&self) -> bool {
+    pub fn is_closed(&self) -> bool {
         matches!(self, Self::Failed(_) | Self::Disconnected(_))
     }
 
@@ -106,7 +106,7 @@ impl AttachmentState {
         };
     }
 
-    pub(crate) fn stream_ended(&mut self) {
+    pub fn stream_ended(&mut self) {
         if !self.is_closed() {
             *self = if self.is_ready() {
                 Self::Disconnected("Session connection closed; reopen the session".into())

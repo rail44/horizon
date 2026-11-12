@@ -34,17 +34,17 @@ use super::common::{
 };
 use super::connection::connect_or_spawn_agentd_retrying;
 use super::routing::{parse_session_id, AgentRoutes, RouteKey, EXT_VERSION_MISMATCH};
-use crate::agent::model::AgentEvent;
+use crate::agent_model::AgentEvent;
 
 /// The binary id this client reports in `initialize`.
 const CLIENT_BINARY_ID: &str = concat!("horizon/", env!("CARGO_PKG_VERSION"));
 
 /// A daemon-side agent session as `session/list` reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SessionSummary {
-    pub(crate) session_id: SessionId,
-    pub(crate) parent_session_id: Option<SessionId>,
-    pub(crate) workspace_root: Option<PathBuf>,
+pub struct SessionSummary {
+    pub session_id: SessionId,
+    pub parent_session_id: Option<SessionId>,
+    pub workspace_root: Option<PathBuf>,
 }
 
 impl SessionSummary {

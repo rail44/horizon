@@ -48,7 +48,7 @@ fn stub_recovery_never_launches_inherited_daemon_binaries() {
         let output = fs::File::create(&output_path).unwrap();
         let mut child = TestProcess(
             Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", &format!("runtime::tests::{case}"), "--nocapture"])
+                .args(["--exact", &format!("tests::{case}"), "--nocapture"])
                 // Configure only the child: parallel cargo-test cases must
                 // not race over this process's environment.
                 .env("HORIZON_AGENTD_BINARY", &recorder)

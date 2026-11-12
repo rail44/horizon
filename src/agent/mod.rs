@@ -10,7 +10,7 @@
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod auxiliary;
 #[cfg(not(target_family = "wasm"))]
-pub(crate) mod model;
+pub(crate) use horizon_shell_runtime::agent_model as model;
 #[cfg(not(target_family = "wasm"))]
 mod session;
 #[cfg(not(target_family = "wasm"))]

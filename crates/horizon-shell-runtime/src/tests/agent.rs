@@ -29,7 +29,7 @@ use super::{
     read_until_closed, recv_frame, serve_fake_terminal_hub, spec, stub_socket_paths, FakeBehavior,
     TerminalCall,
 };
-use crate::agent::model::{AgentEvent, PermissionDecision, ToolCallIdentity};
+use crate::agent_model::{AgentEvent, PermissionDecision, ToolCallIdentity};
 
 #[derive(Clone, Copy, Default)]
 struct FakeAgentBehavior {

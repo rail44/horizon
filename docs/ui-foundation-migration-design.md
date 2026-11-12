@@ -52,8 +52,10 @@ types, and for the terminal the paint widget.
   `horizon-terminald`, `horizon-logd`, `horizon-agent`,
   `horizon-terminal-core`, `horizon-board`, `horizon-wiki`,
   `horizon-workspace`, `horizon-control`, `horizon-cli`, `horizon-config`.
-- `src/runtime/` (the agentd and terminald clients): one file of it names
-  gpui.
+- The agentd and terminald clients, their route tables, and the agent
+  session model the agent routes carry: `crates/horizon-shell-runtime`.
+  The GPUI shell's `src/runtime/` keeps the one part that is GPUI's own,
+  the bridge from an attachment's channels into its tasks and entities.
 - The theme's derivation: `crates/horizon-theme`, a scheme of packed
   colors with no UI framework's types. The GPUI shell's `src/theme/` is its
   projection onto gpui; the Blitz shell's `shell-blitz/theme` is its
