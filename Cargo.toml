@@ -6,6 +6,7 @@ members = [
     "crates/horizon-agentd",
     "crates/horizon-daemon-testkit",
     "crates/horizon-terminald",
+    "crates/horizon-theme",
     "crates/horizon-control",
     "crates/horizon-cli",
     "crates/horizon-terminal-core",
@@ -93,6 +94,7 @@ gpui-kit-assets = { git = "https://github.com/longbridge/gpui-kit", rev = "7591a
 # together.
 gpui-base = { git = "https://github.com/longbridge/gpui-kit", rev = "7591a35eced761e3613c01e71ff04c10129dae1a" }
 horizon-config = { path = "crates/horizon-config" }
+horizon-theme = { path = "crates/horizon-theme" }
 # The board pane is previewable (`src/board_pane/previews.rs`), so its two
 # model crates compile for the plugin target as well. `horizon-board`'s
 # queries and its in-memory store source build anywhere; reaching the event

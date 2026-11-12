@@ -54,9 +54,10 @@ types, and for the terminal the paint widget.
   `horizon-workspace`, `horizon-control`, `horizon-cli`, `horizon-config`.
 - `src/runtime/` (the agentd and terminald clients): one file of it names
   gpui.
-- The theme's derivation (`src/theme/scheme.rs`, `palette.rs`,
-  `oklab.rs`): pure over packed colors. It names three gpui color types,
-  which need a home that is not gpui.
+- The theme's derivation: `crates/horizon-theme`, a scheme of packed
+  colors with no UI framework's types. The GPUI shell's `src/theme/` is its
+  projection onto gpui; the Blitz shell's `shell-blitz/theme` is its
+  projection onto CSS variables.
 - Display models written apart from their views (`src/agent/view/display.rs`,
   `chrome.rs`).
 
@@ -70,10 +71,18 @@ shell depends on a revision past its last release, so its dependency
 graph stays out of the root lockfile. The GPUI shell keeps working until
 the new one is at parity, and is then deleted.
 
-`blitz-shell` is vendored in the repository with Horizon's changes (three
-in the spike: the input method's cursor area, thin borders at fractional
-scales, a hook after each resolve). `blitz-dom`, `blitz-paint` and
+`blitz-shell` is vendored in the repository (`shell-blitz/vendor/`) with
+two changes: the input method is enabled with its cursor area, and the
+shell hands each frame's layout to the layer (`set_frame`) instead of
+resolving the document itself. `blitz-dom`, `blitz-paint` and
 `blitz-traits` are pinned by revision. Nothing is posted upstream.
+
+The workspace's crates:
+
+- `shell-blitz/ui` (`horizon-ui`): the layer.
+- `shell-blitz/theme` (`horizon-theme-css`): the theme and the type scale
+  as CSS variables.
+- `shell-blitz/app` (`horizon-blitz`): the shell's binary.
 
 ## Order
 
@@ -94,14 +103,20 @@ scales, a hook after each resolve). `blitz-dom`, `blitz-paint` and
 
 The extension boundary comes after retirement.
 
-## The spike's shortcuts, to be removed in the foundation
+## What the foundation changed from the spike
 
-- The document is lent to effects through a raw pointer while the shell
-  holds it (`unsafe`), so that a layout can be redone before a paint.
-- Handlers registered for a node are not dropped with the node.
-- `each_layout` work is never unregistered.
-- The type scale is `src/ui/spec.rs`'s table written out again; the theme
-  files are read in through a stand-in for gpui's color types.
+- A frame is the layer's: it lays out, runs the work that follows a
+  layout, and lays out again while that work asks for it, with ordinary
+  borrows of the document. The spike lent the document to effects through
+  a raw pointer while the shell held it.
+- What the layer keeps for an element (handlers, what takes text and
+  pastes) is dropped with the element, and work registered to follow each
+  layout ends with the owner it was registered under.
+- The theme is read from `horizon-theme`. The spike read the GPUI shell's
+  theme files in through a stand-in for gpui's color types.
+
+Still written out twice: the type scale. `shell-blitz/theme` repeats the
+table of `src/ui/spec.rs`, which is in gpui's units.
 
 ## Verification
 
@@ -109,6 +124,9 @@ Tests drive a view with the document's own input events and assert on the
 document, with no window. Appearance is checked against the GPUI shell
 side by side: an isolated instance on a virtual display (`Xvfb`), its
 window captured, beside the new shell's own picture of the same content.
+The new shell's picture is drawn offscreen; its window does not open on
+`Xvfb` (Vello's window renderer finds no adapter that can present there),
+so what only a window shows is looked at on a real desktop.
 
 ## Known gaps
 

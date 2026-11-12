@@ -94,12 +94,12 @@ mod gpui_component;
 // panes, neither of which a guest has.
 #[cfg(not(target_family = "wasm"))]
 pub mod live;
-mod oklab;
 mod palette;
-mod scheme;
+// The derivation and its color math live in `horizon-theme`; this module
+// is their projection onto gpui.
+pub(crate) use horizon_theme::scheme;
 #[cfg(test)]
-mod test_support;
-mod warnings;
+pub(crate) use horizon_theme::{oklab, test_support};
 
 pub use accessors::{
     accent, background, border, danger, diff_added_surface, diff_added_text, diff_removed_surface,
@@ -115,3 +115,54 @@ pub use scheme::reload_from;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use scheme::resolve_text_contrast;
 pub use scheme::{TEXT_CONTRAST_CEIL, TEXT_CONTRAST_FLOOR};
+
+#[cfg(test)]
+mod tests {
+    use horizon_config::RawUiConfig;
+    use horizon_theme::scheme::ANSI16_DEFAULT;
+
+    /// Drift guard for `config.example.toml` (repo root): every example
+    /// value the file leaves *active* (uncommented) must equal the
+    /// built-in default it documents, so the example never quietly falls
+    /// out of sync with the code. Lives here (rather than in
+    /// `horizon-config`, which has no dependency on this crate and so
+    /// can't see `ANSI16_DEFAULT`/`ui::font::DEFAULT_FONT_SIZE`) because
+    /// this is where those constants are reachable -- see
+    /// `ui::font::DEFAULT_FONT_SIZE`'s own doc comment for the other half
+    /// of this guard's cross-reference.
+    #[test]
+    fn config_example_toml_matches_its_documented_defaults() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.example.toml");
+        let example = horizon_config::reload_from_path(Some(&path))
+            .expect("config.example.toml must be valid TOML");
+
+        // [terminal]'s only active example value.
+        assert_eq!(
+            example.terminal.font_size,
+            Some(crate::ui::font::DEFAULT_FONT_SIZE),
+            "config.example.toml's active [terminal] font_size must match \
+             ui::font::DEFAULT_FONT_SIZE"
+        );
+
+        // [theme.ansi]'s six active hue slots, against ANSI16_DEFAULT's
+        // corresponding indices (see `scheme_from`'s own `ansi_slot` calls
+        // for the same index-to-hue mapping).
+        let hex = |value: u32| format!("#{value:06x}");
+        assert_eq!(example.theme.ansi.red, Some(hex(ANSI16_DEFAULT[1])));
+        assert_eq!(example.theme.ansi.green, Some(hex(ANSI16_DEFAULT[2])));
+        assert_eq!(example.theme.ansi.yellow, Some(hex(ANSI16_DEFAULT[3])));
+        assert_eq!(example.theme.ansi.blue, Some(hex(ANSI16_DEFAULT[4])));
+        assert_eq!(example.theme.ansi.magenta, Some(hex(ANSI16_DEFAULT[5])));
+        assert_eq!(example.theme.ansi.cyan, Some(hex(ANSI16_DEFAULT[6])));
+
+        // Everything else in the file is commented out (no single built-in
+        // default worth showing as "live" -- see the file's own comments):
+        // must still parse to nothing rather than an accidental leaked
+        // personal-preference value.
+        assert!(example.providers.is_empty());
+        assert_eq!(example.ui, RawUiConfig::default());
+        assert!(example.keybindings.is_empty());
+        assert!(example.theme.colors.is_empty());
+        assert_eq!(example.theme.text_contrast, None);
+    }
+}

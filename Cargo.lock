@@ -4259,6 +4259,7 @@ dependencies = [
  "horizon-config",
  "horizon-control",
  "horizon-terminal-core",
+ "horizon-theme",
  "horizon-wiki",
  "horizon-wire",
  "horizon-workspace",
@@ -4486,6 +4487,13 @@ dependencies = [
  "termwiz",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "horizon-theme"
+version = "0.1.0"
+dependencies = [
+ "horizon-config",
 ]
 
 [[package]]

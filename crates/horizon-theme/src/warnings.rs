@@ -73,7 +73,7 @@ fn theme_color_warnings(colors: &std::collections::HashMap<String, String>) -> V
 /// Called exactly once per resolution pass from [`scheme_from`]'s own
 /// single call site -- startup (`scheme_store`) plus each `Reload Config`
 /// (`reload_from`) -- never from a per-lookup/per-render path.
-pub(super) fn warn_invalid_theme_colors(colors: &std::collections::HashMap<String, String>) {
+pub fn warn_invalid_theme_colors(colors: &std::collections::HashMap<String, String>) {
     for warning in theme_color_warnings(colors) {
         eprintln!("{warning}");
     }
@@ -116,7 +116,7 @@ fn theme_ansi_warnings(ansi: &RawThemeAnsiConfig) -> Vec<String> {
 /// [`theme_ansi_warnings`]'s stderr half, the `[theme.ansi]` counterpart
 /// to [`warn_invalid_theme_colors`] -- same single call site, same
 /// once-per-resolution-pass cadence.
-pub(super) fn warn_invalid_theme_ansi(ansi: &RawThemeAnsiConfig) {
+pub fn warn_invalid_theme_ansi(ansi: &RawThemeAnsiConfig) {
     for warning in theme_ansi_warnings(ansi) {
         eprintln!("{warning}");
     }
@@ -202,7 +202,7 @@ mod tests {
         // `theme_color_warnings` directly) -- it never breaks resolution
         // of the rest of `[theme]`, still falling back to that one role's
         // built-in default exactly as before this fix.
-        let config = crate::theme::test_support::config_with(&[
+        let config = crate::test_support::config_with(&[
             ("not_a_real_role", "#ffffff"),
             ("surface_base", "not-a-hex-color"),
             ("accent", "#887700"),
@@ -260,8 +260,7 @@ mod tests {
         // Same lenient-fallback guarantee as `[theme]`'s own colors: an
         // unparsable `[theme.ansi]` value only ever produces a stderr
         // warning, never breaks resolution of the rest of the palette.
-        let config =
-            crate::theme::test_support::config_with_ansi(&[], &[("red", "not-a-hex-color")]);
+        let config = crate::test_support::config_with_ansi(&[], &[("red", "not-a-hex-color")]);
         let scheme = super::super::scheme::scheme_from(&config);
         assert_eq!(scheme.ansi[1], super::super::scheme::ANSI16_DEFAULT[1]);
     }

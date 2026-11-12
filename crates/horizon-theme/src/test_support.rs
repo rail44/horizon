@@ -11,7 +11,7 @@ use horizon_config::{RawConfig, RawThemeConfig};
 
 use super::scheme::{scheme_from, Scheme};
 
-pub(super) fn config_with(colors: &[(&str, &str)]) -> RawConfig {
+pub fn config_with(colors: &[(&str, &str)]) -> RawConfig {
     RawConfig {
         theme: RawThemeConfig {
             colors: colors
@@ -26,10 +26,7 @@ pub(super) fn config_with(colors: &[(&str, &str)]) -> RawConfig {
 
 /// [`config_with`] plus an explicit `text_contrast` (the seed knob,
 /// not part of `colors` -- it's `RawThemeConfig`'s own typed field).
-pub(super) fn config_with_and_contrast(
-    colors: &[(&str, &str)],
-    text_contrast: Option<f64>,
-) -> RawConfig {
+pub fn config_with_and_contrast(colors: &[(&str, &str)], text_contrast: Option<f64>) -> RawConfig {
     let mut config = config_with(colors);
     config.theme.text_contrast = text_contrast;
     config
@@ -38,7 +35,7 @@ pub(super) fn config_with_and_contrast(
 /// [`config_with`] plus `[theme.ansi]` hue overrides -- `ansi` is a
 /// nested typed struct, not part of the flattened `colors` map, so it
 /// needs its own setter rather than a `("ansi.red", ...)` entry.
-pub(super) fn config_with_ansi(colors: &[(&str, &str)], ansi: &[(&str, &str)]) -> RawConfig {
+pub fn config_with_ansi(colors: &[(&str, &str)], ansi: &[(&str, &str)]) -> RawConfig {
     let mut config = config_with(colors);
     for (slot, value) in ansi {
         let value = Some((*value).to_string());
@@ -76,7 +73,7 @@ fn owner_seeded_light_colors() -> Vec<(&'static str, &'static str)> {
 /// and the owner's actual `[theme.ansi]` overrides (`red`/`green`/
 /// `yellow`/`blue`/`magenta`/`cyan` -- `config_with_ansi` doesn't cover
 /// `black`/`white`/`bright_*`, left unset like the real config).
-pub(super) fn owner_seeded_light_scheme() -> Scheme {
+pub fn owner_seeded_light_scheme() -> Scheme {
     let mut config = config_with_ansi(
         &owner_seeded_light_colors(),
         &[

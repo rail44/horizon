@@ -10,9 +10,9 @@ use horizon_config::{RawConfig, RawThemeConfig};
 use super::palette::{blend, contrast_snap, parse_hex};
 use super::warnings::{warn_invalid_theme_ansi, warn_invalid_theme_colors};
 
-pub(super) const BACKGROUND_DEFAULT: u32 = 0x16181d; // SURFACE_BASE_DEFAULT
-pub(super) const FOREGROUND_DEFAULT: u32 = 0xe9ecf2; // TEXT_PRIMARY_DEFAULT
-pub(super) const CURSOR_DEFAULT: u32 = 0x84dcc6; // ACCENT_DEFAULT
+pub const BACKGROUND_DEFAULT: u32 = 0x16181d; // SURFACE_BASE_DEFAULT
+pub const FOREGROUND_DEFAULT: u32 = 0xe9ecf2; // TEXT_PRIMARY_DEFAULT
+pub const CURSOR_DEFAULT: u32 = 0x84dcc6; // ACCENT_DEFAULT
 
 // Agent-pane role defaults -- historically chosen to match
 // the agent view's then-hardcoded hex values (`src/agent/view.rs` before
@@ -32,15 +32,15 @@ pub(super) const CURSOR_DEFAULT: u32 = 0x84dcc6; // ACCENT_DEFAULT
 // see this module's tests) -- production code no longer reads them
 // directly.
 #[cfg(test)]
-pub(super) const DANGER_DEFAULT: u32 = 0xe06c75;
+pub const DANGER_DEFAULT: u32 = 0xe06c75;
 #[cfg(test)]
-pub(super) const WARNING_DEFAULT: u32 = 0xe5c07b;
+pub const WARNING_DEFAULT: u32 = 0xe5c07b;
 #[cfg(test)]
-pub(super) const SUCCESS_DEFAULT: u32 = 0x98c379;
+pub const SUCCESS_DEFAULT: u32 = 0x98c379;
 #[cfg(test)]
-pub(super) const INFO_DEFAULT: u32 = 0x61afef; // the assistant message label
-pub(super) const TEXT_MUTED_DEFAULT: u32 = 0x8a90a0; // status line / exited state
-pub(super) const TEXT_SUBTLE_DEFAULT: u32 = 0x5f6370; // thinking deltas / tool-preparing text
+pub const INFO_DEFAULT: u32 = 0x61afef; // the assistant message label
+pub const TEXT_MUTED_DEFAULT: u32 = 0x8a90a0; // status line / exited state
+pub const TEXT_SUBTLE_DEFAULT: u32 = 0x5f6370; // thinking deltas / tool-preparing text
 
 /// How far a border sits from `background` toward `text_subtle`. Blending
 /// toward the scheme's own subtle-text role -- rather than a fixed
@@ -56,7 +56,7 @@ const BORDER_BLEND_RATIO: f32 = 0.35;
 /// (rather than a fixed lighten/darken) is what keeps the lift direction
 /// correct on both polarities, since `foreground` is by construction the
 /// higher-contrast color against `background`.
-pub(super) const SURFACE_LIFT_RATIO: f32 = 0.035;
+pub const SURFACE_LIFT_RATIO: f32 = 0.035;
 
 /// How far a diff surface's built-in default sits from `background`
 /// toward the matching semantic color (`success` for additions, `danger`
@@ -79,7 +79,7 @@ const DIFF_SURFACE_BLEND_RATIO: f32 = 0.12;
 /// ([`LIST_ACTIVE_ALPHA_CLAMP`]), which would otherwise wash this blend
 /// out to a barely-visible highlight on screen -- see that constant's
 /// doc and [`invert_list_active_clamp`] for the compensation.
-pub(super) const LIST_ACTIVE_BLEND_RATIO: f32 = 0.1;
+pub const LIST_ACTIVE_BLEND_RATIO: f32 = 0.1;
 
 // --- Seed derivation (`docs/theme-design.md`) ---------------------------
 //
@@ -111,7 +111,7 @@ pub const TEXT_CONTRAST_CEIL: f64 = 21.0;
 /// within a couple of `u8` units of `FOREGROUND_DEFAULT` at this setting
 /// -- verified in this module's tests, not assumed). `pub(crate)`, see
 /// [`TEXT_CONTRAST_FLOOR`].
-pub(crate) const TEXT_CONTRAST_DEFAULT: f64 = 15.0;
+pub const TEXT_CONTRAST_DEFAULT: f64 = 15.0;
 
 /// How far of the way from the WCAG floor (`TEXT_CONTRAST_FLOOR`) to the
 /// `text_contrast` knob `text_muted`'s own target ratio sits, when
@@ -148,10 +148,10 @@ const TEXT_SUBTLE_LADDER_FRACTION: f64 = 0.4;
 /// from both ends. `surface_selected` briefly joined this ladder too
 /// (`SURFACE_SELECTED_STEP == BORDER_STEP`) but moved back to being
 /// accent-anchored on both derivation paths -- see `LIST_ACTIVE_BLEND_RATIO`.
-pub(super) const SURFACE_CHROME_STEP: f64 = 0.12;
+pub const SURFACE_CHROME_STEP: f64 = 0.12;
 const SURFACE_PANEL_STEP: f64 = 0.28;
 const SURFACE_RAISED_STEP: f64 = 0.34;
-pub(super) const BORDER_STEP: f64 = 0.5;
+pub const BORDER_STEP: f64 = 0.5;
 
 /// OKLCH lightness delta applied, toward the foreground's own direction
 /// (dark background: lighter; light background: darker -- "emphasis
@@ -166,9 +166,9 @@ pub(super) const BORDER_STEP: f64 = 0.5;
 /// constant, it derives from `text_subtle` instead (both reference
 /// fixtures -- built-in and the owner's -- agree `bright_black` IS
 /// `text_subtle`, not a further push off `black`).
-pub(super) const BRIGHT_HUE_EMPHASIS_DELTA: f64 = 0.1;
+pub const BRIGHT_HUE_EMPHASIS_DELTA: f64 = 0.1;
 
-pub(super) const ANSI16_DEFAULT: [u32; 16] = [
+pub const ANSI16_DEFAULT: [u32; 16] = [
     0x23262e, // black
     0xe06c75, // red
     0x98c379, // green
@@ -188,25 +188,25 @@ pub(super) const ANSI16_DEFAULT: [u32; 16] = [
 ];
 
 #[derive(Clone, Copy)]
-pub(super) struct Scheme {
-    pub(super) background: u32,
-    pub(super) foreground: u32,
+pub struct Scheme {
+    pub background: u32,
+    pub foreground: u32,
     /// Read only by `ansi`, which is native-only.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    pub(super) cursor: u32,
-    pub(super) ansi: [u32; 16],
-    pub(super) accent: u32,
-    pub(super) danger: u32,
-    pub(super) warning: u32,
-    pub(super) success: u32,
-    pub(super) info: u32,
-    pub(super) text_muted: u32,
-    pub(super) text_subtle: u32,
-    pub(super) diff_added_surface: u32,
-    pub(super) diff_added_text: u32,
-    pub(super) diff_removed_surface: u32,
-    pub(super) diff_removed_text: u32,
-    pub(super) surface_panel: u32,
+    pub cursor: u32,
+    pub ansi: [u32; 16],
+    pub accent: u32,
+    pub danger: u32,
+    pub warning: u32,
+    pub success: u32,
+    pub info: u32,
+    pub text_muted: u32,
+    pub text_subtle: u32,
+    pub diff_added_surface: u32,
+    pub diff_added_text: u32,
+    pub diff_removed_surface: u32,
+    pub diff_removed_text: u32,
+    pub surface_panel: u32,
     /// The tab strip's own chrome background (`tab_bar`/
     /// `tab_bar.segmented` in [`gpui_component_theme_config`]) -- a
     /// neutral-ladder step from `background` toward `foreground`
@@ -217,7 +217,7 @@ pub(super) struct Scheme {
     /// Purely derived since the 2026-07-16 "config narrowed to the seed"
     /// decision (`docs/theme-design.md`) -- no longer independently
     /// overridable via a `surface_chrome` key.
-    pub(super) surface_chrome: u32,
+    pub surface_chrome: u32,
     /// The *intended, on-screen* selected-row highlight for
     /// gpui-component's `List` (the command palette / session manager /
     /// view chooser rows): a blend of `background` toward the resolved
@@ -229,21 +229,21 @@ pub(super) struct Scheme {
     /// [`invert_list_active_clamp`] for why and how it compensates. Purely
     /// derived since 2026-07-16 -- no longer independently overridable via
     /// a `surface_selected` key.
-    pub(super) surface_selected: u32,
+    pub surface_selected: u32,
     /// A subtle separator line: a neutral-ladder step from `background`
     /// toward `foreground` (`BORDER_STEP`) on a seeded scheme, or a blend
     /// of `background` toward `text_subtle` (`BORDER_BLEND_RATIO`) on the
     /// zero-config path. Purely derived since 2026-07-16 -- no longer
     /// independently overridable via a `border_default`/`border_subtle`
     /// key.
-    pub(super) border: u32,
+    pub border: u32,
     /// An elevated surface for floating chrome (popover/dropdown-menu
     /// chrome), stepped from `background` toward `foreground`
     /// (`SURFACE_RAISED_STEP`) on a seeded scheme, or plain `background`
     /// on the zero-config path (i.e. no distinct raise by default -- see
     /// [`surface_raised`]'s own doc for who reads it). Purely derived since 2026-07-16 -- no
     /// longer independently overridable via a `surface_raised` key.
-    pub(super) surface_raised: u32,
+    pub surface_raised: u32,
 }
 
 impl Scheme {
@@ -251,7 +251,7 @@ impl Scheme {
     /// brightness. Drives gpui-component's `ThemeMode` pick (so unset
     /// `ThemeColor` fields fall back to its matching dark/light baseline,
     /// not always dark) in [`gpui_component_theme_config`].
-    pub(super) fn is_dark(&self) -> bool {
+    pub fn is_dark(&self) -> bool {
         !super::palette::is_light(self.background)
     }
 }
@@ -323,14 +323,14 @@ fn seed_is_configured(theme: &RawThemeConfig) -> bool {
 /// unset or non-finite (`nan`/`inf` are valid TOML float literals, so
 /// this still needs a check even though `RawThemeConfig::text_contrast`'s
 /// own lenient deserializer already screens out the wrong TOML *type*).
-pub(crate) fn resolve_text_contrast(raw: Option<f64>) -> f64 {
+pub fn resolve_text_contrast(raw: Option<f64>) -> f64 {
     match raw {
         Some(value) if value.is_finite() => value.clamp(TEXT_CONTRAST_FLOOR, TEXT_CONTRAST_CEIL),
         _ => TEXT_CONTRAST_DEFAULT,
     }
 }
 
-pub(super) fn scheme_from(raw: &RawConfig) -> Scheme {
+pub fn scheme_from(raw: &RawConfig) -> Scheme {
     warn_invalid_theme_colors(&raw.theme.colors);
     warn_invalid_theme_ansi(&raw.theme.ansi);
     let ansi_slot = |value: &Option<String>, default: u32| {
@@ -565,12 +565,12 @@ pub(super) fn scheme_from(raw: &RawConfig) -> Scheme {
     }
 }
 
-pub(super) fn scheme_store() -> &'static RwLock<Scheme> {
+pub fn scheme_store() -> &'static RwLock<Scheme> {
     static STORE: OnceLock<RwLock<Scheme>> = OnceLock::new();
     STORE.get_or_init(|| RwLock::new(scheme_from(horizon_config::load())))
 }
 
-pub(super) fn scheme() -> Scheme {
+pub fn scheme() -> Scheme {
     *scheme_store().read().unwrap()
 }
 
@@ -584,10 +584,9 @@ pub fn reload_from(raw: &RawConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::test_support::{
+    use crate::test_support::{
         config_with, config_with_and_contrast, config_with_ansi, owner_seeded_light_scheme,
     };
-    use horizon_config::RawUiConfig;
 
     #[test]
     fn default_scheme_matches_agent_views_pre_existing_hex_values() {
@@ -1090,50 +1089,5 @@ mod tests {
                 super::super::oklab::relative_luminance(scheme.diff_removed_surface),
             ) >= TEXT_CONTRAST_FLOOR
         );
-    }
-
-    /// Drift guard for `config.example.toml` (repo root): every example
-    /// value the file leaves *active* (uncommented) must equal the
-    /// built-in default it documents, so the example never quietly falls
-    /// out of sync with the code. Lives here (rather than in
-    /// `horizon-config`, which has no dependency on this crate and so
-    /// can't see `ANSI16_DEFAULT`/`ui::font::DEFAULT_FONT_SIZE`) because
-    /// this is where those constants are reachable -- see
-    /// `ui::font::DEFAULT_FONT_SIZE`'s own doc comment for the other half
-    /// of this guard's cross-reference.
-    #[test]
-    fn config_example_toml_matches_its_documented_defaults() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.example.toml");
-        let example = horizon_config::reload_from_path(Some(&path))
-            .expect("config.example.toml must be valid TOML");
-
-        // [terminal]'s only active example value.
-        assert_eq!(
-            example.terminal.font_size,
-            Some(crate::ui::font::DEFAULT_FONT_SIZE),
-            "config.example.toml's active [terminal] font_size must match \
-             ui::font::DEFAULT_FONT_SIZE"
-        );
-
-        // [theme.ansi]'s six active hue slots, against ANSI16_DEFAULT's
-        // corresponding indices (see `scheme_from`'s own `ansi_slot` calls
-        // for the same index-to-hue mapping).
-        let hex = |value: u32| format!("#{value:06x}");
-        assert_eq!(example.theme.ansi.red, Some(hex(ANSI16_DEFAULT[1])));
-        assert_eq!(example.theme.ansi.green, Some(hex(ANSI16_DEFAULT[2])));
-        assert_eq!(example.theme.ansi.yellow, Some(hex(ANSI16_DEFAULT[3])));
-        assert_eq!(example.theme.ansi.blue, Some(hex(ANSI16_DEFAULT[4])));
-        assert_eq!(example.theme.ansi.magenta, Some(hex(ANSI16_DEFAULT[5])));
-        assert_eq!(example.theme.ansi.cyan, Some(hex(ANSI16_DEFAULT[6])));
-
-        // Everything else in the file is commented out (no single built-in
-        // default worth showing as "live" -- see the file's own comments):
-        // must still parse to nothing rather than an accidental leaked
-        // personal-preference value.
-        assert!(example.providers.is_empty());
-        assert_eq!(example.ui, RawUiConfig::default());
-        assert!(example.keybindings.is_empty());
-        assert!(example.theme.colors.is_empty());
-        assert_eq!(example.theme.text_contrast, None);
     }
 }

@@ -13,7 +13,7 @@
 /// here -- clamping happens once, on the final sRGB round-trip), `a`/`b`
 /// the two opponent-color axes (green-red / blue-yellow).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Oklab {
+pub struct Oklab {
     pub l: f64,
     pub a: f64,
     pub b: f64,
@@ -22,7 +22,7 @@ pub(crate) struct Oklab {
 /// The polar form of [`Oklab`]: `l` unchanged, `c` chroma (`>= 0.0`), `h`
 /// hue angle in radians (`atan2` range, `-pi..=pi`).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Oklch {
+pub struct Oklch {
     pub l: f64,
     pub c: f64,
     pub h: f64,
@@ -109,7 +109,7 @@ fn oklab_to_linear_srgb(lab: Oklab) -> [f64; 3] {
 
 // --- OKLab <-> OKLCH -----------------------------------------------------
 
-pub(crate) fn oklch_from_oklab(lab: Oklab) -> Oklch {
+pub fn oklch_from_oklab(lab: Oklab) -> Oklch {
     Oklch {
         l: lab.l,
         c: lab.a.hypot(lab.b),
@@ -117,7 +117,7 @@ pub(crate) fn oklch_from_oklab(lab: Oklab) -> Oklch {
     }
 }
 
-pub(crate) fn oklab_from_oklch(lch: Oklch) -> Oklab {
+pub fn oklab_from_oklch(lch: Oklch) -> Oklab {
     Oklab {
         l: lch.l,
         a: lch.c * lch.h.cos(),
@@ -127,12 +127,12 @@ pub(crate) fn oklab_from_oklch(lch: Oklch) -> Oklab {
 
 // --- packed 0xRRGGBB <-> OKLCH, composed -------------------------------
 
-pub(crate) fn oklch_from_packed(value: u32) -> Oklch {
+pub fn oklch_from_packed(value: u32) -> Oklch {
     let linear = packed_to_srgb(value).map(srgb_to_linear);
     oklch_from_oklab(linear_srgb_to_oklab(linear))
 }
 
-pub(crate) fn packed_from_oklch(lch: Oklch) -> u32 {
+pub fn packed_from_oklch(lch: Oklch) -> u32 {
     let linear = oklab_to_linear_srgb(oklab_from_oklch(lch));
     srgb_to_packed(linear.map(linear_to_srgb))
 }
@@ -143,7 +143,7 @@ pub(crate) fn packed_from_oklch(lch: Oklch) -> u32 {
 /// of the older BT.601-luma [`super::luminance`]/`is_light` pair, which
 /// stays in place unchanged for the pre-existing `contrast_safe_default`
 /// call sites this module's callers don't touch.
-pub(crate) fn lightness(value: u32) -> f64 {
+pub fn lightness(value: u32) -> f64 {
     oklch_from_packed(value).l
 }
 
@@ -168,7 +168,7 @@ fn wcag_linearize(c: f64) -> f64 {
 /// `0.0..=1.0`. The basis for [`contrast_ratio`]; not perceptually uniform
 /// (unlike OKLab `l`) -- never used for polarity/ordering decisions, only
 /// for the contrast-ratio arithmetic the WCAG formula itself specifies.
-pub(crate) fn relative_luminance(value: u32) -> f64 {
+pub fn relative_luminance(value: u32) -> f64 {
     let [r, g, b] = packed_to_srgb(value).map(wcag_linearize);
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
@@ -176,7 +176,7 @@ pub(crate) fn relative_luminance(value: u32) -> f64 {
 /// WCAG contrast ratio between two relative luminances, in `1.0..=21.0`.
 /// Order-independent (the lighter of the two always plays the `+0.05`
 /// numerator role).
-pub(crate) fn contrast_ratio(l1: f64, l2: f64) -> f64 {
+pub fn contrast_ratio(l1: f64, l2: f64) -> f64 {
     let (lighter, darker) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
     (lighter + 0.05) / (darker + 0.05)
 }
@@ -228,12 +228,7 @@ const CONTRAST_QUANTIZATION_MAX_STEPS: u32 = 32;
 /// reaching it), the search still converges monotonically to the nearest
 /// achievable extreme instead of oscillating or landing on the wrong side
 /// of `background`.
-pub(crate) fn solve_lightness_for_ratio(
-    background: u32,
-    hue: f64,
-    chroma: f64,
-    target_ratio: f64,
-) -> f64 {
+pub fn solve_lightness_for_ratio(background: u32, hue: f64, chroma: f64, target_ratio: f64) -> f64 {
     let background_luminance = relative_luminance(background);
     let dark = lightness(background) < 0.5;
     let (mut low, mut high) = if dark {
@@ -317,7 +312,7 @@ pub(crate) fn solve_lightness_for_ratio(
 /// that just want the resulting color -- `background`'s own hue/chroma
 /// (the "inherit the background's tint" rule) at the lightness that hits
 /// `target_ratio` WCAG contrast against it.
-pub(crate) fn tint_for_contrast(background: u32, target_ratio: f64) -> u32 {
+pub fn tint_for_contrast(background: u32, target_ratio: f64) -> u32 {
     let lch = oklch_from_packed(background);
     let l = solve_lightness_for_ratio(background, lch.h, lch.c, target_ratio);
     packed_from_oklch(Oklch {
@@ -334,7 +329,7 @@ pub(crate) fn tint_for_contrast(background: u32, target_ratio: f64) -> u32 {
 /// clamped to `0.0..=1.0`: every call site in `scheme.rs` passes a
 /// constant already in range, and an out-of-range `fraction` is a
 /// meaningful (if unusual) extrapolation rather than a caller error.
-pub(crate) fn step_lightness_toward(from: u32, to: u32, fraction: f64) -> u32 {
+pub fn step_lightness_toward(from: u32, to: u32, fraction: f64) -> u32 {
     let from_lch = oklch_from_packed(from);
     let to_l = lightness(to);
     let l = from_lch.l + (to_l - from_lch.l) * fraction;
@@ -349,7 +344,7 @@ pub(crate) fn step_lightness_toward(from: u32, to: u32, fraction: f64) -> u32 {
 /// `toward_light` else toward `0.0`, clamped at that bound -- the
 /// `bright_*` ANSI-slot emphasis rule (`docs/theme-design.md`: "emphasis
 /// toward the foreground direction"). Hue and chroma are preserved.
-pub(crate) fn emphasize_lightness(color: u32, delta: f64, toward_light: bool) -> u32 {
+pub fn emphasize_lightness(color: u32, delta: f64, toward_light: bool) -> u32 {
     let lch = oklch_from_packed(color);
     let l = if toward_light {
         (lch.l + delta).min(1.0)

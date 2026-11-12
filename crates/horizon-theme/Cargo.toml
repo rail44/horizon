@@ -1,0 +1,13 @@
+[package]
+name = "horizon-theme"
+version = "0.1.0"
+edition = "2021"
+
+# The theme's derivation, apart from any UI framework: a config's seed to a
+# scheme of packed colors (`docs/theme-design.md`). The shell reads the
+# scheme and turns it into its own framework's colors.
+[dependencies]
+horizon-config = { path = "../horizon-config" }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
