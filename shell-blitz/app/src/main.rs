@@ -13,7 +13,7 @@ use anyrender_vello::VelloWindowRenderer;
 use blitz_shell::{BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop};
 use horizon_blitz::paths::{daemon_binary, runtime_dir, workspace_state};
 use horizon_blitz::terminal::Session;
-use horizon_blitz::{restore, workspace};
+use horizon_blitz::{control, restore, workspace};
 use horizon_shell_runtime::TerminaldHandle;
 use horizon_terminal_core::{
     DEFAULT_SCROLLBACK_LINES, TerminalColorScheme, TerminalSize, TerminalSpawnSpec,
@@ -33,10 +33,10 @@ fn main() {
         unsafe { std::env::set_var("HORIZON_TERMINALD_BINARY", binary) };
     }
 
-    // No control plane yet: the socket a pane's `horizon` command would
-    // reach is one of this shell's own that nothing listens on, not the
-    // GPUI shell's.
+    // The socket a pane's `horizon` command reaches is this shell's own,
+    // not the GPUI shell's.
     let control_socket = sockets.join("control.sock");
+    let requests = control::listen(control_socket.clone());
     let terminald = TerminaldHandle::start(&sockets.join("terminald.sock"), &control_socket);
     let store = WorkspaceStateStore::new(workspace_state());
     let opening = workspace::Opening {
@@ -69,12 +69,14 @@ fn main() {
         shell = Some(built);
         root
     });
-    // A frame from a session wakes the window to draw it.
+    // A frame from a session wakes the window to draw it, and so does
+    // something asked over the control plane, which is answered here.
     let (shell, woken) = (shell.expect("the shell"), Cell::new(false));
     app.on_poll(move |waker| {
         if !woken.replace(true) {
             shell.set_waker(waker.clone());
         }
+        requests.answer(waker, &shell);
     });
 
     // The layer lays the document out for each frame.

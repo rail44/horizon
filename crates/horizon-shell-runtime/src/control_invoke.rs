@@ -1,6 +1,7 @@
-//! Validate external command arguments before any shell operation runs.
+//! The control plane's external commands, their arguments validated
+//! before any shell operation runs: what both shells dispatch on.
 
-use crate::agent::model::ToolCallIdentity;
+use crate::agent_model::ToolCallIdentity;
 use horizon_agent::roles::RoleId;
 use horizon_control::contract::Invoke;
 use horizon_workspace::commands::CommandId;
@@ -8,7 +9,7 @@ use horizon_workspace::{SessionId, SessionKind, SplitAxis};
 use std::path::PathBuf;
 
 #[derive(Debug)]
-pub(super) enum Command {
+pub enum Command {
     NewSession {
         kind: SessionKind,
         role_id: Option<RoleId>,
@@ -62,7 +63,7 @@ pub(super) enum Command {
     },
 }
 
-pub(super) fn parse(invoke: &Invoke) -> Result<Command, String> {
+pub fn parse(invoke: &Invoke) -> Result<Command, String> {
     let args = &invoke.args;
     Ok(match invoke.command.as_str() {
         "new-terminal" => new_session(args, SessionKind::Terminal)?,
@@ -413,7 +414,7 @@ mod tests {
     #[test]
     fn approval_identity_requires_both_ids_and_preserves_the_supplied_occurrence() {
         use super::approval_identity_arg;
-        use crate::agent::model::ToolCallIdentity;
+        use crate::agent_model::ToolCallIdentity;
         for args in [
             serde_json::json!({"call_id":"same"}),
             serde_json::json!({"call_id":"same", "occurrence_id":""}),

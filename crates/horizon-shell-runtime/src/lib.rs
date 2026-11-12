@@ -31,6 +31,7 @@ pub mod agent_model;
 mod attachment;
 mod common;
 mod connection;
+pub mod control_invoke;
 mod notify;
 mod request;
 mod routing;

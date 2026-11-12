@@ -9,9 +9,9 @@ use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
-use horizon_ui::reactive_graph::traits::WithUntracked;
+use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_ui::testing::{Pointer, click_at, pointer};
-use horizon_workspace::{PaneId, Workspace};
+use horizon_workspace::{PaneId, SessionId, Workspace};
 use keyboard_types::{Key, Modifiers, NamedKey};
 
 mod support;
@@ -64,6 +64,16 @@ impl Opened {
 
     fn sessions(&self) -> usize {
         self.model(|model| model.session_summaries().len())
+    }
+
+    /// Closes a pane as `x` on it does.
+    fn model_closing(&self, pane: PaneId) {
+        self.chord();
+        self.shell.model.update(|model| {
+            model.commit_workspace_mode_to(pane);
+        });
+        self.chord();
+        self.character("x");
     }
 
     fn mode(&self) -> bool {
@@ -539,4 +549,98 @@ fn a_tabs_close_button_closes_it_and_keeps_its_session() {
     opened.wait(pane, "the output", |text| {
         text.lines().any(|line| line == "here")
     });
+}
+
+#[test]
+fn the_control_plane_makes_lists_attaches_and_ends_sessions() {
+    use horizon_control::contract::{EnvelopeBody, Invoke, Query};
+    use horizon_control::host::executor::{ControlExecutor, ControlRequest};
+
+    let opened = open();
+    let (asking, requests) = horizon_blitz::control::bridge();
+    // Asked from another thread, as the socket's listener asks, and
+    // answered on this one at each poll.
+    let ask = |request: ControlRequest| -> EnvelopeBody {
+        std::thread::scope(|scope| {
+            let asked = scope.spawn(|| asking.execute(request));
+            while !asked.is_finished() {
+                requests.answer(std::task::Waker::noop(), &opened.shell);
+                opened.app.resolve();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            asked.join().unwrap()
+        })
+    };
+    let invoke = |command: &str, args: serde_json::Value| {
+        ask(ControlRequest::Invoke(Invoke {
+            command: command.to_string(),
+            args,
+        }))
+    };
+    let first = opened.panes()[0];
+    let session = opened.model(|model| model.terminal_session_id(first).unwrap());
+    let id = |session: SessionId| session.as_uuid().to_string();
+
+    // A terminal beside the first, without taking the focus.
+    let made = invoke("new-terminal", serde_json::json!({ "split": id(session) }));
+    let EnvelopeBody::Ok {
+        session_id: Some(made),
+    } = made
+    else {
+        panic!("{made:?}");
+    };
+    let panes = opened.panes();
+    assert_eq!(panes.len(), 2);
+    assert!(opened.model(|model| model.is_active_pane(first)));
+    assert_eq!(
+        opened.model(|model| model.terminal_session_id(panes[1]).map(id)),
+        Some(made.clone())
+    );
+    opened.prompt(panes[1]);
+
+    let EnvelopeBody::Sessions(listed) = ask(ControlRequest::Query(Query {
+        what: "sessions".to_string(),
+    })) else {
+        panic!("no sessions");
+    };
+    assert_eq!(listed.sessions.len(), 2);
+    assert!(listed.sessions.iter().all(|session| session.attached));
+
+    // Closed, the new one is detached; `attach` puts it back, and
+    // `terminate-session` ends it.
+    opened.model_closing(panes[1]);
+    assert_eq!(opened.model(Workspace::detached_session_count), 1);
+    let attached = invoke(
+        "attach",
+        serde_json::json!({ "session_id": made, "activate": true }),
+    );
+    assert!(
+        matches!(attached, EnvelopeBody::Ok { session_id: None }),
+        "{attached:?}"
+    );
+    assert_eq!(opened.panes().len(), 2);
+    assert_eq!(opened.model(Workspace::detached_session_count), 0);
+    let ended = invoke(
+        "terminate-session",
+        serde_json::json!({ "session_id": made }),
+    );
+    assert!(matches!(ended, EnvelopeBody::Ok { .. }), "{ended:?}");
+    assert_eq!(opened.panes(), vec![first]);
+    assert_eq!(opened.sessions(), 1);
+
+    // What is not a command, and what this shell has no runtime for.
+    for (command, args) in [
+        ("no-such-command", serde_json::json!({})),
+        ("new-agent", serde_json::json!({})),
+        (
+            "terminate-session",
+            serde_json::json!({ "session_id": made }),
+        ),
+    ] {
+        let answer = invoke(command, args);
+        assert!(
+            matches!(answer, EnvelopeBody::Error(_)),
+            "{command}: {answer:?}"
+        );
+    }
 }

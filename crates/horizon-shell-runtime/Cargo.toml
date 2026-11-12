@@ -16,6 +16,7 @@ horizon-agent = { path = "../horizon-agent" }
 horizon-control = { path = "../horizon-control" }
 horizon-terminal-core = { path = "../horizon-terminal-core" }
 horizon-wire = { path = "../horizon-wire" }
+horizon-workspace = { path = "../horizon-workspace" }
 log = "0.4"
 remoc = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }

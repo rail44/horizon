@@ -38,6 +38,7 @@ use crate::terminal::{self, Session, Terminal};
 
 mod arrangement;
 mod commands;
+mod control;
 mod keymap;
 mod keys;
 mod palette;

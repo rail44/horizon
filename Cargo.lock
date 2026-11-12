@@ -4466,6 +4466,7 @@ dependencies = [
  "horizon-control",
  "horizon-terminal-core",
  "horizon-wire",
+ "horizon-workspace",
  "log",
  "remoc",
  "serde",

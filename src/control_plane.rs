@@ -8,8 +8,6 @@
 //! (the agentd drain/respawn/resume sequence,
 //! `WorkspaceShell::reload_agent_runtime`).
 
-mod invoke;
-
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -18,6 +16,7 @@ use gpui::*;
 use horizon_control::contract::{EnvelopeBody, Invoke, Query, SessionEntry, Sessions, State};
 use horizon_control::host::executor::{error_body, ControlExecutor, ControlRequest};
 use horizon_control::host::listener;
+use horizon_shell_runtime::control_invoke as invoke;
 use horizon_workspace::commands::{core_commands, CommandId};
 
 use crate::workspace::WorkspaceShell;

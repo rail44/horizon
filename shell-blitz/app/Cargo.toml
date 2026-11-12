@@ -9,6 +9,7 @@ publish = false
 horizon-ui = { path = "../ui" }
 horizon-theme-css = { path = "../theme" }
 horizon-config = { path = "../../crates/horizon-config" }
+horizon-control = { path = "../../crates/horizon-control" }
 horizon-shell-runtime = { path = "../../crates/horizon-shell-runtime" }
 horizon-terminal-core = { path = "../../crates/horizon-terminal-core" }
 horizon-workspace = { path = "../../crates/horizon-workspace" }
@@ -32,6 +33,7 @@ unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
+serde_json = "1.0"
 # The terminal view's tests run the terminal core over a PTY of their own.
 portable-pty = "0.9.0"
 # The view painted into pixels, with no window and no GPU.
