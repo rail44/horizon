@@ -15,6 +15,8 @@ pub mod board;
 #[cfg(not(target_family = "wasm"))]
 pub mod control;
 #[cfg(not(target_family = "wasm"))]
+pub mod desktop_notify;
+#[cfg(not(target_family = "wasm"))]
 pub mod markdown;
 #[cfg(not(target_family = "wasm"))]
 pub mod parts;
@@ -33,5 +35,7 @@ pub mod theme_settings;
 pub mod wake;
 #[cfg(not(target_family = "wasm"))]
 pub mod wiki;
+#[cfg(not(target_family = "wasm"))]
+pub mod window;
 #[cfg(not(target_family = "wasm"))]
 pub mod workspace;

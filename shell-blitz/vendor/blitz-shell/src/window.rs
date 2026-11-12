@@ -862,7 +862,11 @@ impl<Rend: WindowRenderer> View<Rend> {
 
                 self.doc.handle_ui_event(UiEvent::Wheel(event));
             }
-            WindowEvent::Focused(_) => {}
+            WindowEvent::Focused(focused) => {
+                if let Some(told) = WINDOW_FOCUSED.get() {
+                    told(focused);
+                }
+            }
             WindowEvent::TouchpadPressure { .. } => {}
             WindowEvent::PinchGesture { .. } => {},
             WindowEvent::PanGesture { .. } => {},
@@ -887,6 +891,16 @@ thread_local! {
 /// produced and, if that changes the document, to lay it out again.
 pub fn set_frame(frame: fn(f64)) {
     FRAME.set(Some(frame));
+}
+
+thread_local! {
+    static WINDOW_FOCUSED: std::cell::Cell<Option<fn(bool)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Added to upstream's blitz-shell: `told` is called when a window takes
+/// or loses the desktop's focus, which upstream drops.
+pub fn set_window_focused(told: fn(bool)) {
+    WINDOW_FOCUSED.set(Some(told));
 }
 
 fn prepare_frame(document: &mut dyn blitz_dom::Document, animation_time: f64) {

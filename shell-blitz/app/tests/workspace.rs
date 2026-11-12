@@ -929,3 +929,58 @@ fn the_control_plane_switches_a_sessions_model_through_the_runtime() {
         "{answer:?}"
     );
 }
+
+#[test]
+fn a_notification_a_program_asks_for_is_posted_unless_its_pane_is_looked_at() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let posted = Rc::new(RefCell::new(Vec::new()));
+    let log = posted.clone();
+    let opened = open_with(Opening {
+        notify: Some(Rc::new(move |session, notification| {
+            (log.borrow_mut()).push((session, notification.title, notification.body));
+        })),
+        ..Opening::default()
+    });
+    let first = opened.panes()[0];
+    let session = opened.model(|model| model.terminal_session_id(first).unwrap());
+    opened.prompt(first);
+
+    // From the pane that has the keys, in a window that has the focus:
+    // the owner is looking at it, and nothing is posted.
+    opened.run(r"printf '\033]9;seen\007'; echo told-$((1+1))");
+    opened.wait(first, "the command", |text| text.contains("told-2"));
+    assert!(posted.borrow().is_empty(), "{:?}", posted.borrow());
+
+    // From a pane that no longer has them: posted, for its session.
+    opened.run(r"sleep 0.4; printf '\033]777;notify;Build;done\007'");
+    opened.chord();
+    opened.character("s");
+    let second = opened.panes()[1];
+    assert!(opened.model(|model| model.is_active_pane(second)));
+    opened.until("the notification", || !posted.borrow().is_empty());
+    assert_eq!(
+        *posted.borrow(),
+        [(session, Some("Build".to_string()), "done".to_string())]
+    );
+
+    // With the window away, also from the pane that has the keys.
+    opened.prompt(second);
+    horizon_blitz::window::set_active(false);
+    opened.run(r"printf '\033]9;away\007'");
+    opened.until("the second notification", || posted.borrow().len() == 2);
+    let (from, title, body) = posted.borrow()[1].clone();
+    assert_eq!(
+        opened.model(|model| model.terminal_session_id(second)),
+        Some(from)
+    );
+    assert_eq!((title, body.as_str()), (None, "away"));
+    horizon_blitz::window::set_active(true);
+
+    // A click on a banner brings its session's pane to the front.
+    opened.shell.reveal_session(session);
+    opened.app.run_effects();
+    opened.app.resolve();
+    assert!(opened.model(|model| model.is_active_pane(first)));
+}

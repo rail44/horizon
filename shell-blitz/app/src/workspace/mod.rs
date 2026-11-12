@@ -28,7 +28,7 @@ use horizon_agent::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
 use horizon_agent::roles::RoleId;
 use horizon_config::RawConfig;
 use horizon_shell_runtime::AgentCommand;
-use horizon_terminal_core::{TerminalCommand, TerminalUpdate};
+use horizon_terminal_core::{TerminalCommand, TerminalNotification, TerminalUpdate};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
@@ -177,6 +177,10 @@ fn summarizer(config: &RawConfig) -> Option<Arc<AuxiliaryClient>> {
     })))
 }
 
+/// Hands a notification a program in a terminal session asked for to the
+/// desktop.
+pub type Notify = Rc<dyn Fn(SessionId, TerminalNotification)>;
+
 /// Starts a terminal session.
 pub type Spawn = Box<dyn Fn(Starting) -> Session>;
 
@@ -257,6 +261,8 @@ pub struct Opening {
     /// Hands a URL to the desktop: a link in a document that is not a
     /// file.
     pub open_url: Option<markdown::OpenUrl>,
+    /// Posts a desktop notification: without it none is posted.
+    pub notify: Option<Notify>,
     /// What the model picker lists and switches with.
     pub models: Option<Arc<dyn Models>>,
     /// What the reload commands do with their runtimes, and what the
@@ -285,6 +291,7 @@ impl Default for Opening {
             agent_sessions: Vec::new(),
             agents: None,
             open_url: None,
+            notify: None,
             models: None,
             agent_runtime: None,
             reload_terminals: None,
@@ -368,6 +375,7 @@ struct Kept {
     /// The same, for what wakes the page from another thread.
     wake: Wake,
     open_url: markdown::OpenUrl,
+    notify: Option<Notify>,
     models: Option<Arc<dyn Models>>,
     agent_runtime: Option<AgentRuntime>,
     reload_terminals: Option<ReloadTerminals>,
@@ -754,6 +762,7 @@ impl Shell {
         }
         self.tell_boards();
         let (mut titles, mut directories, mut exited) = (Vec::new(), Vec::new(), Vec::new());
+        let mut notifications = Vec::new();
         for view in self.kept().panes.borrow().values() {
             let Some((session, terminal)) = &view.terminal else {
                 continue;
@@ -769,6 +778,9 @@ impl Shell {
             if terminal.exited() {
                 exited.push(*session);
             }
+            for notification in terminal.take_notifications() {
+                notifications.push((*session, notification));
+            }
         }
         // A session no pane shows has no view to take its updates in.
         let kept = self.kept();
@@ -782,6 +794,9 @@ impl Shell {
             for update in session.take_updates() {
                 match update {
                     TerminalUpdate::Exited => exited.push(*id),
+                    TerminalUpdate::Notification(notification) => {
+                        notifications.push((*id, notification));
+                    }
                     TerminalUpdate::Title(title) => {
                         titles.push((*id, title.as_deref().and_then(derive_session_title)));
                     }
@@ -795,6 +810,18 @@ impl Shell {
         for (id, session) in kept.agents.borrow().iter() {
             if let Some(title) = session.take_title() {
                 titles.push((*id, Some(title)));
+            }
+        }
+        // A notification is for a session the owner is not looking at:
+        // not the active pane's, or any while the window is away.
+        if let Some(notify) = kept.notify.as_ref() {
+            let looked_at = (self.model)
+                .with_untracked(Workspace::active_terminal_session_id)
+                .filter(|_| crate::window::active());
+            for (session, notification) in notifications {
+                if looked_at != Some(session) {
+                    notify(session, notification);
+                }
             }
         }
         if titles.is_empty() && directories.is_empty() && exited.is_empty() {
@@ -817,6 +844,17 @@ impl Shell {
         }
         // What follows the model is on the page before it is painted.
         relayout();
+    }
+
+    /// Brings the pane a session is in to the front: the answer to a
+    /// click on its notification. A session no pane shows is left where
+    /// it is.
+    pub fn reveal_session(&self, session: SessionId) {
+        let shown =
+            (self.model).with_untracked(|model| model.pane_location_for_session(session).is_some());
+        if shown {
+            self.go_to_session(session);
+        }
     }
 
     /// Who the sessions wake when they have something to draw.
@@ -1168,6 +1206,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             waker: RefCell::default(),
             wake: Wake::default(),
             open_url: opening.open_url.unwrap_or_else(|| Rc::new(|_| {})),
+            notify: opening.notify,
             models: opening.models,
             agent_runtime: opening.agent_runtime,
             reload_terminals: opening.reload_terminals,

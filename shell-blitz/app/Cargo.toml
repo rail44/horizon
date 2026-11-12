@@ -49,6 +49,8 @@ tokio = { version = "1.52", features = ["rt", "net", "time", "macros", "io-util"
 termwiz = { version = "0.23.3", features = ["use_serde"] }
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4"] }
+# The desktop's notification service (`src/desktop_notify.rs`).
+notify-rust = "4"
 # The runtime a preview's plugin runs in (`src/preview.rs`).
 wasmtime = { version = "36", default-features = false, features = [
     "async",

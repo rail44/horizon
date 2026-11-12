@@ -19,7 +19,7 @@ mod accessibility;
 
 pub use crate::application::BlitzApplication;
 pub use crate::event::{BlitzShellEvent, BlitzShellProxy};
-pub use crate::window::{View, WindowConfig, set_frame};
+pub use crate::window::{View, WindowConfig, set_frame, set_window_focused};
 
 #[cfg(feature = "data-uri")]
 pub use crate::net::DataUriNetProvider;

@@ -99,6 +99,8 @@ struct State {
     /// they were last taken.
     titled: RefCell<Option<Option<String>>>,
     directory: RefCell<Option<PathBuf>>,
+    /// The notifications the program asked for, not yet taken.
+    notifications: RefCell<Vec<horizon_terminal_core::TerminalNotification>>,
     /// What the session last copied, for whoever placed the view to see,
     /// and what it copied that the clipboard has not been given yet.
     copied: RefCell<Option<String>>,
@@ -172,6 +174,12 @@ impl Terminal {
         self.state.titled.borrow_mut().take()
     }
 
+    /// The desktop notifications the program asked for since the last
+    /// call.
+    pub fn take_notifications(&self) -> Vec<horizon_terminal_core::TerminalNotification> {
+        std::mem::take(&mut *self.state.notifications.borrow_mut())
+    }
+
     /// The shell's working directory, if it changed since the last call.
     pub fn take_directory(&self) -> Option<PathBuf> {
         self.state.directory.borrow_mut().take()
@@ -210,6 +218,9 @@ fn pump(state: &State) -> bool {
             } => {
                 *state.outgoing.borrow_mut() = Some(text.clone());
                 *state.copied.borrow_mut() = Some(text);
+            }
+            TerminalUpdate::Notification(notification) => {
+                state.notifications.borrow_mut().push(notification);
             }
             TerminalUpdate::Exited => state.exited.set(true),
             TerminalUpdate::Title(title) => *state.titled.borrow_mut() = Some(title),
@@ -300,6 +311,7 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         cells: Cell::new((1., 0, 0)),
         preedit: RefCell::new(String::new()),
         focused: Cell::new(false),
+        notifications: RefCell::default(),
         exited: Cell::new(false),
         titled: RefCell::new(None),
         directory: RefCell::new(None),
@@ -514,8 +526,9 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
             cell_width = measure(&sized.look.borrow());
         }
         // Whether the keys come here: asked of the page, since a focus
-        // given from code is not announced by an event.
-        let focused = page.has_focus(element);
+        // given from code is not announced by an event. A window that
+        // does not have the desktop's focus brings no keys.
+        let focused = page.has_focus(element) && crate::window::active();
         if focused != sized.focused.replace(focused) {
             if !focused {
                 sized.preedit.borrow_mut().clear();

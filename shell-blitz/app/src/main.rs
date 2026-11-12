@@ -15,7 +15,7 @@ use horizon_blitz::agentd::{Agentd, RuntimeModels};
 use horizon_blitz::paths::{daemon_binary, data_home, runtime_dir, workspace_state};
 use horizon_blitz::terminal::Session;
 use horizon_blitz::terminald::Terminald;
-use horizon_blitz::{control, restore, workspace};
+use horizon_blitz::{control, desktop_notify, restore, window, workspace};
 use horizon_terminal_core::{
     DEFAULT_SCROLLBACK_LINES, TerminalColorScheme, TerminalSize, TerminalSpawnSpec,
 };
@@ -69,7 +69,12 @@ fn main() {
     let terminald = Terminald::start(&sockets.join("terminald.sock"), &control_socket);
     let agentd = Agentd::start(&sockets.join("agentd.sock"), &control_socket);
     let store = WorkspaceStateStore::new(workspace_state());
+    let wake = horizon_blitz::wake::Wake::default();
+    let (poster, clicked) = desktop_notify::poster(wake.clone());
     let opening = workspace::Opening {
+        notify: Some(std::rc::Rc::new(move |session, notification| {
+            poster.post(session, notification.title, &notification.body);
+        })),
         config: horizon_config::load().clone(),
         reload: Some(Box::new(horizon_config::reload)),
         agents: Some(agentd.spawn()),
@@ -111,6 +116,11 @@ fn main() {
     app.on_poll(move |waker| {
         if !woken.replace(true) {
             shell.set_waker(waker.clone());
+            wake.set(waker.clone());
+            window::set_waker(waker.clone());
+        }
+        for session in clicked.take() {
+            shell.reveal_session(session);
         }
         requests.answer(waker, &shell);
         agentd.answer(waker, &shell);
@@ -118,6 +128,7 @@ fn main() {
 
     // The layer lays the document out for each frame.
     blitz_shell::set_frame(horizon_ui::frame);
+    blitz_shell::set_window_focused(window::set_active);
     let event_loop = create_default_event_loop();
     let (proxy, events) = BlitzShellProxy::new(event_loop.create_proxy());
     let mut application = BlitzApplication::new(proxy, events);
