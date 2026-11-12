@@ -92,6 +92,41 @@ struct RgbSchema {
     b: u8,
 }
 
+impl TerminalColorScheme {
+    /// The scheme of a theme given as plain colors (red, green, blue): the
+    /// foreground, the background, the cursor and the sixteen colors a
+    /// program names by number.
+    pub fn from_rgb(
+        foreground: [u8; 3],
+        background: [u8; 3],
+        cursor: [u8; 3],
+        ansi: [[u8; 3]; 16],
+    ) -> Self {
+        let rgb = |[r, g, b]: [u8; 3]| Rgb { r, g, b };
+        Self {
+            foreground: rgb(foreground),
+            background: rgb(background),
+            cursor: rgb(cursor),
+            black: rgb(ansi[0]),
+            red: rgb(ansi[1]),
+            green: rgb(ansi[2]),
+            yellow: rgb(ansi[3]),
+            blue: rgb(ansi[4]),
+            magenta: rgb(ansi[5]),
+            cyan: rgb(ansi[6]),
+            white: rgb(ansi[7]),
+            bright_black: rgb(ansi[8]),
+            bright_red: rgb(ansi[9]),
+            bright_green: rgb(ansi[10]),
+            bright_yellow: rgb(ansi[11]),
+            bright_blue: rgb(ansi[12]),
+            bright_magenta: rgb(ansi[13]),
+            bright_cyan: rgb(ansi[14]),
+            bright_white: rgb(ansi[15]),
+        }
+    }
+}
+
 impl Default for TerminalColorScheme {
     fn default() -> Self {
         const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
