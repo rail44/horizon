@@ -57,6 +57,7 @@ pub const CSS: &str = "
         .scroll pre { padding: 8px 12px; border-radius: 4px; background: #f0f0f0;
                       font-size: 13px; line-height: 20px; overflow-x: scroll; }
         .scroll code { font-family: monospace; font-size: 13px; }
+        .language { text-align: right; font-size: 12px; color: #808080; }
         .scroll blockquote { padding-left: 12px; border-left: 2px solid #d0d0d0; color: #606060; }
         .scroll td, .scroll th { padding: 2px 8px; border: 1px solid #d0d0d0; }
         .link { color: #356df3; cursor: pointer; }
@@ -285,11 +286,15 @@ pub(crate) fn render(source: &str, on_link: Rc<dyn Fn(&str)>) -> El {
                     }),
                     Tag::BlockQuote(_) => el("blockquote"),
                     Tag::CodeBlock(kind) => {
-                        let code = el("code");
+                        let (code, pre) = (el("code"), el("pre"));
+                        // A fenced block names its language above its code,
+                        // as gpui-component's Markdown does.
                         if let CodeBlockKind::Fenced(language) = kind {
-                            code.attr("data-language", &language);
+                            if !language.is_empty() {
+                                pre.child(el("div").class("language").text(&language));
+                            }
                         }
-                        let pre = el("pre").child(code);
+                        pre.child(code);
                         top.child(pre);
                         // Text goes into the `code`; the `pre` is its box.
                         open.push(code);

@@ -50,7 +50,7 @@ pub const CSS: &str = "
              font-family: var(--font-family); font-size: var(--body-size);
              line-height: var(--body-line);
         .column { flex: 1; min-height: 0; overflow-y: scroll;
-                  padding: var(--u24) var(--u24) var(--u32) var(--u24); }
+                  padding: var(--u24) 1px var(--u32) 1px; }
         .unit { padding-bottom: var(--u8); }
         .user { margin-left: var(--u24); padding: var(--u8) var(--u16); border-radius: 4px;
                 background: var(--band); white-space: pre-wrap; }
@@ -74,13 +74,12 @@ pub const CSS: &str = "
                        color: var(--chip-accent-text); }
         .chip.danger { background: var(--chip-danger-surface);
                        color: var(--chip-danger-text); }
-        .button { flex: none; padding: 0 var(--u8); border-radius: 4px;
-                  font-size: var(--meta-size); line-height: var(--u24);
-                  color: var(--text); cursor: pointer; }
+        .button { flex: none; padding: 0 8px; border-radius: 6px; font-size: 12px;
+                  line-height: 20px; color: var(--text); cursor: pointer; }
         .button:hover { background: var(--surface-raised); }
-        .button.primary { padding: 0 var(--u12); line-height: var(--u28);
+        .button.primary { font-size: 14px; line-height: var(--u28);
                           background: var(--accent); color: var(--on-accent); }
-        .button.deny { line-height: var(--u28); }
+        .button.deny { font-size: 14px; line-height: var(--u28); }
         .receipt { display: flex; flex-direction: column; gap: var(--u4); }
         .receipt-line { display: flex; align-items: center; gap: var(--u8); cursor: pointer;
                         font-size: var(--meta-size); line-height: var(--meta-line);
@@ -103,7 +102,7 @@ pub const CSS: &str = "
         .target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
                   white-space: nowrap; }
         .mono { font-size: var(--meta-size); line-height: var(--meta-line);
-                white-space: pre; }
+                min-height: var(--meta-line); white-space: pre; }
         .diff-line { display: flex; color: var(--text-muted); }
         .diff-line.added { background: var(--diff-added-surface);
                            color: var(--diff-added-text); }
@@ -128,11 +127,15 @@ pub const CSS: &str = "
         .box { display: flex; flex-direction: column; gap: var(--u4);
                padding: var(--u8) var(--u16); border: 1px solid var(--border);
                border-radius: 4px; }
+        .field { position: relative; display: flex; flex-direction: column;
+                 padding: 6px 12px; }
         textarea { font-family: var(--font-family); font-size: var(--body-size);
                    line-height: var(--body-line); color: var(--text); border: none;
                    outline: none; padding: 0; margin: 0; background: transparent;
                    resize: none; }
         textarea:focus { outline: none; }
+        .placeholder { position: absolute; left: 12px; top: 6px; pointer-events: none;
+                       color: var(--text-muted); }
         .hints { display: flex; align-items: center; gap: var(--u4);
                  font-size: var(--micro-size); line-height: var(--micro-line);
                  color: var(--text-muted); }
@@ -142,11 +145,15 @@ pub const CSS: &str = "
         .text h2, .text h3 { font-size: var(--body-size); line-height: var(--body-line);
                              font-weight: 600; margin: var(--u8) 0; }
         .text p, .text ul, .text ol, .text pre, .text blockquote { margin: 0 0 8px 0; }
-        .text ul, .text ol { padding-left: var(--u24); }
+        .text ul, .text ol { padding-left: 20px; }
+        .text li { margin-bottom: 4px; }
         .text .body > :first-child { margin-top: 0; }
         .text .body > :last-child { margin-bottom: 0; }
-        .text pre { padding: var(--u8) var(--u12); border-radius: 4px;
-                    background: var(--surface-panel); overflow-x: scroll; }
+        .text pre { padding: 16px; border: 1px solid var(--border); border-radius: 6px;
+                    line-height: 21px; background: var(--surface-panel);
+                    overflow-x: scroll; }
+        .text .language { margin: -11px 0 2px 0; text-align: right;
+                          font-size: var(--meta-size); color: var(--text-muted); }
         .text code { font-family: var(--font-family); }
         .text :not(pre) > code { padding: 0 var(--u4); border-radius: 2px;
                                  background: var(--surface-panel); }
@@ -331,9 +338,6 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
     state
         .field
         .attr("rows", "1")
-        .attr_dyn("placeholder", move || {
-            placeholder(state.status.get()).to_string()
-        })
         .attr_dyn("style", move || {
             format!("height: calc(var(--body-line) * {})", rows.get())
         })
@@ -363,19 +367,34 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
         });
 
     let composer = el("div").class("composer").child(
-        el("div").class("box").child(state.field).child(
-            el("div")
-                .class("hints")
-                .child(
-                    el("span")
-                        .class("chip model")
-                        .text_dyn(move || state.model.get())
-                        .on("click", move |_| state.ask(Asked::SwitchModel)),
-                )
-                .child(el("span").class("spacer"))
-                .child(el("span").class("chip").text("Enter"))
-                .child(el("span").text(chrome::SEND_HINT)),
-        ),
+        el("div")
+            .class("box")
+            .child(
+                // blitz-dom does not draw a text field's `placeholder`: it
+                // is an element over the field, there while the field is
+                // empty.
+                el("div").class("field").child(state.field).when(
+                    move || state.typed.get().is_empty(),
+                    move || {
+                        el("div")
+                            .class("placeholder")
+                            .text_dyn(move || placeholder(state.status.get()).to_string())
+                    },
+                ),
+            )
+            .child(
+                el("div")
+                    .class("hints")
+                    .child(
+                        el("span")
+                            .class("chip model")
+                            .text_dyn(move || state.model.get())
+                            .on("click", move |_| state.ask(Asked::SwitchModel)),
+                    )
+                    .child(el("span").class("spacer"))
+                    .child(el("span").class("chip").text("Enter"))
+                    .child(el("span").text(chrome::SEND_HINT)),
+            ),
     );
 
     let root = el("div")
@@ -504,6 +523,10 @@ fn turn_card(turn: &Turn, state: Agent) -> El {
         line.child(el("span").class("spacer"))
             .when(carried, move || stop_button(state));
         card.child(line);
+    } else if thinks {
+        // The state and `Stop` are on the running receipt's line: the
+        // thinking is a line of its own.
+        card.child(thinking());
     }
     if !running {
         let label = match turn.state {

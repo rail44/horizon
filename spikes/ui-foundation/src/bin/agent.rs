@@ -2,7 +2,7 @@
 //!
 //!     cargo run --release --bin agent -- window [turns] [whole]
 //!     cargo run --release --bin agent -- measure [scale]
-//!     cargo run --release --bin agent -- picture out.png [idle]
+//!     cargo run --release --bin agent -- picture out.png [idle|running] [scale]
 //!
 //! `window` shows a made-up session of `turns` ended turns (200 unless
 //! given; with `whole`, every unit an element, in view or not, and
@@ -207,10 +207,12 @@ fn measure_column(scale: f32, column: Column, lengths: &[usize]) {
 /// The sample of Horizon's own agent previews: a turn in progress waiting
 /// on an approval, or with `idle` the session idle with the long turn's
 /// edit and its failed command open, as the `agent-idle` preview has them.
-fn picture(path: &str, idle: bool) {
+fn picture(path: &str, idle: bool, scale: f32) {
     let session = Session::preview(!idle);
     let (app, agent) = open(|_| {}, Column::Windowed);
-    let (width, height, scale) = (1350, 1800, 1.5);
+    // The page is 900 by 1185 CSS pixels: the pane Horizon's own preview
+    // has in a window 900 by 1280.
+    let (width, height) = ((900. * scale) as u32, (1185. * scale) as u32);
     (app.document().borrow_mut()).set_viewport(Viewport::new(
         width,
         height,
@@ -378,6 +380,9 @@ fn main() {
         Some("picture") => picture(
             arguments.get(1).expect("a PNG path"),
             arguments.get(2).map(String::as_str) == Some("idle"),
+            (arguments.get(3))
+                .map(|scale| scale.parse().expect("a display scale"))
+                .unwrap_or(1.5),
         ),
         Some("window") | None => window(
             (arguments.get(1))
