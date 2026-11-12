@@ -342,3 +342,40 @@ fn a_tab_is_a_blank_cell_and_what_follows_it_is_at_the_tab_stop() {
     assert!(text.lines().any(|line| line == "a       b"), "{text}");
     assert!(!text.contains('\t'), "{text}");
 }
+
+#[test]
+fn the_screen_is_painted_and_not_only_held() {
+    use anyrender::ImageRenderer as _;
+
+    let opened = open();
+    opened.run("echo painted");
+    opened.wait("the line", |text| {
+        text.lines().any(|line| line == "painted")
+    });
+    let (width, height) = (900, 540);
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut pixels = Vec::new();
+    let document = opened.app.document();
+    renderer.render_to_vec(
+        |scene| {
+            blitz_paint::paint_scene(scene, &mut document.borrow_mut(), 1.0, width, height, 0, 0)
+        },
+        &mut pixels,
+    );
+    // The screen's own background fills the page, and the text on it is
+    // pixels of its foreground.
+    let look = Theme::built_in().terminal();
+    let (rgba, _) = pixels.as_chunks::<4>();
+    let colors: Vec<[u8; 3]> = (rgba.iter())
+        .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+        .collect();
+    let of = |color: [u8; 3]| colors.iter().filter(|pixel| **pixel == color).count();
+    let filled = of(look.background);
+    assert!(
+        filled > colors.len() / 2,
+        "{filled} of {} pixels are the background",
+        colors.len()
+    );
+    let lit = of(look.foreground);
+    assert!(lit > 20, "{lit} pixels of text");
+}

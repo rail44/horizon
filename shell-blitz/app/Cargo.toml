@@ -12,7 +12,10 @@ horizon-shell-runtime = { path = "../../crates/horizon-shell-runtime" }
 horizon-terminal-core = { path = "../../crates/horizon-terminal-core" }
 anyrender = "0.14"
 anyrender_vello = "0.15"
-blitz-shell = { workspace = true }
+# The terminal's screen is a widget that paints itself: both crates draw
+# one only with this feature on.
+blitz-paint = { workspace = true }
+blitz-shell = { workspace = true, features = ["custom-widget"] }
 crossbeam-channel = "0.5"
 futures = "0.3"
 keyboard-types = "0.8"
@@ -26,6 +29,8 @@ uuid = { version = "1.18", features = ["v4"] }
 [dev-dependencies]
 # The terminal view's tests run the terminal core over a PTY of their own.
 portable-pty = "0.9.0"
+# The view painted into pixels, with no window and no GPU.
+anyrender_vello_cpu = "0.18"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
