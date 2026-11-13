@@ -23,7 +23,12 @@
 //! element.
 //!
 //! The CSS is also held to the theme (`checks.rs`): what is not is a
-//! compile error.
+//! compile error. A sheet whose business is colors themselves (a color
+//! picker's spectrum) says so, and may write them out:
+//!
+//! ```ignore
+//! horizon_ui::css_module! { allow written_colors; "..." }
+//! ```
 
 mod checks;
 
@@ -33,15 +38,44 @@ use lightningcss::css_modules::{Config, Pattern};
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
+use syn::parse::{Parse, ParseStream};
 use syn::{LitStr, parse_macro_input};
+
+/// What the macro is given: the sheet, and what it is let off.
+struct Given {
+    written_colors: bool,
+    css: LitStr,
+}
+
+impl Parse for Given {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut written_colors = false;
+        if input.peek(syn::Ident) {
+            let allow: syn::Ident = input.parse()?;
+            let what: syn::Ident = input.parse()?;
+            if allow != "allow" || what != "written_colors" {
+                return Err(syn::Error::new(
+                    what.span(),
+                    "the one thing a sheet can be let off is `allow written_colors;`",
+                ));
+            }
+            input.parse::<syn::Token![;]>()?;
+            written_colors = true;
+        }
+        Ok(Self {
+            written_colors,
+            css: input.parse()?,
+        })
+    }
+}
 
 /// See the crate's documentation.
 #[proc_macro]
 pub fn css_module(input: TokenStream) -> TokenStream {
-    let source = parse_macro_input!(input as LitStr);
-    match module(&source.value()) {
+    let given = parse_macro_input!(input as Given);
+    match module(&given.css.value(), given.written_colors) {
         Ok(tokens) => tokens.into(),
-        Err(message) => syn::Error::new(source.span(), message)
+        Err(message) => syn::Error::new(given.css.span(), message)
             .to_compile_error()
             .into(),
     }
@@ -58,7 +92,7 @@ fn constant(class: &str) -> String {
         .collect()
 }
 
-fn module(css: &str) -> Result<proc_macro2::TokenStream, String> {
+fn module(css: &str, written_colors: bool) -> Result<proc_macro2::TokenStream, String> {
     // The sheet's name: the same CSS is the same sheet wherever it is
     // written.
     let mut hasher = DefaultHasher::new();
@@ -76,7 +110,7 @@ fn module(css: &str) -> Result<proc_macro2::TokenStream, String> {
         ..ParserOptions::default()
     };
     let mut sheet = StyleSheet::parse(css, options).map_err(|error| error.to_string())?;
-    let faults = checks::faults(&mut sheet);
+    let faults = checks::faults(&mut sheet, written_colors);
     if !faults.is_empty() {
         return Err(faults.join("\n"));
     }
@@ -124,13 +158,23 @@ fn module(css: &str) -> Result<proc_macro2::TokenStream, String> {
 mod tests {
     use super::module;
 
+    fn module_held(css: &str) -> Result<proc_macro2::TokenStream, String> {
+        module(css, false)
+    }
+
+    #[test]
+    fn a_sheet_let_off_may_write_colors_out_and_nothing_else() {
+        assert!(module(".a { background: #fff; }", true).is_ok());
+        assert!(module(".a { font-size: 12px; }", true).is_err());
+    }
+
     fn refused(css: &str) -> String {
-        module(css).expect_err("refused").to_string()
+        module(css, false).expect_err("refused").to_string()
     }
 
     #[test]
     fn a_sheet_written_from_the_theme_is_taken() {
-        let made = module(
+        let made = module_held(
             ".row { color: var(--text); background: transparent; border: 1px solid currentColor;
                     font-size: var(--meta-size); line-height: 1.4; padding: var(--u4) 2px;
                     --inset: 4px; margin: var(--inset); gap: var(--gap, var(--u8)); }",
@@ -154,13 +198,13 @@ mod tests {
     #[test]
     fn a_variable_nobody_sets_is_refused_unless_it_has_a_fallback() {
         assert!(refused(".a { color: var(--surfce); }").contains("`var(--surfce)`"));
-        assert!(module(".a { color: var(--theirs, var(--text)); }").is_ok());
+        assert!(module_held(".a { color: var(--theirs, var(--text)); }").is_ok());
     }
 
     #[test]
     fn a_property_css_does_not_have_is_refused() {
         assert!(refused(".a { colr: var(--text); }").contains("`colr` is not a property"));
-        assert!(module(".a { text-wrap: balance; rotate: 90deg; }").is_ok());
+        assert!(module_held(".a { text-wrap: balance; rotate: 90deg; }").is_ok());
     }
 
     #[test]

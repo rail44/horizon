@@ -30,11 +30,6 @@ pub use gallery::gallery;
 pub use select::select;
 pub use slider::{Range, slider};
 
-/// The style sheet of every part.
-pub fn css() -> String {
-    [slider::CSS, select::CSS, color::CSS].concat()
-}
-
 /// Hears where the pointer is, on the page.
 type Moved = Rc<dyn Fn(f32, f32)>;
 

@@ -7,24 +7,26 @@ use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set};
 use horizon_ui::{El, each_layout, el, prevent_default, relayout, stop_propagation};
 use keyboard_types::{Key, NamedKey};
 
-pub(super) const CSS: &str = "
+mod styles {
+    horizon_ui::css_module! {"
     .select { position: relative; outline: none; font-size: var(--meta-size);
               line-height: var(--meta-line);
         .trigger { display: flex; align-items: center; justify-content: space-between;
-                   gap: var(--u8); padding: var(--u4) var(--u8); border-radius: 4px;
-                   border: 1px solid var(--border); background: var(--background);
+                   gap: var(--u8); padding: var(--u4) var(--u8); border-radius: var(--radius);
+                   border: var(--line) solid var(--border); background: var(--background);
                    cursor: pointer; }
         .chevron { color: var(--text-muted); }
         .options { position: absolute; z-index: 60; left: 0; right: 0; top: 100%;
-                   margin-top: 4px; padding: var(--u4); border-radius: 6px;
-                   border: 1px solid var(--border); background: var(--background);
-                   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15); }
-        .option { padding: var(--u4) var(--u8); border-radius: 4px; cursor: pointer; }
+                   margin-top: var(--u4); padding: var(--u4); border-radius: var(--radius-large);
+                   border: var(--line) solid var(--border); background: var(--background);
+                   box-shadow: var(--shadow-popup); }
+        .option { padding: var(--u4) var(--u8); border-radius: var(--radius); cursor: pointer; }
         .option.active { background: var(--surface-selected); }
         .option.chosen { font-weight: 600; }
     }
     .select:focus .trigger { border-color: var(--accent); }
-";
+"}
+}
 
 /// Builds a select over `chosen`, the place of the chosen one among
 /// `options`. `changed` hears each option a person chose.
@@ -37,7 +39,7 @@ pub fn select(
     // The option the keyboard is on while the list is open.
     let active = RwSignal::new(0usize);
     let count = options.len();
-    let root = el("div").class("select").attr("tabindex", "0");
+    let root = el("div").class(styles::SELECT).attr("tabindex", "0");
     let choose = move |index: usize| {
         open.set(false);
         if index != chosen.get_untracked() {
@@ -85,11 +87,11 @@ pub fn select(
     })
     .child(
         el("div")
-            .class("trigger")
+            .class(styles::TRIGGER)
             .child(
                 el("span").text_dyn(move || shown.get(chosen.get()).cloned().unwrap_or_default()),
             )
-            .child(el("span").class("chevron").text("▾"))
+            .child(el("span").class(styles::CHEVRON).text("▾"))
             .on("click", move |_| {
                 active.set(chosen.get_untracked());
                 open.set(!open.get_untracked());
@@ -98,20 +100,17 @@ pub fn select(
     .when(
         move || open.get(),
         move || {
-            let list = el("div").class("options");
+            let list = el("div").class(styles::OPTIONS);
             for (index, option) in listed.iter().enumerate() {
                 let choose = chosen_by_click.clone();
                 list.child(
                     el("div")
+                        .class(styles::OPTION)
                         .class_dyn(move || {
-                            let mut class = "option".to_string();
-                            if active.get() == index {
-                                class += " active";
-                            }
-                            if chosen.get() == index {
-                                class += " chosen";
-                            }
-                            class
+                            (
+                                (active.get() == index).then_some(styles::ACTIVE),
+                                (chosen.get() == index).then_some(styles::CHOSEN),
+                            )
                         })
                         .text(option)
                         .on("click", move |_| choose(index)),

@@ -15,11 +15,10 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
 use horizon_ui::{El, el};
 
-use crate::parts::{self, Drags, Range, color_picker, select, slider};
+use crate::parts::{Drags, Range, color_picker, select, slider};
 
-// Every rule sits under the view's own class: the page's style sheet is one
-// for all the views on it.
-pub const CSS: &str = "
+mod styles {
+    horizon_ui::css_module! {"
     .theme-settings { height: 100%; overflow-y: scroll; outline: none; box-sizing: border-box;
                       display: flex; flex-direction: column; gap: var(--u24);
                       padding: var(--u16); background: var(--background);
@@ -29,7 +28,7 @@ pub const CSS: &str = "
         .top { display: flex; align-items: center; justify-content: space-between; }
         .heading { font-size: var(--t2-size); line-height: var(--t2-line); }
         .right { display: flex; align-items: center; gap: var(--u8); }
-        .save { padding: 0 var(--u12); border-radius: 4px; line-height: var(--u28);
+        .save { padding: 0 var(--u12); border-radius: var(--radius); line-height: var(--u28);
                 font-size: var(--meta-size); cursor: pointer;
                 background: var(--accent); color: var(--on-accent); }
         .small { font-size: var(--micro-size); line-height: var(--micro-line);
@@ -47,13 +46,9 @@ pub const CSS: &str = "
         .chips { display: flex; flex-wrap: wrap; gap: var(--u8); }
         .chip { display: flex; flex-direction: column; align-items: center; gap: var(--u4); }
         .chip .color-of { width: 28px; height: 20px; box-sizing: border-box;
-                          border-radius: 3px; border: 1px solid var(--border); }
+                          border-radius: 3px; border: var(--line) solid var(--border); }
     }
-";
-
-/// The style sheet of the view and the controls on it.
-pub fn css() -> String {
-    [CSS, &parts::css()].concat()
+"}
 }
 
 /// The accent's choices: the six hues by name, then a color of its own.
@@ -161,8 +156,8 @@ fn swatches(scheme: &Scheme) -> Vec<Swatches> {
 
 fn labeled(label: &str, control: El) -> El {
     el("div")
-        .class("labeled")
-        .child(el("div").class("small").text(label))
+        .class(styles::LABELED)
+        .child(el("div").class(styles::SMALL).text(label))
         .child(control)
 }
 
@@ -192,7 +187,7 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
             change(&|seed| seed.surface_base = packed(color));
         })
     };
-    let hues = el("div").class("row");
+    let hues = el("div").class(styles::ROW);
     for slot in HueSlot::ALL {
         let value = RwSignal::new(rgb(seed.get_untracked().hue(slot)));
         let change = change.clone();
@@ -227,15 +222,18 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
     });
     let by_color = change.clone();
     let custom_drags = drags.clone();
-    let accent = el("div").class("inline accent").child(accent_select).when(
-        move || chosen.get() == ACCENT_OPTIONS.len() - 1,
-        move || {
-            let change = by_color.clone();
-            color_picker(custom, &custom_drags, move |color| {
-                change(&|seed| seed.accent = AccentValue::Hex(packed(color)));
-            })
-        },
-    );
+    let accent = el("div")
+        .class((styles::INLINE, styles::ACCENT))
+        .child(accent_select)
+        .when(
+            move || chosen.get() == ACCENT_OPTIONS.len() - 1,
+            move || {
+                let change = by_color.clone();
+                color_picker(custom, &custom_drags, move |color| {
+                    change(&|seed| seed.accent = AccentValue::Hex(packed(color)));
+                })
+            },
+        );
 
     let contrast = RwSignal::new(initial.text_contrast);
     let range = Range {
@@ -252,46 +250,52 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
     let path = (host.path.as_ref())
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "no config path resolved (HOME/XDG_CONFIG_HOME unset)".to_string());
-    let header = el("div")
-        .class("header")
-        .child(
-            el("div")
-                .class("top")
-                .child(el("div").class("heading").text("Theme Settings"))
-                .child(
-                    el("div")
-                        .class("right")
-                        .when(
-                            move || dirty.get(),
-                            || el("div").class("small unsaved").text("● unsaved changes"),
-                        )
-                        .child(el("div").class("save").text("Save").on("click", move |_| {
-                            match (saving.save)(&seed.get_untracked()) {
-                                Ok(path) => {
-                                    dirty.set(false);
-                                    status.set(Some(format!("Saved to {}", path.display())));
-                                }
-                                Err(error) => status.set(Some(format!("Save failed: {error}"))),
-                            }
-                        })),
-                ),
-        )
-        .child(el("div").class("small path").text(&path))
-        .when(
-            move || status.get().is_some(),
-            move || {
+    let header =
+        el("div")
+            .class(styles::HEADER)
+            .child(
                 el("div")
-                    .class("small status")
-                    .text_dyn(move || status.get().unwrap_or_default())
-            },
-        );
+                    .class(styles::TOP)
+                    .child(el("div").class(styles::HEADING).text("Theme Settings"))
+                    .child(
+                        el("div")
+                            .class(styles::RIGHT)
+                            .when(
+                                move || dirty.get(),
+                                || {
+                                    el("div")
+                                        .class((styles::SMALL, "unsaved"))
+                                        .text("● unsaved changes")
+                                },
+                            )
+                            .child(el("div").class(styles::SAVE).text("Save").on(
+                                "click",
+                                move |_| match (saving.save)(&seed.get_untracked()) {
+                                    Ok(path) => {
+                                        dirty.set(false);
+                                        status.set(Some(format!("Saved to {}", path.display())));
+                                    }
+                                    Err(error) => status.set(Some(format!("Save failed: {error}"))),
+                                },
+                            )),
+                    ),
+            )
+            .child(el("div").class((styles::SMALL, styles::PATH)).text(&path))
+            .when(
+                move || status.get().is_some(),
+                move || {
+                    el("div")
+                        .class((styles::SMALL, "status"))
+                        .text_dyn(move || status.get().unwrap_or_default())
+                },
+            );
 
     let seed_section = el("div")
-        .class("section")
-        .child(el("div").class("section-title").text("Seed"))
+        .class(styles::SECTION)
+        .child(el("div").class(styles::SECTION_TITLE).text("Seed"))
         .child(
             el("div")
-                .class("row")
+                .class(styles::ROW)
                 .child(labeled("Surface Base", surface)),
         )
         .child(hues)
@@ -299,35 +303,35 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
         .child(labeled(
             "Text Contrast",
             el("div")
-                .class("inline contrast")
+                .class((styles::INLINE, styles::CONTRAST))
                 .child(contrast_slider)
                 .child(
                     el("div")
-                        .class("small")
+                        .class(styles::SMALL)
                         .text_dyn(move || format!("{:.1}", contrast.get())),
                 ),
         ));
 
     // The derived colors follow the theme as it is drawn.
     let preview = el("div")
-        .class("section")
-        .child(el("div").class("section-title").text("Preview"))
+        .class(styles::SECTION)
+        .child(el("div").class(styles::SECTION_TITLE).text("Preview"))
         .each(
             move || swatches(theme.get().scheme()),
             |(title, rows)| (*title, rows.clone()),
             |(title, rows)| {
                 let group = el("div")
-                    .class("group")
-                    .child(el("div").class("section-title").text(title));
+                    .class(styles::GROUP)
+                    .child(el("div").class(styles::SECTION_TITLE).text(title));
                 for row in rows {
-                    let chips = el("div").class("chips");
+                    let chips = el("div").class(styles::CHIPS);
                     for (name, color) in row {
                         let color = format!("background: #{color:06x}");
                         chips.child(
                             el("div")
-                                .class("chip")
-                                .child(el("div").class("color-of").attr("style", &color))
-                                .child(el("div").class("small").text(name)),
+                                .class(styles::CHIP)
+                                .child(el("div").class(styles::COLOR_OF).attr("style", &color))
+                                .child(el("div").class(styles::SMALL).text(name)),
                         );
                     }
                     group.child(chips);
@@ -337,7 +341,7 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
         );
 
     let root = el("div")
-        .class("theme-settings")
+        .class(styles::THEME_SETTINGS)
         .attr("tabindex", "0")
         .child(header)
         .child(seed_section)

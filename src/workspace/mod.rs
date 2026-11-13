@@ -139,7 +139,6 @@ pub fn css() -> String {
         terminal::CSS,
         agent::CSS,
         preview::CSS,
-        &theme_settings::css(),
     ]
     .concat()
 }

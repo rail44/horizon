@@ -2,7 +2,8 @@
 //! the theme.
 //!
 //! - A color is one of the theme's variables, not written out
-//!   (`transparent` and `currentColor` are not the theme's to give).
+//!   (`transparent` and `currentColor` are not the theme's to give),
+//!   unless the sheet is let off that.
 //! - A `font-size` or a `line-height` is not a number of pixels: the type
 //!   scale's variables have those.
 //! - A variable read with nothing to fall back on is the theme's or one
@@ -45,6 +46,8 @@ const THEME: &str = include_str!("../../horizon-theme-css/variables.txt");
 
 #[derive(Default)]
 struct Checks {
+    /// The sheet may write colors out.
+    written_colors: bool,
     /// The property being looked into, as the sheet names it.
     property: String,
     set: HashSet<String>,
@@ -54,6 +57,9 @@ struct Checks {
 
 impl Checks {
     fn color(&mut self, color: &CssColor) {
+        if self.written_colors {
+            return;
+        }
         let given = match color {
             CssColor::CurrentColor => true,
             CssColor::RGBA(color) => color.alpha == 0,
@@ -146,8 +152,11 @@ impl<'i> Visitor<'i> for Checks {
 
 /// What in `sheet` is not as a CSS module is to be written, each said in
 /// a line.
-pub(crate) fn faults(sheet: &mut StyleSheet) -> Vec<String> {
-    let mut checks = Checks::default();
+pub(crate) fn faults(sheet: &mut StyleSheet, written_colors: bool) -> Vec<String> {
+    let mut checks = Checks {
+        written_colors,
+        ..Checks::default()
+    };
     let Ok(()) = sheet.visit(&mut checks);
     let theme: HashSet<&str> = THEME.lines().map(str::trim).collect();
     let mut faults = checks.faults;

@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use horizon::parts::{Drags, Range, color_picker, css, select, slider};
+use horizon::parts::{Drags, Range, color_picker, select, slider};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
@@ -24,7 +24,7 @@ const HOST: &str = "
 /// A page with what `build` makes on it, and beside it something else
 /// that takes the focus.
 fn open(build: impl FnOnce(&Drags) -> El) -> App {
-    let sheet = [horizon_theme_css::CSS, &css(), HOST].concat();
+    let sheet = [horizon_theme_css::CSS, HOST].concat();
     let app = App::new(400, 400, &sheet, || {
         let drags = Drags::default();
         let host = el("div")

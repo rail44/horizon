@@ -19,30 +19,32 @@ use keyboard_types::{Key, NamedKey};
 
 use super::Drags;
 
-pub(super) const CSS: &str = "
+mod styles {
+    // The picker draws colors themselves: the spectrum, white and black.
+    horizon_ui::css_module! { allow written_colors; "
     .color { position: relative; outline: none;
-        .swatch { width: 28px; height: 28px; box-sizing: border-box; border-radius: 4px;
-                  border: 1px solid var(--border); cursor: pointer; }
-        .panel { position: absolute; z-index: 60; left: 0; top: 100%; margin-top: 4px;
-                 display: flex; flex-direction: column; gap: 8px; padding: 8px; width: 200px;
-                 border-radius: 8px; border: 1px solid var(--border);
-                 background: var(--background); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15); }
-        .area { position: relative; height: 140px; border-radius: 6px; cursor: pointer; }
+        .swatch { width: 28px; height: 28px; box-sizing: border-box; border-radius: var(--radius);
+                  border: var(--line) solid var(--border); cursor: pointer; }
+        .panel { position: absolute; z-index: 60; left: 0; top: 100%; margin-top: var(--u4);
+                 display: flex; flex-direction: column; gap: var(--u8); padding: var(--u8); width: 200px;
+                 border-radius: 8px; border: var(--line) solid var(--border);
+                 background: var(--background); box-shadow: var(--shadow-popup); }
+        .area { position: relative; height: 140px; border-radius: var(--radius-large); cursor: pointer; }
         .area .white, .area .black { position: absolute; left: 0; top: 0; right: 0; bottom: 0;
-                                     border-radius: 6px; }
+                                     border-radius: var(--radius-large); }
         .area .white { background: linear-gradient(to right, white, rgba(255, 255, 255, 0)); }
         .area .black { background: linear-gradient(to top, black, rgba(0, 0, 0, 0)); }
-        .hue { position: relative; height: 16px; border-radius: 4px; cursor: pointer;
+        .hue { position: relative; height: 16px; border-radius: var(--radius); cursor: pointer;
                background: linear-gradient(to right, rgb(255, 0, 0), rgb(255, 255, 0),
                    rgb(0, 255, 0), rgb(0, 255, 255), rgb(0, 0, 255), rgb(255, 0, 255),
                    rgb(255, 0, 0)); }
         .knob { position: absolute; width: 12px; height: 12px; margin: -7px 0 0 -7px;
-                border-radius: 50%; border: 2px solid white; box-shadow: 0 0 0 1px black;
+                border-radius: 50%; border: var(--line-strong) solid white; box-shadow: 0 0 0 1px black;
                 pointer-events: none; }
         .hue .knob { top: 50%; }
-        .written { display: flex; align-items: center; gap: 8px; }
-        .written input { flex: 1; min-width: 0; padding: 2px 6px; border-radius: 4px;
-                         border: 1px solid var(--border); outline: none;
+        .written { display: flex; align-items: center; gap: var(--u8); }
+        .written input { flex: 1; min-width: 0; padding: var(--u2) 6px; border-radius: var(--radius);
+                         border: var(--line) solid var(--border); outline: none;
                          background: var(--background); color: var(--text);
                          font-family: var(--font-family); font-size: var(--meta-size);
                          line-height: var(--meta-line); }
@@ -52,7 +54,8 @@ pub(super) const CSS: &str = "
     .color .area, .color .hue { outline: none; }
     .color .area:focus, .color .hue:focus { outline: 2px solid var(--accent);
                                             outline-offset: 1px; }
-";
+"}
+}
 
 /// A color written `#rrggbb`.
 pub fn hex(color: [u8; 3]) -> String {
@@ -120,7 +123,7 @@ pub fn color_picker(
     // the bar must not jump back to red while one is passed through.
     let held = RwSignal::new(to_hsv(value.get_untracked()));
     let changed: Rc<dyn Fn([u8; 3])> = Rc::new(changed);
-    let root = el("div").class("color").attr("tabindex", "0");
+    let root = el("div").class(styles::COLOR).attr("tabindex", "0");
     let set = move |hsv: Hsv| {
         held.set(hsv);
         let color = from_hsv(hsv);
@@ -158,7 +161,7 @@ pub fn color_picker(
     })
     .child(
         el("div")
-            .class("swatch")
+            .class(styles::SWATCH)
             .style_dyn("background", move || hex(value.get()))
             .on("click", move |_| {
                 held.set(to_hsv(value.get_untracked()));
@@ -168,8 +171,8 @@ pub fn color_picker(
     .when(
         move || open.get(),
         move || {
-            let area = el("div").class("area").attr("tabindex", "0");
-            let bar = el("div").class("hue").attr("tabindex", "0");
+            let area = el("div").class(styles::AREA).attr("tabindex", "0");
+            let bar = el("div").class(styles::HUE).attr("tabindex", "0");
             if from_keys.take() {
                 area.focus();
             }
@@ -247,14 +250,14 @@ pub fn color_picker(
             // being typed into.
             field.attr_dyn("value", move || hex(value.get()));
             el("div")
-                .class("panel")
+                .class(styles::PANEL)
                 .child(
                     area.style_dyn("background", move || hex(from_hsv((held.get().0, 1., 1.))))
-                        .child(el("div").class("white"))
-                        .child(el("div").class("black"))
+                        .child(el("div").class(styles::WHITE))
+                        .child(el("div").class(styles::BLACK))
                         .child(
                             el("div")
-                                .class("knob")
+                                .class(styles::KNOB)
                                 .style_dyn("left", move || format!("{}%", held.get().1 * 100.))
                                 .style_dyn("top", move || {
                                     format!("{}%", (1. - held.get().2) * 100.)
@@ -272,7 +275,7 @@ pub fn color_picker(
                 .child(
                     bar.child(
                         el("div")
-                            .class("knob")
+                            .class(styles::KNOB)
                             .style_dyn("left", move || format!("{}%", held.get().0 / 3.6)),
                     )
                     .on("pointerdown", move |event| {
@@ -287,7 +290,7 @@ pub fn color_picker(
                 )
                 .child(
                     el("div")
-                        .class("written")
+                        .class(styles::WRITTEN)
                         .child(field.on("input", move |event| {
                             let DomEventData::Input(input) = &event.data else {
                                 return;
@@ -298,7 +301,7 @@ pub fn color_picker(
                         }))
                         .child(
                             el("div")
-                                .class("swatch")
+                                .class(styles::SWATCH)
                                 .style_dyn("background", move || hex(value.get())),
                         ),
                 )

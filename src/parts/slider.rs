@@ -9,19 +9,21 @@ use keyboard_types::{Key, NamedKey};
 
 use super::Drags;
 
-pub(super) const CSS: &str = "
+mod styles {
+    horizon_ui::css_module! {"
     .slider { position: relative; display: flex; align-items: center; min-width: 120px;
-              padding: 8px 0; outline: none; cursor: pointer;
+              padding: var(--u8) 0; outline: none; cursor: pointer;
         .track { position: relative; flex: 1; height: 6px; border-radius: 3px;
                  background: var(--surface-chrome); }
         .range { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px;
                  background: var(--accent); }
         .thumb { position: absolute; top: -5px; width: 16px; height: 16px;
                  margin-left: -8px; box-sizing: border-box; border-radius: 50%;
-                 background: var(--background); border: 1px solid var(--accent); }
+                 background: var(--background); border: var(--line) solid var(--accent); }
     }
     .slider:focus .thumb { border-width: 2px; }
-";
+"}
+}
 
 /// The values a slider takes: from `min` to `max`, in steps of `step`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -52,7 +54,7 @@ pub fn slider(
     drags: &Drags,
     changed: impl Fn(f64) + Clone + 'static,
 ) -> El {
-    let track = el("div").class("track");
+    let track = el("div").class(styles::TRACK);
     let moved = {
         let changed = changed.clone();
         move |to: f64| {
@@ -80,7 +82,7 @@ pub fn slider(
     let percent = move || format!("{}%", range.share(value.get()) * 100.);
     let drags = drags.clone();
     el("div")
-        .class("slider")
+        .class(styles::SLIDER)
         .attr("tabindex", "0")
         .on("pointerdown", move |event| {
             let DomEventData::PointerDown(pointer) = &event.data else {
@@ -114,7 +116,7 @@ pub fn slider(
         })
         .child(
             track
-                .child(el("div").class("range").style_dyn("width", percent))
-                .child(el("div").class("thumb").style_dyn("left", percent)),
+                .child(el("div").class(styles::RANGE).style_dyn("width", percent))
+                .child(el("div").class(styles::THUMB).style_dyn("left", percent)),
         )
 }
