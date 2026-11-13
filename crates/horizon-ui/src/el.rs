@@ -109,15 +109,7 @@ impl El {
     /// reach the element and what is under it, and stop at what is inside
     /// a view placed there.
     pub fn styled(self, css: &str) -> Self {
-        with_document(|document| crate::sheet::adopt(document, self.0, css, false));
-        self
-    }
-
-    /// Provides a style sheet to the element and everything under it, the
-    /// views placed there included: what a parent or the shell shares with
-    /// what it holds.
-    pub fn provides(self, css: &str) -> Self {
-        with_document(|document| crate::sheet::adopt(document, self.0, css, true));
+        with_document(|document| crate::sheet::adopt(document, self.0, css));
         self
     }
 

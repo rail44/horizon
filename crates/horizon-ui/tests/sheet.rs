@@ -1,6 +1,5 @@
-//! A style sheet that is an element's own, and one provided to all under
-//! an element. A rule that applies here gives its box a width, which is
-//! what is read.
+//! A style sheet that is an element's own, beside the page's. A rule that
+//! applies here gives its box a width, which is what is read.
 
 use horizon_ui::{App, El, el};
 use reactive_graph::signal::RwSignal;
@@ -130,22 +129,53 @@ fn a_view_put_on_the_page_later_has_its_sheet() {
 }
 
 #[test]
-fn a_provided_sheet_reaches_the_views_under_the_element() {
+fn the_page_s_sheet_reaches_into_every_view_and_a_view_s_own_rule_is_over_it() {
     let mut made = None;
-    let app = App::new(600, 400, "", || {
-        let inner_row = el("div").class("w-80");
-        let outside = el("div").class("w-80");
-        made = Some((inner_row, outside));
-        el("div").child(outside).child(
-            el("div")
-                .provides(".w-80 { width: 80px; }")
-                .child(el("div").styled(".x { width: 1px; }").child(inner_row)),
+    let app = App::new(600, 400, ".w-80 { width: 80px; }", || {
+        let shared = el("div").class("w-80");
+        let own = el("div").class("w-80 own");
+        made = Some((shared, own));
+        el("div").child(
+            el("div").styled(".x { width: 1px; }").child(
+                el("div")
+                    .styled(".own { width: 40px; }")
+                    .child(shared)
+                    .child(own),
+            ),
         )
     });
     app.resolve();
-    let (inner_row, outside) = made.unwrap();
-    assert_eq!(width(&app, inner_row), 80.);
-    assert_eq!(width(&app, outside), 600.);
+    let (shared, own) = made.unwrap();
+    assert_eq!(width(&app, shared), 80.);
+    assert_eq!(width(&app, own), 40.);
+}
+
+#[test]
+fn a_variable_a_view_sets_is_read_inside_a_view_placed_in_it() {
+    let page = page(
+        ".outer { --row-width: 70px; }",
+        ".row { width: var(--row-width, 50px); }",
+        None,
+    );
+    assert_eq!(width(&page.app, page.inner_row), 70.);
+}
+
+#[test]
+fn a_view_s_sheet_can_order_its_rules_in_layers() {
+    let page = page(
+        "@layer base, over;
+         @layer over { .row { width: 100px; } }
+         @layer base { .row { width: 20px; } }",
+        "",
+        None,
+    );
+    assert_eq!(width(&page.app, page.outer_row), 100.);
+}
+
+#[test]
+fn a_view_s_own_rule_for_its_root_is_over_the_rule_of_the_view_that_places_it() {
+    let page = page(".inner { width: 200px; }", ".inner { width: 300px; }", None);
+    assert_eq!(width(&page.app, page.inner), 300.);
 }
 
 #[test]

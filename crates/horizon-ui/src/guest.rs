@@ -140,14 +140,7 @@ impl El {
     /// reach the element and what is under it, and stop at what is inside
     /// a view placed there.
     pub fn styled(self, css: &str) -> Self {
-        host::adopt_style(id(self), css, false);
-        self
-    }
-
-    /// Provides a style sheet to everything under the element, the views
-    /// placed there included.
-    pub fn provides(self, css: &str) -> Self {
-        host::adopt_style(id(self), css, true);
+        host::adopt_style(id(self), css);
         self
     }
 
