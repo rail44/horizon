@@ -100,10 +100,10 @@ pub fn select(
     .when(
         move || open.get(),
         move || {
-            let list = el("div").class(styles::OPTIONS);
-            for (index, option) in listed.iter().enumerate() {
-                let choose = chosen_by_click.clone();
-                list.child(
+            el("div")
+                .class(styles::OPTIONS)
+                .children((listed.iter().enumerate()).map(|(index, option)| {
+                    let choose = chosen_by_click.clone();
                     el("div")
                         .class(styles::OPTION)
                         .class_dyn(move || {
@@ -113,10 +113,8 @@ pub fn select(
                             )
                         })
                         .text(option)
-                        .on("click", move |_| choose(index)),
-                );
-            }
-            list
+                        .on("click", move |_| choose(index))
+                }))
         },
     )
 }

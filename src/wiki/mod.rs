@@ -744,10 +744,9 @@ fn dialog(state: State) -> El {
         },
         None => return scrim,
     };
-    let list = el("div").class(styles::POSTS);
-    for annotation in &posts {
-        list.child(post(annotation));
-    }
+    let list = el("div")
+        .class(styles::POSTS)
+        .children(posts.iter().map(post));
     if replying {
         list.child(replying_line());
     }
@@ -812,9 +811,7 @@ fn thread(state: State, placed: &PlacedThread, replying: bool) -> El {
         .class((styles::THREAD, focused.then_some(styles::FOCUSED)))
         .child(head);
     if open {
-        for annotation in posts {
-            card.child(post(annotation));
-        }
+        card.children(posts.iter().map(|annotation| post(annotation)));
         if replying {
             card.child(replying_line());
         }

@@ -320,23 +320,21 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
             move || swatches(theme.get().scheme()),
             |(title, rows)| (*title, rows.clone()),
             |(title, rows)| {
-                let group = el("div")
+                let chip = |(name, color): &(&str, u32)| {
+                    let color = format!("background: #{color:06x}");
+                    el("div")
+                        .class(styles::CHIP)
+                        .child(el("div").class(styles::COLOR_OF).attr("style", &color))
+                        .child(el("div").class(styles::SMALL).text(name))
+                };
+                el("div")
                     .class(styles::GROUP)
-                    .child(el("div").class(styles::SECTION_TITLE).text(title));
-                for row in rows {
-                    let chips = el("div").class(styles::CHIPS);
-                    for (name, color) in row {
-                        let color = format!("background: #{color:06x}");
-                        chips.child(
-                            el("div")
-                                .class(styles::CHIP)
-                                .child(el("div").class(styles::COLOR_OF).attr("style", &color))
-                                .child(el("div").class(styles::SMALL).text(name)),
-                        );
-                    }
-                    group.child(chips);
-                }
-                group
+                    .child(el("div").class(styles::SECTION_TITLE).text(title))
+                    .children((rows.iter()).map(|row| {
+                        el("div")
+                            .class(styles::CHIPS)
+                            .children(row.iter().map(chip))
+                    }))
             },
         );
 

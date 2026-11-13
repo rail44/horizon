@@ -23,17 +23,15 @@ mod styles {
 /// One part of the gallery: its name, and lines of it as it is placed,
 /// each with what the line is.
 fn part(name: &str, lines: Vec<(&str, Vec<El>)>) -> El {
-    let part = el("div")
+    el("div")
         .class(styles::PART)
-        .child(el("div").class(styles::NAME).text(name));
-    for (said, shown) in lines {
-        let line = el("div").class(styles::LINE);
-        for one in shown {
-            line.child(one);
-        }
-        part.child(line.child(el("span").class(styles::SAID).text(said)));
-    }
-    part
+        .child(el("div").class(styles::NAME).text(name))
+        .children(lines.into_iter().map(|(said, shown)| {
+            el("div")
+                .class(styles::LINE)
+                .children(shown)
+                .child(el("span").class(styles::SAID).text(said))
+        }))
 }
 
 fn buttons() -> El {

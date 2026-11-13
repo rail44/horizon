@@ -441,12 +441,14 @@ fn stop_button(state: Agent) -> El {
 }
 
 fn thinking() -> El {
-    let dots = el("div").class(styles::THINKING).text(chrome::THINKING);
-    // (The first has no delay of its own.)
-    for dot in [None, Some(styles::D1), Some(styles::D2)] {
-        dots.child(el("span").class((styles::D, dot)).text("・"));
-    }
-    dots
+    // (The first dot has no delay of its own.)
+    el("div")
+        .class(styles::THINKING)
+        .text(chrome::THINKING)
+        .children(
+            [None, Some(styles::D1), Some(styles::D2)]
+                .map(|dot| el("span").class((styles::D, dot)).text("・")),
+        )
 }
 
 /// One whole turn: its text and its receipt lines in order, its thinking
@@ -598,11 +600,10 @@ fn receipt_block(receipt: Rc<Receipt>, carries: bool, state: Agent) -> El {
         );
     }
     block.when(expanded, move || {
-        let calls = el("div").class(styles::CALLS);
-        for (index, call) in receipt.calls.iter().enumerate() {
-            calls.child(call_row(key, index, call, state));
-        }
-        calls
+        el("div").class(styles::CALLS).children(
+            (receipt.calls.iter().enumerate())
+                .map(|(index, call)| call_row(key, index, call, state)),
+        )
     })
 }
 
@@ -706,10 +707,11 @@ fn call_body(body: &CallBody) -> El {
             diff
         }
         CallBody::Output { lines, omitted } => {
-            let output = el("div").class(styles::OUTPUT);
-            for line in lines {
-                output.child(el("div").class(styles::MONO).text(line));
-            }
+            let output = el("div").class(styles::OUTPUT).children(
+                lines
+                    .iter()
+                    .map(|line| el("div").class(styles::MONO).text(line)),
+            );
             let block = el("div").child(output);
             if *omitted > 0 {
                 block.child(

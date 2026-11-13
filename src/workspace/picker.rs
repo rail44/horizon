@@ -85,10 +85,9 @@ pub(super) fn view_in_steps(
                 .class_dyn(move || (shell.chosen.get() == index).then_some(styles::CHOSEN))
                 .attr("style", &format!("padding-left: {}px", 12. + row.indent))
                 .on("click", move |_| clicked(index, Picked::Confirmed));
-            for (class, text) in &row.parts {
-                item.child(el("div").class(*class).text(text));
-            }
-            item
+            item.children(
+                (row.parts.iter()).map(|(class, text)| el("div").class(*class).text(text)),
+            )
         },
     );
     let list =

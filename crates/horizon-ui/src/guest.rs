@@ -178,6 +178,15 @@ impl El {
         self
     }
 
+    /// Puts each component's element at the end of this one's, in order:
+    /// a list that is built once. (One that changes is [`El::each`].)
+    pub fn children<C: Component>(self, children: impl IntoIterator<Item = C>) -> Self {
+        for child in children {
+            self.child(child);
+        }
+        self
+    }
+
     pub fn text(self, text: &str) -> Self {
         host::append(id(self), host::create_text(text));
         self
