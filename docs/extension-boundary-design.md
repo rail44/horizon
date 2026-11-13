@@ -106,6 +106,41 @@ fonts; it leans on `anyrender`'s recorded commands staying data (its
 `wasm32-wasip2`, which it does at the pinned revision and which upstream
 does not promise.
 
+**How the boundary ages.** What crosses in 1 and 2 has counterparts in
+standards that have not moved in decades: making elements and setting
+attributes (DOM), CSS as text, events (UI Events), asking where a box is
+(`getBoundingClientRect`, `elementFromPoint`, scroll offsets). An
+extension built against a subset of those keeps working while the subset
+means what it meant, and the boundary grows by adding. `plugin.wit` has
+that shape already, with names and details of its own. In 3 what crosses
+is `anyrender`'s vocabulary, a crate before 1.0, with glyphs numbered by
+one font file; and each extension carries a Blitz of its own version,
+rebuilt to take a fix.
+
+## A view that paints itself, by a standard
+
+No format for vector drawing commands is a standard: Skia's pictures,
+Vello's scene encoding and `anyrender`'s recording are each their
+implementation's. What standards have is a vocabulary for painting a box
+from isolated code:
+
+| | What crosses | State (2026-11) | Here |
+| --- | --- | --- | --- |
+| Canvas 2D (HTML) | state, transforms, paths, fill and stroke styles, rectangles, clips, images, shadows, compositing, text as a string and a font's name | long stable | all but text maps onto `anyrender`'s commands one to one; text is shaped by the host |
+| CSS Painting API (Houdini) | a subset of Canvas 2D, called on to paint an element's box from a worklet | Editor's Draft, 2026-02-25 | the precedent for this use; it leaves text and image data out |
+| SVG | shapes and text as elements | stable | crosses as elements already; too heavy for a surface repainted every frame |
+| WebGPU (`wasi:webgpu`) | GPU commands; the guest brings a renderer | W3C CR; the WASI proposal is moving to 0.3 and to conformance | not in Wasmtime itself |
+| pixels (`wasi-gfx:frame-buffer`) | what the guest rasterized | moved out of WASI's namespace in 2026-06, to be versioned like a library | the guest carries text rendering and fonts |
+
+Blitz's `<canvas>` at the pinned revision is a box for a paint source the
+host registers; it has no 2D context. Taking Canvas 2D's commands and
+drawing them would be the host's own code.
+
+With text as a string and a font's name, no glyph or font file is at the
+boundary. Not known: what shaping a terminal's screenful of text in the
+host costs each frame, and what it takes for a built-in view to paint
+through the same calls, so that its code is the same in a plugin.
+
 ## Who drives
 
 Today the guest runs only while the host calls it: it has no thread and no
@@ -132,4 +167,7 @@ tried. This question is the same for all three models.
 
 ## Decided
 
-Nothing yet.
+- The boundary carries the document's operations, CSS and events, shaped
+  after their standards (models 1 and 2), not drawing commands (model 3).
+
+Open: per call or gathered; who drives; how a view paints itself.
