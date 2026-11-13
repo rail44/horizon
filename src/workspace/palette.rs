@@ -7,15 +7,11 @@ use horizon_workspace::Workspace;
 use horizon_workspace::commands::{CommandEntry, command_entries, filter_command_entries};
 
 use super::Shell;
-use super::commands::CARRIED_OUT;
 use super::picker::{self, Picked, Row};
 
 /// The commands that match `query`, in the palette's order.
 fn matching(shell: Shell, query: &str) -> Vec<CommandEntry> {
-    let entries = (command_entries(shell.command_state()).into_iter())
-        .filter(|entry| CARRIED_OUT.contains(&entry.spec.id))
-        .collect();
-    filter_command_entries(entries, query)
+    filter_command_entries(command_entries(shell.command_state()), query)
 }
 
 pub(super) fn view(shell: Shell) -> El {

@@ -8,17 +8,26 @@
 //! those nodes is told to the plugin, and the plugin's effects run when
 //! this shell's do.
 //!
-//! A plugin that traps is let go of, and the pane says what it said.
+//! A pane shows one preview of one plugin file, and reads the file again
+//! when it changes or when asked to. The file is compiled off the UI
+//! thread; what the pane showed stays until the new one is ready.
+//!
+//! A plugin that traps is let go of, and the pane says what it said. It
+//! traps when it takes more memory than [`MEMORY_LIMIT`], or a call into
+//! it goes on for longer than [`CALL_LIMIT`].
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::Duration;
 
 use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
+use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
-use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set};
+use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, With, WithUntracked};
 use horizon_ui::{
     El, dispatched, each_effects, each_layout, el, host, prevent_default, relayout,
     stop_propagation,
@@ -35,15 +44,27 @@ wasmtime::component::bindgen!({
 });
 
 use self::horizon::ui::document::{Bounds, Host};
+use crate::background::Background;
+use crate::markdown::watch;
+use crate::wake::Wake;
 
 /// The most memory a plugin may take.
 const MEMORY_LIMIT: usize = 512 << 20;
+/// The longest one call into a plugin may take.
+const CALL_LIMIT: Duration = Duration::from_secs(5);
+
+const NO_PREVIEW: &str = "No preview. `horizon preview <plugin.wasm>` shows one here.";
 
 pub const CSS: &str = "
-    .preview { height: 100%; min-height: 0; display: flex; flex-direction: column; }
-    .preview > .failed { padding: var(--u16); color: var(--danger);
-                         font-size: var(--meta-size); line-height: var(--meta-line);
-                         white-space: pre-wrap; }
+    .preview { height: 100%; min-height: 0; display: flex; flex-direction: column;
+               background: var(--background); color: var(--foreground); }
+    .preview > .shown { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .preview .failed { padding: var(--u16); color: var(--danger);
+                       font-size: var(--meta-size); line-height: var(--meta-line);
+                       white-space: pre-wrap; }
+    .preview > .empty, .preview > .loading {
+        padding: var(--u16); color: var(--muted-foreground);
+        font-size: var(--meta-size); line-height: var(--meta-line); }
 ";
 
 /// The DOM events a plugin may listen for, as the names the layer keeps.
@@ -296,10 +317,48 @@ fn payload(event: &DomEvent) -> EventData {
     }
 }
 
+/// Ends a call into a plugin that goes on for longer than
+/// [`CALL_LIMIT`]: the engine's epoch is moved on, and the call, made with
+/// that epoch as its deadline, traps. The thread sleeps between calls.
+struct Watchdog {
+    /// Told `true` as a call begins and `false` as it ends.
+    calls: mpsc::Sender<bool>,
+}
+
+impl Watchdog {
+    fn over(engine: Engine) -> Self {
+        let (calls, told) = mpsc::channel::<bool>();
+        std::thread::spawn(move || {
+            // Until the plugin is let go of, and the sender with it.
+            while let Ok(began) = told.recv() {
+                if !began {
+                    continue;
+                }
+                match told.recv_timeout(CALL_LIMIT) {
+                    Ok(_) => {}
+                    Err(RecvTimeoutError::Timeout) => engine.increment_epoch(),
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+        Self { calls }
+    }
+
+    /// Runs `call`, a call into the plugin of `store`, under the limit.
+    fn timed<R>(&self, store: &mut Store<State>, call: impl FnOnce(&mut Store<State>) -> R) -> R {
+        store.set_epoch_deadline(1);
+        let _ = self.calls.send(true);
+        let answer = call(store);
+        let _ = self.calls.send(false);
+        answer
+    }
+}
+
 /// A plugin in use.
 struct Loaded {
     store: RefCell<Store<State>>,
     plugin: Plugin,
+    watchdog: Watchdog,
     /// What the plugin said when it trapped; nothing is asked of it after.
     failed: RwSignal<Option<String>>,
     /// Whether a call into the plugin is under way: it is not called
@@ -320,7 +379,7 @@ impl Loaded {
         }
         let (answer, listens) = {
             let mut store = self.store.borrow_mut();
-            let answer = call(&self.plugin, &mut store);
+            let answer = (self.watchdog).timed(&mut store, |store| call(&self.plugin, store));
             (answer, std::mem::take(&mut store.data_mut().listens))
         };
         self.calling.set(false);
@@ -373,16 +432,33 @@ impl Loaded {
     }
 }
 
-fn load(path: &Path, failed: RwSignal<Option<String>>) -> wasmtime::Result<Rc<Loaded>> {
+/// A plugin's file compiled: what takes a while, and can be done off the
+/// UI thread.
+#[derive(Clone)]
+struct Compiled {
+    engine: Engine,
+    component: Component,
+}
+
+fn compile(path: &Path) -> Result<Compiled, String> {
+    let said = |error: wasmtime::Error| format!("{error:#}");
     let mut config = Config::new();
     config.wasm_component_model(true);
-    let engine = Engine::new(&config)?;
-    let component = Component::from_file(&engine, path)?;
-    let mut linker = Linker::<State>::new(&engine);
+    config.epoch_interruption(true);
+    let engine = Engine::new(&config).map_err(said)?;
+    let component = Component::from_file(&engine, path).map_err(said)?;
+    Ok(Compiled { engine, component })
+}
+
+fn instantiate(
+    compiled: &Compiled,
+    failed: RwSignal<Option<String>>,
+) -> wasmtime::Result<Rc<Loaded>> {
+    let mut linker = Linker::<State>::new(&compiled.engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
     Plugin::add_to_linker::<_, HasSelf<State>>(&mut linker, |state| state)?;
     let mut store = Store::new(
-        &engine,
+        &compiled.engine,
         State {
             // No grants: no files, no sockets, no environment.
             wasi: WasiCtxBuilder::new().build(),
@@ -393,19 +469,60 @@ fn load(path: &Path, failed: RwSignal<Option<String>>) -> wasmtime::Result<Rc<Lo
         },
     );
     store.limiter(|state| &mut state.limits);
-    let plugin = Plugin::instantiate(&mut store, &component, &linker)?;
+    let watchdog = Watchdog::over(compiled.engine.clone());
+    let plugin = watchdog.timed(&mut store, |store| {
+        Plugin::instantiate(store, &compiled.component, &linker)
+    })?;
     Ok(Rc::new(Loaded {
         store: RefCell::new(store),
         plugin,
+        watchdog,
         failed,
         calling: Cell::new(false),
     }))
 }
 
-/// Builds the preview `name` of the plugin at `path`.
-pub fn view(path: &Path, name: &str) -> El {
+/// What a preview pane shows: a plugin's file, and which of its previews
+/// (its first, with no name).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Target {
+    pub path: PathBuf,
+    pub name: Option<String>,
+}
+
+/// The file of a target as last compiled, or why it could not be.
+type Read = (Target, u32, Result<Compiled, String>);
+
+/// A preview pane's state, for whoever placed it to drive.
+#[derive(Clone, Copy)]
+pub struct Preview {
+    target: RwSignal<Option<Target>>,
+    /// Moves when the file is to be read again.
+    reads: RwSignal<u32>,
+    read: RwSignal<Option<Read>>,
+}
+
+impl Preview {
+    /// Shows `target`, its file read anew.
+    pub fn show(&self, target: Target) {
+        self.target.set(Some(target));
+        self.reload();
+    }
+
+    /// Reads the file again.
+    pub fn reload(&self) {
+        self.reads.update(|reads| *reads += 1);
+    }
+
+    pub fn target(&self) -> Option<Target> {
+        self.target.get_untracked()
+    }
+}
+
+/// One preview of a compiled plugin, or what was said in place of it.
+fn shown(compiled: Result<Compiled, String>, name: Option<&str>) -> El {
     let failed = RwSignal::new(None::<String>);
-    let root = el("div").class("preview").when(
+    let root = el("div").class("shown").when(
         move || failed.get().is_some(),
         move || {
             el("div")
@@ -413,10 +530,12 @@ pub fn view(path: &Path, name: &str) -> El {
                 .text_dyn(move || failed.get().unwrap_or_default())
         },
     );
-    let loaded = match load(path, failed) {
+    let loaded = compiled
+        .and_then(|compiled| instantiate(&compiled, failed).map_err(|error| format!("{error:#}")));
+    let loaded = match loaded {
         Ok(loaded) => loaded,
         Err(error) => {
-            failed.set(Some(format!("{error:#}")));
+            failed.set(Some(error));
             return root;
         }
     };
@@ -424,7 +543,18 @@ pub fn view(path: &Path, name: &str) -> El {
     if let Some(css) = loaded.call(|plugin, store| plugin.call_css(store)) {
         root.child(el("style").text(&css));
     }
-    match loaded.call(|plugin, store| plugin.call_mount(store, name)) {
+    let name = match name {
+        Some(name) => Some(name.to_string()),
+        None => (loaded.call(|plugin, store| plugin.call_names(store)))
+            .and_then(|names| names.into_iter().next()),
+    };
+    let Some(name) = name else {
+        failed.update(|failed| {
+            failed.get_or_insert_with(|| "the plugin has no previews".to_string());
+        });
+        return root;
+    };
+    match loaded.call(|plugin, store| plugin.call_mount(store, &name)) {
         Some(Some(mounted)) => {
             root.child(El(NodeId::from_u64(mounted)));
         }
@@ -441,4 +571,103 @@ pub fn view(path: &Path, name: &str) -> El {
         effects.call(|plugin, store| plugin.call_run_effects(store));
     });
     root
+}
+
+/// A preview pane, empty until it is given a target. `background` is
+/// where the file is compiled, and `wake` what a change of the file wakes.
+pub fn view(background: Background, wake: Wake) -> (El, Preview) {
+    let state = Preview {
+        target: RwSignal::new(None),
+        reads: RwSignal::new(0),
+        read: RwSignal::new(None),
+    };
+    let compiling = background.clone();
+    Effect::new(move |_| {
+        let (Some(target), reads) = (state.target.get(), state.reads.get()) else {
+            return;
+        };
+        let path = target.path.clone();
+        compiling.run(
+            move || compile(&path),
+            move |compiled| {
+                // (The pane may be gone by now.)
+                state.read.try_set(Some((target, reads, compiled)));
+            },
+        );
+    });
+    // Whether what is shown is not yet what was asked for.
+    let reading = move || {
+        let asked = (state.target.get()).map(|target| (target, state.reads.get()));
+        let read = (state.read).with(|read| {
+            read.as_ref()
+                .map(|(target, reads, _)| (target.clone(), *reads))
+        });
+        asked.is_some() && asked != read
+    };
+    // What was last put in the pane, until the layout after it.
+    let arrived = Rc::new(Cell::new(None::<El>));
+    let placed = arrived.clone();
+    let root = el("div")
+        .class("preview")
+        .attr("tabindex", "0")
+        .when(
+            move || state.target.with(Option::is_none),
+            || el("div").class("empty").text(NO_PREVIEW),
+        )
+        .when(reading, move || {
+            el("div").class("loading").text_dyn(move || {
+                let file = (state.target.get()).and_then(|target| {
+                    Some(target.path.file_name()?.to_string_lossy().into_owned())
+                });
+                format!("Loading {}…", file.unwrap_or_default())
+            })
+        })
+        // What was read last stays until the next is ready.
+        .each(
+            move || {
+                (state.read)
+                    .with(|read| {
+                        read.as_ref()
+                            .map(|(target, reads, _)| (target.clone(), *reads))
+                    })
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            },
+            Clone::clone,
+            move |(target, _)| {
+                let compiled = (state.read)
+                    .with_untracked(|read| read.as_ref().map(|(_, _, compiled)| compiled.clone()));
+                let shown = shown(
+                    compiled.unwrap_or_else(|| Err("nothing was read".to_string())),
+                    target.name.as_deref(),
+                );
+                arrived.set(Some(shown));
+                shown
+            },
+        );
+    // The file is watched: a build that replaces it is shown.
+    let changed = watch::Changed::default();
+    let noted = changed.clone();
+    Effect::new(move |_| {
+        let path = state.target.get().map(|target| target.path);
+        path.and_then(|path| watch::on(path, noted.clone(), wake.clone()))
+    });
+    each_layout(move |page| {
+        // A pane given the keys before its plugin was read has them on
+        // itself: they go on to what the plugin shows.
+        if let Some(shown) = placed.take()
+            && page.has_focus(root)
+        {
+            shown.focus_within();
+        }
+        let mut again = background.take_in();
+        if changed.settled() {
+            state.reload();
+            again = true;
+        }
+        if again {
+            relayout();
+        }
+    });
+    (root, state)
 }

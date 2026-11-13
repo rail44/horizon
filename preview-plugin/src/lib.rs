@@ -50,6 +50,14 @@ fn view(name: &str) -> Option<El> {
     match name {
         "board-list" => Some(board_list(tasks())),
         "board-list-empty" => Some(board_list(Vec::new())),
+        // Never comes back: what the shell's limit on a call is for
+        // (`tests/preview.rs`). Not among the names.
+        "stuck" => {
+            let mut turns = 0u64;
+            loop {
+                turns = std::hint::black_box(turns.wrapping_add(1));
+            }
+        }
         _ => None,
     }
 }

@@ -27,9 +27,7 @@ The shell moved from GPUI to Blitz (signals over a CSS document, painted
 by Vello), and the GPUI shell was deleted on 2026-11-13 (board #75; [the
 migration design](ui-foundation-migration-design.md), [the research
 record](research/ui-foundation-candidates-2026-11-11.md)). What that left
-open: a preview pane for the new stack (a prototype shows a view from a
-wasm plugin, `src/preview.rs`, with no pane kind or command yet), and
-macOS, where the new shell has not been run.
+open: macOS, where the new shell has not been run.
 
 The containment perimeter moves from "spawned isolated" to the sandbox
 itself: one session kind, `bash` always sandboxed with the gitdir excluded
@@ -734,21 +732,19 @@ Several models combined behind one entry in model selection. v1 was
 implemented 2026-09-20 and removed in full on 2026-10-20 by the owner's
 decision; its design record was deleted with it and remains in git history.
 
-### Preview pane for views under development (v1 implemented 2026-09-21)
+### Preview pane for views under development (v1 2026-09-21, on Blitz 2026-11-13)
 
-A gpui view from an unmerged branch shown inside a pane of the running
-Horizon: compiled into a `wasm32-wasip2` plugin, drawn by Horizon's own
-renderer through a fork of Zed's experimental embedded_gpui, reloaded when
-the artifact changes, opened with `horizon preview`. The root package is a
-library plus a thin binary so the plugin can link the theme and the named
-previews. `docs/preview-pane-design.md` describes the design, the measured
-costs, and what does not reach a guest. The board is the first real
-view carried this way (`board-list`, `board-list-empty`, `board-thread`,
-`board-thread-long`, over a read-only in-memory store); every other view
-still needs its
-outside-world access made replaceable and its module built for wasm. Open
-ends: IME, clipboard, and modifier keys are not forwarded by the fork; a
-failed plugin load leaks one thread in the fork.
+A view from an unmerged branch shown inside a pane of the running Horizon:
+compiled into a `wasm32-wasip2` plugin that has the view's signals and
+handlers, shown in the shell's own document, read again when the file
+changes, opened with `horizon preview`. The root package is a library plus
+a thin binary so the plugin can link the views.
+`docs/preview-pane-design.md` describes the design and what does not cross
+to a plugin. The board's list is the one view carried this way
+(`board-list`, `board-list-empty`, over a read-only in-memory store);
+every other view still needs its outside-world access made replaceable and
+its module built for wasm. Open ends: a paint widget, text fields, the
+clipboard and the page's selection do not cross.
 
 ### Deferred: session-attention surface and non-interrupting sends
 

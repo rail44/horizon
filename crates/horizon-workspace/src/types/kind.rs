@@ -31,8 +31,8 @@ pub enum ViewKind {
     BoardThread {
         task: u64,
     },
-    /// A gpui view compiled into a wasm plugin, drawn through
-    /// `embedded_gpui` (`src/preview/`). Which artifact and which named
+    /// A view compiled into a wasm plugin and shown from it
+    /// (`docs/preview-pane-design.md`). Which file and which named
     /// preview a pane shows is shell-side state keyed by pane id, not part
     /// of this kind: the kind stays `Copy` and the persisted schema stays a
     /// bare tag.

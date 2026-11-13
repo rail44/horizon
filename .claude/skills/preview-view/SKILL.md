@@ -1,16 +1,14 @@
 ---
 name: preview-view
-description: Use when implementing or changing a view in Horizon and you want it shown from the preview plugin - registering a named preview with sample data, building the plugin, and checking it windowlessly. Trigger words: preview a view, preview pane, show the view to the owner, view feedback, horizon preview, make a view previewable.
+description: Use when implementing or changing a view in Horizon and you want it shown from the preview plugin - registering a named preview with sample data, building the plugin, checking it windowlessly, and showing it to the owner in a pane of the running Horizon. Trigger words: preview a view, preview pane, show the view to the owner, view feedback, horizon preview, make a view previewable.
 ---
 
 # Previewing a view under development
 
 A view can be built into a WebAssembly plugin (`preview-plugin/`) and shown
-from it by `src/preview.rs`: the plugin has the view's signals, effects and
-handlers, and the document is the shell's. This is a prototype: there is
-no pane kind and no `horizon preview` command for it yet, so today it is a
-windowless check, not a way to show a person a view in their running
-Horizon.
+from it in a pane of the running Horizon (`src/preview.rs`,
+`docs/preview-pane-design.md`): the plugin has the view's signals, effects
+and handlers, and the document is the shell's.
 
 ## Making a view previewable
 
@@ -41,3 +39,16 @@ natively. Needs `rustup target add wasm32-wasip2`. Not part of the gate.
 
 `scripts/check-preview-wasm.sh` (in the gate) only checks that the library
 still builds for the plugin's target.
+
+## Showing it to the owner
+
+```sh
+cargo build -p horizon-preview-plugin --target wasm32-wasip2
+horizon preview target/wasm32-wasip2/debug/horizon_preview_plugin.wasm --name <preview>
+```
+
+opens a preview pane in the Horizon the command reaches (the one whose
+pane it is run in), without taking the focus unless `--active` is given.
+The pane reads the file again whenever a build replaces it, so the loop
+after that is edit and build. This shows something on a person's screen:
+do it when they have asked to see the view, not as a check of your own.

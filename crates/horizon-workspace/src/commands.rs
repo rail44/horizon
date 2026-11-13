@@ -101,10 +101,10 @@ command_ids! {
         SaveBoardState,
         ToggleBoardClosed,
         OpenBoardOrganizer,
-        /// Reloads the active preview pane's plugin from the artifact on disk
-        /// (`src/preview/`). The pane also reloads on its own when the file
-        /// changes; this is the manual path. Palette-only -- no default
-        /// keybinding (binding id `"reload-preview"`).
+        /// Reads the plugin file of the cursor's preview pane again. The
+        /// pane also does on its own when the file changes; this is the
+        /// manual path. Palette-only -- no default keybinding (binding id
+        /// `"reload-preview"`).
         ReloadPreview,
         /// Copies the active terminal's selection to the clipboard.
         CopyTerminalSelection,

@@ -15,48 +15,6 @@ use horizon_workspace::{CloseCursorOutcome, ViewKind, Workspace};
 use super::{Modal, Placement, Shell};
 use crate::agent::AgentSession;
 
-/// The commands of the model this shell carries out so far: what the
-/// palette lists.
-pub(super) const CARRIED_OUT: &[CommandId] = &[
-    CommandId::SplitRight,
-    CommandId::SplitDown,
-    CommandId::NewTab,
-    CommandId::FocusNextPane,
-    CommandId::CloseActivePane,
-    CommandId::CloseActiveTab,
-    CommandId::TerminateActiveSession,
-    CommandId::TerminateAllDetachedSessions,
-    CommandId::ApproveToolCall,
-    CommandId::DenyToolCall,
-    CommandId::CancelAgentTurn,
-    CommandId::ContinueAgentTurn,
-    CommandId::SwitchModel,
-    CommandId::OpenSessionManager,
-    CommandId::OpenTerminalInSessionDirectory,
-    CommandId::OpenBoard,
-    CommandId::ToggleBoardExpansion,
-    CommandId::ToggleBoardFinishedBand,
-    CommandId::OpenBoardRelatedItem,
-    CommandId::BackBoardList,
-    CommandId::OpenBoardTaskSession,
-    CommandId::AddBoardTask,
-    CommandId::PostBoardMessage,
-    CommandId::MoveBoardTaskUp,
-    CommandId::MoveBoardTaskDown,
-    CommandId::ReorderBoardTask,
-    CommandId::OpenBoardOrganizer,
-    CommandId::SaveBoardState,
-    CommandId::ToggleBoardClosed,
-    CommandId::ReloadConfig,
-    CommandId::ReloadAgentRuntime,
-    CommandId::ReloadTerminalRuntime,
-    CommandId::IncreaseFontSize,
-    CommandId::DecreaseFontSize,
-    CommandId::ResetFontSize,
-    CommandId::CopyTerminalSelection,
-    CommandId::PasteIntoTerminal,
-];
-
 impl Shell {
     /// What the commands' availability is decided from.
     pub(super) fn command_state(&self) -> CommandState {
@@ -219,6 +177,12 @@ impl Shell {
                     request_paste();
                 }
             }
+            CommandId::ReloadPreview => {
+                let pane = self.model.with_untracked(Workspace::cursor_pane_id);
+                if let Some(preview) = pane.and_then(|pane| self.preview(pane)) {
+                    preview.reload();
+                }
+            }
             CommandId::OpenTerminalInSessionDirectory => {
                 let directory = self.model.with_untracked(|model| {
                     let session = model.active_session_id()?;
@@ -228,7 +192,6 @@ impl Shell {
                     self.open_terminal_in(directory);
                 }
             }
-            _ => {}
         }
     }
 

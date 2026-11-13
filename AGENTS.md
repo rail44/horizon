@@ -277,11 +277,12 @@ home of its own (the agent's provider is the local mock
 `scripts/mock-openai-provider.py`): a session created and typed into, the
 workspace coming back after the shell is closed, a runtime reloaded.
 
-A view still being written can be shown from a wasm plugin
-(`preview-plugin/`, `src/preview.rs`): `scripts/check-preview-plugin.sh`
-builds the plugin and runs the windowless tests that draw and drive a view
-through it (not part of the gate). There is no pane kind or command for it
-yet.
+A view still being written can be shown from a wasm plugin in a pane of
+the running Horizon (`horizon preview <plugin.wasm>`,
+`docs/preview-pane-design.md`): that is how an agent asks a person to look
+at a view. `scripts/check-preview-plugin.sh` builds the plugin and runs
+the windowless tests that draw and drive a view through it (not part of
+the gate).
 
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
 (`docs/workspace-mode-design.md`), then `:` to open the control surface —
@@ -338,8 +339,9 @@ their wiring:
   `docs/project-wiki-design.md`.
 - `theme_settings.rs` / `parts/` — the theme settings view, and the parts
   it is made of (slider, select, color picker).
-- `preview.rs` — a view shown from a wasm plugin (`preview-plugin/`): the
-  plugin has the view's signals and handlers, the document is the shell's.
+- `preview.rs` — the preview pane: a view shown from a wasm plugin
+  (`preview-plugin/`). The plugin has the view's signals and handlers, the
+  document is the shell's. See `docs/preview-pane-design.md`.
 - `control.rs` — the bridge from the CLI control plane's listener to the
   UI thread; the transport is `horizon-control::host`, the client is
   `horizon <subcommand>` itself (`crates/horizon-cli`). Panes get

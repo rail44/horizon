@@ -1,178 +1,75 @@
 # Preview pane
 
-Status: v1 implemented 2026-09-21; removed with the GPUI shell on
-2026-11-13. What follows describes the pane as it was: a gpui view in a
-wasm plugin, replayed by the GPUI shell's renderer. Its successor is a
-prototype (`src/preview.rs`, `preview-plugin/`,
-`crates/horizon-ui/wit/plugin.wit`) with no pane kind or command yet.
-
-A preview pane shows a gpui view that is still being developed inside a pane
-of the running Horizon, without merging the branch and without restarting
+A preview pane shows a view that is still being written inside a pane of
+the running Horizon, without merging the branch and without restarting
 the app. The view is compiled into a WebAssembly plugin; Horizon loads the
-plugin, draws it with its own renderer, and reloads it when the file on disk
-changes.
+plugin, shows the view in its own document, and reads the plugin again
+when the file on disk changes.
+
+(Until 2026-11-13 the pane showed a gpui view, drawn in the plugin and
+replayed by the GPUI shell's renderer. That went with the GPUI shell.)
 
 ## Mechanism
 
-The plugin runs a complete GPUI `App` inside a wasmtime component
-(`wasm32-wasip2`). Its windows do not rasterize anything: each frame is
-shipped to the host as a display list, and the host-side
-`embedded_gpui::Surface` replays that list as native GPUI primitives. Text
-is shaped and rasterized by the host's text system. A previewed view is
-therefore painted by the same renderer, with the same fonts, as a native
-view in the neighbouring pane.
+A view is a function that builds elements once and follows signals
+afterwards, through `horizon-ui`'s `El` and `Page`. For `wasm32-wasip2`
+`horizon-ui` is a different implementation of the same names
+(`crates/horizon-ui/src/guest.rs`): an `El` is a number, and what the view
+does to it is a call out of the plugin (`crates/horizon-ui/wit/plugin.wit`).
 
-This is [embedded_gpui](https://github.com/zed-industries/embedded_gpui),
-an experimental Zed project. Horizon depends on a fork,
-`rail44/embedded_gpui` branch `gpui-pre`, pinned by revision. The fork
-exists because upstream takes `gpui` from the zed repository while Horizon
-and gpui-component build against the crates.io `gpui-pre` snapshot family;
-those are different packages, and a second gpui in the graph would make
-the plugin surface unusable in Horizon's element tree. The fork's delta is
-the dependency retarget, the API follow-ups the snapshots need, and
-`Surface::scene_summary()`, which the windowless check reads. When
-`gpui-pre` is bumped in Horizon, the fork has to build against the new
-snapshot too.
+The plugin has the view's signals, effects and handlers. The document is
+the shell's: `src/preview.rs` does what the plugin's calls ask in the
+shell's own document, on nodes the plugin made and no others. So a
+previewed view is styled by the shell's theme, laid out and drawn by the
+shell's renderer with the shell's fonts, beside the native panes.
 
-## Where the code lives
+- An event that reaches a node the plugin listens at is told to the
+  plugin (`handle`). What crosses: keys, pointer events, `input`.
+- The plugin's effects run when the shell's do (`run-effects`), and its
+  work after a layout when the shell's does (`after-layout`), with the
+  page lent for the length of that call.
+- The plugin gets no WASI grants (no files, sockets or environment), at
+  most 512 MiB of memory, and five seconds for any one call: a watchdog
+  thread moves the engine's epoch on when a call outlasts that, and the
+  call traps. A plugin that traps is let go of, and the pane says what it
+  said.
 
-The root package has a library target (`src/lib.rs`) next to the binary.
-`src/main.rs` only calls `horizon::run()`; the former body of `main.rs` is
-`src/entry.rs`. The plugin links this library, so the library must build
-for `wasm32-wasip2`:
+What does not cross to a plugin: a paint widget, `takes_text`, `on_paste`,
+the clipboard, the page's selection, `windowed`. A view that needs one of
+them cannot be previewed yet.
 
-- Dependencies that cannot build there are declared under
-  `[target.'cfg(not(target_family = "wasm"))'.dependencies]` in the root
-  `Cargo.toml`.
-- Modules that need them carry `#[cfg(not(target_family = "wasm"))]` at
-  their declaration in `src/lib.rs`. `theme`, `preview` and `board` build
-  for both targets; every other module is native-only.
-  A module that
-  carries previews of its own view is gated inside itself instead, so the
-  view and the native-only halves it uses can live in one directory.
-- `scripts/check-preview-wasm.sh` checks that the library still builds for
-  the plugin target. It is part of the quality gate.
+## The plugin
 
-`src/preview/` holds the feature:
+`preview-plugin/` is a workspace member whose crate is empty for any
+target but wasm. It names the previews (`horizon_ui::plugin!`): each is a
+name and a function that builds one of the root library's views over
+sample data. The root library therefore builds for `wasm32-wasip2`:
+`src/lib.rs` marks the modules that cannot
+(`#[cfg(not(target_family = "wasm"))]`), and a view that can keeps what it
+needs of the host (a thread, a socket, a file) behind that gate inside
+itself. `scripts/check-preview-wasm.sh`, in the gate, checks that the
+library still builds for the target.
 
-| Module | Target | Contents |
-| --- | --- | --- |
-| `schema` | both | The two root interfaces the ends talk through. |
-| `registry` | both | The list of named previews. |
-| `sample` | both | The one seeded preview; the template for new ones. |
-| `animation` | both | A preview that animates without end, for frame pacing. |
-| `guest` | wasm | The plugin's entry point. |
-| `host`, `pane`, `watch` | native | Theme publication, the pane entity, the file watcher. |
-
-`preview-plugin/` is the plugin crate: a `cdylib` in its own sub-workspace,
-excluded from the root workspace so `cargo build --workspace` never builds
-it for the host. Its source is one line registering
-`horizon::preview::guest::PreviewGuest`; every preview lives in the root
-library. Its `Cargo.lock` is tracked and seeded from the root lockfile so
-the shared packages resolve identically.
-
-## Named previews
-
-A preview is a name plus a constructor that builds the view with sample
-data:
-
-```rust
-pub struct Preview {
-    pub name: &'static str,
-    pub build: fn(&mut Window, &mut App) -> AnyView,
-}
+```sh
+cargo build -p horizon-preview-plugin --target wasm32-wasip2
+# target/wasm32-wasip2/debug/horizon_preview_plugin.wasm
 ```
-
-`registry::PREVIEWS` lists them. A preview is written next to the view it
-shows, the way a story sits next to a component. One plugin contains every
-registered preview; the host selects one by name.
-
-The previews in this build:
-
-| Name | Shows |
-| --- | --- |
-| `sample` | The seeded widget gallery (`src/preview/sample.rs`). |
-| `board-thread`, `board-thread-long` | One task's thread, over an in-memory store (`src/board/previews.rs`): the task header band, the task body, agent posts as bordered cards and owner replies as tinted blocks, and the composer pinned under them. The long one opens on a forty-message thread whose third post is long enough to fold. |
-| `board-list`, `board-list-empty` | The same board's task list as a view of its own: one row per task in rank order as a tree, children indented under their parent and foldable per parent, finished top-level work behind one 「完了」 row at the bottom, and the add-task input pinned under everything. |
-| `animation` | gpui-component's `Spinner` beside a bar whose width loops, both repeating animations (`src/preview/animation.rs`); for looking at frame pacing (see "Frame pacing"). |
-
-`src/board/` is two views, not one — a thread and a list, each
-taking a pane's whole width, with a pane split putting them side by side.
-Both read and write a board through the module's own
-`BoardStoreSource`/`run_store_job` pair, so a preview's in-memory store and
-a log-backed one look the same from inside a view; on the former every
-write answers `StoreError::ReadOnly` and lands on the notice line. What
-reaches the host — the logd poke pump and the observation of the shell's
-`AgentSession` entities — is gated `#[cfg(not(target_family = "wasm"))]`
-inside the module, as is each view's shell-facing block. Neither view calls
-into the shell: a request that needs a pane or a session leaves as an
-event, listed in the module doc.
-
-For a view to be previewable, the code that goes into the plugin must not
-reach sockets, subprocesses, or the filesystem directly — a wasm32-wasip2
-guest has none of them. Whatever the view uses to reach the outside world
-has to be replaceable with sample data in the preview constructor. The
-shape is not prescribed: a view backed by a session entity is handed a
-sample entity; a view that reads a store is handed a store with sample
-contents. The replaceable seam belongs in the store or session entity
-rather than in a new layer inside the view.
-
-## Host and guest vocabulary
-
-Host root (`PreviewHost`):
-
-- `theme() -> Ref<PreviewThemeApi>` — the object the guest observes for
-  scheme changes. `PreviewThemeApi::theme_json()` returns the current
-  `[theme]` input as JSON of `horizon_config::RawThemeConfig`.
-- `selected_preview() -> String`.
-
-Guest root (`PreviewPlugin`):
-
-- `preview_names() -> Vec<String>`.
-- `mount(surface: Ref<SurfaceApi>)` — the guest reads `selected_preview()`
-  and opens that preview on the surface.
-
-The guest applies the theme with the same two calls the shell uses,
-`theme::reload_from` and `theme::apply_gpui_component_theme`, at mount and
-on every change notification. On the host, `theme::live::apply_scheme` is
-the single place the live scheme changes (`Reload Config`, the theme
-settings pane); it also publishes the new theme to open preview panes.
-The guest platform reports a fixed dark window appearance, which does not
-matter here because Horizon's colors never come from the OS appearance.
 
 ## The pane
 
-`ViewKind::Preview` is a session-less view kind like the board's. The workspace
-model carries only the kind; the artifact path and preview name live in
-the shell (`WorkspaceShell::preview_targets`, keyed by pane id), so
-nothing path-shaped enters the persisted schema. After a UI restart a
-preview pane is restored empty; an empty preview pane under the cursor
-takes the next `horizon preview`.
+`ViewKind::Preview` is a session-less view kind. The workspace model
+carries only the kind: which file and which of its previews a pane shows
+is the pane's own (`preview::Preview`), so nothing path-shaped is saved.
+After a restart a preview pane comes back empty, and an empty preview
+pane under the cursor takes the next `horizon preview`.
 
-The pane owns a `Surface`, a `PluginHost`, a status line (loading, loaded,
-or the load error), and a `notify` watcher on the artifact's directory.
-Only events that can change the artifact's content count (create, remove,
-data or name modification): inotify also reports opens and closes of a
-file that is merely read, and a load reads the artifact, so reacting to
-access events would make every load schedule the next one. Change events
-are debounced by 300 ms because cargo unlinks and re-links the artifact.
-A reload drops the old host and loads the new one; a load that fails
-shows its error and keeps watching. The plugin gets no WASI grants beyond
-the defaults, a 5 s per-turn budget, and a 512 MiB memory limit.
+The file is compiled off the UI thread. While it is, the pane says so,
+and what it showed before stays until the new one is ready. The pane
+watches the file's directory, and reads the file again 300 ms after it
+last changed (a build unlinks and links it again).
 
-The platform text system is published once at startup as the
-`PreviewTextSystem` global. `entry::build_application` constructs the
-platform with `gpui_platform::current_platform(false)` and
-`Application::with_platform` — what `gpui_platform::application()` does
-internally — because gpui exposes the platform text system only on the
-`Platform` object.
-
-`embedded_gpui::Surface` keeps its focus handle private, so the pane owns
-its own focus handle and forwards key events to the guest while that
-handle is focused. The pane declares no key context, and the
-workspace-mode chord is bound without a context and handled on the shell
-root. That the chord still works while a preview pane has focus is not
-covered by a test; the shell has no window-level test harness.
+A pane given the keys before its plugin was read has them on itself; when
+the plugin's view is put in, they go on to it.
 
 ## Commands
 
@@ -180,107 +77,25 @@ covered by a test; the shell has no window-level test harness.
 horizon preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]
 ```
 
-Without `--active` the pane does not take focus. A path that already has a
-pane reloads that pane; otherwise an empty preview pane under the cursor
-takes it; otherwise a new tab or split opens. The path is made absolute
-against the caller's working directory in the CLI. `--name` defaults to
-the sample preview. The request travels as the control plane's existing
-`invoke` message.
+Without `--active` the pane does not take the focus. A file that a pane
+shows already is read again by that pane, with the preview asked for;
+otherwise an empty preview pane under the cursor takes it; otherwise a new
+tab or split opens. Without `--name` the plugin's first preview is shown.
 
-`Reload Preview` (keybinding id `reload-preview`, no default chord)
-reloads the active preview pane.
+`Reload Preview` (binding id `reload-preview`, no default chord) reads the
+file of the cursor's preview pane again.
 
 An agent's own checks are windowless. Opening a preview in the running
-Horizon is how an agent asks a person to look at a view, so the CLI is the
-primary entry point and the view chooser does not list the preview kind.
+Horizon is how an agent asks a person to look at a view.
 
 ## Checks
 
-- `scripts/check-preview-wasm.sh` — the library builds for the plugin
-  target. Seconds when warm; part of the quality gate.
-- `scripts/check-preview-plugin.sh` — builds the plugin with the `quick`
-  profile and runs the `#[ignore]`d windowless tests through real
-  wasmtime. The sample's: it paints its label, a host theme change changes
-  what is painted, a reload from the same path re-attaches to the same
-  surface with exactly one live instance, and a broken artifact fails the
-  load without disturbing the pane. The
-  thread view's: `board-thread` paints its task's title exactly once —
-  the header band, with no list row beside it — and the first post's probe
-  under it, and `board-thread-long` shows the long post's first line
-  and not its deep probe until `j`, `j`, `e` put the post cursor on it and
-  unfold it. The list view's: `board-list` paints two row titles and
-  none of the folded first row's children until `l` opens it (and `h`
-  folds them away again), and `j` then Enter adds the open notice naming
-  the row the cursor landed on; `board-list-empty` paints chrome, no
-  row, and the add-task input. The `animation` preview asks for a next
-  frame after every host frame it is given. A board
-  preview's surface is tall, because gpui culls primitives outside the
-  content mask and an assertion on text that scrolled out of view is an
-  assertion on nothing. Minutes when cold; not part of the gate.
-
-## Costs measured at introduction
-
-One run each on a loaded desktop; order of magnitude only.
-
-| | before | after |
-| --- | --- | --- |
-| cold `cargo build --workspace` | 764 s | 799 s |
-| `target/debug/horizon` | 482 MB | 595 MB |
-| root `Cargo.lock` packages | 1084 | 1176 |
-
-Plugin, `quick` profile (release-derived, `opt-level = 2`, no LTO): cold
-build 131 s; rebuild after an edit in `src/preview/sample.rs` about 4 s;
-component about 14 MiB; load to first frame about 1.4 s. Load time is
-almost entirely wasmtime compiling the component and tracks its size, so a
-debug component loads several times slower.
-
-## Not forwarded to a guest
-
-The fork's host/guest interface carries resize, mouse, key, and cursor
-style. It does not carry IME composition, clipboard, modifier-key state,
-file drops, or native prompts. Latin text entry works; CJK composition
-does not reach a guest. Upstream lists IME as open work in its `TODO.md`;
-the others are not mentioned there.
-
-A font crosses the boundary as family, weight, and italic only; a
-fallback chain does not. The host resolves an unknown family by trying
-`.SystemUIFont` and `Helvetica` and then falls back to font id 0, the
-first font the host text system resolved. A preview that sets no family
-lands there; when checked on a virtual display that was the shell's UI
-font, so the sample matched the chrome, but nothing guarantees the order.
-Glyphs missing from the primary font are left to the host text system's
-own fallback, not to the configured chain.
-
-`PluginInstance::new` in the fork starts its epoch-ticker thread before it
-compiles the component, and the thread is not stopped when compilation
-fails, so each failed load leaves one idle thread behind until the app
-exits.
-
-## Frame pacing
-
-Guest frames are paced by the host's display. When gpui inside the guest
-has frame demand for a window — the window became dirty, or a next-frame
-callback such as an animation's is queued — the guest sends the pane's
-`Surface` one `request_frame` and does not send another until it is
-answered. The surface answers from its prepaint with the view's `frame`,
-and only then does the guest draw. A surface is prepainted at most once
-per host frame, so a guest draws at most once per host frame: a repeating
-`gpui::Animation` (gpui-component's `Spinner`, the `animation` preview)
-advances once per host frame and no faster. A guest with no demand sends
-no request and runs no turn, so an idle preview costs nothing. Input is
-applied in the turn that carries it, and its result is drawn on the next
-host frame.
-
-Under gpui's test executor there is no display: nothing renders the
-surface, so nothing answers a request on its own. `src/preview/e2e.rs`
-therefore drives frames itself with `Surface::drive_frame`, the call the
-prepaint makes. Its `host_frames()` answers requests until the guest
-stops asking, and fails when the guest asks for many frames in a row. A
-view that animates never stops asking, so that failure means the view
-under test animates; `preview_plugin_paces_a_repeating_animation` drives
-the `animation` preview a fixed number of frames instead and checks that
-every one is answered with a request for the next.
-
-embedded_gpui paints sprite transformations untransformed, so a rotating
-icon such as the `Spinner`'s does not visibly rotate in a preview pane;
-animated sizes, positions and colors do show.
+- `scripts/check-preview-wasm.sh`: the library builds for the plugin's
+  target. In the gate.
+- `scripts/check-preview-plugin.sh`: builds the plugin and runs
+  `tests/preview.rs` (`#[ignore]`d otherwise) through real wasmtime, with
+  no window: a view is drawn and takes its keys, a drag asks the page
+  where it is, a file replaced is read again, a call that does not come
+  back is ended, what cannot be shown is said in the pane, and the control
+  plane's `preview` shows one in a pane of the whole shell. Not in the
+  gate: the plugin's build and wasmtime's compiling of it take a while.

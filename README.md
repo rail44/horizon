@@ -93,9 +93,8 @@ so a subcommand run from inside a pane targets the enclosing instance and
 `approve`/`deny <session-id> <call-id> <occurrence-id>`, `cancel-turn <session-id>`,
 `continue-turn <session-id>`,
 `reload-agent-runtime`, `reload-terminal-runtime`, `reload-config`,
-`preview <path-to-wasm> [--name <preview>]` (the shell does not carry this
-one out yet: a preview is a windowless check for now, see the
-`preview-view` skill),
+`preview <path-to-wasm> [--name <preview>]` (a view still being written,
+shown from a wasm plugin: `docs/preview-pane-design.md`),
 `sessions`, `state` (each takes
 `--split`/`--active` where placement/focus applies). See
 `docs/cli-control-plane-design.md` for the full contract.

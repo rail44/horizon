@@ -8,10 +8,10 @@ use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::control_invoke::{self, Command};
 use horizon_ui::reactive_graph::traits::WithUntracked;
 use horizon_workspace::commands::{CommandId, core_commands};
-use horizon_workspace::{SessionId, SessionKind, ViewKind};
+use horizon_workspace::{PaneId, SessionId, SessionKind, ViewKind, Workspace};
 
-use super::commands::CARRIED_OUT;
 use super::{Shell, Start};
+use crate::preview::Target;
 
 /// The answer to a command this shell has no view or runtime for yet.
 const NOT_YET: &str = "this command is not carried out yet";
@@ -132,7 +132,7 @@ impl Shell {
                 self.execute(CommandId::TerminateAllDetachedSessions);
                 done
             }
-            Command::Execute(command) if CARRIED_OUT.contains(&command) => {
+            Command::Execute(command) => {
                 self.execute(command);
                 done
             }
@@ -146,6 +146,12 @@ impl Shell {
                 split,
                 activate,
             } => self.open_document(ViewKind::Wiki, path, split, activate),
+            Command::Preview {
+                path,
+                name,
+                split,
+                activate,
+            } => self.open_preview(Target { path, name }, split, activate),
             Command::Approve {
                 session_id,
                 identity,
@@ -214,6 +220,65 @@ impl Shell {
         self.reconcile();
         opened.ok_or("unknown split target session")?;
         if activate {
+            self.focus_active();
+        }
+        Ok(EnvelopeBody::Ok { session_id: None })
+    }
+
+    /// A preview pane on `target`: the pane that shows its file already,
+    /// which reads it again; or an empty preview pane under the cursor;
+    /// or a new one.
+    fn open_preview(
+        &self,
+        target: Target,
+        split: Option<(SessionId, horizon_workspace::SplitAxis)>,
+        activate: bool,
+    ) -> Result<EnvelopeBody, String> {
+        if !target.path.is_file() {
+            return Err(format!("not a file: {}", target.path.display()));
+        }
+        let previews: Vec<(PaneId, Option<Target>)> = {
+            let kept = self.kept();
+            let panes = kept.panes.borrow();
+            (panes.iter())
+                .filter_map(|(pane, view)| Some((*pane, view.preview?.target())))
+                .collect()
+        };
+        let showing = |path: &std::path::Path| {
+            (previews.iter())
+                .find(|(_, shown)| shown.as_ref().is_some_and(|shown| shown.path == path))
+        };
+        let cursor = self.model.with_untracked(Workspace::cursor_pane_id);
+        let empty =
+            (previews.iter()).find(|(pane, shown)| shown.is_none() && Some(*pane) == cursor);
+        let pane = match showing(&target.path).or(empty) {
+            Some((pane, _)) => *pane,
+            None => {
+                let mut opened = None;
+                self.model_changed(|model| {
+                    opened = match split {
+                        Some((session, axis)) => model.split_session_with_view(
+                            session,
+                            ViewKind::Preview,
+                            axis,
+                            activate,
+                        ),
+                        None => {
+                            Some(model.open_tab_with_view_activated(ViewKind::Preview, activate))
+                        }
+                    };
+                });
+                self.reconcile();
+                opened.ok_or("unknown split target session")?
+            }
+        };
+        (self.preview(pane).ok_or("the pane has no preview")?).show(target);
+        if activate {
+            self.change(|model| {
+                if let Some((tab, pane)) = model.pane_position(pane) {
+                    model.activate_pane_index(tab, pane);
+                }
+            });
             self.focus_active();
         }
         Ok(EnvelopeBody::Ok { session_id: None })

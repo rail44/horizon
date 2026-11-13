@@ -3,12 +3,14 @@
 //! way `tests/board.rs` drives the same view built natively.
 //!
 //! The plugin is `../preview-plugin` built for `wasm32-wasip2`, which
-//! `scripts/check-preview.sh` does before it runs these.
+//! `scripts/check-preview-plugin.sh` does before it runs these.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use horizon::preview::{CSS, view};
+use horizon::background::Background;
+use horizon::preview::{CSS, Preview, Target, view};
+use horizon::wake::Wake;
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
@@ -26,25 +28,43 @@ fn plugin() -> PathBuf {
     );
     assert!(
         built.is_file(),
-        "no {}: run scripts/check-preview.sh",
+        "no {}: run scripts/check-preview-plugin.sh",
         built.display()
     );
     built
 }
 
+mod support;
+
 struct Opened {
     app: App,
+    preview: Preview,
 }
 
 /// The preview `name` of the plugin at `path`, on a page that has the
 /// theme and the pane's own rules and none of the view's.
 fn open_at(path: &std::path::Path, name: &str) -> Opened {
     let css = [horizon_theme_css::CSS, CSS].concat();
+    let mut made = None;
     let app = App::new(600, 500, &css, || {
-        themed(Theme::built_in, view(path, name).focus_within())
+        let (root, preview) = view(Background::default(), Wake::default());
+        made = Some((root, preview));
+        themed(Theme::built_in, root)
     });
-    app.resolve();
-    Opened { app }
+    let (root, preview) = made.unwrap();
+    // The pane has the keys before its plugin is read, as a pane of the
+    // shell does: they go on to what the plugin shows.
+    root.focus();
+    preview.show(Target {
+        path: path.to_path_buf(),
+        name: Some(name.to_string()),
+    });
+    let opened = Opened { app, preview };
+    // The file is compiled off this thread.
+    opened.app.run_effects();
+    opened.until("the plugin", || !opened.all("shown").is_empty());
+    opened.app.resolve();
+    opened
 }
 
 fn open(name: &str) -> Opened {
@@ -100,9 +120,17 @@ impl Opened {
         document.get_node(node).unwrap().text_content()
     }
 
+    /// The titles of the rows the preview shows (a shell around it has
+    /// titles of its own).
     fn titles(&self) -> Vec<String> {
-        (self.all("title").into_iter())
-            .map(|title| self.text_of(title))
+        let document = self.app.document();
+        let document = document.borrow();
+        let mut found = Vec::new();
+        for preview in self.all("preview") {
+            collect(&document, preview, "title", &mut found);
+        }
+        (found.into_iter())
+            .map(|title| document.get_node(title).unwrap().text_content())
             .collect()
     }
 
@@ -146,7 +174,7 @@ impl Opened {
 }
 
 #[test]
-#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview.sh"]
+#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
 fn a_view_in_a_plugin_is_drawn_in_this_document_and_takes_its_keys() {
     let opened = open("board-list");
     // The store is read in the plugin, and taken in after a layout here.
@@ -224,7 +252,7 @@ fn a_view_in_a_plugin_is_drawn_in_this_document_and_takes_its_keys() {
 }
 
 #[test]
-#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview.sh"]
+#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
 fn a_drag_in_a_plugin_s_view_asks_this_page_where_it_is() {
     let opened = open("board-list");
     opened.until("the tasks", || !opened.titles().is_empty());
@@ -253,7 +281,7 @@ fn a_drag_in_a_plugin_s_view_asks_this_page_where_it_is() {
 }
 
 #[test]
-#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview.sh"]
+#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
 fn what_cannot_be_shown_is_said_in_the_pane() {
     // A preview the plugin does not have.
     let opened = open("no-such-preview");
@@ -272,4 +300,129 @@ fn what_cannot_be_shown_is_said_in_the_pane() {
     assert_eq!(opened.all("failed").len(), 1);
     assert!(opened.all("row").is_empty());
     let _ = std::fs::remove_file(&broken);
+}
+
+#[test]
+#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
+fn a_plugin_s_file_replaced_is_read_and_shown_again() {
+    // A copy, to replace without touching the build's.
+    let copy = std::env::temp_dir().join(format!("hzb-preview-{}", std::process::id()));
+    std::fs::create_dir_all(&copy).unwrap();
+    let file = copy.join("plugin.wasm");
+    std::fs::copy(plugin(), &file).unwrap();
+    let opened = open_at(&file, "board-list");
+    opened.until("the tasks", || !opened.titles().is_empty());
+    let first = opened.all("shown")[0];
+
+    // A build writes the file anew: what was shown stays until the new
+    // one is read.
+    std::fs::copy(plugin(), copy.join("next.wasm")).unwrap();
+    std::fs::rename(copy.join("next.wasm"), &file).unwrap();
+    opened.until("the file read again", || {
+        opened
+            .all("shown")
+            .first()
+            .is_some_and(|shown| *shown != first)
+    });
+    opened.until("the tasks again", || !opened.titles().is_empty());
+    assert_eq!(opened.all("shown").len(), 1);
+
+    // And when asked to.
+    let second = opened.all("shown")[0];
+    opened.preview.reload();
+    opened.app.run_effects();
+    opened.until("a reload", || {
+        opened
+            .all("shown")
+            .first()
+            .is_some_and(|shown| *shown != second)
+    });
+    let _ = std::fs::remove_dir_all(&copy);
+}
+
+#[test]
+#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
+fn a_call_into_a_plugin_that_does_not_come_back_is_ended() {
+    let started = Instant::now();
+    let opened = open("stuck");
+    let said = opened.all("failed");
+    assert_eq!(said.len(), 1, "{}", opened.text());
+    // (The limit is five seconds.)
+    assert!(started.elapsed() >= Duration::from_secs(4));
+    assert!(started.elapsed() < Duration::from_secs(60));
+}
+
+#[test]
+#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
+fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
+    use horizon::workspace::{Opening, Shell, Spawn, css, view as shell_view};
+    use horizon_control::contract::{EnvelopeBody, Invoke};
+    use horizon_control::host::executor::ControlRequest;
+    use horizon_terminal_core::TerminalSize;
+    use horizon_ui::reactive_graph::traits::WithUntracked;
+    use horizon_workspace::commands::CommandId;
+    use horizon_workspace::{PaneKind, ViewKind, Workspace};
+
+    let mut shell: Option<Shell> = None;
+    let app = App::new(1200, 800, &css(), || {
+        let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
+        let (root, built) = shell_view(spawn, Opening::default());
+        shell = Some(built);
+        root
+    });
+    app.resolve();
+    let shell = shell.unwrap();
+    let opened = Opened {
+        app,
+        // (Not this test's: the panes' own are asked of the shell.)
+        preview: view(Background::default(), Wake::default()).1,
+    };
+    let ask = |args: serde_json::Value| {
+        let answer = shell.control(&ControlRequest::Invoke(Invoke {
+            command: "preview".to_string(),
+            args,
+        }));
+        opened.app.run_effects();
+        opened.app.resolve();
+        answer
+    };
+    let previews = || {
+        shell.model.with_untracked(|model: &Workspace| {
+            (model.all_pane_ids().into_iter())
+                .filter(|pane| model.pane_kind(*pane) == Some(PaneKind::View(ViewKind::Preview)))
+                .collect::<Vec<_>>()
+        })
+    };
+
+    let answer =
+        ask(serde_json::json!({ "path": plugin(), "name": "board-list", "activate": true }));
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    assert_eq!(previews().len(), 1);
+    opened.until("the tasks", || !opened.titles().is_empty());
+    assert_eq!(
+        opened.titles(),
+        ["first", "child one", "child two", "second"]
+    );
+    // The pane has the keys: the list's own move its selection.
+    opened.character("j");
+    assert_eq!(opened.selected(), Some(1));
+
+    // The same file again is the same pane's, with the preview asked for.
+    let answer = ask(serde_json::json!({ "path": plugin(), "name": "board-list-empty" }));
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    assert_eq!(previews().len(), 1);
+    opened.until("the empty list", || opened.titles().is_empty());
+
+    // The command reads the file again.
+    let shown = opened.all("shown")[0];
+    shell.execute(CommandId::ReloadPreview);
+    opened.app.run_effects();
+    opened.until("a reload", || {
+        opened.all("shown").first().is_some_and(|now| *now != shown)
+    });
+
+    // What is not a file is refused, and opens nothing.
+    let answer = ask(serde_json::json!({ "path": "/no/such/plugin.wasm" }));
+    assert!(matches!(answer, EnvelopeBody::Error { .. }), "{answer:?}");
+    assert_eq!(previews().len(), 1);
 }

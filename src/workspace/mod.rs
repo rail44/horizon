@@ -46,6 +46,7 @@ use crate::agent::{self, Agent, AgentSession};
 use crate::background::Background;
 use crate::board::{self, BoardList, BoardThread};
 use crate::markdown::{self, Markdown};
+use crate::preview::{self, Preview};
 use crate::terminal::{self, Session, Terminal};
 use crate::theme_settings;
 use crate::wake::Wake;
@@ -143,6 +144,7 @@ pub fn css() -> String {
         terminal::CSS,
         agent::CSS,
         markdown::CSS,
+        preview::CSS,
         &board::css(),
         &theme_settings::css(),
         wiki::CSS,
@@ -347,6 +349,7 @@ struct PaneView {
     wiki: Option<Wiki>,
     board_list: Option<BoardList>,
     board_thread: Option<BoardThread>,
+    preview: Option<Preview>,
 }
 
 /// What the shell keeps beside the model.
@@ -498,6 +501,7 @@ impl Shell {
         let owner = kept.owner.child();
         let (mut terminal, mut agent, mut document) = (None, None, None);
         let (mut board_list, mut board_thread, mut wiki_page) = (None, None, None);
+        let mut shown_preview = None;
         let start = |session| {
             kept.starting
                 .borrow_mut()
@@ -680,6 +684,14 @@ impl Shell {
                     board_thread = Some(view);
                     root
                 }
+                // Which plugin and which of its previews is this pane's
+                // alone, and not the model's: it comes back empty.
+                (PaneKind::View(ViewKind::Preview), ..) => {
+                    let background = Background::new(kept.wake.clone());
+                    let (root, view) = preview::view(background, kept.wake.clone());
+                    shown_preview = Some(view);
+                    root
+                }
                 _ => el("div")
                     .class("empty")
                     .attr("tabindex", "0")
@@ -709,6 +721,7 @@ impl Shell {
             wiki: wiki_page,
             board_list,
             board_thread,
+            preview: shown_preview,
         }
     }
 
@@ -1087,6 +1100,11 @@ impl Shell {
     /// The Markdown view a pane shows.
     pub fn markdown(&self, pane: PaneId) -> Option<Markdown> {
         self.kept().panes.borrow().get(&pane)?.markdown
+    }
+
+    /// The preview a pane shows.
+    pub fn preview(&self, pane: PaneId) -> Option<Preview> {
+        self.kept().panes.borrow().get(&pane)?.preview
     }
 
     /// The agent view a pane shows.
