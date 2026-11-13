@@ -222,6 +222,12 @@ impl Terminal {
         self.state.directory.borrow_mut().take()
     }
 
+    /// The number, among the session's, of the frame on screen: it moves
+    /// when a frame is taken in.
+    pub fn frame_number(&self) -> u64 {
+        self.state.seen.get()
+    }
+
     /// Asks the session to copy what is selected.
     pub fn copy_selection(&self) {
         self.state.session.send(TerminalCommand::CopySelection);

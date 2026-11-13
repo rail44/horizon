@@ -141,6 +141,13 @@ portable-pty = "0.9.0"
 # The view painted into pixels, with no window and no GPU.
 anyrender_vello_cpu = "0.18"
 
+# Scenarios that time the views a frame at a time, with no window
+# (`docs/performance-scenarios.md`). Not a test and not in the gate.
+[[bench]]
+name = "scenarios"
+path = "benches/scenarios/main.rs"
+harness = false
+
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 

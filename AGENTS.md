@@ -128,6 +128,10 @@ and [the review guide](docs/refactoring-review.md). They cover reproducible
 whole-repository or scoped scans and interpretation of the results. The audit
 is an on-demand review aid, separate from the quality gate above.
 
+For where the views are slow, `cargo bench --bench scenarios` times them a
+frame at a time with no window (`docs/performance-scenarios.md`). It is
+run by hand, not in the gate.
+
 ## Build setup
 
 `crates/horizon-agent` links DuckDB dynamically, and the library is a
