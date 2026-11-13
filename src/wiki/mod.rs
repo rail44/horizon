@@ -40,7 +40,7 @@ use horizon_ui::{
 };
 use horizon_wiki::Store;
 
-use crate::parts::{Tone, chip};
+use crate::parts::{ButtonKind, ButtonSize, Tone, button, chip};
 use horizon_wiki::anchor::Anchor;
 use horizon_wiki::annotation::{Agent, AgentType, Annotation, markdown_body};
 use horizon_wiki::view_model::{PlacedThread, WikiPage};
@@ -179,9 +179,6 @@ pub const CSS: &str = "
                font-size: var(--micro-size); line-height: var(--micro-line);
                color: var(--text-muted); }
         .offer { display: flex; align-items: center; gap: 2px; }
-        .button { padding: 0 var(--u12); border-radius: 4px; line-height: var(--u24);
-                  font-size: var(--meta-size); border: 1px solid var(--border);
-                  cursor: pointer; }
         .orphans { padding-top: var(--u24); font-size: var(--meta-size);
                    line-height: var(--meta-line); font-weight: 600;
                    color: var(--text-muted); }
@@ -966,16 +963,14 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
             // selection it is an offer for.)
             Line::Offer => el("div")
                 .class("offer")
-                .child(
-                    el("div")
-                        .class("button")
-                        .text(COMMENT)
-                        .on("pointerdown", move |_| {
-                            state.comment_on_selection();
-                            prevent_default();
-                            stop_propagation();
-                        }),
-                )
+                .child(button(ButtonKind::Plain, ButtonSize::Regular, COMMENT).on(
+                    "pointerdown",
+                    move |_| {
+                        state.comment_on_selection();
+                        prevent_default();
+                        stop_propagation();
+                    },
+                ))
                 .child(el("span").class("key").text("c")),
             Line::New(chars) => {
                 let quote = one_line(&page.quote_of(chars.clone()));

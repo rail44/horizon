@@ -33,6 +33,9 @@
 --tab-track
 --tab-text
 --on-accent
+--hover
+--focus
+--text-disabled
 --t1-size
 --t1-line
 --t2-size
@@ -43,6 +46,7 @@
 --meta-line
 --micro-size
 --micro-line
+--u2
 --u4
 --u8
 --u12
@@ -50,4 +54,14 @@
 --u24
 --u28
 --u32
+--radius-small
+--radius
+--radius-large
+--line
+--line-strong
+--shadow-popup
+--shadow-modal
+--z-raised
+--z-modal
+--z-popup
 --font-family

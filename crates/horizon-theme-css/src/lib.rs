@@ -140,6 +140,11 @@ impl Theme {
         color("tab-text", palette::contrast_snap(scheme.text_muted, track));
         // What is written on the accent itself: a primary button's label.
         color("on-accent", palette::primary_foreground_for(scheme.accent));
+        // What an element is in a state: under the pointer, with the keys,
+        // not to be used.
+        color("hover", scheme.surface_raised);
+        color("focus", scheme.accent);
+        color("text-disabled", scheme.text_muted);
 
         // The type scale: a size and the line height that goes with it.
         for (name, step) in [
@@ -158,9 +163,16 @@ impl Theme {
         // Lengths that scale with the type: `--u8` is 8 px at the
         // reference size. The rhythm is 4, 8, 12, 16,
         // 24 and 32 of these.
-        for length in [4., 8., 12., 16., 24., 28., 32.] {
+        for length in [2., 4., 8., 12., 16., 24., 28., 32.] {
             out += &format!("--u{length}: {}px; ", self.scaled(length));
         }
+        // What does not scale with the type: a corner, a line, a shadow,
+        // and what is over what.
+        out += "--radius-small: 2px; --radius: 4px; --radius-large: 6px; ";
+        out += "--line: 1px; --line-strong: 2px; ";
+        out += "--shadow-popup: 0 4px 16px rgba(0, 0, 0, 0.15); ";
+        out += "--shadow-modal: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1); ";
+        out += "--z-raised: 10; --z-modal: 50; --z-popup: 60; ";
         // The font stack, each family named as CSS wants it.
         let families: Vec<String> = (self.font_family.split(','))
             .map(str::trim)

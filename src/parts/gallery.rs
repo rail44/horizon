@@ -3,7 +3,7 @@
 
 use horizon_ui::{El, el};
 
-use super::{Tone, chip};
+use super::{ButtonKind, ButtonSize, Tone, button, chip};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -36,42 +36,27 @@ fn part(name: &str, lines: Vec<(&str, Vec<El>)>) -> El {
     part
 }
 
-/// A button as one of the views draws it today, before there is a part:
-/// the view's own rules, written out on the element.
-fn drawn(style: &str, label: &str) -> El {
-    el("span").attr("style", style).text(label)
-}
-
-/// The buttons the views each draw their own way, side by side.
-fn buttons_today() -> El {
-    let agent = "flex: none; padding: 0 8px; border-radius: 6px; font-size: 12px; \
-                 line-height: 20px; color: var(--text); cursor: pointer;";
-    let agent_large = "flex: none; padding: 0 8px; border-radius: 6px; font-size: 14px; \
-                       line-height: var(--u28); color: var(--text); cursor: pointer;";
-    let thread = "padding: 0 var(--u12); border-radius: 4px; line-height: var(--u28); \
-                  font-size: var(--meta-size); cursor: pointer;";
-    let wiki = "padding: 0 var(--u12); border-radius: 4px; line-height: var(--u24); \
-                font-size: var(--meta-size); border: 1px solid var(--border); cursor: pointer;";
-    let primary = " background: var(--accent); color: var(--on-accent);";
+fn buttons() -> El {
+    use ButtonKind::{Plain, Primary};
+    use ButtonSize::{Regular, Small};
     part(
-        "button (as each view draws it today)",
+        "button",
         vec![
             (
-                "agent: Stop, then Approve and Deny",
+                "the one thing to do next, and the others beside it",
                 vec![
-                    drawn(agent, "Stop"),
-                    drawn(&[agent_large, primary].concat(), "Approve"),
-                    drawn(agent_large, "Deny"),
+                    button(Primary, Regular, "Reply"),
+                    button(Plain, Regular, "Close"),
+                    button(Plain, Regular, "Session"),
                 ],
             ),
             (
-                "board thread: the primary action and the others",
+                "small, in a line of text",
                 vec![
-                    drawn(&[thread, primary].concat(), "Send"),
-                    drawn(thread, "Close task"),
+                    button(Plain, Small, "Stop"),
+                    button(Primary, Small, "Approve"),
                 ],
             ),
-            ("wiki", vec![drawn(wiki, "Send"), drawn(wiki, "Cancel")]),
         ],
     )
 }
@@ -108,5 +93,5 @@ pub fn gallery() -> El {
                 ),
             ],
         ))
-        .child(buttons_today())
+        .child(buttons())
 }

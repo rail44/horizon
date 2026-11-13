@@ -28,7 +28,7 @@ use super::list::key_name;
 use super::{Activity, Job, Source, activity_chip, follow, run, tone, write_refusal};
 use crate::background::Background;
 use crate::markdown::render;
-use crate::parts::{Tone, chip};
+use crate::parts::{ButtonKind, ButtonSize, Tone, button, chip};
 
 /// How many cells wide a post is taken to be when deciding whether to
 /// fold it: an owner's is narrower by its indent.
@@ -65,11 +65,6 @@ pub const CSS: &str = "
         .chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--u8);
                  min-width: 0; }
         .actions { flex: none; display: flex; align-items: center; gap: var(--u4); }
-        .button { padding: 0 var(--u12); border-radius: 4px; line-height: var(--u28);
-                  font-size: var(--meta-size); cursor: pointer; }
-        .button.primary { background: var(--accent); color: var(--on-accent); }
-        .button:hover { background: var(--surface-raised); }
-        .button.primary:hover { background: var(--accent); opacity: 0.9; }
         .state { display: flex; align-items: center; gap: var(--u8); }
         .updated, .time, .hint, .more, .on-hover { font-size: var(--meta-size);
                                                    line-height: var(--meta-line);
@@ -370,25 +365,22 @@ fn author_label(author: &str) -> String {
     }
 }
 
-fn button(class: &str, label: &str, state: BoardThread, command: ThreadCommand) -> El {
-    el("div")
-        .class(class)
-        .text(label)
-        .on("click", move |_| state.execute(command.clone()))
+fn action(kind: ButtonKind, label: &str, state: BoardThread, command: ThreadCommand) -> El {
+    button(kind, ButtonSize::Regular, label).on("click", move |_| state.execute(command.clone()))
 }
 
 /// The task's actions: the same wherever in the band they are.
 fn actions(state: BoardThread, closed: bool, has_session: bool) -> El {
     let actions = el("div")
         .class("actions")
-        .child(button(
-            "button primary",
+        .child(action(
+            ButtonKind::Primary,
             chrome::REPLY,
             state,
             ThreadCommand::FocusComposer,
         ))
-        .child(button(
-            "button",
+        .child(action(
+            ButtonKind::Plain,
             if closed {
                 chrome::REOPEN
             } else {
@@ -398,8 +390,8 @@ fn actions(state: BoardThread, closed: bool, has_session: bool) -> El {
             ThreadCommand::ToggleClosed,
         ));
     if has_session {
-        actions.child(button(
-            "button",
+        actions.child(action(
+            ButtonKind::Plain,
             chrome::SESSION,
             state,
             ThreadCommand::OpenTaskSession,

@@ -18,7 +18,7 @@ use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, WithVal
 use horizon_ui::windowed::{follow_tail, windowed};
 use horizon_ui::{El, dispatched, el, prevent_default, stop_propagation};
 
-use crate::parts::{self, chip, chip_of};
+use crate::parts::{self, ButtonKind, ButtonSize, button, chip, chip_of};
 use keyboard_types::{Key, NamedKey};
 
 use horizon_agent_display::chrome;
@@ -62,12 +62,6 @@ pub const CSS: &str = "
         .danger { color: var(--danger); }
         .line { display: flex; align-items: center; gap: var(--u8); }
         .spacer { flex: 1; min-width: 0; }
-        .button { flex: none; padding: 0 8px; border-radius: 6px; font-size: 12px;
-                  line-height: 20px; color: var(--text); cursor: pointer; }
-        .button:hover { background: var(--surface-raised); }
-        .button.primary { font-size: 14px; line-height: var(--u28);
-                          background: var(--accent); color: var(--on-accent); }
-        .button.deny { font-size: 14px; line-height: var(--u28); }
         .receipt { display: flex; flex-direction: column; gap: var(--u4); }
         .receipt-line { display: flex; align-items: center; gap: var(--u8); cursor: pointer;
                         font-size: var(--meta-size); line-height: var(--meta-line);
@@ -454,13 +448,10 @@ fn session_state_chip(state: Agent) -> El {
 }
 
 fn stop_button(state: Agent) -> El {
-    el("span")
-        .class("button")
-        .text(chrome::STOP)
-        .on("click", move |_| {
-            stop_propagation();
-            state.ask(Asked::Stop);
-        })
+    button(ButtonKind::Plain, ButtonSize::Small, chrome::STOP).on("click", move |_| {
+        stop_propagation();
+        state.ask(Asked::Stop);
+    })
 }
 
 fn thinking() -> El {
@@ -669,9 +660,8 @@ fn approval_block(approval: &Approval, state: Agent) -> El {
         .child(el("span").class("reason").text(&approval.reason))
         .child(chip(parts::Tone::Muted, "Enter"))
         .child(
-            el("span")
-                .class("button primary approve")
-                .text(chrome::APPROVE)
+            button(ButtonKind::Primary, ButtonSize::Regular, chrome::APPROVE)
+                .class("approve")
                 .on("click", move |_| {
                     stop_propagation();
                     state.ask(Asked::Approve(approve.clone()));
@@ -679,9 +669,8 @@ fn approval_block(approval: &Approval, state: Agent) -> El {
         )
         .child(chip(parts::Tone::Muted, "Esc"))
         .child(
-            el("span")
-                .class("button deny")
-                .text(chrome::DENY)
+            button(ButtonKind::Plain, ButtonSize::Regular, chrome::DENY)
+                .class("deny")
                 .on("click", move |_| {
                     stop_propagation();
                     state.ask(Asked::Deny(deny.clone()));
