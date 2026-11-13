@@ -657,11 +657,10 @@ fn composer(state: State) -> El {
         .focus();
     el("div")
         .class(styles::COMPOSER)
-        .child(
-            el("div")
-                .class(styles::FIELD)
-                .child(crate::parts::field(field)),
-        )
+        .child(el("div").class(styles::FIELD).child(crate::parts::Field {
+            input: field,
+            prompt: None,
+        }))
         .child(
             el("div")
                 .class(styles::SEND)

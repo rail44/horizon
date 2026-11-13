@@ -4,7 +4,9 @@
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set};
-use horizon_ui::{El, each_layout, el, prevent_default, relayout, stop_propagation};
+use horizon_ui::{
+    Callable, Callback, Component, El, each_layout, el, prevent_default, relayout, stop_propagation,
+};
 use keyboard_types::{Key, NamedKey};
 
 mod styles {
@@ -30,7 +32,23 @@ mod styles {
 
 /// Builds a select over `chosen`, the place of the chosen one among
 /// `options`. `changed` hears each option a person chose.
-pub fn select(
+pub struct Select {
+    pub options: Vec<String>,
+    /// The place of the chosen one among the options: the select follows
+    /// it, and sets it as one is chosen.
+    pub chosen: RwSignal<usize>,
+    /// Told of each option a person chose.
+    pub on_change: Callback<usize>,
+}
+
+impl Component for Select {
+    fn view(self) -> El {
+        let on_change = self.on_change;
+        select(self.options, self.chosen, move |index| on_change.run(index))
+    }
+}
+
+fn select(
     options: Vec<String>,
     chosen: RwSignal<usize>,
     changed: impl Fn(usize) + Clone + 'static,

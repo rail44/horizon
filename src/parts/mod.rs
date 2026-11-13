@@ -24,11 +24,11 @@ mod slider;
 
 pub use button::{Button, ButtonKind, ButtonSize, Press};
 pub use chip::{Chip, Tone};
-pub use color::{color_picker, hex, parse_hex};
-pub use field::{field, prompt, prompt_of};
+pub use color::{ColorPicker, hex, parse_hex};
+pub use field::{Field, Prompt};
 pub use gallery::gallery;
-pub use select::select;
-pub use slider::{Range, slider};
+pub use select::Select;
+pub use slider::{Range, Slider};
 
 /// Hears where the pointer is, on the page.
 type Moved = Rc<dyn Fn(f32, f32)>;

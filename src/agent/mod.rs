@@ -15,10 +15,11 @@ use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, WithValue};
+use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::windowed::{follow_tail, windowed};
 use horizon_ui::{Callback, Component, El, dispatched, el, prevent_default, stop_propagation};
 
-use crate::parts::{self, Button, ButtonKind, ButtonSize, Chip, field, prompt_of};
+use crate::parts::{self, Button, ButtonKind, ButtonSize, Chip, Field, Prompt};
 use keyboard_types::{Key, NamedKey};
 
 use horizon_agent_display::chrome;
@@ -325,17 +326,13 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
     let composer = el("div").class(styles::COMPOSER).child(
         el("div")
             .class(styles::BOX)
-            .child(
-                el("div")
-                    .class(styles::FIELD)
-                    .child(field(state.field).when(
-                        move || state.typed.get().is_empty(),
-                        move || {
-                            prompt_of()
-                                .text_dyn(move || placeholder(state.status.get()).to_string())
-                        },
-                    )),
-            )
+            .child(el("div").class(styles::FIELD).child(Field {
+                input: state.field,
+                prompt: Some(Prompt {
+                    text: Signal::derive(move || placeholder(state.status.get()).to_string()),
+                    shown: Signal::derive(move || state.typed.get().is_empty()),
+                }),
+            }))
             .child(
                 el("div")
                     .class(styles::HINTS)

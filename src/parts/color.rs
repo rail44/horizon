@@ -14,7 +14,10 @@ use std::rc::Rc;
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set};
-use horizon_ui::{El, dispatched, each_layout, el, prevent_default, relayout, stop_propagation};
+use horizon_ui::{
+    Callable, Callback, Component, El, dispatched, each_layout, el, prevent_default, relayout,
+    stop_propagation,
+};
 use keyboard_types::{Key, NamedKey};
 
 use super::Drags;
@@ -110,7 +113,23 @@ fn from_hsv((hue, saturation, value): Hsv) -> [u8; 3] {
 
 /// Builds a color picker over `value`. `changed` hears each color a
 /// person chose.
-pub fn color_picker(
+pub struct ColorPicker<'a> {
+    /// The color: the picker follows it, and sets it as one is picked.
+    pub value: RwSignal<[u8; 3]>,
+    /// Where a drag that leaves the picker is heard (`Drags::wire`).
+    pub drags: &'a Drags,
+    /// Told of each color a person picked.
+    pub on_change: Callback<[u8; 3]>,
+}
+
+impl Component for ColorPicker<'_> {
+    fn view(self) -> El {
+        let on_change = self.on_change;
+        color_picker(self.value, self.drags, move |color| on_change.run(color))
+    }
+}
+
+fn color_picker(
     value: RwSignal<[u8; 3]>,
     drags: &Drags,
     changed: impl Fn([u8; 3]) + 'static,

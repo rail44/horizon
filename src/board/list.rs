@@ -20,6 +20,7 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
 };
+use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{
     Component, El, OneOf, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
 };
@@ -29,7 +30,7 @@ use keyboard_types::{Key, NamedKey};
 use super::follow;
 use super::{Activity, Job, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
-use crate::parts::{self, Chip, Tone};
+use crate::parts::{Chip, Field, Prompt, Tone};
 
 // The measurements are in the theme's scaled lengths (`--u8` is 8 px at
 // the reference type size).
@@ -726,38 +727,36 @@ pub fn view(
         },
     )
     .child(
-        el("div").class(styles::ADD).child(
-            parts::field(
-                field
-                    .on("input", move |event| {
-                        if let DomEventData::Input(input) = &event.data {
-                            state.typed.set(input.value.clone());
+        el("div").class(styles::ADD).child(Field {
+            input: field
+                .on("input", move |event| {
+                    if let DomEventData::Input(input) = &event.data {
+                        state.typed.set(input.value.clone());
+                    }
+                })
+                // The field's keys are its own: Enter adds the task,
+                // Escape goes back to the rows.
+                .on("keydown", move |event| {
+                    let DomEventData::KeyDown(key) = &event.data else {
+                        return;
+                    };
+                    match &key.key {
+                        Key::Named(NamedKey::Enter) => {
+                            state.execute(ListCommand::AddTask);
+                            prevent_default();
                         }
-                    })
-                    // The field's keys are its own: Enter adds the task,
-                    // Escape goes back to the rows.
-                    .on("keydown", move |event| {
-                        let DomEventData::KeyDown(key) = &event.data else {
-                            return;
-                        };
-                        match &key.key {
-                            Key::Named(NamedKey::Enter) => {
-                                state.execute(ListCommand::AddTask);
-                                prevent_default();
-                            }
-                            Key::Named(NamedKey::Escape) => {
-                                root.focus();
-                            }
-                            _ => {}
+                        Key::Named(NamedKey::Escape) => {
+                            root.focus();
                         }
-                        stop_propagation();
-                    }),
-            )
-            .when(
-                move || state.typed.with(String::is_empty),
-                || parts::prompt(chrome::ADD_TASK),
-            ),
-        ),
+                        _ => {}
+                    }
+                    stop_propagation();
+                }),
+            prompt: Some(Prompt {
+                text: chrome::ADD_TASK.into(),
+                shown: Signal::derive(move || state.typed.with(String::is_empty)),
+            }),
+        }),
     )
     .when(
         move || state.carried.get().is_some(),

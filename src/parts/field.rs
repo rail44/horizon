@@ -3,15 +3,13 @@
 //! empty.
 //!
 //! The field is the view's: it made it, hears its events and gives it
-//! the keys. `field` is the box it sits in. blitz-dom does not draw a
+//! the keys. `Field` is the box it sits in. blitz-dom does not draw a
 //! field's `placeholder`, so the prompt is an element in the same place,
-//! there while whoever placed it says the field is empty:
-//!
-//! ```ignore
-//! field(input).when(move || typed.with(String::is_empty), || prompt("Search..."))
-//! ```
+//! there while whoever placed it says the field is empty.
 
-use horizon_ui::{El, el};
+use horizon_ui::reactive_graph::traits::Get;
+use horizon_ui::reactive_graph::wrappers::read::Signal;
+use horizon_ui::{Component, El, el};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -26,18 +24,30 @@ mod styles {
 
 /// The box `input` is typed in, at the size and in the type of the text
 /// around it.
-pub fn field(input: El) -> El {
-    el("div")
-        .class(styles::FIELD)
-        .child(input.class(styles::INPUT))
+pub struct Field {
+    /// The `input` or `textarea`.
+    pub input: El,
+    pub prompt: Option<Prompt>,
 }
 
-/// What a field says while it is empty: placed in the field's box.
-pub fn prompt(text: &str) -> El {
-    prompt_of().text(text)
+/// What a field says while it is empty.
+pub struct Prompt {
+    pub text: Signal<String>,
+    /// Whether the field is empty: the prompt is there while it is.
+    pub shown: Signal<bool>,
 }
 
-/// A prompt whose words whoever asked puts in it.
-pub fn prompt_of() -> El {
-    el("div").class(styles::PROMPT)
+impl Component for Field {
+    fn view(self) -> El {
+        let field = el("div")
+            .class(styles::FIELD)
+            .child(self.input.class(styles::INPUT));
+        let Some(Prompt { text, shown }) = self.prompt else {
+            return field;
+        };
+        field.when(
+            move || shown.get(),
+            move || el("div").class(styles::PROMPT).text_dyn(move || text.get()),
+        )
+    }
 }

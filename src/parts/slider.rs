@@ -4,7 +4,7 @@
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set};
-use horizon_ui::{El, dispatched, el, prevent_default};
+use horizon_ui::{Callable, Callback, Component, El, dispatched, el, prevent_default};
 use keyboard_types::{Key, NamedKey};
 
 use super::Drags;
@@ -48,7 +48,26 @@ impl Range {
 
 /// Builds a slider over `value`. `changed` hears each value a person
 /// moved it to.
-pub fn slider(
+pub struct Slider<'a> {
+    /// The value: the slider follows it, and sets it as it is dragged.
+    pub value: RwSignal<f64>,
+    pub range: Range,
+    /// Where a drag that leaves the slider is heard (`Drags::wire`).
+    pub drags: &'a Drags,
+    /// Told of each value a person set.
+    pub on_change: Callback<f64>,
+}
+
+impl Component for Slider<'_> {
+    fn view(self) -> El {
+        let on_change = self.on_change;
+        slider(self.value, self.range, self.drags, move |value| {
+            on_change.run(value)
+        })
+    }
+}
+
+fn slider(
     value: RwSignal<f64>,
     range: Range,
     drags: &Drags,

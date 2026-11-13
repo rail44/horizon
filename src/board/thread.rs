@@ -18,6 +18,7 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
 };
+use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{
     Callback, Component, El, OneOf, dispatched, each_layout, el, prevent_default, relayout,
     stop_propagation,
@@ -29,7 +30,7 @@ use super::list::key_name;
 use super::{Activity, Job, Source, activity_chip, follow, run, tone, write_refusal};
 use crate::background::Background;
 use crate::markdown::{Headings, render};
-use crate::parts::{Button, ButtonKind, Chip, Tone, field, prompt};
+use crate::parts::{Button, ButtonKind, Chip, Field, Prompt, Tone};
 
 /// How many cells wide a post is taken to be when deciding whether to
 /// fold it: an owner's is narrower by its indent.
@@ -573,37 +574,35 @@ pub fn view(
         |shown| *shown,
         move |(closed, has_session)| actions(state, *closed, *has_session),
     );
-    let status_field = el("div").class(styles::STATUS).child(
-        field(
-            status
-                .on("input", move |event| {
-                    if let DomEventData::Input(input) = &event.data {
-                        state.status_typed.set(input.value.clone());
+    let status_field = el("div").class(styles::STATUS).child(Field {
+        input: status
+            .on("input", move |event| {
+                if let DomEventData::Input(input) = &event.data {
+                    state.status_typed.set(input.value.clone());
+                }
+            })
+            .on("keydown", move |event| {
+                let DomEventData::KeyDown(key) = &event.data else {
+                    return;
+                };
+                match &key.key {
+                    Key::Named(NamedKey::Enter) => {
+                        state.execute(ThreadCommand::SaveStatus);
+                        prevent_default();
                     }
-                })
-                .on("keydown", move |event| {
-                    let DomEventData::KeyDown(key) = &event.data else {
-                        return;
-                    };
-                    match &key.key {
-                        Key::Named(NamedKey::Enter) => {
-                            state.execute(ThreadCommand::SaveStatus);
-                            prevent_default();
-                        }
-                        Key::Named(NamedKey::Escape) => {
-                            state.execute(ThreadCommand::LeaveComposer);
-                        }
-                        _ => {}
+                    Key::Named(NamedKey::Escape) => {
+                        state.execute(ThreadCommand::LeaveComposer);
                     }
-                    // The field's keys are its own.
-                    stop_propagation();
-                }),
-        )
-        .when(
-            move || state.status_typed.with(String::is_empty),
-            || prompt(chrome::CHANGE_STATUS),
-        ),
-    );
+                    _ => {}
+                }
+                // The field's keys are its own.
+                stop_propagation();
+            }),
+        prompt: Some(Prompt {
+            text: chrome::CHANGE_STATUS.into(),
+            shown: Signal::derive(move || state.status_typed.with(String::is_empty)),
+        }),
+    });
     let line = el("div")
         .class(styles::STATE)
         .each(
@@ -703,49 +702,47 @@ pub fn view(
     let rows = RwSignal::new(COMPOSER_MIN_ROWS);
     let composer = el("div")
         .class(styles::COMPOSER)
-        .child(
-            field(
-                reply
-                    .attr("rows", "2")
-                    .attr_dyn("style", move || {
-                        format!("height: calc(var(--body-line) * {})", rows.get())
-                    })
-                    .on("input", move |event| {
-                        if let DomEventData::Input(input) = &event.data {
-                            state.typed.set(input.value.clone());
+        .child(Field {
+            input: reply
+                .attr("rows", "2")
+                .attr_dyn("style", move || {
+                    format!("height: calc(var(--body-line) * {})", rows.get())
+                })
+                .on("input", move |event| {
+                    if let DomEventData::Input(input) = &event.data {
+                        state.typed.set(input.value.clone());
+                    }
+                    // As tall as its lines, within its bounds.
+                    dispatched(move |page| {
+                        if let Some(lines) = page.lines(reply) {
+                            rows.set(lines.clamp(COMPOSER_MIN_ROWS, COMPOSER_MAX_ROWS));
                         }
-                        // As tall as its lines, within its bounds.
-                        dispatched(move |page| {
-                            if let Some(lines) = page.lines(reply) {
-                                rows.set(lines.clamp(COMPOSER_MIN_ROWS, COMPOSER_MAX_ROWS));
-                            }
-                        });
-                    })
-                    .on("keydown", move |event| {
-                        let DomEventData::KeyDown(key) = &event.data else {
-                            return;
-                        };
-                        match &key.key {
-                            Key::Named(NamedKey::Enter)
-                                if !key.modifiers.shift() && !key.is_composing =>
-                            {
-                                state.execute(ThreadCommand::PostMessage);
-                                rows.set(COMPOSER_MIN_ROWS);
-                                prevent_default();
-                            }
-                            Key::Named(NamedKey::Escape) => {
-                                state.execute(ThreadCommand::LeaveComposer);
-                            }
-                            _ => {}
+                    });
+                })
+                .on("keydown", move |event| {
+                    let DomEventData::KeyDown(key) = &event.data else {
+                        return;
+                    };
+                    match &key.key {
+                        Key::Named(NamedKey::Enter)
+                            if !key.modifiers.shift() && !key.is_composing =>
+                        {
+                            state.execute(ThreadCommand::PostMessage);
+                            rows.set(COMPOSER_MIN_ROWS);
+                            prevent_default();
                         }
-                        stop_propagation();
-                    }),
-            )
-            .when(
-                move || state.typed.with(String::is_empty),
-                || prompt(chrome::WRITE_REPLY),
-            ),
-        )
+                        Key::Named(NamedKey::Escape) => {
+                            state.execute(ThreadCommand::LeaveComposer);
+                        }
+                        _ => {}
+                    }
+                    stop_propagation();
+                }),
+            prompt: Some(Prompt {
+                text: chrome::WRITE_REPLY.into(),
+                shown: Signal::derive(move || state.typed.with(String::is_empty)),
+            }),
+        })
         .child(
             el("div")
                 .class(styles::SEND)

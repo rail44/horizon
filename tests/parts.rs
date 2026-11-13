@@ -5,14 +5,14 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use horizon::parts::{Drags, Range, color_picker, select, slider};
+use horizon::parts::{ColorPicker, Drags, Range, Select, Slider};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::GetUntracked;
 use horizon_ui::testing::{Pointer, click_at, pointer};
-use horizon_ui::{App, El, el};
+use horizon_ui::{App, Callback, Component, El, el};
 use keyboard_types::{Key, Modifiers, NamedKey};
 
 const HOST: &str = "
@@ -127,7 +127,15 @@ fn a_slider_follows_a_press_a_drag_and_the_keys_in_its_steps() {
         max: 10.,
         step: 0.5,
     };
-    let app = open(|drags| slider(value, range, drags, move |to| log.borrow_mut().push(to)));
+    let app = open(|drags| {
+        Slider {
+            value,
+            range,
+            drags,
+            on_change: Callback::new(move |to| log.borrow_mut().push(to)),
+        }
+        .view()
+    });
     let track = all(&app, "track")[0];
     // The thumb is where the value is along the track.
     let (track_x, _, track_width, _) = bounds(&app, track);
@@ -174,7 +182,14 @@ fn a_select_opens_its_options_and_one_is_chosen_by_click_or_key() {
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = heard.clone();
     let options = ["red", "green", "custom"].map(String::from).to_vec();
-    let app = open(|_| select(options, chosen, move |index| log.borrow_mut().push(index)));
+    let app = open(|_| {
+        Select {
+            options,
+            chosen,
+            on_change: Callback::new(move |index| log.borrow_mut().push(index)),
+        }
+        .view()
+    });
     let text = |app: &App, node: NodeId| {
         let document = app.document();
         let document = document.borrow();
@@ -219,7 +234,14 @@ fn a_color_picker_chooses_on_its_area_and_its_bar_of_hues() {
     let value = RwSignal::new([255, 0, 0]);
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = heard.clone();
-    let app = open(|drags| color_picker(value, drags, move |color| log.borrow_mut().push(color)));
+    let app = open(|drags| {
+        ColorPicker {
+            value,
+            drags,
+            on_change: Callback::new(move |color| log.borrow_mut().push(color)),
+        }
+        .view()
+    });
     assert!(all(&app, "panel").is_empty());
     click(&app, all(&app, "swatch")[0], 0.5, 0.5);
     assert_eq!(all(&app, "panel").len(), 1);
@@ -271,7 +293,14 @@ fn a_color_picker_is_worked_from_the_keyboard() {
     let value = RwSignal::new([255, 0, 0]);
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = heard.clone();
-    let app = open(|drags| color_picker(value, drags, move |color| log.borrow_mut().push(color)));
+    let app = open(|drags| {
+        ColorPicker {
+            value,
+            drags,
+            on_change: Callback::new(move |color| log.borrow_mut().push(color)),
+        }
+        .view()
+    });
     // The swatch has the keys (a click on it, and its panel shut again).
     click(&app, all(&app, "swatch")[0], 0.5, 0.5);
     named(&app, NamedKey::Escape);
@@ -320,7 +349,6 @@ fn a_color_picker_is_worked_from_the_keyboard() {
 #[test]
 fn a_button_is_pressed_by_a_click_and_by_enter_or_space_and_leaves_the_keys_where_they_were() {
     use horizon::parts::Button;
-    use horizon_ui::{Callback, Component};
 
     let presses = Rc::new(RefCell::new(0));
     let counted = presses.clone();

@@ -7,11 +7,12 @@ use horizon_ui::blitz_traits::events::{BlitzKeyEvent, DomEventData};
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, WithUntracked};
+use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Class, El, el, prevent_default, stop_propagation};
 use keyboard_types::{Key, NamedKey};
 
 use super::{Shell, styles};
-use crate::parts::{field, prompt};
+use crate::parts::{Field, Prompt};
 
 /// One row: its parts as text, each under a class of its own.
 #[derive(Clone, PartialEq)]
@@ -90,47 +91,50 @@ pub(super) fn view_in_steps(
             )
         },
     );
-    let list =
-        el("div")
-            .class(styles::PICKER)
-            // A press in the list is not one outside it.
-            .on("pointerdown", |_| stop_propagation())
-            .on("keydown", move |event| {
-                let DomEventData::KeyDown(key) = &event.data else {
-                    return;
-                };
-                let count = rows.with_untracked(Vec::len);
-                let chosen = shell.chosen.get_untracked().min(count.saturating_sub(1));
-                let (down, up) = (
-                    (chosen + 1).min(count.saturating_sub(1)),
-                    chosen.saturating_sub(1),
-                );
-                match &key.key {
-                    Key::Named(NamedKey::ArrowDown) => shell.chosen.set(down),
-                    Key::Named(NamedKey::ArrowUp) => shell.chosen.set(up),
-                    Key::Named(NamedKey::Tab) if key.modifiers.shift() => shell.chosen.set(up),
-                    Key::Named(NamedKey::Tab) => shell.chosen.set(down),
-                    Key::Named(NamedKey::Escape) => {
-                        if !back() {
-                            close();
-                        }
+    let list = el("div")
+        .class(styles::PICKER)
+        // A press in the list is not one outside it.
+        .on("pointerdown", |_| stop_propagation())
+        .on("keydown", move |event| {
+            let DomEventData::KeyDown(key) = &event.data else {
+                return;
+            };
+            let count = rows.with_untracked(Vec::len);
+            let chosen = shell.chosen.get_untracked().min(count.saturating_sub(1));
+            let (down, up) = (
+                (chosen + 1).min(count.saturating_sub(1)),
+                chosen.saturating_sub(1),
+            );
+            match &key.key {
+                Key::Named(NamedKey::ArrowDown) => shell.chosen.set(down),
+                Key::Named(NamedKey::ArrowUp) => shell.chosen.set(up),
+                Key::Named(NamedKey::Tab) if key.modifiers.shift() => shell.chosen.set(up),
+                Key::Named(NamedKey::Tab) => shell.chosen.set(down),
+                Key::Named(NamedKey::Escape) => {
+                    if !back() {
+                        close();
                     }
-                    _ if count == 0 => return,
-                    Key::Named(NamedKey::Enter) if key.modifiers.ctrl() => {
-                        picked(chosen, Picked::ConfirmedSecondary);
-                    }
-                    Key::Named(NamedKey::Enter) => picked(chosen, Picked::Confirmed),
-                    _ if key.modifiers.ctrl() => picked(chosen, Picked::Chord(key)),
-                    // Anything else is the field's.
-                    _ => return,
                 }
-                prevent_default();
-                stop_propagation();
-            })
-            .child(el("div").class(styles::SEARCH).child(
-                field(input).when(move || shell.query.get().is_empty(), || prompt("Search...")),
-            ))
-            .child(items);
+                _ if count == 0 => return,
+                Key::Named(NamedKey::Enter) if key.modifiers.ctrl() => {
+                    picked(chosen, Picked::ConfirmedSecondary);
+                }
+                Key::Named(NamedKey::Enter) => picked(chosen, Picked::Confirmed),
+                _ if key.modifiers.ctrl() => picked(chosen, Picked::Chord(key)),
+                // Anything else is the field's.
+                _ => return,
+            }
+            prevent_default();
+            stop_propagation();
+        })
+        .child(el("div").class(styles::SEARCH).child(Field {
+            input,
+            prompt: Some(Prompt {
+                text: "Search...".into(),
+                shown: Signal::derive(move || shell.query.get().is_empty()),
+            }),
+        }))
+        .child(items);
     el("div")
         .class(styles::SCRIM)
         .on("pointerdown", move |_| close())

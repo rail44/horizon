@@ -3,7 +3,7 @@
 
 use horizon_ui::{Component, El, el};
 
-use super::{Button, ButtonKind, ButtonSize, Chip, Tone, field, prompt};
+use super::{Button, ButtonKind, ButtonSize, Chip, Field, Prompt, Tone};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -101,8 +101,23 @@ fn fields() -> El {
         vec![(
             "empty with its prompt, and typed in (the box around is whoever places it's)",
             vec![
-                boxed(field(el("input").attr("type", "text")).child(prompt("Add a task..."))),
-                boxed(field(typed)),
+                boxed(
+                    Field {
+                        input: el("input").attr("type", "text"),
+                        prompt: Some(Prompt {
+                            text: "Add a task...".into(),
+                            shown: true.into(),
+                        }),
+                    }
+                    .view(),
+                ),
+                boxed(
+                    Field {
+                        input: typed,
+                        prompt: None,
+                    }
+                    .view(),
+                ),
             ],
         )],
     )

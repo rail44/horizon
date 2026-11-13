@@ -13,9 +13,9 @@ use horizon_theme::seed::{AccentValue, HueSlot, ResolvedFallback, Seed};
 use horizon_theme_css::Theme;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
-use horizon_ui::{El, el};
+use horizon_ui::{Callback, Component, El, el};
 
-use crate::parts::{Drags, Range, color_picker, select, slider};
+use crate::parts::{ColorPicker, Drags, Range, Select, Slider};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -183,17 +183,27 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
     let surface = {
         let value = RwSignal::new(rgb(seed.get_untracked().surface_base));
         let change = change.clone();
-        color_picker(value, &drags, move |color| {
-            change(&|seed| seed.surface_base = packed(color));
-        })
+        ColorPicker {
+            value,
+            drags: &drags,
+            on_change: Callback::new(move |color| {
+                change(&|seed| seed.surface_base = packed(color));
+            }),
+        }
+        .view()
     };
     let hues = el("div").class(styles::ROW);
     for slot in HueSlot::ALL {
         let value = RwSignal::new(rgb(seed.get_untracked().hue(slot)));
         let change = change.clone();
-        let control = color_picker(value, &drags, move |color| {
-            change(&|seed| *seed = seed.with_hue(slot, packed(color)));
-        });
+        let control = ColorPicker {
+            value,
+            drags: &drags,
+            on_change: Callback::new(move |color| {
+                change(&|seed| *seed = seed.with_hue(slot, packed(color)));
+            }),
+        }
+        .view();
         hues.child(labeled(slot.label(), control));
     }
 
@@ -213,13 +223,17 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
     }));
     let options = ACCENT_OPTIONS.map(String::from).to_vec();
     let by_name = change.clone();
-    let accent_select = select(options, chosen, move |index| {
-        let accent = match HueSlot::ALL.get(index) {
-            Some(slot) => AccentValue::Slot(*slot),
-            None => AccentValue::Hex(packed(custom.get_untracked())),
-        };
-        by_name(&|seed| seed.accent = accent);
-    });
+    let accent_select = Select {
+        options,
+        chosen,
+        on_change: Callback::new(move |index: usize| {
+            let accent = match HueSlot::ALL.get(index) {
+                Some(slot) => AccentValue::Slot(*slot),
+                None => AccentValue::Hex(packed(custom.get_untracked())),
+            };
+            by_name(&|seed| seed.accent = accent);
+        }),
+    };
     let by_color = change.clone();
     let custom_drags = drags.clone();
     let accent = el("div")
@@ -229,9 +243,14 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
             move || chosen.get() == ACCENT_OPTIONS.len() - 1,
             move || {
                 let change = by_color.clone();
-                color_picker(custom, &custom_drags, move |color| {
-                    change(&|seed| seed.accent = AccentValue::Hex(packed(color)));
-                })
+                ColorPicker {
+                    value: custom,
+                    drags: &custom_drags,
+                    on_change: Callback::new(move |color| {
+                        change(&|seed| seed.accent = AccentValue::Hex(packed(color)));
+                    }),
+                }
+                .view()
             },
         );
 
@@ -242,9 +261,14 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
         step: 0.1,
     };
     let by_contrast = change.clone();
-    let contrast_slider = slider(contrast, range, &drags, move |value| {
-        by_contrast(&|seed| seed.text_contrast = Seed::clamp_contrast(value));
-    });
+    let contrast_slider = Slider {
+        value: contrast,
+        range,
+        drags: &drags,
+        on_change: Callback::new(move |value| {
+            by_contrast(&|seed| seed.text_contrast = Seed::clamp_contrast(value));
+        }),
+    };
 
     let saving = host.clone();
     let path = (host.path.as_ref())
