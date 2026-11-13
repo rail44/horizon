@@ -235,7 +235,10 @@ fn a_task_is_its_band_its_body_and_its_posts_and_what_is_shown_is_read() {
 
     // The session's button asks the shell for the bound session.
     opened.click(opened.all("button")[2]);
-    assert!(matches!(opened.asked.borrow()[..], [Asked::OpenSession(_)]));
+    assert!(matches!(
+        opened.asked.borrow()[..],
+        [Asked::OpenSession { .. }]
+    ));
 }
 
 #[test]

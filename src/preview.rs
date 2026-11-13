@@ -28,6 +28,7 @@ use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, With, WithUntracked};
+use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{
     El, dispatched, each_effects, each_layout, el, host, prevent_default, relayout,
     stop_propagation,
@@ -508,26 +509,17 @@ type Read = (Target, u32, Result<Compiled, String>);
 /// A preview pane's state, for whoever placed it to drive.
 #[derive(Clone, Copy)]
 pub struct Preview {
-    target: RwSignal<Option<Target>>,
+    /// What the pane is given to show: it follows it.
+    target: Signal<Option<Target>>,
     /// Moves when the file is to be read again.
     reads: RwSignal<u32>,
     read: RwSignal<Option<Read>>,
 }
 
 impl Preview {
-    /// Shows `target`, its file read anew.
-    pub fn show(&self, target: Target) {
-        self.target.set(Some(target));
-        self.reload();
-    }
-
     /// Reads the file again.
     pub fn reload(&self) {
         self.reads.update(|reads| *reads += 1);
-    }
-
-    pub fn target(&self) -> Option<Target> {
-        self.target.get_untracked()
     }
 }
 
@@ -587,9 +579,14 @@ fn shown(compiled: Result<Compiled, String>, name: Option<&str>) -> El {
 
 /// A preview pane, empty until it is given a target. `background` is
 /// where the file is compiled, and `wake` what a change of the file wakes.
-pub fn view(background: Background, wake: Wake) -> (El, Preview) {
+pub fn view(
+    // What to show: the pane follows it.
+    target: Signal<Option<Target>>,
+    background: Background,
+    wake: Wake,
+) -> (El, Preview) {
     let state = Preview {
-        target: RwSignal::new(None),
+        target,
         reads: RwSignal::new(0),
         read: RwSignal::new(None),
     };

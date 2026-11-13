@@ -364,8 +364,12 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         let running = agentd.running().expect("the daemon's sessions");
         running.iter().any(|agent| agent.session == elsewhere)
     });
+    // What whoever asked is told went wrong.
     let notice = horizon_ui::reactive_graph::signal::RwSignal::new(None);
-    shell.open_task_session(elsewhere, notice);
+    let failed = horizon_ui::Callback::new(move |error: String| {
+        horizon_ui::reactive_graph::traits::Set::set(&notice, Some(error))
+    });
+    shell.open_task_session(elsewhere, failed);
     until("the task's session", &|| agents().contains(&elsewhere));
     until("its pane", &|| {
         shown()
@@ -373,7 +377,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
             .any(|(_, session)| *session == Some(elsewhere))
     });
     assert_eq!(notice.get_untracked(), None);
-    shell.open_task_session(horizon_workspace::SessionId::new(), notice);
+    shell.open_task_session(horizon_workspace::SessionId::new(), failed);
     until("the refusal", &|| notice.get_untracked().is_some());
     assert_eq!(agents().len(), 3);
 

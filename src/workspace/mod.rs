@@ -332,7 +332,8 @@ struct PaneView {
     agent: Option<Agent>,
     board_list: Option<BoardList>,
     board_thread: Option<BoardThread>,
-    preview: Option<Preview>,
+    /// A preview pane's view, and what the shell has it show.
+    preview: Option<(Preview, RwSignal<Option<preview::Target>>)>,
     /// The sessions a board view says its tasks are bound to.
     bound: Option<RwSignal<Vec<SessionId>>>,
 }
@@ -640,12 +641,19 @@ impl Shell {
                 }
                 (PaneKind::View(ViewKind::BoardList), ..) => {
                     let background = Background::new(kept.wake.clone());
+                    let source = self.board_source();
+                    // (The board's project, for what the view asks that
+                    // is the project's.)
+                    let project = source.root();
                     let (root, view) = board::list::view(
-                        self.board_source(),
+                        source,
                         background,
                         self.board_sessions(&mut bound),
                         move |asked| match asked {
                             board::list::Asked::OpenThread(task) => shell.open_thread(id, task),
+                            board::list::Asked::OpenOrganizer { failed } => {
+                                shell.open_board_organizer(id, project.clone(), failed);
+                            }
                         },
                     );
                     board_list = Some(view);
@@ -661,16 +669,19 @@ impl Shell {
                             _ => task,
                         })
                     });
+                    let source = self.board_source();
+                    let project = source.root();
                     let (root, view) = board::thread::view(
-                        self.board_source(),
+                        source,
                         background,
                         shown.into(),
                         self.board_sessions(&mut bound),
                         move |asked| match asked {
-                            board::thread::Asked::OpenSession(session) => {
-                                if let Some(thread) = shell.board_thread(id) {
-                                    shell.open_task_session(session, thread.notice);
-                                }
+                            board::thread::Asked::OpenSession { session, failed } => {
+                                shell.open_task_session(session, failed);
+                            }
+                            board::thread::Asked::OpenOrganizer { failed } => {
+                                shell.open_board_organizer(id, project.clone(), failed);
                             }
                         },
                     );
@@ -681,8 +692,10 @@ impl Shell {
                 // alone, and not the model's: it comes back empty.
                 (PaneKind::View(ViewKind::Preview), ..) => {
                     let background = Background::new(kept.wake.clone());
-                    let (root, view) = preview::view(background, kept.wake.clone());
-                    shown_preview = Some(view);
+                    // What it shows is the shell's to say, pane by pane.
+                    let target = RwSignal::new(None);
+                    let (root, view) = preview::view(target.into(), background, kept.wake.clone());
+                    shown_preview = Some((view, target));
                     root
                 }
                 _ => el("div")
@@ -1069,7 +1082,7 @@ impl Shell {
 
     /// The preview a pane shows.
     pub fn preview(&self, pane: PaneId) -> Option<Preview> {
-        self.kept().panes.borrow().get(&pane)?.preview
+        Some(self.kept().panes.borrow().get(&pane)?.preview.as_ref()?.0)
     }
 
     /// The agent view a pane shows.

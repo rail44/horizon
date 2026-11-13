@@ -10,7 +10,7 @@ use horizon_terminal_core::TerminalCommand;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Update, WithUntracked};
 use horizon_ui::request_paste;
 use horizon_workspace::commands::{CommandId, CommandState};
-use horizon_workspace::{CloseCursorOutcome, ViewKind, Workspace};
+use horizon_workspace::{CloseCursorOutcome, PaneKind, ViewKind, Workspace};
 
 use super::{Modal, Placement, Shell};
 use crate::agent::AgentSession;
@@ -21,8 +21,16 @@ impl Shell {
         let standing = (self.active_agent())
             .map(|session| session.standing())
             .unwrap_or_default();
-        let on_board = (self.model.with_untracked(Workspace::cursor_pane_id)).is_some_and(|pane| {
-            self.board_list(pane).is_some() || self.board_thread(pane).is_some()
+        let on_board = self.model.with_untracked(|model| {
+            let kind = model
+                .cursor_pane_id()
+                .and_then(|pane| model.pane_kind(pane));
+            matches!(
+                kind,
+                Some(PaneKind::View(
+                    ViewKind::BoardList | ViewKind::BoardThread { .. }
+                ))
+            )
         });
         let kept = self.kept();
         self.model.with_untracked(|model| CommandState {
@@ -154,7 +162,15 @@ impl Shell {
                 Some(Err(error)) => eprintln!("horizon config: reload failed: {error}"),
                 None => {}
             },
-            CommandId::OpenBoardOrganizer => self.open_board_organizer(),
+            // The board the cursor is on asks for it, and says what goes
+            // wrong.
+            CommandId::OpenBoardOrganizer => {
+                if let Some((_, list)) = self.active_board_list() {
+                    list.open_organizer();
+                } else if let Some(thread) = self.active_board_thread() {
+                    thread.open_organizer();
+                }
+            }
             CommandId::ReloadAgentRuntime => self.reload_agent_runtime(),
             CommandId::ReloadTerminalRuntime => self.reload_terminal_runtime(),
             CommandId::IncreaseFontSize => self.step_font_size(1.),

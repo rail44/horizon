@@ -15,6 +15,8 @@ use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::Set;
 use horizon_ui::testing::{Pointer, click_at, pointer};
 use keyboard_types::{Key, Modifiers, NamedKey};
 
@@ -46,18 +48,19 @@ struct Opened {
 fn open_at(path: &std::path::Path, name: &str) -> Opened {
     let mut made = None;
     let app = App::new(600, 500, horizon_theme_css::CSS, || {
-        let (root, preview) = view(Background::default(), Wake::default());
-        made = Some((root, preview));
+        let target = RwSignal::new(None);
+        let (root, preview) = view(target.into(), Background::default(), Wake::default());
+        made = Some((root, preview, target));
         themed(Theme::built_in, root)
     });
-    let (root, preview) = made.unwrap();
+    let (root, preview, target) = made.unwrap();
     // The pane has the keys before its plugin is read, as a pane of the
     // shell does: they go on to what the plugin shows.
     root.focus();
-    preview.show(Target {
+    target.set(Some(Target {
         path: path.to_path_buf(),
         name: Some(name.to_string()),
-    });
+    }));
     let opened = Opened { app, preview };
     // The file is compiled off this thread.
     opened.app.run_effects();
@@ -387,7 +390,12 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
     let opened = Opened {
         app,
         // (Not this test's: the panes' own are asked of the shell.)
-        preview: view(Background::default(), Wake::default()).1,
+        preview: view(
+            RwSignal::new(None).into(),
+            Background::default(),
+            Wake::default(),
+        )
+        .1,
     };
     let ask = |args: serde_json::Value| {
         let answer = shell.control(&ControlRequest::Invoke(Invoke {

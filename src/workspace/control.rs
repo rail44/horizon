@@ -6,7 +6,7 @@ use horizon_control::contract::{EnvelopeBody, Query, SessionEntry, Sessions, Sta
 use horizon_control::host::executor::{ControlRequest, error_body};
 use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::control_invoke::{self, Command};
-use horizon_ui::reactive_graph::traits::WithUntracked;
+use horizon_ui::reactive_graph::traits::{GetUntracked, Set, WithUntracked};
 use horizon_workspace::commands::{CommandId, core_commands};
 use horizon_workspace::{PaneId, SessionId, SessionKind, ViewKind, Workspace};
 
@@ -231,7 +231,7 @@ impl Shell {
             let kept = self.kept();
             let panes = kept.panes.borrow();
             (panes.iter())
-                .filter_map(|(pane, view)| Some((*pane, view.preview?.target())))
+                .filter_map(|(pane, view)| Some((*pane, view.preview?.1.get_untracked())))
                 .collect()
         };
         let showing = |path: &std::path::Path| {
@@ -262,7 +262,13 @@ impl Shell {
                 opened.ok_or("unknown split target session")?
             }
         };
-        (self.preview(pane).ok_or("the pane has no preview")?).show(target);
+        // The pane is told what to show, and reads the file anew even if
+        // it is the one it showed.
+        let (preview, shown) = (self.kept().panes.borrow().get(&pane))
+            .and_then(|view| view.preview)
+            .ok_or("the pane has no preview")?;
+        shown.set(Some(target));
+        preview.reload();
         if activate {
             self.change(|model| {
                 if let Some((tab, pane)) = model.pane_position(pane) {

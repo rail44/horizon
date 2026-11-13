@@ -106,10 +106,29 @@ mod styles {
 }
 
 /// What the thread asks of whatever holds it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Asked {
-    /// The agent session bound to the task, in a pane.
-    OpenSession(SessionId),
+    /// The agent session bound to the task, in a pane. `failed` is told
+    /// what went wrong.
+    OpenSession {
+        session: SessionId,
+        failed: Callback<String>,
+    },
+    /// The board's organizer, in a pane.
+    OpenOrganizer { failed: Callback<String> },
+}
+
+/// (What is asked is the same whoever is to be told of a failure.)
+impl PartialEq for Asked {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::OpenSession { session, .. }, Self::OpenSession { session: other, .. }) => {
+                session == other
+            }
+            (Self::OpenOrganizer { .. }, Self::OpenOrganizer { .. }) => true,
+            _ => false,
+        }
+    }
 }
 
 /// What the view keeps that is not a signal.
@@ -158,8 +177,18 @@ impl BoardThread {
     }
 
     /// The directory of the project whose board this is.
-    pub fn root(&self) -> Option<std::path::PathBuf> {
-        self.held().source.root()
+    /// Asks for the board's organizer: what goes wrong is said on the
+    /// notice line.
+    pub fn open_organizer(&self) {
+        (self.held().ask)(Asked::OpenOrganizer {
+            failed: self.failed(),
+        });
+    }
+
+    /// Says what went wrong with something asked for, on the notice line.
+    fn failed(&self) -> Callback<String> {
+        let notice = self.notice;
+        Callback::new(move |error| notice.set(Some(error)))
     }
 
     /// Reads the task again.
@@ -313,7 +342,10 @@ impl BoardThread {
             }
             ThreadCommand::OpenTaskSession => {
                 if let Some(session) = self.task_session() {
-                    (self.held().ask)(Asked::OpenSession(session));
+                    (self.held().ask)(Asked::OpenSession {
+                        session,
+                        failed: self.failed(),
+                    });
                 }
             }
             ThreadCommand::PostMessage => {

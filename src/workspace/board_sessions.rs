@@ -4,14 +4,15 @@
 //! which is then taken into the workspace.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use horizon_board_view::activity::BoardSessionActivity;
 
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Update, WithUntracked};
-use horizon_ui::relayout;
-use horizon_workspace::{PaneKind, SessionId, SessionKind, Workspace};
+use horizon_ui::{Callable, Callback, relayout};
+use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, Workspace};
 
 use super::{RunningAgent, Shell};
 
@@ -148,17 +149,17 @@ impl Shell {
         );
     }
 
-    /// The organizer of the board the cursor is on, in a pane: started if
-    /// it is not running. What goes wrong is said in the board's view.
-    pub(super) fn open_board_organizer(&self) {
+    /// The organizer of the board at `root`, asked for from `pane`, in a
+    /// pane: started if it is not running. `failed` is told what goes
+    /// wrong.
+    pub(super) fn open_board_organizer(
+        &self,
+        pane: PaneId,
+        root: Option<PathBuf>,
+        failed: Callback<String>,
+    ) {
         let kept = self.kept();
-        let Some(pane) = self.model.with_untracked(Workspace::cursor_pane_id) else {
-            return;
-        };
-        let board = (self.board_list(pane))
-            .map(|list| (list.root(), list.notice))
-            .or_else(|| (self.board_thread(pane)).map(|thread| (thread.root(), thread.notice)));
-        let Some((Some(root), notice)) = board else {
+        let Some(root) = root else {
             return;
         };
         let Some(runtime) = kept.agent_runtime.as_ref() else {
@@ -193,16 +194,16 @@ impl Shell {
                     Ok(())
                 });
                 if let Err(error) = shown {
-                    notice.set(Some(error));
+                    failed.run(error);
                 }
             },
         );
     }
 
     /// The session a task is bound to, in a pane. One this workspace does
-    /// not have is looked for in the agent runtime; `notice` is where the
-    /// thread says what went wrong.
-    pub fn open_task_session(&self, session: SessionId, notice: RwSignal<Option<String>>) {
+    /// not have is looked for in the agent runtime; `failed` is told what
+    /// went wrong.
+    pub fn open_task_session(&self, session: SessionId, failed: Callback<String>) {
         let kept = self.kept();
         let known = (self.model).with_untracked(|model| model.session_pane_kind(session).is_some());
         let Some(runtime) = kept.agent_runtime.as_ref().filter(|_| !known) else {
@@ -221,7 +222,7 @@ impl Shell {
                         shell.kept().refocus.set(true);
                         shell.model.update(|model| show(model, session));
                     }
-                    Err(error) => notice.set(Some(error)),
+                    Err(error) => failed.run(error),
                 }
             },
         );
