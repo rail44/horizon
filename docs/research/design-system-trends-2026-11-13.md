@@ -175,3 +175,43 @@ Horizon の全 view を「view ごとの style sheet」に書き直す前に、�
 9. **振る舞いの基準**: 部品のキー操作を APG のパターンに合わせ、テストの基準にするか。
 10. **トークンの書式**: DTCG の書式(2025.10)でトークンを持つか。今は Rust の定数と計算。
 11. **Stylo の設定**: `:has()` などを有効にするか(`@scope` と同じ扱い)。
+
+## 6. 部品の CSS を隔離する仕組みどうしの評価
+
+部品に渡した中身(slot、children)に誰の style が当たるか、を軸に追加で調べた。印は 1 節と同じ。
+
+### 汎用 class
+
+- 強み: class だけで書くので詳細度が低く揃う(Tailwind の設計者、2017-08)**(a)**。https://adamwathan.me/css-utility-classes-and-separation-of-concerns/
+- 弱み: 部品に class を渡して上書きするとき、勝ち負けは class 属性の中の順でなく stylesheet の中の順で決まる。これを解くのが tailwind-merge **(a/b)**。https://github.com/dcastil/tailwind-merge
+
+### 名前を一意にする方式、原子的な方式
+
+- GitHub Primer は styled-components から CSS Modules へ移った(2026-06 完了)。理由は初回表示と SSR の遅さ、styled-components の保守モード。SSR 約 55% 減、部品の初期化 約 25% 減。`sx` prop 6,419 件を CSS 変数つきの CSS Modules に置き換えた。記事は CSS Modules の弱点を挙げていない(2026-09)**(a)**。https://github.blog/engineering/architecture-optimization/improving-site-performance-by-shipping-more-css/
+- StyleX は子孫 selector を禁じている。理由は「壊れやすく、予測しにくく、debug しにくい」。原則は「要素の style はその要素自身の class だけから生じる」。離れた要素に及ぶのは継承だけ **(a)**。https://stylexjs.com/docs/learn/thinking-in-stylex/
+- vanilla-extract は `selectors` に子孫を書くと error。子孫は `globalStyle` で書く **(b)**。
+
+### 要素に印を付ける方式
+
+- Vue: slot に渡した中身は渡した親のもので、子の scoped style は当たらない。子から当てるには `:slotted`。子の部品の根には親と子の両方が当たる(親が配置できるようにするための仕様)。内側へは `:deep()` **(a)**。https://vuejs.org/api/sfc-css-features.html
+- Vue の文書は、要素名の selector(`p {}`)を scoped にすると属性 selector との組み合わせで何倍も遅く、class を使えばほぼ解消すると書いている **(a)**。
+- Svelte: hash の class を付け、詳細度が 0-1-0 上がる **(a)**。https://svelte.dev/docs/svelte/scoped-styles
+- Svelte の issue #6972(2021-12、利用者)は「scoped な class を子の部品に渡せない」を最大の苦痛として挙げる。2026-11 時点で未解決 **(a)**。
+
+### Shadow DOM
+
+- `::slotted()` は直接の子にしか当たらない(Lit の文書)**(a)**。https://lit.dev/docs/components/styles/
+- 隔離は部品の変えやすさを大きく制限し、作者が CSS 変数や part で明示の口を用意する必要がある。代わりに版を上げたときに壊れにくい(Nolan Lawson、2023-12、個人)**(a)**。https://nolanlawson.com/2023/12/30/shadow-dom-and-the-problem-of-encapsulation/
+- 使わない理由として、`*` の style が境界を通らない、渡した style が部品の既定値に負ける、`::slotted` の制限、SSR しにくさ(Every Layout、2019-06、個人)**(a)**。https://every-layout.dev/blog/eschewing-shadow-dom/
+- 大規模なデザインシステムが Shadow DOM をやめた記録は確認できなかった。
+
+### `@scope`
+
+- 「selector の隔離であって、style の隔離ではない」。継承は境界を越える。近さは詳細度の後、出現順の前に効く(Chrome の記事、2023-10)**(a)**。https://developer.chrome.com/docs/css-ui/at-scope
+- 提案者の説明(Miriam Suzanne、2022-10 更新)は、完全な隔離を「より極端な use case」とし、slot は donut の穴として扱う、としている。CSS Modules や Vue の scoped は「下限を足し、属性 selector を 1 つ足す」ものと説明 **(a)**。https://css.oddbird.net/scope/explainer/
+- 「scope は cascade の働きを驚くような形で変える」(WebKit、2024-03)**(a)**。https://webkit.org/blog/15063/
+
+### 測った比較
+
+- 速さ: 1,000 部品の合成ベンチマーク(Nolan Lawson、2022-06、個人、M1)。属性による scope と class による scope は Chrome 102 で 418.8ms 対 277.1ms、Safari 15.5 で 802ms 対 80ms。Safari 16 で差はほぼ消え、Chrome 106 では stylesheet を連結すると差の大半が消えた。Shadow DOM が最も安定して速い(Chrome 56.8ms)。scope しない場合(Chrome 820ms)はどの方式より遅い。結論は「速さを方式選びの主な理由にすべきではない」**(a)**。https://nolanlawson.com/2022/06/22/style-scoping-versus-shadow-dom-which-is-fastest/
+- 不具合の数や保守性を方式どうしで測った資料は見つからなかった。
