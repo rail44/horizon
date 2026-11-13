@@ -14,7 +14,7 @@ mod styles {
                    line-height: var(--body-line); }
         .part { display: flex; flex-direction: column; gap: var(--u8); }
         .name { font-weight: 600; }
-        .line { display: flex; align-items: center; gap: var(--u8); }
+        .line { display: flex; align-items: flex-start; gap: var(--u8); }
         .said { font-size: var(--meta-size); line-height: var(--meta-line);
                 color: var(--text-muted); }
     "}
@@ -61,6 +61,31 @@ fn buttons() -> El {
     )
 }
 
+/// Rendered Markdown, with each way its headings are drawn. (Not in a
+/// plugin: the renderer is not built for one.)
+#[cfg(not(target_family = "wasm"))]
+fn markdown() -> El {
+    use std::rc::Rc;
+
+    use crate::markdown::{Headings, render};
+
+    const SAMPLE: &str = "# A heading\n\nA paragraph with `code` in it, a [link](there), and \
+        **bold**.\n\n## A second heading\n\n- one item\n- another\n\n```rust\nfn main() \
+        {}\n```\n\n> Something quoted.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
+    let shown = |headings| {
+        el("div")
+            .attr("style", "flex: 1; min-width: 0;")
+            .child(render(SAMPLE, headings, Rc::new(|_| {})))
+    };
+    part(
+        "markdown",
+        vec![(
+            "a page or a message, and a post among posts",
+            vec![shown(Headings::Scaled), shown(Headings::AsText)],
+        )],
+    )
+}
+
 /// The gallery.
 pub fn gallery() -> El {
     let tones = [
@@ -71,7 +96,7 @@ pub fn gallery() -> El {
         (Tone::Warning, "warning"),
         (Tone::Danger, "danger"),
     ];
-    el("div")
+    let gallery = el("div")
         .class(styles::GALLERY)
         .child(part(
             "chip",
@@ -93,5 +118,8 @@ pub fn gallery() -> El {
                 ),
             ],
         ))
-        .child(buttons())
+        .child(buttons());
+    #[cfg(not(target_family = "wasm"))]
+    gallery.child(markdown());
+    gallery
 }

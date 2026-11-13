@@ -25,7 +25,7 @@ use crate::wake::Wake;
 mod render;
 pub(crate) mod watch;
 
-pub use render::render;
+pub use render::{Headings, render};
 
 const BACK: &str = "Back";
 const NO_DOCUMENT: &str = "No document";
@@ -41,7 +41,6 @@ pub const CSS: &str = "
         .header { flex: none; display: flex; flex-direction: column; gap: var(--u8);
                   padding: 0 var(--u16); }
         .header > :first-child { margin-top: var(--u24); }
-        .body > :first-child { margin-top: 0; }
         .back { align-self: flex-start; padding: 0 var(--u8); border-radius: 4px;
                 font-size: var(--meta-size); line-height: 20px; color: var(--text-muted);
                 cursor: pointer; }
@@ -54,28 +53,6 @@ pub const CSS: &str = "
         .error { color: var(--danger); }
         .scroll { flex: 1; min-height: 0; overflow-y: scroll;
                   padding: var(--u24) var(--u16) var(--u32) var(--u16); }
-        .scroll h1 { font-size: var(--t2-size); line-height: var(--t2-line);
-                     font-weight: 600; margin: 16px 0 2px 0; }
-        .scroll h2, .scroll h3 { font-size: var(--body-size); line-height: var(--body-line);
-                                 font-weight: 600; margin: 16px 0 2px 0; }
-        .scroll p, .scroll ul, .scroll ol, .scroll pre, .scroll blockquote, .scroll table {
-            margin: 0 0 8px 0; }
-        .scroll ul, .scroll ol { padding-left: 18px; }
-        .scroll li { margin-bottom: 3px; }
-        .scroll pre { padding: 16px; border: 1px solid var(--border); border-radius: 6px;
-                      line-height: 21px; background: var(--surface-panel);
-                      overflow-x: scroll; }
-        .scroll code { font-family: var(--font-family); }
-        .scroll :not(pre) > code { padding: 0 var(--u4); border-radius: 2px;
-                                   font-size: var(--meta-size);
-                                   background: var(--surface-panel); }
-        .language { margin: -11px 0 2px 0; text-align: right; font-size: var(--meta-size);
-                    color: var(--text-muted); }
-        .scroll blockquote { padding-left: 12px; border-left: 2px solid var(--border);
-                             color: var(--text-muted); }
-        .scroll td, .scroll th { padding: 2px 8px; border: 1px solid var(--border); }
-        .link { color: var(--accent); cursor: pointer; }
-        .link:hover { text-decoration: underline; }
     }
 ";
 
@@ -219,6 +196,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Markdo
             let open_url = open_url.clone();
             render(
                 body,
+                Headings::Scaled,
                 Rc::new(move |target: &str| link_state.follow_link(target, &open_url)),
             )
         },

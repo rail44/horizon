@@ -27,7 +27,7 @@ use keyboard_types::{Key, NamedKey};
 use super::list::key_name;
 use super::{Activity, Job, Source, activity_chip, follow, run, tone, write_refusal};
 use crate::background::Background;
-use crate::markdown::render;
+use crate::markdown::{Headings, render};
 use crate::parts::{ButtonKind, ButtonSize, Tone, button, chip};
 
 /// How many cells wide a post is taken to be when deciding whether to
@@ -98,17 +98,6 @@ pub const CSS: &str = "
         .text.plain { white-space: pre-wrap; }
         .post.system .text { color: var(--text-muted); }
         .more { margin-top: var(--u4); color: var(--accent); cursor: pointer; }
-        .body > :first-child { margin-top: 0; }
-        .body > :last-child { margin-bottom: 0; }
-        .body p, .body ul, .body ol, .body pre, .body blockquote { margin: 0 0 8px 0; }
-        .body ul, .body ol { padding-left: 18px; }
-        .body h1, .body h2, .body h3 { font-size: var(--body-size);
-                                       line-height: var(--body-line); font-weight: 600;
-                                       margin: 12px 0 2px 0; }
-        .body pre { padding: 12px; border: 1px solid var(--border); border-radius: 6px;
-                    background: var(--surface-panel); overflow-x: scroll; }
-        .body code { font-family: var(--font-family); }
-        .link { color: var(--accent); }
         .composer { flex: none; display: flex; flex-direction: column; gap: 2px;
                     padding: var(--u8) var(--u24); border-top: 1px solid var(--border); }
         .composer .field { position: relative; }
@@ -449,9 +438,11 @@ fn post(
     // An agent's post is Markdown; a person's, and the system's, is the
     // text as it was written.
     let text = match spoken {
-        Voice::Agent => el("div")
-            .class("text")
-            .child(render(shown, Rc::new(|_| {}))),
+        Voice::Agent => {
+            el("div")
+                .class("text")
+                .child(render(shown, Headings::AsText, Rc::new(|_| {})))
+        }
         _ => el("div").class("text plain").text(shown),
     };
     let fixed = match spoken {
@@ -663,7 +654,11 @@ pub fn view(
                 body.into_iter().collect::<Vec<_>>()
             },
             |body| body.clone(),
-            |body| el("div").class("text").child(render(body, Rc::new(|_| {}))),
+            |body| {
+                el("div")
+                    .class("text")
+                    .child(render(body, Headings::AsText, Rc::new(|_| {})))
+            },
         )
         .each(
             move || {

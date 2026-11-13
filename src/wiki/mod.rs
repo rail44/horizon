@@ -155,9 +155,6 @@ pub const CSS: &str = "
                 border-radius: 4px; }
         .post.person { margin-left: var(--u24); border: none; border-radius: 0;
                        border-left: 2px solid var(--text-muted); }
-        .post .body > :first-child { margin-top: 0; }
-        .post .body > :last-child { margin-bottom: 0; }
-        .post .body p, .post .body ul, .post .body ol, .post .body pre { margin: 0 0 8px 0; }
         .when, .hint { font-size: var(--micro-size); line-height: var(--micro-line);
                        color: var(--text-muted); }
         .replying { position: relative; padding: var(--u4) var(--u16);
@@ -660,6 +657,7 @@ fn post(annotation: &Annotation) -> El {
         .class(class)
         .child(crate::markdown::render(
             &annotation.body.value,
+            crate::markdown::Headings::AsText,
             Rc::new(|_| {}),
         ))
         .child(el("div").class("when").text(&when))

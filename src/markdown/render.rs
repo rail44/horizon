@@ -1,18 +1,61 @@
-//! Markdown as elements of the document: what an agent's message, and a
-//! Markdown file, are drawn from. The view that places it gives it its
-//! rules.
+//! Markdown as elements of the document, drawn the same wherever it is
+//! placed: an agent's message, a post, a Markdown file.
 
 use std::rc::Rc;
 
 use horizon_ui::{El, el};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+mod styles {
+    horizon_ui::css_module! {"
+        .body {
+            > :first-child { margin-top: 0; }
+            > :last-child { margin-bottom: 0; }
+            h1 { font-size: var(--t2-size); line-height: var(--t2-line); font-weight: 600;
+                 margin: var(--u8) 0; }
+            h2, h3 { font-size: var(--body-size); line-height: var(--body-line);
+                     font-weight: 600; margin: var(--u8) 0; }
+            p, ul, ol, pre, blockquote, table { margin: 0 0 var(--u8) 0; }
+            ul, ol { padding-left: calc(var(--u4) * 5); }
+            li { margin-bottom: var(--u4); }
+            pre { padding: var(--u16); border: var(--line) solid var(--border);
+                  border-radius: var(--radius-large); line-height: 1.5;
+                  background: var(--surface-panel); overflow-x: scroll; }
+            code { font-family: var(--font-family); }
+            :not(pre) > code { padding: 0 var(--u4); border-radius: var(--radius-small);
+                               font-size: var(--meta-size); background: var(--surface-panel); }
+            blockquote { padding-left: var(--u12);
+                         border-left: var(--line-strong) solid var(--border);
+                         color: var(--text-muted); }
+            td, th { padding: var(--u2) var(--u8); border: var(--line) solid var(--border); }
+        }
+        .body.plain-headings h1 { font-size: var(--body-size); line-height: var(--body-line); }
+        .language { margin: -11px 0 2px 0; text-align: right; font-size: var(--meta-size);
+                    color: var(--text-muted); }
+        .link { color: var(--accent); cursor: pointer; }
+        .link:hover { text-decoration: underline; }
+    "}
+}
+
+/// How big a heading is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Headings {
+    /// The first level above the text's size: a page, a message.
+    Scaled,
+    /// Every level at the text's size, in bold: a post among posts.
+    AsText,
+}
+
 /// Markdown as elements, a link calling `on_link` with where it points.
-pub fn render(source: &str, on_link: Rc<dyn Fn(&str)>) -> El {
+pub fn render(source: &str, headings: Headings, on_link: Rc<dyn Fn(&str)>) -> El {
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     // The elements open at this point of the text, innermost last.
-    let mut open = vec![el("div").class("body")];
+    let body = el("div").class(styles::BODY);
+    if headings == Headings::AsText {
+        body.class(styles::PLAIN_HEADINGS);
+    }
+    let mut open = vec![body];
     for event in Parser::new_ext(source, options) {
         let top = *open.last().expect("the body");
         match event {
@@ -32,7 +75,7 @@ pub fn render(source: &str, on_link: Rc<dyn Fn(&str)>) -> El {
                         if let CodeBlockKind::Fenced(language) = kind
                             && !language.is_empty()
                         {
-                            pre.child(el("div").class("language").text(&language));
+                            pre.child(el("div").class(styles::LANGUAGE).text(&language));
                         }
                         pre.child(code);
                         top.child(pre);
@@ -49,7 +92,7 @@ pub fn render(source: &str, on_link: Rc<dyn Fn(&str)>) -> El {
                     Tag::Link { dest_url, .. } => {
                         let (target, on_link) = (dest_url.to_string(), on_link.clone());
                         el("span")
-                            .class("link")
+                            .class(styles::LINK)
                             .on("click", move |_| on_link(&target))
                     }
                     Tag::Table(_) => el("table"),

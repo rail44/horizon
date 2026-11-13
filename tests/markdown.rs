@@ -75,7 +75,9 @@ impl Opened {
     fn click(&self, class: &str) {
         fn find(document: &BaseDocument, id: NodeId, class: &str) -> Option<NodeId> {
             let node = document.get_node(id)?;
-            if node.attr(local_name!("class")) == Some(class) {
+            let named = (node.attr(local_name!("class")))
+                .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
+            if named {
                 return Some(id);
             }
             node.children

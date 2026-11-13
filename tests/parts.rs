@@ -326,7 +326,7 @@ fn paint_the_gallery() {
     use anyrender::ImageRenderer as _;
 
     let out = std::env::var_os("HORIZON_GALLERY_OUT").expect("HORIZON_GALLERY_OUT");
-    let (width, height) = (720u32, 420u32);
+    let (width, height) = (900u32, 760u32);
     let app = App::new(width, height, horizon_theme_css::CSS, || {
         themed(Theme::of_this_machine, horizon::parts::gallery())
     });

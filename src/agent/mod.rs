@@ -122,25 +122,6 @@ pub const CSS: &str = "
                  font-size: var(--micro-size); line-height: var(--micro-line);
                  color: var(--text-muted); }
         .model { cursor: pointer; }
-        .text h1 { font-size: var(--t2-size); line-height: var(--t2-line); font-weight: 600;
-                   margin: var(--u8) 0; }
-        .text h2, .text h3 { font-size: var(--body-size); line-height: var(--body-line);
-                             font-weight: 600; margin: var(--u8) 0; }
-        .text p, .text ul, .text ol, .text pre, .text blockquote { margin: 0 0 8px 0; }
-        .text ul, .text ol { padding-left: 20px; }
-        .text li { margin-bottom: 4px; }
-        .text .body > :first-child { margin-top: 0; }
-        .text .body > :last-child { margin-bottom: 0; }
-        .text pre { padding: 16px; border: 1px solid var(--border); border-radius: 6px;
-                    line-height: 21px; background: var(--surface-panel);
-                    overflow-x: scroll; }
-        .text .language { margin: -11px 0 2px 0; text-align: right;
-                          font-size: var(--meta-size); color: var(--text-muted); }
-        .text code { font-family: var(--font-family); }
-        .text :not(pre) > code { padding: 0 var(--u4); border-radius: 2px;
-                                 font-size: var(--meta-size);
-                                 background: var(--surface-panel); }
-        .link { color: var(--accent); }
     }
     @keyframes thinking { from { opacity: 1; } to { opacity: 0.25; } }
 ";
@@ -477,7 +458,11 @@ fn turn_card(turn: &Turn, state: Agent) -> El {
     for part in &turn.parts {
         match part {
             TurnPart::Text(text) => {
-                let body = crate::markdown::render(text, Rc::new(|_| {}));
+                let body = crate::markdown::render(
+                    text,
+                    crate::markdown::Headings::Scaled,
+                    Rc::new(|_| {}),
+                );
                 card.child(el("div").class("text").child(body));
             }
             TurnPart::Receipt(receipt) => {
