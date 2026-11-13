@@ -14,12 +14,16 @@
 //!   drawn, as commands).
 //!
 //! Turning the commands into pixels is the GPU's in a window and is not
-//! timed here.
+//! timed here. With `--window` the frames are drawn into a window on the
+//! desktop instead (`window.rs`), and the third part is `render`: the
+//! scene, the GPU's work on it and its presentation, which waits for the
+//! display.
 //!
 //! ```sh
 //! cargo bench --bench scenarios                # every scenario
 //! cargo bench --bench scenarios -- agent/      # those whose name has `agent/`
 //! cargo bench --bench scenarios -- --json out.json
+//! cargo bench --bench scenarios -- --window    # drawn into a window
 //! ```
 
 use std::time::{Duration, Instant};
@@ -44,12 +48,15 @@ mod shell;
 #[path = "../../tests/support/mod.rs"]
 mod support;
 mod terminal;
+mod window;
 
 /// What one frame took.
 #[derive(Clone, Copy, Default)]
 pub struct Frame {
     pub act: Duration,
     pub layout: Duration,
+    /// The scene's commands; drawn into a window, those and the GPU's work
+    /// and the presentation.
     pub scene: Duration,
 }
 
@@ -68,7 +75,13 @@ pub struct Stage {
 }
 
 impl Stage {
+    /// A view in a document of `width` by `height`; drawn into a window,
+    /// of the size the window can be given.
     pub fn new(width: u32, height: u32, css: &str, view: impl FnOnce() -> El) -> Self {
+        let (width, height) = match window::is_open() {
+            true => window::fit(width, height),
+            false => (width, height),
+        };
         let app = App::new(width, height, css, view);
         let mut stage = Self {
             app,
@@ -80,10 +93,15 @@ impl Stage {
         stage
     }
 
-    fn paint(&mut self) {
-        self.scene.reset();
+    /// Draws the page, and how long that took.
+    fn paint(&mut self) -> Duration {
         let document = self.app.document();
         let (width, height) = self.size;
+        if window::is_open() {
+            return window::render(&document, width, height);
+        }
+        let started = Instant::now();
+        self.scene.reset();
         blitz_paint::paint_scene(
             &mut self.scene,
             &mut document.borrow_mut(),
@@ -93,6 +111,7 @@ impl Stage {
             0,
             0,
         );
+        started.elapsed()
     }
 
     /// One frame around `act`, timed.
@@ -104,9 +123,7 @@ impl Stage {
         let started = Instant::now();
         self.app.resolve();
         let layout = started.elapsed();
-        let started = Instant::now();
-        self.paint();
-        let scene = started.elapsed();
+        let scene = self.paint();
         self.frames.push(Frame { act, layout, scene });
     }
 
@@ -143,6 +160,10 @@ impl Stage {
     /// The window at another size.
     pub fn resize(&mut self, width: u32, height: u32) {
         use horizon_ui::blitz_traits::shell::{ColorScheme, Viewport};
+        let (width, height) = match window::is_open() {
+            true => window::fit(width, height),
+            false => (width, height),
+        };
         self.size = (width, height);
         let document = self.app.document();
         (document.borrow_mut()).set_viewport(Viewport::new(width, height, 1.0, ColorScheme::Light));
@@ -230,6 +251,7 @@ fn main() {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--json" => json = arguments.next(),
+            "--window" => window::open(),
             // What `cargo bench` passes to every bench target.
             "--bench" => {}
             "--list" => {
@@ -241,6 +263,9 @@ fn main() {
             _ => filter = Some(argument),
         }
     }
+    // Drawn into a window, a frame is on time when it is done within the
+    // display's refresh after the one before it.
+    let shown = window::is_open().then(window::refresh_interval);
     let mut measured = Vec::new();
     for scenario in scenarios() {
         if filter
@@ -252,7 +277,7 @@ fn main() {
         for &size in scenario.sizes {
             eprintln!("{} at {size} {}", scenario.name, scenario.unit);
             let frames = (scenario.run)(size);
-            measured.push(report::Measured::of(&scenario, size, &frames));
+            measured.push(report::Measured::of(&scenario, size, &frames, shown));
         }
     }
     print!("{}", report::table(&measured));

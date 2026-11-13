@@ -42,6 +42,9 @@ pub struct Measured {
     pub unit: &'static str,
     pub size: usize,
     pub frames: usize,
+    /// Drawn into a window: the display's refresh interval, and how many
+    /// frames took longer than it.
+    pub late: Option<(Duration, usize)>,
     pub act: Spread,
     pub layout: Spread,
     pub scene: Spread,
@@ -49,13 +52,23 @@ pub struct Measured {
 }
 
 impl Measured {
-    pub fn of(scenario: &Scenario, size: usize, frames: &[Frame]) -> Self {
+    pub fn of(
+        scenario: &Scenario,
+        size: usize,
+        frames: &[Frame],
+        refresh: Option<Duration>,
+    ) -> Self {
         let spread = |of: fn(&Frame) -> Duration| Spread::of(frames.iter().map(of).collect());
+        let late = refresh.map(|refresh| {
+            let late = frames.iter().filter(|frame| frame.total() > refresh);
+            (refresh, late.count())
+        });
         Self {
             name: scenario.name,
             unit: scenario.unit,
             size,
             frames: frames.len(),
+            late,
             act: spread(|frame| frame.act),
             layout: spread(|frame| frame.layout),
             scene: spread(|frame| frame.scene),
@@ -72,6 +85,14 @@ fn milliseconds(time: Duration) -> f64 {
 /// smallest.
 fn marks(measured: &Measured, smallest: &Measured) -> Vec<String> {
     let mut marks = Vec::new();
+    // Drawn into a window, a frame is held against the display it was
+    // drawn for.
+    if let Some((_, late)) = measured.late {
+        if late > 0 {
+            marks.push(format!("{late} over a refresh"));
+        }
+        return marks;
+    }
     if measured.total.p95 > A_FRAME {
         marks.push("over a frame".to_string());
     }
@@ -97,10 +118,26 @@ fn smallest<'a>(all: &'a [Measured], of: &Measured) -> &'a Measured {
 /// 95th percentile and longest of the whole frame.
 pub fn table(all: &[Measured]) -> String {
     let mut table = String::new();
+    let shown = all.iter().find_map(|measured| measured.late);
+    if let Some((refresh, _)) = shown {
+        let _ = writeln!(
+            table,
+            "drawn into a window; the display shows a frame for {:.2} ms",
+            milliseconds(refresh)
+        );
+    }
     let _ = writeln!(
         table,
         "{:<28} {:>14} {:>6}  {:>8} {:>8} {:>8}  {:>8} {:>8} {:>8}  ",
-        "scenario", "size", "frames", "act", "layout", "scene", "median", "p95", "max"
+        "scenario",
+        "size",
+        "frames",
+        "act",
+        "layout",
+        if shown.is_some() { "render" } else { "scene" },
+        "median",
+        "p95",
+        "max"
     );
     for measured in all {
         let _ = writeln!(
@@ -136,11 +173,15 @@ pub fn json(all: &[Measured]) -> String {
                 .map(|mark| format!("{mark:?}"))
                 .collect();
             format!(
-                r#"  {{"scenario":{:?},"size":{},"unit":{:?},"frames":{},"act":{},"layout":{},"scene":{},"total":{},"marks":[{}]}}"#,
+                r#"  {{"scenario":{:?},"size":{},"unit":{:?},"frames":{},"late":{},"act":{},"layout":{},"scene":{},"total":{},"marks":[{}]}}"#,
                 measured.name,
                 measured.size,
                 measured.unit,
                 measured.frames,
+                match measured.late {
+                    Some((_, late)) => late.to_string(),
+                    None => "null".to_string(),
+                },
                 spread(&measured.act),
                 spread(&measured.layout),
                 spread(&measured.scene),

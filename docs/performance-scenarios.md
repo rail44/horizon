@@ -30,8 +30,29 @@ it can draw:
 | `scene` | `blitz_paint::paint_scene` into a recording scene: what is drawn, as commands |
 
 These are the same code a window runs. Turning the commands into pixels
-is the GPU's in a window, and is not timed: a scenario says nothing about
-the renderer.
+is the GPU's in a window, and is not timed this way.
+
+## Drawn into a window
+
+```sh
+cargo bench --bench scenarios -- --window
+```
+
+opens a window on the desktop and draws every frame into it with the
+renderer Horizon's window uses (`benches/scenarios/window.rs`). The third
+column is then `render`: the scene, the GPU's work on it and its
+presentation. A row is marked `N over a refresh` when N of its frames
+took longer than the display shows one for.
+
+The window is a real one: it takes its place on the desktop, changes size
+from scenario to scenario, and has to stay in view (a window that is
+hidden is not presented to, and the run waits). It is not for a desktop
+someone is working on without their say, and never for a test or the
+gate. The desktop decides the window's size: a scenario that asks for
+more than it gives runs at what it was given, and says so on stderr.
+
+Twice in five runs the desktop (GNOME on Wayland) ended the program's
+connection during `terminal/typing`; the cause is not known.
 
 ## What the table says
 

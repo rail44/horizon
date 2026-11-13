@@ -3065,6 +3065,7 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wasmtime-wasi",
+ "winit",
 ]
 
 [[package]]

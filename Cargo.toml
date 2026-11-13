@@ -140,6 +140,9 @@ wasmtime-wasi = "36"
 portable-pty = "0.9.0"
 # The view painted into pixels, with no window and no GPU.
 anyrender_vello_cpu = "0.18"
+# The scenarios' window (`benches/scenarios/window.rs`) pumps the event
+# loop itself: the version `vendor/blitz-shell` is built on.
+winit = "=0.31.0-beta.4"
 
 # Scenarios that time the views a frame at a time, with no window
 # (`docs/performance-scenarios.md`). Not a test and not in the gate.
