@@ -316,3 +316,33 @@ fn a_color_picker_is_worked_from_the_keyboard() {
     app.resolve();
     assert!(all(&app, "panel").is_empty());
 }
+
+/// Paints the gallery of the parts in this machine's theme, to the file
+/// `HORIZON_GALLERY_OUT` names (a PPM): a picture for a person to look
+/// at. Run by hand.
+#[test]
+#[ignore = "writes a picture for a person: set HORIZON_GALLERY_OUT"]
+fn paint_the_gallery() {
+    use anyrender::ImageRenderer as _;
+
+    let out = std::env::var_os("HORIZON_GALLERY_OUT").expect("HORIZON_GALLERY_OUT");
+    let (width, height) = (720u32, 420u32);
+    let app = App::new(width, height, horizon_theme_css::CSS, || {
+        themed(Theme::of_this_machine, horizon::parts::gallery())
+    });
+    app.resolve();
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut pixels = Vec::new();
+    let document = app.document();
+    renderer.render_to_vec(
+        |scene| {
+            blitz_paint::paint_scene(scene, &mut document.borrow_mut(), 1.0, width, height, 0, 0)
+        },
+        &mut pixels,
+    );
+    let mut picture = format!("P6\n{width} {height}\n255\n").into_bytes();
+    for [red, green, blue, _] in pixels.as_chunks::<4>().0 {
+        picture.extend_from_slice(&[*red, *green, *blue]);
+    }
+    std::fs::write(out, picture).expect("the picture written");
+}

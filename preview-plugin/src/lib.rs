@@ -4,9 +4,8 @@
 
 use horizon::background::Background;
 use horizon::board::{Source, list};
-use horizon::parts::{Tone, chip};
 use horizon_board::{BoardEvent, Comment, Item, Store, sample_envelopes};
-use horizon_ui::{El, el};
+use horizon_ui::El;
 
 fn item(id: u64, title: &str, rank: &str, parent: Option<u64>, status: &str) -> Item {
     Item {
@@ -47,73 +46,9 @@ fn board_list(items: Vec<Item>) -> El {
     list::view(source, Background::default(), |_| {}).0
 }
 
-mod gallery {
-    horizon_ui::css_module! {"
-        .gallery { display: flex; flex-direction: column; gap: var(--u24); height: 100%;
-                   box-sizing: border-box; padding: var(--u24); overflow-y: scroll;
-                   background: var(--background); color: var(--text);
-                   font-family: var(--font-family); font-size: var(--body-size);
-                   line-height: var(--body-line); }
-        .part { display: flex; flex-direction: column; gap: var(--u8); }
-        .name { font-weight: 600; }
-        .line { display: flex; align-items: center; gap: var(--u8); }
-        .said { font-size: var(--meta-size); line-height: var(--meta-line);
-                color: var(--text-muted); }
-    "}
-}
-
-/// One part of the gallery: its name, and lines of it as it is placed,
-/// each with what the line is.
-fn part(name: &str, lines: Vec<(&str, Vec<El>)>) -> El {
-    let part = el("div")
-        .class(gallery::PART)
-        .child(el("div").class(gallery::NAME).text(name));
-    for (said, shown) in lines {
-        let line = el("div").class(gallery::LINE);
-        for one in shown {
-            line.child(one);
-        }
-        part.child(line.child(el("span").class(gallery::SAID).text(said)));
-    }
-    part
-}
-
-/// The parts views are made of (`horizon::parts`), each in every kind it
-/// has.
-fn parts() -> El {
-    let tones = [
-        (Tone::Muted, "muted"),
-        (Tone::Accent, "accent"),
-        (Tone::Success, "success"),
-        (Tone::Info, "info"),
-        (Tone::Warning, "warning"),
-        (Tone::Danger, "danger"),
-    ];
-    el("div").class(gallery::GALLERY).child(part(
-        "chip",
-        vec![
-            (
-                "every tone",
-                tones.iter().map(|(tone, name)| chip(*tone, name)).collect(),
-            ),
-            (
-                "as views say things",
-                vec![
-                    chip(Tone::Accent, "doing"),
-                    chip(Tone::Info, "review"),
-                    chip(Tone::Accent, "3 unread"),
-                    chip(Tone::Danger, "Failed"),
-                    chip(Tone::Muted, "Stopped"),
-                    chip(Tone::Muted, "Enter"),
-                ],
-            ),
-        ],
-    ))
-}
-
 fn view(name: &str) -> Option<El> {
     match name {
-        "parts" => Some(parts()),
+        "parts" => Some(horizon::parts::gallery()),
         "board-list" => Some(board_list(tasks())),
         "board-list-empty" => Some(board_list(Vec::new())),
         // Never comes back: what the shell's limit on a call is for
