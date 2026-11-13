@@ -13,7 +13,8 @@ use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
-use horizon_ui::reactive_graph::traits::GetUntracked;
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
 use horizon_ui::testing::click_at;
 use horizon_workspace::SessionId;
 use keyboard_types::{Key, Modifiers, NamedKey};
@@ -21,7 +22,17 @@ use keyboard_types::{Key, Modifiers, NamedKey};
 struct Opened {
     app: App,
     thread: BoardThread,
+    /// The task the view is given: it follows it.
+    shown: RwSignal<u64>,
     asked: Rc<RefCell<Vec<Asked>>>,
+}
+
+impl Opened {
+    /// Gives the view another task.
+    fn show_task(&self, task: u64) {
+        self.shown.set(task);
+        self.app.run_effects();
+    }
 }
 
 fn post(id: &str, author: &str, text: &str) -> Comment {
@@ -75,8 +86,9 @@ fn open_at(items: Vec<Item>, task: u64, width: u32) -> Opened {
         .map(|item| BoardEvent::ItemStored { id: item.id, item });
     let source = Source::Ready(Store::in_memory(sample_envelopes(events)));
     let mut thread = None;
+    let shown = RwSignal::new(task);
     let app = App::new(width, 600, horizon_theme_css::CSS, || {
-        let (root, state) = view(source, Background::default(), task, move |asked| {
+        let (root, state) = view(source, Background::default(), shown.into(), move |asked| {
             log.borrow_mut().push(asked)
         });
         thread = Some(state);
@@ -85,6 +97,7 @@ fn open_at(items: Vec<Item>, task: u64, width: u32) -> Opened {
     let opened = Opened {
         app,
         thread: thread.unwrap(),
+        shown,
         asked,
     };
     // The store is read off the UI thread.
@@ -255,12 +268,12 @@ fn the_keys_move_the_post_cursor_fold_a_post_and_reach_the_fields() {
 fn a_task_that_is_not_there_says_so_and_another_is_shown_in_its_place() {
     let opened = open(sample(SessionId::new()), 99);
     assert_eq!(opened.texts("missing").len(), 1);
-    opened.thread.show_task(8);
+    opened.show_task(8);
     opened.until("the other task", || opened.texts("title") == ["another"]);
     assert!(opened.all("missing").is_empty());
     assert!(opened.all("post").is_empty());
     assert_eq!(opened.texts("button"), ["Reply", "Close"]);
-    opened.thread.show_task(7);
+    opened.show_task(7);
     opened.until("the first task", || opened.texts("title") == ["the task"]);
     assert_eq!(opened.all("post").len(), 3);
 }

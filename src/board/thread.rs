@@ -13,6 +13,7 @@ use horizon_board_view::model::{
     step_post, task_session_id, unread_count, voice,
 };
 use horizon_ui::blitz_traits::events::DomEventData;
+use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue, on_cleanup};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{
@@ -216,7 +217,7 @@ impl BoardThread {
     }
 
     /// Shows another task in the same view.
-    pub fn show_task(&self, task: u64) {
+    fn show_task(&self, task: u64) {
         if self.task.get_untracked() == task {
             return;
         }
@@ -514,11 +515,13 @@ fn post(
 pub fn view(
     source: Source,
     background: Background,
-    task: u64,
+    // The task the view is on: it follows it.
+    task: Signal<u64>,
     ask: impl Fn(Asked) + 'static,
 ) -> (El, BoardThread) {
+    let shown = task;
     let state = BoardThread {
-        task: RwSignal::new(task),
+        task: RwSignal::new(shown.get_untracked()),
         item: RwSignal::new(None),
         positions: RwSignal::new(HashMap::new()),
         cursor: RwSignal::new(None),
@@ -541,6 +544,8 @@ pub fn view(
         status: el("input").attr("type", "text"),
         column: el("div").class(styles::COLUMN),
     };
+    // Another task given from outside is shown in the same view.
+    Effect::new(move |_| state.show_task(shown.get()));
     let (root, column, reply, status) = (state.element, state.column, state.reply, state.status);
     let held = state.held();
     state.load();

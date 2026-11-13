@@ -645,16 +645,26 @@ impl Shell {
                 }
                 (PaneKind::View(ViewKind::BoardThread { task }), ..) => {
                     let background = Background::new(kept.wake.clone());
-                    let (root, view) =
-                        board::thread::view(self.board_source(), background, task, move |asked| {
-                            match asked {
-                                board::thread::Asked::OpenSession(session) => {
-                                    if let Some(thread) = shell.board_thread(id) {
-                                        shell.open_task_session(session, thread.notice);
-                                    }
+                    // The task is the pane's in the model: the view
+                    // follows it there.
+                    let shown = Memo::new(move |_| {
+                        shell.model.with(|model| match model.pane_kind(id) {
+                            Some(PaneKind::View(ViewKind::BoardThread { task })) => task,
+                            _ => task,
+                        })
+                    });
+                    let (root, view) = board::thread::view(
+                        self.board_source(),
+                        background,
+                        shown.into(),
+                        move |asked| match asked {
+                            board::thread::Asked::OpenSession(session) => {
+                                if let Some(thread) = shell.board_thread(id) {
+                                    shell.open_task_session(session, thread.notice);
                                 }
                             }
-                        });
+                        },
+                    );
                     board_thread = Some(view);
                     root
                 }
@@ -964,9 +974,6 @@ impl Shell {
                 }
             }
         });
-        if let Some(view) = thread.and_then(|thread| self.board_thread(thread)) {
-            view.show_task(task);
-        }
     }
 
     /// From a thread, back to the list in its tab.

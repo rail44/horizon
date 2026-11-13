@@ -128,7 +128,7 @@ fn thread(posts: usize) -> Stage {
     }
     let source = source(vec![task]);
     let mut stage = Stage::new(700, 800, horizon_theme_css::CSS, || {
-        let (root, _) = view(source, Background::default(), 1, |_| {});
+        let (root, _) = view(source, Background::default(), 1.into(), |_| {});
         themed(Theme::built_in, root.focus())
     });
     stage.until_text("the page", "投稿の多いタスク");
