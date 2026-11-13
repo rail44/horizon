@@ -2,9 +2,10 @@
 
 use std::rc::Rc;
 
-use horizon::markdown::view;
+use horizon::markdown::Markdown;
 use horizon::wake::Wake;
 use horizon_theme_css::{Theme, themed};
+use horizon_ui::Component;
 
 use crate::{Frame, Scenario, Stage, wheel};
 
@@ -39,7 +40,13 @@ fn scroll(sections: usize) -> Vec<Frame> {
     std::fs::write(&path, document(sections)).expect("the document written");
     let shown = path.clone();
     let mut stage = Stage::new(800, 800, horizon_theme_css::CSS, || {
-        let (root, _) = view(Some(shown), Rc::new(|_: &str| {}), Wake::default());
+        let root = Markdown {
+            path: Some(shown),
+            open_url: Rc::new(|_: &str| {}),
+            on_navigate: None,
+            wake: Wake::default(),
+        }
+        .view();
         themed(Theme::built_in, root.focus())
     });
     stage.until_text("the document", "0 番目の節");

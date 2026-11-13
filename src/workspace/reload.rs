@@ -43,6 +43,18 @@ impl Shell {
             .update(|times| *times = times.wrapping_add(1));
     }
 
+    /// Lets go of one pane's view and has the panes arranged again, which
+    /// makes it anew.
+    pub(super) fn remake_pane(&self, pane: horizon_workspace::PaneId) {
+        let view = self.kept().panes.borrow_mut().remove(&pane);
+        if let Some(view) = view {
+            view.owner.cleanup();
+            view.element.remove();
+        }
+        self.rearranged
+            .update(|times| *times = times.wrapping_add(1));
+    }
+
     pub(super) fn reload_agent_runtime(&self) {
         let kept = self.kept();
         let Some(reload) = kept.agent_runtime.as_ref() else {

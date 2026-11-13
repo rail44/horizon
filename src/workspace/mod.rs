@@ -37,7 +37,7 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Track, Update, With, WithUntracked, WithValue,
 };
-use horizon_ui::{El, each_layout, el, relayout, stop_propagation};
+use horizon_ui::{Callback, Component, El, each_layout, el, relayout, stop_propagation};
 use horizon_workspace::title::derive_session_title;
 use horizon_workspace::types::TabSummary;
 use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, ViewKind, Workspace};
@@ -329,7 +329,6 @@ struct PaneView {
     owner: Owner,
     terminal: Option<(SessionId, Terminal)>,
     agent: Option<Agent>,
-    markdown: Option<Markdown>,
     wiki: Option<Wiki>,
     board_list: Option<BoardList>,
     board_thread: Option<BoardThread>,
@@ -483,7 +482,7 @@ impl Shell {
     fn pane(&self, id: PaneId, kind: PaneKind, session: Option<SessionId>) -> PaneView {
         let (shell, kept) = (*self, self.kept());
         let owner = kept.owner.child();
-        let (mut terminal, mut agent, mut document) = (None, None, None);
+        let (mut terminal, mut agent) = (None, None);
         let (mut board_list, mut board_thread, mut wiki_page) = (None, None, None);
         let mut shown_preview = None;
         let start = |session| {
@@ -568,26 +567,20 @@ impl Shell {
                 (PaneKind::View(ViewKind::Markdown), ..) => {
                     let path = (self.model)
                         .with_untracked(|model| model.pane_document(id).map(PathBuf::from));
-                    let (root, view) =
-                        markdown::view(path, kept.open_url.clone(), kept.wake.clone());
-                    // The file it shows is the pane's in the model, so
-                    // that it comes back on the same one: a link followed
-                    // moves it.
-                    Effect::new(move |_| {
-                        let Some(path) = view.path.get() else {
-                            return;
-                        };
-                        let kept = shell
-                            .model
-                            .with_untracked(|model| model.pane_document(id) == Some(&path));
-                        if !kept {
+                    Markdown {
+                        path,
+                        open_url: kept.open_url.clone(),
+                        wake: kept.wake.clone(),
+                        // The file it shows is the pane's in the model, so
+                        // that it comes back on the same one: a link
+                        // followed moves it.
+                        on_navigate: Some(Callback::new(move |path: PathBuf| {
                             shell.model.update(|model| {
                                 model.set_pane_document(id, path);
                             });
-                        }
-                    });
-                    document = Some(view);
-                    root
+                        })),
+                    }
+                    .view()
                 }
                 (PaneKind::View(ViewKind::Wiki), ..) => {
                     let path = (self.model)
@@ -702,7 +695,6 @@ impl Shell {
             owner,
             terminal,
             agent,
-            markdown: document,
             wiki: wiki_page,
             board_list,
             board_thread,
@@ -1080,11 +1072,6 @@ impl Shell {
         });
         self.reconcile();
         self.focus_active();
-    }
-
-    /// The Markdown view a pane shows.
-    pub fn markdown(&self, pane: PaneId) -> Option<Markdown> {
-        self.kept().panes.borrow().get(&pane)?.markdown
     }
 
     /// The preview a pane shows.

@@ -14,7 +14,7 @@ use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
-use horizon_ui::{Component, El, dispatched, each_layout, el, relayout};
+use horizon_ui::{Callable, Callback, Component, El, dispatched, each_layout, el, relayout};
 
 use crate::parts::{Chip, Tone};
 use horizon_workspace::markdown::{LinkTarget, parse, resolve_link};
@@ -59,28 +59,43 @@ mod styles {
 /// What is outside the view: a URL handed to the desktop.
 pub type OpenUrl = Rc<dyn Fn(&str)>;
 
-/// The view's state, for whoever placed it to read or drive.
-#[derive(Clone, Copy)]
+/// A Markdown file, read from disk and read again when it changes. Links
+/// to other Markdown files are followed in place, with a way back.
+///
+/// The file it opens on is a value: to show another from outside, another
+/// is placed.
 pub struct Markdown {
-    pub path: RwSignal<Option<PathBuf>>,
+    /// The file it opens on.
+    pub path: Option<PathBuf>,
+    /// Hands a URL to the desktop.
+    pub open_url: OpenUrl,
+    /// Told of the file a link, or the way back, took the view to.
+    pub on_navigate: Option<Callback<PathBuf>>,
+    /// Makes the page take in a change of the file.
+    pub wake: Wake,
+}
+
+/// What the view keeps.
+#[derive(Clone, Copy)]
+struct State {
+    path: RwSignal<Option<PathBuf>>,
     /// The files left by following links, most recent last.
-    pub history: RwSignal<Vec<PathBuf>>,
+    history: RwSignal<Vec<PathBuf>>,
     title: RwSignal<Option<String>>,
     fields: RwSignal<Vec<(String, String)>>,
     body: RwSignal<String>,
     error: RwSignal<Option<String>>,
     /// A line under the header: a link the view did not follow.
-    pub notice: RwSignal<Option<String>>,
+    notice: RwSignal<Option<String>>,
+    on_navigate: Option<Callback<PathBuf>>,
 }
 
-impl Markdown {
-    /// Points the view at `path` from outside: the history is left as it
-    /// is, since the jump was not a link followed here.
-    pub fn open(&self, path: PathBuf) {
-        if self.path.get_untracked().as_ref() == Some(&path) {
-            self.reload();
-        } else {
-            self.show(path);
+impl State {
+    /// Goes to `path` from here: whoever placed the view is told.
+    fn go(&self, path: PathBuf) {
+        self.show(path.clone());
+        if let Some(on_navigate) = self.on_navigate {
+            on_navigate.run(path);
         }
     }
 
@@ -91,7 +106,7 @@ impl Markdown {
     }
 
     /// Reads the file again.
-    pub fn reload(&self) {
+    fn reload(&self) {
         let Some(path) = self.path.get_untracked() else {
             return;
         };
@@ -120,7 +135,7 @@ impl Markdown {
             LinkTarget::Document(path) => {
                 if path != current {
                     self.history.update(|history| history.push(current));
-                    self.show(path);
+                    self.go(path);
                 }
             }
             LinkTarget::External(url) => open_url(&url),
@@ -135,15 +150,28 @@ impl Markdown {
         let mut previous = None;
         self.history.update(|history| previous = history.pop());
         if let Some(previous) = previous {
-            self.show(previous);
+            self.go(previous);
         }
     }
 }
 
-/// Builds the view, opened on `path`. A change of the file it shows is
-/// read in once the file has sat still, `wake` making the page take it in.
-pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Markdown) {
-    let state = Markdown {
+impl Component for Markdown {
+    fn view(self) -> El {
+        build(self)
+    }
+}
+
+/// A change of the file the view shows is read in once the file has sat
+/// still, `wake` making the page take it in.
+fn build(given: Markdown) -> El {
+    let Markdown {
+        path,
+        open_url,
+        on_navigate,
+        wake,
+    } = given;
+    let state = State {
+        on_navigate,
         path: RwSignal::new(None),
         history: RwSignal::new(Vec::new()),
         title: RwSignal::new(None),
@@ -274,5 +302,5 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Markdo
         },
     )
     .child(scroll);
-    (root, state)
+    root
 }

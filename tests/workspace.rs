@@ -650,7 +650,6 @@ fn the_control_plane_makes_lists_attaches_and_ends_sessions() {
 fn the_control_plane_opens_a_markdown_file_in_a_pane_that_follows_its_links() {
     use horizon_control::contract::{EnvelopeBody, Invoke};
     use horizon_control::host::executor::ControlRequest;
-    use horizon_ui::reactive_graph::traits::GetUntracked;
 
     let directory = std::env::temp_dir().join(format!("hzb-md-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -674,8 +673,10 @@ fn the_control_plane_opens_a_markdown_file_in_a_pane_that_follows_its_links() {
     assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
     assert_eq!(opened.model(Workspace::tab_count), 2);
     let pane = opened.panes()[0];
-    let view = opened.shell.markdown(pane).expect("a Markdown view");
-    assert_eq!(view.path.get_untracked(), Some(first.clone()));
+    let shown = |opened: &Opened| {
+        opened.model(|model| model.pane_document(pane).map(std::path::PathBuf::from))
+    };
+    assert_eq!(shown(&opened), Some(first.clone()));
     // The tab is named for the file.
     let title = |opened: &Opened| opened.model(|model| model.tab_summaries()[1].title.clone());
     assert_eq!(title(&opened), "first.md");
@@ -684,11 +685,7 @@ fn the_control_plane_opens_a_markdown_file_in_a_pane_that_follows_its_links() {
     let (x, y) = opened.middle(opened.all("link")[0]);
     click_at(&opened.app, x, y);
     opened.app.resolve();
-    assert_eq!(view.path.get_untracked(), Some(second.clone()));
-    assert_eq!(
-        opened.model(|model| model.pane_document(pane).map(std::path::PathBuf::from)),
-        Some(second.clone())
-    );
+    assert_eq!(shown(&opened), Some(second.clone()));
     assert_eq!(title(&opened), "second.md");
 
     // Asked for a file a pane shows already, that pane is the one.

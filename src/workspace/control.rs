@@ -191,11 +191,8 @@ impl Shell {
                         view.open(path);
                     }
                 }
-                _ => {
-                    if let Some(view) = self.markdown(pane) {
-                        view.open(path);
-                    }
-                }
+                // (A view opens on its file: the pane's is made again.)
+                _ => self.remake_pane(pane),
             }
             if activate {
                 self.change(|model| {

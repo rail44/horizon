@@ -5,14 +5,13 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use horizon::markdown::{Markdown, view};
+use horizon::markdown::Markdown;
 use horizon::wake::Wake;
 use horizon_theme_css::{Theme, themed};
-use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
-use horizon_ui::reactive_graph::traits::GetUntracked;
 use horizon_ui::testing::click_at;
+use horizon_ui::{App, Callback, Component};
 
 struct Scratch(PathBuf);
 
@@ -39,7 +38,8 @@ impl Drop for Scratch {
 
 struct Opened {
     app: App,
-    state: Markdown,
+    /// The files the view said it went to, in order.
+    went: Rc<RefCell<Vec<PathBuf>>>,
     /// The URLs the view handed to the desktop.
     opened: Rc<RefCell<Vec<String>>>,
 }
@@ -47,22 +47,22 @@ struct Opened {
 fn open(path: &Path) -> Opened {
     let opened = Rc::new(RefCell::new(Vec::new()));
     let log = opened.clone();
-    let mut state = None;
+    let went = Rc::new(RefCell::new(Vec::new()));
+    let gone = went.clone();
     let app = App::new(800, 600, horizon_theme_css::CSS, || {
-        let (root, markdown) = view(
-            Some(path.to_path_buf()),
-            Rc::new(move |url: &str| log.borrow_mut().push(url.to_owned())),
-            Wake::default(),
-        );
-        state = Some(markdown);
+        let root = Markdown {
+            path: Some(path.to_path_buf()),
+            open_url: Rc::new(move |url: &str| log.borrow_mut().push(url.to_owned())),
+            on_navigate: Some(Callback::new(move |path: PathBuf| {
+                gone.borrow_mut().push(path)
+            })),
+            wake: Wake::default(),
+        }
+        .view();
         themed(Theme::built_in, root.focus())
     });
     app.resolve();
-    Opened {
-        app,
-        state: state.unwrap(),
-        opened,
-    }
+    Opened { app, went, opened }
 }
 
 impl Opened {
@@ -122,8 +122,9 @@ fn a_link_opens_in_place_and_back_returns() {
 
     // A real click on the link in the text.
     opened.click("link");
-    assert_eq!(opened.state.path.get_untracked(), Some(page.clone()));
-    assert_eq!(opened.state.history.get_untracked(), vec![index.clone()]);
+    // Whoever placed the view is told where it went, and there is a way
+    // back.
+    assert_eq!(*opened.went.borrow(), std::slice::from_ref(&page));
     assert_eq!(opened.text(), "BackPage Abody");
 
     // The back key, through the view's own key handling.
@@ -131,8 +132,7 @@ fn a_link_opens_in_place_and_back_returns() {
         keyboard_types::Key::Named(keyboard_types::NamedKey::Backspace),
         keyboard_types::Code::Backspace,
     );
-    assert_eq!(opened.state.path.get_untracked(), Some(index));
-    assert!(opened.state.history.get_untracked().is_empty());
+    assert_eq!(*opened.went.borrow(), [page, index]);
     assert_eq!(opened.text(), "Indexwritten 2026-11-08See a.");
 }
 
@@ -145,8 +145,8 @@ fn a_link_that_is_not_markdown_stays_put_with_a_notice() {
     );
     let opened = open(&index);
     opened.click("link");
-    assert_eq!(opened.state.path.get_untracked(), Some(index));
-    assert!(opened.state.history.get_untracked().is_empty());
+    assert!(opened.went.borrow().is_empty());
+    assert!(!opened.text().contains("Back"), "{}", opened.text());
     assert!(
         opened.text().contains("Not a Markdown file: src/lib.rs"),
         "{}",
@@ -163,10 +163,9 @@ fn a_missing_file_is_a_pane_state_and_a_rewrite_is_picked_up() {
     assert!(opened.text().contains("later.md: "), "{}", opened.text());
 
     scratch.write("later.md", "---\ntitle: Now\n---\n");
-    // What the CLI does to a pane that already shows the file.
-    opened.state.open(path);
-    opened.app.run_effects();
-    opened.app.resolve();
+    // What the CLI does to a pane that already shows the file: the view
+    // is placed again, and opens on the file as it is now.
+    let opened = open(&path);
     assert_eq!(opened.text(), "Now");
 }
 
