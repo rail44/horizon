@@ -38,6 +38,8 @@ mod page;
 #[cfg(not(target_family = "wasm"))]
 mod shared;
 #[cfg(not(target_family = "wasm"))]
+mod sheet;
+#[cfg(not(target_family = "wasm"))]
 pub mod testing;
 #[cfg(not(target_family = "wasm"))]
 pub mod windowed;

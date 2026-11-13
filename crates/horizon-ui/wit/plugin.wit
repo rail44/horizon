@@ -9,6 +9,10 @@ interface document {
     create-comment: func(text: string) -> u64;
     set-attribute: func(node: u64, name: string, value: string);
     set-style: func(node: u64, property: string, value: string);
+    /// Gives a node a style sheet: its own (its rules reach what is under
+    /// the node and stop at a view placed there), or provided to all under
+    /// it. `:host` in it is the node.
+    adopt-style: func(node: u64, css: string, provided: bool);
     set-text: func(node: u64, text: string);
     append: func(parent: u64, child: u64);
     /// Puts nodes, in order, just before a node among its parent's.

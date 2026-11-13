@@ -64,6 +64,7 @@ fn view(name: &str) -> Option<El> {
 
 horizon_ui::plugin!(
     names: vec!["board-list".to_string(), "board-list-empty".to_string()],
-    css: list::CSS.to_string(),
+    // (Each view brings its own style sheet.)
+    css: String::new(),
     view: view,
 );

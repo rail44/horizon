@@ -10,7 +10,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use horizon::background::Background;
-use horizon::board::list::{CSS, view};
+use horizon::board::list::view;
 use horizon::board::{BoardList, Source};
 use horizon_board::{Position, Store};
 use horizon_board_view::model::ListCommand;
@@ -143,8 +143,8 @@ fn a_task_added_in_the_list_is_written_and_one_written_elsewhere_arrives() {
     assert!(made.is_ok_and(|status| status.success()), "git init");
 
     let mut list: Option<BoardList> = None;
-    let css = [horizon_theme_css::CSS, CSS].concat();
-    let app = App::new(600, 500, &css, || {
+    let css = horizon_theme_css::CSS;
+    let app = App::new(600, 500, css, || {
         let source = Source::Root(project.clone());
         let (root, state) = view(source, Background::default(), |_| {});
         list = Some(state);

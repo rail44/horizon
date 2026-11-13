@@ -104,6 +104,22 @@ impl El {
         self
     }
 
+    /// Gives the element a style sheet of its own: plain CSS whose rules
+    /// reach what is under the element and stop at a view placed there.
+    /// `:host` in it is the element itself.
+    pub fn styled(self, css: &str) -> Self {
+        with_document(|document| crate::sheet::adopt(document, self.0, css, false));
+        self
+    }
+
+    /// Provides a style sheet to everything under the element, the views
+    /// placed there included: what a parent or the shell shares with what
+    /// it holds. `:host` in it is the element itself.
+    pub fn provides(self, css: &str) -> Self {
+        with_document(|document| crate::sheet::adopt(document, self.0, css, true));
+        self
+    }
+
     pub fn child(self, child: El) -> Self {
         with_document(|document| append(document, self.0, child.0));
         self

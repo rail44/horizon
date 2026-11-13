@@ -73,11 +73,11 @@ fn tasks(count: usize) -> Vec<Item> {
 }
 
 fn list(count: usize) -> Stage {
-    use horizon::board::list::{CSS, view};
+    use horizon::board::list::view;
     let source = source(tasks(count));
     let mut list = None;
-    let css = [horizon_theme_css::CSS, CSS].concat();
-    let mut stage = Stage::new(600, 800, &css, || {
+    let css = horizon_theme_css::CSS;
+    let mut stage = Stage::new(600, 800, css, || {
         let (root, state) = view(source, Background::default(), |_| {});
         list = Some(state);
         themed(Theme::built_in, root.focus())

@@ -28,6 +28,11 @@ pub fn set_style(node: NodeId, property: &str, value: &str) {
     with_document(|document| (document.mutate()).set_style_property(node, property, value));
 }
 
+/// Gives a node a style sheet: its own, or provided to all under it.
+pub fn adopt_style(node: NodeId, css: &str, provided: bool) {
+    with_document(|document| crate::sheet::adopt(document, node, css, provided));
+}
+
 pub fn append(parent: NodeId, child: NodeId) {
     with_document(|document| crate::el::append(document, parent, child));
 }

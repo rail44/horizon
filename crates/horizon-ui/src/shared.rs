@@ -63,6 +63,8 @@ pub(crate) struct Shared {
     pub(crate) polled: RefCell<Vec<PollWork>>,
     /// Whether the document was written to since the shell last asked.
     pub(crate) written: Cell<bool>,
+    /// The style sheets already in the document, by name (`sheet.rs`).
+    pub(crate) sheets: RefCell<HashSet<String>>,
     /// Whether something woke the page since the shell last asked: a
     /// session's thread with a frame, say. The page as first built counts.
     pub(crate) woken: Arc<AtomicBool>,
@@ -93,6 +95,7 @@ impl Shared {
             retired: RefCell::default(),
             polled: RefCell::default(),
             written: Cell::new(false),
+            sheets: RefCell::default(),
             woken: Arc::new(AtomicBool::new(true)),
             waker: RefCell::default(),
             effects: RefCell::default(),

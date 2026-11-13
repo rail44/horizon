@@ -136,6 +136,21 @@ impl El {
         self
     }
 
+    /// Gives the element a style sheet of its own: plain CSS whose rules
+    /// reach what is under the element and stop at a view placed there.
+    /// `:host` in it is the element itself.
+    pub fn styled(self, css: &str) -> Self {
+        host::adopt_style(id(self), css, false);
+        self
+    }
+
+    /// Provides a style sheet to everything under the element, the views
+    /// placed there included.
+    pub fn provides(self, css: &str) -> Self {
+        host::adopt_style(id(self), css, true);
+        self
+    }
+
     pub fn child(self, child: El) -> Self {
         host::append(id(self), id(child));
         self

@@ -3259,6 +3259,7 @@ dependencies = [
  "blitz-traits",
  "keyboard-types",
  "reactive_graph",
+ "stylo_static_prefs",
  "wit-bindgen 0.41.0",
 ]
 
