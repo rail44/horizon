@@ -24,6 +24,7 @@ use horizon_ui::{
 use horizon_workspace::SessionId;
 use keyboard_types::{Key, NamedKey};
 
+use super::chip::{Tone, chip};
 use super::list::key_name;
 use super::{Activity, Job, Source, activity_chip, follow, run, tone, write_refusal};
 use crate::background::Background;
@@ -82,16 +83,6 @@ pub const CSS: &str = "
             outline: none; resize: none; background: transparent; color: var(--text); }
         .placeholder { position: absolute; left: 0; top: 0; color: var(--text-muted);
                        pointer-events: none; }
-        .chip { padding: 0 var(--u4); border-radius: 2px; font-size: var(--micro-size);
-                line-height: var(--micro-line); }
-        .chip.muted { background: var(--chip-muted-surface); color: var(--chip-muted-text); }
-        .chip.accent { background: var(--chip-accent-surface); color: var(--chip-accent-text); }
-        .chip.success { background: var(--chip-success-surface);
-                        color: var(--chip-success-text); }
-        .chip.info { background: var(--chip-info-surface); color: var(--chip-info-text); }
-        .chip.warning { background: var(--chip-warning-surface);
-                        color: var(--chip-warning-text); }
-        .chip.danger { background: var(--chip-muted-surface); color: var(--danger); }
         .notice { flex: none; padding: var(--u4) var(--u24) 0 var(--u24);
                   font-size: var(--meta-size); line-height: var(--meta-line);
                   color: var(--danger); }
@@ -379,10 +370,6 @@ fn author_label(author: &str) -> String {
     }
 }
 
-fn chip(tone: &str, text: &str) -> El {
-    el("span").class(&format!("chip {tone}")).text(text)
-}
-
 fn button(class: &str, label: &str, state: BoardThread, command: ThreadCommand) -> El {
     el("div")
         .class(class)
@@ -433,7 +420,7 @@ fn chips(state: BoardThread, item: &Item, unread: usize) -> El {
     }
     activity_chip(line, item, state.activity);
     if unread > 0 {
-        line.child(chip("accent", &chrome::unread_count(unread)));
+        line.child(chip(Tone::Accent, &chrome::unread_count(unread)));
     }
     if let Some(at) = item.comments.last().and_then(|comment| comment.at) {
         let updated = chrome::updated(&chrome::relative_time(at, model::now_ms()));
@@ -504,7 +491,7 @@ fn post(
     }
     head.child(on_hover);
     if unread {
-        head.child(chip("accent", chrome::UNREAD));
+        head.child(chip(Tone::Accent, chrome::UNREAD));
     }
     let element = el("div")
         .class_dyn(move || match current.is(&Some(index)) {

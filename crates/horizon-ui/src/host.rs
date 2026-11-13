@@ -28,9 +28,19 @@ pub fn set_style(node: NodeId, property: &str, value: &str) {
     with_document(|document| (document.mutate()).set_style_property(node, property, value));
 }
 
-/// Gives a node a style sheet of its own.
-pub fn adopt_style(node: NodeId, css: &str) {
-    with_document(|document| crate::sheet::adopt(document, node, css));
+/// Puts a CSS module's sheet in the document, unless it is there.
+pub fn adopt_sheet(id: &str, css: &str) {
+    with_document(|document| crate::sheet::adopt(document, id, css));
+}
+
+/// Takes classes out of a node's and puts classes in, each between
+/// spaces.
+pub fn change_classes(node: NodeId, remove: &str, add: &str) {
+    let named =
+        |classes: &str| -> Vec<String> { classes.split_whitespace().map(str::to_string).collect() };
+    with_document(|document| {
+        crate::sheet::change_named(document, node, &named(remove), &named(add));
+    });
 }
 
 pub fn append(parent: NodeId, child: NodeId) {
@@ -39,15 +49,7 @@ pub fn append(parent: NodeId, child: NodeId) {
 
 /// Puts `nodes`, in order, just before `marker` among its parent's.
 pub fn insert_before(marker: NodeId, nodes: &[NodeId]) {
-    with_document(|document| {
-        document.mutate().insert_nodes_before(marker, nodes);
-        let holder = document.get_node(marker).and_then(|marker| marker.parent);
-        if let Some(holder) = holder {
-            for node in nodes {
-                crate::sheet::held(document, holder, *node);
-            }
-        }
-    });
+    with_document(|document| document.mutate().insert_nodes_before(marker, nodes));
 }
 
 /// Takes a node out for good with everything inside it, now if the

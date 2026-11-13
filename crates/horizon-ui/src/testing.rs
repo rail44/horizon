@@ -68,3 +68,12 @@ pub fn select(app: &App, from: (crate::El, usize), to: (crate::El, usize)) {
     let document = app.document();
     (document.borrow_mut()).set_text_selection(from.0.0, from.1, to.0.0, to.1);
 }
+
+/// Whether `classes`, an element's `class` attribute, has the class a
+/// sheet wrote as `class`: by that name, or by the name a CSS module gave
+/// it (`class--` and the module's own mark).
+pub fn has_class(classes: &str, class: &str) -> bool {
+    classes.split_whitespace().any(|name| {
+        name == class || (name.rsplit_once("--")).is_some_and(|(written, _)| written == class)
+    })
+}

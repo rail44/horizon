@@ -50,9 +50,6 @@ impl App {
         });
         // The page fills the window and has no margin of its own; a view's
         // rules come after and are about the view.
-        // A view's own style sheet is kept to the view with `@scope`
-        // (`sheet.rs`), which Stylo has and leaves off.
-        stylo_static_prefs::set_pref!("layout.css.at-scope.enabled", true);
         let css = format!("html, body {{ margin: 0; height: 100%; }}\n{css}");
         document.add_user_agent_stylesheet(UserAgentStylesheet::parse(&css));
         let shared = Rc::new(Shared::new(document));

@@ -10,6 +10,7 @@ use reactive_graph::effect::Effect;
 use reactive_graph::graph::untrack;
 use reactive_graph::owner::Owner;
 
+use crate::class::Classes;
 use crate::shared::{drop_node, name, shared, with_document, write};
 
 /// An element being built: a node of the document already.
@@ -33,7 +34,6 @@ pub fn el(tag: &str) -> El {
 /// it with an unstyled one inside is marked as having something to style.
 pub(crate) fn append(document: &mut BaseDocument, parent: NodeId, child: NodeId) {
     document.mutate().append_children(parent, &[child]);
-    crate::sheet::held(document, parent, child);
     let on_the_page = (document.get_node(parent)).is_some_and(|node| node.flags.is_in_document());
     if !on_the_page {
         return;
@@ -85,12 +85,22 @@ impl El {
         self
     }
 
-    pub fn class(self, class: &str) -> Self {
-        self.attr("class", class)
+    /// Adds classes to the element's: a CSS module's (whose sheet comes
+    /// into the document with it), or the page's own by name.
+    pub fn class(self, classes: impl Classes) -> Self {
+        with_document(|document| crate::sheet::change(document, self.0, &[], &classes));
+        self
     }
 
-    pub fn class_dyn(self, class: impl Fn() -> String + 'static) -> Self {
-        self.attr_dyn("class", class)
+    /// Classes that follow the signals `classes` reads, beside the ones
+    /// the element has otherwise.
+    pub fn class_dyn<C: Classes>(self, classes: impl Fn() -> C + 'static) -> Self {
+        Effect::new(move |earlier: Option<Vec<String>>| {
+            let classes = classes();
+            let earlier = earlier.unwrap_or_default();
+            with_document(|document| crate::sheet::change(document, self.0, &earlier, &classes))
+        });
+        self
     }
 
     /// One property of the element's own style, following the signals
@@ -102,14 +112,6 @@ impl El {
                 (document.mutate()).set_style_property(self.0, property, &value)
             });
         });
-        self
-    }
-
-    /// Gives the element a style sheet of its own: plain CSS whose rules
-    /// reach the element and what is under it, and stop at what is inside
-    /// a view placed there.
-    pub fn styled(self, css: &str) -> Self {
-        with_document(|document| crate::sheet::adopt(document, self.0, css));
         self
     }
 
@@ -342,10 +344,6 @@ impl El {
                     mutator.insert_nodes_before(marker, &order);
                 } else if !created.is_empty() {
                     mutator.insert_nodes_before(marker, &created);
-                }
-                drop(mutator);
-                for made in &created {
-                    crate::sheet::held(document, self.0, *made);
                 }
             });
             next

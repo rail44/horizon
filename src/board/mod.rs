@@ -21,7 +21,9 @@ use horizon_ui::reactive_graph::traits::With;
 use horizon_workspace::SessionId;
 
 use crate::background::Background;
+use chip::{Tone, chip};
 
+mod chip;
 pub mod list;
 #[cfg(not(target_family = "wasm"))]
 pub mod thread;
@@ -153,17 +155,17 @@ fn follow(
     stop
 }
 
-/// The class of a task's status: the tone its chip or dot is drawn in.
-fn tone(item: &Item) -> &'static str {
+/// The tone a task's status is drawn in, as a chip or a dot.
+fn tone(item: &Item) -> Tone {
     if item.is_closed {
-        return "muted";
+        return Tone::Muted;
     }
     match item.status.trim() {
-        "done" => "success",
-        "review" => "info",
-        "blocked" | "見送り" => "warning",
-        "進行中" | "doing" | "設計中" => "accent",
-        _ => "muted",
+        "done" => Tone::Success,
+        "review" => Tone::Info,
+        "blocked" | "見送り" => Tone::Warning,
+        "進行中" | "doing" | "設計中" => Tone::Accent,
+        _ => Tone::Muted,
     }
 }
 
@@ -183,15 +185,14 @@ fn activity_chip(into: El, item: &Item, states: Activity) {
         |state| *state,
         |state| {
             let tone = match state {
-                BoardSessionActivity::Failed => "danger",
+                BoardSessionActivity::Failed => Tone::Danger,
                 BoardSessionActivity::Running
                 | BoardSessionActivity::ToolRunning
-                | BoardSessionActivity::WaitingForApproval => "accent",
-                _ => "muted",
+                | BoardSessionActivity::WaitingForApproval => Tone::Accent,
+                _ => Tone::Muted,
             };
-            horizon_ui::el("span")
-                .class(&format!("chip activity {tone}"))
-                .text(state.label())
+            // (Named for whoever looks for it; no rule is about it.)
+            chip(tone, state.label()).class("activity")
         },
     );
 }

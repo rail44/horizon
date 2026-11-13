@@ -49,7 +49,7 @@ fn open(session: &Session) -> Opened {
 fn has_class(document: &BaseDocument, id: NodeId, class: &str) -> bool {
     (document.get_node(id))
         .and_then(|node| node.attr(local_name!("class")))
-        .is_some_and(|classes| classes.split(' ').any(|name| name == class))
+        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class))
 }
 
 fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {

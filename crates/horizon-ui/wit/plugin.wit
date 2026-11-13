@@ -9,9 +9,12 @@ interface document {
     create-comment: func(text: string) -> u64;
     set-attribute: func(node: u64, name: string, value: string);
     set-style: func(node: u64, property: string, value: string);
-    /// Gives a node a style sheet of its own: its rules reach the node and
-    /// what is under it, and stop at what is inside a view placed there.
-    adopt-style: func(node: u64, css: string);
+    /// Puts a CSS module's sheet in the document, unless one of that id is
+    /// there.
+    adopt-sheet: func(id: string, css: string);
+    /// Takes classes out of a node's and puts classes in, each between
+    /// spaces.
+    change-classes: func(node: u64, remove: string, add: string);
     set-text: func(node: u64, text: string);
     append: func(parent: u64, child: u64);
     /// Puts nodes, in order, just before a node among its parent's.

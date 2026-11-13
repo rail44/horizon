@@ -23,6 +23,7 @@ members = [
     "crates/horizon-logd",
     "crates/horizon-wiki",
     "crates/horizon-ui",
+    "crates/horizon-ui-macros",
     "crates/horizon-theme-css",
     "preview-plugin",
 ]

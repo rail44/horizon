@@ -43,7 +43,7 @@ fn open_with(opening: Opening) -> Opened {
 fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
     let node = document.get_node(id).expect("a node");
     let named = (node.attr(local_name!("class")))
-        .is_some_and(|classes| classes.split(' ').any(|name| name == class));
+        .is_some_and(|classes| horizon_ui::testing::has_class(classes, class));
     if named {
         found.push(id);
     }

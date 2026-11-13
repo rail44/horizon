@@ -25,14 +25,16 @@ use horizon_ui::{
 };
 use keyboard_types::{Key, NamedKey};
 
+use super::chip::{Tone, chip};
 #[cfg(not(target_family = "wasm"))]
 use super::follow;
 use super::{Activity, Job, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
 
-// The view's own style sheet. The measurements are in the theme's scaled
-// lengths (`--u8` is 8 px at the reference type size).
-const CSS: &str = "
+// The measurements are in the theme's scaled lengths (`--u8` is 8 px at
+// the reference type size).
+mod styles {
+    horizon_ui::css_module! {"
     .board-list { position: relative; display: flex; flex-direction: column; height: 100%;
                   min-width: calc(var(--u28) * 10); outline: none;
                   background: var(--background); color: var(--text);
@@ -66,16 +68,6 @@ const CSS: &str = "
                 line-height: var(--micro-line); color: var(--text-muted); }
         .tail { flex: none; display: flex; align-items: center; gap: var(--u4);
                 padding: 0 var(--u16) 0 var(--u4); }
-        .chip { padding: 0 var(--u4); border-radius: 2px; font-size: var(--micro-size);
-                line-height: var(--micro-line); }
-        .chip.muted { background: var(--chip-muted-surface); color: var(--chip-muted-text); }
-        .chip.accent { background: var(--chip-accent-surface); color: var(--chip-accent-text); }
-        .chip.success { background: var(--chip-success-surface);
-                        color: var(--chip-success-text); }
-        .chip.info { background: var(--chip-info-surface); color: var(--chip-info-text); }
-        .chip.warning { background: var(--chip-warning-surface);
-                        color: var(--chip-warning-text); }
-        .chip.danger { background: var(--chip-muted-surface); color: var(--danger); }
         .status-dot { width: 8px; height: 8px; border-radius: 50%; opacity: 0.55; }
         .status-dot.muted { background: var(--text-muted); }
         .status-dot.accent { background: var(--accent); }
@@ -99,7 +91,20 @@ const CSS: &str = "
                  background: var(--surface-selected); pointer-events: none; }
     }
     .board-list:focus .row.selected { border-color: var(--accent); }
-";
+"}
+}
+
+/// The class a status's dot has for its tone.
+fn dot(tone: Tone) -> Option<horizon_ui::Class> {
+    match tone {
+        Tone::Muted => Some(styles::MUTED),
+        Tone::Accent => Some(styles::ACCENT),
+        Tone::Success => Some(styles::SUCCESS),
+        Tone::Info => Some(styles::INFO),
+        Tone::Warning => Some(styles::WARNING),
+        Tone::Danger => None,
+    }
+}
 
 /// How far the pointer moves with the button held before a press on a row
 /// is a drag of it.
@@ -385,7 +390,7 @@ fn shown(row: &Row, now: u64) -> String {
     let last = item.comments.last().and_then(|comment| comment.at);
     let age = last.map(|at| chrome::relative_time(at, now));
     format!(
-        "{} {} {} {} {} {} {} {} {} {}",
+        "{} {} {} {:?} {} {} {} {} {} {}",
         row.depth,
         item.title,
         status_text(item),
@@ -416,12 +421,12 @@ fn row(state: BoardList, marks: &Marks, row: &Row) -> El {
     let last = item.comments.last().and_then(|comment| comment.at);
     let age = last.map(|at| chrome::relative_time(at, now));
     let status = status_text(item);
-    let fixed = match (row.unread > 0, row.finished) {
-        (true, _) => "row unread",
-        (false, true) => "row finished",
-        (false, false) => "row",
+    let read = match (row.unread > 0, row.finished) {
+        (true, _) => Some(styles::UNREAD),
+        (false, true) => Some(styles::FINISHED),
+        (false, false) => None,
     };
-    let disclosure = el("div").class("disclosure");
+    let disclosure = el("div").class(styles::DISCLOSURE);
     if row.has_children {
         disclosure
             .text(if row.collapsed { "▸" } else { "▾" })
@@ -431,34 +436,31 @@ fn row(state: BoardList, marks: &Marks, row: &Row) -> El {
                 state.execute(ListCommand::ToggleExpansion(id))
             });
     }
-    let tail = el("div").class("tail");
+    let tail = el("div").class(styles::TAIL);
     // The unread posts folded away under the row, beside its own.
     if row.subtree_unread > row.unread {
         let unread = chrome::unread_count(row.subtree_unread);
-        tail.child(el("span").class("chip accent").text(&unread));
+        tail.child(chip(Tone::Accent, &unread));
     }
     activity_chip(tail, item, state.activity);
     let tone = tone(item);
     tail.child(match row.finished || status.is_empty() {
-        true => el("div").class(&format!("status-dot {tone}")),
-        false => el("span").class(&format!("chip {tone}")).text(&status),
+        true => el("div").class((styles::STATUS_DOT, dot(tone))),
+        false => chip(tone, &status),
     });
-    let gutter = el("div").class("gutter");
+    let gutter = el("div").class(styles::GUTTER);
     if row.subtree_unread > 0 {
-        gutter.child(el("div").class("unread-dot"));
+        gutter.child(el("div").class(styles::UNREAD_DOT));
     }
     el("div")
+        .class((styles::ROW, read))
         .class_dyn(move || {
-            let mut class = fixed.to_string();
-            if marked.selected.is(&Some(id)) {
-                class += " selected";
-            }
-            if marked.carried.is(&Some(id)) {
-                class += " carried";
-            }
-            class
+            (
+                (marked.selected.is(&Some(id))).then_some(styles::SELECTED),
+                (marked.carried.is(&Some(id))).then_some(styles::CARRIED),
+            )
         })
-        .child(el("div").class("bar"))
+        .child(el("div").class(styles::BAR))
         .child(gutter)
         .child(el("div").attr(
             "style",
@@ -467,22 +469,22 @@ fn row(state: BoardList, marks: &Marks, row: &Row) -> El {
         .child(disclosure)
         .child(
             el("div")
-                .class("label")
-                .child(el("div").class("title").text(&item.title))
+                .class(styles::LABEL)
+                .child(el("div").class(styles::TITLE).text(&item.title))
                 .child(
                     el("div")
-                        .class("meta")
+                        .class(styles::META)
                         .text(&chrome::row_meta(age.as_deref(), item.comments.len())),
                 ),
         )
         .child(tail)
         .when(
             move || above.indicator.is(&Some((id, DropHalf::Above))),
-            || el("div").class("line above"),
+            || el("div").class((styles::LINE, styles::ABOVE)),
         )
         .when(
             move || below.indicator.is(&Some((id, DropHalf::Below))),
-            || el("div").class("line below"),
+            || el("div").class((styles::LINE, styles::BELOW)),
         )
 }
 
@@ -512,12 +514,9 @@ pub fn view(
             rows: RefCell::default(),
             reveal: Cell::new(None),
         })),
-        element: el("div")
-            .class("board-list")
-            .attr("tabindex", "0")
-            .styled(CSS),
+        element: el("div").class(styles::BOARD_LIST).attr("tabindex", "0"),
         field: el("input").attr("type", "text"),
-        scroll: el("div").class("rows"),
+        scroll: el("div").class(styles::ROWS),
     };
     let (root, scroll, field) = (state.element, state.scroll, state.field);
     let held = state.held();
@@ -595,13 +594,13 @@ pub fn view(
                 expanded,
             } => {
                 let band = el("div")
-                    .class("band")
+                    .class(styles::BAND)
                     .child(el("span").text(if *expanded { "▾" } else { "▸" }))
                     .child(el("span").text(&chrome::done_band(*count)))
                     .on("click", move |_| state.execute(ListCommand::ToggleFinished));
                 if *unread > 0 {
                     let unread = chrome::unread_count(*unread);
-                    band.child(el("span").class("chip accent").text(&unread));
+                    band.child(chip(Tone::Accent, &unread));
                 }
                 band
             }
@@ -707,7 +706,7 @@ pub fn view(
             state.move_task(id, position);
         }
     })
-    .child(el("div").class("head").text_dyn(move || {
+    .child(el("div").class(styles::HEAD).text_dyn(move || {
         state.rows.with(|rows| {
             let unread = rows.iter().map(|row| row.unread).sum();
             chrome::list_header_text(rows.len(), unread)
@@ -718,14 +717,14 @@ pub fn view(
         move || state.notice.with(Option::is_some),
         move || {
             el("div")
-                .class("notice")
+                .class(styles::NOTICE)
                 .text_dyn(move || state.notice.get().unwrap_or_default())
         },
     )
     .child(
         // blitz-dom does not draw a field's `placeholder`.
         el("div")
-            .class("add")
+            .class(styles::ADD)
             .child(
                 field
                     .on("input", move |event| {
@@ -754,14 +753,14 @@ pub fn view(
             )
             .when(
                 move || state.typed.with(String::is_empty),
-                || el("div").class("placeholder").text(chrome::ADD_TASK),
+                || el("div").class(styles::PLACEHOLDER).text(chrome::ADD_TASK),
             ),
     )
     .when(
         move || state.carried.get().is_some(),
         move || {
             el("div")
-                .class("ghost")
+                .class(styles::GHOST)
                 .style_dyn("left", move || format!("{}px", ghost_at.get().0))
                 .style_dyn("top", move || format!("{}px", ghost_at.get().1))
                 .text_dyn(move || {

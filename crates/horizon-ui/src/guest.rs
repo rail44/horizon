@@ -31,6 +31,8 @@ use reactive_graph::effect::Effect;
 use reactive_graph::graph::untrack;
 use reactive_graph::owner::{Owner, on_cleanup};
 
+use crate::class::Classes;
+
 #[doc(hidden)]
 pub mod bindings {
     wit_bindgen::generate!({
@@ -43,6 +45,28 @@ pub mod bindings {
 
 use bindings::horizon::ui::document as host;
 use bindings::{EventData, Handled};
+
+thread_local! {
+    /// The sheets the host has been given, by id.
+    static ADOPTED: RefCell<HashSet<&'static str>> = RefCell::default();
+}
+
+/// The classes between spaces, their sheets given to the host first.
+fn named(classes: &impl Classes) -> String {
+    let mut named = String::new();
+    classes.each(&mut |class, sheet| {
+        if let Some(sheet) = sheet
+            && ADOPTED.with(|adopted| adopted.borrow_mut().insert(sheet.id))
+        {
+            host::adopt_sheet(sheet.id, sheet.css);
+        }
+        if !named.is_empty() {
+            named.push(' ');
+        }
+        named.push_str(class);
+    });
+    named
+}
 
 type Handler = Rc<dyn Fn(&DomEvent)>;
 /// The handlers at a node, by whether they hear an event on its way in.
@@ -121,26 +145,28 @@ impl El {
         self
     }
 
-    pub fn class(self, class: &str) -> Self {
-        self.attr("class", class)
+    /// Adds classes to the element's: a CSS module's (whose sheet comes
+    /// into the document with it), or the page's own by name.
+    pub fn class(self, classes: impl Classes) -> Self {
+        host::change_classes(id(self), "", &named(&classes));
+        self
     }
 
-    pub fn class_dyn(self, class: impl Fn() -> String + 'static) -> Self {
-        self.attr_dyn("class", class)
+    /// Classes that follow the signals `classes` reads, beside the ones
+    /// the element has otherwise.
+    pub fn class_dyn<C: Classes>(self, classes: impl Fn() -> C + 'static) -> Self {
+        Effect::new(move |earlier: Option<String>| {
+            let now = named(&classes());
+            host::change_classes(id(self), earlier.as_deref().unwrap_or(""), &now);
+            now
+        });
+        self
     }
 
     /// One property of the element's own style, following the signals
     /// `value` reads.
     pub fn style_dyn(self, property: &'static str, value: impl Fn() -> String + 'static) -> Self {
         Effect::new(move |_| host::set_style(id(self), property, &value()));
-        self
-    }
-
-    /// Gives the element a style sheet of its own: plain CSS whose rules
-    /// reach the element and what is under it, and stop at what is inside
-    /// a view placed there.
-    pub fn styled(self, css: &str) -> Self {
-        host::adopt_style(id(self), css);
         self
     }
 

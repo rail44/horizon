@@ -158,8 +158,13 @@ impl Host for State {
         Ok(())
     }
 
-    fn adopt_style(&mut self, node: u64, css: String) -> wasmtime::Result<()> {
-        host::adopt_style(self.change(node)?, &css);
+    fn adopt_sheet(&mut self, id: String, css: String) -> wasmtime::Result<()> {
+        host::adopt_sheet(&id, &css);
+        Ok(())
+    }
+
+    fn change_classes(&mut self, node: u64, remove: String, add: String) -> wasmtime::Result<()> {
+        host::change_classes(self.change(node)?, &remove, &add);
         Ok(())
     }
 

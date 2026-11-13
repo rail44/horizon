@@ -9,14 +9,12 @@ publish = false
 blitz-traits = { workspace = true }
 reactive_graph = { workspace = true }
 any_spawner = { workspace = true }
+horizon-ui-macros = { path = "../horizon-ui-macros" }
 
 # The document is the host's: a view built into a wasm plugin reaches it
 # over `wit/plugin.wit` (`src/guest.rs`).
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 blitz-dom = { workspace = true }
-# Stylo's switches, to turn `@scope` on (`src/sheet.rs`): the copy Blitz's
-# Stylo reads, so the revision Blitz pins. A Blitz bump moves it.
-stylo_static_prefs = { git = "https://github.com/servo/stylo", rev = "cd230184a620c3e6c0f25faa07838fddcefec32d" }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 wit-bindgen = "0.41"
