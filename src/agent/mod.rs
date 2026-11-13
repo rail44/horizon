@@ -18,7 +18,7 @@ use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, WithVal
 use horizon_ui::windowed::{follow_tail, windowed};
 use horizon_ui::{El, dispatched, el, prevent_default, stop_propagation};
 
-use crate::parts::{self, ButtonKind, ButtonSize, button, chip, chip_of};
+use crate::parts::{self, ButtonKind, ButtonSize, button, chip, chip_of, field, prompt_of};
 use keyboard_types::{Key, NamedKey};
 
 use horizon_agent_display::chrome;
@@ -109,15 +109,7 @@ pub const CSS: &str = "
         .box { display: flex; flex-direction: column; gap: var(--u4);
                padding: var(--u8) var(--u16); border: 1px solid var(--border);
                border-radius: 4px; }
-        .field { position: relative; display: flex; flex-direction: column;
-                 padding: 6px 12px; }
-        textarea { font-family: var(--font-family); font-size: var(--body-size);
-                   line-height: var(--body-line); color: var(--text); border: none;
-                   outline: none; padding: 0; margin: 0; background: transparent;
-                   resize: none; }
-        textarea:focus { outline: none; }
-        .placeholder { position: absolute; left: 12px; top: 6px; pointer-events: none;
-                       color: var(--text-muted); }
+        .field { padding: 6px 12px; }
         .hints { display: flex; align-items: center; gap: var(--u4);
                  font-size: var(--micro-size); line-height: var(--micro-line);
                  color: var(--text-muted); }
@@ -332,19 +324,10 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
     let composer = el("div").class("composer").child(
         el("div")
             .class("box")
-            .child(
-                // blitz-dom does not draw a text field's `placeholder`: it
-                // is an element over the field, there while the field is
-                // empty.
-                el("div").class("field").child(state.field).when(
-                    move || state.typed.get().is_empty(),
-                    move || {
-                        el("div")
-                            .class("placeholder")
-                            .text_dyn(move || placeholder(state.status.get()).to_string())
-                    },
-                ),
-            )
+            .child(el("div").class("field").child(field(state.field).when(
+                move || state.typed.get().is_empty(),
+                move || prompt_of().text_dyn(move || placeholder(state.status.get()).to_string()),
+            )))
             .child(
                 el("div")
                     .class("hints")

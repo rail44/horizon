@@ -166,11 +166,7 @@ pub const CSS: &str = "
         .composer { display: flex; flex-direction: column; gap: 2px; padding-top: var(--u4); }
         .composer .field { padding: 2px var(--u16); border: 1px solid var(--border);
                            border-radius: 4px; }
-        .composer textarea { width: 100%; box-sizing: border-box; padding: 0; border: none;
-                             outline: none; resize: none; background: transparent;
-                             color: var(--text); font-family: var(--font-family);
-                             font-size: var(--body-size); line-height: var(--body-line);
-                             height: calc(var(--body-line) * 2); }
+        .composer textarea { height: calc(var(--body-line) * 2); }
         .send { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
         .key { padding: 0 var(--u4); border: 1px solid var(--border); border-radius: 3px;
                font-size: var(--micro-size); line-height: var(--micro-line);
@@ -638,7 +634,7 @@ fn composer(state: Wiki) -> El {
         .focus();
     el("div")
         .class("composer")
-        .child(el("div").class("field").child(field))
+        .child(el("div").class("field").child(crate::parts::field(field)))
         .child(
             el("div")
                 .class("send")

@@ -1,4 +1,4 @@
-//! What views are made of: a chip, a button, and the controls a view places (a
+//! What views are made of: a chip, a button, a field's box, and the controls a view places (a
 //! slider, a select, a color picker). A control is built over a signal of
 //! the value it edits, and tells whoever placed it when a person changed
 //! it.
@@ -17,6 +17,7 @@ use horizon_ui::blitz_traits::events::DomEventData;
 mod button;
 mod chip;
 mod color;
+mod field;
 mod gallery;
 mod select;
 mod slider;
@@ -24,6 +25,7 @@ mod slider;
 pub use button::{ButtonKind, ButtonSize, button};
 pub use chip::{Tone, chip, chip_of};
 pub use color::{color_picker, hex, parse_hex};
+pub use field::{field, prompt, prompt_of};
 pub use gallery::gallery;
 pub use select::select;
 pub use slider::{Range, slider};

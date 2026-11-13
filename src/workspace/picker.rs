@@ -11,6 +11,7 @@ use horizon_ui::{El, el, prevent_default, stop_propagation};
 use keyboard_types::{Key, NamedKey};
 
 use super::Shell;
+use crate::parts::{field, prompt};
 
 /// One row: its parts as text, each under a class of its own.
 #[derive(Clone, PartialEq)]
@@ -92,50 +93,47 @@ pub(super) fn view_in_steps(
             item
         },
     );
-    let list = el("div")
-        .class("picker")
-        // A press in the list is not one outside it.
-        .on("pointerdown", |_| stop_propagation())
-        .on("keydown", move |event| {
-            let DomEventData::KeyDown(key) = &event.data else {
-                return;
-            };
-            let count = rows.with_untracked(Vec::len);
-            let chosen = shell.chosen.get_untracked().min(count.saturating_sub(1));
-            let (down, up) = (
-                (chosen + 1).min(count.saturating_sub(1)),
-                chosen.saturating_sub(1),
-            );
-            match &key.key {
-                Key::Named(NamedKey::ArrowDown) => shell.chosen.set(down),
-                Key::Named(NamedKey::ArrowUp) => shell.chosen.set(up),
-                Key::Named(NamedKey::Tab) if key.modifiers.shift() => shell.chosen.set(up),
-                Key::Named(NamedKey::Tab) => shell.chosen.set(down),
-                Key::Named(NamedKey::Escape) => {
-                    if !back() {
-                        close();
+    let list =
+        el("div")
+            .class("picker")
+            // A press in the list is not one outside it.
+            .on("pointerdown", |_| stop_propagation())
+            .on("keydown", move |event| {
+                let DomEventData::KeyDown(key) = &event.data else {
+                    return;
+                };
+                let count = rows.with_untracked(Vec::len);
+                let chosen = shell.chosen.get_untracked().min(count.saturating_sub(1));
+                let (down, up) = (
+                    (chosen + 1).min(count.saturating_sub(1)),
+                    chosen.saturating_sub(1),
+                );
+                match &key.key {
+                    Key::Named(NamedKey::ArrowDown) => shell.chosen.set(down),
+                    Key::Named(NamedKey::ArrowUp) => shell.chosen.set(up),
+                    Key::Named(NamedKey::Tab) if key.modifiers.shift() => shell.chosen.set(up),
+                    Key::Named(NamedKey::Tab) => shell.chosen.set(down),
+                    Key::Named(NamedKey::Escape) => {
+                        if !back() {
+                            close();
+                        }
                     }
+                    _ if count == 0 => return,
+                    Key::Named(NamedKey::Enter) if key.modifiers.ctrl() => {
+                        picked(chosen, Picked::ConfirmedSecondary);
+                    }
+                    Key::Named(NamedKey::Enter) => picked(chosen, Picked::Confirmed),
+                    _ if key.modifiers.ctrl() => picked(chosen, Picked::Chord(key)),
+                    // Anything else is the field's.
+                    _ => return,
                 }
-                _ if count == 0 => return,
-                Key::Named(NamedKey::Enter) if key.modifiers.ctrl() => {
-                    picked(chosen, Picked::ConfirmedSecondary);
-                }
-                Key::Named(NamedKey::Enter) => picked(chosen, Picked::Confirmed),
-                _ if key.modifiers.ctrl() => picked(chosen, Picked::Chord(key)),
-                // Anything else is the field's.
-                _ => return,
-            }
-            prevent_default();
-            stop_propagation();
-        })
-        .child(
-            // blitz-dom does not draw a field's `placeholder`.
-            el("div").class("search").child(input).when(
-                move || shell.query.get().is_empty(),
-                || el("div").class("placeholder").text("Search..."),
-            ),
-        )
-        .child(items);
+                prevent_default();
+                stop_propagation();
+            })
+            .child(el("div").class("search").child(
+                field(input).when(move || shell.query.get().is_empty(), || prompt("Search...")),
+            ))
+            .child(items);
     el("div")
         .class("scrim")
         .on("pointerdown", move |_| close())

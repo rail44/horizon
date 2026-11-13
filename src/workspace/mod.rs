@@ -113,12 +113,7 @@ pub const CSS: &str = "
                   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1); }
         .search { flex: none; position: relative; display: flex; align-items: center;
                   height: 32px; padding: 0 12px; border-bottom: 1px solid var(--border); }
-        .search input { flex: 1; font-family: var(--font-family);
-                        font-size: var(--body-size); line-height: 20px; padding: 0;
-                        border: none; outline: none; background: transparent;
-                        color: var(--text); }
-        .search .placeholder { position: absolute; left: 12px; top: 6px; line-height: 20px;
-                               color: var(--text-muted); pointer-events: none; }
+        .search > * { flex: 1; font-size: var(--body-size); line-height: 20px; }
         .items { flex: 1; min-height: 0; overflow-y: auto; }
         .item { display: flex; padding: 7px 12px; cursor: pointer; }
         .item.command { flex-direction: column; }

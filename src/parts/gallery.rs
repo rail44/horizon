@@ -3,7 +3,7 @@
 
 use horizon_ui::{El, el};
 
-use super::{ButtonKind, ButtonSize, Tone, button, chip};
+use super::{ButtonKind, ButtonSize, Tone, button, chip, field, prompt};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -58,6 +58,31 @@ fn buttons() -> El {
                 ],
             ),
         ],
+    )
+}
+
+/// A field's box, empty with its prompt and with something typed.
+fn fields() -> El {
+    let boxed = |field: El| {
+        el("div")
+            .attr(
+                "style",
+                "flex: none; width: 240px; padding: var(--u4) var(--u8); \
+                 border: var(--line) solid var(--border); border-radius: var(--radius);",
+            )
+            .child(field)
+    };
+    let typed = el("input").attr("type", "text");
+    typed.set_value("something typed");
+    part(
+        "field",
+        vec![(
+            "empty with its prompt, and typed in (the box around is whoever places it's)",
+            vec![
+                boxed(field(el("input").attr("type", "text")).child(prompt("Add a task..."))),
+                boxed(field(typed)),
+            ],
+        )],
     )
 }
 
@@ -118,7 +143,8 @@ pub fn gallery() -> El {
                 ),
             ],
         ))
-        .child(buttons());
+        .child(buttons())
+        .child(fields());
     #[cfg(not(target_family = "wasm"))]
     gallery.child(markdown());
     gallery

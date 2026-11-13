@@ -29,7 +29,7 @@ use keyboard_types::{Key, NamedKey};
 use super::follow;
 use super::{Activity, Job, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
-use crate::parts::{Tone, chip};
+use crate::parts::{self, Tone, chip};
 
 // The measurements are in the theme's scaled lengths (`--u8` is 8 px at
 // the reference type size).
@@ -79,14 +79,8 @@ mod styles {
         .line.above { top: -1px; }
         .line.below { bottom: -1px; }
         .band { display: flex; align-items: center; gap: var(--u4); cursor: pointer; }
-        .add { flex: none; position: relative; padding: var(--u4) var(--u16);
+        .add { flex: none; padding: var(--u4) var(--u16);
                border-top: 1px solid var(--border); }
-        .add input { width: 100%; font-family: var(--font-family);
-                     font-size: var(--body-size); line-height: var(--body-line); padding: 0;
-                     border: none; outline: none; background: transparent;
-                     color: var(--text); }
-        .add .placeholder { position: absolute; left: var(--u16); top: var(--u4);
-                            color: var(--text-muted); pointer-events: none; }
         .ghost { position: absolute; z-index: 10; padding: 4px 8px;
                  background: var(--surface-selected); pointer-events: none; }
     }
@@ -722,10 +716,8 @@ pub fn view(
         },
     )
     .child(
-        // blitz-dom does not draw a field's `placeholder`.
-        el("div")
-            .class(styles::ADD)
-            .child(
+        el("div").class(styles::ADD).child(
+            parts::field(
                 field
                     .on("input", move |event| {
                         if let DomEventData::Input(input) = &event.data {
@@ -753,8 +745,9 @@ pub fn view(
             )
             .when(
                 move || state.typed.with(String::is_empty),
-                || el("div").class(styles::PLACEHOLDER).text(chrome::ADD_TASK),
+                || parts::prompt(chrome::ADD_TASK),
             ),
+        ),
     )
     .when(
         move || state.carried.get().is_some(),
