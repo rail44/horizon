@@ -152,9 +152,35 @@ WASI 0.3 (ratified 2026-06-11; Wasmtime 46 and later) gives components
 `async` functions, `stream` and `future`: a guest can have tasks of its
 own that wait for a file to change, a timer, or work in the host, with the
 host running them from its own loop (`Store::run_concurrent`). Rust guests
-build for `wasm32-wasip2` with `wit-bindgen`'s `async` feature. Whether
-that loop can be run from the UI thread's, a frame at a time, has not been
-tried. This question is the same for all three models.
+build for `wasm32-wasip2` with `wit-bindgen`'s `async` feature.
+
+Tried (`spikes/plugin-boundary/guest-async`, `host-tasks`; wasmtime
+50.0.1, wit-bindgen 0.63): a guest's async export starts a task and comes
+back; the task waits on a timer of the host's and calls the host between
+waits. The host is one thread with no async runtime. When its waker is
+woken it gives the store's tasks one turn
+(`run_concurrent` around a future that is done on its second poll), and
+between turns it calls the guest plainly.
+
+- The task goes on across turns and ends; plain calls in between see what
+  it has done.
+- A task that waits one second asks for 2 turns in 250 frames of 4 ms,
+  and once it has ended none are asked for: a guest that waits costs
+  nothing.
+- A wake must not be dropped. One that arrives during a plain call into
+  the guest is for the tasks: every wake is answered with a turn.
+- A store with an async import takes every call into the guest as an
+  async one (`call_async`, on a fiber): about 1 µs a call.
+- A plain call out of the guest costs 125 ns with a number, 219 ns with
+  two short strings (the copies and the allocation are about 90 ns of
+  that), 191 ns with a list of eight coming back.
+
+Not tried: the limit on a call's time (the engine's epoch) together with
+tasks; `stream`; what wasmtime's documentation says of `run_concurrent`,
+that a future inside it can be kept from being polled while wasm runs
+(bytecodealliance/wasmtime#11869, #11870). `wit-bindgen`'s `spawn_local`
+needs the crate that spawns and the crate that exports to be one version,
+and a spawned task lives as long as the export's task that spawned it.
 
 ## Not yet known
 
@@ -163,8 +189,7 @@ tried. This question is the same for all three models.
   types take them as parameters; nothing converts them yet); the input
   method across the boundary.
 - For 2: what handing changes over together saves, measured.
-- For all: running a guest's tasks from the UI thread (above); keeping a
-  compiled component between runs.
+- For all: keeping a compiled component between runs.
 
 ## Decided
 
@@ -192,9 +217,8 @@ The decisions and who made them are on board #76. What they come to:
 - **The document is synchronous; the world outside may not be.**
   Operations on the document and questions about the layout are plain
   calls. Waiting for a file to change, a timer, or work off the UI thread
-  is to be WASI 0.3's `async`, if a guest's tasks can be run from the UI
-  thread's loop, which is to be tried first. If they cannot, the host
-  calls the guest to tell it, as it does today.
+  is WASI 0.3's `async`: a guest's tasks can be run from the UI thread's
+  loop ("Who drives").
 - **wasmtime 50.** Done.
 - **The first extension is the Markdown view**, taking the built-in one's
   place once it passes the same tests. It reads files through WASI, with
