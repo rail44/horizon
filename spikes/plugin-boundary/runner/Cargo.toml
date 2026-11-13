@@ -1,0 +1,10 @@
+[package]
+name = "runner"
+description = "Runs a command component of this spike in the current wasmtime, with the fonts' directory lent to it."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wasmtime = "50"
+wasmtime-wasi = "50"

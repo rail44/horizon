@@ -125,7 +125,7 @@ uuid = { version = "1.18", features = ["v4"] }
 # The desktop's notification service (`src/desktop_notify.rs`).
 notify-rust = "4"
 # The runtime a preview's plugin runs in (`src/preview.rs`).
-wasmtime = { version = "36", default-features = false, features = [
+wasmtime = { version = "50", default-features = false, features = [
     "async",
     "demangle",
     "runtime",
@@ -133,7 +133,7 @@ wasmtime = { version = "36", default-features = false, features = [
     "component-model",
     "parallel-compilation",
 ] }
-wasmtime-wasi = "36"
+wasmtime-wasi = "50"
 
 [dev-dependencies]
 # The terminal view's tests run the terminal core over a PTY of their own.

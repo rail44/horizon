@@ -1,0 +1,19 @@
+# A spike on the extension boundary (`docs/extension-boundary-design.md`):
+# small programs that answer one question each. Its own workspace; nothing
+# in the root workspace depends on it.
+[workspace]
+resolver = "3"
+members = ["guest-doc", "runner"]
+
+[workspace.dependencies]
+blitz-dom = "=0.3.0-beta.4"
+blitz-traits = "=0.3.0-beta.4"
+blitz-paint = "=0.3.0-beta.4"
+
+[patch.crates-io]
+blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
+blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
+blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
+
+[profile.release]
+opt-level = 3

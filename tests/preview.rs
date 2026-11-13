@@ -426,3 +426,90 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
     assert!(matches!(answer, EnvelopeBody::Error { .. }), "{answer:?}");
     assert_eq!(previews().len(), 1);
 }
+
+#[test]
+#[ignore = "a probe for the spike"]
+fn probe_the_cost_of_the_boundary() {
+    use horizon::preview::{PROBE_CALLS, PROBE_TIME};
+
+    let started = Instant::now();
+    let opened = open("board-list-1000");
+    // The frame the rows are built in: their building and their layout.
+    let mut longest = Duration::ZERO;
+    while opened.all("row").len() < 1000 {
+        let frame = Instant::now();
+        opened.app.run_effects();
+        opened.app.resolve();
+        longest = longest.max(frame.elapsed());
+        assert!(started.elapsed() < Duration::from_secs(20));
+    }
+    eprintln!("PLUGIN the frame that built the rows: {longest:?}");
+    eprintln!(
+        "PLUGIN build: {} calls to the host, {:?} in calls into the plugin (wall {:?}, with the compile)",
+        PROBE_CALLS.get(),
+        PROBE_TIME.get(),
+        started.elapsed()
+    );
+    let (calls, time) = (PROBE_CALLS.get(), PROBE_TIME.get());
+    for _ in 0..100 {
+        opened.character("j");
+    }
+    eprintln!(
+        "PLUGIN 100 steps of the selection: {} calls, {:?}",
+        PROBE_CALLS.get() - calls,
+        PROBE_TIME.get() - time
+    );
+}
+
+#[test]
+#[ignore = "a probe for the spike"]
+fn probe_the_same_list_built_here() {
+    use horizon::board::Source;
+    use horizon::board::list;
+    use horizon_board::{BoardEvent, Item, Store, sample_envelopes};
+
+    let items = (1..=1000u64).map(|id| Item {
+        id,
+        title: format!("task {id}"),
+        rank: format!("{id:08}"),
+        ..Item::default()
+    });
+    let events = items.map(|item| BoardEvent::ItemStored { id: item.id, item });
+    let source = Source::Ready(Store::in_memory(sample_envelopes(events)));
+    let css = [horizon_theme_css::CSS, list::CSS].concat();
+    let app = App::new(600, 500, &css, || {
+        themed(
+            Theme::built_in,
+            list::view(source, Background::default(), |_| {}).0.focus(),
+        )
+    });
+    let opened = Opened {
+        app,
+        preview: view(Background::default(), Wake::default()).1,
+    };
+    // The time in the effects that build the rows, and in nothing else.
+    let mut longest = Duration::ZERO;
+    let started = Instant::now();
+    while opened.all("row").len() < 1000 {
+        let frame = Instant::now();
+        opened.app.run_effects();
+        opened.app.resolve();
+        longest = longest.max(frame.elapsed());
+        assert!(started.elapsed() < Duration::from_secs(20));
+    }
+    eprintln!("NATIVE the frame that built the rows: {longest:?}");
+    let effects = Instant::now();
+    for _ in 0..100 {
+        opened.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+            key: Key::Character("j".into()),
+            code: keyboard_types::Code::Unidentified,
+            modifiers: Modifiers::default(),
+            location: keyboard_types::Location::Standard,
+            is_auto_repeating: false,
+            is_composing: false,
+            state: KeyState::Pressed,
+            text: None,
+        }));
+    }
+    eprintln!("NATIVE 100 steps of the selection: {:?}", effects.elapsed());
+}

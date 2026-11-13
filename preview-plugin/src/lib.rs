@@ -50,6 +50,11 @@ fn view(name: &str) -> Option<El> {
     match name {
         "board-list" => Some(board_list(tasks())),
         "board-list-empty" => Some(board_list(Vec::new())),
+        "board-list-1000" => Some(board_list(
+            (1..=1000)
+                .map(|id| item(id, &format!("task {id}"), &format!("{id:08}"), None, ""))
+                .collect(),
+        )),
         // Never comes back: what the shell's limit on a call is for
         // (`tests/preview.rs`). Not among the names.
         "stuck" => {

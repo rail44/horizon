@@ -84,6 +84,13 @@ const EVENTS: &[&str] = &[
     "input",
 ];
 
+thread_local! {
+    /// (A probe, for the spike: the plugin's calls to the host, and the
+    /// time spent in calls into the plugin.)
+    pub static PROBE_CALLS: Cell<u64> = const { Cell::new(0) };
+    pub static PROBE_TIME: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+}
+
 struct State {
     wasi: WasiCtx,
     table: ResourceTable,
@@ -109,6 +116,7 @@ impl WasiView for State {
 impl State {
     /// A node the plugin names, if it is one of its own.
     fn own(&self, node: u64) -> wasmtime::Result<NodeId> {
+        PROBE_CALLS.set(PROBE_CALLS.get() + 1);
         let node = NodeId::from_u64(node);
         if self.owned.contains(&node) {
             Ok(node)
@@ -126,6 +134,7 @@ impl State {
     }
 
     fn made(&mut self, make: impl FnOnce() -> NodeId) -> wasmtime::Result<u64> {
+        PROBE_CALLS.set(PROBE_CALLS.get() + 1);
         if !host::free() {
             return Err(wasmtime::Error::msg(BUSY));
         }
@@ -379,7 +388,9 @@ impl Loaded {
         }
         let (answer, listens) = {
             let mut store = self.store.borrow_mut();
+            let started = std::time::Instant::now();
             let answer = (self.watchdog).timed(&mut store, |store| call(&self.plugin, store));
+            PROBE_TIME.set(PROBE_TIME.get() + started.elapsed());
             (answer, std::mem::take(&mut store.data_mut().listens))
         };
         self.calling.set(false);
