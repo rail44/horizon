@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use horizon::terminal::{Terminal, view};
+use horizon::terminal::{Terminal, TerminalView, build};
 use horizon_terminal_core::TerminalSize;
 use horizon_theme_css::Theme;
 use keyboard_types::{Key, Modifiers, NamedKey};
@@ -58,7 +58,11 @@ fn open(cells: usize) -> Opened {
     let session = support::shell("sh", TerminalSize::new(columns as u16, rows as u16));
     let mut terminal = None;
     let stage = Stage::new(columns as u32 * 8, rows as u32 * 18, "", || {
-        let (root, state) = view(session.into(), Theme::built_in().terminal());
+        let (root, state) = build(TerminalView {
+            session: session.into(),
+            look: Theme::built_in().terminal().into(),
+            open_url: None,
+        });
         terminal = Some(state);
         root.focus();
         horizon_ui::el("div")

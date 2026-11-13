@@ -1,7 +1,14 @@
-//! One terminal session as a view sees it: commands in, the newest frame
-//! and the updates out, and someone to wake when a frame comes. A session
-//! outlives a view of it: the frame is kept for the next view to draw.
+//! One terminal session: commands in, the newest frame and the updates
+//! out, and someone to wake when a frame comes. A session outlives a view
+//! of it: the frame is kept for the next view to draw.
+//!
+//! What a session says is for two readers. What is drawn and what a view
+//! acts on (a copy, a window of the scrollback) is the view's
+//! (`take_updates`). What is about the session itself (its title, its
+//! directory, a notification, that its shell has gone) is for whoever
+//! keeps the session, whether a view shows it or not (`take_reports`).
 
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
@@ -18,6 +25,9 @@ pub struct Session {
     commands: Sender<TerminalCommand>,
     latest: Latest,
     updates: Receiver<TerminalUpdate>,
+    /// What has come and not been taken, for each reader.
+    for_view: RefCell<Vec<TerminalUpdate>>,
+    for_keeper: RefCell<Vec<TerminalUpdate>>,
     waker: Wake,
     /// The attachment to the terminal runtime, kept for as long as the
     /// view is: letting go of it detaches the session, which goes on
@@ -46,6 +56,8 @@ impl Session {
             commands: handle.sender(),
             latest,
             updates: handle.events(),
+            for_view: RefCell::default(),
+            for_keeper: RefCell::default(),
             waker,
             _attachment: Some(handle),
         }
@@ -70,6 +82,8 @@ impl Session {
             commands,
             latest,
             updates,
+            for_view: RefCell::default(),
+            for_keeper: RefCell::default(),
             waker,
             _attachment: None,
         }
@@ -87,9 +101,34 @@ impl Session {
         Some((latest.0, frame.clone()))
     }
 
-    /// The updates that arrived since the last call.
+    /// Puts what has come in front of the reader it is for.
+    fn sort(&self) {
+        for update in self.updates.try_iter() {
+            let about_the_session = matches!(
+                update,
+                TerminalUpdate::Title(_)
+                    | TerminalUpdate::WorkingDirectory(_)
+                    | TerminalUpdate::Notification(_)
+                    | TerminalUpdate::Exited
+            );
+            match about_the_session {
+                true => self.for_keeper.borrow_mut().push(update),
+                false => self.for_view.borrow_mut().push(update),
+            }
+        }
+    }
+
+    /// What a view draws or acts on, that arrived since the last call.
     pub fn take_updates(&self) -> Vec<TerminalUpdate> {
-        self.updates.try_iter().collect()
+        self.sort();
+        std::mem::take(&mut *self.for_view.borrow_mut())
+    }
+
+    /// What is about the session itself, that arrived since the last
+    /// call: its title, its directory, a notification, its end.
+    pub fn take_reports(&self) -> Vec<TerminalUpdate> {
+        self.sort();
+        std::mem::take(&mut *self.for_keeper.borrow_mut())
     }
 
     /// Who to wake when a frame arrives.

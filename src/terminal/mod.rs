@@ -11,7 +11,6 @@
 //! holding wide characters stays on the grid.
 
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyrender::PaintScene;
@@ -36,7 +35,10 @@ use horizon_shell_runtime::terminal_glyphs::{self as drawn_glyphs, GlyphShape};
 use horizon_shell_runtime::terminal_links::{is_openable_url, url_from_lines};
 use horizon_shell_runtime::terminal_scrollback::{ScrollIpc, Scrollback};
 use horizon_theme_css::TerminalLook;
-use horizon_ui::{El, copy, each_layout, el, prevent_default};
+use horizon_ui::reactive_graph::effect::Effect;
+use horizon_ui::reactive_graph::traits::{Get, GetUntracked};
+use horizon_ui::reactive_graph::wrappers::read::Signal;
+use horizon_ui::{Component, El, copy, each_layout, el, prevent_default};
 
 mod session;
 mod shaping;
@@ -107,13 +109,6 @@ struct State {
     /// What the input method is composing, drawn at the cursor.
     preedit: RefCell<String>,
     focused: Cell<bool>,
-    exited: Cell<bool>,
-    /// The title and the working directory the session reported since
-    /// they were last taken.
-    titled: RefCell<Option<Option<String>>>,
-    directory: RefCell<Option<PathBuf>>,
-    /// The notifications the program asked for, not yet taken.
-    notifications: RefCell<Vec<horizon_terminal_core::TerminalNotification>>,
     /// What the session last copied, for whoever placed the view to see,
     /// and what it copied that the clipboard has not been given yet.
     copied: RefCell<Option<String>>,
@@ -132,13 +127,34 @@ struct State {
     /// The button a press reported to the program is for.
     reporting: Cell<Option<TerminalMouseButton>>,
     /// What a link clicked with the platform's key held is opened with.
-    open_url: RefCell<Option<OpenUrl>>,
+    open_url: Option<OpenUrl>,
     /// Whether a button went down here and is still held, and whether what
     /// it drags is a selection (or, otherwise, a report to the program).
     dragging: Cell<Option<bool>>,
 }
 
-/// The view, for whoever placed it.
+/// A terminal session, drawn and typed into.
+///
+/// The session is whoever placed the view's, and outlives it. What the
+/// session says of itself (its title, its end) is read from the session
+/// (`Session::take_reports`), not from the view.
+pub struct TerminalView {
+    pub session: Rc<Session>,
+    /// The theme's colors, font and row height: the view follows it, and
+    /// has the program that asks what the colors are answered with its.
+    pub look: Signal<TerminalLook>,
+    /// Opens a link clicked with the platform's key held.
+    pub open_url: Option<OpenUrl>,
+}
+
+impl Component for TerminalView {
+    fn view(self) -> El {
+        build(self).0
+    }
+}
+
+/// A way into the view for what is not a prop yet: the shell's commands
+/// on it, and its tests' look at what it has drawn.
 #[derive(Clone)]
 pub struct Terminal {
     state: Rc<State>,
@@ -203,27 +219,6 @@ impl Terminal {
         self.state.preedit.borrow().clone()
     }
 
-    pub fn exited(&self) -> bool {
-        self.state.exited.get()
-    }
-
-    /// The title the program set since the last call: `Some(None)` when
-    /// it took its title back.
-    pub fn take_title(&self) -> Option<Option<String>> {
-        self.state.titled.borrow_mut().take()
-    }
-
-    /// The desktop notifications the program asked for since the last
-    /// call.
-    pub fn take_notifications(&self) -> Vec<horizon_terminal_core::TerminalNotification> {
-        std::mem::take(&mut *self.state.notifications.borrow_mut())
-    }
-
-    /// The shell's working directory, if it changed since the last call.
-    pub fn take_directory(&self) -> Option<PathBuf> {
-        self.state.directory.borrow_mut().take()
-    }
-
     /// The number, among the session's, of the frame on screen: it moves
     /// when a frame is taken in.
     pub fn frame_number(&self) -> u64 {
@@ -238,19 +233,6 @@ impl Terminal {
     /// What the session last copied, taken.
     pub fn take_copied(&self) -> Option<String> {
         self.state.copied.borrow_mut().take()
-    }
-
-    /// Opens a link clicked with the platform's key held with `open`.
-    pub fn on_open_url(&self, open: OpenUrl) {
-        *self.state.open_url.borrow_mut() = Some(open);
-    }
-
-    /// Draws the terminal in `look` from now on, and has the program
-    /// that asks what the colors are answered with its.
-    pub fn set_look(&self, look: TerminalLook) {
-        (self.state.session).send(TerminalCommand::SetColorScheme(color_scheme(&look)));
-        *self.state.look.borrow_mut() = look;
-        self.state.restyled.set(self.state.restyled.get() + 1);
     }
 
     /// Who to wake when the session has a frame.
@@ -282,9 +264,6 @@ fn pump(state: &State) -> bool {
                 text,
                 destination: ClipboardDestination::Primary,
             } => crate::primary::set(text),
-            TerminalUpdate::Notification(notification) => {
-                state.notifications.borrow_mut().push(notification);
-            }
             TerminalUpdate::ScrollWindow(window) => {
                 let install = state.scrollback.borrow_mut().install_window(window);
                 if let Some((anchor, height)) = install.request {
@@ -294,11 +273,6 @@ fn pump(state: &State) -> bool {
             // A runtime that failed serves no window.
             TerminalUpdate::Error(_) => {
                 state.scrollback.borrow_mut().abandon();
-            }
-            TerminalUpdate::Exited => state.exited.set(true),
-            TerminalUpdate::Title(title) => *state.titled.borrow_mut() = Some(title),
-            TerminalUpdate::WorkingDirectory(directory) => {
-                *state.directory.borrow_mut() = Some(directory);
             }
             _ => {}
         }
@@ -373,14 +347,16 @@ fn key_code(key: &BlitzKeyEvent) -> Option<(KeyCode, Option<String>)> {
     }
 }
 
-/// Builds the view over `session`, in `look`.
-pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
-    // The colors a program is told when it asks (OSC 4, 10, 11, 12) are
-    // the ones it is drawn in.
-    session.send(TerminalCommand::SetColorScheme(color_scheme(&look)));
+/// Builds the view, with the way into it.
+pub fn build(given: TerminalView) -> (El, Terminal) {
+    let TerminalView {
+        session,
+        look,
+        open_url,
+    } = given;
     let state = Rc::new(State {
         session,
-        look: RefCell::new(look),
+        look: RefCell::new(look.get_untracked()),
         restyled: Cell::new(0),
         frame: RefCell::new(None),
         seen: Cell::new(0),
@@ -388,18 +364,23 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         origin: Cell::new((0., 0.)),
         preedit: RefCell::new(String::new()),
         focused: Cell::new(false),
-        notifications: RefCell::default(),
-        exited: Cell::new(false),
-        titled: RefCell::new(None),
-        directory: RefCell::new(None),
         copied: RefCell::new(None),
         outgoing: RefCell::new(None),
         scrollback: RefCell::default(),
         wheel: Cell::new(0.),
         clicked: Cell::new(None),
         reporting: Cell::new(None),
-        open_url: RefCell::new(None),
+        open_url,
         dragging: Cell::new(None),
+    });
+    // The colors a program is told when it asks (OSC 4, 10, 11, 12) are
+    // the ones it is drawn in, whenever they change.
+    let restyled = state.clone();
+    Effect::new(move |_| {
+        let look = look.get();
+        (restyled.session).send(TerminalCommand::SetColorScheme(color_scheme(&look)));
+        *restyled.look.borrow_mut() = look;
+        restyled.restyled.set(restyled.restyled.get() + 1);
     });
     let element = el("div").class(styles::TERMINAL).attr("tabindex", "0");
 
@@ -500,7 +481,7 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
             // selection.
             if button == TerminalMouseButton::Left && pointer.mods.meta() {
                 let link = link_at(&pressed, pointer.element.x, pointer.element.y);
-                let open = pressed.open_url.borrow().clone();
+                let open = pressed.open_url.clone();
                 if let (Some(link), Some(open)) = (link.filter(|link| is_openable_url(link)), open)
                 {
                     open(&link);

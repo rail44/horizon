@@ -4,8 +4,13 @@
 
 use std::time::{Duration, Instant};
 
-use horizon::terminal::{Terminal, view};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use horizon::terminal::{Session, Terminal, TerminalView, build};
 use horizon_terminal_core::TerminalSize;
+use horizon_terminal_core::TerminalUpdate;
+use horizon_theme_css::TerminalLook;
 use horizon_theme_css::Theme;
 use horizon_ui::App;
 use horizon_ui::blitz_traits::events::{
@@ -13,6 +18,8 @@ use horizon_ui::blitz_traits::events::{
     UiEvent,
 };
 use horizon_ui::blitz_traits::shell::{ColorScheme, Viewport};
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::Set;
 use horizon_ui::testing::{Pointer, move_to, pointer};
 
 mod support;
@@ -20,6 +27,11 @@ mod support;
 struct Opened {
     app: App,
     terminal: Terminal,
+    /// What the view was given: the session, the look it follows, and
+    /// where the links it opened went.
+    session: Rc<Session>,
+    look: RwSignal<TerminalLook>,
+    opened_urls: Rc<RefCell<Vec<String>>>,
 }
 
 fn open() -> Opened {
@@ -28,10 +40,17 @@ fn open() -> Opened {
 
 /// The view in a box with `style`: where on the page it is.
 fn open_at(style: &str) -> Opened {
-    let session = support::shell("sh", TerminalSize::new(80, 24));
+    let session: Rc<Session> = support::shell("sh", TerminalSize::new(80, 24)).into();
+    let look = RwSignal::new(Theme::built_in().terminal());
+    let opened_urls = Rc::new(RefCell::new(Vec::new()));
+    let (given, log) = (session.clone(), opened_urls.clone());
     let mut terminal = None;
     let app = App::new(900, 540, "", || {
-        let (root, state) = view(session.into(), Theme::built_in().terminal());
+        let (root, state) = build(TerminalView {
+            session: given,
+            look: look.into(),
+            open_url: Some(Rc::new(move |url| log.borrow_mut().push(url.to_string()))),
+        });
         terminal = Some(state);
         root.focus();
         horizon_ui::el("div")
@@ -45,6 +64,9 @@ fn open_at(style: &str) -> Opened {
     let opened = Opened {
         app,
         terminal: terminal.unwrap(),
+        session,
+        look,
+        opened_urls,
     };
     // The shell's first prompt.
     opened.wait("a prompt", |text| text.trim_end().ends_with('$'));
@@ -368,12 +390,17 @@ fn the_wheel_goes_back_through_what_scrolled_off() {
 }
 
 #[test]
-fn the_view_knows_when_the_shell_has_gone() {
+fn the_session_says_when_the_shell_has_gone_and_the_view_does_not_take_that() {
     let opened = open();
-    assert!(!opened.terminal.exited());
+    let gone = |opened: &Opened| {
+        (opened.session.take_reports().iter())
+            .any(|report| matches!(report, TerminalUpdate::Exited))
+    };
+    assert!(!gone(&opened));
     opened.run("exit");
     let started = Instant::now();
-    while !opened.terminal.exited() {
+    // (The view takes in what is its own at each layout.)
+    while !gone(&opened) {
         opened.app.resolve();
         assert!(started.elapsed() < Duration::from_secs(10), "still running");
         std::thread::sleep(Duration::from_millis(5));
@@ -544,7 +571,8 @@ fn a_program_that_asks_the_colors_is_told_the_ones_it_is_drawn_in() {
     // Another look: another answer.
     let mut other = look.clone();
     other.background = [0x12, 0x34, 0x56];
-    opened.terminal.set_look(other);
+    opened.look.set(other);
+    opened.app.run_effects();
     opened.run(r"printf '\033]11;?\007'; sleep 0.5");
     opened.wait("the new background's color", |text| {
         text.contains("11;rgb:1212/3434/5656")
@@ -553,15 +581,10 @@ fn a_program_that_asks_the_colors_is_told_the_ones_it_is_drawn_in() {
 
 #[test]
 fn a_link_clicked_with_the_platform_s_key_is_opened() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
     use horizon_ui::blitz_traits::events::MouseEventButton;
 
     let opened = open();
-    let opened_urls = Rc::new(RefCell::new(Vec::new()));
-    let log = opened_urls.clone();
-    (opened.terminal).on_open_url(Rc::new(move |url| log.borrow_mut().push(url.to_string())));
+    let opened_urls = opened.opened_urls.clone();
     opened.run(r"printf '\033]8;;https://example.com/x\033\\a-link\033]8;;\033\\ plain\n'");
     opened.wait("the link", |text| {
         text.lines().any(|line| line == "a-link plain")

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use horizon::restore;
-use horizon::terminal::{Session, view};
+use horizon::terminal::{Session, TerminalView, build};
 use horizon::terminald::Terminald;
 use horizon::workspace::{self, Shell};
 use horizon_shell_runtime::{TerminaldHandle, wait_for_drain};
@@ -141,10 +141,11 @@ fn a_session_of_a_real_terminald_runs_what_is_typed_into_the_view() {
 
     let mut terminal = None;
     let app = App::new(900, 540, "", || {
-        let (root, state) = view(
-            Session::attached(handle).into(),
-            Theme::built_in().terminal(),
-        );
+        let (root, state) = build(TerminalView {
+            session: Session::attached(handle).into(),
+            look: Theme::built_in().terminal().into(),
+            open_url: None,
+        });
         terminal = Some(state);
         root.focus()
     });

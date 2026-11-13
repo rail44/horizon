@@ -37,6 +37,7 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Track, Update, With, WithUntracked, WithValue,
 };
+use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Callback, Component, El, each_layout, el, relayout, stop_propagation};
 use horizon_workspace::title::derive_session_title;
 use horizon_workspace::types::TabSummary;
@@ -47,7 +48,7 @@ use crate::background::Background;
 use crate::board::{self, BoardList, BoardThread};
 use crate::markdown::{self, Markdown};
 use crate::preview::{self, Preview};
-use crate::terminal::{self, Session, Terminal};
+use crate::terminal::{self, Session, Terminal, TerminalView};
 use crate::theme_settings;
 use crate::wake::Wake;
 use crate::wiki::Wiki;
@@ -511,9 +512,11 @@ impl Shell {
                     if let Some(waker) = kept.waker.borrow().clone() {
                         session.set_waker(waker);
                     }
-                    let look = self.theme.with_untracked(Theme::terminal);
-                    let (root, view) = terminal::view(session, look);
-                    view.on_open_url(kept.open_url.clone());
+                    let (root, view) = terminal::build(TerminalView {
+                        session,
+                        look: Signal::derive(move || shell.theme.with(Theme::terminal)),
+                        open_url: Some(kept.open_url.clone()),
+                    });
                     terminal = Some((session_id, view));
                     root
                 }
@@ -744,40 +747,21 @@ impl Shell {
         self.tell_boards();
         let (mut titles, mut directories, mut exited) = (Vec::new(), Vec::new(), Vec::new());
         let mut notifications = Vec::new();
-        for view in self.kept().panes.borrow().values() {
-            let Some((session, terminal)) = &view.terminal else {
-                continue;
-            };
-            // A program's title is shaped as any title is; one that
-            // shapes to nothing is no title.
-            if let Some(title) = terminal.take_title() {
-                titles.push((*session, title.as_deref().and_then(derive_session_title)));
-            }
-            if let Some(directory) = terminal.take_directory() {
-                directories.push((*session, directory));
-            }
-            if terminal.exited() {
-                exited.push(*session);
-            }
-            for notification in terminal.take_notifications() {
-                notifications.push((*session, notification));
-            }
-        }
-        // A session no pane shows has no view to take its updates in.
+        // What a session says of itself is read from the session, whether a
+        // pane shows it or not.
         let kept = self.kept();
         let shown: HashSet<SessionId> = (kept.panes.borrow().values())
             .filter_map(|view| view.terminal.as_ref().map(|(session, _)| *session))
             .collect();
         for (id, session) in kept.sessions.borrow().iter() {
-            if shown.contains(id) {
-                continue;
-            }
-            for update in session.take_updates() {
-                match update {
+            for report in session.take_reports() {
+                match report {
                     TerminalUpdate::Exited => exited.push(*id),
                     TerminalUpdate::Notification(notification) => {
                         notifications.push((*id, notification));
                     }
+                    // A program's title is shaped as any title is; one
+                    // that shapes to nothing is no title.
                     TerminalUpdate::Title(title) => {
                         titles.push((*id, title.as_deref().and_then(derive_session_title)));
                     }
@@ -786,6 +770,10 @@ impl Shell {
                     }
                     _ => {}
                 }
+            }
+            // What is for a view has nowhere to go without one.
+            if !shown.contains(id) {
+                session.take_updates();
             }
         }
         for (id, session) in kept.agents.borrow().iter() {
@@ -1215,15 +1203,6 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         shell.reconcile();
     });
     each_layout(move |_| shell.take_in_sessions());
-    // The terminals draw themselves: a change of theme is handed to each.
-    Effect::new(move |_| {
-        let look = shell.theme.with(Theme::terminal);
-        for view in shell.kept().panes.borrow().values() {
-            if let Some((_, terminal)) = &view.terminal {
-                terminal.set_look(look.clone());
-            }
-        }
-    });
     // The model is kept as it changes, though not at every step of a
     // boundary being dragged.
     if let Some(mut save) = opening.save {
