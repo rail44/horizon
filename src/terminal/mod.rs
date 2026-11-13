@@ -1067,19 +1067,40 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             return scene;
         }
 
-        // A row is shaped again only when it is not the row drawn before.
         if self.shaped_at != scale {
             self.rows.clear();
             self.shaped_at = scale;
             self.baseline = (self.shaper).baseline(scale as f32, look.line_height);
         }
-        self.rows.truncate(frame.lines.len());
+        // A row drawn before is not shaped again, at whatever place it is
+        // now: output that scrolls moves every row and changes one.
+        let mut before: Vec<Option<Shaped>> = (std::mem::take(&mut self.rows).into_iter())
+            .map(Some)
+            .collect();
+        // How far below its new place the last row found was, and how many
+        // rows were looked for among all of those drawn before and not
+        // found: after a couple, the screen is taken to be all new (output
+        // faster than the frames), and the rest are not looked for.
+        let (mut below, mut missed) = (0, 0);
         for (index, wanted) in frame.lines.iter().enumerate() {
-            match self.rows.get(index) {
-                Some(shaped) if shaped.line == *wanted => {}
-                Some(_) => self.rows[index] = shape(wanted, &mut self.shaper, scale as f32, look),
-                None => (self.rows).push(shape(wanted, &mut self.shaper, scale as f32, look)),
+            let same = |shaped: &Option<Shaped>| {
+                (shaped.as_ref()).is_some_and(|shaped| shaped.line == *wanted)
+            };
+            let mut found = [index + below, index]
+                .into_iter()
+                .find(|at| before.get(*at).is_some_and(same));
+            if found.is_none() && missed < 2 {
+                found = before.iter().position(same);
+                missed += usize::from(found.is_none());
             }
+            let shaped = match found.and_then(|at| Some((at, before[at].take()?))) {
+                Some((at, shaped)) => {
+                    below = at.saturating_sub(index);
+                    shaped
+                }
+                None => shape(wanted, &mut self.shaper, scale as f32, look),
+            };
+            self.rows.push(shaped);
         }
 
         // (Edges on the display's pixels: two fills that meet part of a

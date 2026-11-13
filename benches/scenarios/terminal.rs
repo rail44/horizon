@@ -21,6 +21,12 @@ pub fn scenarios() -> Vec<Scenario> {
             run: output,
         },
         Scenario {
+            name: "terminal/lines",
+            unit: "cells",
+            sizes: CELLS,
+            run: lines,
+        },
+        Scenario {
             name: "terminal/typing",
             unit: "cells",
             sizes: CELLS,
@@ -114,9 +120,12 @@ impl Opened {
 fn output(cells: usize) -> Vec<Frame> {
     let mut opened = open(cells);
     // Lines as wide as the grid, so that a larger grid has more to draw,
-    // and more of them than are shown before the measuring stops.
-    let line = "x".repeat(opened.columns - 2);
-    opened.run(&format!("yes {line} | head -n 20000000; echo output-done"));
+    // each unlike the others, as what scrolls by is, and more of them
+    // than are shown before the measuring stops.
+    let line = "x".repeat(opened.columns - 14);
+    opened.run(&format!(
+        "seq -f '%012.0f {line}' 1 20000000; echo output-done"
+    ));
     opened.frames_taking_in("the end of the output", |text| {
         text.lines().any(|line| line == "output-done")
     });
@@ -126,6 +135,25 @@ fn output(cells: usize) -> Vec<Frame> {
         Key::Character("c".into()),
         Modifiers::CONTROL,
     );
+    opened.stage.frames
+}
+
+/// A program printing a line at a time: each frame has the rows of the
+/// one before it, a row up, and one new row.
+fn lines(cells: usize) -> Vec<Frame> {
+    let mut opened = open(cells);
+    let line = "x".repeat(opened.columns - 14);
+    // First a screenful, so that every frame timed is of a full screen.
+    opened.run(&format!("seq -f '%012.0f {line}' 1 200; echo screen-full"));
+    opened.wait("a full screen", |text| {
+        text.lines().any(|line| line == "screen-full")
+    });
+    opened.run(&format!(
+        "i=0; while [ $i -lt 300 ]; do echo \"$i {line}\"; sleep 0.005; i=$((i+1)); done; echo output-done"
+    ));
+    opened.frames_taking_in("the end of the output", |text| {
+        text.lines().any(|line| line == "output-done")
+    });
     opened.stage.frames
 }
 
