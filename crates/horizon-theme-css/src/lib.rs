@@ -190,3 +190,23 @@ pub fn themed(theme: impl Fn() -> Theme + 'static, view: El) -> El {
         .attr_dyn("style", move || theme().variables())
         .child(view)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Theme;
+
+    /// `variables.txt` is what a view's CSS is checked against
+    /// (`horizon-ui-macros`).
+    #[test]
+    fn the_theme_sets_the_variables_the_list_names_and_no_others() {
+        let set = Theme::built_in().variables();
+        let mut set: Vec<&str> = (set.split(';'))
+            .filter_map(|declaration| declaration.split_once(':'))
+            .map(|(name, _)| name.trim())
+            .collect();
+        let mut listed: Vec<&str> = include_str!("../variables.txt").lines().collect();
+        set.sort();
+        listed.sort();
+        assert_eq!(set, listed);
+    }
+}

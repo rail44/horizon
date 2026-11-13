@@ -9,7 +9,7 @@ publish = false
 proc-macro = true
 
 [dependencies]
-lightningcss = { version = "1.0.0-alpha.72", default-features = false }
+lightningcss = { version = "1.0.0-alpha.72", default-features = false, features = ["visitor"] }
 proc-macro2 = "1"
 quote = "1"
 syn = "2"

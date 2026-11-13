@@ -21,6 +21,11 @@
 //! the CSS does not have is a constant that does not exist. The sheet
 //! goes into the document when one of its classes is first put on an
 //! element.
+//!
+//! The CSS is also held to the theme (`checks.rs`): what is not is a
+//! compile error.
+
+mod checks;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -70,7 +75,11 @@ fn module(css: &str) -> Result<proc_macro2::TokenStream, String> {
         }),
         ..ParserOptions::default()
     };
-    let sheet = StyleSheet::parse(css, options).map_err(|error| error.to_string())?;
+    let mut sheet = StyleSheet::parse(css, options).map_err(|error| error.to_string())?;
+    let faults = checks::faults(&mut sheet);
+    if !faults.is_empty() {
+        return Err(faults.join("\n"));
+    }
     let printed = sheet
         .to_css(PrinterOptions {
             minify: true,
@@ -109,4 +118,47 @@ fn module(css: &str) -> Result<proc_macro2::TokenStream, String> {
         pub const __SHEET: ::horizon_ui::Sheet = ::horizon_ui::Sheet::new(#id, #code);
         #(#constants)*
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::module;
+
+    fn refused(css: &str) -> String {
+        module(css).expect_err("refused").to_string()
+    }
+
+    #[test]
+    fn a_sheet_written_from_the_theme_is_taken() {
+        let made = module(
+            ".row { color: var(--text); background: transparent; border: 1px solid currentColor;
+                    font-size: var(--meta-size); line-height: 1.4; padding: var(--u4) 2px;
+                    --inset: 4px; margin: var(--inset); gap: var(--gap, var(--u8)); }",
+        );
+        assert!(made.unwrap().to_string().contains("ROW"));
+    }
+
+    #[test]
+    fn a_color_written_out_is_refused() {
+        assert!(refused(".a { color: #fff; }").contains("`color` has the color"));
+        assert!(refused(".a { border: 1px solid red; }").contains("written out"));
+        assert!(refused(".a { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); }").contains("box-shadow"));
+    }
+
+    #[test]
+    fn a_type_size_in_pixels_is_refused() {
+        assert!(refused(".a { font-size: 12px; }").contains("`font-size`"));
+        assert!(refused(".a { line-height: 20px; }").contains("`line-height`"));
+    }
+
+    #[test]
+    fn a_variable_nobody_sets_is_refused_unless_it_has_a_fallback() {
+        assert!(refused(".a { color: var(--surfce); }").contains("`var(--surfce)`"));
+        assert!(module(".a { color: var(--theirs, var(--text)); }").is_ok());
+    }
+
+    #[test]
+    fn important_is_refused() {
+        assert!(refused(".a { width: 1px !important; }").contains("`!important`"));
+    }
 }
