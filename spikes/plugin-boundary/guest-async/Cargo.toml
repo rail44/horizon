@@ -1,0 +1,12 @@
+[package]
+name = "guest-async"
+description = "A guest with a task of its own: it waits on the host's timer and calls the host between waits."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.63", features = ["async", "async-spawn"] }

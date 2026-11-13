@@ -1,0 +1,10 @@
+[package]
+name = "host-tasks"
+description = "Runs a guest's own task a little at a time from one thread's loop, with plain calls into the guest in between."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wasmtime = "50"
+wasmtime-wasi = "50"

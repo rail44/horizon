@@ -1,0 +1,22 @@
+package spike:tasks;
+
+world guest {
+    /// Stands for an operation on the document: a plain call.
+    import note: func(text: string);
+    /// Plain calls that do nothing in the host, to time the crossing: with
+    /// a number, with a short string, and with a list coming back.
+    import nothing: func(value: u32);
+    import named: func(node: u32, name: string, value: string);
+    import several: func(count: u32) -> list<u64>;
+    /// A timer in the host: comes back after so many milliseconds.
+    import wait: async func(milliseconds: u32);
+
+    /// Starts a task that goes on after this comes back: it waits so many
+    /// milliseconds, notes, and counts, `times` times.
+    export start: async func(times: u32, milliseconds: u32);
+    /// Makes each of the three plain calls `times` times.
+    export burst: func(kind: u32, times: u32);
+    /// A plain call into the guest while its task is waiting: how far the
+    /// task has counted.
+    export counted: func() -> u32;
+}

@@ -3,7 +3,7 @@
 # in the root workspace depends on it.
 [workspace]
 resolver = "3"
-members = ["guest-doc", "runner"]
+members = ["guest-doc", "runner", "guest-async", "host-tasks"]
 
 [workspace.dependencies]
 blitz-dom = "=0.3.0-beta.4"
