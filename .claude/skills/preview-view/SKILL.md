@@ -22,9 +22,9 @@ and handlers, and the document is the shell's.
    cross: a paint widget, `takes_text`, `on_paste`, the clipboard, the
    page's selection, `windowed`. The events that cross are keys, pointer
    events and `input` (`crates/horizon-ui/wit/plugin.wit`).
-3. Add the preview to `preview-plugin/src/lib.rs`: a name in `names`, an arm
-   in `view` that builds the view over sample data, and the view's CSS in
-   `css`.
+3. Add the preview to `preview-plugin/src/lib.rs`: a name in `names` and an
+   arm in `view` that builds the view over sample data. The view's CSS
+   comes with it (`horizon_ui::css_module!`).
 
 ## Checking it
 

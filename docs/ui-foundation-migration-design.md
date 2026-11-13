@@ -29,8 +29,11 @@ changes afterwards is an effect over signals that writes one thing: a text
 node, an attribute, a list's children. There is no render pass over a view
 and no notify.
 
-Styles are CSS. Each view's rules sit under its root element's class
-(CSS nesting), since a document has one style sheet for every view on it.
+Styles are CSS. A view's CSS is a CSS module (`horizon_ui::css_module!`,
+read at compile time with Lightning CSS): its classes get names no other
+sheet has and are constants in the view's code, and its sheet goes into the
+document when one of them is first given to an element. The page's own
+sheet is the theme's variables.
 
 ## The layer between signals and the document
 

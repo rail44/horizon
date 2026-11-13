@@ -377,6 +377,17 @@ their wiring:
 - **Close vs. terminate are distinct.** Closing a pane/tab detaches sessions;
   `Terminate Active Session` is the explicit destructive command. Preserve
   this separation (see `docs/ux-principles.md`).
+- **A view's CSS is a CSS module.** `mod styles { horizon_ui::css_module!
+  {"…"} }` beside the view: plain CSS whose classes become constants
+  (`el("div").class(styles::ROW)`), with names no other sheet has. The
+  macro refuses what is not written from the theme (a color or a type
+  size written out, a variable the theme does not have, a property CSS
+  does not have); the theme's variables are listed in
+  `crates/horizon-theme-css/variables.txt`. What several views draw the
+  same is a part in `src/parts/` (chip, button, field, the controls), and
+  `parts::gallery` shows them all: `HORIZON_GALLERY_OUT=<file.ppm> cargo
+  nextest run -p horizon --test parts --run-ignored only
+  paint_the_gallery` paints it in this machine's theme.
 - **Tests are colocated** next to the code in the crates (an external
   `tests.rs` declared via `#[cfg(test)] mod tests;`, or an inline
   `#[cfg(test)] mod tests { ... }` block). The root package's views are
