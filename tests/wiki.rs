@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use horizon::wake::Wake;
-use horizon::wiki::{CSS, CommentLayout, Target, Wiki, view};
+use horizon::wiki::{CommentLayout, Target, Wiki, view};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
@@ -54,8 +54,7 @@ fn open_at(name: &str, width: u32) -> Opened {
         .unwrap();
     let path = store.page_path("sandbox").unwrap();
     let mut wiki = None;
-    let css = [horizon_theme_css::CSS, CSS].concat();
-    let app = App::new(width, 700, &css, || {
+    let app = App::new(width, 700, horizon_theme_css::CSS, || {
         let (root, state) = view(Some(path), Rc::new(|_| {}), Wake::default());
         wiki = Some(state);
         themed(Theme::built_in, root.focus())

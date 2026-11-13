@@ -138,11 +138,8 @@ pub fn css() -> String {
         CSS,
         terminal::CSS,
         agent::CSS,
-        markdown::CSS,
         preview::CSS,
-        &board::css(),
         &theme_settings::css(),
-        wiki::CSS,
     ]
     .concat()
 }

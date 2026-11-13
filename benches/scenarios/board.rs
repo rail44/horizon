@@ -107,7 +107,7 @@ fn list_scroll(count: usize) -> Vec<Frame> {
 
 /// A task's thread of `posts` posts, laid out.
 fn thread(posts: usize) -> Stage {
-    use horizon::board::thread::{CSS, view};
+    use horizon::board::thread::view;
     let mut task = Item {
         id: 1,
         title: "投稿の多いタスク".to_string(),
@@ -127,8 +127,7 @@ fn thread(posts: usize) -> Stage {
         });
     }
     let source = source(vec![task]);
-    let css = [horizon_theme_css::CSS, CSS].concat();
-    let mut stage = Stage::new(700, 800, &css, || {
+    let mut stage = Stage::new(700, 800, horizon_theme_css::CSS, || {
         let (root, _) = view(source, Background::default(), 1, |_| {});
         themed(Theme::built_in, root.focus())
     });

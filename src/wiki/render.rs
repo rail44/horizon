@@ -10,6 +10,8 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use horizon_ui::{El, el};
+
+use super::styles;
 use horizon_wiki::view_model::WikiPage;
 use markdown::ParseOptions;
 use markdown::mdast::Node;
@@ -75,8 +77,10 @@ impl Drawing<'_> {
                         .map(|(_, focused)| *focused)
                         .max();
                     match marked {
-                        Some(true) => into.child(el("span").class("mark focused").text(text)),
-                        Some(false) => into.child(el("span").class("mark").text(text)),
+                        Some(true) => {
+                            into.child(el("span").class((styles::MARK, styles::FOCUSED)).text(text))
+                        }
+                        Some(false) => into.child(el("span").class(styles::MARK).text(text)),
                         None => into.text(text),
                     };
                 }
@@ -116,7 +120,7 @@ impl Drawing<'_> {
                 Node::Link(link) => {
                     let (target, on_link) = (link.url.clone(), self.on_link.clone());
                     let element = el("span")
-                        .class("link")
+                        .class(styles::LINK)
                         .on("click", move |_| on_link(&target));
                     into.child(element);
                     self.inlines(child, element, root);
@@ -211,7 +215,7 @@ pub(super) fn block(
     marks: &[Mark],
     on_link: Rc<dyn Fn(&str)>,
 ) -> (El, Vec<Piece>) {
-    let element = el("div").class("block");
+    let element = el("div").class(styles::BLOCK);
     let source = &page.document.body[range.clone()];
     let mut drawing = Drawing {
         page,

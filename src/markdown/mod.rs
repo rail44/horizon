@@ -31,9 +31,8 @@ const BACK: &str = "Back";
 const NO_DOCUMENT: &str = "No document";
 const UNSUPPORTED_LINK: &str = "Not a Markdown file";
 
-// Every rule sits under the view's own class: the page's style sheet is one
-// for all the views on it.
-pub const CSS: &str = "
+mod styles {
+    horizon_ui::css_module! {"
     .markdown { display: flex; flex-direction: column; height: 100%; min-width: 240px;
                 outline: none; background: var(--background); color: var(--text);
                 font-family: var(--font-family); font-size: var(--body-size);
@@ -41,8 +40,8 @@ pub const CSS: &str = "
         .header { flex: none; display: flex; flex-direction: column; gap: var(--u8);
                   padding: 0 var(--u16); }
         .header > :first-child { margin-top: var(--u24); }
-        .back { align-self: flex-start; padding: 0 var(--u8); border-radius: 4px;
-                font-size: var(--meta-size); line-height: 20px; color: var(--text-muted);
+        .back { align-self: flex-start; padding: 0 var(--u8); border-radius: var(--radius);
+                font-size: var(--meta-size); line-height: calc(var(--u4) * 5); color: var(--text-muted);
                 cursor: pointer; }
         .back:hover { background: var(--surface-raised); }
         .title { font-size: var(--t1-size); line-height: var(--t1-line); font-weight: 600; }
@@ -54,7 +53,8 @@ pub const CSS: &str = "
         .scroll { flex: 1; min-height: 0; overflow-y: scroll;
                   padding: var(--u24) var(--u16) var(--u32) var(--u16); }
     }
-";
+"}
+}
 
 /// What is outside the view: a URL handed to the desktop.
 pub type OpenUrl = Rc<dyn Fn(&str)>;
@@ -157,12 +157,12 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Markdo
     }
 
     let header = el("div")
-        .class("header")
+        .class(styles::HEADER)
         .when(
             move || !state.history.get().is_empty(),
             move || {
                 el("div")
-                    .class("back")
+                    .class(styles::BACK)
                     .text(BACK)
                     .on("click", move |_| state.back())
             },
@@ -171,14 +171,14 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Markdo
             move || state.title.get().is_some(),
             move || {
                 el("div")
-                    .class("title")
+                    .class(styles::TITLE)
                     .text_dyn(move || state.title.get().unwrap_or_default())
             },
         )
         .when(
             move || !state.fields.get().is_empty(),
             move || {
-                el("div").class("chips").each(
+                el("div").class(styles::CHIPS).each(
                     move || state.fields.get(),
                     |field| field.clone(),
                     |(key, value)| chip(Tone::Muted, &format!("{key} {value}")),
@@ -187,7 +187,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Markdo
         );
 
     let link_state = state;
-    let scroll = el("div").class("scroll").each(
+    let scroll = el("div").class(styles::SCROLL).each(
         // The whole body again when the text changes: Markdown has no
         // parts that stay the same from one text to the next.
         move || vec![state.body.get()],
@@ -218,7 +218,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Markdo
         }
     });
 
-    let root = el("div").class("markdown").attr("tabindex", "0");
+    let root = el("div").class(styles::MARKDOWN).attr("tabindex", "0");
     root.on("keydown", move |event| {
         let DomEventData::KeyDown(key) = &event.data else {
             return;
@@ -251,19 +251,19 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Markdo
         move || state.notice.get().is_some(),
         move || {
             el("div")
-                .class("notice")
+                .class(styles::NOTICE)
                 .text_dyn(move || state.notice.get().unwrap_or_default())
         },
     )
     .when(
         move || state.path.get().is_none(),
-        || el("div").class("empty").text(NO_DOCUMENT),
+        || el("div").class(styles::EMPTY).text(NO_DOCUMENT),
     )
     .when(
         move || state.error.get().is_some(),
         move || {
             el("div")
-                .class("error")
+                .class(styles::ERROR)
                 .text_dyn(move || state.error.get().unwrap_or_default())
         },
     )

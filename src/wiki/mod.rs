@@ -70,9 +70,8 @@ const TO_DIALOG: &str = "Comments in a dialog";
 const TO_MARGIN: &str = "Comments in the margin";
 const CLOSE: &str = "Close";
 
-// Every rule sits under the view's own class: the page's style sheet is one
-// for all the views on it.
-pub const CSS: &str = "
+pub(crate) mod styles {
+    horizon_ui::css_module! {"
     .wiki { position: relative; display: flex; flex-direction: column; height: 100%;
             min-width: 240px;
             outline: none; background: var(--background); color: var(--text);
@@ -82,8 +81,8 @@ pub const CSS: &str = "
                   padding: var(--u24) var(--u16) 0 var(--u16); }
         .bar { display: flex; align-items: center; gap: var(--u8); }
         .bar .space { flex: 1; }
-        .back, .layout, .close { flex: none; padding: 0 var(--u8); border-radius: 4px;
-                                 font-size: var(--meta-size); line-height: 20px;
+        .back, .layout, .close { flex: none; padding: 0 var(--u8); border-radius: var(--radius);
+                                 font-size: var(--meta-size); line-height: calc(var(--u4) * 5);
                                  color: var(--text-muted); cursor: pointer; }
         .back:hover, .layout:hover, .close:hover { background: var(--surface-raised); }
         .scrim { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 10;
@@ -92,9 +91,9 @@ pub const CSS: &str = "
         .dialog { display: flex; flex-direction: column; gap: var(--u8);
                   width: calc(var(--u24) * 30); max-width: 92%; max-height: 85%;
                   box-sizing: border-box; padding: var(--u16);
-                  background: var(--background); border: 1px solid var(--border);
-                  border-radius: 6px;
-                  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1); }
+                  background: var(--background); border: var(--line) solid var(--border);
+                  border-radius: var(--radius-large);
+                  box-shadow: var(--shadow-modal); }
         .dialog .top { flex: none; display: flex; align-items: flex-start; gap: var(--u8); }
         .dialog .passage { flex: 1; min-width: 0; font-size: var(--meta-size);
                            line-height: var(--meta-line); color: var(--text-muted); }
@@ -121,62 +120,63 @@ pub const CSS: &str = "
         .block > :first-child { margin-top: 0; }
         .block > :last-child { margin-bottom: 0; }
         .block h1 { font-size: var(--t2-size); line-height: var(--t2-line); font-weight: 600;
-                    margin: 8px 0 2px 0; }
+                    margin: var(--u8) 0 var(--u2) 0; }
         .block h2, .block h3 { font-size: var(--body-size); line-height: var(--body-line);
-                               font-weight: 600; margin: 8px 0 2px 0; }
+                               font-weight: 600; margin: var(--u8) 0 var(--u2) 0; }
         .block p, .block ul, .block ol, .block pre, .block blockquote, .block table {
-            margin: 0 0 8px 0; }
+            margin: 0 0 var(--u8) 0; }
         .block ul, .block ol { padding-left: 18px; }
-        .block pre { padding: 12px; border: 1px solid var(--border); border-radius: 6px;
+        .block pre { padding: var(--u12); border: var(--line) solid var(--border); border-radius: var(--radius-large);
                      background: var(--surface-panel); overflow-x: scroll;
                      font-family: var(--font-family); }
         .block code { font-family: var(--font-family); padding: 0 var(--u4);
-                      border-radius: 2px; font-size: var(--meta-size);
+                      border-radius: var(--radius-small); font-size: var(--meta-size);
                       background: var(--surface-panel); }
-        .block blockquote { padding-left: 12px; border-left: 2px solid var(--border);
+        .block blockquote { padding-left: var(--u12); border-left: var(--line-strong) solid var(--border);
                             color: var(--text-muted); }
-        .block td { padding: 2px 8px; border: 1px solid var(--border); }
+        .block td { padding: var(--u2) var(--u8); border: var(--line) solid var(--border); }
         .link { color: var(--accent); cursor: pointer; }
         .mark { background: var(--selection); }
         .mark.focused { background: var(--surface-selected); }
         .thread, .new { display: flex; flex-direction: column; gap: var(--u4);
-                        padding: var(--u4); border: 1px solid var(--border);
-                        border-radius: 4px; }
+                        padding: var(--u4); border: var(--line) solid var(--border);
+                        border-radius: var(--radius); }
         .thread.focused, .new { border-color: var(--accent); }
-        .head, .quoted { display: flex; align-items: center; gap: 2px;
+        .head, .quoted { display: flex; align-items: center; gap: var(--u2);
                          font-size: var(--meta-size); line-height: var(--meta-line);
                          color: var(--text-muted); }
         .head { cursor: pointer; }
         .quote { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
                  text-overflow: ellipsis; }
         .count { flex: none; }
-        .post { display: flex; flex-direction: column; gap: 2px;
-                padding: var(--u4) var(--u16); border: 1px solid var(--border);
-                border-radius: 4px; }
+        .post { display: flex; flex-direction: column; gap: var(--u2);
+                padding: var(--u4) var(--u16); border: var(--line) solid var(--border);
+                border-radius: var(--radius); }
         .post.person { margin-left: var(--u24); border: none; border-radius: 0;
-                       border-left: 2px solid var(--text-muted); }
+                       border-left: var(--line-strong) solid var(--text-muted); }
         .when, .hint { font-size: var(--micro-size); line-height: var(--micro-line);
                        color: var(--text-muted); }
         .replying { position: relative; padding: var(--u4) var(--u16);
-                    border: 1px solid var(--border); border-radius: 4px;
+                    border: var(--line) solid var(--border); border-radius: var(--radius);
                     font-size: var(--meta-size); line-height: var(--meta-line);
                     color: var(--text-muted); }
         .replying .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
                          background: var(--accent); }
-        .composer { display: flex; flex-direction: column; gap: 2px; padding-top: var(--u4); }
-        .composer .field { padding: 2px var(--u16); border: 1px solid var(--border);
-                           border-radius: 4px; }
+        .composer { display: flex; flex-direction: column; gap: var(--u2); padding-top: var(--u4); }
+        .composer .field { padding: var(--u2) var(--u16); border: var(--line) solid var(--border);
+                           border-radius: var(--radius); }
         .composer textarea { height: calc(var(--body-line) * 2); }
-        .send { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
-        .key { padding: 0 var(--u4); border: 1px solid var(--border); border-radius: 3px;
+        .send { display: flex; align-items: center; justify-content: flex-end; gap: var(--u2); }
+        .key { padding: 0 var(--u4); border: var(--line) solid var(--border); border-radius: 3px;
                font-size: var(--micro-size); line-height: var(--micro-line);
                color: var(--text-muted); }
-        .offer { display: flex; align-items: center; gap: 2px; }
+        .offer { display: flex; align-items: center; gap: var(--u2); }
         .orphans { padding-top: var(--u24); font-size: var(--meta-size);
                    line-height: var(--meta-line); font-weight: 600;
                    color: var(--text-muted); }
     }
-";
+"}
+}
 
 /// The share of the width the margin takes.
 const MARGIN_SHARE: f64 = 0.4;
@@ -633,30 +633,34 @@ fn composer(state: Wiki) -> El {
         })
         .focus();
     el("div")
-        .class("composer")
-        .child(el("div").class("field").child(crate::parts::field(field)))
+        .class(styles::COMPOSER)
         .child(
             el("div")
-                .class("send")
-                .child(el("span").class("key").text("Enter"))
-                .child(el("span").class("hint").text(TO_SEND)),
+                .class(styles::FIELD)
+                .child(crate::parts::field(field)),
+        )
+        .child(
+            el("div")
+                .class(styles::SEND)
+                .child(el("span").class(styles::KEY).text("Enter"))
+                .child(el("span").class(styles::HINT).text(TO_SEND)),
         )
 }
 
 fn post(annotation: &Annotation) -> El {
-    let class = match annotation.creator.kind {
-        AgentType::Person => "post person",
-        AgentType::Software => "post",
+    let person = match annotation.creator.kind {
+        AgentType::Person => Some(styles::PERSON),
+        AgentType::Software => None,
     };
     let when = annotation.created.replace('T', " ").replace('Z', "");
     el("div")
-        .class(class)
+        .class((styles::POST, person))
         .child(crate::markdown::render(
             &annotation.body.value,
             crate::markdown::Headings::AsText,
             Rc::new(|_| {}),
         ))
-        .child(el("div").class("when").text(&when))
+        .child(el("div").class(styles::WHEN).text(&when))
 }
 
 /// What a thread's card shows, as text: the card is built again when any
@@ -680,8 +684,8 @@ fn thread_key(
 
 fn replying_line() -> El {
     el("div")
-        .class("replying")
-        .child(el("div").class("bar"))
+        .class(styles::REPLYING)
+        .child(el("div").class(styles::BAR))
         .child(el("span").text(REPLYING))
 }
 
@@ -689,7 +693,7 @@ fn replying_line() -> El {
 /// quote, the posts and the field. Escape, `Close` or a press outside
 /// closes it.
 fn dialog(state: Wiki) -> El {
-    let scrim = el("div").class("scrim").on("pointerdown", move |_| {
+    let scrim = el("div").class(styles::SCRIM).on("pointerdown", move |_| {
         state.cancel();
     });
     let Some(page) = state.page.get_untracked() else {
@@ -717,7 +721,7 @@ fn dialog(state: Wiki) -> El {
         },
         None => return scrim,
     };
-    let list = el("div").class("posts");
+    let list = el("div").class(styles::POSTS);
     for annotation in &posts {
         list.child(post(annotation));
     }
@@ -726,17 +730,17 @@ fn dialog(state: Wiki) -> El {
     }
     scrim.child(
         el("div")
-            .class("dialog")
+            .class(styles::DIALOG)
             // A press in the dialog is not a press outside it.
             .on("pointerdown", |_| stop_propagation())
             .child(
                 el("div")
-                    .class("top")
-                    .child(el("div").class("passage").text(&quote))
-                    .child(el("span").class("key").text("Esc"))
+                    .class(styles::TOP)
+                    .child(el("div").class(styles::PASSAGE).text(&quote))
+                    .child(el("span").class(styles::KEY).text("Esc"))
                     .child(
                         el("div")
-                            .class("close")
+                            .class(styles::CLOSE)
                             .text(CLOSE)
                             .on("click", move |_| state.cancel()),
                     ),
@@ -760,14 +764,14 @@ fn thread(state: Wiki, placed: &PlacedThread, replying: bool) -> El {
     };
     let toggled = root.clone();
     let head = el("div")
-        .class("head")
+        .class(styles::HEAD)
         .child(el("span").text(if open { "▾" } else { "▸" }))
         .child(
             el("span")
-                .class("quote")
+                .class(styles::QUOTE)
                 .text(&format!("“{}”", one_line(&placed.quote()))),
         )
-        .child(el("span").class("count").text(&count))
+        .child(el("span").class(styles::COUNT).text(&count))
         .on("click", move |_| state.toggle_thread(toggled.clone()));
     if matches!(placed.anchor, Anchor::Moved { exact: false, .. }) {
         head.child(chip(Tone::Muted, CHANGED_SINCE));
@@ -776,7 +780,7 @@ fn thread(state: Wiki, placed: &PlacedThread, replying: bool) -> El {
         head.child(chip(Tone::Accent, REPLYING));
     }
     let card = el("div")
-        .class(if focused { "thread focused" } else { "thread" })
+        .class((styles::THREAD, focused.then_some(styles::FOCUSED)))
         .child(head);
     if open {
         for annotation in posts {
@@ -822,8 +826,8 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
             reveal: Cell::new(None),
             owner: Cell::new(None),
         })),
-        element: el("div").class("wiki").attr("tabindex", "0"),
-        scroll: el("div").class("scroll"),
+        element: el("div").class(styles::WIKI).attr("tabindex", "0"),
+        scroll: el("div").class(styles::SCROLL),
     };
     let (root, scroll) = (state.element, state.scroll);
     let held = state.held();
@@ -832,20 +836,20 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
     }
 
     let bar = el("div")
-        .class("bar")
+        .class(styles::BAR)
         .when(
             move || !state.history.with(Vec::is_empty),
             move || {
                 el("div")
-                    .class("back")
+                    .class(styles::BACK)
                     .text(BACK)
                     .on("click", move |_| state.back())
             },
         )
-        .child(el("div").class("space"))
+        .child(el("div").class(styles::SPACE))
         .child(
             el("div")
-                .class("layout")
+                .class(styles::LAYOUT)
                 .text_dyn(move || {
                     match state.layout.get() {
                         CommentLayout::Margin => TO_DIALOG,
@@ -856,7 +860,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
                 .on("click", move |_| state.switch_layout()),
         );
     let header = el("div")
-        .class("header")
+        .class(styles::HEADER)
         .child(bar)
         .each(
             move || {
@@ -865,7 +869,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
                 title.into_iter().collect::<Vec<_>>()
             },
             |title| title.clone(),
-            |title| el("div").class("heading").text(title),
+            |title| el("div").class(styles::HEADING).text(title),
         )
         .each(
             move || {
@@ -882,7 +886,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
             },
             |fields| fields.clone(),
             |fields| {
-                let row = el("div").class("fields");
+                let row = el("div").class(styles::FIELDS);
                 for (key, value) in fields {
                     row.child(chip(Tone::Muted, &format!("{key} {value}")));
                 }
@@ -956,7 +960,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
             // (Pressed, not clicked: the press itself would take the
             // selection it is an offer for.)
             Line::Offer => el("div")
-                .class("offer")
+                .class(styles::OFFER)
                 .child(button(ButtonKind::Plain, ButtonSize::Regular, COMMENT).on(
                     "pointerdown",
                     move |_| {
@@ -965,28 +969,28 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
                         stop_propagation();
                     },
                 ))
-                .child(el("span").class("key").text("c")),
+                .child(el("span").class(styles::KEY).text("c")),
             Line::New(chars) => {
                 let quote = one_line(&page.quote_of(chars.clone()));
                 el("div")
-                    .class("new")
+                    .class(styles::NEW)
                     .child(
-                        el("div").class("quoted").child(
+                        el("div").class(styles::QUOTED).child(
                             el("span")
-                                .class("quote")
+                                .class(styles::QUOTE)
                                 .text(&format!("{COMMENT_ON} “{quote}”")),
                         ),
                     )
                     .child(composer(state))
             }
             Line::Thread { placed, .. } => thread(state, placed, placed.replying(&page.replying)),
-            Line::Orphans => el("div").class("orphans").text(ORPHANS),
+            Line::Orphans => el("div").class(styles::ORPHANS).text(ORPHANS),
         }
     });
 
     // The page's text: its blocks in order, each followed, when there is
     // no margin, by what is set after it.
-    let text = el("div").class("text").each(
+    let text = el("div").class(styles::TEXT).each(
         move || {
             let Some(page) = state.page.get() else {
                 return Vec::new();
@@ -1040,7 +1044,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
     // children changed while it was not displayed from the children it
     // had.)
     let margin = el("div")
-        .class("margin")
+        .class(styles::MARGIN)
         .style_dyn("width", move || {
             let width = state.margin.get().filter(|_| wide.get());
             format!("{}px", width.unwrap_or(0.))
@@ -1080,7 +1084,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
                     let slot = line.slot();
                     let at = slot.clone();
                     let item = el("div")
-                        .class("aside")
+                        .class(styles::ASIDE)
                         .style_dyn("top", move || {
                             let top = state.tops.with(|tops| tops.get(&at).copied());
                             format!("{}px", top.unwrap_or(0.))
@@ -1092,9 +1096,10 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
             },
         );
 
-    let unit = el("div").class("unit");
+    let unit = el("div").class(styles::UNIT);
     let row = el("div")
-        .class_dyn(move || if wide.get() { "row" } else { "row narrow" }.to_string())
+        .class(styles::ROW)
+        .class_dyn(move || (!wide.get()).then_some(styles::NARROW))
         .child(text)
         .child(margin);
     // After them, the threads whose passage has gone.
@@ -1277,7 +1282,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
         move || state.notice.with(Option::is_some),
         move || {
             el("div")
-                .class("notice")
+                .class(styles::NOTICE)
                 .text_dyn(move || state.notice.get().unwrap_or_default())
         },
     )
@@ -1294,7 +1299,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
         |stated| stated.clone(),
         |(text, error)| {
             el("div")
-                .class(if *error { "state error" } else { "state" })
+                .class((styles::STATE, error.then_some(styles::ERROR)))
                 .text(text)
         },
     )

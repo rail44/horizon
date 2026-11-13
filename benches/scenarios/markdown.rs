@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use horizon::markdown::{CSS, view};
+use horizon::markdown::view;
 use horizon::wake::Wake;
 use horizon_theme_css::{Theme, themed};
 
@@ -37,9 +37,8 @@ fn scroll(sections: usize) -> Vec<Frame> {
     std::fs::create_dir_all(&directory).expect("a directory");
     let path = directory.join(format!("{sections}.md"));
     std::fs::write(&path, document(sections)).expect("the document written");
-    let css = [horizon_theme_css::CSS, CSS].concat();
     let shown = path.clone();
-    let mut stage = Stage::new(800, 800, &css, || {
+    let mut stage = Stage::new(800, 800, horizon_theme_css::CSS, || {
         let (root, _) = view(Some(shown), Rc::new(|_: &str| {}), Wake::default());
         themed(Theme::built_in, root.focus())
     });

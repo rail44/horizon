@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use horizon::background::Background;
-use horizon::board::thread::{Asked, CSS, view};
+use horizon::board::thread::{Asked, view};
 use horizon::board::{BoardThread, Source};
 use horizon_board::{BoardEvent, Comment, Item, Store, sample_envelopes};
 use horizon_theme_css::{Theme, themed};
@@ -75,8 +75,7 @@ fn open_at(items: Vec<Item>, task: u64, width: u32) -> Opened {
         .map(|item| BoardEvent::ItemStored { id: item.id, item });
     let source = Source::Ready(Store::in_memory(sample_envelopes(events)));
     let mut thread = None;
-    let css = [horizon_theme_css::CSS, CSS].concat();
-    let app = App::new(width, 600, &css, || {
+    let app = App::new(width, 600, horizon_theme_css::CSS, || {
         let (root, state) = view(source, Background::default(), task, move |asked| {
             log.borrow_mut().push(asked)
         });

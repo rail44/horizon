@@ -38,9 +38,8 @@ const OWNER_MEASURE_CELLS: usize = 60;
 const COMPOSER_MIN_ROWS: usize = 2;
 const COMPOSER_MAX_ROWS: usize = 8;
 
-// Every rule sits under the view's own class: the page's style sheet is one
-// for all the views on it. The measurements are in the theme's scaled lengths.
-pub const CSS: &str = "
+mod styles {
+    horizon_ui::css_module! {"
     .board-thread { display: flex; flex-direction: column; height: 100%; min-width: 240px;
                     outline: none; background: var(--background); color: var(--text);
                     font-family: var(--font-family); font-size: var(--body-size);
@@ -55,7 +54,7 @@ pub const CSS: &str = "
                    line-height: var(--meta-line); color: var(--text-muted); }
         .band { position: relative; flex: none; display: flex; flex-direction: column;
                 gap: var(--u8); padding: var(--u16); background: var(--band);
-                border-bottom: 1px solid var(--border); }
+                border-bottom: var(--line) solid var(--border); }
         .top { display: flex; align-items: flex-start; gap: var(--u16); }
         .title { flex: 1; min-width: 0; overflow: hidden;
                  max-height: calc(var(--t1-line) * 2);
@@ -79,7 +78,7 @@ pub const CSS: &str = "
                   flex-direction: column; gap: var(--u8);
                   padding: var(--u24) var(--u24) var(--u32) var(--u24); }
         .post { position: relative; flex: none; padding: var(--u8) var(--u16);
-                border: 1px solid var(--border); border-radius: 4px; }
+                border: var(--line) solid var(--border); border-radius: var(--radius); }
         .post.owner { margin-left: var(--u24); border-color: transparent;
                       background: var(--band); }
         .post .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px; }
@@ -92,15 +91,16 @@ pub const CSS: &str = "
         .text.plain { white-space: pre-wrap; }
         .post.system .text { color: var(--text-muted); }
         .more { margin-top: var(--u4); color: var(--accent); cursor: pointer; }
-        .composer { flex: none; display: flex; flex-direction: column; gap: 2px;
-                    padding: var(--u8) var(--u24); border-top: 1px solid var(--border); }
-        .send { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
-        .key { padding: 0 var(--u4); border: 1px solid var(--border); border-radius: 3px;
+        .composer { flex: none; display: flex; flex-direction: column; gap: var(--u2);
+                    padding: var(--u8) var(--u24); border-top: var(--line) solid var(--border); }
+        .send { display: flex; align-items: center; justify-content: flex-end; gap: var(--u2); }
+        .key { padding: 0 var(--u4); border: var(--line) solid var(--border); border-radius: 3px;
                font-size: var(--micro-size); line-height: var(--micro-line);
                color: var(--text-muted); }
         .hint { font-size: var(--micro-size); line-height: var(--micro-line); }
     }
-";
+"}
+}
 
 /// What the thread asks of whatever holds it.
 #[derive(Clone, Debug, PartialEq)]
@@ -354,7 +354,7 @@ fn action(kind: ButtonKind, label: &str, state: BoardThread, command: ThreadComm
 /// The task's actions: the same wherever in the band they are.
 fn actions(state: BoardThread, closed: bool, has_session: bool) -> El {
     let actions = el("div")
-        .class("actions")
+        .class(styles::ACTIONS)
         .child(action(
             ButtonKind::Primary,
             chrome::REPLY,
@@ -387,7 +387,7 @@ fn actions(state: BoardThread, closed: bool, has_session: bool) -> El {
 /// session is doing, how much of it is unread and when it was last
 /// written to. Built again when the task changes.
 fn chips(state: BoardThread, item: &Item, unread: usize) -> El {
-    let line = el("div").class("chips");
+    let line = el("div").class(styles::CHIPS);
     let status = status_text(item);
     if !status.is_empty() {
         line.child(chip(tone(item), &status));
@@ -398,7 +398,7 @@ fn chips(state: BoardThread, item: &Item, unread: usize) -> El {
     }
     if let Some(at) = item.comments.last().and_then(|comment| comment.at) {
         let updated = chrome::updated(&chrome::relative_time(at, model::now_ms()));
-        line.child(el("span").class("updated").text(&updated));
+        line.child(el("span").class(styles::UPDATED).text(&updated));
     }
     line
 }
@@ -433,32 +433,31 @@ fn post(
     let text = match spoken {
         Voice::Agent => {
             el("div")
-                .class("text")
+                .class(styles::TEXT)
                 .child(render(shown, Headings::AsText, Rc::new(|_| {})))
         }
-        _ => el("div").class("text plain").text(shown),
+        _ => el("div").class((styles::TEXT, styles::PLAIN)).text(shown),
     };
-    let fixed = match spoken {
-        Voice::Owner => "post owner",
-        Voice::System => "post system",
-        Voice::Agent => "post",
+    let voice = match spoken {
+        Voice::Owner => Some(styles::OWNER),
+        Voice::System => Some(styles::SYSTEM),
+        Voice::Agent => None,
     };
-    let head = el("div").class("head").child(
+    let head = el("div").class(styles::HEAD).child(
         el("span")
-            .class("author")
+            .class(styles::AUTHOR)
             .text(&author_label(&comment.author)),
     );
     if let Some(at) = comment.at {
         let age = chrome::relative_time(at, model::now_ms());
-        head.child(el("span").class("time").text(&age));
+        head.child(el("span").class(styles::TIME).text(&age));
     }
-    head.child(el("div").class("spacer"));
-    let on_hover =
-        el("div")
-            .class("on-hover")
-            .child(el("span").text(chrome::REPLY).on("click", move |_| {
-                state.execute(ThreadCommand::FocusComposer)
-            }));
+    head.child(el("div").class(styles::SPACER));
+    let on_hover = el("div").class(styles::ON_HOVER).child(
+        el("span").text(chrome::REPLY).on("click", move |_| {
+            state.execute(ThreadCommand::FocusComposer)
+        }),
+    );
     if foldable && expanded {
         let id = comment.id.clone();
         on_hover.child(el("span").text(chrome::COLLAPSE).on("click", move |_| {
@@ -470,11 +469,9 @@ fn post(
         head.child(chip(Tone::Accent, chrome::UNREAD));
     }
     let element = el("div")
-        .class_dyn(move || match current.is(&Some(index)) {
-            true => format!("{fixed} current"),
-            false => fixed.to_string(),
-        })
-        .child(el("div").class("bar"))
+        .class((styles::POST, voice))
+        .class_dyn(move || current.is(&Some(index)).then_some(styles::CURRENT))
+        .child(el("div").class(styles::BAR))
         .child(head)
         .child(text)
         .on("click", move |_| {
@@ -484,7 +481,7 @@ fn post(
         let id = comment.id.clone();
         element.child(
             el("div")
-                .class("more")
+                .class(styles::MORE)
                 .text(&chrome::more_lines(fold.hidden_lines))
                 .on("click", move |_| {
                     state.execute(ThreadCommand::TogglePost(id.clone()));
@@ -525,7 +522,7 @@ pub fn view(
         element: el("div").attr("tabindex", "0"),
         reply: el("textarea"),
         status: el("input").attr("type", "text"),
-        column: el("div").class("column"),
+        column: el("div").class(styles::COLUMN),
     };
     let (root, column, reply, status) = (state.element, state.column, state.reply, state.status);
     let held = state.held();
@@ -549,18 +546,18 @@ pub fn view(
                 .collect::<Vec<_>>()
         }
     };
-    let title = el("div").class("title").text_dyn(move || {
+    let title = el("div").class(styles::TITLE).text_dyn(move || {
         (state.item).with(|item| {
             item.as_ref()
                 .map_or_else(String::new, |item| item.title.clone())
         })
     });
-    let top = el("div").class("top").child(title).each(
+    let top = el("div").class(styles::TOP).child(title).each(
         slot(false),
         |shown| *shown,
         move |(closed, has_session)| actions(state, *closed, *has_session),
     );
-    let status_field = el("div").class("status").child(
+    let status_field = el("div").class(styles::STATUS).child(
         field(
             status
                 .on("input", move |event| {
@@ -592,7 +589,7 @@ pub fn view(
         ),
     );
     let line = el("div")
-        .class("state")
+        .class(styles::STATE)
         .each(
             move || {
                 let item = state.item.get();
@@ -618,7 +615,7 @@ pub fn view(
             },
             move |(item, unread)| chips(state, item, *unread),
         )
-        .child(el("div").class("spacer"))
+        .child(el("div").class(styles::SPACER))
         .child(status_field)
         .each(
             slot(true),
@@ -627,8 +624,12 @@ pub fn view(
         );
     // (As wide as the title is let get before the band stacks, with the
     // gap to the actions: what the stacking is decided by.)
-    let floor = el("div").class("floor");
-    let task_band = el("div").class("band").child(top).child(line).child(floor);
+    let floor = el("div").class(styles::FLOOR);
+    let task_band = el("div")
+        .class(styles::BAND)
+        .child(top)
+        .child(line)
+        .child(floor);
 
     // The column: the task's body, then its posts.
     let known = held.clone();
@@ -647,7 +648,7 @@ pub fn view(
             |body| body.clone(),
             |body| {
                 el("div")
-                    .class("text")
+                    .class(styles::TEXT)
                     .child(render(body, Headings::AsText, Rc::new(|_| {})))
             },
         )
@@ -685,7 +686,7 @@ pub fn view(
 
     let rows = RwSignal::new(COMPOSER_MIN_ROWS);
     let composer = el("div")
-        .class("composer")
+        .class(styles::COMPOSER)
         .child(
             field(
                 reply
@@ -731,9 +732,9 @@ pub fn view(
         )
         .child(
             el("div")
-                .class("send")
-                .child(el("span").class("key").text("Enter"))
-                .child(el("span").class("hint").text(chrome::TO_SEND)),
+                .class(styles::SEND)
+                .child(el("span").class(styles::KEY).text("Enter"))
+                .child(el("span").class(styles::HINT).text(chrome::TO_SEND)),
         );
 
     // After each layout: the answers the store gave, the post the
@@ -815,20 +816,22 @@ pub fn view(
     })
     // The band, the column and the field are built once and stay: with no
     // task to show they are only not drawn.
-    .class_dyn(move || match found() {
-        true => "board-thread".to_string(),
-        false => "board-thread none".to_string(),
-    })
+    .class(styles::BOARD_THREAD)
+    .class_dyn(move || (!found()).then_some(styles::NONE))
     .when(
         move || !found(),
-        || el("div").class("missing").text(chrome::TASK_NOT_FOUND),
+        || {
+            el("div")
+                .class(styles::MISSING)
+                .text(chrome::TASK_NOT_FOUND)
+        },
     )
     .child(task_band)
     .when(
         move || found() && state.notice.with(Option::is_some),
         move || {
             el("div")
-                .class("notice")
+                .class(styles::NOTICE)
                 .text_dyn(move || state.notice.get().unwrap_or_default())
         },
     )

@@ -31,12 +31,6 @@ pub use list::BoardList;
 #[cfg(not(target_family = "wasm"))]
 pub use thread::BoardThread;
 
-/// The style sheet of both views.
-#[cfg(not(target_family = "wasm"))]
-pub fn css() -> String {
-    thread::CSS.to_string()
-}
-
 /// Where a view's store is: a project's, by a directory in it, or one
 /// handed in whole (a test's, which refuses writes).
 #[derive(Clone)]

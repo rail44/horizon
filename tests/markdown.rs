@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use horizon::markdown::{CSS, Markdown, view};
+use horizon::markdown::{Markdown, view};
 use horizon::wake::Wake;
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
@@ -48,8 +48,7 @@ fn open(path: &Path) -> Opened {
     let opened = Rc::new(RefCell::new(Vec::new()));
     let log = opened.clone();
     let mut state = None;
-    let css = [horizon_theme_css::CSS, CSS].concat();
-    let app = App::new(800, 600, &css, || {
+    let app = App::new(800, 600, horizon_theme_css::CSS, || {
         let (root, markdown) = view(
             Some(path.to_path_buf()),
             Rc::new(move |url: &str| log.borrow_mut().push(url.to_owned())),
