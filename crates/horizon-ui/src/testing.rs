@@ -77,3 +77,15 @@ pub fn has_class(classes: &str, class: &str) -> bool {
         name == class || (name.rsplit_once("--")).is_some_and(|(written, _)| written == class)
     })
 }
+
+/// The words on the page: the text of everything in the body.
+pub fn text(app: &App) -> String {
+    let document = app.document();
+    let document = document.borrow();
+    let top = document.root_element();
+    (top.children.iter())
+        .filter_map(|child| document.get_node(*child))
+        .filter(|node| (node.element_data()).is_some_and(|element| &*element.name.local == "body"))
+        .map(|body| body.text_content())
+        .collect()
+}

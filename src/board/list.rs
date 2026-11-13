@@ -25,11 +25,11 @@ use horizon_ui::{
 };
 use keyboard_types::{Key, NamedKey};
 
-use super::chip::{Tone, chip};
 #[cfg(not(target_family = "wasm"))]
 use super::follow;
 use super::{Activity, Job, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
+use crate::parts::{Tone, chip};
 
 // The measurements are in the theme's scaled lengths (`--u8` is 8 px at
 // the reference type size).

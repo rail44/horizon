@@ -54,8 +54,9 @@ impl App {
         document.add_user_agent_stylesheet(UserAgentStylesheet::parse(&css));
         let shared = Rc::new(Shared::new(document));
         enter(&shared);
+        // The sheets of the views' CSS modules go in the head (`sheet.rs`).
         let body = el("body");
-        let html = el("html").child(body);
+        let html = el("html").child(el("head")).child(body);
         with_document(|document| {
             let root = document.root_node().id;
             document.mutate().append_children(root, &[html.0]);

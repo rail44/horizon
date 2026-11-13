@@ -253,6 +253,19 @@ fn a_view_in_a_plugin_is_drawn_in_this_document_and_takes_its_keys() {
 
 #[test]
 #[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
+fn the_parts_are_drawn_from_a_plugin_with_their_sheets() {
+    let opened = open("parts");
+    let chips = opened.all("chip");
+    assert!(chips.len() >= 6, "{} chips", chips.len());
+    // A chip's sheet came with it: it has its padding.
+    let document = opened.app.document();
+    let document = document.borrow();
+    let chip = document.get_node(chips[0]).unwrap();
+    assert!(chip.final_layout().padding.left > 0.);
+}
+
+#[test]
+#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
 fn a_drag_in_a_plugin_s_view_asks_this_page_where_it_is() {
     let opened = open("board-list");
     opened.until("the tasks", || !opened.titles().is_empty());

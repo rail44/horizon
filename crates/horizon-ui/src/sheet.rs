@@ -24,8 +24,17 @@ pub(crate) fn adopt(document: &mut BaseDocument, id: &str, css: &str) {
     let text = mutator.create_text_node(css);
     mutator.append_children(style, &[text]);
     drop(mutator);
-    let top = document.root_element().id;
-    document.mutate().append_children(top, &[style]);
+    // In the head, so that the page's words are the body's alone.
+    let top = document.root_element();
+    let head = (top.children.iter().copied())
+        .find(|child| {
+            let element = document
+                .get_node(*child)
+                .and_then(|node| node.element_data());
+            element.is_some_and(|element| &*element.name.local == "head")
+        })
+        .unwrap_or(top.id);
+    document.mutate().append_children(head, &[style]);
 }
 
 /// Takes `remove` out of `node`'s classes and puts `add` in, leaving the

@@ -15,6 +15,8 @@ use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
 use horizon_ui::{El, dispatched, each_layout, el, relayout};
+
+use crate::parts::{Tone, chip};
 use horizon_workspace::markdown::{LinkTarget, parse, resolve_link};
 use keyboard_types::{Key, NamedKey};
 
@@ -46,9 +48,6 @@ pub const CSS: &str = "
         .back:hover { background: var(--surface-raised); }
         .title { font-size: var(--t1-size); line-height: var(--t1-line); font-weight: 600; }
         .chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--u4); }
-        .chip { padding: 0 var(--u4); border-radius: 2px;
-                background: var(--chip-muted-surface); color: var(--chip-muted-text);
-                font-size: var(--micro-size); line-height: var(--micro-line); }
         .notice, .empty, .error { flex: none; padding: var(--u8) var(--u16) 0 var(--u16);
                                   font-size: var(--meta-size); line-height: var(--meta-line);
                                   color: var(--text-muted); }
@@ -205,7 +204,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Markdo
                 el("div").class("chips").each(
                     move || state.fields.get(),
                     |field| field.clone(),
-                    |(key, value)| el("span").class("chip").text(&format!("{key} {value}")),
+                    |(key, value)| chip(Tone::Muted, &format!("{key} {value}")),
                 )
             },
         );

@@ -17,6 +17,8 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, WithValue};
 use horizon_ui::windowed::{follow_tail, windowed};
 use horizon_ui::{El, dispatched, el, prevent_default, stop_propagation};
+
+use crate::parts::{self, chip, chip_of};
 use keyboard_types::{Key, NamedKey};
 
 use horizon_agent_display::chrome;
@@ -60,13 +62,6 @@ pub const CSS: &str = "
         .danger { color: var(--danger); }
         .line { display: flex; align-items: center; gap: var(--u8); }
         .spacer { flex: 1; min-width: 0; }
-        .chip { flex: none; padding: 0 var(--u4); border-radius: 2px;
-                font-size: var(--micro-size); line-height: var(--micro-line);
-                background: var(--chip-muted-surface); color: var(--chip-muted-text); }
-        .chip.accent { background: var(--chip-accent-surface);
-                       color: var(--chip-accent-text); }
-        .chip.danger { background: var(--chip-danger-surface);
-                       color: var(--chip-danger-text); }
         .button { flex: none; padding: 0 8px; border-radius: 6px; font-size: 12px;
                   line-height: 20px; color: var(--text); cursor: pointer; }
         .button:hover { background: var(--surface-raised); }
@@ -447,13 +442,9 @@ fn notice_line(notice: &Notice) -> El {
         .text(&notice.text)
 }
 
-fn chip(class: &str, label: &str) -> El {
-    el("span").class(class).text(label)
-}
-
 /// The running session's state, following it.
 fn session_state_chip(state: Agent) -> El {
-    el("span").class("chip accent").text_dyn(move || {
+    chip_of(parts::Tone::Accent).text_dyn(move || {
         if state.status.get() == Status::WaitingForApproval {
             chrome::WAITING_FOR_APPROVAL.to_string()
         } else {
@@ -523,8 +514,8 @@ fn turn_card(turn: &Turn, state: Agent) -> El {
     }
     if !running {
         let label = match turn.state {
-            TurnState::Stopped => Some(("chip", chrome::STOPPED)),
-            TurnState::Failed => Some(("chip danger", chrome::FAILED)),
+            TurnState::Stopped => Some((parts::Tone::Muted, chrome::STOPPED)),
+            TurnState::Failed => Some((parts::Tone::Danger, chrome::FAILED)),
             TurnState::Done | TurnState::Running => None,
         };
         let elapsed = turn
@@ -533,8 +524,8 @@ fn turn_card(turn: &Turn, state: Agent) -> El {
             .filter(|_| turn.state == TurnState::Done);
         if label.is_some() || elapsed.is_some() {
             let end = el("div").class("end");
-            if let Some((class, label)) = label {
-                end.child(chip(class, label));
+            if let Some((tone, label)) = label {
+                end.child(chip(tone, label));
             }
             if let Some(elapsed) = elapsed {
                 end.child(el("span").text(elapsed));
@@ -597,7 +588,7 @@ fn receipt_block(receipt: Rc<Receipt>, carries: bool, state: Agent) -> El {
         .when(carried, move || session_state_chip(state))
         .child(el("span").text(&receipt_line_text(&receipt)));
     if failed > 0 {
-        line.child(chip("chip danger", &chrome::failed_calls(failed)));
+        line.child(chip(parts::Tone::Danger, &chrome::failed_calls(failed)));
     }
     line.when(carried, || el("span").class("spacer"))
         .when(carried, move || stop_button(state));
@@ -674,9 +665,9 @@ fn approval_block(approval: &Approval, state: Agent) -> El {
     let (approve, deny) = (approval.id.clone(), approval.id.clone());
     el("div")
         .class("approval")
-        .child(chip("chip accent", chrome::APPROVAL_NEEDED))
+        .child(chip(parts::Tone::Accent, chrome::APPROVAL_NEEDED))
         .child(el("span").class("reason").text(&approval.reason))
-        .child(chip("chip", "Enter"))
+        .child(chip(parts::Tone::Muted, "Enter"))
         .child(
             el("span")
                 .class("button primary approve")
@@ -686,7 +677,7 @@ fn approval_block(approval: &Approval, state: Agent) -> El {
                     state.ask(Asked::Approve(approve.clone()));
                 }),
         )
-        .child(chip("chip", "Esc"))
+        .child(chip(parts::Tone::Muted, "Esc"))
         .child(
             el("span")
                 .class("button deny")

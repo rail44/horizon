@@ -1,8 +1,9 @@
-//! Controls a view places: a slider, a select, a color picker. Each is
-//! built over a signal of the value it edits, and tells whoever placed it
-//! when a person changed it.
+//! What views are made of: a chip, and the controls a view places (a
+//! slider, a select, a color picker). A control is built over a signal of
+//! the value it edits, and tells whoever placed it when a person changed
+//! it.
 //!
-//! Their structure, behaviour and keys follow the Dioxus components
+//! The controls' structure, behaviour and keys follow the Dioxus components
 //! (<https://github.com/DioxusLabs/components>, MIT or Apache-2.0), which
 //! are themselves after Radix; they are written over this shell's own
 //! layer, and drawn in the theme's variables.
@@ -13,10 +14,12 @@ use std::rc::Rc;
 use horizon_ui::El;
 use horizon_ui::blitz_traits::events::DomEventData;
 
+mod chip;
 mod color;
 mod select;
 mod slider;
 
+pub use chip::{Tone, chip, chip_of};
 pub use color::{color_picker, hex, parse_hex};
 pub use select::select;
 pub use slider::{Range, slider};

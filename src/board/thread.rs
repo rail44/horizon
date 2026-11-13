@@ -24,11 +24,11 @@ use horizon_ui::{
 use horizon_workspace::SessionId;
 use keyboard_types::{Key, NamedKey};
 
-use super::chip::{Tone, chip};
 use super::list::key_name;
 use super::{Activity, Job, Source, activity_chip, follow, run, tone, write_refusal};
 use crate::background::Background;
 use crate::markdown::render;
+use crate::parts::{Tone, chip};
 
 /// How many cells wide a post is taken to be when deciding whether to
 /// fold it: an owner's is narrower by its indent.

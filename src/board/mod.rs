@@ -21,9 +21,8 @@ use horizon_ui::reactive_graph::traits::With;
 use horizon_workspace::SessionId;
 
 use crate::background::Background;
-use chip::{Tone, chip};
+use crate::parts::{Tone, chip};
 
-mod chip;
 pub mod list;
 #[cfg(not(target_family = "wasm"))]
 pub mod thread;

@@ -68,9 +68,7 @@ fn open(path: &Path) -> Opened {
 
 impl Opened {
     fn text(&self) -> String {
-        let document = self.app.document();
-        let document = document.borrow();
-        document.root_element().text_content()
+        horizon_ui::testing::text(&self.app)
     }
 
     /// Clicks the first element of `class`, at its middle.

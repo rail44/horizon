@@ -39,6 +39,8 @@ use horizon_ui::{
     El, Page, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
 };
 use horizon_wiki::Store;
+
+use crate::parts::{Tone, chip};
 use horizon_wiki::anchor::Anchor;
 use horizon_wiki::annotation::{Agent, AgentType, Annotation, markdown_body};
 use horizon_wiki::view_model::{PlacedThread, WikiPage};
@@ -100,11 +102,6 @@ pub const CSS: &str = "
                          flex-direction: column; gap: var(--u8); }
         .heading { font-size: var(--t1-size); line-height: var(--t1-line); font-weight: 600; }
         .fields { display: flex; flex-wrap: wrap; gap: var(--u4); }
-        .chip { padding: 0 var(--u4); border-radius: 2px; font-size: var(--micro-size);
-                line-height: var(--micro-line); background: var(--chip-muted-surface);
-                color: var(--chip-muted-text); }
-        .chip.accent { background: var(--chip-accent-surface);
-                       color: var(--chip-accent-text); }
         .state, .notice { flex: none; padding: var(--u24) var(--u16) 0 var(--u16);
                           font-size: var(--meta-size); line-height: var(--meta-line);
                           color: var(--text-muted); }
@@ -616,10 +613,6 @@ impl Wiki {
     }
 }
 
-fn chip(class: &str, text: &str) -> El {
-    el("span").class(class).text(text)
-}
-
 /// The field for a comment, with what was typed so far in it.
 fn composer(state: Wiki) -> El {
     let field = el("textarea").attr("rows", "2");
@@ -786,10 +779,10 @@ fn thread(state: Wiki, placed: &PlacedThread, replying: bool) -> El {
         .child(el("span").class("count").text(&count))
         .on("click", move |_| state.toggle_thread(toggled.clone()));
     if matches!(placed.anchor, Anchor::Moved { exact: false, .. }) {
-        head.child(chip("chip", CHANGED_SINCE));
+        head.child(chip(Tone::Muted, CHANGED_SINCE));
     }
     if replying && !open {
-        head.child(chip("chip accent", REPLYING));
+        head.child(chip(Tone::Accent, REPLYING));
     }
     let card = el("div")
         .class(if focused { "thread focused" } else { "thread" })
@@ -900,7 +893,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
             |fields| {
                 let row = el("div").class("fields");
                 for (key, value) in fields {
-                    row.child(chip("chip", &format!("{key} {value}")));
+                    row.child(chip(Tone::Muted, &format!("{key} {value}")));
                 }
                 row
             },

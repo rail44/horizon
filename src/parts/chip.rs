@@ -4,6 +4,7 @@ use horizon_ui::{El, el};
 
 mod styles {
     horizon_ui::css_module! {"
+        :where(.chip) { flex: none; }
         .chip { padding: 0 var(--u4); border-radius: 2px; font-size: var(--micro-size);
                 line-height: var(--micro-line); }
         .chip.muted { background: var(--chip-muted-surface); color: var(--chip-muted-text); }
@@ -13,13 +14,13 @@ mod styles {
         .chip.info { background: var(--chip-info-surface); color: var(--chip-info-text); }
         .chip.warning { background: var(--chip-warning-surface);
                         color: var(--chip-warning-text); }
-        .chip.danger { background: var(--chip-muted-surface); color: var(--danger); }
+        .chip.danger { background: var(--chip-danger-surface); color: var(--chip-danger-text); }
     "}
 }
 
 /// What a chip, or a status's dot, is drawn in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Tone {
+pub enum Tone {
     Muted,
     Accent,
     Success,
@@ -28,7 +29,13 @@ pub(super) enum Tone {
     Danger,
 }
 
-pub(super) fn chip(tone: Tone, text: &str) -> El {
+/// A chip saying `text`, in `tone`.
+pub fn chip(tone: Tone, text: &str) -> El {
+    chip_of(tone).text(text)
+}
+
+/// A chip in `tone` whose words whoever asked puts in it.
+pub fn chip_of(tone: Tone) -> El {
     let tone = match tone {
         Tone::Muted => styles::MUTED,
         Tone::Accent => styles::ACCENT,
@@ -37,5 +44,5 @@ pub(super) fn chip(tone: Tone, text: &str) -> El {
         Tone::Warning => styles::WARNING,
         Tone::Danger => styles::DANGER,
     };
-    el("span").class((styles::CHIP, tone)).text(text)
+    el("span").class((styles::CHIP, tone))
 }
