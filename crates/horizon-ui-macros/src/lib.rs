@@ -158,6 +158,12 @@ mod tests {
     }
 
     #[test]
+    fn a_property_css_does_not_have_is_refused() {
+        assert!(refused(".a { colr: var(--text); }").contains("`colr` is not a property"));
+        assert!(module(".a { text-wrap: balance; rotate: 90deg; }").is_ok());
+    }
+
+    #[test]
     fn important_is_refused() {
         assert!(refused(".a { width: 1px !important; }").contains("`!important`"));
     }

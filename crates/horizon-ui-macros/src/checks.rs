@@ -9,6 +9,8 @@
 //!   the sheet sets itself. (One read with a fallback is how a part takes
 //!   what whoever places it may set.)
 //! - Nothing is `!important`.
+//! - A property is one CSS has: a mistyped name is otherwise a declaration
+//!   that does nothing, silently.
 
 use std::collections::HashSet;
 use std::convert::Infallible;
@@ -23,6 +25,19 @@ use lightningcss::values::color::CssColor;
 use lightningcss::values::length::{LengthPercentage, LengthValue};
 use lightningcss::visit_types;
 use lightningcss::visitor::{Visit, VisitTypes, Visitor};
+
+/// Properties CSS has that Lightning CSS does not know by name: a name
+/// that is neither one it knows nor one of these is taken for a mistyped
+/// one.
+const UNNAMED: &[&str] = &[
+    "content",
+    "object-fit",
+    "outline-offset",
+    "pointer-events",
+    "scroll-behavior",
+    "scrollbar-width",
+    "text-wrap",
+];
 
 /// The theme's variables, as `horizon-theme-css` sets them: the file is
 /// that crate's, and it checks that it sets these and no others.
@@ -87,11 +102,16 @@ impl<'i> Visitor<'i> for Checks {
     fn visit_property(&mut self, property: &mut Property<'i>) -> Result<(), Self::Error> {
         self.property = property.property_id().name().to_string();
         match property {
-            Property::Custom(custom) => {
-                if let CustomPropertyName::Custom(name) = &custom.name {
+            Property::Custom(custom) => match &custom.name {
+                CustomPropertyName::Custom(name) => {
                     self.set.insert(name.0.to_string());
                 }
-            }
+                CustomPropertyName::Unknown(name) if !UNNAMED.contains(&&*name.0) => {
+                    self.faults
+                        .push(format!("`{}` is not a property CSS has", name.0));
+                }
+                CustomPropertyName::Unknown(_) => {}
+            },
             Property::FontSize(FontSize::Length(length)) if in_pixels(length) => {
                 self.faults.push(
                     "`font-size` is a number of pixels: the type scale has the sizes \
