@@ -258,11 +258,15 @@ impl El {
 
     /// A child that is there while `shown` says so, built by `view` each
     /// time it appears.
-    pub fn when(self, shown: impl Fn() -> bool + 'static, view: impl Fn() -> El + 'static) -> Self {
+    pub fn when<C: Component>(
+        self,
+        shown: impl Fn() -> bool + 'static,
+        view: impl Fn() -> C + 'static,
+    ) -> Self {
         self.each(
             move || if shown() { vec![()] } else { Vec::new() },
             |_| (),
-            move |_| view(),
+            move |_| view().view(),
         )
     }
 
@@ -286,15 +290,16 @@ impl El {
     /// Children that follow a list: one per item of `items`, told apart by
     /// `key`. An item whose key stays keeps its node; `view` runs once for
     /// each key that is new.
-    pub fn each<T, K>(
+    pub fn each<T, K, C>(
         self,
         items: impl Fn() -> Vec<T> + 'static,
         key: impl Fn(&T) -> K + 'static,
-        view: impl Fn(&T) -> El + 'static,
+        view: impl Fn(&T) -> C + 'static,
     ) -> Self
     where
         T: 'static,
         K: Eq + Hash + Clone + 'static,
+        C: Component,
     {
         // The list's place among its parent's children: its nodes go just
         // before this marker, whatever else the parent holds.
@@ -320,7 +325,7 @@ impl El {
                     // The row's own effects belong to the row, and what
                     // `view` reads is not what the list depends on.
                     let owner = outer.child();
-                    let node = owner.with(|| untrack(|| view(item))).0;
+                    let node = owner.with(|| untrack(|| view(item).view())).0;
                     created.push(node);
                     (node, owner)
                 });
