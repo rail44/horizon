@@ -24,10 +24,12 @@ pub struct App {
 
 impl Drop for App {
     /// Ends what the view made: its effects, and what it kept (a session's
-    /// attachment, a connection). The thread goes on holding the owner as
-    /// its current one, so letting go of it here would end nothing.
+    /// attachment, a connection). The owner is also taken off the thread:
+    /// left as the current one, it would own whatever signal is made
+    /// next, and take it along when the next page lets go of it.
     fn drop(&mut self) {
         self.owner.cleanup();
+        self.owner.clone().unset();
     }
 }
 

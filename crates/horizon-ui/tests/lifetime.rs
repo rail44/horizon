@@ -99,3 +99,38 @@ fn a_long_list_builds_the_rows_near_the_view_and_lays_out_again_within_a_frame()
     assert!((1022..=1024).contains(&end), "{end}");
     assert_eq!(rows(&app), end - start);
 }
+
+#[test]
+fn a_signal_made_after_a_page_has_gone_is_not_that_pages_to_take_along() {
+    use horizon_ui::reactive_graph::effect::Effect;
+    use horizon_ui::reactive_graph::traits::GetUntracked;
+
+    // A page that has gone, with something of it still holding its owner
+    // (work kept for after a layout, as a list keeps its rows' owner).
+    let earlier = App::new(400, 300, "", || {
+        let held = horizon_ui::reactive_graph::owner::Owner::current();
+        each_layout(move |_| {
+            let _ = &held;
+        });
+        el("div")
+    });
+    earlier.resolve();
+    drop(earlier);
+    // A signal made now, for the next page to follow.
+    let given = RwSignal::new(0);
+    let runs = Rc::new(Cell::new(0));
+    let counted = runs.clone();
+    let app = App::new(400, 300, "", move || {
+        Effect::new(move |_| {
+            given.get();
+            counted.set(counted.get() + 1);
+        });
+        el("div")
+    });
+    app.run_effects();
+    assert_eq!(given.try_get_untracked(), Some(0));
+    let before = runs.get();
+    given.set(1);
+    app.run_effects();
+    assert_eq!(runs.get(), before + 1);
+}
