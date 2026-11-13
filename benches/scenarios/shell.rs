@@ -51,7 +51,7 @@ const SIZE: (u32, u32) = (1600, 1000);
 /// A shell whose tab has `panes` terminals, each at its prompt.
 fn open(panes: usize) -> (Stage, Shell) {
     let mut shell = None;
-    let mut stage = Stage::new(SIZE.0, SIZE.1, &css(), || {
+    let mut stage = Stage::new(SIZE.0, SIZE.1, css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let (root, built) = view(spawn, Opening::default());
         shell = Some(built);

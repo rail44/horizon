@@ -7,10 +7,10 @@ use horizon_ui::blitz_traits::events::{BlitzKeyEvent, DomEventData};
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, WithUntracked};
-use horizon_ui::{El, el, prevent_default, stop_propagation};
+use horizon_ui::{Class, El, el, prevent_default, stop_propagation};
 use keyboard_types::{Key, NamedKey};
 
-use super::Shell;
+use super::{Shell, styles};
 use crate::parts::{field, prompt};
 
 /// One row: its parts as text, each under a class of its own.
@@ -18,9 +18,9 @@ use crate::parts::{field, prompt};
 pub(super) struct Row {
     /// What tells the row from the others, and from itself changed.
     pub(super) key: String,
-    /// The row's classes, beside `item`.
-    pub(super) class: &'static str,
-    pub(super) parts: Vec<(&'static str, String)>,
+    /// What kind of row it is, and what state it is in.
+    pub(super) class: (Class, Option<Class>),
+    pub(super) parts: Vec<(Class, String)>,
     /// How far in the row starts, in CSS pixels.
     pub(super) indent: f32,
 }
@@ -75,27 +75,25 @@ pub(super) fn view_in_steps(
     });
     let rows = Memo::new(move |_| rows(&shell.query.get()));
     let clicked = picked.clone();
-    let items = el("div").class("items").each(
+    let items = el("div").class(styles::ITEMS).each(
         move || rows.get().into_iter().enumerate().collect::<Vec<_>>(),
         |(index, row)| (*index, row.key.clone()),
         move |(index, row)| {
             let (index, class, clicked) = (*index, row.class, clicked.clone());
             let item = el("div")
-                .class_dyn(move || match shell.chosen.get() == index {
-                    true => format!("item {class} chosen"),
-                    false => format!("item {class}"),
-                })
+                .class((styles::ITEM, class))
+                .class_dyn(move || (shell.chosen.get() == index).then_some(styles::CHOSEN))
                 .attr("style", &format!("padding-left: {}px", 12. + row.indent))
                 .on("click", move |_| clicked(index, Picked::Confirmed));
             for (class, text) in &row.parts {
-                item.child(el("div").class(class).text(text));
+                item.child(el("div").class(*class).text(text));
             }
             item
         },
     );
     let list =
         el("div")
-            .class("picker")
+            .class(styles::PICKER)
             // A press in the list is not one outside it.
             .on("pointerdown", |_| stop_propagation())
             .on("keydown", move |event| {
@@ -130,12 +128,12 @@ pub(super) fn view_in_steps(
                 prevent_default();
                 stop_propagation();
             })
-            .child(el("div").class("search").child(
+            .child(el("div").class(styles::SEARCH).child(
                 field(input).when(move || shell.query.get().is_empty(), || prompt("Search...")),
             ))
             .child(items);
     el("div")
-        .class("scrim")
+        .class(styles::SCRIM)
         .on("pointerdown", move |_| close())
         .child(list)
 }

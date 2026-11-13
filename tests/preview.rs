@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use horizon::background::Background;
-use horizon::preview::{CSS, Preview, Target, view};
+use horizon::preview::{Preview, Target, view};
 use horizon::wake::Wake;
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
@@ -44,9 +44,8 @@ struct Opened {
 /// The preview `name` of the plugin at `path`, on a page that has the
 /// theme and the pane's own rules and none of the view's.
 fn open_at(path: &std::path::Path, name: &str) -> Opened {
-    let css = [horizon_theme_css::CSS, CSS].concat();
     let mut made = None;
-    let app = App::new(600, 500, &css, || {
+    let app = App::new(600, 500, horizon_theme_css::CSS, || {
         let (root, preview) = view(Background::default(), Wake::default());
         made = Some((root, preview));
         themed(Theme::built_in, root)
@@ -377,7 +376,7 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
     use horizon_workspace::{PaneKind, ViewKind, Workspace};
 
     let mut shell: Option<Shell> = None;
-    let app = App::new(1200, 800, &css(), || {
+    let app = App::new(1200, 800, css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let (root, built) = shell_view(spawn, Opening::default());
         shell = Some(built);

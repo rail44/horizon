@@ -11,7 +11,7 @@ use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, With};
 use horizon_workspace::{SessionId, Workspace};
 
 use super::picker::{self, Picked, Row};
-use super::{Models, Shell};
+use super::{Models, Shell, styles};
 
 /// A provider's models: `None` while they are being asked for.
 type Listed = HashMap<usize, Option<Vec<String>>>;
@@ -20,8 +20,8 @@ type Listed = HashMap<usize, Option<Vec<String>>>;
 fn saying(text: &str) -> Vec<Row> {
     vec![Row {
         key: text.to_string(),
-        class: "command disabled",
-        parts: vec![("name", text.to_string())],
+        class: (styles::COMMAND, Some(styles::DISABLED)),
+        parts: vec![(styles::NAME, text.to_string())],
         indent: 0.,
     }]
 }
@@ -84,11 +84,11 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
                     };
                     Row {
                         key: format!("{} {about}", provider.name),
-                        class: match provider.available {
-                            true => "command",
-                            false => "command disabled",
-                        },
-                        parts: vec![("name", provider.name), ("about", about)],
+                        class: (
+                            styles::COMMAND,
+                            (!provider.available).then_some(styles::DISABLED),
+                        ),
+                        parts: vec![(styles::NAME, provider.name), (styles::ABOUT, about)],
                         indent: 0.,
                     }
                 })
@@ -108,8 +108,8 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
             let rows: Vec<Row> = (matching_models(provider, query).into_iter())
                 .map(|model| Row {
                     key: model.clone(),
-                    class: "command",
-                    parts: vec![("name", model)],
+                    class: (styles::COMMAND, None),
+                    parts: vec![(styles::NAME, model)],
                     indent: 0.,
                 })
                 .collect();

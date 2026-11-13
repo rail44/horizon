@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use horizon::terminal::{CSS, Terminal, view};
+use horizon::terminal::{Terminal, view};
 use horizon_terminal_core::TerminalSize;
 use horizon_theme_css::Theme;
 use horizon_ui::App;
@@ -30,7 +30,7 @@ fn open() -> Opened {
 fn open_at(style: &str) -> Opened {
     let session = support::shell("sh", TerminalSize::new(80, 24));
     let mut terminal = None;
-    let app = App::new(900, 540, CSS, || {
+    let app = App::new(900, 540, "", || {
         let (root, state) = view(session.into(), Theme::built_in().terminal());
         terminal = Some(state);
         root.focus();

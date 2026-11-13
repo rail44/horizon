@@ -44,9 +44,11 @@ mod shaping;
 pub use session::Session;
 use shaping::{Ink, Row, Shaper};
 
-pub const CSS: &str = "
+mod styles {
+    horizon_ui::css_module! {"
     .terminal { width: 100%; height: 100%; outline: none; }
-";
+"}
+}
 
 fn dim(color: [u8; 3], toward: [u8; 3]) -> [u8; 3] {
     std::array::from_fn(|channel| ((color[channel] as u16 + toward[channel] as u16) / 2) as u8)
@@ -399,7 +401,7 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
         open_url: RefCell::new(None),
         dragging: Cell::new(None),
     });
-    let element = el("div").class("terminal").attr("tabindex", "0");
+    let element = el("div").class(styles::TERMINAL).attr("tabindex", "0");
 
     // The cell under a point of the element's box.
     let cell_at = {

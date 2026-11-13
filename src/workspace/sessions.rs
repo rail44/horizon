@@ -16,8 +16,8 @@ use horizon_workspace::types::SessionSummary;
 use horizon_workspace::{SessionKind, Workspace};
 use keyboard_types::Key;
 
-use super::Shell;
 use super::picker::{self, Picked, Row};
+use super::{Shell, styles};
 
 /// A step of the tree's indentation, in CSS pixels.
 const INDENT: f32 = 16.;
@@ -37,23 +37,23 @@ fn row(session: &SessionRow) -> Row {
         0 => summary.title.clone(),
         _ => format!("↳ {}", summary.title),
     };
-    let mut parts = vec![("name", title)];
+    let mut parts = vec![(styles::NAME, title)];
     parts.push(match summary.attached {
-        true => ("attached", "attached".to_string()),
-        false => ("detached", "detached".to_string()),
+        true => (styles::ATTACHED, "attached".to_string()),
+        false => (styles::DETACHED, "detached".to_string()),
     });
     if let Some(directory) = &summary.directory {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let repository = enclosing_repo_root(directory);
         let short = abbreviate_directory(directory, repository.as_deref(), home.as_deref());
-        parts.push(("about", short));
+        parts.push((styles::ABOUT, short));
     }
     if session.has_children {
-        parts.push(("about", "subtree".to_string()));
+        parts.push((styles::ABOUT, "subtree".to_string()));
     }
     Row {
         key: format!("{:?} {parts:?}", summary.id),
-        class: "session",
+        class: (styles::SESSION, None),
         parts,
         indent: session.depth as f32 * INDENT,
     }

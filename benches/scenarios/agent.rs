@@ -1,7 +1,7 @@
 //! The agent view over a made-up session, with histories of several
 //! lengths.
 
-use horizon::agent::{Agent, CSS, view};
+use horizon::agent::{Agent, view};
 use horizon_theme_css::{Theme, themed};
 
 use crate::sample::Session;
@@ -39,8 +39,7 @@ pub fn scenarios() -> Vec<Scenario> {
 
 fn open() -> (Stage, Agent) {
     let mut agent = None;
-    let css = [horizon_theme_css::CSS, CSS].concat();
-    let stage = Stage::new(900, 700, &css, || {
+    let stage = Stage::new(900, 700, horizon_theme_css::CSS, || {
         let (root, state) = view(|_| {});
         state.field.focus();
         agent = Some(state);

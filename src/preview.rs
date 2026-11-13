@@ -55,17 +55,19 @@ const CALL_LIMIT: Duration = Duration::from_secs(5);
 
 const NO_PREVIEW: &str = "No preview. `horizon preview <plugin.wasm>` shows one here.";
 
-pub const CSS: &str = "
+mod styles {
+    horizon_ui::css_module! {"
     .preview { height: 100%; min-height: 0; display: flex; flex-direction: column;
-               background: var(--background); color: var(--foreground); }
+               background: var(--background); color: var(--text); }
     .preview > .shown { flex: 1; min-height: 0; display: flex; flex-direction: column; }
     .preview .failed { padding: var(--u16); color: var(--danger);
                        font-size: var(--meta-size); line-height: var(--meta-line);
                        white-space: pre-wrap; }
     .preview > .empty, .preview > .loading {
-        padding: var(--u16); color: var(--muted-foreground);
+        padding: var(--u16); color: var(--text-muted);
         font-size: var(--meta-size); line-height: var(--meta-line); }
-";
+"}
+}
 
 /// The DOM events a plugin may listen for, as the names the layer keeps.
 const EVENTS: &[&str] = &[
@@ -532,11 +534,11 @@ impl Preview {
 /// One preview of a compiled plugin, or what was said in place of it.
 fn shown(compiled: Result<Compiled, String>, name: Option<&str>) -> El {
     let failed = RwSignal::new(None::<String>);
-    let root = el("div").class("shown").when(
+    let root = el("div").class(styles::SHOWN).when(
         move || failed.get().is_some(),
         move || {
             el("div")
-                .class("failed")
+                .class(styles::FAILED)
                 .text_dyn(move || failed.get().unwrap_or_default())
         },
     );
@@ -618,14 +620,14 @@ pub fn view(background: Background, wake: Wake) -> (El, Preview) {
     let arrived = Rc::new(Cell::new(None::<El>));
     let placed = arrived.clone();
     let root = el("div")
-        .class("preview")
+        .class(styles::PREVIEW)
         .attr("tabindex", "0")
         .when(
             move || state.target.with(Option::is_none),
-            || el("div").class("empty").text(NO_PREVIEW),
+            || el("div").class(styles::EMPTY).text(NO_PREVIEW),
         )
         .when(reading, move || {
-            el("div").class("loading").text_dyn(move || {
+            el("div").class(styles::LOADING).text_dyn(move || {
                 let file = (state.target.get()).and_then(|target| {
                     Some(target.path.file_name()?.to_string_lossy().into_owned())
                 });

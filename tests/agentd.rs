@@ -189,7 +189,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         &directory.join("control.sock"),
     );
     let mut shell = None;
-    let app = App::new(1200, 800, &workspace::css(), || {
+    let app = App::new(1200, 800, workspace::css(), || {
         let spawn: workspace::Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let opening = Opening {
             agents: Some(agentd.spawn()),
@@ -270,7 +270,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         while let Some(id) = pending.pop() {
             let node = document.get_node(id).unwrap();
             let class = node.attr(horizon_ui::blitz_dom::local_name!("class"));
-            if class == Some("name") {
+            if class.is_some_and(|classes| horizon_ui::testing::has_class(classes, "name")) {
                 names.push(node.text_content());
             }
             pending.extend(node.children.iter().rev().copied());

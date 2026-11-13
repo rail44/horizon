@@ -6,7 +6,6 @@
 //! has) is a string.
 
 /// A CSS module's sheet as the document takes it.
-#[derive(Debug)]
 pub struct Sheet {
     pub(crate) id: &'static str,
     pub(crate) css: &'static str,
@@ -20,10 +19,25 @@ impl Sheet {
 }
 
 /// A class of a CSS module.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct Class {
     name: &'static str,
     sheet: &'static Sheet,
+}
+
+/// (A name is one sheet's alone.)
+impl PartialEq for Class {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for Class {}
+
+impl std::fmt::Debug for Class {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.name)
+    }
 }
 
 impl Class {

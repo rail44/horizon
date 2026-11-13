@@ -8,7 +8,7 @@ use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
 use horizon_workspace::{SessionKind, ViewKind};
 
 use super::picker::{self, Picked, Row};
-use super::{Placement, Shell};
+use super::{Placement, Shell, styles};
 
 /// What a new pane shows.
 enum Choice {
@@ -49,8 +49,8 @@ pub(super) fn view(shell: Shell, placement: Placement) -> El {
         (matching(query).into_iter())
             .map(|(title, ..)| Row {
                 key: title.clone(),
-                class: "command",
-                parts: vec![("name", title)],
+                class: (styles::COMMAND, None),
+                parts: vec![(styles::NAME, title)],
                 indent: 0.,
             })
             .collect()

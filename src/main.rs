@@ -111,7 +111,7 @@ fn run_window() {
     });
 
     let mut shell = None;
-    let app = App::new(1100, 720, &workspace::css(), || {
+    let app = App::new(1100, 720, workspace::css(), || {
         let (root, built) = workspace::view(spawn, opening);
         shell = Some(built);
         root

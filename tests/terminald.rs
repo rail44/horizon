@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use horizon::restore;
-use horizon::terminal::{CSS, Session, view};
+use horizon::terminal::{Session, view};
 use horizon::terminald::Terminald;
 use horizon::workspace::{self, Shell};
 use horizon_shell_runtime::{TerminaldHandle, wait_for_drain};
@@ -140,7 +140,7 @@ fn a_session_of_a_real_terminald_runs_what_is_typed_into_the_view() {
     let handle = terminald.start_terminal(uuid::Uuid::new_v4(), daemon.spec());
 
     let mut terminal = None;
-    let app = App::new(900, 540, CSS, || {
+    let app = App::new(900, 540, "", || {
         let (root, state) = view(
             Session::attached(handle).into(),
             Theme::built_in().terminal(),
@@ -184,7 +184,7 @@ fn open(daemon: &Daemon, terminald: &Terminald, state: &Path) -> (App, Shell) {
         )
     });
     let mut shell = None;
-    let app = App::new(1200, 800, &workspace::css(), || {
+    let app = App::new(1200, 800, workspace::css(), || {
         let (root, built) = workspace::view(spawn, opening);
         shell = Some(built);
         root

@@ -35,11 +35,8 @@ pub use session::{AgentSession, Standing};
 
 const COMPOSER_MAX_ROWS: usize = 8;
 
-// Every rule sits under the view's own class: the page's style sheet is one
-// for all the views on it. Colors and lengths are the theme's variables
-// (`horizon-theme-css`); `--u8` is 8 px at the reference type size. A
-// button's and Markdown's own spacing are by eye.
-pub const CSS: &str = "
+pub(crate) mod styles {
+    horizon_ui::css_module! {"
     .agent { display: flex; flex-direction: column; height: 100%; min-width: 240px;
              outline: none; background: var(--background); color: var(--text);
              font-family: var(--font-family); font-size: var(--body-size);
@@ -47,12 +44,12 @@ pub const CSS: &str = "
         .column { flex: 1; min-height: 0; overflow-y: scroll;
                   padding: var(--u24) 1px var(--u32) 1px; }
         .unit { padding-bottom: var(--u8); }
-        .user { margin-left: var(--u24); padding: var(--u8) var(--u16); border-radius: 4px;
+        .user { margin-left: var(--u24); padding: var(--u8) var(--u16); border-radius: var(--radius);
                 background: var(--band); white-space: pre-wrap; }
         .user.muted { color: var(--text-muted); }
         .turn { position: relative; display: flex; flex-direction: column;
                 gap: var(--u4); padding: var(--u8) var(--u16);
-                border: 1px solid var(--border); border-radius: 4px; }
+                border: var(--line) solid var(--border); border-radius: var(--radius); }
         .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
                background: var(--accent); }
         .notice, .task { padding: 0 var(--u16); font-size: var(--meta-size);
@@ -68,7 +65,7 @@ pub const CSS: &str = "
                         color: var(--text-muted); }
         .calls { display: flex; flex-direction: column; gap: var(--u4);
                  margin-left: var(--u8); padding-left: var(--u16);
-                 border-left: 1px solid var(--border); }
+                 border-left: var(--line) solid var(--border); }
         .call { display: flex; flex-direction: column; gap: var(--u4); }
         .call-row { display: flex; align-items: center; gap: var(--u8);
                     font-size: var(--meta-size); line-height: var(--meta-line); }
@@ -107,16 +104,17 @@ pub const CSS: &str = "
         .thinking .d2 { animation-delay: -0.4s; }
         .composer { flex: none; padding: 0 var(--u24) var(--u12) var(--u24); }
         .box { display: flex; flex-direction: column; gap: var(--u4);
-               padding: var(--u8) var(--u16); border: 1px solid var(--border);
-               border-radius: 4px; }
-        .field { padding: 6px 12px; }
+               padding: var(--u8) var(--u16); border: var(--line) solid var(--border);
+               border-radius: var(--radius); }
+        .field { padding: 6px var(--u12); }
         .hints { display: flex; align-items: center; gap: var(--u4);
                  font-size: var(--micro-size); line-height: var(--micro-line);
                  color: var(--text-muted); }
         .model { cursor: pointer; }
     }
     @keyframes thinking { from { opacity: 1; } to { opacity: 0.25; } }
-";
+"}
+}
 
 /// What the view asks of whatever holds it.
 #[derive(Clone, Debug, PartialEq)]
@@ -244,7 +242,7 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
         typed: RwSignal::new(String::new()),
         built: RwSignal::new((0, 0)),
         ask: StoredValue::new_local(Rc::new(ask)),
-        column: el("div").class("column"),
+        column: el("div").class(styles::COLUMN),
         field: el("textarea"),
     };
 
@@ -252,12 +250,15 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
     // A unit kept from the last update is the allocation it was.
     let key = |(index, unit): &(usize, Rc<Unit>)| (*index, Rc::as_ptr(unit) as usize);
     let unit = move |(_, unit): &(usize, Rc<Unit>)| {
-        el("div").class("unit").child(match unit.as_ref() {
+        el("div").class(styles::UNIT).child(match unit.as_ref() {
             Unit::User(message) => el("div")
-                .class(match message.label {
-                    Label::You => "user",
-                    Label::Task | Label::Continue => "user muted",
-                })
+                .class((
+                    styles::USER,
+                    match message.label {
+                        Label::You => None,
+                        Label::Task | Label::Continue => Some(styles::MUTED),
+                    },
+                ))
                 .text(&message.text),
             Unit::Notice(notice) => notice_line(notice),
             Unit::Turn(turn) => turn_card(turn, state),
@@ -274,7 +275,7 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
     }
     state.column.child(
         el("div")
-            .class("footer")
+            .class(styles::FOOTER)
             .when(
                 move || session_end(state.status.get()).is_some(),
                 move || match session_end(state.status.get_untracked()) {
@@ -285,7 +286,7 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
             .each(
                 move || state.tasks.get(),
                 chrome::task_line,
-                |task| el("div").class("task").text(&chrome::task_line(task)),
+                |task| el("div").class(styles::TASK).text(&chrome::task_line(task)),
             ),
     );
 
@@ -321,30 +322,37 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
             }
         });
 
-    let composer = el("div").class("composer").child(
+    let composer = el("div").class(styles::COMPOSER).child(
         el("div")
-            .class("box")
-            .child(el("div").class("field").child(field(state.field).when(
-                move || state.typed.get().is_empty(),
-                move || prompt_of().text_dyn(move || placeholder(state.status.get()).to_string()),
-            )))
+            .class(styles::BOX)
             .child(
                 el("div")
-                    .class("hints")
+                    .class(styles::FIELD)
+                    .child(field(state.field).when(
+                        move || state.typed.get().is_empty(),
+                        move || {
+                            prompt_of()
+                                .text_dyn(move || placeholder(state.status.get()).to_string())
+                        },
+                    )),
+            )
+            .child(
+                el("div")
+                    .class(styles::HINTS)
                     .child(
                         el("span")
-                            .class("chip model")
+                            .class(("chip", styles::MODEL))
                             .text_dyn(move || state.model.get())
                             .on("click", move |_| state.ask(Asked::SwitchModel)),
                     )
-                    .child(el("span").class("spacer"))
+                    .child(el("span").class(styles::SPACER))
                     .child(el("span").class("chip").text("Enter"))
                     .child(el("span").text(chrome::SEND_HINT)),
             ),
     );
 
     let root = el("div")
-        .class("agent")
+        .class(styles::AGENT)
         .on("keydown", move |event| {
             let DomEventData::KeyDown(key) = &event.data else {
                 return;
@@ -392,11 +400,14 @@ fn session_end(status: Status) -> Option<Notice> {
 
 fn notice_line(notice: &Notice) -> El {
     el("div")
-        .class(match notice.tone {
-            Tone::Muted => "notice",
-            Tone::Warning => "notice warning",
-            Tone::Danger => "notice danger",
-        })
+        .class((
+            styles::NOTICE,
+            match notice.tone {
+                Tone::Muted => None,
+                Tone::Warning => Some(styles::WARNING),
+                Tone::Danger => Some(styles::DANGER),
+            },
+        ))
         .text(&notice.text)
 }
 
@@ -419,9 +430,10 @@ fn stop_button(state: Agent) -> El {
 }
 
 fn thinking() -> El {
-    let dots = el("div").class("thinking").text(chrome::THINKING);
-    for dot in ["d d0", "d d1", "d d2"] {
-        dots.child(el("span").class(dot).text("・"));
+    let dots = el("div").class(styles::THINKING).text(chrome::THINKING);
+    // (The first has no delay of its own.)
+    for dot in [None, Some(styles::D1), Some(styles::D2)] {
+        dots.child(el("span").class((styles::D, dot)).text("・"));
     }
     dots
 }
@@ -434,9 +446,9 @@ fn turn_card(turn: &Turn, state: Agent) -> El {
     let running = turn.state == TurnState::Running;
     let carried = move || running && state.status.get().running();
     let carrier = running_receipt(turn).map(|receipt| receipt.key);
-    let card = el("div").class("turn");
+    let card = el("div").class(styles::TURN);
     if running {
-        card.child(el("div").class("bar"));
+        card.child(el("div").class(styles::BAR));
     }
     for part in &turn.parts {
         match part {
@@ -458,12 +470,12 @@ fn turn_card(turn: &Turn, state: Agent) -> El {
     let thinks = turn.parts.contains(&TurnPart::Thinking);
     if running && carrier.is_none() {
         let line = el("div")
-            .class("line")
+            .class(styles::LINE)
             .when(carried, move || session_state_chip(state));
         if thinks {
             line.child(thinking());
         }
-        line.child(el("span").class("spacer"))
+        line.child(el("span").class(styles::SPACER))
             .when(carried, move || stop_button(state));
         card.child(line);
     } else if thinks {
@@ -482,7 +494,7 @@ fn turn_card(turn: &Turn, state: Agent) -> El {
             .as_ref()
             .filter(|_| turn.state == TurnState::Done);
         if label.is_some() || elapsed.is_some() {
-            let end = el("div").class("end");
+            let end = el("div").class(styles::END);
             if let Some((tone, label)) = label {
                 end.child(chip(tone, label));
             }
@@ -536,7 +548,7 @@ fn receipt_block(receipt: Rc<Receipt>, carries: bool, state: Agent) -> El {
         .filter(|call| call.status == CallStatus::Failed)
         .count();
     let line = el("div")
-        .class("receipt-line")
+        .class(styles::RECEIPT_LINE)
         .on("click", move |_| {
             state.expanded.update(|expanded| {
                 if !expanded.remove(&key) {
@@ -549,10 +561,10 @@ fn receipt_block(receipt: Rc<Receipt>, carries: bool, state: Agent) -> El {
     if failed > 0 {
         line.child(chip(parts::Tone::Danger, &chrome::failed_calls(failed)));
     }
-    line.when(carried, || el("span").class("spacer"))
+    line.when(carried, || el("span").class(styles::SPACER))
         .when(carried, move || stop_button(state));
 
-    let block = el("div").class("receipt").child(line);
+    let block = el("div").class(styles::RECEIPT).child(line);
     // A pending approval sits under the line while that is collapsed, and
     // under its call once it is open.
     let approvals: Vec<(usize, Approval)> = (receipt.calls.iter().enumerate())
@@ -572,7 +584,7 @@ fn receipt_block(receipt: Rc<Receipt>, carries: bool, state: Agent) -> El {
         );
     }
     block.when(expanded, move || {
-        let calls = el("div").class("calls");
+        let calls = el("div").class(styles::CALLS);
         for (index, call) in receipt.calls.iter().enumerate() {
             calls.child(call_row(key, index, call, state));
         }
@@ -582,24 +594,22 @@ fn receipt_block(receipt: Rc<Receipt>, carries: bool, state: Agent) -> El {
 
 fn call_row(receipt: usize, index: usize, call: &Call, state: Agent) -> El {
     let row = el("div")
-        .class(if call.body.is_some() {
-            "call-row opens"
-        } else {
-            "call-row"
-        })
-        .child(
-            el("span")
-                .class("dot-cell")
-                .child(el("span").class(match call.status {
-                    CallStatus::Done | CallStatus::Cancelled => "dot",
-                    CallStatus::Failed => "dot failed",
-                    CallStatus::Running => "dot running",
-                    CallStatus::Denied => "dot denied",
-                })),
-        )
-        .child(el("span").class("verb").text(&call.verb))
-        .child(el("span").class("target").text(&call.target));
-    let block = el("div").class("call").child(row);
+        .class((
+            styles::CALL_ROW,
+            call.body.is_some().then_some(styles::OPENS),
+        ))
+        .child(el("span").class(styles::DOT_CELL).child(el("span").class((
+            styles::DOT,
+            match call.status {
+                CallStatus::Done | CallStatus::Cancelled => None,
+                CallStatus::Failed => Some(styles::FAILED),
+                CallStatus::Running => Some(styles::RUNNING),
+                CallStatus::Denied => Some(styles::DENIED),
+            },
+        ))))
+        .child(el("span").class(styles::VERB).text(&call.verb))
+        .child(el("span").class(styles::TARGET).text(&call.target));
+    let block = el("div").class(styles::CALL).child(row);
     if let Some(body) = call.body.clone() {
         row.on("click", move |_| {
             state.open_bodies.update(|open| {
@@ -623,9 +633,9 @@ fn call_row(receipt: usize, index: usize, call: &Call, state: Agent) -> El {
 fn approval_block(approval: &Approval, state: Agent) -> El {
     let (approve, deny) = (approval.id.clone(), approval.id.clone());
     el("div")
-        .class("approval")
+        .class(styles::APPROVAL)
         .child(chip(parts::Tone::Accent, chrome::APPROVAL_NEEDED))
-        .child(el("span").class("reason").text(&approval.reason))
+        .child(el("span").class(styles::REASON).text(&approval.reason))
         .child(chip(parts::Tone::Muted, "Enter"))
         .child(
             button(ButtonKind::Primary, ButtonSize::Regular, chrome::APPROVE)
@@ -651,31 +661,35 @@ fn call_body(body: &CallBody) -> El {
         CallBody::Diff(lines) => {
             let diff = el("div").class("diff");
             for line in lines {
-                let (class, mark) = match line.kind {
-                    DiffKind::Added => ("diff-line added", "+"),
-                    DiffKind::Removed => ("diff-line removed", "−"),
-                    DiffKind::Context => ("diff-line", ""),
+                let (kind, mark) = match line.kind {
+                    DiffKind::Added => (Some(styles::ADDED), "+"),
+                    DiffKind::Removed => (Some(styles::REMOVED), "−"),
+                    DiffKind::Context => (None, ""),
                 };
                 diff.child(
                     el("div")
-                        .class(class)
-                        .child(el("span").class("mono mark").text(mark))
-                        .child(el("span").class("mono").text(&line.text)),
+                        .class((styles::DIFF_LINE, kind))
+                        .child(el("span").class((styles::MONO, styles::MARK)).text(mark))
+                        .child(el("span").class(styles::MONO).text(&line.text)),
                 );
             }
             diff
         }
         CallBody::Output { lines, omitted } => {
-            let output = el("div").class("output");
+            let output = el("div").class(styles::OUTPUT);
             for line in lines {
-                output.child(el("div").class("mono").text(line));
+                output.child(el("div").class(styles::MONO).text(line));
             }
             let block = el("div").child(output);
             if *omitted > 0 {
-                block.child(el("div").class("more").text(&chrome::more_lines(*omitted)));
+                block.child(
+                    el("div")
+                        .class(styles::MORE)
+                        .text(&chrome::more_lines(*omitted)),
+                );
             }
             block
         }
-        CallBody::Text(text) => el("div").class("notice").text(text),
+        CallBody::Text(text) => el("div").class(styles::NOTICE).text(text),
     }
 }

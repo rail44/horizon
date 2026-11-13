@@ -6,8 +6,8 @@ use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Track};
 use horizon_workspace::Workspace;
 use horizon_workspace::commands::{CommandEntry, command_entries, filter_command_entries};
 
-use super::Shell;
 use super::picker::{self, Picked, Row};
+use super::{Shell, styles};
 
 /// The commands that match `query`, in the palette's order.
 fn matching(shell: Shell, query: &str) -> Vec<CommandEntry> {
@@ -22,13 +22,13 @@ pub(super) fn view(shell: Shell) -> El {
             .map(|entry| Row {
                 key: format!("{} {}", entry.spec.name, entry.enabled),
                 class: match (entry.enabled, entry.spec.destructive) {
-                    (false, _) => "command disabled",
-                    (true, true) => "command destructive",
-                    (true, false) => "command",
+                    (false, _) => (styles::COMMAND, Some(styles::DISABLED)),
+                    (true, true) => (styles::COMMAND, Some(styles::DESTRUCTIVE)),
+                    (true, false) => (styles::COMMAND, None),
                 },
                 parts: vec![
-                    ("name", entry.spec.title.to_string()),
-                    ("about", entry.spec.description.to_string()),
+                    (styles::NAME, entry.spec.title.to_string()),
+                    (styles::ABOUT, entry.spec.description.to_string()),
                 ],
                 indent: 0.,
             })

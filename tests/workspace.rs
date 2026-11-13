@@ -27,7 +27,7 @@ fn open() -> Opened {
 
 fn open_with(opening: Opening) -> Opened {
     let mut shell = None;
-    let app = App::new(1200, 800, &css(), || {
+    let app = App::new(1200, 800, css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let (root, built) = view(spawn, opening);
         shell = Some(built);

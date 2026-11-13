@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use horizon::agent::{Agent, Asked, CSS, view};
+use horizon::agent::{Agent, Asked, view};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
@@ -30,8 +30,7 @@ fn open(session: &Session) -> Opened {
     let mut agent = None;
     // The theme with no config file, at its 13 px: the measurements below
     // are the type scale's at that size.
-    let css = [horizon_theme_css::CSS, CSS].concat();
-    let app = App::new(900, 700, &css, || {
+    let app = App::new(900, 700, horizon_theme_css::CSS, || {
         let (root, state) = view(move |asked| log.borrow_mut().push(asked));
         state.field.focus();
         agent = Some(state);
@@ -394,7 +393,7 @@ fn the_thinking_dots_move_with_the_clock() {
     let opened = open(&session);
     session.begin_turn("考えて");
     opened.show(&session);
-    let dot = opened.all("d0")[0];
+    let dot = opened.all("d")[0];
     let opacity = |seconds: f64| {
         opened.app.resolve_at(seconds);
         let document = opened.app.document();

@@ -10,7 +10,7 @@ use horizon_ui::{El, dispatched, el, prevent_default};
 use horizon_workspace::types::{LayoutNode, TabId};
 use horizon_workspace::{PaneId, SplitAxis, Workspace};
 
-use super::Shell;
+use super::{Shell, styles};
 
 /// A tab's splits without their weights: what the boxes are built from. A
 /// boundary dragged changes weights only, and builds nothing.
@@ -90,7 +90,7 @@ pub(super) fn view(shell: Shell) -> El {
     let shown = Memo::new(move |_| {
         (shell.model).with(|model| model.active_tab().map(|tab| (tab.id, Shape::of(&tab.root))))
     });
-    let root = el("div").class("tab");
+    let root = el("div").class(styles::TAB);
     // The outermost box of the last arrangement, when it was a split, and
     // the panes that were in it.
     Effect::new(move |previous: Option<(Option<El>, Vec<El>)>| {
@@ -123,7 +123,7 @@ pub(super) fn view(shell: Shell) -> El {
         move || shown.with(Option::is_none),
         || {
             el("div")
-                .class("empty")
+                .class(styles::EMPTY)
                 .text("No tabs. Press : for commands.")
         },
     )
@@ -135,13 +135,16 @@ fn arrange(shape: &Shape, path: &[usize], tab: TabId, shell: Shell) -> El {
         Shape::Split { axis, children } => (*axis, children),
     };
     let across = axis == SplitAxis::Horizontal;
-    let split = el("div").class(if across { "split across" } else { "split down" });
+    let split = el("div").class((
+        styles::SPLIT,
+        if across { styles::ACROSS } else { styles::DOWN },
+    ));
     let cells: Vec<El> = (children.iter().enumerate())
         .map(|(index, child)| {
             let at = [path, &[index]].concat();
             let weighed = at.clone();
             el("div")
-                .class("cell")
+                .class(styles::CELL)
                 .style_dyn("flex-grow", move || {
                     shell
                         .model
@@ -165,12 +168,16 @@ fn arrange(shape: &Shape, path: &[usize], tab: TabId, shell: Shell) -> El {
                 before: index - 1,
                 ..resize.clone()
             };
-            split.child(el("div").class("divider").on("pointerdown", move |_| {
-                let resize = resize.clone();
-                shell.resizing.update(|resizing| *resizing = Some(resize));
-                // Not the start of a selection in the text around it.
-                prevent_default();
-            }));
+            split.child(
+                el("div")
+                    .class(styles::DIVIDER)
+                    .on("pointerdown", move |_| {
+                        let resize = resize.clone();
+                        shell.resizing.update(|resizing| *resizing = Some(resize));
+                        // Not the start of a selection in the text around it.
+                        prevent_default();
+                    }),
+            );
         }
         split.child(cell);
     }

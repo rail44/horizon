@@ -65,24 +65,23 @@ mod picker;
 mod reload;
 mod sessions;
 
-// Every rule sits under the view's own class: the page's style sheet is one
-// for all the views on it.
-pub const CSS: &str = "
+pub(crate) mod styles {
+    horizon_ui::css_module! {"
     .workspace { position: relative; display: flex; flex-direction: column; height: 100%;
                  outline: none; background: var(--background); color: var(--text);
                  font-family: var(--font-family); font-size: var(--body-size);
                  line-height: var(--body-line);
         &.resizing { user-select: none; }
-        .tabs { flex: none; display: flex; gap: 4px; padding: 4px 28px 4px 8px;
-                background: var(--tab-track); border-top: 1px solid var(--border);
-                border-bottom: 1px solid var(--border); }
-        .tab-label { flex: 1; min-width: 0; display: flex; padding: 0 4px 0 8px;
-                     border-radius: 6px; line-height: 24px; color: var(--tab-text);
+        .tabs { flex: none; display: flex; gap: var(--u4); padding: var(--u4) var(--u28) var(--u4) var(--u8);
+                background: var(--tab-track); border-top: var(--line) solid var(--border);
+                border-bottom: var(--line) solid var(--border); }
+        .tab-label { flex: 1; min-width: 0; display: flex; padding: 0 var(--u4) 0 var(--u8);
+                     border-radius: var(--radius-large); line-height: var(--u24); color: var(--tab-text);
                      cursor: pointer; }
         .tab-label.active { background: var(--background); color: var(--text); }
         .tab-label .title { flex: 1; min-width: 0; text-align: center; overflow: hidden;
                             white-space: nowrap; text-overflow: ellipsis; }
-        .tab-label .close { flex: none; width: 16px; text-align: center; border-radius: 4px;
+        .tab-label .close { flex: none; width: 16px; text-align: center; border-radius: var(--radius);
                             opacity: 0; }
         .tab-label:hover .close { opacity: 1; }
         .tab-label .close:hover { background: var(--surface-selected); }
@@ -95,7 +94,7 @@ pub const CSS: &str = "
         .split.down > .divider { height: 5px; cursor: row-resize; }
         .pane { position: relative; flex: 1; min-width: 0; min-height: 0;
                 box-sizing: border-box; display: flex; flex-direction: column;
-                overflow: hidden; border: 2px solid var(--background);
+                overflow: hidden; border: var(--line-strong) solid var(--background);
                 background: var(--background); }
         .pane.focused { border-color: var(--border); }
         .pane.cursor { border-color: var(--accent); }
@@ -109,16 +108,16 @@ pub const CSS: &str = "
                  padding-top: 97px; }
         .picker { width: 560px; max-height: 400px; display: flex; flex-direction: column;
                   overflow: hidden; background: var(--background);
-                  border: 1px solid var(--border); border-radius: 8px;
-                  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1); }
+                  border: var(--line) solid var(--border); border-radius: 8px;
+                  box-shadow: var(--shadow-modal); }
         .search { flex: none; position: relative; display: flex; align-items: center;
-                  height: 32px; padding: 0 12px; border-bottom: 1px solid var(--border); }
-        .search > * { flex: 1; font-size: var(--body-size); line-height: 20px; }
+                  height: 32px; padding: 0 var(--u12); border-bottom: var(--line) solid var(--border); }
+        .search > * { flex: 1; font-size: var(--body-size); line-height: calc(var(--u4) * 5); }
         .items { flex: 1; min-height: 0; overflow-y: auto; }
-        .item { display: flex; padding: 7px 12px; cursor: pointer; }
+        .item { display: flex; padding: 7px var(--u12); cursor: pointer; }
         .item.command { flex-direction: column; }
-        .item.session { align-items: baseline; gap: 8px; }
-        .item .name { line-height: 20px; }
+        .item.session { align-items: baseline; gap: var(--u8); }
+        .item .name { line-height: calc(var(--u4) * 5); }
         .item .about, .item .attached, .item .detached {
             font-size: var(--meta-size); line-height: var(--meta-line);
             color: var(--text-muted); }
@@ -128,19 +127,13 @@ pub const CSS: &str = "
         .item.disabled .name { color: var(--text-muted); }
         .item.chosen { background: var(--surface-selected); }
     }
-";
+"}
+}
 
-/// The page's style sheet with the theme's, this view's and those of the
-/// views its panes show.
-pub fn css() -> String {
-    [
-        horizon_theme_css::CSS,
-        CSS,
-        terminal::CSS,
-        agent::CSS,
-        preview::CSS,
-    ]
-    .concat()
+/// The page's style sheet: the theme's alone. A view's own comes with
+/// the view (`horizon_ui::css_module!`).
+pub fn css() -> &'static str {
+    horizon_theme_css::CSS
 }
 
 pub use keymap::Keymap;
@@ -532,7 +525,7 @@ impl Shell {
                     if kept.reloading.get() == Some(Reloading::Agents) =>
                 {
                     el("div")
-                        .class("empty")
+                        .class(styles::EMPTY)
                         .attr("tabindex", "0")
                         .text("Reloading the agent runtime")
                 }
@@ -684,7 +677,7 @@ impl Shell {
                     root
                 }
                 _ => el("div")
-                    .class("empty")
+                    .class(styles::EMPTY)
                     .attr("tabindex", "0")
                     .text("This view is not shown yet."),
             };
@@ -692,16 +685,17 @@ impl Shell {
                 // The focused pane's border is the theme's quiet line; in
                 // workspace mode the cursor's is the accent, and every
                 // pane is veiled.
+                .class(styles::PANE)
                 .class_dyn(
                     move || match (shell.cursor.get() == Some(id), shell.mode.get()) {
-                        (true, true) => "pane cursor".to_string(),
-                        (true, false) => "pane focused".to_string(),
-                        (false, _) => "pane".to_string(),
+                        (true, true) => Some(styles::CURSOR),
+                        (true, false) => Some(styles::FOCUSED),
+                        (false, _) => None,
                     },
                 )
                 .on("pointerdown", move |_| shell.pane_pressed(id))
                 .child(content)
-                .when(move || shell.mode.get(), || el("div").class("veil"))
+                .when(move || shell.mode.get(), || el("div").class(styles::VEIL))
         });
         PaneView {
             element,
@@ -1145,29 +1139,36 @@ impl Shell {
 fn strip(shell: Shell) -> El {
     let tabs = Memo::new(move |_| shell.model.with(Workspace::tab_summaries));
     let tab = move |index: usize| tabs.with(|tabs: &Vec<TabSummary>| tabs.get(index).cloned());
-    el("div").class("tabs").each(
+    el("div").class(styles::TABS).each(
         move || (0..tabs.with(Vec::len)).collect::<Vec<_>>(),
         |index| *index,
         move |index| {
             let index = *index;
             el("div")
-                .class_dyn(move || match tab(index) {
-                    Some(tab) if tab.active => "tab-label active".to_string(),
-                    _ => "tab-label".to_string(),
+                .class(styles::TAB_LABEL)
+                .class_dyn(move || {
+                    tab(index)
+                        .is_some_and(|tab| tab.active)
+                        .then_some(styles::ACTIVE)
                 })
                 .child(
                     el("div")
-                        .class("title")
+                        .class(styles::TITLE)
                         .text_dyn(move || tab(index).map(|tab| tab.title).unwrap_or_default()),
                 )
                 // Closing a tab detaches the sessions in it.
-                .child(el("div").class("close").text("×").on("click", move |_| {
-                    shell.change(|model| {
-                        model.exit_workspace_mode();
-                        model.close_tab_index(index);
-                    });
-                    stop_propagation();
-                }))
+                .child(
+                    el("div")
+                        .class(styles::CLOSE)
+                        .text("×")
+                        .on("click", move |_| {
+                            shell.change(|model| {
+                                model.exit_workspace_mode();
+                                model.close_tab_index(index);
+                            });
+                            stop_propagation();
+                        }),
+                )
                 .on("click", move |_| {
                     shell.change(|model| {
                         model.exit_workspace_mode();
@@ -1262,9 +1263,12 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
     }
 
     root.attr("tabindex", "0")
-        .class_dyn(move || match shell.resizing.with(Option::is_some) {
-            true => "workspace resizing".to_string(),
-            false => "workspace".to_string(),
+        .class(styles::WORKSPACE)
+        .class_dyn(move || {
+            shell
+                .resizing
+                .with(Option::is_some)
+                .then_some(styles::RESIZING)
         })
         // On the keys' way in: a view with the focus, a terminal above
         // all, would otherwise have the shell's chords before the shell.
