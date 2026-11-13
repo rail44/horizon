@@ -317,6 +317,43 @@ fn a_color_picker_is_worked_from_the_keyboard() {
     assert!(all(&app, "panel").is_empty());
 }
 
+#[test]
+fn a_button_is_pressed_by_a_click_and_by_enter_or_space_and_leaves_the_keys_where_they_were() {
+    use horizon::parts::Button;
+    use horizon_ui::{Callback, Component};
+
+    let presses = Rc::new(RefCell::new(0));
+    let counted = presses.clone();
+    let app = open(move |_| {
+        Button {
+            label: "Save",
+            on_press: Some(Callback::new(move |()| *counted.borrow_mut() += 1)),
+            ..Default::default()
+        }
+        .view()
+    });
+    let button = all(&app, "button")[0];
+    let focused = |app: &App| app.document().borrow().get_focussed_node_id();
+    let other = all(&app, "other")[0];
+    // The keys are elsewhere, and a press with the pointer leaves them there.
+    El(other).focus();
+    app.resolve();
+    click(&app, button, 0.5, 0.5);
+    assert_eq!(*presses.borrow(), 1);
+    assert_eq!(focused(&app), Some(other));
+    // With the keys on it, Enter and Space press it.
+    El(button).focus();
+    app.resolve();
+    named(&app, NamedKey::Enter);
+    key(&app, Key::Character(" ".into()), Modifiers::default());
+    assert_eq!(*presses.borrow(), 3);
+    // It is a button to whoever asks what is on the page.
+    let document = app.document();
+    let document = document.borrow();
+    let element = document.get_node(button).unwrap().element_data().unwrap();
+    assert_eq!(&*element.name.local, "button");
+}
+
 /// Paints the gallery of the parts in this machine's theme, to the file
 /// `HORIZON_GALLERY_OUT` names (a PPM): a picture for a person to look
 /// at. Run by hand.

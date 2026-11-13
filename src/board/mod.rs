@@ -189,7 +189,6 @@ fn activity_chip(into: El, item: &Item, states: Activity) {
                 tone,
                 text: state.label(),
             }
-            .view()
             .class("activity")
         },
     );

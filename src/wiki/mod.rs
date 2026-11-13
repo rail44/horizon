@@ -36,11 +36,11 @@ use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
 };
 use horizon_ui::{
-    Component, El, Page, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
+    Callback, El, Page, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
 };
 use horizon_wiki::Store;
 
-use crate::parts::{Button, Chip, Tone};
+use crate::parts::{Button, Chip, Press, Tone};
 use horizon_wiki::anchor::Anchor;
 use horizon_wiki::annotation::{Agent, AgentType, Annotation, markdown_body};
 use horizon_wiki::view_model::{PlacedThread, WikiPage};
@@ -970,18 +970,18 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
             // selection it is an offer for.)
             Line::Offer => el("div")
                 .class(styles::OFFER)
-                .child(
-                    Button {
-                        label: COMMENT,
-                        ..Default::default()
-                    }
-                    .view()
-                    .on("pointerdown", move |_| {
+                .child(Button {
+                    label: COMMENT,
+                    // (Pressed, not clicked: the click itself would
+                    // take the selection it is an offer for.)
+                    press: Press::Down,
+                    on_press: Some(Callback::new(move |()| {
                         state.comment_on_selection();
                         prevent_default();
                         stop_propagation();
-                    }),
-                )
+                    })),
+                    ..Default::default()
+                })
                 .child(el("span").class(styles::KEY).text("c")),
             Line::New(chars) => {
                 let quote = one_line(&page.quote_of(chars.clone()));

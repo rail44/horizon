@@ -667,7 +667,6 @@ fn approval_block(approval: &Approval, state: Agent) -> El {
                 })),
                 ..Default::default()
             }
-            .view()
             .class("approve"),
         )
         .child(Chip {
@@ -683,7 +682,6 @@ fn approval_block(approval: &Approval, state: Agent) -> El {
                 })),
                 ..Default::default()
             }
-            .view()
             .class("deny"),
         )
 }
