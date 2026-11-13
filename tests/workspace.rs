@@ -1209,3 +1209,69 @@ fn tabs_are_shown_in_turn_in_the_mode_with_a_split_tab_among_them() {
         "{boxes:?}"
     );
 }
+
+#[test]
+fn a_shell_with_nothing_happening_has_nothing_to_draw() {
+    use std::task::{Context, Waker};
+
+    use horizon_ui::Live;
+    use horizon_ui::blitz_dom::Document;
+
+    let opened = open();
+    let pane = opened.panes()[0];
+    opened.prompt(pane);
+    let Opened { app, shell } = opened;
+    // As the window's own wiring does: the waker is handed over once.
+    let handed = std::cell::Cell::new(false);
+    app.on_poll(move |waker| {
+        if !handed.replace(true) {
+            shell.set_waker(waker.clone());
+        }
+    });
+    let mut live = Live(app);
+    // The window's turn: it asks the document whether there is something
+    // to draw, and draws if so. It asks again after every draw.
+    let turn = |live: &mut Live| {
+        let draws = live.poll(Some(Context::from_waker(Waker::noop())));
+        if draws {
+            live.0.resolve();
+        }
+        draws
+    };
+    // What opening left to draw is drawn: the terminal, sized by the
+    // first layout, answers with a frame a moment later.
+    let (started, mut still) = (Instant::now(), 0);
+    while still < 20 {
+        assert!(started.elapsed() < Duration::from_secs(5), "never still");
+        still = if turn(&mut live) { 0 } else { still + 1 };
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Then there is nothing, for as long as nothing happens.
+    for _ in 0..40 {
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(!turn(&mut live));
+    }
+    // A frame from the session is something to draw.
+    live.0.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+        text: Some("a".into()),
+        key: Key::Character("a".into()),
+        code: keyboard_types::Code::Unidentified,
+        modifiers: Modifiers::default(),
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+    }));
+    while turn(&mut live) {}
+    let started = Instant::now();
+    while !turn(&mut live) {
+        assert!(started.elapsed() < Duration::from_secs(5), "no echo drawn");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let terminal = shell.terminal(pane).expect("a terminal");
+    assert!(
+        terminal.text().trim_end().ends_with("$ a"),
+        "{}",
+        terminal.text()
+    );
+}

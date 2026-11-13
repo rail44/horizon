@@ -4,7 +4,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use blitz_dom::{BaseDocument, LocalName, NodeId, QualName, ns};
 use blitz_traits::events::DomEvent;
@@ -60,6 +61,14 @@ pub(crate) struct Shared {
     pub(crate) retired: RefCell<HashSet<u64>>,
     /// What runs when the shell polls the document.
     pub(crate) polled: RefCell<Vec<PollWork>>,
+    /// Whether the document was written to since the shell last asked.
+    pub(crate) written: Cell<bool>,
+    /// Whether something woke the page since the shell last asked: a
+    /// session's thread with a frame, say. The page as first built counts.
+    pub(crate) woken: Arc<AtomicBool>,
+    /// The waker handed to what runs on a poll, and the shell's that it
+    /// is around.
+    pub(crate) waker: RefCell<Option<(std::task::Waker, std::task::Waker)>>,
     /// What runs whenever the signals' effects do, under the id it is
     /// taken back out by: the effects of a graph that is not this
     /// thread's own.
@@ -83,6 +92,9 @@ impl Shared {
             laid_out: RefCell::default(),
             retired: RefCell::default(),
             polled: RefCell::default(),
+            written: Cell::new(false),
+            woken: Arc::new(AtomicBool::new(true)),
+            waker: RefCell::default(),
             effects: RefCell::default(),
         }
     }
@@ -114,14 +126,53 @@ pub(crate) fn fresh_id() -> u64 {
 
 pub(crate) fn with_document<R>(work: impl FnOnce(&mut BaseDocument) -> R) -> R {
     let shared = shared();
+    shared.written.set(true);
     let mut document = shared.document.borrow_mut();
     work(&mut document)
+}
+
+/// The shell's waker with a note taken of its being woken: what a
+/// session's thread wakes when it has something for the page.
+struct Noting {
+    woken: Arc<AtomicBool>,
+    shell: std::task::Waker,
+}
+
+impl std::task::Wake for Noting {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.woken.store(true, Ordering::Relaxed);
+        self.shell.wake_by_ref();
+    }
+}
+
+impl Shared {
+    /// The waker for what runs on a poll: the shell's, noting in `woken`
+    /// that it was woken.
+    pub(crate) fn waker(&self, shell: &std::task::Waker) -> std::task::Waker {
+        let mut kept = self.waker.borrow_mut();
+        match kept.as_ref() {
+            Some((around, noting)) if around.will_wake(shell) => noting.clone(),
+            _ => {
+                let noting = std::task::Waker::from(Arc::new(Noting {
+                    woken: self.woken.clone(),
+                    shell: shell.clone(),
+                }));
+                *kept = Some((shell.clone(), noting.clone()));
+                noting
+            }
+        }
+    }
 }
 
 /// Changes the document: now if it is free, and otherwise (from a handler
 /// the document is running, or from work done after a layout) once it is.
 pub(crate) fn write(work: impl FnOnce(&mut BaseDocument) + 'static) {
     let shared = shared();
+    shared.written.set(true);
     let Ok(mut document) = shared.document.try_borrow_mut() else {
         shared.later.borrow_mut().push(Box::new(work));
         return;

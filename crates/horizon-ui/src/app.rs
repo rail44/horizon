@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 
 use any_spawner::Executor;
 use blitz_dom::{BaseDocument, Document, DocumentConfig, EventDriver, UserAgentStylesheet};
@@ -197,16 +198,23 @@ impl Document for Live {
         self.0.dispatch(event);
     }
 
+    /// Whether there is something to draw: the document was written to,
+    /// or something woke the page (a session with a frame), since the
+    /// shell last asked. The shell asks after every event of the window,
+    /// a redraw among them, and redraws on a yes: a yes with nothing
+    /// behind it would have it redraw without end.
     fn poll(&mut self, task_context: Option<std::task::Context>) -> bool {
         let Some(context) = task_context else {
             return false;
         };
-        let polled = !self.0.shared.polled.borrow().is_empty();
-        enter(&self.0.shared);
-        for work in self.0.shared.polled.borrow_mut().iter_mut() {
-            work(context.waker());
+        let shared = &self.0.shared;
+        let waker = shared.waker(context.waker());
+        enter(shared);
+        for work in shared.polled.borrow_mut().iter_mut() {
+            work(&waker);
         }
         self.0.run_effects();
-        polled
+        let woken = shared.woken.swap(false, Ordering::Relaxed);
+        shared.written.replace(false) || woken
     }
 }
