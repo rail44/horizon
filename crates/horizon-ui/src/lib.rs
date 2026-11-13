@@ -32,6 +32,7 @@ pub mod guest;
 pub mod host;
 #[cfg(not(target_family = "wasm"))]
 mod input_method;
+mod one_of;
 #[cfg(not(target_family = "wasm"))]
 mod page;
 #[cfg(not(target_family = "wasm"))]
@@ -55,6 +56,8 @@ pub use guest::{
 };
 #[cfg(not(target_family = "wasm"))]
 pub use page::{Bounds, Page, dispatched, each_layout};
+
+pub use one_of::OneOf;
 
 #[cfg(not(target_family = "wasm"))]
 pub use blitz_dom;

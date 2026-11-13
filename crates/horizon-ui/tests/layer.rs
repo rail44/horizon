@@ -271,3 +271,55 @@ fn what_is_added_to_an_element_while_it_is_out_of_the_page_is_laid_out_when_it_i
     let size = document.get_node(added).unwrap().final_layout().size;
     assert!(size.width > 0. && size.height > 0., "{size:?}");
 }
+
+#[test]
+fn only_the_rows_a_mark_leaves_and_reaches_are_told_of_it() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use horizon_ui::OneOf;
+
+    let chosen = RwSignal::new(0usize);
+    // How many times each row worked its class out.
+    let runs = Rc::new(RefCell::new(vec![0usize; 5]));
+    let counted = runs.clone();
+    let mut rows = Vec::new();
+    let app = App::new(400, 300, CSS, || {
+        let one = OneOf::new(move || chosen.get());
+        let column = el("div").class("column");
+        for index in 0..5 {
+            let (one, counted) = (one.clone(), counted.clone());
+            let row = el("div").class_dyn(move || {
+                counted.borrow_mut()[index] += 1;
+                match one.is(&index) {
+                    true => "row chosen".to_string(),
+                    false => "row".to_string(),
+                }
+            });
+            rows.push(row);
+            column.child(row);
+        }
+        column
+    });
+    app.resolve();
+    let class = |row: El| {
+        let document = app.document();
+        let document = document.borrow();
+        let node = document.get_node(row.0).unwrap();
+        node.attr(horizon_ui::blitz_dom::local_name!("class"))
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(class(rows[0]), "row chosen");
+    assert_eq!(class(rows[3]), "row");
+    let before = runs.borrow().clone();
+
+    chosen.set(3);
+    app.run_effects();
+    assert_eq!(class(rows[0]), "row");
+    assert_eq!(class(rows[3]), "row chosen");
+    let ran: Vec<usize> = (runs.borrow().iter().zip(&before))
+        .map(|(now, before)| now - before)
+        .collect();
+    assert_eq!(ran, [1, 0, 0, 1, 0]);
+}

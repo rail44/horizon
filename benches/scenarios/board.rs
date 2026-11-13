@@ -23,6 +23,12 @@ pub fn scenarios() -> Vec<Scenario> {
             run: list_scroll,
         },
         Scenario {
+            name: "board/thread-step",
+            unit: "posts",
+            sizes: &[10, 100, 1000],
+            run: thread_step,
+        },
+        Scenario {
             name: "board/thread-scroll",
             unit: "posts",
             sizes: &[10, 100, 1000],
@@ -99,8 +105,8 @@ fn list_scroll(count: usize) -> Vec<Frame> {
     stage.frames
 }
 
-/// The wheel turned through a task's thread of `posts` posts.
-fn thread_scroll(posts: usize) -> Vec<Frame> {
+/// A task's thread of `posts` posts, laid out.
+fn thread(posts: usize) -> Stage {
     use horizon::board::thread::{CSS, view};
     let mut task = Item {
         id: 1,
@@ -130,6 +136,21 @@ fn thread_scroll(posts: usize) -> Vec<Frame> {
     for _ in 0..4 {
         stage.settle();
     }
+    stage
+}
+
+/// The cursor moved up a thread a post at a time.
+fn thread_step(posts: usize) -> Vec<Frame> {
+    let mut stage = thread(posts);
+    for _ in 0..100.min(posts - 1) {
+        stage.frame(|app| character(app, 'k'));
+    }
+    stage.frames
+}
+
+/// The wheel turned through a task's thread of `posts` posts.
+fn thread_scroll(posts: usize) -> Vec<Frame> {
+    let mut stage = thread(posts);
     for step in 0..100 {
         // Up from the end and back down to it.
         let up = if step < 50 { 120. } else { -120. };

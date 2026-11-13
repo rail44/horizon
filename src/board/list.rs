@@ -20,7 +20,9 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
 };
-use horizon_ui::{El, dispatched, each_layout, el, prevent_default, relayout, stop_propagation};
+use horizon_ui::{
+    El, OneOf, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
+};
 use keyboard_types::{Key, NamedKey};
 
 #[cfg(not(target_family = "wasm"))]
@@ -398,7 +400,18 @@ fn shown(row: &Row, now: u64) -> String {
     )
 }
 
-fn row(state: BoardList, row: &Row) -> El {
+/// Which row each of a list's marks is on. A row asks whether it is the
+/// one, and is told when that changes: a mark that moves is the business
+/// of the row it leaves and the row it reaches, not of every row.
+#[derive(Clone)]
+struct Marks {
+    selected: OneOf<Option<u64>>,
+    carried: OneOf<Option<u64>>,
+    indicator: OneOf<Option<(u64, DropHalf)>>,
+}
+
+fn row(state: BoardList, marks: &Marks, row: &Row) -> El {
+    let (marked, above, below) = (marks.clone(), marks.clone(), marks.clone());
     let (id, item) = (row.item.id, &row.item);
     let now = model::now_ms();
     let last = item.comments.last().and_then(|comment| comment.at);
@@ -438,10 +451,10 @@ fn row(state: BoardList, row: &Row) -> El {
     el("div")
         .class_dyn(move || {
             let mut class = fixed.to_string();
-            if state.selected.get() == Some(id) {
+            if marked.selected.is(&Some(id)) {
                 class += " selected";
             }
-            if state.carried.get() == Some(id) {
+            if marked.carried.is(&Some(id)) {
                 class += " carried";
             }
             class
@@ -465,11 +478,11 @@ fn row(state: BoardList, row: &Row) -> El {
         )
         .child(tail)
         .when(
-            move || state.indicator.get() == Some((id, DropHalf::Above)),
+            move || above.indicator.is(&Some((id, DropHalf::Above))),
             || el("div").class("line above"),
         )
         .when(
-            move || state.indicator.get() == Some((id, DropHalf::Below)),
+            move || below.indicator.is(&Some((id, DropHalf::Below))),
             || el("div").class("line below"),
         )
 }
@@ -520,6 +533,11 @@ pub fn view(
     // Where the dragged row's copy is, in the view.
     let ghost_at = RwSignal::new((0f32, 0f32));
 
+    let marks = Marks {
+        selected: OneOf::new(move || state.selected.get()),
+        carried: OneOf::new(move || state.carried.get()),
+        indicator: OneOf::new(move || state.indicator.get()),
+    };
     let known = held.clone();
     scroll.each(
         move || {
@@ -561,7 +579,7 @@ pub fn view(
         move |line| match line {
             Line::Task(task, _) => {
                 let id = task.item.id;
-                let element = row(state, task).on("pointerdown", move |event| {
+                let element = row(state, &marks, task).on("pointerdown", move |event| {
                     if let DomEventData::PointerDown(pointer) = &event.data {
                         pressed.set(Some((id, pointer.page_x(), pointer.page_y())));
                     }

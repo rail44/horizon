@@ -300,7 +300,7 @@ pub fn sibling_move(items: &[Item], id: u64, up: bool) -> Option<Position> {
 /// Which half of a row the cursor is in during a drag, used to decide
 /// whether the drop indicator line shows above or below the row and
 /// whether the move is `Before` or `After`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DropHalf {
     Above,
     Below,

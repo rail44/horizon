@@ -18,7 +18,9 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
 };
-use horizon_ui::{El, dispatched, each_layout, el, prevent_default, relayout, stop_propagation};
+use horizon_ui::{
+    El, OneOf, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
+};
 use horizon_workspace::SessionId;
 use keyboard_types::{Key, NamedKey};
 
@@ -442,7 +444,15 @@ fn chips(state: BoardThread, item: &Item, unread: usize) -> El {
 
 /// One post. What it shows of its own state (unread, folded) is fixed
 /// when it is built: a post is built again when that changes.
-fn post(state: BoardThread, index: usize, comment: &Comment, unread: bool, expanded: bool) -> El {
+fn post(
+    state: BoardThread,
+    current: &OneOf<Option<usize>>,
+    index: usize,
+    comment: &Comment,
+    unread: bool,
+    expanded: bool,
+) -> El {
+    let current = current.clone();
     let spoken = voice(&comment.author);
     let cells = match spoken {
         Voice::Owner => OWNER_MEASURE_CELLS,
@@ -497,7 +507,7 @@ fn post(state: BoardThread, index: usize, comment: &Comment, unread: bool, expan
         head.child(chip("accent", chrome::UNREAD));
     }
     let element = el("div")
-        .class_dyn(move || match state.cursor.get() == Some(index) {
+        .class_dyn(move || match current.is(&Some(index)) {
             true => format!("{fixed} current"),
             false => fixed.to_string(),
         })
@@ -661,6 +671,9 @@ pub fn view(
 
     // The column: the task's body, then its posts.
     let known = held.clone();
+    // Which post the cursor is on, told to the post it leaves and the one
+    // it reaches.
+    let current = OneOf::new(move || state.cursor.get());
     column
         .each(
             move || {
@@ -699,7 +712,7 @@ pub fn view(
                 )
             },
             move |(index, comment, unread, expanded)| {
-                let element = post(state, *index, comment, *unread, *expanded);
+                let element = post(state, &current, *index, comment, *unread, *expanded);
                 (known.posts.borrow_mut()).insert(comment.id.clone(), element);
                 element
             },
