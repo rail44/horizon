@@ -29,7 +29,7 @@ pub fn set_style(node: NodeId, property: &str, value: &str) {
 }
 
 pub fn append(parent: NodeId, child: NodeId) {
-    with_document(|document| document.mutate().append_children(parent, &[child]));
+    with_document(|document| crate::el::append(document, parent, child));
 }
 
 /// Puts `nodes`, in order, just before `marker` among its parent's.

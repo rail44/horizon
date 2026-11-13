@@ -39,10 +39,25 @@ impl Page<'_> {
     /// [`bounds`](Self::bounds) is its place before the rounding, and at a
     /// display scale that is not whole the two differ by part of a device
     /// pixel.
+    ///
+    /// `None` for an element that is not on the page: one taken out of it
+    /// keeps the box it had, around boxes that may be gone.
     pub fn painted_at(&self, element: El) -> Option<(f64, f64)> {
-        let at = self.0.get_node(element.0)?.absolute_position(0., 0.);
+        // What `Node::absolute_position` adds up, which takes every box on
+        // the way out to be there.
+        let mut node = self.0.get_node(element.0)?;
+        let (mut x, mut y) = (0., 0.);
+        loop {
+            let (place, scrolled) = (node.final_layout().location, node.scroll_offset());
+            x += place.x as f64 - scrolled.x;
+            y += place.y as f64 - scrolled.y;
+            match node.containing_block() {
+                Some(around) => node = self.0.get_node(around)?,
+                None => break,
+            }
+        }
         let scroll = self.0.viewport_scroll();
-        Some((at.x as f64 - scroll.x, at.y as f64 - scroll.y))
+        Some((x - scroll.x, y - scroll.y))
     }
 
     /// An element's width and height.

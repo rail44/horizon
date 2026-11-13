@@ -231,3 +231,43 @@ fn rows_scrolled_out_of_a_list_do_not_take_the_clicks_above_it() {
     click_at(&app, 100., 90.);
     assert_eq!((bar.get(), row.get()), (1, 1));
 }
+
+#[test]
+fn what_is_added_to_an_element_while_it_is_out_of_the_page_is_laid_out_when_it_is_back() {
+    let shown = RwSignal::new(false);
+    let mut parts = None;
+    let app = App::new(400, 300, CSS, || {
+        let kept = el("div")
+            .class("row")
+            .child(el("div").class("button").text("first"));
+        let kept = kept.when(
+            move || shown.get(),
+            || el("div").class("button").text("added"),
+        );
+        let root = el("div").class("column").child(kept);
+        parts = Some((root, kept));
+        root
+    });
+    let (root, kept) = parts.unwrap();
+    app.resolve();
+
+    kept.detach();
+    app.run_effects();
+    app.resolve();
+    shown.set(true);
+    app.run_effects();
+    app.resolve();
+    // Back inside a box that is new.
+    root.child(el("div").class("row").child(kept));
+    app.run_effects();
+    app.resolve();
+
+    assert_eq!(text(&app), "firstadded");
+    let document = app.document();
+    let document = document.borrow();
+    let added = (children(&app, kept).into_iter().rev())
+        .find(|id| document.get_node(*id).unwrap().element_data().is_some())
+        .unwrap();
+    let size = document.get_node(added).unwrap().final_layout().size;
+    assert!(size.width > 0. && size.height > 0., "{size:?}");
+}

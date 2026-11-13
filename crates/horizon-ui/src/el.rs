@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::rc::Rc;
 
-use blitz_dom::{LocalName, NodeId, QualName, ns};
+use blitz_dom::{BaseDocument, LocalName, NodeId, QualName, ns};
 use blitz_traits::events::DomEvent;
 use reactive_graph::effect::Effect;
 use reactive_graph::graph::untrack;
@@ -21,6 +21,44 @@ pub fn el(tag: &str) -> El {
     El(with_document(|document| {
         document.mutate().create_element(tag, Vec::new())
     }))
+}
+
+/// Puts `child` at the end of `parent`.
+///
+/// An element that was on the page and was taken out keeps the styles it
+/// had, and what is added inside it while it is out has none. Put back
+/// (itself, or inside something new), it is not looked into for what has
+/// no styles, and the layout that follows would read styles that are not
+/// there. So when something is put on the page, every styled element in
+/// it with an unstyled one inside is marked as having something to style.
+pub(crate) fn append(document: &mut BaseDocument, parent: NodeId, child: NodeId) {
+    document.mutate().append_children(parent, &[child]);
+    let on_the_page = (document.get_node(parent)).is_some_and(|node| node.flags.is_in_document());
+    if !on_the_page {
+        return;
+    }
+    let mut pending = vec![child];
+    while let Some(id) = pending.pop() {
+        let Some(node) = document.get_node(id) else {
+            continue;
+        };
+        let styled = node.primary_styles().is_some();
+        let mut marked = false;
+        for inside in &node.children {
+            let Some(found) = document.get_node(*inside) else {
+                continue;
+            };
+            if found.element_data().is_none() {
+                continue;
+            }
+            pending.push(*inside);
+            if styled && !marked && found.primary_styles().is_none() {
+                node.set_dirty_descendants();
+                node.mark_ancestors_dirty();
+                marked = true;
+            }
+        }
+    }
 }
 
 impl El {
@@ -67,7 +105,7 @@ impl El {
     }
 
     pub fn child(self, child: El) -> Self {
-        with_document(|document| document.mutate().append_children(self.0, &[child.0]));
+        with_document(|document| append(document, self.0, child.0));
         self
     }
 

@@ -1173,3 +1173,39 @@ fn a_chord_bound_to_a_command_that_cannot_run_now_is_the_views_key() {
         text.lines().any(|line| line.trim_end() == "zz")
     });
 }
+
+#[test]
+fn tabs_are_shown_in_turn_in_the_mode_with_a_split_tab_among_them() {
+    use horizon_workspace::commands::CommandId;
+    let opened = open();
+    for split in [
+        CommandId::SplitRight,
+        CommandId::SplitDown,
+        CommandId::SplitRight,
+    ] {
+        opened.shell.execute(split);
+        opened.app.run_effects();
+        opened.app.resolve();
+    }
+    opened.shell.execute(CommandId::NewTab);
+    opened.app.run_effects();
+    opened.app.resolve();
+    // The mode puts a veil over every pane, those of the tab not shown
+    // too: they are not on the page then, and come back to it with what
+    // was added inside them.
+    opened.chord();
+    for _ in 0..3 {
+        opened.named(NamedKey::Tab);
+    }
+    assert_eq!(opened.panes().len(), 4);
+    assert_eq!(opened.all("veil").len(), 4);
+    let boxes: Vec<_> = (opened.all("veil").into_iter())
+        .map(|veil| opened.bounds(veil))
+        .collect();
+    assert!(
+        boxes
+            .iter()
+            .all(|(_, _, width, height)| *width > 0. && *height > 0.),
+        "{boxes:?}"
+    );
+}
