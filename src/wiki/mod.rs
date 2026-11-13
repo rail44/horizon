@@ -36,7 +36,8 @@ use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
 };
 use horizon_ui::{
-    Callback, El, Page, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
+    Callable, Callback, Component, El, Page, dispatched, each_layout, el, prevent_default,
+    relayout, stop_propagation,
 };
 use horizon_wiki::Store;
 
@@ -216,6 +217,7 @@ struct Held {
     background: Background,
     wake: Wake,
     open_url: OpenUrl,
+    on_navigate: Option<Callback<PathBuf>>,
     /// A change of the files drawn from, noted by the watches on them.
     changed: Changed,
     watches: RefCell<Vec<notify::RecommendedWatcher>>,
@@ -232,9 +234,32 @@ struct Held {
     owner: Cell<Option<uuid::Uuid>>,
 }
 
-/// The view's state, for whoever placed it to read or drive.
-#[derive(Clone, Copy)]
+/// A page of a project's wiki, with the owner's comment threads anchored
+/// in it. Links to other pages are followed in place, with a way back.
+///
+/// The page it opens on is a value: to show another from outside,
+/// another is placed.
 pub struct Wiki {
+    /// The page's file it opens on.
+    pub path: Option<PathBuf>,
+    /// Hands a URL to the desktop.
+    pub open_url: OpenUrl,
+    /// Told of the page a link, or the way back, took the view to.
+    pub on_navigate: Option<Callback<PathBuf>>,
+    /// Makes the page take in a change of the files.
+    pub wake: Wake,
+}
+
+impl Component for Wiki {
+    fn view(self) -> El {
+        build(self).0
+    }
+}
+
+/// What the view keeps. (Read by its tests, until they are written from
+/// what is on the page.)
+#[derive(Clone, Copy)]
+pub struct State {
     pub path: RwSignal<Option<PathBuf>>,
     page: RwSignal<Option<Rc<WikiPage>>, LocalStorage>,
     error: RwSignal<Option<String>>,
@@ -293,7 +318,7 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-impl Wiki {
+impl State {
     fn held(&self) -> Rc<Held> {
         self.held.with_value(Rc::clone)
     }
@@ -308,13 +333,11 @@ impl Wiki {
         (path.file_stem()).map(|stem| stem.to_string_lossy().into_owned())
     }
 
-    /// Points the view at `path` from outside: the history is left as it
-    /// is, since the jump was not a link followed here.
-    pub fn open(&self, path: PathBuf) {
-        if self.path.get_untracked().as_ref() == Some(&path) {
-            self.reload();
-        } else {
-            self.show(path);
+    /// Goes to `path` from here: whoever placed the view is told.
+    fn go(&self, path: PathBuf) {
+        self.show(path.clone());
+        if let Some(on_navigate) = self.held().on_navigate {
+            on_navigate.run(path);
         }
     }
 
@@ -551,7 +574,7 @@ impl Wiki {
             LinkTarget::Document(path) if path.parent() == current.parent() => {
                 if path != current {
                     self.history.update(|history| history.push(current));
-                    self.show(path);
+                    self.go(path);
                 }
             }
             LinkTarget::External(url) => (self.held().open_url)(&url),
@@ -565,7 +588,7 @@ impl Wiki {
         let mut previous = None;
         self.history.update(|history| previous = history.pop());
         if let Some(previous) = previous {
-            self.show(previous);
+            self.go(previous);
         }
     }
 
@@ -604,7 +627,7 @@ impl Wiki {
 }
 
 /// The field for a comment, with what was typed so far in it.
-fn composer(state: Wiki) -> El {
+fn composer(state: State) -> El {
     let field = el("textarea").attr("rows", "2");
     let typed = state.typed.get_untracked();
     if !typed.is_empty() {
@@ -692,7 +715,7 @@ fn replying_line() -> El {
 /// The thread or new comment being worked on, over the view: the whole
 /// quote, the posts and the field. Escape, `Close` or a press outside
 /// closes it.
-fn dialog(state: Wiki) -> El {
+fn dialog(state: State) -> El {
     let scrim = el("div").class(styles::SCRIM).on("pointerdown", move |_| {
         state.cancel();
     });
@@ -750,7 +773,7 @@ fn dialog(state: Wiki) -> El {
     )
 }
 
-fn thread(state: Wiki, placed: &PlacedThread, replying: bool) -> El {
+fn thread(state: State, placed: &PlacedThread, replying: bool) -> El {
     let root = placed.thread.root.id.clone();
     let open = !state.in_dialog() && state.expanded.with(|expanded| expanded.contains(&root));
     let focused = state.focused.get_untracked().as_ref() == Some(&root);
@@ -803,8 +826,14 @@ fn thread(state: Wiki, placed: &PlacedThread, replying: bool) -> El {
 }
 
 /// Builds the view, opened on `path`: a page's file in a project's wiki.
-pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) {
-    let state = Wiki {
+pub fn build(given: Wiki) -> (El, State) {
+    let Wiki {
+        path,
+        open_url,
+        on_navigate,
+        wake,
+    } = given;
+    let state = State {
         path: RwSignal::new(None),
         page: RwSignal::new_local(None),
         error: RwSignal::new(None),
@@ -820,6 +849,7 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
         tops: RwSignal::new(HashMap::new()),
         reach: RwSignal::new(0.),
         held: StoredValue::new_local(Rc::new(Held {
+            on_navigate,
             background: Background::new(wake.clone()),
             wake,
             open_url,

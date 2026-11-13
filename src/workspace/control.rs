@@ -185,15 +185,8 @@ impl Shell {
         // A pane that shows the file already reads it again.
         let shown = (self.model).with_untracked(|model| model.document_pane(kind, &path));
         if let Some(pane) = shown {
-            match kind {
-                ViewKind::Wiki => {
-                    if let Some(view) = self.wiki(pane) {
-                        view.open(path);
-                    }
-                }
-                // (A view opens on its file: the pane's is made again.)
-                _ => self.remake_pane(pane),
-            }
+            // (A view opens on its file: the pane's is made again.)
+            self.remake_pane(pane);
             if activate {
                 self.change(|model| {
                     if let Some((tab, pane)) = model.pane_position(pane) {

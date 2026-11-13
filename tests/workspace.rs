@@ -826,7 +826,6 @@ fn the_theme_settings_apply_a_seed_as_it_changes_and_save_it_when_asked() {
 fn the_control_plane_opens_a_wiki_page_in_a_pane() {
     use horizon_control::contract::{EnvelopeBody, Invoke};
     use horizon_control::host::executor::ControlRequest;
-    use horizon_ui::reactive_graph::traits::GetUntracked;
     use horizon_workspace::{PaneKind, ViewKind};
 
     let directory = std::env::temp_dir().join(format!("hzb-wiki-{}", std::process::id()));
@@ -849,8 +848,10 @@ fn the_control_plane_opens_a_wiki_page_in_a_pane() {
         opened.model(|model| model.pane_kind(pane)),
         Some(PaneKind::View(ViewKind::Wiki))
     );
-    let view = opened.shell.wiki(pane).expect("a wiki view");
-    assert_eq!(view.path.get_untracked(), Some(page.clone()));
+    assert_eq!(
+        opened.model(|model| model.pane_document(pane).map(std::path::PathBuf::from)),
+        Some(page.clone())
+    );
     opened.until("the page", || opened.all("heading").len() == 1);
     // The tab is named for the page's file, and the pane comes back on it.
     assert_eq!(

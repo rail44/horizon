@@ -50,7 +50,7 @@ use crate::preview::{self, Preview};
 use crate::terminal::{self, Session, Terminal};
 use crate::theme_settings;
 use crate::wake::Wake;
-use crate::wiki::{self, Wiki};
+use crate::wiki::Wiki;
 
 mod arrangement;
 mod board_sessions;
@@ -329,7 +329,6 @@ struct PaneView {
     owner: Owner,
     terminal: Option<(SessionId, Terminal)>,
     agent: Option<Agent>,
-    wiki: Option<Wiki>,
     board_list: Option<BoardList>,
     board_thread: Option<BoardThread>,
     preview: Option<Preview>,
@@ -483,7 +482,7 @@ impl Shell {
         let (shell, kept) = (*self, self.kept());
         let owner = kept.owner.child();
         let (mut terminal, mut agent) = (None, None);
-        let (mut board_list, mut board_thread, mut wiki_page) = (None, None, None);
+        let (mut board_list, mut board_thread) = (None, None);
         let mut shown_preview = None;
         let start = |session| {
             kept.starting
@@ -585,24 +584,19 @@ impl Shell {
                 (PaneKind::View(ViewKind::Wiki), ..) => {
                     let path = (self.model)
                         .with_untracked(|model| model.pane_document(id).map(PathBuf::from));
-                    let (root, view) = wiki::view(path, kept.open_url.clone(), kept.wake.clone());
-                    // The page it shows is the pane's in the model, as a
-                    // Markdown pane's file is.
-                    Effect::new(move |_| {
-                        let Some(path) = view.path.get() else {
-                            return;
-                        };
-                        let kept = shell
-                            .model
-                            .with_untracked(|model| model.pane_document(id) == Some(&path));
-                        if !kept {
+                    Wiki {
+                        path,
+                        open_url: kept.open_url.clone(),
+                        wake: kept.wake.clone(),
+                        // The page it shows is the pane's in the model, as
+                        // a Markdown pane's file is.
+                        on_navigate: Some(Callback::new(move |path: PathBuf| {
                             shell.model.update(|model| {
                                 model.set_pane_document(id, path);
                             });
-                        }
-                    });
-                    wiki_page = Some(view);
-                    root
+                        })),
+                    }
+                    .view()
                 }
                 (PaneKind::View(ViewKind::ThemeSettings), ..) => {
                     let config = kept.config.borrow().clone();
@@ -695,7 +689,6 @@ impl Shell {
             owner,
             terminal,
             agent,
-            wiki: wiki_page,
             board_list,
             board_thread,
             preview: shown_preview,
@@ -1041,11 +1034,6 @@ impl Shell {
             }
             model.exit_workspace_mode();
         });
-    }
-
-    /// The wiki view a pane shows.
-    pub fn wiki(&self, pane: PaneId) -> Option<Wiki> {
-        self.kept().panes.borrow().get(&pane)?.wiki
     }
 
     /// A new pane at `placement` on the overview of the wiki of the

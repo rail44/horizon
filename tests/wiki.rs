@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use horizon::wake::Wake;
-use horizon::wiki::{CommentLayout, Target, Wiki, view};
+use horizon::wiki::{CommentLayout, State, Target, Wiki, build};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
@@ -29,7 +29,7 @@ struct Opened {
     _scratch: Scratch,
     store: Store,
     app: App,
-    wiki: Wiki,
+    wiki: State,
 }
 
 const PAGE: &str = "---\ntitle: Sandbox\nstatus: draft\n---\n\
@@ -55,7 +55,12 @@ fn open_at(name: &str, width: u32) -> Opened {
     let path = store.page_path("sandbox").unwrap();
     let mut wiki = None;
     let app = App::new(width, 700, horizon_theme_css::CSS, || {
-        let (root, state) = view(Some(path), Rc::new(|_| {}), Wake::default());
+        let (root, state) = build(Wiki {
+            path: Some(path),
+            open_url: Rc::new(|_| {}),
+            on_navigate: None,
+            wake: Wake::default(),
+        });
         wiki = Some(state);
         themed(Theme::built_in, root.focus())
     });
