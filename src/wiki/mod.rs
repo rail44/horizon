@@ -36,11 +36,11 @@ use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
 };
 use horizon_ui::{
-    El, Page, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
+    Component, El, Page, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
 };
 use horizon_wiki::Store;
 
-use crate::parts::{ButtonKind, ButtonSize, Tone, button, chip};
+use crate::parts::{Button, Chip, Tone};
 use horizon_wiki::anchor::Anchor;
 use horizon_wiki::annotation::{Agent, AgentType, Annotation, markdown_body};
 use horizon_wiki::view_model::{PlacedThread, WikiPage};
@@ -774,10 +774,16 @@ fn thread(state: Wiki, placed: &PlacedThread, replying: bool) -> El {
         .child(el("span").class(styles::COUNT).text(&count))
         .on("click", move |_| state.toggle_thread(toggled.clone()));
     if matches!(placed.anchor, Anchor::Moved { exact: false, .. }) {
-        head.child(chip(Tone::Muted, CHANGED_SINCE));
+        head.child(Chip {
+            tone: Tone::Muted,
+            text: CHANGED_SINCE,
+        });
     }
     if replying && !open {
-        head.child(chip(Tone::Accent, REPLYING));
+        head.child(Chip {
+            tone: Tone::Accent,
+            text: REPLYING,
+        });
     }
     let card = el("div")
         .class((styles::THREAD, focused.then_some(styles::FOCUSED)))
@@ -888,7 +894,10 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
             |fields| {
                 let row = el("div").class(styles::FIELDS);
                 for (key, value) in fields {
-                    row.child(chip(Tone::Muted, &format!("{key} {value}")));
+                    row.child(Chip {
+                        tone: Tone::Muted,
+                        text: &format!("{key} {value}"),
+                    });
                 }
                 row
             },
@@ -961,14 +970,18 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Wiki) 
             // selection it is an offer for.)
             Line::Offer => el("div")
                 .class(styles::OFFER)
-                .child(button(ButtonKind::Plain, ButtonSize::Regular, COMMENT).on(
-                    "pointerdown",
-                    move |_| {
+                .child(
+                    Button {
+                        label: COMMENT,
+                        ..Default::default()
+                    }
+                    .view()
+                    .on("pointerdown", move |_| {
                         state.comment_on_selection();
                         prevent_default();
                         stop_propagation();
-                    },
-                ))
+                    }),
+                )
                 .child(el("span").class(styles::KEY).text("c")),
             Line::New(chars) => {
                 let quote = one_line(&page.quote_of(chars.clone()));

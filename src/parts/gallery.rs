@@ -1,9 +1,9 @@
 //! Every part in every kind it has, on one page: what the parts are
 //! looked at on (the `parts` preview, `tests/parts.rs`'s picture).
 
-use horizon_ui::{El, el};
+use horizon_ui::{Component, El, el};
 
-use super::{ButtonKind, ButtonSize, Tone, button, chip, field, prompt};
+use super::{Button, ButtonKind, ButtonSize, Chip, Tone, field, prompt};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -37,24 +37,48 @@ fn part(name: &str, lines: Vec<(&str, Vec<El>)>) -> El {
 }
 
 fn buttons() -> El {
-    use ButtonKind::{Plain, Primary};
-    use ButtonSize::{Regular, Small};
+    use ButtonKind::Primary;
+    use ButtonSize::Small;
     part(
         "button",
         vec![
             (
                 "the one thing to do next, and the others beside it",
                 vec![
-                    button(Primary, Regular, "Reply"),
-                    button(Plain, Regular, "Close"),
-                    button(Plain, Regular, "Session"),
+                    Button {
+                        label: "Reply",
+                        kind: Primary,
+                        ..Default::default()
+                    }
+                    .view(),
+                    Button {
+                        label: "Close",
+                        ..Default::default()
+                    }
+                    .view(),
+                    Button {
+                        label: "Session",
+                        ..Default::default()
+                    }
+                    .view(),
                 ],
             ),
             (
                 "small, in a line of text",
                 vec![
-                    button(Plain, Small, "Stop"),
-                    button(Primary, Small, "Approve"),
+                    Button {
+                        label: "Stop",
+                        size: Small,
+                        ..Default::default()
+                    }
+                    .view(),
+                    Button {
+                        label: "Approve",
+                        kind: Primary,
+                        size: Small,
+                        ..Default::default()
+                    }
+                    .view(),
                 ],
             ),
         ],
@@ -128,17 +152,50 @@ pub fn gallery() -> El {
             vec![
                 (
                     "every tone",
-                    tones.iter().map(|(tone, name)| chip(*tone, name)).collect(),
+                    tones
+                        .iter()
+                        .map(|(tone, name)| {
+                            Chip {
+                                tone: *tone,
+                                text: name,
+                            }
+                            .view()
+                        })
+                        .collect(),
                 ),
                 (
                     "as views say things",
                     vec![
-                        chip(Tone::Accent, "doing"),
-                        chip(Tone::Info, "review"),
-                        chip(Tone::Accent, "3 unread"),
-                        chip(Tone::Danger, "Failed"),
-                        chip(Tone::Muted, "Stopped"),
-                        chip(Tone::Muted, "Enter"),
+                        Chip {
+                            tone: Tone::Accent,
+                            text: "doing",
+                        }
+                        .view(),
+                        Chip {
+                            tone: Tone::Info,
+                            text: "review",
+                        }
+                        .view(),
+                        Chip {
+                            tone: Tone::Accent,
+                            text: "3 unread",
+                        }
+                        .view(),
+                        Chip {
+                            tone: Tone::Danger,
+                            text: "Failed",
+                        }
+                        .view(),
+                        Chip {
+                            tone: Tone::Muted,
+                            text: "Stopped",
+                        }
+                        .view(),
+                        Chip {
+                            tone: Tone::Muted,
+                            text: "Enter",
+                        }
+                        .view(),
                     ],
                 ),
             ],

@@ -32,6 +32,7 @@ use reactive_graph::graph::untrack;
 use reactive_graph::owner::{Owner, on_cleanup};
 
 use crate::class::Classes;
+use crate::component::Component;
 
 #[doc(hidden)]
 pub mod bindings {
@@ -170,7 +171,9 @@ impl El {
         self
     }
 
-    pub fn child(self, child: El) -> Self {
+    /// Puts a component's element at the end of this one's.
+    pub fn child(self, child: impl Component) -> Self {
+        let child = child.view();
         host::append(id(self), id(child));
         self
     }

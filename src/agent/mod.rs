@@ -16,9 +16,9 @@ use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, WithValue};
 use horizon_ui::windowed::{follow_tail, windowed};
-use horizon_ui::{El, dispatched, el, prevent_default, stop_propagation};
+use horizon_ui::{Callback, Component, El, dispatched, el, prevent_default, stop_propagation};
 
-use crate::parts::{self, ButtonKind, ButtonSize, button, chip, chip_of, field, prompt_of};
+use crate::parts::{self, Button, ButtonKind, ButtonSize, Chip, field, prompt_of};
 use keyboard_types::{Key, NamedKey};
 
 use horizon_agent_display::chrome;
@@ -413,7 +413,12 @@ fn notice_line(notice: &Notice) -> El {
 
 /// The running session's state, following it.
 fn session_state_chip(state: Agent) -> El {
-    chip_of(parts::Tone::Accent).text_dyn(move || {
+    Chip {
+        tone: parts::Tone::Accent,
+        text: "",
+    }
+    .view()
+    .text_dyn(move || {
         if state.status.get() == Status::WaitingForApproval {
             chrome::WAITING_FOR_APPROVAL.to_string()
         } else {
@@ -423,10 +428,16 @@ fn session_state_chip(state: Agent) -> El {
 }
 
 fn stop_button(state: Agent) -> El {
-    button(ButtonKind::Plain, ButtonSize::Small, chrome::STOP).on("click", move |_| {
-        stop_propagation();
-        state.ask(Asked::Stop);
-    })
+    Button {
+        label: chrome::STOP,
+        size: ButtonSize::Small,
+        on_press: Some(Callback::new(move |()| {
+            stop_propagation();
+            state.ask(Asked::Stop);
+        })),
+        ..Default::default()
+    }
+    .view()
 }
 
 fn thinking() -> El {
@@ -496,7 +507,7 @@ fn turn_card(turn: &Turn, state: Agent) -> El {
         if label.is_some() || elapsed.is_some() {
             let end = el("div").class(styles::END);
             if let Some((tone, label)) = label {
-                end.child(chip(tone, label));
+                end.child(Chip { tone, text: label });
             }
             if let Some(elapsed) = elapsed {
                 end.child(el("span").text(elapsed));
@@ -559,7 +570,10 @@ fn receipt_block(receipt: Rc<Receipt>, carries: bool, state: Agent) -> El {
         .when(carried, move || session_state_chip(state))
         .child(el("span").text(&receipt_line_text(&receipt)));
     if failed > 0 {
-        line.child(chip(parts::Tone::Danger, &chrome::failed_calls(failed)));
+        line.child(Chip {
+            tone: parts::Tone::Danger,
+            text: &chrome::failed_calls(failed),
+        });
     }
     line.when(carried, || el("span").class(styles::SPACER))
         .when(carried, move || stop_button(state));
@@ -634,25 +648,43 @@ fn approval_block(approval: &Approval, state: Agent) -> El {
     let (approve, deny) = (approval.id.clone(), approval.id.clone());
     el("div")
         .class(styles::APPROVAL)
-        .child(chip(parts::Tone::Accent, chrome::APPROVAL_NEEDED))
+        .child(Chip {
+            tone: parts::Tone::Accent,
+            text: chrome::APPROVAL_NEEDED,
+        })
         .child(el("span").class(styles::REASON).text(&approval.reason))
-        .child(chip(parts::Tone::Muted, "Enter"))
+        .child(Chip {
+            tone: parts::Tone::Muted,
+            text: "Enter",
+        })
         .child(
-            button(ButtonKind::Primary, ButtonSize::Regular, chrome::APPROVE)
-                .class("approve")
-                .on("click", move |_| {
+            Button {
+                label: chrome::APPROVE,
+                kind: ButtonKind::Primary,
+                on_press: Some(Callback::new(move |()| {
                     stop_propagation();
                     state.ask(Asked::Approve(approve.clone()));
-                }),
+                })),
+                ..Default::default()
+            }
+            .view()
+            .class("approve"),
         )
-        .child(chip(parts::Tone::Muted, "Esc"))
+        .child(Chip {
+            tone: parts::Tone::Muted,
+            text: "Esc",
+        })
         .child(
-            button(ButtonKind::Plain, ButtonSize::Regular, chrome::DENY)
-                .class("deny")
-                .on("click", move |_| {
+            Button {
+                label: chrome::DENY,
+                on_press: Some(Callback::new(move |()| {
                     stop_propagation();
                     state.ask(Asked::Deny(deny.clone()));
-                }),
+                })),
+                ..Default::default()
+            }
+            .view()
+            .class("deny"),
         )
 }
 

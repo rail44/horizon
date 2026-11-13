@@ -14,9 +14,9 @@ use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
-use horizon_ui::{El, dispatched, each_layout, el, relayout};
+use horizon_ui::{Component, El, dispatched, each_layout, el, relayout};
 
-use crate::parts::{Tone, chip};
+use crate::parts::{Chip, Tone};
 use horizon_workspace::markdown::{LinkTarget, parse, resolve_link};
 use keyboard_types::{Key, NamedKey};
 
@@ -181,7 +181,13 @@ pub fn view(path: Option<PathBuf>, open_url: OpenUrl, wake: Wake) -> (El, Markdo
                 el("div").class(styles::CHIPS).each(
                     move || state.fields.get(),
                     |field| field.clone(),
-                    |(key, value)| chip(Tone::Muted, &format!("{key} {value}")),
+                    |(key, value)| {
+                        Chip {
+                            tone: Tone::Muted,
+                            text: &format!("{key} {value}"),
+                        }
+                        .view()
+                    },
                 )
             },
         );

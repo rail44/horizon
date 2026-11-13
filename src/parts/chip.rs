@@ -1,6 +1,6 @@
 //! A chip: a word or two on a tinted ground, in a tone.
 
-use horizon_ui::{El, el};
+use horizon_ui::{Component, El, el};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -19,8 +19,9 @@ mod styles {
 }
 
 /// What a chip, or a status's dot, is drawn in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tone {
+    #[default]
     Muted,
     Accent,
     Success,
@@ -29,20 +30,28 @@ pub enum Tone {
     Danger,
 }
 
-/// A chip saying `text`, in `tone`.
-pub fn chip(tone: Tone, text: &str) -> El {
-    chip_of(tone).text(text)
+/// A chip saying `text`, in `tone`. With no text, its words are whoever
+/// placed it's to put in.
+#[derive(Default)]
+pub struct Chip<'a> {
+    pub tone: Tone,
+    pub text: &'a str,
 }
 
-/// A chip in `tone` whose words whoever asked puts in it.
-pub fn chip_of(tone: Tone) -> El {
-    let tone = match tone {
-        Tone::Muted => styles::MUTED,
-        Tone::Accent => styles::ACCENT,
-        Tone::Success => styles::SUCCESS,
-        Tone::Info => styles::INFO,
-        Tone::Warning => styles::WARNING,
-        Tone::Danger => styles::DANGER,
-    };
-    el("span").class((styles::CHIP, tone))
+impl Component for Chip<'_> {
+    fn view(self) -> El {
+        let tone = match self.tone {
+            Tone::Muted => styles::MUTED,
+            Tone::Accent => styles::ACCENT,
+            Tone::Success => styles::SUCCESS,
+            Tone::Info => styles::INFO,
+            Tone::Warning => styles::WARNING,
+            Tone::Danger => styles::DANGER,
+        };
+        let chip = el("span").class((styles::CHIP, tone));
+        match self.text.is_empty() {
+            true => chip,
+            false => chip.text(self.text),
+        }
+    }
 }

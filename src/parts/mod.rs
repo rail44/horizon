@@ -22,8 +22,8 @@ mod gallery;
 mod select;
 mod slider;
 
-pub use button::{ButtonKind, ButtonSize, button};
-pub use chip::{Tone, chip, chip_of};
+pub use button::{Button, ButtonKind, ButtonSize};
+pub use chip::{Chip, Tone};
 pub use color::{color_picker, hex, parse_hex};
 pub use field::{field, prompt, prompt_of};
 pub use gallery::gallery;

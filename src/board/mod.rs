@@ -15,13 +15,13 @@ use std::pin::Pin;
 use horizon_board::{Item, Store, StoreError};
 use horizon_board_view::activity::{BoardSessionActivity, task_session_state};
 use horizon_board_view::chrome;
-use horizon_ui::El;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::With;
+use horizon_ui::{Component, El};
 use horizon_workspace::SessionId;
 
 use crate::background::Background;
-use crate::parts::{Tone, chip};
+use crate::parts::{Chip, Tone};
 
 pub mod list;
 #[cfg(not(target_family = "wasm"))]
@@ -185,7 +185,12 @@ fn activity_chip(into: El, item: &Item, states: Activity) {
                 _ => Tone::Muted,
             };
             // (Named for whoever looks for it; no rule is about it.)
-            chip(tone, state.label()).class("activity")
+            Chip {
+                tone,
+                text: state.label(),
+            }
+            .view()
+            .class("activity")
         },
     );
 }

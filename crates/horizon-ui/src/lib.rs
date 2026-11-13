@@ -21,6 +21,7 @@ mod app;
 #[cfg(not(target_family = "wasm"))]
 mod borders;
 mod class;
+mod component;
 #[cfg(not(target_family = "wasm"))]
 mod dispatch;
 #[cfg(not(target_family = "wasm"))]
@@ -61,6 +62,7 @@ pub use guest::{
 pub use page::{Bounds, Page, dispatched, each_layout};
 
 pub use class::{Class, Classes, Sheet};
+pub use component::{Callable, Callback, Component};
 pub use horizon_ui_macros::css_module;
 pub use one_of::OneOf;
 

@@ -21,7 +21,7 @@ use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
 };
 use horizon_ui::{
-    El, OneOf, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
+    Component, El, OneOf, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
 };
 use keyboard_types::{Key, NamedKey};
 
@@ -29,7 +29,7 @@ use keyboard_types::{Key, NamedKey};
 use super::follow;
 use super::{Activity, Job, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
-use crate::parts::{self, Tone, chip};
+use crate::parts::{self, Chip, Tone};
 
 // The measurements are in the theme's scaled lengths (`--u8` is 8 px at
 // the reference type size).
@@ -434,13 +434,20 @@ fn row(state: BoardList, marks: &Marks, row: &Row) -> El {
     // The unread posts folded away under the row, beside its own.
     if row.subtree_unread > row.unread {
         let unread = chrome::unread_count(row.subtree_unread);
-        tail.child(chip(Tone::Accent, &unread));
+        tail.child(Chip {
+            tone: Tone::Accent,
+            text: &unread,
+        });
     }
     activity_chip(tail, item, state.activity);
     let tone = tone(item);
     tail.child(match row.finished || status.is_empty() {
         true => el("div").class((styles::STATUS_DOT, dot(tone))),
-        false => chip(tone, &status),
+        false => Chip {
+            tone,
+            text: &status,
+        }
+        .view(),
     });
     let gutter = el("div").class(styles::GUTTER);
     if row.subtree_unread > 0 {
@@ -594,7 +601,10 @@ pub fn view(
                     .on("click", move |_| state.execute(ListCommand::ToggleFinished));
                 if *unread > 0 {
                     let unread = chrome::unread_count(*unread);
-                    band.child(chip(Tone::Accent, &unread));
+                    band.child(Chip {
+                        tone: Tone::Accent,
+                        text: &unread,
+                    });
                 }
                 band
             }

@@ -11,6 +11,7 @@ use reactive_graph::graph::untrack;
 use reactive_graph::owner::Owner;
 
 use crate::class::Classes;
+use crate::component::Component;
 use crate::shared::{drop_node, name, shared, with_document, write};
 
 /// An element being built: a node of the document already.
@@ -115,7 +116,9 @@ impl El {
         self
     }
 
-    pub fn child(self, child: El) -> Self {
+    /// Puts a component's element at the end of this one's.
+    pub fn child(self, child: impl Component) -> Self {
+        let child = child.view();
         with_document(|document| append(document, self.0, child.0));
         self
     }

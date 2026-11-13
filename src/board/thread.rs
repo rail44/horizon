@@ -19,7 +19,8 @@ use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Update, With, WithUntracked, WithValue,
 };
 use horizon_ui::{
-    El, OneOf, dispatched, each_layout, el, prevent_default, relayout, stop_propagation,
+    Callback, Component, El, OneOf, dispatched, each_layout, el, prevent_default, relayout,
+    stop_propagation,
 };
 use horizon_workspace::SessionId;
 use keyboard_types::{Key, NamedKey};
@@ -28,7 +29,7 @@ use super::list::key_name;
 use super::{Activity, Job, Source, activity_chip, follow, run, tone, write_refusal};
 use crate::background::Background;
 use crate::markdown::{Headings, render};
-use crate::parts::{ButtonKind, ButtonSize, Tone, button, chip, field, prompt};
+use crate::parts::{Button, ButtonKind, Chip, Tone, field, prompt};
 
 /// How many cells wide a post is taken to be when deciding whether to
 /// fold it: an owner's is narrower by its indent.
@@ -348,7 +349,13 @@ fn author_label(author: &str) -> String {
 }
 
 fn action(kind: ButtonKind, label: &str, state: BoardThread, command: ThreadCommand) -> El {
-    button(kind, ButtonSize::Regular, label).on("click", move |_| state.execute(command.clone()))
+    Button {
+        label,
+        kind,
+        on_press: Some(Callback::new(move |()| state.execute(command.clone()))),
+        ..Default::default()
+    }
+    .view()
 }
 
 /// The task's actions: the same wherever in the band they are.
@@ -390,11 +397,17 @@ fn chips(state: BoardThread, item: &Item, unread: usize) -> El {
     let line = el("div").class(styles::CHIPS);
     let status = status_text(item);
     if !status.is_empty() {
-        line.child(chip(tone(item), &status));
+        line.child(Chip {
+            tone: tone(item),
+            text: &status,
+        });
     }
     activity_chip(line, item, state.activity);
     if unread > 0 {
-        line.child(chip(Tone::Accent, &chrome::unread_count(unread)));
+        line.child(Chip {
+            tone: Tone::Accent,
+            text: &chrome::unread_count(unread),
+        });
     }
     if let Some(at) = item.comments.last().and_then(|comment| comment.at) {
         let updated = chrome::updated(&chrome::relative_time(at, model::now_ms()));
@@ -466,7 +479,10 @@ fn post(
     }
     head.child(on_hover);
     if unread {
-        head.child(chip(Tone::Accent, chrome::UNREAD));
+        head.child(Chip {
+            tone: Tone::Accent,
+            text: chrome::UNREAD,
+        });
     }
     let element = el("div")
         .class((styles::POST, voice))
