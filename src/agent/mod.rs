@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use horizon_ui::blitz_traits::events::DomEventData;
+use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, WithValue};
@@ -152,9 +153,9 @@ pub struct Agent {
 }
 
 impl Agent {
-    /// Replaces what the view shows. A unit equal to the one in its place
-    /// stays the allocation it was, so its elements stay too.
-    pub fn set_transcript(&self, transcript: Transcript) {
+    /// Takes in what the view is given to show. A unit equal to the one
+    /// in its place stays the allocation it was, so its elements stay too.
+    fn take(&self, transcript: Transcript) {
         let old = self.units.get_untracked();
         let units: Vec<Rc<Unit>> = (transcript.units.into_iter().enumerate())
             .map(|(index, unit)| match old.get(index) {
@@ -227,11 +228,15 @@ pub enum Column {
 }
 
 /// Builds the view, empty; `ask` hears what the owner asks for.
-pub fn view(ask: impl Fn(Asked) + 'static) -> (El, Agent) {
-    view_with(ask, Column::Windowed)
+/// The session as the view is given it: it follows it. (Of this thread:
+/// the units are shared, not sent.)
+pub type Shown = Signal<Option<Transcript>, LocalStorage>;
+
+pub fn view(shown: Shown, ask: impl Fn(Asked) + 'static) -> (El, Agent) {
+    view_with(shown, ask, Column::Windowed)
 }
 
-pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
+pub fn view_with(shown: Shown, ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
     let state = Agent {
         units: RwSignal::new_local(Vec::new()),
         status: RwSignal::new(Status::Idle),
@@ -246,6 +251,11 @@ pub fn view_with(ask: impl Fn(Asked) + 'static, column: Column) -> (El, Agent) {
         column: el("div").class(styles::COLUMN),
         field: el("textarea"),
     };
+    Effect::new(move |_| {
+        if let Some(transcript) = shown.get() {
+            state.take(transcript);
+        }
+    });
 
     let units = move || (state.units.get().into_iter().enumerate()).collect::<Vec<_>>();
     // A unit kept from the last update is the allocation it was.

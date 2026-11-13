@@ -1,10 +1,10 @@
 //! The agent view over a made-up session, with histories of several
 //! lengths.
 
-use horizon::agent::{Agent, view};
+use horizon::agent::view;
 use horizon_theme_css::{Theme, themed};
 
-use crate::sample::Session;
+use crate::sample::{Given, Session};
 use crate::{Frame, Scenario, Stage, commit, wheel};
 
 pub fn scenarios() -> Vec<Scenario> {
@@ -37,25 +37,28 @@ pub fn scenarios() -> Vec<Scenario> {
     ]
 }
 
-fn open() -> (Stage, Agent) {
-    let mut agent = None;
+/// The view on a page, with what it is given to show.
+fn open() -> (Stage, Given) {
+    // (Made on the page: a signal is its page's.)
+    let mut given = None;
     let stage = Stage::new(900, 700, horizon_theme_css::CSS, || {
-        let (root, state) = view(|_| {});
+        let shown = Given::new_local(None);
+        given = Some(shown);
+        let (root, state) = view(shown.into(), |_| {});
         state.field.focus();
-        agent = Some(state);
         themed(Theme::built_in, root)
     });
-    (stage, agent.unwrap())
+    (stage, given.unwrap())
 }
 
-fn opened_on(session: &Session) -> (Stage, Agent) {
-    let (mut stage, agent) = open();
-    session.show(&agent);
+fn opened_on(session: &Session) -> (Stage, Given) {
+    let (mut stage, shown) = open();
+    session.show(shown);
     // The list is built for what is in view over a few layouts.
     for _ in 0..4 {
         stage.settle();
     }
-    (stage, agent)
+    (stage, shown)
 }
 
 /// A session's whole history handed to a view that had none: what
@@ -64,8 +67,8 @@ fn show(turns: usize) -> Vec<Frame> {
     let session = Session::long(turns);
     let mut frames = Vec::new();
     for _ in 0..5 {
-        let (mut stage, agent) = open();
-        stage.frame(|_| session.show(&agent));
+        let (mut stage, shown) = open();
+        stage.frame(|_| session.show(shown));
         frames.append(&mut stage.frames);
     }
     frames
@@ -74,13 +77,13 @@ fn show(turns: usize) -> Vec<Frame> {
 /// An answer arriving a few words at a time after the history.
 fn streaming(turns: usize) -> Vec<Frame> {
     let mut session = Session::long(turns);
-    let (mut stage, agent) = opened_on(&session);
+    let (mut stage, shown) = opened_on(&session);
     session.begin_turn("もう一度、同じ箇所を確認してほしい");
-    session.show(&agent);
+    session.show(shown);
     stage.settle();
     for chunk in 0..300 {
         session.stream(&format!("確認した内容の {chunk} 番目です。"));
-        stage.frame(|_| session.show(&agent));
+        stage.frame(|_| session.show(shown));
     }
     stage.frames
 }

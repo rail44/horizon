@@ -86,8 +86,11 @@ fn open_at(items: Vec<Item>, task: u64, width: u32) -> Opened {
         .map(|item| BoardEvent::ItemStored { id: item.id, item });
     let source = Source::Ready(Store::in_memory(sample_envelopes(events)));
     let mut thread = None;
-    let shown = RwSignal::new(task);
+    // (Made on the page: a signal is its page's.)
+    let mut given = None;
     let app = App::new(width, 600, horizon_theme_css::CSS, || {
+        let shown = RwSignal::new(task);
+        given = Some(shown);
         let (root, state) = view(source, Background::default(), shown.into(), move |asked| {
             log.borrow_mut().push(asked)
         });
@@ -97,7 +100,7 @@ fn open_at(items: Vec<Item>, task: u64, width: u32) -> Opened {
     let opened = Opened {
         app,
         thread: thread.unwrap(),
-        shown,
+        shown: given.unwrap(),
         asked,
     };
     // The store is read off the UI thread.

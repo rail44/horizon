@@ -9,6 +9,8 @@ use std::rc::Rc;
 use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::agent_model::ToolCallIdentity;
 use horizon_shell_runtime::agent_view::adapter::SettledUnits;
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::Set;
 use horizon_ui::{El, each_layout, relayout};
 
 use super::session::AgentSession;
@@ -20,7 +22,9 @@ pub fn live(session: Rc<AgentSession>, switch_model: impl Fn() + 'static) -> (El
     // The approvals on screen, by the ids the view knows them by.
     let approvals = Rc::new(RefCell::new(HashMap::<String, ToolCallIdentity>::new()));
     let (asking, known) = (session.clone(), approvals.clone());
-    let (root, agent) = view(move |asked| {
+    // The session as the view shows it: adapted below whenever it changed.
+    let shown = RwSignal::new_local(None);
+    let (root, agent) = view(shown.into(), move |asked| {
         let identity = |id: &str| known.borrow().get(id).cloned();
         let command = match asked {
             Asked::Send(text) => Some(AgentCommand::Prompt { text }),
@@ -46,7 +50,7 @@ pub fn live(session: Rc<AgentSession>, switch_model: impl Fn() + 'static) -> (El
         };
         seen = revision;
         *approvals.borrow_mut() = adapted.approvals;
-        agent.set_transcript(adapted.transcript);
+        shown.set(Some(adapted.transcript));
         // What it shows now is laid out before the page is painted.
         relayout();
     });

@@ -41,11 +41,14 @@ fn open() -> Opened {
 /// The view in a box with `style`: where on the page it is.
 fn open_at(style: &str) -> Opened {
     let session: Rc<Session> = support::shell("sh", TerminalSize::new(80, 24)).into();
-    let look = RwSignal::new(Theme::built_in().terminal());
+    // (Made on the page: a signal is its page's.)
+    let mut followed = None;
     let opened_urls = Rc::new(RefCell::new(Vec::new()));
     let (given, log) = (session.clone(), opened_urls.clone());
     let mut terminal = None;
     let app = App::new(900, 540, "", || {
+        let look = RwSignal::new(Theme::built_in().terminal());
+        followed = Some(look);
         let (root, state) = build(TerminalView {
             session: given,
             look: look.into(),
@@ -65,7 +68,7 @@ fn open_at(style: &str) -> Opened {
         app,
         terminal: terminal.unwrap(),
         session,
-        look,
+        look: followed.unwrap(),
         opened_urls,
     };
     // The shell's first prompt.

@@ -21,6 +21,8 @@ use sample::Session;
 struct Opened {
     app: App,
     agent: Agent,
+    /// What the view is given to show.
+    shown: sample::Given,
     asked: Rc<RefCell<Vec<Asked>>>,
 }
 
@@ -28,10 +30,14 @@ fn open(session: &Session) -> Opened {
     let asked = Rc::new(RefCell::new(Vec::new()));
     let log = asked.clone();
     let mut agent = None;
+    // (Made on the page: a signal is its page's.)
+    let mut given = None;
     // The theme with no config file, at its 13 px: the measurements below
     // are the type scale's at that size.
     let app = App::new(900, 700, horizon_theme_css::CSS, || {
-        let (root, state) = view(move |asked| log.borrow_mut().push(asked));
+        let shown = sample::Given::new_local(None);
+        given = Some(shown);
+        let (root, state) = view(shown.into(), move |asked| log.borrow_mut().push(asked));
         state.field.focus();
         agent = Some(state);
         themed(Theme::built_in, root)
@@ -39,6 +45,7 @@ fn open(session: &Session) -> Opened {
     let opened = Opened {
         app,
         agent: agent.unwrap(),
+        shown: given.unwrap(),
         asked,
     };
     opened.show(session);
@@ -62,7 +69,7 @@ fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<Nod
 
 impl Opened {
     fn show(&self, session: &Session) {
-        session.show(&self.agent);
+        session.show(self.shown);
         self.app.run_effects();
         self.app.resolve();
     }

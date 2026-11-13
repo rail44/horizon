@@ -4,11 +4,17 @@
 
 use std::rc::Rc;
 
-use horizon::agent::Agent;
+use horizon_ui::reactive_graph::owner::LocalStorage;
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::Set;
+
 use horizon_agent_display::{
     Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Label, Message,
     Receipt, Status, Transcript, Turn, TurnPart, TurnState, Unit,
 };
+
+/// What a test gives the view to show.
+pub type Given = RwSignal<Option<Transcript>, LocalStorage>;
 
 pub struct Session {
     transcript: Transcript,
@@ -212,7 +218,7 @@ impl Session {
     }
 
     /// Hands the view the session as it is now.
-    pub fn show(&self, agent: &Agent) {
-        agent.set_transcript(self.transcript.clone());
+    pub fn show(&self, shown: Given) {
+        shown.set(Some(self.transcript.clone()));
     }
 }
