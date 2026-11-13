@@ -1133,3 +1133,43 @@ fn block_art_has_no_seams_in_either_pane_of_a_split_at_a_fractional_scale() {
         }
     }
 }
+
+#[test]
+fn a_terminals_copy_chord_is_not_typed_into_it() {
+    let opened = open();
+    let pane = opened.panes()[0];
+    opened.prompt(pane);
+    // Typed into the terminal, the chord would be the program's Ctrl+C,
+    // which drops the line begun.
+    for character in "echo cop".chars() {
+        opened.character(&character.to_string());
+    }
+    opened.key(
+        Key::Character("C".into()),
+        Modifiers::CONTROL | Modifiers::SHIFT,
+    );
+    opened.run("ied");
+    opened.wait(pane, "the line's output", |text| {
+        text.lines().any(|line| line.trim_end() == "copied")
+    });
+}
+
+#[test]
+fn a_chord_bound_to_a_command_that_cannot_run_now_is_the_views_key() {
+    let opened = open();
+    let config = horizon_config::parse(
+        r#"
+        [keybindings]
+        "z" = "cancel-agent-turn"
+        "#,
+    )
+    .unwrap();
+    opened.shell.apply_config(&config);
+    let pane = opened.panes()[0];
+    opened.prompt(pane);
+    // No agent's turn is in flight: the key is typed into the terminal.
+    opened.run("echo zz");
+    opened.wait(pane, "the line's output", |text| {
+        text.lines().any(|line| line.trim_end() == "zz")
+    });
+}

@@ -6,7 +6,9 @@ use std::path::Path;
 use horizon_board_view::model::{ListCommand, ThreadCommand};
 use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::agent_model::ToolCallIdentity;
+use horizon_terminal_core::TerminalCommand;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Update, WithUntracked};
+use horizon_ui::request_paste;
 use horizon_workspace::commands::{CommandId, CommandState};
 use horizon_workspace::{CloseCursorOutcome, ViewKind, Workspace};
 
@@ -51,6 +53,8 @@ pub(super) const CARRIED_OUT: &[CommandId] = &[
     CommandId::IncreaseFontSize,
     CommandId::DecreaseFontSize,
     CommandId::ResetFontSize,
+    CommandId::CopyTerminalSelection,
+    CommandId::PasteIntoTerminal,
 ];
 
 impl Shell {
@@ -62,11 +66,14 @@ impl Shell {
         let on_board = (self.model.with_untracked(Workspace::cursor_pane_id)).is_some_and(|pane| {
             self.board_list(pane).is_some() || self.board_thread(pane).is_some()
         });
+        let kept = self.kept();
         self.model.with_untracked(|model| CommandState {
             tab_count: model.tab_count(),
             visible_pane_count: model.visible_panes().len(),
             has_active_session: model.active_session_id().is_some(),
             has_cursor_board: on_board,
+            has_active_terminal: (model.active_session_id())
+                .is_some_and(|session| kept.sessions.borrow().contains_key(&session)),
             detached_session_count: model.detached_session_count(),
             has_pending_approval: standing.pending_approval,
             has_turn_in_flight: standing.turn_in_flight,
@@ -197,6 +204,20 @@ impl Shell {
             CommandId::ResetFontSize => {
                 let size = kept.configured_size.get();
                 self.theme.update(|theme| theme.font_size = size);
+            }
+            CommandId::CopyTerminalSelection => {
+                let session = self.model.with_untracked(Workspace::active_session_id);
+                let session = session.and_then(|id| kept.sessions.borrow().get(&id).cloned());
+                if let Some(session) = session {
+                    session.send(TerminalCommand::CopySelection);
+                }
+            }
+            // The clipboard's text arrives as a paste, at the view with the
+            // keys.
+            CommandId::PasteIntoTerminal => {
+                if self.command_state().has_active_terminal {
+                    request_paste();
+                }
             }
             CommandId::OpenTerminalInSessionDirectory => {
                 let directory = self.model.with_untracked(|model| {

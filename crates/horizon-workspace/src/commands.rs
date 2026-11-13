@@ -106,6 +106,10 @@ command_ids! {
         /// changes; this is the manual path. Palette-only -- no default
         /// keybinding (binding id `"reload-preview"`).
         ReloadPreview,
+        /// Copies the active terminal's selection to the clipboard.
+        CopyTerminalSelection,
+        /// Pastes the clipboard's text into the active terminal.
+        PasteIntoTerminal,
     }
 }
 
@@ -140,6 +144,8 @@ pub struct CommandState {
     pub has_active_session: bool,
     /// Whether the workspace cursor targets a board pane.
     pub has_cursor_board: bool,
+    /// Whether the active session is a terminal's.
+    pub has_active_terminal: bool,
     pub detached_session_count: usize,
     pub has_pending_approval: bool,
     pub has_turn_in_flight: bool,
@@ -390,6 +396,18 @@ impl CommandId {
                 CommandCategory::Workspace,
                 "Reload the active preview pane's plugin from disk.",
             ),
+            CommandId::CopyTerminalSelection => (
+                "copy-terminal-selection",
+                "Copy Terminal Selection",
+                CommandCategory::Workspace,
+                "Copy the active terminal's selection to the clipboard.",
+            ),
+            CommandId::PasteIntoTerminal => (
+                "paste-into-terminal",
+                "Paste into Terminal",
+                CommandCategory::Workspace,
+                "Paste the clipboard's text into the active terminal.",
+            ),
         };
         CommandSpec {
             id: self,
@@ -411,7 +429,7 @@ pub fn core_commands() -> Vec<CommandSpec> {
     CommandId::ALL.iter().map(|id| id.spec()).collect()
 }
 
-pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
+pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
     match command_id {
         // Both split placements target the active tab/session
         // (`split_active_tab_with_view`/`split_session_with_new_session` in
@@ -444,6 +462,9 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::ToggleBoardClosed
         | CommandId::ReloadPreview => true,
         CommandId::OpenBoardOrganizer => state.has_cursor_board,
+        CommandId::CopyTerminalSelection | CommandId::PasteIntoTerminal => {
+            state.has_active_terminal
+        }
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // Unlike `CloseActivePane` -- workspace-mode `x` falls through to
         // closing the tab when the pane is the last one
@@ -502,7 +523,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 36);
+        assert_eq!(commands.len(), 38);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -540,6 +561,35 @@ mod tests {
     }
 
     #[test]
+    fn the_terminal_clipboard_commands_need_an_active_terminal() {
+        let mut state = CommandState {
+            tab_count: 1,
+            visible_pane_count: 1,
+            has_cursor_board: false,
+            has_active_terminal: false,
+            has_active_session: true,
+            detached_session_count: 0,
+            has_pending_approval: false,
+            has_turn_in_flight: false,
+            has_paused_turn: false,
+            has_active_session_directory: false,
+        };
+        for command in [
+            CommandId::CopyTerminalSelection,
+            CommandId::PasteIntoTerminal,
+        ] {
+            assert!(!command_enabled(command, state));
+        }
+        state.has_active_terminal = true;
+        for command in [
+            CommandId::CopyTerminalSelection,
+            CommandId::PasteIntoTerminal,
+        ] {
+            assert!(command_enabled(command, state));
+        }
+    }
+
+    #[test]
     fn open_session_manager_is_always_enabled() {
         assert!(command_enabled(
             CommandId::OpenSessionManager,
@@ -547,6 +597,7 @@ mod tests {
                 tab_count: 0,
                 visible_pane_count: 0,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -564,6 +615,7 @@ mod tests {
             visible_pane_count: 2,
             has_active_session: true,
             has_cursor_board: false,
+            has_active_terminal: false,
             detached_session_count: 0,
             has_pending_approval: false,
             has_turn_in_flight: false,
@@ -619,6 +671,7 @@ mod tests {
             tab_count: 1,
             visible_pane_count: 1,
             has_cursor_board: false,
+            has_active_terminal: false,
             has_active_session: true,
             detached_session_count: 0,
             has_pending_approval: false,
@@ -647,6 +700,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 2,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -661,6 +715,7 @@ mod tests {
                 tab_count: 2,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -680,6 +735,7 @@ mod tests {
                 tab_count: 0,
                 visible_pane_count: 0,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -700,6 +756,7 @@ mod tests {
                 tab_count: 0,
                 visible_pane_count: 0,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -714,6 +771,7 @@ mod tests {
                 tab_count: 0,
                 visible_pane_count: 0,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -728,6 +786,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -742,6 +801,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -764,6 +824,7 @@ mod tests {
                 tab_count: 0,
                 visible_pane_count: 0,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -782,6 +843,7 @@ mod tests {
                 tab_count: 0,
                 visible_pane_count: 0,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -796,6 +858,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -814,6 +877,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -828,6 +892,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 2,
                 has_pending_approval: false,
@@ -846,6 +911,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -860,6 +926,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: true,
@@ -874,6 +941,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -888,6 +956,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: true,
@@ -906,6 +975,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -920,6 +990,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -938,6 +1009,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -952,6 +1024,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -968,6 +1041,7 @@ mod tests {
             tab_count: 2,
             visible_pane_count: 2,
             has_cursor_board: false,
+            has_active_terminal: false,
             has_active_session: true,
             detached_session_count: 0,
             has_pending_approval: false,
@@ -998,6 +1072,7 @@ mod tests {
                 tab_count: 0,
                 visible_pane_count: 0,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -1012,6 +1087,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -1026,6 +1102,7 @@ mod tests {
                 tab_count: 1,
                 visible_pane_count: 1,
                 has_cursor_board: false,
+                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,

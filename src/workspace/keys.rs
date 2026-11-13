@@ -5,7 +5,7 @@
 use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
 use horizon_ui::reactive_graph::traits::{GetUntracked, WithUntracked};
 use horizon_ui::{prevent_default, stop_propagation};
-use horizon_workspace::commands::CommandId;
+use horizon_workspace::commands::{CommandId, command_enabled};
 use horizon_workspace::{Direction, SessionKind, Workspace};
 use keyboard_types::{Key, NamedKey};
 
@@ -30,6 +30,12 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
         let keymap = kept.keymap.borrow();
         (keymap.workspace_mode.matches(key), keymap.bound(key))
     };
+    // A chord bound to a command that cannot be carried out now is the
+    // view's key.
+    let bound = bound.filter(|bound| match bound {
+        Bound::Command(command) => command_enabled(*command, shell.command_state()),
+        Bound::OpenPalette => true,
+    });
     if toggles {
         shell.change(|model| match model.is_workspace_mode_active() {
             true => model.cancel_workspace_mode(),

@@ -36,7 +36,7 @@ use horizon_shell_runtime::terminal_glyphs::{self as drawn_glyphs, GlyphShape};
 use horizon_shell_runtime::terminal_links::{is_openable_url, url_from_lines};
 use horizon_shell_runtime::terminal_scrollback::{ScrollIpc, Scrollback};
 use horizon_theme_css::TerminalLook;
-use horizon_ui::{El, copy, each_layout, el, prevent_default, request_paste};
+use horizon_ui::{El, copy, each_layout, el, prevent_default};
 
 mod session;
 mod shaping;
@@ -220,6 +220,11 @@ impl Terminal {
     /// The shell's working directory, if it changed since the last call.
     pub fn take_directory(&self) -> Option<PathBuf> {
         self.state.directory.borrow_mut().take()
+    }
+
+    /// Asks the session to copy what is selected.
+    pub fn copy_selection(&self) {
+        self.state.session.send(TerminalCommand::CopySelection);
     }
 
     /// What the session last copied, taken.
@@ -422,22 +427,6 @@ pub fn view(session: Rc<Session>, look: TerminalLook) -> (El, Terminal) {
             };
             // While the input method composes, the keys are its own.
             if key.is_composing || !keyed.preedit.borrow().is_empty() {
-                return;
-            }
-            let character = match &key.key {
-                Key::Character(character) => character.to_lowercase(),
-                _ => String::new(),
-            };
-            // Copy and paste are the view's, on the chords a terminal
-            // leaves the program its Ctrl+C and Ctrl+V with.
-            if key.modifiers.ctrl() && key.modifiers.shift() && character == "c" {
-                keyed.session.send(TerminalCommand::CopySelection);
-                prevent_default();
-                return;
-            }
-            if key.modifiers.ctrl() && key.modifiers.shift() && character == "v" {
-                request_paste();
-                prevent_default();
                 return;
             }
             let Some((code, text)) = key_code(key) else {

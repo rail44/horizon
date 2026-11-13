@@ -129,12 +129,20 @@ pub struct Keymap {
     bindings: Vec<(Chord, Bound)>,
 }
 
-/// The chords bound with no configuration: the font size's.
-const BUILT_IN: [(&str, CommandId); 4] = [
+/// The chords bound with no configuration: the font size's, and a
+/// terminal's copy and paste, on the chords that leave the program in it
+/// its Ctrl+C and Ctrl+V.
+const BUILT_IN: &[(&str, CommandId)] = &[
     ("ctrl+=", CommandId::IncreaseFontSize),
     ("ctrl++", CommandId::IncreaseFontSize),
     ("ctrl+-", CommandId::DecreaseFontSize),
     ("ctrl+0", CommandId::ResetFontSize),
+    ("ctrl+shift+c", CommandId::CopyTerminalSelection),
+    ("ctrl+shift+v", CommandId::PasteIntoTerminal),
+    #[cfg(target_os = "macos")]
+    ("meta+c", CommandId::CopyTerminalSelection),
+    #[cfg(target_os = "macos")]
+    ("meta+v", CommandId::PasteIntoTerminal),
 ];
 
 impl Default for Keymap {
@@ -233,6 +241,22 @@ mod tests {
                 .unwrap()
                 .matches(&character("'", Modifiers::CONTROL))
         );
+    }
+
+    #[test]
+    fn a_terminals_copy_and_paste_are_bound_beside_its_ctrl_c_and_ctrl_v() {
+        let keymap = Keymap::default();
+        let chord = Modifiers::CONTROL | Modifiers::SHIFT;
+        assert_eq!(
+            keymap.bound(&character("C", chord)),
+            Some(Bound::Command(CommandId::CopyTerminalSelection))
+        );
+        assert_eq!(
+            keymap.bound(&character("V", chord)),
+            Some(Bound::Command(CommandId::PasteIntoTerminal))
+        );
+        assert_eq!(keymap.bound(&character("c", Modifiers::CONTROL)), None);
+        assert_eq!(keymap.bound(&character("v", Modifiers::CONTROL)), None);
     }
 
     #[test]

@@ -265,7 +265,7 @@ fn the_shell_is_told_the_size_of_the_box() {
 }
 
 #[test]
-fn a_drag_selects_cells_and_the_copy_chord_copies_them() {
+fn a_drag_selects_cells_and_copying_takes_them() {
     let opened = open();
     opened.run("echo select-me-please");
     opened.wait("the line", |text| {
@@ -291,10 +291,8 @@ fn a_drag_selects_cells_and_the_copy_chord_copies_them() {
     assert_eq!((selection.start.row, selection.start.col), (row, 0));
     assert_eq!((selection.end.row, selection.end.col), (row, 5));
 
-    opened.key(
-        keyboard_types::Key::Character("C".into()),
-        keyboard_types::Modifiers::CONTROL | keyboard_types::Modifiers::SHIFT,
-    );
+    // (The chord for it is the shell's: `tests/workspace.rs`.)
+    opened.terminal.copy_selection();
     let started = Instant::now();
     let copied = loop {
         opened.app.resolve();
