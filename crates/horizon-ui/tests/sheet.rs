@@ -36,9 +36,9 @@ fn page(outer_css: &'static str, inner_css: &'static str, chosen: Option<RwSigna
             None => el("div").class("row"),
         };
         let inner_row = el("div").class("row");
-        let inner = el("div").class("view").styled(inner_css).child(inner_row);
+        let inner = el("div").class("inner").styled(inner_css).child(inner_row);
         let outer = el("div")
-            .class("view")
+            .class("outer")
             .styled(outer_css)
             .child(outer_row)
             .child(inner);
@@ -66,10 +66,10 @@ fn a_view_s_sheet_reaches_what_is_its_own_and_stops_at_a_view_inside_it() {
 }
 
 #[test]
-fn the_host_is_the_element_and_the_outer_view_can_size_the_inner_one() {
+fn a_view_names_its_own_root_and_the_outer_view_can_size_the_inner_one() {
     let page = page(
-        ":host { width: 400px; } .view { width: 200px; } .row { width: 100px; }",
-        ":host(.view) { height: 30px; } .row { width: 50px; }",
+        ".outer { width: 400px; } .inner { width: 200px; } .row { width: 100px; }",
+        ".inner { height: 30px; } .row { width: 50px; }",
         None,
     );
     assert_eq!(width(&page.app, page.outer), 400.);
@@ -108,7 +108,7 @@ fn a_view_put_on_the_page_later_has_its_sheet() {
     let app = App::new(600, 400, "", || {
         el("div").when(
             move || shown.get(),
-            || el("div").class("late").styled(":host { width: 222px; }"),
+            || el("div").class("late").styled(".late { width: 222px; }"),
         )
     });
     app.resolve();

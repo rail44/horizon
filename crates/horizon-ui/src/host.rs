@@ -39,7 +39,15 @@ pub fn append(parent: NodeId, child: NodeId) {
 
 /// Puts `nodes`, in order, just before `marker` among its parent's.
 pub fn insert_before(marker: NodeId, nodes: &[NodeId]) {
-    with_document(|document| document.mutate().insert_nodes_before(marker, nodes));
+    with_document(|document| {
+        document.mutate().insert_nodes_before(marker, nodes);
+        let holder = document.get_node(marker).and_then(|marker| marker.parent);
+        if let Some(holder) = holder {
+            for node in nodes {
+                crate::sheet::held(document, holder, *node);
+            }
+        }
+    });
 }
 
 /// Takes a node out for good with everything inside it, now if the

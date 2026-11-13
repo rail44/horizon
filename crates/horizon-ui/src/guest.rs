@@ -137,8 +137,8 @@ impl El {
     }
 
     /// Gives the element a style sheet of its own: plain CSS whose rules
-    /// reach what is under the element and stop at a view placed there.
-    /// `:host` in it is the element itself.
+    /// reach the element and what is under it, and stop at what is inside
+    /// a view placed there.
     pub fn styled(self, css: &str) -> Self {
         host::adopt_style(id(self), css, false);
         self

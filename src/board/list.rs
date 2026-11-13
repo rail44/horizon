@@ -30,10 +30,10 @@ use super::follow;
 use super::{Activity, Job, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
 
-// The view's own style sheet (`:host` is its root). The measurements are in
-// the theme's scaled lengths (`--u8` is 8 px at the reference type size).
+// The view's own style sheet. The measurements are in the theme's scaled
+// lengths (`--u8` is 8 px at the reference type size).
 const CSS: &str = "
-    :host { position: relative; display: flex; flex-direction: column; height: 100%;
+    .board-list { position: relative; display: flex; flex-direction: column; height: 100%;
                   min-width: calc(var(--u28) * 10); outline: none;
                   background: var(--background); color: var(--text);
                   font-family: var(--font-family); font-size: var(--body-size);
@@ -98,7 +98,7 @@ const CSS: &str = "
         .ghost { position: absolute; z-index: 10; padding: 4px 8px;
                  background: var(--surface-selected); pointer-events: none; }
     }
-    :host(:focus) .row.selected { border-color: var(--accent); }
+    .board-list:focus .row.selected { border-color: var(--accent); }
 ";
 
 /// How far the pointer moves with the button held before a press on a row

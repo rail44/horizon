@@ -33,6 +33,7 @@ pub fn el(tag: &str) -> El {
 /// it with an unstyled one inside is marked as having something to style.
 pub(crate) fn append(document: &mut BaseDocument, parent: NodeId, child: NodeId) {
     document.mutate().append_children(parent, &[child]);
+    crate::sheet::held(document, parent, child);
     let on_the_page = (document.get_node(parent)).is_some_and(|node| node.flags.is_in_document());
     if !on_the_page {
         return;
@@ -105,16 +106,16 @@ impl El {
     }
 
     /// Gives the element a style sheet of its own: plain CSS whose rules
-    /// reach what is under the element and stop at a view placed there.
-    /// `:host` in it is the element itself.
+    /// reach the element and what is under it, and stop at what is inside
+    /// a view placed there.
     pub fn styled(self, css: &str) -> Self {
         with_document(|document| crate::sheet::adopt(document, self.0, css, false));
         self
     }
 
-    /// Provides a style sheet to everything under the element, the views
-    /// placed there included: what a parent or the shell shares with what
-    /// it holds. `:host` in it is the element itself.
+    /// Provides a style sheet to the element and everything under it, the
+    /// views placed there included: what a parent or the shell shares with
+    /// what it holds.
     pub fn provides(self, css: &str) -> Self {
         with_document(|document| crate::sheet::adopt(document, self.0, css, true));
         self
@@ -349,6 +350,10 @@ impl El {
                     mutator.insert_nodes_before(marker, &order);
                 } else if !created.is_empty() {
                     mutator.insert_nodes_before(marker, &created);
+                }
+                drop(mutator);
+                for made in &created {
+                    crate::sheet::held(document, self.0, *made);
                 }
             });
             next

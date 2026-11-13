@@ -1,17 +1,19 @@
-//! A style sheet that is an element's own: its rules reach what is under
-//! the element and nothing else.
+//! A style sheet that is an element's own: its rules reach the element
+//! and what is under it, and nothing else.
 //!
-//! A view writes plain CSS, with `:host` for the element the sheet was
-//! given to, as a sheet in a shadow tree is written. How the rules are kept
-//! to that element is this module's alone: today the sheet is wrapped in
-//! CSS's `@scope`, from the element down to the next element with a sheet
-//! of its own. A view placed inside another is not reached by the outer
-//! one's rules; its root is, so that the outer view can size and place it.
+//! A view writes plain CSS, and names its own root as it names anything
+//! (`.board-list { … }`). How the rules are kept to that element is this
+//! module's alone. Today the sheet is wrapped in CSS's `@scope`. The scope
+//! starts at the element that holds the view's root, so that the root is
+//! in it as any of its own elements is, and leaves out the other things
+//! that element holds. It ends at what is inside a view placed in this
+//! one: that view's root is reached, so that this one can size and place
+//! it, and what is under it is not.
 //!
-//! A sheet can also be provided: its rules reach everything under the
-//! element, the views placed there included. That is how a parent or the
-//! shell hands down what is shared (the theme's variables, a vocabulary of
-//! utility classes).
+//! A sheet can also be provided: its rules reach the element and
+//! everything under it, the views placed there included. That is how a
+//! parent or the shell hands down what is shared (the theme's variables,
+//! a vocabulary of utility classes).
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -23,44 +25,49 @@ use crate::shared::{name, shared};
 const OWN: &str = "data-sheet";
 /// On an element that provides a sheet: the sheet's name.
 const PROVIDED: &str = "data-provides";
-
-/// `:host` and `:host(…)` as `:scope` and `:scope…`: the element the
-/// sheet was given to, as `@scope` names it.
-fn host_as_scope(css: &str) -> String {
-    let mut out = String::with_capacity(css.len());
-    let mut rest = css;
-    while let Some(at) = rest.find(":host") {
-        out += &rest[..at];
-        rest = &rest[at + ":host".len()..];
-        out += ":scope";
-        // `:host(.selected)` is the host when it is also `.selected`.
-        if let Some(inner) = rest.strip_prefix('(') {
-            let mut depth = 1;
-            let end = inner.char_indices().find(|(_, character)| {
-                match character {
-                    '(' => depth += 1,
-                    ')' => depth -= 1,
-                    _ => {}
-                }
-                depth == 0
-            });
-            if let Some((end, _)) = end {
-                out += &inner[..end];
-                rest = &inner[end + 1..];
-            }
-        }
-    }
-    out + rest
-}
+/// On an element that holds one with a sheet of its own, or one that
+/// provides a sheet: those sheets' names, between spaces.
+const HOLDS: &str = "data-holds";
+const HOLDS_PROVIDED: &str = "data-holds-provided";
 
 /// The sheet as the document takes it.
 fn wrapped(css: &str, sheet: &str, provided: bool) -> String {
-    let rules = host_as_scope(css);
     match provided {
-        true => format!("@scope ([{PROVIDED}=\"{sheet}\"]) {{\n{rules}\n}}"),
-        // Down to what is inside the next element with a sheet of its
-        // own, and not that element itself.
-        false => format!("@scope ([{OWN}=\"{sheet}\"]) to ([{OWN}] > *) {{\n{rules}\n}}"),
+        true => format!(
+            "@scope ([{HOLDS_PROVIDED}~=\"{sheet}\"]) \
+             to (:scope > :not([{PROVIDED}=\"{sheet}\"])) {{\n{css}\n}}"
+        ),
+        // Not the other things the holder holds, and not what is inside a
+        // view placed in this one (that view's root is two elements with
+        // sheets down from the holder).
+        false => format!(
+            "@scope ([{HOLDS}~=\"{sheet}\"]) \
+             to (:scope > :not([{OWN}=\"{sheet}\"]), [{OWN}] [{OWN}] > *) {{\n{css}\n}}"
+        ),
+    }
+}
+
+fn attribute(document: &BaseDocument, node: NodeId, attribute: &str) -> Option<String> {
+    let node = document.get_node(node)?;
+    node.attr(LocalName::from(attribute)).map(str::to_string)
+}
+
+/// Notes on `holder` that it holds `child`, if `child` has a sheet: called
+/// wherever an element is put in another.
+pub(crate) fn held(document: &mut BaseDocument, holder: NodeId, child: NodeId) {
+    for (of_child, of_holder) in [(OWN, HOLDS), (PROVIDED, HOLDS_PROVIDED)] {
+        let Some(sheet) = attribute(document, child, of_child) else {
+            continue;
+        };
+        let noted = attribute(document, holder, of_holder).unwrap_or_default();
+        if noted.split(' ').any(|noted| noted == sheet) {
+            continue;
+        }
+        let noted = match noted.is_empty() {
+            true => sheet,
+            false => format!("{noted} {sheet}"),
+        };
+        (document.mutate()).set_attribute(holder, name(of_holder), &noted);
     }
 }
 
@@ -74,10 +81,12 @@ pub(crate) fn adopt(document: &mut BaseDocument, node: NodeId, css: &str, provid
     let mut hasher = DefaultHasher::new();
     (css, provided).hash(&mut hasher);
     let sheet = format!("{:x}", hasher.finish());
-    let attribute = if provided { PROVIDED } else { OWN };
-    document
-        .mutate()
-        .set_attribute(node, name(attribute), &sheet);
+    let own = if provided { PROVIDED } else { OWN };
+    document.mutate().set_attribute(node, name(own), &sheet);
+    // (Given its sheet after it was put somewhere.)
+    if let Some(holder) = document.get_node(node).and_then(|node| node.parent) {
+        held(document, holder, node);
+    }
     if !shared().sheets.borrow_mut().insert(sheet.clone()) {
         return;
     }
@@ -91,18 +100,4 @@ pub(crate) fn adopt(document: &mut BaseDocument, node: NodeId, css: &str, provid
     drop(mutator);
     let top = document.root_element().id;
     document.mutate().append_children(top, &[style]);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_host_is_the_scope_s_root() {
-        assert_eq!(
-            host_as_scope(":host { a: b } :host(:focus) .row, :host(.x:not(.y)) > .z { c: d }"),
-            ":scope { a: b } :scope:focus .row, :scope.x:not(.y) > .z { c: d }"
-        );
-        assert_eq!(host_as_scope(".row { a: b }"), ".row { a: b }");
-    }
 }
