@@ -15,6 +15,7 @@ use horizon_board_view::model::{
     visible_rows,
 };
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, DomEventData};
+use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{
@@ -28,7 +29,7 @@ use keyboard_types::{Key, NamedKey};
 
 #[cfg(not(target_family = "wasm"))]
 use super::follow;
-use super::{Activity, Job, Source, activity_chip, run, tone, write_refusal};
+use super::{Activity, Job, Sessions, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
 use crate::parts::{Chip, Field, Prompt, Tone};
 
@@ -166,12 +167,6 @@ enum Line {
 impl BoardList {
     fn held(&self) -> Rc<Held> {
         self.held.with_value(Rc::clone)
-    }
-
-    /// Every session the tasks are bound to, each once.
-    pub fn bound_sessions(&self) -> Vec<horizon_workspace::SessionId> {
-        self.items
-            .with_untracked(|items| model::bound_sessions(items))
     }
 
     /// The directory of the project whose board this is.
@@ -495,6 +490,7 @@ fn row(state: BoardList, marks: &Marks, row: &Row) -> El {
 pub fn view(
     source: Source,
     background: Background,
+    sessions: Sessions,
     ask: impl Fn(Asked) + 'static,
 ) -> (El, BoardList) {
     let state = BoardList {
@@ -505,7 +501,7 @@ pub fn view(
         selected: RwSignal::new(None),
         finished_expanded: RwSignal::new(false),
         notice: RwSignal::new(None),
-        activity: RwSignal::new(HashMap::new()),
+        activity: sessions.activity,
         carried: RwSignal::new(None),
         indicator: RwSignal::new(None),
         typed: RwSignal::new(String::new()),
@@ -520,6 +516,10 @@ pub fn view(
         field: el("input").attr("type", "text"),
         scroll: el("div").class(styles::ROWS),
     };
+    // Whoever placed the view is told which sessions its tasks name.
+    Effect::new(move |_| {
+        (sessions.bound).set(state.items.with(|items| model::bound_sessions(items)));
+    });
     let (root, scroll, field) = (state.element, state.scroll, state.field);
     let held = state.held();
     state.load();

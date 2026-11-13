@@ -333,6 +333,8 @@ struct PaneView {
     board_list: Option<BoardList>,
     board_thread: Option<BoardThread>,
     preview: Option<Preview>,
+    /// The sessions a board view says its tasks are bound to.
+    bound: Option<RwSignal<Vec<SessionId>>>,
 }
 
 /// What the shell keeps beside the model.
@@ -366,6 +368,10 @@ struct Kept {
     /// The sessions a board named that this workspace did not have, and
     /// whether the agent runtime has answered about each.
     looked_for: RefCell<HashMap<SessionId, bool>>,
+    /// What the sessions the board views name are doing: every board view
+    /// is given it.
+    board_activity:
+        RwSignal<HashMap<SessionId, horizon_board_view::activity::BoardSessionActivity>>,
     /// The next arranging gives the active pane the keys.
     refocus: Cell<bool>,
     board: Option<board::Source>,
@@ -485,6 +491,7 @@ impl Shell {
         let (mut terminal, mut agent) = (None, None);
         let (mut board_list, mut board_thread) = (None, None);
         let mut shown_preview = None;
+        let mut bound = None;
         let start = |session| {
             kept.starting
                 .borrow_mut()
@@ -636,6 +643,7 @@ impl Shell {
                     let (root, view) = board::list::view(
                         self.board_source(),
                         background,
+                        self.board_sessions(&mut bound),
                         move |asked| match asked {
                             board::list::Asked::OpenThread(task) => shell.open_thread(id, task),
                         },
@@ -657,6 +665,7 @@ impl Shell {
                         self.board_source(),
                         background,
                         shown.into(),
+                        self.board_sessions(&mut bound),
                         move |asked| match asked {
                             board::thread::Asked::OpenSession(session) => {
                                 if let Some(thread) = shell.board_thread(id) {
@@ -705,6 +714,7 @@ impl Shell {
             board_list,
             board_thread,
             preview: shown_preview,
+            bound,
         }
     }
 
@@ -1191,6 +1201,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             reload_terminals: opening.reload_terminals,
             reloading: Cell::new(None),
             looked_for: RefCell::default(),
+            board_activity: RwSignal::new(HashMap::new()),
             refocus: Cell::new(false),
             board: opening.board,
             config: RefCell::new(opening.config.clone()),

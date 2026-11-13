@@ -15,8 +15,9 @@ use std::pin::Pin;
 use horizon_board::{Item, Store, StoreError};
 use horizon_board_view::activity::{BoardSessionActivity, task_session_state};
 use horizon_board_view::chrome;
-use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::signal::{RwSignal, WriteSignal};
 use horizon_ui::reactive_graph::traits::With;
+use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Component, El};
 use horizon_workspace::SessionId;
 
@@ -164,7 +165,28 @@ fn tone(item: &Item) -> Tone {
 
 /// What the sessions a board's tasks are bound to are doing, as whoever
 /// placed the view says: a view draws it and does not find it out.
-pub type Activity = RwSignal<std::collections::HashMap<SessionId, BoardSessionActivity>>;
+pub type Activity = Signal<std::collections::HashMap<SessionId, BoardSessionActivity>>;
+
+/// What a board view and whoever placed it say to each other of the
+/// sessions its tasks are bound to.
+#[derive(Clone, Copy)]
+pub struct Sessions {
+    pub activity: Activity,
+    /// The sessions the view's tasks are bound to, each once: the view
+    /// says, for whoever placed it to find out what they are doing.
+    pub bound: WriteSignal<Vec<SessionId>>,
+}
+
+impl Sessions {
+    /// For a view nobody tells anything: no session is doing anything
+    /// that is known.
+    pub fn untold() -> Self {
+        Self {
+            activity: RwSignal::new(std::collections::HashMap::new()).into(),
+            bound: RwSignal::new(Vec::new()).write_only(),
+        }
+    }
+}
 
 /// A chip in `into` for what the session `item` is bound to is doing,
 /// there while the task is bound to one.

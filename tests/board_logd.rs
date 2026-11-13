@@ -146,7 +146,12 @@ fn a_task_added_in_the_list_is_written_and_one_written_elsewhere_arrives() {
     let css = horizon_theme_css::CSS;
     let app = App::new(600, 500, css, || {
         let source = Source::Root(project.clone());
-        let (root, state) = view(source, Background::default(), |_| {});
+        let (root, state) = view(
+            source,
+            Background::default(),
+            horizon::board::Sessions::untold(),
+            |_| {},
+        );
         list = Some(state);
         themed(Theme::built_in, root.focus())
     });

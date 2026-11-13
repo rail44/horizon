@@ -78,7 +78,12 @@ fn list(count: usize) -> Stage {
     let mut list = None;
     let css = horizon_theme_css::CSS;
     let mut stage = Stage::new(600, 800, css, || {
-        let (root, state) = view(source, Background::default(), |_| {});
+        let (root, state) = view(
+            source,
+            Background::default(),
+            horizon::board::Sessions::untold(),
+            |_| {},
+        );
         list = Some(state);
         themed(Theme::built_in, root.focus())
     });
@@ -128,7 +133,13 @@ fn thread(posts: usize) -> Stage {
     }
     let source = source(vec![task]);
     let mut stage = Stage::new(700, 800, horizon_theme_css::CSS, || {
-        let (root, _) = view(source, Background::default(), 1.into(), |_| {});
+        let (root, _) = view(
+            source,
+            Background::default(),
+            1.into(),
+            horizon::board::Sessions::untold(),
+            |_| {},
+        );
         themed(Theme::built_in, root.focus())
     });
     stage.until_text("the page", "投稿の多いタスク");

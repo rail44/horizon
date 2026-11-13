@@ -2,24 +2,32 @@
 //! writes), driven the way an owner drives it.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use horizon::background::Background;
 use horizon::board::list::{Asked, view};
-use horizon::board::{BoardList, Source};
+use horizon::board::{BoardList, Sessions, Source};
 use horizon_board::{BoardEvent, Comment, Item, Store, sample_envelopes};
+use horizon_board_view::activity::BoardSessionActivity;
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
+use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::GetUntracked;
 use horizon_ui::testing::{Pointer, click_at, pointer};
+use horizon_workspace::SessionId;
 use keyboard_types::{Key, Modifiers, NamedKey};
 
 struct Opened {
     app: App,
     list: BoardList,
+    /// What the view is told sessions are doing, and the sessions it says
+    /// its tasks are bound to.
+    activity: RwSignal<HashMap<SessionId, BoardSessionActivity>>,
+    bound: RwSignal<Vec<SessionId>>,
     asked: Rc<RefCell<Vec<Asked>>>,
 }
 
@@ -62,17 +70,28 @@ fn open(items: Vec<Item>) -> Opened {
         .map(|item| BoardEvent::ItemStored { id: item.id, item });
     let source = Source::Ready(Store::in_memory(sample_envelopes(events)));
     let mut list = None;
+    let mut told = None;
     let css = horizon_theme_css::CSS;
     let app = App::new(600, 500, css, || {
-        let (root, state) = view(source, Background::default(), move |asked| {
+        // What the view is told of sessions, and what it says of them.
+        let (activity, bound) = (RwSignal::new(HashMap::new()), RwSignal::new(Vec::new()));
+        told = Some((activity, bound));
+        let sessions = Sessions {
+            activity: activity.into(),
+            bound: bound.write_only(),
+        };
+        let (root, state) = view(source, Background::default(), sessions, move |asked| {
             log.borrow_mut().push(asked)
         });
         list = Some(state);
         themed(Theme::built_in, root.focus())
     });
+    let (activity, bound) = told.unwrap();
     let opened = Opened {
         app,
         list: list.unwrap(),
+        activity,
+        bound,
         asked,
     };
     // The store is read off the UI thread.
@@ -277,7 +296,7 @@ fn a_task_bound_to_a_session_says_what_the_session_is_doing() {
     let mut items = sample();
     items[3].session_id = Some(session.as_uuid().to_string());
     let opened = open(items);
-    assert_eq!(opened.list.bound_sessions(), [session]);
+    assert_eq!(opened.bound.get_untracked(), [session]);
     let said = || -> Vec<String> {
         (opened.all("activity").into_iter())
             .map(|chip| opened.text_of(chip))
@@ -286,7 +305,7 @@ fn a_task_bound_to_a_session_says_what_the_session_is_doing() {
     // Until whoever placed the view has said, the session is being found.
     assert_eq!(said(), ["Loading"]);
     let tell = |activity| {
-        opened.list.activity.set([(session, activity)].into());
+        opened.activity.set([(session, activity)].into());
         opened.app.run_effects();
         opened.app.resolve();
     };

@@ -9,7 +9,7 @@ use std::rc::Rc;
 use horizon_board_view::activity::BoardSessionActivity;
 
 use horizon_ui::reactive_graph::signal::RwSignal;
-use horizon_ui::reactive_graph::traits::{Set, Update, WithUntracked};
+use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Update, WithUntracked};
 use horizon_ui::relayout;
 use horizon_workspace::{PaneKind, SessionId, SessionKind, Workspace};
 
@@ -65,7 +65,22 @@ impl Shell {
         Ok(())
     }
 
-    /// Tells each board view what the sessions its tasks are bound to are
+    /// What a board view and the shell say to each other of sessions: the
+    /// shell's account of what they are doing, and a place of the pane's
+    /// own for the view to say which its tasks name.
+    pub(super) fn board_sessions(
+        &self,
+        bound: &mut Option<RwSignal<Vec<SessionId>>>,
+    ) -> crate::board::Sessions {
+        let named = RwSignal::new(Vec::new());
+        *bound = Some(named);
+        crate::board::Sessions {
+            activity: self.kept().board_activity.into(),
+            bound: named.write_only(),
+        }
+    }
+
+    /// Tells the board views what the sessions their tasks are bound to are
     /// doing, after a layout. A session this workspace does not have is
     /// asked of the agent runtime once, and taken in detached if it runs
     /// there; until the answer it reads as loading, and after it as out
@@ -73,14 +88,14 @@ impl Shell {
     pub(super) fn tell_boards(&self) {
         let kept = self.kept();
         let mut unknown = Vec::new();
-        for view in kept.panes.borrow().values() {
-            let (bound, states) = match (&view.board_list, &view.board_thread) {
-                (Some(list), _) => (list.bound_sessions(), list.activity),
-                (_, Some(thread)) => (thread.bound_sessions(), thread.activity),
-                _ => continue,
-            };
+        let named: Vec<SessionId> = (kept.panes.borrow().values())
+            .filter_map(|view| view.bound)
+            .flat_map(|bound| bound.get_untracked())
+            .collect();
+        {
+            let states = kept.board_activity;
             let mut told = HashMap::new();
-            for session in bound {
+            for session in named {
                 let running = kept
                     .agents
                     .borrow()

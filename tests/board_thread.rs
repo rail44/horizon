@@ -91,9 +91,13 @@ fn open_at(items: Vec<Item>, task: u64, width: u32) -> Opened {
     let app = App::new(width, 600, horizon_theme_css::CSS, || {
         let shown = RwSignal::new(task);
         given = Some(shown);
-        let (root, state) = view(source, Background::default(), shown.into(), move |asked| {
-            log.borrow_mut().push(asked)
-        });
+        let (root, state) = view(
+            source,
+            Background::default(),
+            shown.into(),
+            horizon::board::Sessions::untold(),
+            move |asked| log.borrow_mut().push(asked),
+        );
         thread = Some(state);
         themed(Theme::built_in, root.focus())
     });

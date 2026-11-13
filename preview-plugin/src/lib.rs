@@ -43,7 +43,13 @@ fn tasks() -> Vec<Item> {
 fn board_list(items: Vec<Item>) -> El {
     let events = (items.into_iter()).map(|item| BoardEvent::ItemStored { id: item.id, item });
     let source = Source::Ready(Store::in_memory(sample_envelopes(events)));
-    list::view(source, Background::default(), |_| {}).0
+    list::view(
+        source,
+        Background::default(),
+        horizon::board::Sessions::untold(),
+        |_| {},
+    )
+    .0
 }
 
 fn view(name: &str) -> Option<El> {

@@ -28,7 +28,7 @@ use horizon_workspace::SessionId;
 use keyboard_types::{Key, NamedKey};
 
 use super::list::key_name;
-use super::{Activity, Job, Source, activity_chip, follow, run, tone, write_refusal};
+use super::{Activity, Job, Sessions, Source, activity_chip, follow, run, tone, write_refusal};
 use crate::background::Background;
 use crate::markdown::{Headings, render};
 use crate::parts::{Button, ButtonKind, Chip, Field, Prompt, Tone};
@@ -155,15 +155,6 @@ type Read = (Option<Item>, HashMap<u64, String>);
 impl BoardThread {
     fn held(&self) -> Rc<Held> {
         self.held.with_value(Rc::clone)
-    }
-
-    /// Every session the task is bound to, each once.
-    pub fn bound_sessions(&self) -> Vec<SessionId> {
-        self.item.with_untracked(|item| {
-            (item.as_ref()).map_or_else(Vec::new, |item| {
-                horizon_board_view::model::bound_sessions(std::slice::from_ref(item))
-            })
-        })
     }
 
     /// The directory of the project whose board this is.
@@ -517,6 +508,7 @@ pub fn view(
     background: Background,
     // The task the view is on: it follows it.
     task: Signal<u64>,
+    sessions: Sessions,
     ask: impl Fn(Asked) + 'static,
 ) -> (El, BoardThread) {
     let shown = task;
@@ -527,7 +519,7 @@ pub fn view(
         cursor: RwSignal::new(None),
         expanded: RwSignal::new(HashSet::new()),
         notice: RwSignal::new(None),
-        activity: RwSignal::new(HashMap::new()),
+        activity: sessions.activity,
         stacked: RwSignal::new(false),
         typed: RwSignal::new(String::new()),
         status_typed: RwSignal::new(String::new()),
@@ -544,6 +536,14 @@ pub fn view(
         status: el("input").attr("type", "text"),
         column: el("div").class(styles::COLUMN),
     };
+    // Whoever placed the view is told which sessions its task names.
+    Effect::new(move |_| {
+        (sessions.bound).set(state.item.with(|item| {
+            (item.as_ref()).map_or_else(Vec::new, |item| {
+                horizon_board_view::model::bound_sessions(std::slice::from_ref(item))
+            })
+        }));
+    });
     // Another task given from outside is shown in the same view.
     Effect::new(move |_| state.show_task(shown.get()));
     let (root, column, reply, status) = (state.element, state.column, state.reply, state.status);
