@@ -16,8 +16,8 @@ Resolution order (first one found wins):
 2. `$XDG_CONFIG_HOME/horizon/config.toml`, if `$XDG_CONFIG_HOME` is set.
 3. `~/.config/horizon/config.toml` otherwise.
 
-Always call `config.read` first to see the resolved path and current
-contents -- never assume it exists or guess its contents. `config.read`
+Always call `config_read` first to see the resolved path and current
+contents -- never assume it exists or guess its contents. `config_read`
 reports `"exists": false` (with the resolved path) when nothing has been
 written there yet; that is normal, not an error.
 
@@ -30,15 +30,15 @@ this file -- never write one there even if the user asks.
 
 ## Editing rules
 
-- Always `config.read` before `config.write` in this session, even if you
+- Always `config_read` before `config_write` in this session, even if you
   already showed the user the contents earlier in the conversation --
-  `config.write` refuses a write if the file was not read in this session,
+  `config_write` refuses a write if the file was not read in this session,
   or if it changed on disk since that read.
-- `config.write` takes the **complete** file content and replaces the file
+- `config_write` takes the **complete** file content and replaces the file
   with it. Always preserve every existing entry the user did not ask you
   to change -- read the current file, edit only the requested section, and
   write the whole thing back. Never write just the section you touched.
-- `config.write` validates the content is well-formed TOML before writing
+- `config_write` validates the content is well-formed TOML before writing
   and reports a parse error (with detail) if not, so you can fix it and
   retry.
 - An unrecognized key or an unparsable value inside `[theme]`/
@@ -50,7 +50,7 @@ this file -- never write one there even if the user asks.
 ## Apply timing
 
 `[theme]` and `[keybindings]` changes take effect automatically as soon as
-the user approves a `config.write` -- no restart needed. `[[providers]]`,
+the user approves a `config_write` -- no restart needed. `[[providers]]`,
 `default_model`, `small_model`, and `decision_model` apply through "Reload
 Config" to new sessions and future title calls. The three model keys
 are top-level `{ provider = "...", model = "..." }` pairs written before any

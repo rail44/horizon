@@ -77,7 +77,7 @@ fn is_git_repository(cwd: &Path) -> bool {
 /// (`tools::explore`) is told to use it. Not part of the base prompt --
 /// `providers::rig::session::session_extra_sections` appends it only for a
 /// session whose advertised toolset actually contains `task`, so an
-/// exploration session (whose role allows `fs.read`/`fs.grep`/`fs.glob`
+/// exploration session (whose role allows `fs_read`/`fs_grep`/`fs_glob`
 /// and nothing else) is never told to make a call it cannot make.
 ///
 /// `tools::catalog`'s `task` description states the same constraints.

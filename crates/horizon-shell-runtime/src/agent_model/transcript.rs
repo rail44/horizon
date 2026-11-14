@@ -205,7 +205,7 @@ fn affected_files(tool_id: &str, input: &Value, output: Option<&Value>) -> Vec<F
         return Vec::new();
     };
     match tool_id {
-        "fs.edit" => decode::<FileEdits>(output)
+        "fs_edit" => decode::<FileEdits>(output)
             .map(|result| {
                 let inputs = edit_entries(input);
                 result
@@ -230,7 +230,7 @@ fn affected_files(tool_id: &str, input: &Value, output: Option<&Value>) -> Vec<F
                     .collect()
             })
             .unwrap_or_default(),
-        "fs.write" => decode::<FileWritten>(output)
+        "fs_write" => decode::<FileWritten>(output)
             .map(|result| {
                 vec![FileEffect {
                     path: result.path,
@@ -259,7 +259,7 @@ enum CallClass {
 
 fn classify_call(tool_id: &str) -> CallClass {
     match tool_id {
-        "fs.edit" | "fs.write" => CallClass::Edit,
+        "fs_edit" | "fs_write" => CallClass::Edit,
         "bash" => CallClass::Bash,
         _ => CallClass::Query,
     }
@@ -296,7 +296,7 @@ pub fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate {
                 }
             }
             CallClass::Bash => aggregate.bash_count += 1,
-            CallClass::Query if call.tool_id == "fs.read" => {
+            CallClass::Query if call.tool_id == "fs_read" => {
                 if let Some(path) = &call.target {
                     read_paths.insert(path.clone());
                 }

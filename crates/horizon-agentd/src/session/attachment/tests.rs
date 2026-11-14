@@ -129,7 +129,7 @@ fn detached_progress_is_seeded_and_closed_previews_and_tasks_stay_closed() {
         task_session_id: SessionId::new(),
         description: "research".into(),
         state: TaskProgressState::Running,
-        activity: Some("fs.read".into()),
+        activity: Some("fs_read".into()),
         started_at_epoch_ms: 0,
     };
     send_session_event(&state, session, preview.clone());

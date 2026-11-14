@@ -66,7 +66,7 @@ pub(crate) struct RecallHit {
     pub session_id: String,
     /// Whether the hit is in the session doing the search.
     pub own_session: bool,
-    /// The sequence to read around it with `recall.read`.
+    /// The sequence to read around it with `recall_read`.
     pub sequence: i64,
     /// What kind of entry it is.
     pub kind: String,
@@ -116,7 +116,7 @@ pub(crate) struct RecallRead {
 /// command failures, tool/runtime errors, and containment denials separate.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RecallSession {
-    /// The session's id, the key `recall.read` takes.
+    /// The session's id, the key `recall_read` takes.
     pub session_id: String,
     /// When the session was most recently active.
     pub at: String,
@@ -140,7 +140,7 @@ pub(crate) struct RecallSession {
     /// Approval requests raised in this session, whether a human answered
     /// them, denied them, or left them unanswered.
     pub approval_count: usize,
-    /// The sequence to resume `recall.read` from.
+    /// The sequence to resume `recall_read` from.
     pub first_sequence: Option<i64>,
 }
 
@@ -149,7 +149,7 @@ pub(crate) struct RecallSessions {
     /// One entry per session, newest first.
     pub sessions: Vec<RecallSession>,
 }
-/// `worktree.enter`'s receipt: the activation is queued, not yet applied.
+/// `worktree_enter`'s receipt: the activation is queued, not yet applied.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct WorktreeRequested {
     /// Whether the move was queued.

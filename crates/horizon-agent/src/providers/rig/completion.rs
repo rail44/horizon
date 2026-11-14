@@ -677,10 +677,10 @@ pub(super) fn partial_assistant_message(
     ))
 }
 
-/// Line prefix the deterministic fallback reads an `fs.read` target from;
+/// Line prefix the deterministic fallback reads an `fs_read` target from;
 /// the rest of the line is the path, verbatim (case-sensitive, unlike the
 /// keyword triggers below).
-pub(super) const READ_PATH_TRIGGER: &str = "fs.read path: ";
+pub(super) const READ_PATH_TRIGGER: &str = "fs_read path: ";
 
 pub(super) fn deterministic_rig_response(text: &str) -> Message {
     let lower = text.to_ascii_lowercase();
@@ -688,7 +688,7 @@ pub(super) fn deterministic_rig_response(text: &str) -> Message {
         .lines()
         .find_map(|line| line.trim().strip_prefix(READ_PATH_TRIGGER))
     {
-        // Deterministic hook for driving a real `fs.read` -- including one
+        // Deterministic hook for driving a real `fs_read` -- including one
         // whose path leaves the workspace root, so the approval/refusal
         // routing is exercisable without a network provider.
         return Message::Assistant(rig_core::completion::message::AssistantMessage::new(vec![
@@ -771,7 +771,7 @@ fn multi_tool_call_message(count: usize) -> Message {
 /// is advertised only when `EXA_API_KEY` is set in the process environment:
 /// without the key the Exa adapter can only return a "not configured" error,
 /// so advertising it buys a round that cannot succeed (`web_fetch` needs no
-/// key and stays advertised). `knowledge.read`/`knowledge.write` are
+/// key and stays advertised). `knowledge_read`/`knowledge_write` are
 /// advertised only when `trusted_project` is true — an untrusted session
 /// gets no project-knowledge index in its prompt and no way to call
 /// through to the user-side store (see `knowledge`'s module doc).
@@ -795,12 +795,12 @@ pub(super) fn rig_tool_definitions(
                 && (exa_configured || definition.id != "web_search")
                 && (trusted_project || !is_knowledge_tool(&definition.id))
                 && (trusted_project || !crate::tools::external_requires_trust(&definition.id))
-                // `memory.update` is a standing-role-only tool: a role-less
+                // `memory_update` is a standing-role-only tool: a role-less
                 // session (`allowed_tool_ids == None`, i.e. "all tools") must
                 // never see it, and non-standing roles don't list it in their
                 // allowlist so `allows` already excludes them. This filter
                 // closes the `None` gap.
-                && (allowed_tool_ids.is_some() || definition.id != "memory.update")
+                && (allowed_tool_ids.is_some() || definition.id != "memory_update")
         })
         .map(rig_tool_definition_from_horizon)
         .collect()
@@ -835,7 +835,7 @@ fn rig_tool_definition_from_horizon(definition: Definition) -> ToolDefinition {
 /// withheld from untrusted sessions — see `rig_tool_definitions`'s
 /// filter.
 fn is_knowledge_tool(tool_id: &str) -> bool {
-    tool_id == "knowledge.read" || tool_id == "knowledge.write"
+    tool_id == "knowledge_read" || tool_id == "knowledge_write"
 }
 
 fn tool_call_requests_from_events(

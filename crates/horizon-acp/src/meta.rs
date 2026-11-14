@@ -248,7 +248,7 @@ mod tests {
         });
         round_trip(&ToolCallMeta {
             call_id: "call-2".into(),
-            tool_id: "fs.edit".into(),
+            tool_id: "fs_edit".into(),
             outcome: Some(ToolOutcome::Succeeded),
             auto_approved: None,
             policy_tier: None,

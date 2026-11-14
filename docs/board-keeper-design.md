@@ -121,14 +121,14 @@ so the board crate owns both the role data and the skill content as a single
 package. The agent crate's skill mechanism treats it identically to its own
 embedded skills once registered.
 
-### 4.3 Board tools (`board.read`, `board.comment`)
+### 4.3 Board tools (`board_read`, `board_comment`)
 
 Two new tools in `horizon-agent`'s catalog:
 
-- **`board.read`** — read the board (list items or show one with comments).
+- **`board_read`** — read the board (list items or show one with comments).
   `AutoAllowRead`.
-- **`board.comment`** — append a comment to an item. `AutoAllowRead` (the
-  board event log is the audit trail, same reasoning as `knowledge.write`).
+- **`board_comment`** — append a comment to an item. `AutoAllowRead` (the
+  board event log is the audit trail, same reasoning as `knowledge_write`).
 
 **The seam:** `horizon-agent` cannot depend on `horizon-board`, so board
 operations go through a `BoardHost` trait (mirroring `ExplorationHost`):
@@ -142,9 +142,9 @@ OS thread.
 **Why separate tool ids, not one `board.write`:** the allowlist is
 per-tool-id, not per-field-within-a-tool. To express "comments only, no
 status/rank/assignee changes" structurally (not just in the prompt), the
-keeper role's `allowed_tool_ids` lists `board.comment` but no
+keeper role's `allowed_tool_ids` lists `board_comment` but no
 state-mutation tool — and no state-mutation tool exists in the catalog at
-all. This is the same pattern as `config.read`/`config.write` being separate
+all. This is the same pattern as `config_read`/`config_write` being separate
 tools. If a future role needs board state mutations, it would get its own
 tool ids (`board.set_status`, etc.) and its own catalog entries.
 
@@ -154,7 +154,7 @@ tool ids (`board.set_status`, etc.) and its own catalog entries.
 |---|---|---|
 | `id` | `"keeper"` | Wire/persistence identity |
 | `title` | `"Board Keeper"` | View chooser |
-| `allowed_tool_ids` | `fs.read`, `fs.grep`, `fs.glob`, `board.read`, `board.comment`, `skill.read`, `knowledge.read`, `recall.search`, `recall.read` | Read-only + board comment. No bash, no file writes, no board state mutation |
+| `allowed_tool_ids` | `fs_read`, `fs_grep`, `fs_glob`, `board_read`, `board_comment`, `skill_read`, `knowledge_read`, `recall_search`, `recall_read` | Read-only + board comment. No bash, no file writes, no board state mutation |
 | `model` | `None` | Use provider default |
 | `iteration_cap` | `None` | Interactive, not one-shot |
 | `include_repository_instructions` | `true` | Needs project conventions to reconstruct context |
@@ -166,13 +166,13 @@ tool ids (`board.set_status`, etc.) and its own catalog entries.
 - **Write: board comments only.** Status / rank / assignee / item addition
   are the owner's and integrator's decisions. The keeper's job is context
   restoration, not task management. Structural enforcement (the allowlist
-  lists `board.comment` and no state-mutation tool exists) means the model
+  lists `board_comment` and no state-mutation tool exists) means the model
   cannot express a state-changing call even if it tried — the tool is
   simply not advertised.
 - **Read: same as an ordinary session.** The keeper cannot reconstruct
   context without reading code (`fs.*`), docs (`fs.*`), conversation history
-  (`recall.*`), and the project knowledge layer (`knowledge.read`).
-  `skill.read` is needed to read its own skill.
+  (`recall.*`), and the project knowledge layer (`knowledge_read`).
+  `skill_read` is needed to read its own skill.
 - **bash: not given.** The keeper's work is reading and commenting — it does
   not need to run commands. Adding bash would expand the attack surface
   (bash can write files, change the board via CLI, etc.) with no benefit to
@@ -193,7 +193,7 @@ events past its persisted cursor, and applies the wake policy:
 
 - **item-created** always wakes; **comment-added** wakes unless the author is
   the keeper session itself (`session:<uuid>`, the author format
-  `board.comment`'s dispatch sets); **item-updated** never wakes.
+  `board_comment`'s dispatch sets); **item-updated** never wakes.
 - Bursts are coalesced into a single wake (one wake per quiet period, with
   all affected item ids and the seq range collected).
 - Multi-wake prevention: while a keeper session is running, events
@@ -242,7 +242,7 @@ This implementation is deliberately not board-specific in its mechanism:
 - `BoardHost` is a trait with `list`/`show`/`comment` — a future package
   with different operations would define its own host trait.
 - The keeper role's `allowed_tool_ids` references generic tool ids
-  (`board.read`, `board.comment`), not board-internal types.
+  (`board_read`, `board_comment`), not board-internal types.
 
 A future extension/plugin system would generalize these three seams (role
 registration, skill registration, host-trait injection) into a single

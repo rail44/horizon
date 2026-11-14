@@ -45,7 +45,7 @@ provider へ送る履歴の組み立て時に、過去ターンの生の往復�
 - **透明性**: 集約の区切りを transcript に表示できる(Tier 1 と同じ)。
 
 **B 案(対案・暫定としては併用可)**: 外部文書方式。keeper は都度 spawn の
-まま、走行の終わりに knowledge 層(`knowledge.write` —
+まま、走行の終わりに knowledge 層(`knowledge_write` —
 `$XDG_DATA_HOME/horizon/knowledge/`)の記憶文書を更新し、次回 spawn が
 最初に読む。
 
@@ -62,7 +62,7 @@ provider へ送る履歴の組み立て時に、過去ターンの生の往復�
 pinning・**書き込みの選別**(無選別 −12.05pp vs 選別 +3.42pp)・生ログ
 非破壊。この形を満たす配置として:
 
-- **記憶の更新は型付きツール**(`memory.update` 相当)。入力スキーマ
+- **記憶の更新は型付きツール**(`memory_update` 相当)。入力スキーマ
   そのものが構造化テンプレート(Tier 2 由来: goal / 決定 / 完了・進行・
   詰まり / 次の一手 / 関係ファイルとシンボル、+ 畳んだ生ログ範囲への
   参照)。形式のドリフトをスキル遵守でなくスキーマで構造的に排除する。
@@ -123,14 +123,14 @@ Tier 2 は窓圧力駆動(80%)の生存機構で、board #37 の実測により�
 v1 — セッション内の記憶機構(セッション跨ぎの種付けは #35 の wake 口 v2
 で別途)。実装コード(すべて `crates/horizon-agent`、特に明記ない限り):
 
-- **型付き `memory.update` ツール** — `tools/memory.rs`(新規):
+- **型付き `memory_update` ツール** — `tools/memory.rs`(新規):
   `parse_update`(入力検証+`MemoryDigest` 構築)、`execute_auto`(純粋な
   検証+確認、副作用なし)、`MemoryDocument`(7 フィールドの文書、
   `apply`/`render`/`is_empty`)、`memory_document_from_events`(イベント
   ログから文書を再構成する reducer)。カタログ定義は
-  `tools/catalog.rs`。ツール ID は `memory.update`、権限は
-  `AutoAllowRead`(監査付き書き込み、承認不要 — `knowledge.write`/
-  `board.comment` と同型)。
+  `tools/catalog.rs`。ツール ID は `memory_update`、権限は
+  `AutoAllowRead`(監査付き書き込み、承認不要 — `knowledge_write`/
+  `board_comment` と同型)。
 - **フィールド単位の増分更新**: 各フィールドは `{op, content}` オブジェクト
   で、`op` は `set`(訂正)/`append`(追記)/`clear`(削除)。全文再生成は
   スキーマで構造的に不可能(変更するフィールドだけ指定する)。「更新不要」
@@ -146,9 +146,9 @@ v1 — セッション内の記憶機構(セッション跨ぎの種付けは #3
   (unit variant、enum 末尾に additive 追加)。リマインダ後も更新がなければ
   このイベントを残してターンを終える。
 - **常設ロールフラグ**: `RoleDefinition::standing: bool`(`roles.rs`)。
-  keeper は `horizon_board::keeper::ROLE_STANDING = true`。`memory.update`
+  keeper は `horizon_board::keeper::ROLE_STANDING = true`。`memory_update`
   は keeper の `ROLE_ALLOWED_TOOL_IDS` に追加。`rig_tool_definitions`
-  で `allowed_tool_ids == None`(ロールなし)のとき `memory.update` を非公開
+  で `allowed_tool_ids == None`(ロールなし)のとき `memory_update` を非公開
   にするフィルタを追加(コーディングセッションには見えない)。
 - **送信時投影**: `providers/rig/clearing.rs` の
   `history_for_provider_request` に `memory: Option<&MemoryDocument>`
@@ -166,7 +166,7 @@ v1 — セッション内の記憶機構(セッション跨ぎの種付けは #3
   注入して再実行、それでも false なら `MemoryCheckpointMissed` を
   emit して終了。`memory_satisfied`/`memory_reminded` は
   `SessionLoopState` のフィールドで、`Command::UserMessage`/TaskWake で
-  リセット。`memory.update` の結果は `Command::ToolCallResult` arm で
+  リセット。`memory_update` の結果は `Command::ToolCallResult` arm で
   検出し、`self.memory` に適用 + `MemoryDigest` イベント emit +
   `memory_satisfied = true`。
 - **wire 影響**: `Event` に variant 2 つを末尾に additive 追加
@@ -177,8 +177,8 @@ v1 — セッション内の記憶機構(セッション跨ぎの種付けは #3
 
 設計からの確定事項・実装判断:
 
-- **ツールハンドラは純粋**(host trait なし)。`board.comment` が
-  `BoardHost` 経由で外部ストアに書くのとは異なり、`memory.update` の
+- **ツールハンドラは純粋**(host trait なし)。`board_comment` が
+  `BoardHost` 経由で外部ストアに書くのとは異なり、`memory_update` の
   ハンドラは入力検証+確認のみ。状態更新(`MemoryDocument::apply`)と
   イベント emit はセッションループ(`Command::ToolCallResult` arm)が
   行う — ツール入力(`descriptor.args`)を `parse_update` で再解析して

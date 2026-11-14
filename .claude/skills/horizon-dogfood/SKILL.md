@@ -24,9 +24,9 @@ session and sends the prompt. The session starts in the issuing
 terminal's directory — its shell's cwd as `horizon-terminald` last
 published it, so a `cd` inside a program running in that shell (e.g. a
 Bash tool call) does not move it — not in a worktree; tier-1 auto-approval applies there (sandboxed `bash`,
-in-root `fs.write`/`fs.edit`), with `.git/` read-only to the sandbox
+in-root `fs_write`/`fs_edit`), with `.git/` read-only to the sandbox
 (`docs/sandbox-perimeter-design.md`). When a worktree is wanted, have
-the session call the automatic `worktree.enter` tool (e.g. say so in the
+the session call the automatic `worktree_enter` tool (e.g. say so in the
 prompt): the worktree (`.horizon/worktrees/<slug>`, branch
 `horizon/<slug>`) branches from the session root's `HEAD`, and the
 session's root moves there at the next turn boundary (the pane's
@@ -72,14 +72,14 @@ aborts. **Read the pending call's
 machine.** Never approve an outside-worktree write or a network-shaped
 command unless the owner asked for exactly that test.
 
-**Verify tier 1** (with or without an entered worktree): `fs.write`/`fs.edit`
+**Verify tier 1** (with or without an entered worktree): `fs_write`/`fs_edit`
 inside the workspace root and in-root `bash` must produce **no**
 `approval_requested` at all, and their `tool_call_finished.output` must
 carry `auto_approved: true`, `policy_tier: "contained"` (bash also
 `sandboxed: true`). What still asks: a Git metadata write (`git
 commit`, `git add`, ... — a `GitOperation` approval naming the gitdir
 roots, run sandboxed with `hooks/` and `config` still excluded), an
-`fs.write`/`fs.edit` into `.git/`, an `fs` read outside the root, and
+`fs_write`/`fs_edit` into `.git/`, an `fs` read outside the root, and
 network (a `web_fetch` domain, or a sandboxed bash call whose proxy
 request was denied). A sandboxed bash call refused a path outside the
 root resurfaces as an `approval_requested` for a narrow filesystem

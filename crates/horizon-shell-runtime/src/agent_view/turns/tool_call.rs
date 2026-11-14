@@ -24,14 +24,14 @@ use crate::agent_model::AgentFrameItem;
 /// call id rather than anything receipt-specific.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolCallBody {
-    /// fs.edit -- one reconstructed line diff per edit in the call's
+    /// fs_edit -- one reconstructed line diff per edit in the call's
     /// `edits` list, concatenated; `omitted` counts any lines trimmed by
     /// the cap.
     Diff {
         lines: Vec<DiffLine>,
         omitted: usize,
     },
-    /// fs.write -- a content preview labeled created/overwritten from the
+    /// fs_write -- a content preview labeled created/overwritten from the
     /// output, head-capped (the start of a new file matters most).
     ContentPreview {
         label: String,
@@ -48,7 +48,7 @@ pub enum ToolCallBody {
         lines: Vec<String>,
         omitted: usize,
     },
-    /// fs.read/glob/grep and other known-but-terse tools -- one summary
+    /// fs_read/glob/grep and other known-but-terse tools -- one summary
     /// line (path + range, match counts, ...).
     Summary(String),
     /// An unrecognized tool id -- the base design's raw-JSON fallback,
@@ -56,11 +56,11 @@ pub enum ToolCallBody {
     Raw { lines: Vec<String>, omitted: usize },
 }
 
-/// Diff body line cap -- generous, since an `fs.edit` batch's replacements
+/// Diff body line cap -- generous, since an `fs_edit` batch's replacements
 /// are normally small; guards against an unusually large one still bounding
 /// the number of elements the view has to build.
 const MAX_DIFF_LINES: usize = 300;
-/// fs.write content-preview line cap (head-capped: the file's start
+/// fs_write content-preview line cap (head-capped: the file's start
 /// matters most for a preview).
 const CONTENT_PREVIEW_MAX_LINES: usize = 200;
 /// bash captured-output line cap (tail-capped: the final summary line
@@ -70,7 +70,7 @@ const BASH_OUTPUT_TAIL_LINES: usize = 100;
 const RAW_FALLBACK_MAX_LINES: usize = 200;
 
 /// A terse one-line summary for a known-but-not-specially-bodied tool
-/// call. fs.read/grep/glob get shapes derived from their actual output
+/// call. fs_read/grep/glob get shapes derived from their actual output
 /// JSON (see `crates/horizon-agent/src/tools/fs/{read,grep,glob}.rs`);
 /// every other known tool id falls back to `classify`'s own
 /// verb/target/summary, reused rather than duplicated.
@@ -81,7 +81,7 @@ fn terse_summary(
     classification: ToolCallClassification,
 ) -> String {
     match tool_id {
-        "fs.read" => {
+        "fs_read" => {
             let path = str_field(input, "path").unwrap_or_default();
             let range = output.and_then(decode::<FileRead>).map(|result| {
                 format!(
@@ -94,16 +94,16 @@ fn terse_summary(
                 None => path.to_string(),
             }
         }
-        "fs.grep" | "fs.glob" => {
+        "fs_grep" | "fs_glob" => {
             let pattern = str_field(input, "pattern").unwrap_or_default();
-            let pattern = if tool_id == "fs.grep" {
+            let pattern = if tool_id == "fs_grep" {
                 format!("\"{pattern}\"")
             } else {
                 pattern.to_string()
             };
             let base = str_field(input, "base_path").unwrap_or_default();
             let count = output.and_then(|output| {
-                if tool_id == "fs.grep" {
+                if tool_id == "fs_grep" {
                     decode::<Matches<Location>>(output).map(|result| result.returned_count)
                 } else {
                     decode::<Matches<String>>(output).map(|result| result.returned_count)
@@ -154,13 +154,13 @@ fn raw_body(tool_id: &str, input: &Value, output: Option<&Value>) -> ToolCallBod
 }
 
 /// Maps a tool call's id/input/(optional) output to its [`ToolCallBody`]
-/// -- the per-tool body renderers of decision 3: fs.edit gets a
-/// reconstructed diff, fs.write a content preview, bash a command+output
+/// -- the per-tool body renderers of decision 3: fs_edit gets a
+/// reconstructed diff, fs_write a content preview, bash a command+output
 /// block, and every other known tool id a terse summary; a truly unknown
 /// id falls back to raw JSON.
 pub fn build_tool_call_body(tool_id: &str, input: &Value, output: Option<&Value>) -> ToolCallBody {
     match tool_id {
-        "fs.edit" => {
+        "fs_edit" => {
             // One diff per edit, concatenated in list order. A batch gets a
             // `--- <path>` header line before each edit so the reader can
             // tell which file (and which hunk of it) a run of lines belongs
@@ -205,7 +205,7 @@ pub fn build_tool_call_body(tool_id: &str, input: &Value, output: Option<&Value>
             let (lines, omitted) = cap_lines_head(all_lines, MAX_DIFF_LINES);
             ToolCallBody::Diff { lines, omitted }
         }
-        "fs.write" => {
+        "fs_write" => {
             let result = output.and_then(decode::<FileWritten>);
             if output.is_some() && result.is_none() {
                 return raw_body(tool_id, input, output);
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn build_tool_call_body_reconstructs_an_fs_edit_diff() {
         let body = build_tool_call_body(
-            "fs.edit",
+            "fs_edit",
             &json!({
                 "edits": [{
                     "path": "src/agent/view.rs",
@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn build_tool_call_body_labels_fs_write_created_vs_overwritten() {
         let created = build_tool_call_body(
-            "fs.write",
+            "fs_write",
             &json!({"path": "new.rs", "content": "fn main() {}"}),
             Some(&json!({"path": "new.rs", "bytes_written": 12, "created": true})),
         );
@@ -428,7 +428,7 @@ mod tests {
         }
 
         let overwritten = build_tool_call_body(
-            "fs.write",
+            "fs_write",
             &json!({"path": "old.rs", "content": "x"}),
             Some(&json!({"path": "old.rs", "bytes_written": 1, "created": false})),
         );
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn build_tool_call_body_concatenates_an_fs_edit_batchs_diffs_with_path_headers() {
         let body = build_tool_call_body(
-            "fs.edit",
+            "fs_edit",
             &json!({
                 "edits": [
                     {"path": "/w/a.rs", "old_string": "old", "new_string": "new"},
@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn build_tool_call_body_summarizes_fs_read_with_the_line_range() {
         let body = build_tool_call_body(
-            "fs.read",
+            "fs_read",
             &json!({"path": "src/lib.rs"}),
             Some(
                 &json!({"start_line": 1, "end_line": 40, "total_lines": 120, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null}),
@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn build_tool_call_body_summarizes_fs_grep_with_the_match_count() {
         let body = build_tool_call_body(
-            "fs.grep",
+            "fs_grep",
             &json!({"base_path": ".", "pattern": "notify"}),
             Some(
                 &json!({"returned_count": 3, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 3}),
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn build_tool_call_body_summarizes_fs_glob_with_the_match_count() {
         let body = build_tool_call_body(
-            "fs.glob",
+            "fs_glob",
             &json!({"base_path": ".", "pattern": "*.rs"}),
             Some(
                 &json!({"returned_count": 5, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 5}),
@@ -582,13 +582,13 @@ mod tests {
 
     #[test]
     fn a_reused_call_id_still_shows_the_second_occurrence_as_waiting() {
-        // A provider reused the call id "dup" for two distinct `fs.edit`
+        // A provider reused the call id "dup" for two distinct `fs_edit`
         // calls; the second one's permission request must attach to its
         // own occurrence, not the finished first one.
         let mut first = with_occurrence(
             tool_finished(
                 "dup",
-                "fs.edit",
+                "fs_edit",
                 json!({"edits": [{"path": "a.rs", "old_string": "first old", "new_string": "first new"}]}),
                 edit_result("a.rs"),
             ),
@@ -607,7 +607,7 @@ mod tests {
             with_occurrence(
                 tool_requested(
                     "dup",
-                    "fs.edit",
+                    "fs_edit",
                     json!({"edits": [{"path": "b.rs", "old_string": "second old", "new_string": "second new"}]}),
                 ),
                 "second",
@@ -642,13 +642,13 @@ mod tests {
         let items = vec![
             tool_finished(
                 "a",
-                "fs.read",
+                "fs_read",
                 json!({"path": "a.rs"}),
                 json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
             ),
             tool_finished(
                 "b",
-                "fs.edit",
+                "fs_edit",
                 json!({"edits": [{"path": "b.rs", "old_string": "x", "new_string": "y"}]}),
                 edit_result("b.rs"),
             ),
@@ -667,7 +667,7 @@ mod tests {
 
     #[test]
     fn tool_call_body_rejects_missing_source_items() {
-        let items = vec![tool_requested("a", "fs.read", json!({"path": "a.rs"}))];
+        let items = vec![tool_requested("a", "fs_read", json!({"path": "a.rs"}))];
         let views = build_tool_call_views(&items);
         assert!(tool_call_body(&[], &views[0]).is_none());
     }
@@ -696,18 +696,18 @@ mod tests {
     fn classification_recognizes_every_displayed_tool() {
         // Known generic tools need a Summary body even when their label changes.
         for known in [
-            "fs.edit",
-            "fs.write",
+            "fs_edit",
+            "fs_write",
             "bash",
-            "fs.read",
-            "fs.grep",
-            "fs.glob",
-            "workspace.snapshot",
-            "config.read",
-            "config.write",
-            "recall.search",
-            "recall.read",
-            "skill.read",
+            "fs_read",
+            "fs_grep",
+            "fs_glob",
+            "workspace_snapshot",
+            "config_read",
+            "config_write",
+            "recall_search",
+            "recall_read",
+            "skill_read",
             "task",
             "task_output",
         ] {
@@ -757,7 +757,7 @@ mod tests {
             {"index": 2, "path": "/w/c", "status": "not_attempted"}
         ]});
         let ToolCallBody::Diff { lines, .. } =
-            build_tool_call_body("fs.edit", &input, Some(&output))
+            build_tool_call_body("fs_edit", &input, Some(&output))
         else {
             panic!("expected edit receipts")
         };

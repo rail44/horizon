@@ -41,21 +41,21 @@ pub const THREAD_ROLE_TITLE: &str = "Wiki Thread";
 /// tools: a thread's session does not change the repository
 /// (docs/project-wiki-design.md, "Comments and the wiki view").
 pub const THREAD_ROLE_TOOLS: &[&str] = &[
-    "fs.read",
-    "fs.grep",
-    "fs.glob",
-    "recall.search",
-    "recall.read",
-    "recall.sessions",
-    "knowledge.read",
-    "skill.read",
+    "fs_read",
+    "fs_grep",
+    "fs_glob",
+    "recall_search",
+    "recall_read",
+    "recall_sessions",
+    "knowledge_read",
+    "skill_read",
     "task",
     "web_search",
     "web_fetch",
-    "wiki.list",
-    "wiki.read",
-    "wiki.write",
-    "wiki.edit",
+    "wiki_list",
+    "wiki_read",
+    "wiki_write",
+    "wiki_edit",
 ];
 
 pub const THREAD_ROLE_SKILLS: &[&str] = &["project-wiki"];
@@ -65,12 +65,12 @@ pub const THREAD_ROLE_PROMPT: &str = "You answer the owner's comments on the pro
      state. Each message names a page, the passage the comment is on, and the owner's \
      question or remark; later messages continue the same thread.\n\
      \n\
-     Read the page with `wiki.read` and whatever code, docs or history the answer needs. Your \
+     Read the page with `wiki_read` and whatever code, docs or history the answer needs. Your \
      final message is posted to the thread as your reply, so make it the answer itself, in the \
      owner's language, citing files where they help. Do not narrate your steps.\n\
      \n\
      When the comment shows the page is wrong, unclear or missing something, fix the page with \
-     `wiki.edit` (or `wiki.write` for a new page), following the `project-wiki` skill's page \
+     `wiki_edit` (or `wiki_write` for a new page), following the `project-wiki` skill's page \
      format, and say in your reply what you changed. You cannot change the repository: when \
      the answer needs a code or docs change, describe it for the owner instead.";
 
@@ -88,7 +88,7 @@ pub struct ToolDefinition {
     pub output_schema: Value,
 }
 
-/// `wiki.list`'s result.
+/// `wiki_list`'s result.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct WikiPages {
     /// The wiki's directory, outside the repository.
@@ -106,17 +106,17 @@ pub struct WikiPageEntry {
     pub id: Option<String>,
 }
 
-/// `wiki.read`'s result.
+/// `wiki_read`'s result.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct WikiPageText {
     /// The page name read, or `concepts` for the concept file.
     pub page: String,
-    /// The whole file, frontmatter included, never truncated: `wiki.edit`
+    /// The whole file, frontmatter included, never truncated: `wiki_edit`
     /// needs the exact text.
     pub text: String,
 }
 
-/// `wiki.write`'s result.
+/// `wiki_write`'s result.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct WikiPageWritten {
     /// The page name written.
@@ -125,7 +125,7 @@ pub struct WikiPageWritten {
     pub id: String,
 }
 
-/// `wiki.edit`'s result.
+/// `wiki_edit`'s result.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct WikiPageEdited {
     /// The page name edited.
@@ -157,7 +157,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
     };
     vec![
         tool(
-            "wiki.list",
+            "wiki_list",
             "List wiki pages",
             "List the project wiki's pages.",
             json!({"type": "object", "properties": {}, "additionalProperties": false}),
@@ -165,7 +165,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             output_schema::<WikiPages>(),
         ),
         tool(
-            "wiki.read",
+            "wiki_read",
             "Read a wiki page",
             "Read one project wiki page, or `concepts` for the concept \
              file.",
@@ -179,11 +179,11 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             output_schema::<WikiPageText>(),
         ),
         tool(
-            "wiki.write",
+            "wiki_write",
             "Write a wiki page",
             "Write a project wiki page whole, creating it if it does not exist. The text opens \
              with a `---` frontmatter block; leave out `id` and the page keeps its own. Use \
-             `wiki.edit` to change part of an existing page.",
+             `wiki_edit` to change part of an existing page.",
             json!({
                 "type": "object",
                 "properties": {
@@ -197,7 +197,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             output_schema::<WikiPageWritten>(),
         ),
         tool(
-            "wiki.edit",
+            "wiki_edit",
             "Edit a wiki page",
             "Replace exact strings in a project wiki page. Each `old` must occur exactly once in \
              the page as it stands after the edits before it; all edits apply or none do.",
@@ -247,7 +247,7 @@ struct EditInput {
 pub fn run_tool(store: &Store, tool_id: &str, input: &Value) -> Result<Value, String> {
     let parse = |error: serde_json::Error| format!("invalid input: {error}");
     let result = match tool_id {
-        "wiki.list" => {
+        "wiki_list" => {
             let pages = store.list_pages().map_err(message)?;
             to_value(WikiPages {
                 store: store.dir().to_path_buf(),
@@ -261,7 +261,7 @@ pub fn run_tool(store: &Store, tool_id: &str, input: &Value) -> Result<Value, St
                     .collect(),
             })
         }
-        "wiki.read" => {
+        "wiki_read" => {
             let PageInput { page } = PageInput::deserialize(input).map_err(parse)?;
             let text = if page == "concepts" {
                 std::fs::read_to_string(store.concepts_path()).map_err(|error| error.to_string())?
@@ -270,7 +270,7 @@ pub fn run_tool(store: &Store, tool_id: &str, input: &Value) -> Result<Value, St
             };
             to_value(WikiPageText { page, text })
         }
-        "wiki.write" => {
+        "wiki_write" => {
             let WriteInput { page, text } = WriteInput::deserialize(input).map_err(parse)?;
             let id = store.write_page(&page, &text).map_err(message)?;
             to_value(WikiPageWritten {
@@ -278,7 +278,7 @@ pub fn run_tool(store: &Store, tool_id: &str, input: &Value) -> Result<Value, St
                 id: crate::page::urn(id),
             })
         }
-        "wiki.edit" => {
+        "wiki_edit" => {
             let EditInput { page, edits } = EditInput::deserialize(input).map_err(parse)?;
             store.edit_page(&page, &edits).map_err(message)?;
             to_value(WikiPageEdited {
@@ -424,24 +424,24 @@ mod tests {
         let store = Store::at(dir.path());
         run_tool(
             &store,
-            "wiki.write",
+            "wiki_write",
             &json!({"page": "p", "text": "---\ntitle: P\n---\nold text\n"}),
         )
         .unwrap();
         run_tool(
             &store,
-            "wiki.edit",
+            "wiki_edit",
             &json!({"page": "p", "edits": [{"old": "old", "new": "new"}]}),
         )
         .unwrap();
-        let read = run_tool(&store, "wiki.read", &json!({"page": "p"})).unwrap();
+        let read = run_tool(&store, "wiki_read", &json!({"page": "p"})).unwrap();
         assert!(read["text"].as_str().unwrap().ends_with("new text\n"));
-        let list = run_tool(&store, "wiki.list", &json!({})).unwrap();
+        let list = run_tool(&store, "wiki_list", &json!({})).unwrap();
         assert_eq!(list["pages"][0]["name"], "p");
-        assert!(run_tool(&store, "wiki.read", &json!({"page": "../x"})).is_err());
+        assert!(run_tool(&store, "wiki_read", &json!({"page": "../x"})).is_err());
         assert!(run_tool(
             &store,
-            "wiki.edit",
+            "wiki_edit",
             &json!({"page": "p", "edits": [{"old": "zz", "new": ""}]})
         )
         .is_err());

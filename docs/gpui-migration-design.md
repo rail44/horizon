@@ -228,11 +228,11 @@ Concrete mappings:
   approvals, and a gpui-component Input composer. `new-agent` (with
   `--prompt`) verified end to end over the CLI against live agentd.
   Deferred to M5: virtualized-List/Markdown transcript polish,
-  host-tool answers (`workspace.snapshot` gets an error reply),
+  host-tool answers (`workspace_snapshot` gets an error reply),
   `session_list` resume-at-startup, roles (`new-config-agent`),
   per-session CLI approve/deny/cancel targeting.
 - **M5 — parity + retirement. Mechanical half landed 2026-07-11**
-  (config port `3735c5a`, workspace.snapshot host tool `80143ab`,
+  (config port `3735c5a`, workspace_snapshot host tool `80143ab`,
   startup resume `67db08d`, then a five-worker wave: Markdown
   transcript `697a475`, `[keybindings]` `d56b5d0`, agent CLI verbs +
   roles `12a28fd`, `check-gpui-terminal.sh` `56b7b17`, Reload Agent

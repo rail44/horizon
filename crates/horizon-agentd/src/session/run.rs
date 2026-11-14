@@ -421,7 +421,7 @@ mod tests {
             Event::ToolCallRequested(contract::ToolCallRequest {
                 call_id: contract::ToolCallId("blocked".into()),
                 occurrence_id: contract::OccurrenceId::new(),
-                tool_id: "workspace.snapshot".into(),
+                tool_id: "workspace_snapshot".into(),
                 input: serde_json::json!({}).into(),
             })
             .into(),
@@ -444,7 +444,7 @@ mod tests {
         struct QueuingHost(Sender<Command>);
         impl HostTools for QueuingHost {
             fn execute_auto(&self, tool: &str, _: &serde_json::Value) -> Option<serde_json::Value> {
-                assert_eq!(tool, "workspace.snapshot");
+                assert_eq!(tool, "workspace_snapshot");
                 self.0
                     .send(Command::ActivateWorktree {
                         base: "selected-base".into(),
@@ -488,7 +488,7 @@ mod tests {
             session_id,
             Event::ToolCallRequested(contract::ToolCallRequest {
                 call_id: call_id.clone(),
-                tool_id: "workspace.snapshot".into(),
+                tool_id: "workspace_snapshot".into(),
                 input: serde_json::json!({}).into(),
                 occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
             })

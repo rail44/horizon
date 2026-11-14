@@ -153,7 +153,7 @@ fn read_to_string_or_warn(path: &Path) -> Option<String> {
 /// Truncates `body` to at most `cap_chars` *characters* (not bytes, so a
 /// cap can never split a multi-byte UTF-8 sequence), returning whether it
 /// truncated anything. `pub(crate)` so `skills` can apply the same
-/// truncation discipline to a skill's body (`skill.read`'s size cap).
+/// truncation discipline to a skill's body (`skill_read`'s size cap).
 pub(crate) fn cap_to_chars(body: String, cap_chars: usize) -> (String, bool) {
     if body.chars().count() <= cap_chars {
         (body, false)

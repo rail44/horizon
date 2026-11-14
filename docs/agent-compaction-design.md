@@ -27,7 +27,7 @@ T-callid 級のタスクは有効窓 229k を使い切って死ぬ（追補 4）
   rig_history の組み立て時にのみ適用（撤去された seam の再導入 —
   2026-07-25 記録に「1 call site の 1 関数」と明記）。
 - placeholder は「ツール名・引数の要点・元サイズ・再取得手段
-  （recall.read の範囲 / 再実行）」を含む 1 行。**tool call と call_id
+  （recall_read の範囲 / 再実行）」を含む 1 行。**tool call と call_id
   のペアは保持**（ペア分断は provider 400 の既知源）。
 - **保護**: (1) user メッセージと brief は構造的に対象外（tool 結果
   しか触らない — instruction eviction を構成的に不可能にする）、
@@ -96,9 +96,9 @@ Horizon 固有の強み: 消した本文は recall で**実際に**再取得で�
   停止、最後に tool call を要求した assistant メッセージ＝「今の往復」は
   丸ごと除外（未回収バッチを半端に消せない）。ツール別例外は無し。
 - **placeholder** は 1 行:
-  `[cleared old tool result: fs.read path="…" (12345 chars). The full
-  result is retained in the session event log — use recall.search /
-  recall.read, or re-run the tool.]`
+  `[cleared old tool result: fs_read path="…" (12345 chars). The full
+  result is retained in the session event log — use recall_search /
+  recall_read, or re-run the tool.]`
 - **計測スイッチ**: `HORIZON_AGENT_CLEARING_THRESHOLD_PCT`（env only、
   1..=100 にクランプ、範囲外・非数値は既定値）。config file には載せない。
 - **wire 影響**: `Event` に variant を 1 つ追加（`Unknown` の手前）した

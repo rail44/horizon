@@ -1,6 +1,6 @@
-//! Reconstructed line diffs (`fs.edit`'s body/chip diffstat).
+//! Reconstructed line diffs (`fs_edit`'s body/chip diffstat).
 
-/// One line of a reconstructed diff body (stage D's fs.edit expansion,
+/// One line of a reconstructed diff body (stage D's fs_edit expansion,
 /// `docs/agent-output-ui-design.md` decision 4): `Context` lines are the
 /// common prefix/suffix trimmed below, painted with neither role;
 /// `Added`/`Removed` pair with `theme::diff_added_*`/`diff_removed_*` in
@@ -22,7 +22,7 @@ pub struct DiffLine {
 /// Reconstructs a full line diff between `old` and `new` by trimming the
 /// common prefix/suffix (kept as `Context` lines) and pairing the
 /// remaining middle as removed-then-added -- not a full diff algorithm
-/// (no interior-line matching), matching one `fs.edit` entry's
+/// (no interior-line matching), matching one `fs_edit` entry's
 /// old_string/new_string replacement shape. Operates on `&str` lines
 /// throughout, so multibyte content (e.g. Japanese text) round-trips
 /// unmodified -- no byte-level slicing here.

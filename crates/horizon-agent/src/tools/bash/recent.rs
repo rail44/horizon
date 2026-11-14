@@ -9,11 +9,11 @@
 //! before spawning a sandboxed bash call, the live frame is scanned for a
 //! prior `bash` result whose *base command* (the part before the first pipe)
 //! matches the incoming command's base, whose `output_file` spill still
-//! exists, and where no file-modifying tool call (`fs.write`/`fs.edit`, or a
+//! exists, and where no file-modifying tool call (`fs_write`/`fs_edit`, or a
 //! `bash` call with a *different* base) has run in between. On a match,
 //! execution is skipped and a guidance result is returned instead, pointing
-//! the model at the existing spill file so it can re-filter with `fs.read`/
-//! `fs.grep` without re-running the command.
+//! the model at the existing spill file so it can re-filter with `fs_read`/
+//! `fs_grep` without re-running the command.
 //!
 //! This never changes what `classify_call` or the approval gate would have
 //! decided — the short-circuit runs after classification returned `Contained`
@@ -84,11 +84,11 @@ pub(crate) struct ReusableOutput {
 /// the current request (which is not yet in the frame). Returns the reusable
 /// output if found, or `None` to fall through to a real run.
 ///
-/// "File-modifying" means `fs.write`, `fs.edit`, or a `bash` call whose base
+/// "File-modifying" means `fs_write`, `fs_edit`, or a `bash` call whose base
 /// command *differs* from the incoming one — a same-base bash call between
 /// the prior match and now is a re-filter (e.g. `cmd | tail -30` between
-/// `cmd` and `cmd | tail -5`), not a modification. Read-only tools (`fs.read`,
-/// `fs.grep`, `recall.*`, etc.) never count.
+/// `cmd` and `cmd | tail -5`), not a modification. Read-only tools (`fs_read`,
+/// `fs_grep`, `recall.*`, etc.) never count.
 pub(crate) fn find_reusable_output(
     frame: &AgentFrame,
     incoming_command: &str,
@@ -163,7 +163,7 @@ pub(crate) fn find_reusable_output(
 /// same-base re-filter is detected — `{ exit_code, output, truncated,
 /// output_file, reused_output }`. `output` is the guidance text the model sees
 /// in-context; `output_file` points at the prior run's spill file so the
-/// model can re-filter it with `fs.read`/`fs.grep` without re-running.
+/// model can re-filter it with `fs_read`/`fs_grep` without re-running.
 /// `reused_output: true` distinguishes this from a real run for the audit
 /// trail.
 pub(crate) fn guidance_output(incoming_command: &str, prior: &ReusableOutput) -> Response {
@@ -182,8 +182,8 @@ pub(crate) fn guidance_output(incoming_command: &str, prior: &ReusableOutput) ->
   {path}
 \
          \n\
-         Read or re-filter that file directly with `fs.read` (to view a slice) \
-         or `fs.grep` (to search within it) instead of re-running the command. \
+         Read or re-filter that file directly with `fs_read` (to view a slice) \
+         or `fs_grep` (to search within it) instead of re-running the command. \
          If the code or tests have changed since that run, re-run normally — this \
          short-circuit only fires when no file-modifying tool ran in between.
 \
@@ -213,7 +213,7 @@ pub(crate) fn guidance_output(incoming_command: &str, prior: &ReusableOutput) ->
 /// request counts as a file modification that should block the short-circuit.
 fn is_intervening_modification(tool_id: &str, command: Option<&str>, incoming_base: &str) -> bool {
     match tool_id {
-        "fs.write" | "fs.edit" => true,
+        "fs_write" | "fs_edit" => true,
         "bash" => match command {
             // A bash call with the same base is a re-filter, not a modification.
             Some(cmd) => base_command(cmd) != incoming_base,
@@ -403,7 +403,7 @@ mod tests {
         let f = frame(vec![
             bash_request("c1", "cargo nextest run"),
             bash_result("c1", Some(spill.to_str().unwrap()), Some(0)),
-            other_request("c2", "fs.edit"),
+            other_request("c2", "fs_edit"),
             other_result("c2"),
         ]);
         assert!(find_reusable_output(&f, "cargo nextest run | tail -5").is_none());
@@ -416,7 +416,7 @@ mod tests {
         let f = frame(vec![
             bash_request("c1", "cargo nextest run"),
             bash_result("c1", Some(spill.to_str().unwrap()), Some(0)),
-            other_request("c2", "fs.write"),
+            other_request("c2", "fs_write"),
             other_result("c2"),
         ]);
         assert!(find_reusable_output(&f, "cargo nextest run | tail -5").is_none());
@@ -459,7 +459,7 @@ mod tests {
         let f = frame(vec![
             bash_request("c1", "cargo nextest run"),
             bash_result("c1", Some(spill.to_str().unwrap()), Some(0)),
-            other_request("c2", "fs.read"),
+            other_request("c2", "fs_read"),
             other_result("c2"),
         ]);
         assert!(find_reusable_output(&f, "cargo nextest run | tail -5").is_some());
@@ -502,7 +502,7 @@ mod tests {
     fn modification_before_the_matching_run_does_not_invalidate_it() {
         let spill = temp_spill("older-modification");
         let f = frame(vec![
-            other_request("edit", "fs.edit"),
+            other_request("edit", "fs_edit"),
             other_result("edit"),
             bash_request("build", "cargo nextest run"),
             bash_result("build", Some(spill.to_str().unwrap()), Some(0)),

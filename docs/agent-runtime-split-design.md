@@ -34,10 +34,10 @@ Per-session crash isolation is not worth N processes: sessions are
 event-sourced, so a crash loses at most the in-flight turn.
 
 **2. Tools execute in the child.** fs and bash move with the session loop
-(this also removes the fs.grep/glob UI-thread jank and the thread-local
+(this also removes the fs_grep/glob UI-thread jank and the thread-local
 bash registry from the UI process). Approval *decisions* stay with the
 human in Horizon: approval-request events flow out, approve/deny commands
-flow back, unchanged. Horizon-coupled tools (`workspace.snapshot`, future
+flow back, unchanged. Horizon-coupled tools (`workspace_snapshot`, future
 UI-state tools) become **host tools**: the child asks the client to run
 them over the same connection (see guardrail 4).
 
@@ -61,7 +61,7 @@ exits → Horizon spawns the rebuilt binary → reconnect → `session_load`.
 **5. Four landing steps, each gated.**
 1. Crate split: `crates/horizon-agent` (contract, providers, tools,
    persistence — no floem, no horizon types); `horizon` keeps views,
-   live signal state, and the `workspace.snapshot` host tool. The
+   live signal state, and the `workspace_snapshot` host tool. The
    boundary becomes compiler-enforced.
 2. `horizon-agentd` bin + socket + hello handshake, sessions still
    in-process behind a switch.
@@ -435,14 +435,14 @@ unchanged — every new code path added this step is reached only through
 - **Testing scope**: `horizon-agentd`'s `tests/e2e.rs` gained `session_new`
   -> `UserMessage` -> ordered-transcript assertions (mock provider);
   `session_list` reflecting a live session; an auto-allow *host* tool
-  (`workspace.snapshot`) round-tripping a real `host_tool_request`/
+  (`workspace_snapshot`) round-tripping a real `host_tool_request`/
   `_response` over the socket; an approval round trip (`ApprovalRequested`
   out, `ApproveToolCall` in, `ToolCallFinished` out) via a new mock-provider
   trigger; and `bash` actually spawning a subprocess agentd-side and
   reporting its result back over the wire, via another new mock trigger
   (`crates/horizon-agent/src/providers/mock.rs` gained a `"bash"` trigger
   requesting the real `bash` tool, alongside the pre-existing
-  `mock.approval_required`/`workspace.snapshot`/streaming triggers). All of
+  `mock_approval_required`/`workspace_snapshot`/streaming triggers). All of
   it needed the test harness to stop reading the *developer's own*
   `~/.config/horizon/config.toml` and `~/.local/share/horizon/agent-*`
   files — a pre-existing hermeticity gap that step 2's tests never
@@ -938,7 +938,7 @@ still exist (now read by the writer module instead of `main.rs`). What's
 new: the writer thread now *keeps* the `Store` it opened, instead of
 dropping it right after the rebuild, so every event appended for the rest
 of the process's life is projected live too -- this is also the basis for
-the `recall.search`/`recall.read` agent tools (`tools::recall`). One
+the `recall_search`/`recall_read` agent tools (`tools::recall`). One
 casualty: a rebuild failure is no longer folded into `AgentdState`'s
 skipped-lines-style status (the writer module has no handle to
 `AgentdState`), so that specific client-visible surfacing regressed to

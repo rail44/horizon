@@ -1,6 +1,6 @@
 //! The tool-call readings every frontend shares: the display verb, target
 //! and terse summary a tool call reads as ([`classify`]), the edits and
-//! files an `fs.edit`/`fs.write` call touched ([`edit_entries`]), an edit's
+//! files an `fs_edit`/`fs_write` call touched ([`edit_entries`]), an edit's
 //! reconstructed line diff ([`reconstruct_line_diff`]), the line-capping
 //! mechanics expanded bodies lean on, and the plain types the shell's
 //! per-call view carries ([`FileEffect`], [`Burst`]). They live here because they know each

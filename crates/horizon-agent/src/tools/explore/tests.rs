@@ -795,14 +795,14 @@ fn a_running_child_mirrors_activity_and_retires_its_row_at_terminal() {
         || !host.progressed().is_empty(),
         "the first running observation",
     );
-    events.send(tool_request("fs.grep")).unwrap();
+    events.send(tool_request("fs_grep")).unwrap();
     wait_until(
         || {
             host.progressed()
                 .iter()
-                .any(|p| p.activity.as_deref() == Some("fs.grep"))
+                .any(|p| p.activity.as_deref() == Some("fs_grep"))
         },
-        "the fs.grep activity observation",
+        "the fs_grep activity observation",
     );
 
     // History-shaped events (the report landing) change nothing a row
@@ -830,7 +830,7 @@ fn a_running_child_mirrors_activity_and_retires_its_row_at_terminal() {
         observations,
         vec![
             (TaskProgressState::Running, None),
-            (TaskProgressState::Running, Some("fs.grep".to_string())),
+            (TaskProgressState::Running, Some("fs_grep".to_string())),
             (TaskProgressState::Finished, None),
         ],
         "activity changes only, and the row is retired exactly once"
@@ -862,8 +862,8 @@ fn fold_emits_activity_changes_only() {
         .unwrap();
     events_tx.send(user("prompt")).unwrap();
     events_tx.send(assistant("a partial thought")).unwrap();
-    events_tx.send(tool_request("fs.grep")).unwrap();
-    events_tx.send(tool_request("fs.grep")).unwrap();
+    events_tx.send(tool_request("fs_grep")).unwrap();
+    events_tx.send(tool_request("fs_grep")).unwrap();
     events_tx
         .send(Event::TurnEnded(TurnEndReason::Completed))
         .unwrap();
@@ -876,7 +876,7 @@ fn fold_emits_activity_changes_only() {
     assert!(matches!(outcome.terminal, Terminal::Completed));
     assert_eq!(
         *observed.lock().unwrap(),
-        vec![None, Some("fs.grep".to_string())],
+        vec![None, Some("fs_grep".to_string())],
         "the first observation and each activity change, deduplicated"
     );
 }
@@ -886,7 +886,7 @@ fn a_panicking_activity_observer_becomes_a_failed_outcome() {
     let (events_tx, events) = crossbeam_channel::unbounded();
     let (_cancel_tx, cancel) = crossbeam_channel::bounded::<()>(1);
     events_tx.send(user("prompt")).unwrap();
-    events_tx.send(tool_request("fs.grep")).unwrap();
+    events_tx.send(tool_request("fs_grep")).unwrap();
     let outcome = watch_until_terminal(&events, &cancel, &mut |_| {
         panic!("observer failed");
     });

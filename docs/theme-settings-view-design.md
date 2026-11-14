@@ -80,7 +80,7 @@ Consequences handled in the plumbing slice (slice 1, shipped):
   parallel path; left for later if a CLI-driven Theme Settings pane is
   ever wanted.
 - **Persistence**: decided **surviving** (the doc's preferred option).
-  The `workspace.snapshot` persistence DTO (`persistence.rs`'s
+  The `workspace_snapshot` persistence DTO (`persistence.rs`'s
   `WorkspaceState`) gained a `PaneKindState::View(ViewKindState)` variant,
   serialized as `{"view": "theme_settings"}` (serde's default
   externally-tagged newtype-variant shape) alongside the unchanged bare-

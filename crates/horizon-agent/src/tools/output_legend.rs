@@ -3,7 +3,7 @@
 //! A tool's catalog description is hand-written prose, but which fields its
 //! result carries and what they mean is a property of the output type. Leaving
 //! that half of the description hand-written too let the two drift: the
-//! `recall.sessions` description said only "bounded error/approval counts"
+//! `recall_sessions` description said only "bounded error/approval counts"
 //! while the SQL produced four unrelated aggregates, and the one accurate
 //! sentence lived in a doc comment the model never sees.
 //!

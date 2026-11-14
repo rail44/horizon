@@ -1,6 +1,6 @@
 //! Session worktrees -- `docs/session-relationship-design.md` decision 5 and
 //! `docs/sandbox-perimeter-design.md`. A session that enters a worktree
-//! (environment activation: `worktree.enter`, the board's `implement`) gets
+//! (environment activation: `worktree_enter`, the board's `implement`) gets
 //! its own `git worktree` under the target repository's
 //! `.horizon/worktrees/<slug>`, branched at the requested base; restore
 //! re-adopts it, and it is removed (never the branch) on a clean terminate
@@ -187,7 +187,7 @@ fn ensure_horizon_ignored(common_dir: &Path) {
 /// (`horizon/<slug>`); the directory lives at the repository root regardless
 /// of whether `source_dir` is itself a linked worktree, so a worktree created
 /// from another one is never nested inside it. Environment activation
-/// (`worktree.enter`, the board's `implement`) is the only production caller.
+/// (`worktree_enter`, the board's `implement`) is the only production caller.
 pub(crate) fn create_isolated_worktree_at(
     source_dir: &Path,
     session_id: Uuid,

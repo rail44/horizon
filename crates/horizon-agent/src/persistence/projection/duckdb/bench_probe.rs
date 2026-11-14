@@ -135,7 +135,7 @@ fn bench_mixed_turn_event(index: usize) -> Event {
         }),
         6 => Event::ToolCallRequested(ToolCallRequest {
             call_id: (ToolCallId(format!("call-{index}"))).clone(),
-            tool_id: "workspace.snapshot".to_string(),
+            tool_id: "workspace_snapshot".to_string(),
             input: serde_json::json!({ "index": index }).into(),
             occurrence_id: crate::contract::OccurrenceId(
                 (ToolCallId(format!("call-{index}"))).0.clone(),

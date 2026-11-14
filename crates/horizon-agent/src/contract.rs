@@ -391,7 +391,7 @@ pub enum Event {
     /// One turn's incremental update to a standing agent's memory document
     /// (`docs/standing-agent-memory-design.md`). A standing-role session
     /// (one whose `RoleDefinition::standing` is true) must end every turn
-    /// either by calling the `memory.update` tool — producing this event with
+    /// either by calling the `memory_update` tool — producing this event with
     /// the field-level operations applied — or by declaring no update is
     /// needed, producing this event with `no_update_reason` set. Both satisfy
     /// the turn-end checkpoint; a turn that does neither is reminded once and
@@ -444,7 +444,7 @@ pub struct HistoryCleared {
 /// (`docs/standing-agent-memory-design.md`). The seven fields are the Tier 2
 /// compaction template verbatim — goal / decisions / completed / in-progress /
 /// stuck / next step / related files and symbols — carried on the wire as
-/// snake_case so they round-trip through the `memory.update` tool's JSON
+/// snake_case so they round-trip through the `memory_update` tool's JSON
 /// schema unchanged. All fields are free-text blocks; the template gives the
 /// structure, the agent gives the content.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -476,7 +476,7 @@ impl MemoryField {
 
 /// A field-level operation in a [`MemoryDigest`]. `Set` replaces the field's
 /// content, `Append` adds to it, and `Clear` empties it — the three operations
-/// the `memory.update` tool exposes, so the agent edits one field at a time
+/// the `memory_update` tool exposes, so the agent edits one field at a time
 /// rather than regenerating the whole document (full-document regeneration
 /// collapses under iteration: ACE 66.7→57.1%, codex#14589 13.7→6.9% —
 /// `docs/research/standing-agent-memory-evidence-2026-08-15.md` §2-1).
@@ -490,7 +490,7 @@ pub enum MemoryOp {
 
 /// A reference to the span of the raw event log the digest summarizes — so a
 /// reader (the agent itself, an operator, or #35's wake-side seeding) can
-/// `recall.read` the original turn-by-turn exchanges the document condenses.
+/// `recall_read` the original turn-by-turn exchanges the document condenses.
 /// Sequence numbers are the event log's own ordering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct FoldedLogRange {
@@ -607,7 +607,7 @@ pub struct TaskProgress {
     pub description: String,
     pub state: TaskProgressState,
     /// What the child was last observed doing: the tool id of its most
-    /// recent `ToolCallRequested` (e.g. `"fs.grep"`), or `None` while it is
+    /// recent `ToolCallRequested` (e.g. `"fs_grep"`), or `None` while it is
     /// reasoning between tools.
     pub activity: Option<String>,
     /// When the child was launched, epoch milliseconds — lets a client show
@@ -1192,7 +1192,7 @@ mod json_value_tests {
     fn tool_call_request_encodes_input_as_json_with_required_identity() {
         let request = ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
-            tool_id: "fs.read".to_string(),
+            tool_id: "fs_read".to_string(),
             input: serde_json::json!({"path": "a.txt"}).into(),
             occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         };
@@ -1201,7 +1201,7 @@ mod json_value_tests {
             encoded,
             serde_json::json!({
                 "call_id": "call-1",
-                "tool_id": "fs.read",
+                "tool_id": "fs_read",
                 "input": {"path": "a.txt"},
                 "occurrence_id": "call-1",
             })

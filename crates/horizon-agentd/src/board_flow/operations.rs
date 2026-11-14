@@ -119,7 +119,7 @@ pub(crate) async fn operate(
             let events = queue(target, SessionInput {
                 id: source,
                 origin: format!("session:{}", caller.as_uuid()),
-                text: format!("Review task #{id} from {base} to {tip}. Checks: {checks}\nYour dedicated worktree is pinned to this exact target tip. Read the task's requirements and consultation with board.read. Inspect the full range and independently verify it without modifying the implementation. Return findings to the requesting task session."),
+                text: format!("Review task #{id} from {base} to {tip}. Checks: {checks}\nYour dedicated worktree is pinned to this exact target tip. Read the task's requirements and consultation with board_read. Inspect the full range and independently verify it without modifying the implementation. Return findings to the requesting task session."),
                 reply_to: Some(reply_to),
                 resume_work: false,
             })?;

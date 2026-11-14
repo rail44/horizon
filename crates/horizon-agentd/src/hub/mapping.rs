@@ -499,11 +499,11 @@ impl Mapper {
 
 pub(super) fn tool_kind(tool_id: &str) -> v2::ToolKind {
     match tool_id {
-        "fs.read" => v2::ToolKind::Read,
-        "fs.edit" | "fs.write" => v2::ToolKind::Edit,
+        "fs_read" => v2::ToolKind::Read,
+        "fs_edit" | "fs_write" => v2::ToolKind::Edit,
         "bash" => v2::ToolKind::Execute,
         "web_fetch" => v2::ToolKind::Fetch,
-        "web_search" | "fs.grep" | "fs.glob" => v2::ToolKind::Search,
+        "web_search" | "fs_grep" | "fs_glob" => v2::ToolKind::Search,
         _ => v2::ToolKind::Other,
     }
 }

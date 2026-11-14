@@ -1,4 +1,4 @@
-//! `fs.edit`: a list of exact-string replacements applied in one call.
+//! `fs_edit`: a list of exact-string replacements applied in one call.
 //!
 //! The input is a list and only a list — there is no single-edit top-level
 //! shape — so batching several hunks of one file, or edits across several
@@ -121,7 +121,7 @@ fn apply_one(
 
     if !resolved.is_file() {
         return Err(format!(
-            "`{path_arg}` does not exist as a file — use fs.write to create it"
+            "`{path_arg}` does not exist as a file — use fs_write to create it"
         ));
     }
 

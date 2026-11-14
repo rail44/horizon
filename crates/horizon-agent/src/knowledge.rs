@@ -1,6 +1,6 @@
 //! Project knowledge: a user-side store of distilled lessons keyed by
 //! project root, with an always-loaded prompt index and two tools
-//! (`knowledge.read` / `knowledge.write`).
+//! (`knowledge_read` / `knowledge_write`).
 //!
 //! **Design.** The store lives outside any
 //! repository, under the user's data home:
@@ -25,10 +25,10 @@
 //! 1. **Always loaded**: a prompt section listing `id: description` for
 //!    every `status: active` entry, capped at 16_000 characters (entries
 //!    adopted in `updated`-descending order when the cap is exceeded).
-//! 2. **Read on demand**: `knowledge.read` returns one entry's
+//! 2. **Read on demand**: `knowledge_read` returns one entry's
 //!    frontmatter + body, re-read from disk each call (same "edit ->
-//!    observe" loop as `skill.read`).
-//! 3. **Write on demand**: `knowledge.write` upserts an entry. No
+//!    observe" loop as `skill_read`).
+//! 3. **Write on demand**: `knowledge_write` upserts an entry. No
 //!    approval (the tool-event recording is the audit); validation
 //!    rejects a non-slug `id`, an empty `description`, or an empty
 //!    `sources` list.
@@ -49,7 +49,7 @@ use document::{is_valid_slug, parse_knowledge_md, serialize_entry, ParsedKnowled
 /// `skills::SKILL_BODY_CAP_CHARS`.
 const KNOWLEDGE_INDEX_CAP_CHARS: usize = 16_000;
 
-/// Cap for a single entry's body as returned by `knowledge.read`, in
+/// Cap for a single entry's body as returned by `knowledge_read`, in
 /// characters. Matches `skills::SKILL_BODY_CAP_CHARS` — a knowledge
 /// entry is arbitrary user-authored content, so it needs the same
 /// size-cap discipline.
@@ -206,7 +206,7 @@ pub(crate) fn prompt_section(cwd: &Path) -> Option<String> {
         "Project knowledge distilled from past session logs: procedures, traps, and \
          environment behaviors in this project that its code and docs do not tell you. \
          Each entry cites verifiable sources. When your situation matches a line, act on \
-         it; read the full entry with knowledge.read when you need its details.\n",
+         it; read the full entry with knowledge_read when you need its details.\n",
     );
     let mut chars = section.chars().count();
     for entry in &active {
@@ -226,14 +226,14 @@ pub(crate) fn prompt_section(cwd: &Path) -> Option<String> {
 use crate::tools::output::error as error_output;
 use crate::tools::output::*;
 
-/// Executes `knowledge.read`: returns one entry's frontmatter and body,
+/// Executes `knowledge_read`: returns one entry's frontmatter and body,
 /// re-read from disk. Any status is readable. The entry is looked up by
 /// `id` in the store keyed by `root` (the session's project main root,
 /// resolved by the caller).
 pub(crate) fn execute_read(root: &Path, id: &str) -> Response {
     if !is_valid_slug(id) {
         return error_output(format!(
-            "knowledge.read: `id` must be a slug (lowercase alphanumeric and hyphens), got `{id}`"
+            "knowledge_read: `id` must be a slug (lowercase alphanumeric and hyphens), got `{id}`"
         ));
     }
     let path = store_dir_for_root(root).join(format!("{id}.md"));
@@ -259,13 +259,13 @@ pub(crate) fn execute_read(root: &Path, id: &str) -> Response {
             )),
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => error_output(format!(
-            "no knowledge entry `{id}` — write one with knowledge.write"
+            "no knowledge entry `{id}` — write one with knowledge_write"
         )),
         Err(error) => error_output(format!("cannot read `{}`: {error}", path.display())),
     }
 }
 
-/// Executes `knowledge.write`: upserts an entry. Validates `id` (slug),
+/// Executes `knowledge_write`: upserts an entry. Validates `id` (slug),
 /// `description` (non-empty), and `sources` (non-empty). An existing
 /// entry's `created` date is preserved; `updated` is always set to
 /// today. Optional fields (`anchors`, `status`) default to the existing
@@ -275,7 +275,7 @@ pub(crate) fn execute_write(root: &Path, input: &crate::tools::input::KnowledgeW
     let id = input.id.as_str();
     if !is_valid_slug(id) {
         return error_output(format!(
-            "knowledge.write: `id` must be a slug (lowercase alphanumeric and hyphens), got `{id}`"
+            "knowledge_write: `id` must be a slug (lowercase alphanumeric and hyphens), got `{id}`"
         ));
     }
     let description = &input.description;
@@ -572,7 +572,7 @@ mod tests {
         assert!(section.contains("active-1"));
         assert!(section.contains("Active entry"));
         assert!(!section.contains("expired-1"));
-        assert!(section.contains("knowledge.read"));
+        assert!(section.contains("knowledge_read"));
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&_data);
     }

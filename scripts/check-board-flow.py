@@ -140,25 +140,25 @@ class Provider(http.server.BaseHTTPRequestHandler):
             value = json.loads(outputs[call["id"]])
             return re.findall(r"(?m)^[0-9a-f]{40}$", value["output"]["output"])[-1]
 
-        if "board.read" not in available:
-            if "memory.update" in available:
-                tool = once("memory.update", {"no_update": {"reason": "The fixture keeps its state in task records."}})
+        if "board_read" not in available:
+            if "memory_update" in available:
+                tool = once("memory_update", {"no_update": {"reason": "The fixture keeps its state in task records."}})
                 if tool:
                     return tool, None
             return None, "Fixture checkpoint complete."
         for role in ["board-organizer", "board-task", "board-reviewer"]:
-            if f"Read the {role} skill" in system and "skill.read" in available:
-                tool = once("skill.read", {"id": role})
+            if f"Read the {role} skill" in system and "skill_read" in available:
+                tool = once("skill_read", {"id": role})
                 if tool:
                     return tool, None
         if "Read the board-organizer skill" in system:
             actions = [
-                ("board.read", {}),
-                ("board.update", {"action": "add", "title": DEPENDENT, "body": "Wait for task 1 to complete, then verify its result is available."}),
-                ("board.update", {"action": "dependencies", "id": 2, "depends_on": [1]}),
-                ("board.update", {"action": "move", "id": 1, "position": "first"}),
-                ("board.session", {"action": "consult", "id": 2, "text": "Wait for prerequisite 1 before completing this dependent task."}),
-                ("board.session", {"action": "consult", "id": 1, "text": "Investigate the desired output and ask the owner before implementation."}),
+                ("board_read", {}),
+                ("board_update", {"action": "add", "title": DEPENDENT, "body": "Wait for task 1 to complete, then verify its result is available."}),
+                ("board_update", {"action": "dependencies", "id": 2, "depends_on": [1]}),
+                ("board_update", {"action": "move", "id": 1, "position": "first"}),
+                ("board_session", {"action": "consult", "id": 2, "text": "Wait for prerequisite 1 before completing this dependent task."}),
+                ("board_session", {"action": "consult", "id": 1, "text": "Investigate the desired output and ask the owner before implementation."}),
             ]
             for name, arguments in actions:
                 tool = once(name, arguments)
@@ -171,7 +171,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
                 raise AssertionError("Reviewer received no exact base/tip request")
             task, base, target = reviews[-1]
             assert task == "1" and base == self.base
-            tool = once("board.read", {"id": 1})
+            tool = once("board_read", {"id": 1})
             if tool:
                 return tool, None
             # Each review is a fresh conversation. Decide from the requested
@@ -198,26 +198,26 @@ class Provider(http.server.BaseHTTPRequestHandler):
             return None, REVIEW_OK if lines[3] == "final" else REVIEW_FIX
         if "Read the board-task skill" in system:
             assert "board-integration" in system, "Project policy must be advertised to task sessions"
-            tool = once("skill.read", {"id": "board-integration"})
+            tool = once("skill_read", {"id": "board-integration"})
             if tool:
                 return tool, None
             assignments = re.findall(r"Task #(\d+)\. Board organizer session:", text)
             if not assignments:
                 raise AssertionError("Task session has no explicit task identity")
             task = int(assignments[0])
-            tool = once("board.read", {"id": task})
+            tool = once("board_read", {"id": task})
             if tool:
                 return tool, None
             if task == 2:
                 if "Prerequisite #1 was closed." not in text:
                     return None, "FIXTURE_WAITING: prerequisite 1 is incomplete."
                 command = "test \"$(cat alpha.txt)\" = final"
-                tool = once("bash", {"command": command}) or once("board.update", {"action": "close", "id": 2, "is_closed": True})
+                tool = once("bash", {"command": command}) or once("board_update", {"action": "close", "id": 2, "is_closed": True})
                 return tool, None if tool else DEPENDENCY_SEEN
             assert task == 1
             if OWNER not in text:
                 return None, CONSULTATION
-            actions = [("board.session", {"action": "implement", "id": 1, "base": self.base}),
+            actions = [("board_session", {"action": "implement", "id": 1, "base": self.base}),
                        ("bash", {"command": self.commands()["first"]}),
                        ("bash", {"command": self.commands()["second"]})]
             for name, arguments in actions:
@@ -225,7 +225,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
                 if tool:
                     return tool, None
             initial_tip = tip(self.commands()["second"])
-            tool = once("board.session", {"action": "review", "id": 1, "base": self.base, "tip": initial_tip, "checks": "Two commits; alpha.txt and evidence.txt exist. Verify final content."})
+            tool = once("board_session", {"action": "review", "id": 1, "base": self.base, "tip": initial_tip, "checks": "Two commits; alpha.txt and evidence.txt exist. Verify final content."})
             if tool:
                 return tool, None
             if REVIEW_FIX not in text:
@@ -234,13 +234,13 @@ class Provider(http.server.BaseHTTPRequestHandler):
             if tool:
                 return tool, None
             corrected_tip = tip(self.commands()["correct"])
-            tool = once("board.session", {"action": "review", "id": 1, "base": self.base, "tip": corrected_tip, "checks": "Three commits including review correction; alpha.txt must contain final."})
+            tool = once("board_session", {"action": "review", "id": 1, "base": self.base, "tip": corrected_tip, "checks": "Three commits including review correction; alpha.txt must contain final."})
             if tool:
                 return tool, None
             if REVIEW_OK not in text:
                 return None, WAITING_REREVIEW
             command = f"git -C {shlex.quote(str(self.repository))} merge --ff-only {corrected_tip}"
-            tool = once("bash", {"command": command}) or once("board.update", {"action": "close", "id": 1, "is_closed": True})
+            tool = once("bash", {"command": command}) or once("board_update", {"action": "close", "id": 1, "is_closed": True})
             return tool, None if tool else COMPLETE
         raise AssertionError("Unknown role or unexpected ordinary session")
 

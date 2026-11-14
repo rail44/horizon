@@ -761,7 +761,7 @@ mod tests {
     fn candidate(kind: ApprovalKind) -> ApprovalCandidate {
         let request = ToolCallRequest {
             call_id: (crate::contract::ToolCallId("call-1".to_string())).clone(),
-            tool_id: "mock.approval_required".to_string(),
+            tool_id: "mock_approval_required".to_string(),
             input: serde_json::json!({}).into(),
             occurrence_id: crate::contract::OccurrenceId(
                 (crate::contract::ToolCallId("call-1".to_string()))

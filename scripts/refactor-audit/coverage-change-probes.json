@@ -7,7 +7,7 @@
   "groups": [
     {
       "id": "tool_extension",
-      "scenario": "Add an optional bounded fs.read character budget and show the applied budget.",
+      "scenario": "Add an optional bounded fs_read character budget and show the applied budget.",
       "status": "reviewed",
       "decision": "preserve",
       "reason": "Schema, execution and display each own a different decision. Root escape classification and approved/auto execution already carry the same input. Keep these owners; a generic schema-to-executor or presentation abstraction would not remove duplicated business decisions.",

@@ -1,4 +1,4 @@
-//! The `workspace.snapshot` host-tool payload: the JSON view of the
+//! The `workspace_snapshot` host-tool payload: the JSON view of the
 //! workspace an agent session sees when it asks its host. Shared by both
 //! shells (each answers the wire request with this same shape).
 

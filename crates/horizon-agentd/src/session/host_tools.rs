@@ -32,7 +32,7 @@ fn send_host_tool_request(state: &AgentdState, request: HostToolRequest) -> bool
 /// the current connection (if any -- see [`send_host_tool_request`];
 /// connection-global, exactly as the JSONL envelope's receiver treated it) and blocks this
 /// session's dedicated thread on the matching `host_tool_response`. Only
-/// `workspace.snapshot` is ever routed here today (the same tool id
+/// `workspace_snapshot` is ever routed here today (the same tool id
 /// the shell answers from its own workspace model,
 /// `src/workspace/session_events.rs`) -- everything else falls through to `None`, letting
 /// `execute_agent_tool` try the crate's own `tools::fs` auto tools next.
@@ -42,7 +42,7 @@ pub(super) struct AgentdHostTools {
 
 impl HostTools for AgentdHostTools {
     fn execute_auto(&self, tool_id: &str, input: &serde_json::Value) -> Option<serde_json::Value> {
-        if tool_id != "workspace.snapshot" {
+        if tool_id != "workspace_snapshot" {
             return None;
         }
 
@@ -77,7 +77,7 @@ impl HostTools for AgentdHostTools {
         response.map(|response| response.output.0)
     }
 
-    /// `worktree.enter`: the activation request the board's `implement`
+    /// `worktree_enter`: the activation request the board's `implement`
     /// action sends, with the base pinned to the session root's current
     /// `HEAD` commit. `SessionEnvironment::activate` repeats the ownership
     /// check when the provider reaches its turn boundary.
@@ -115,7 +115,7 @@ mod tests {
     };
     use std::path::Path;
 
-    /// Runs one `worktree.enter` call through the tool executor, returning
+    /// Runs one `worktree_enter` call through the tool executor, returning
     /// the recorded result's outcome flag and JSON body.
     fn enter(state: &Arc<AgentdState>, session: SessionId) -> (bool, serde_json::Value) {
         let tool_state = ToolSessionBuilder::for_current_dir(
@@ -133,12 +133,12 @@ mod tests {
             &ToolCallRequest {
                 call_id: ToolCallId("enter-1".into()),
                 occurrence_id: OccurrenceId::new(),
-                tool_id: "worktree.enter".into(),
+                tool_id: "worktree_enter".into(),
                 input: serde_json::json!({}).into(),
             },
         );
         let Ok(Execution::Applied(ToolUpdate::Finished { events, result })) = execution else {
-            panic!("worktree.enter resolves synchronously, got {execution:?}");
+            panic!("worktree_enter resolves synchronously, got {execution:?}");
         };
         assert!(events
             .iter()

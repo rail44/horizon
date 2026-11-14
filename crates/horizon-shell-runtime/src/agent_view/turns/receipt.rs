@@ -36,8 +36,8 @@ pub fn receipt_summary(calls: &[ToolCallView]) -> String {
             continue;
         }
         match call.tool_id.as_str() {
-            "fs.read" => reads += 1,
-            "fs.edit" | "fs.write" => edits += call.affected_files.len().max(1),
+            "fs_read" => reads += 1,
+            "fs_edit" | "fs_write" => edits += call.affected_files.len().max(1),
             "bash" => runs += 1,
             _ => searches += 1,
         }
@@ -83,25 +83,25 @@ mod tests {
         let items = vec![
             tool_finished(
                 "q1",
-                "fs.grep",
+                "fs_grep",
                 json!({"base_path": ".", "pattern": "x"}),
                 json!({"returned_count": 1, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 1}),
             ),
             tool_finished(
                 "q2",
-                "fs.glob",
+                "fs_glob",
                 json!({"base_path": ".", "pattern": "*.rs"}),
                 json!({"returned_count": 2, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 2}),
             ),
             tool_finished(
                 "r1",
-                "fs.read",
+                "fs_read",
                 json!({"path": "a.rs"}),
                 json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
             ),
             tool_finished(
                 "e1",
-                "fs.edit",
+                "fs_edit",
                 json!({"edits": [{"path": "b.rs", "old_string": "x", "new_string": "y"}]}),
                 edit_result("b.rs"),
             ),
@@ -114,7 +114,7 @@ mod tests {
         ];
         let tool_calls = build_tool_call_views(&items);
         let aggregate = aggregate_receipt(&tool_calls);
-        assert_eq!(aggregate.query_count, 2); // fs.grep + fs.glob
+        assert_eq!(aggregate.query_count, 2); // fs_grep + fs_glob
         assert_eq!(aggregate.read_file_count, 1);
         assert_eq!(aggregate.edited_file_count, 1);
         assert_eq!(aggregate.bash_count, 1);
@@ -130,31 +130,31 @@ mod tests {
         let items = vec![
             tool_finished(
                 "r1",
-                "fs.read",
+                "fs_read",
                 json!({"path": "a.rs"}),
                 json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
             ),
             tool_finished(
                 "r2",
-                "fs.read",
+                "fs_read",
                 json!({"path": "a.rs"}),
                 json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
             ),
             tool_finished(
                 "r3",
-                "fs.read",
+                "fs_read",
                 json!({"path": "b.rs"}),
                 json!({"total_lines": 5, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 5}),
             ),
             tool_finished(
                 "e1",
-                "fs.edit",
+                "fs_edit",
                 json!({"edits": [{"path": "c.rs", "old_string": "x", "new_string": "y"}]}),
                 edit_result("c.rs"),
             ),
             tool_finished(
                 "e2",
-                "fs.write",
+                "fs_write",
                 json!({"path": "c.rs", "content": "z"}),
                 json!({"path": "c.rs", "created": false, "bytes_written": 1}),
             ),
@@ -213,13 +213,13 @@ mod tests {
             user_message("fix the bug"),
             tool_finished(
                 "a",
-                "fs.grep",
+                "fs_grep",
                 json!({"base_path": ".", "pattern": "x"}),
                 json!({"returned_count": 2, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 2}),
             ),
             tool_finished(
                 "b",
-                "fs.read",
+                "fs_read",
                 json!({"path": "a.rs"}),
                 json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
             ),

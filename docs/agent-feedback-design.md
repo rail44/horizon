@@ -111,12 +111,12 @@ The old automatic schema migration was retired; the unused migration flag
 and no-op extension point were removed on 2026-09-25. Opening a store
 initializes absent tables but does not alter incompatible existing tables.
 
-Recall (decision 3): `recall.search` hits carry `is_error` (tool-result
+Recall (decision 3): `recall_search` hits carry `is_error` (tool-result
 hits only) and `turn_outcome` (the end reason of the enclosing turn,
 joined via `agent_events.turn_id`; `null` if the event has no turn or
-the turn hasn't ended). `recall.search` also gained an optional
+the turn hasn't ended). `recall_search` also gained an optional
 `turn_outcome` input filter, validated against the four end-reason
-strings. `recall.read` entries carry `is_error` on tool results only.
+strings. `recall_read` entries carry `is_error` on tool results only.
 
 ## Implementation shape: skill distillation (2026-07-07)
 
@@ -127,13 +127,13 @@ enforcement (no narrowed tool allowlist, no trust flag, no persisted
 identity), so it carries no envelope, only knowledge. The knowledge lives
 entirely in a new embedded skill, `horizon-distill`
 (`crates/horizon-agent/skills/horizon-distill/SKILL.md`), that any
-generic session can `skill.read` on the owner's request; every tool it
-uses (`recall.search`/`recall.read`, `fs.read`, `fs.write`) already
+generic session can `skill_read` on the owner's request; every tool it
+uses (`recall_search`/`recall_read`, `fs_read`, `fs_write`) already
 existed.
 
 **The one mechanism gap it needed**: mining recipes like "list how recent
 work ended" have no substring to search for -- they want to cluster hits by
-`turn_outcome` alone. `recall.search`'s `query` input is now optional when
+`turn_outcome` alone. `recall_search`'s `query` input is now optional when
 `turn_outcome` is given (*listing mode*): the SQL layer
 (`Store::search_history`, `query.rs`) drops the `ILIKE` predicate from
 every branch entirely rather than matching an empty pattern, so a listing
@@ -144,10 +144,10 @@ snippet is the bounded head of the text instead (same character cap, no
 match window to build around).
 
 **The approval gate**: distillation drafts land at
-`.horizon/skills/<id>/SKILL.md` via `fs.write` -- the same path the v2
+`.horizon/skills/<id>/SKILL.md` via `fs_write` -- the same path the v2
 repository-skill layer already reads from
 (`docs/agent-roles-and-skills-design.md`'s "v2" section), which is inside
-the session's workspace root and therefore git-versioned. `fs.write`
+the session's workspace root and therefore git-versioned. `fs_write`
 already requires approval; that approval *is* decision 4's gate verbatim,
 not a new mechanism layered on top. Landing the draft as a normal file
 write also means the owner can review it the same way as any other change
@@ -158,15 +158,15 @@ The skill itself teaches the judgment decision 4 flagged as the harder
 half: which lessons clear the bar (recurring across 2+ incidents,
 generalizable but concrete, model-agnostic, not already covered by an
 existing skill), how to read full context before concluding anything
-(`recall.read`, never a bare snippet), and restraint -- an empty pass
+(`recall_read`, never a bare snippet), and restraint -- an empty pass
 ("nothing recurring enough to distill") is a fine outcome, naming
 `docs/research/letta.md` §14's "generic and lossy" failure mode as exactly
 what forcing a lesson out of insufficient evidence would produce.
 
 **Update (2026-08-05):** The knowledge layer v1 merged, and with it the
 distillation write target moved. Drafts no longer land as repository skill
-files (`.horizon/skills/<id>/SKILL.md` via `fs.write`); they land as
-entries in the user-side knowledge store via `knowledge.write`, which the
+files (`.horizon/skills/<id>/SKILL.md` via `fs_write`); they land as
+entries in the user-side knowledge store via `knowledge_write`, which the
 system prompt's Project knowledge index surfaces back to every session.
 This keeps distilled lessons out of the git tree (the owner promotes a
 lesson to a committed repository skill separately, by their own
@@ -174,5 +174,5 @@ decision) while still giving every future session automatic access to
 them. The `horizon-distill` skill was rewritten to match: its signal
 priority, duplicate-avoidance, and writing-rules sections now teach the
 knowledge-layer flow and the `sources`/`anchors` contract, replacing the
-former `fs.write`-to-`.horizon/skills` instructions. The section above is
+former `fs_write`-to-`.horizon/skills` instructions. The section above is
 kept as the original design record; this paragraph is the only change.

@@ -16,12 +16,12 @@ Per-action approval collapses in practice — the outcome
 confirmed on Horizon's own event log (analysis of the owner's real
 ~19-day log, 2026-07-19):
 
-- 248 approvals total; **bash is ~76% of them** (187), fs.edit 49,
-  fs.write 8. Recent sessions: median 8, p90 ~18, max 23 approvals per
+- 248 approvals total; **bash is ~76% of them** (187), fs_edit 49,
+  fs_write 8. Recent sessions: median 8, p90 ~18, max 23 approvals per
   session.
 - Median wait-to-click is ~2.7s — the pain is prompt *count*, not
   reaction time.
-- The worst single case: 22 consecutive `fs.edit` approvals for one
+- The worst single case: 22 consecutive `fs_edit` approvals for one
   continuous refactor of one file.
 - Refuted by the same data: the "edit fails → model falls back to
   whole-file writes" hypothesis (1 genuine edit failure in 51 calls,
@@ -37,7 +37,7 @@ research doc).
 ## The three tiers
 
 1. **Auto by construction.** In every session, `bash` runs without
-   approval inside the OS sandbox below, and `fs.write`/`fs.edit` run
+   approval inside the OS sandbox below, and `fs_write`/`fs_edit` run
    without approval within `workspace_root` (their confinement is the
    tools' own path check in `tools/state.rs`). The sandbox's writable
    range is the workspace root minus its `.git` entry: a plain checkout's
@@ -475,7 +475,7 @@ product-owned API. Decisions:
 - **Classification is a structural predicate, not a tool allowlist**
   (2026-07-19 consultation): `classify_input` returns Contained only when
   the call runs *inside* the containment perimeter (sandboxed `bash` that
-  writes no Git metadata, an `fs.write`/`fs.edit` inside the workspace
+  writes no Git metadata, an `fs_write`/`fs_edit` inside the workspace
   root and outside its `.git`), independent of session isolation
   (`docs/sandbox-perimeter-design.md`). Every tool that
   runs in the host agent/daemon process outside that perimeter — MCP
@@ -665,7 +665,7 @@ refactoring wave folds into this item.
    `judge_shadow_verdict` to `judge_verdict` with an enforcing-mode marker.
    - **Production approval traffic includes web tools.** `web_fetch` exact-host
      misses enter the gate. `web_search` auto-runs against one fixed vendor
-     and creates no candidate. `mock.boundary_crossing` remains a
+     and creates no candidate. `mock_boundary_crossing` remains a
      transport-free fixture; non-isolated fs/bash calls are `AlwaysAsk` but
      now enter the same enforcing gate.
    - **Judge model config**: the `small_model` pair. The session captures
@@ -735,14 +735,14 @@ session (`cef5fc2e`) found 80 approval requests, all approved, mostly
 repeats of the same few causes. The owner approved fixing all of the code
 side. What changed, and why:
 
-- **fs reads follow the session's filesystem grants.** `fs.read`/`fs.grep`/
-  `fs.glob` asked before reading under a `[[grants.project]]` tree the
+- **fs reads follow the session's filesystem grants.** `fs_read`/`fs_grep`/
+  `fs_glob` asked before reading under a `[[grants.project]]` tree the
   sandbox already let `bash` write (16 asks in one session reading
   `~/.cargo/registry`), and before reading the `bash` spill file the tool
   result itself points at. The read tools' readable roots now include the
   effective grants and `horizon-bash-*.log` directly under the temp dir.
 - **Domains approved for a session survive environment activation.**
-  `worktree.enter` rebuilt the tool state with a fresh domain store seeded
+  `worktree_enter` rebuilt the tool state with a fresh domain store seeded
   from config only, so `index.crates.io` and friends were asked again after
   every activation. The replacement now copies the previous store's
   domains (`ToolSessionState::retain_domains_from`). They are still

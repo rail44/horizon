@@ -30,7 +30,7 @@ use super::{
 /// `substr` -- *before* Rust ever sees the row. This is what stops a single
 /// huge tool result from ballooning a recall response regardless of the
 /// caller's own `limit`; `tools::recall` trims further (a ~200-char search
-/// snippet, a ~16k-char total cap for `recall.read`) on top of this.
+/// snippet, a ~16k-char total cap for `recall_read`) on top of this.
 const RECALL_TEXT_BOUND_CHARS: usize = 4_000;
 
 /// One request per execution identity; the schema enforces uniqueness. Keep
@@ -895,17 +895,17 @@ mod recall_tests {
                 ))
             };
             let mut events = vec![
-                request("dup", "first", "fs.read"),
+                request("dup", "first", "fs_read"),
                 result("dup", "first"),
                 request("dup", "second", "bash"),
                 result("dup", "second"),
                 result("orphan", "unknown"),
-                request("orphan", "future", "fs.write"),
+                request("orphan", "future", "fs_write"),
             ];
-            let mut expected = vec!["fs.read", "bash", "orphan"];
+            let mut expected = vec!["fs_read", "bash", "orphan"];
             {
                 events.push(result("dup", "first"));
-                expected.push("fs.read");
+                expected.push("fs_read");
             }
             store.append_events(session, None, events).unwrap();
             let rows = store.read_history_window(session, 0, 100).unwrap();
@@ -952,7 +952,7 @@ mod recall_tests {
                     }),
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: call_id.clone(),
-                        tool_id: "fs.grep".to_string(),
+                        tool_id: "fs_grep".to_string(),
                         input: serde_json::json!({ "pattern": "fox" }).into(),
                         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                     }),
@@ -1194,7 +1194,7 @@ mod recall_tests {
                     committed(MessageRole::Assistant, "message 1"),
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: call_id.clone(),
-                        tool_id: "fs.read".to_string(),
+                        tool_id: "fs_read".to_string(),
                         input: serde_json::json!({}).into(),
                         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                     }),

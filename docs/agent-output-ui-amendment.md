@@ -62,7 +62,7 @@ F failure display + stop button (each visually confirmed).
 - On top of the existing per-call collapsed blocks, add a
   **turn-level aggregation row**: when a turn completes, its tool
   calls and diffs fold into a single receipt line, e.g.
-  `▸ grep ✓ · fs.read ✓ · [login_form.rs +2 −1] · bash cargo test 12 ✓ · 38s`
+  `▸ grep ✓ · fs_read ✓ · [login_form.rs +2 −1] · bash cargo test 12 ✓ · 38s`
   (mock 3b: a row of pill-shaped chips; file chips carry a language
   dot, test results use the success color).
 - What stays in the conversation by default: user messages, assistant
@@ -85,8 +85,8 @@ F failure display + stop button (each visually confirmed).
 ### 3. Opened receipt = inline expansion (mock 6a)
 
 - Clicking the receipt's `▸` expands the per-call row list in place.
-- Each row expands further individually (fs.edit → line diff, bash →
-  command + output, fs.read/grep/glob → terse summaries) — all
+- Each row expands further individually (fs_edit → line diff, bash →
+  command + output, fs_read/grep/glob → terse summaries) — all
   reusing the base slice-1 renderers.
 - Expansion state is view-local (preserves the base doc's invariant).
 - Rejected alternative: popover display (6b).
@@ -153,7 +153,7 @@ F failure display + stop button (each visually confirmed).
   decision 2026-07-13 — Horizon's theme is one config-driven scheme,
   and a light/dark duality is not part of this design at all.)
 - Rewind/checkpoints (7c — explored, not adopted; if ever built, the
-  recorded direction is reverse-applying fs.edit plus mtime
+  recorded direction is reverse-applying fs_edit plus mtime
   verification).
 
 ## Suggested implementation order
@@ -249,11 +249,11 @@ deviation rather than asking for a mock update):
   information — aggregate them into something like 'x times tool
   called', and express the number of files read/edited as prose." The
   collapsed receipt line is now prose-first: low-signal query calls
-  (`fs.read`/`fs.grep`/`fs.glob`/`recall.*`/`workspace.snapshot`/
-  `skill.read`/any other non-edit, non-bash tool) fold into `{N} tool
-  call(s)`, with `fs.read` broken out separately as `read {N} file(s)`
+  (`fs_read`/`fs_grep`/`fs_glob`/`recall.*`/`workspace_snapshot`/
+  `skill_read`/any other non-edit, non-bash tool) fold into `{N} tool
+  call(s)`, with `fs_read` broken out separately as `read {N} file(s)`
   (distinct paths, not call counts) and edit-class calls
-  (`fs.edit`/`fs.write`) as `edited {N} file(s)` (same distinct-path
+  (`fs_edit`/`fs_write`) as `edited {N} file(s)` (same distinct-path
   treatment). Bash calls keep individual chips (the command itself is
   meaningful); **any failed call, of any class, is never aggregated**
   — it keeps its own error-marked chip, so a failure stays visible on
@@ -559,7 +559,7 @@ deviation rather than asking for a mock update):
     already cover history" scoping. An expandable row reuses the same
     `turns::tool_call_body`/`render_tool_call_body` machinery
     `render_expandable_tool_call_row` already built for the receipt, so
-    the same per-tool bodies (bash's command+output, fs.edit's diff, ...)
+    the same per-tool bodies (bash's command+output, fs_edit's diff, ...)
     now also work as a running-card failure log — the doc comment that
     scoped that machinery to be reusable this way (stage D) was written
     for exactly this. The `retry ×N` chip stays deferred (no retry
@@ -633,7 +633,7 @@ deviation rather than asking for a mock update):
     governs the annotation, not just the old banner). Every other
     `Waiting` row shows plain buttons, unchanged from round 3.
   - **Waiting rows auto-display their proposal.** A `Waiting` row now
-    renders its `turns::tool_call_body` (the same fs.edit diff/fs.write
+    renders its `turns::tool_call_body` (the same fs_edit diff/fs_write
     preview/bash command+output/terse-summary/raw-JSON machinery the
     receipt expansion and stage F's failure log already share)
     underneath itself automatically -- no click needed, since there's
@@ -665,7 +665,7 @@ deviation rather than asking for a mock update):
   log (`~/.local/share/horizon/agent-events.jsonl`, session
   `3fe93cdb-3119-409d-8da7-b4c53c0883bf`, pane "Agent #30",
   `hf:moonshotai/Kimi-K2.7-Code`): the model issued a batch of tool calls
-  within one turn -- a workspace snapshot and several `fs.read`s that
+  within one turn -- a workspace snapshot and several `fs_read`s that
   never need approval, interleaved with three `bash` calls that do. The
   last two (`bash:7`/`bash:8`) were requested back-to-back before either
   resolved -- the "two approvals showing" moment. The owner approved the
@@ -878,13 +878,13 @@ deviation rather than asking for a mock update):
   5 — never ported from the Floem shell).** `turns::aggregate_changes`
   walks the *whole session's* `build_tool_call_views` output (every
   turn, not one receipt/burst's slice) into one `turns::FileChange` per
-  distinct path touched by a successful `fs.edit`/`fs.write`, ordered by
+  distinct path touched by a successful `fs_edit`/`fs_write`, ordered by
   first touch; multiple edits to one file have their diffstats *summed*,
   documented on the function itself as an honest limitation (summed hunk
   stats, not a net diff across a file's whole session history — see the
-  doc comment for the two-edits-that-cancel-out example). `fs.write`
+  doc comment for the two-edits-that-cancel-out example). `fs_write`
   contributes a `created` flag (from the same `output.get("created")`
-  convention `classify`'s `fs.write` arm already reads) instead of a
+  convention `classify`'s `fs_write` arm already reads) instead of a
   diffstat, since a write has none. `turns::changes_summary_text` is
   `None` when no file was ever touched, gating the bar's own "hidden
   entirely" requirement. Colocated tests in `src/agent/turns.rs` cover

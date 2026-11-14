@@ -195,7 +195,7 @@ impl Agentd {
             match told {
                 Told::HostTool(request) => {
                     let output = match request.tool_id.as_str() {
-                        "workspace.snapshot" => shell.model.with_untracked(workspace_snapshot),
+                        "workspace_snapshot" => shell.model.with_untracked(workspace_snapshot),
                         other => serde_json::json!({
                             "error": format!("unknown host tool `{other}`")
                         }),

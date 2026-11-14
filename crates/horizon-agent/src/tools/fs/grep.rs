@@ -11,8 +11,8 @@ use super::traverse;
 use crate::config::FsToolConfig;
 use crate::tools::state::ToolSessionState;
 
-/// A match is reported as a location, never as content: `fs.grep` answers
-/// "where is this?" and `fs.read` answers "what does it say?". Returning
+/// A match is reported as a location, never as content: `fs_grep` answers
+/// "where is this?" and `fs_read` answers "what does it say?". Returning
 /// the matching line (let alone surrounding context) makes the first
 /// question's answer cost as much as the second's — measured on this
 /// repository, one `WaitingForUser` search returns 5,008 bytes as

@@ -75,7 +75,7 @@ fn response(kind: ProviderKind) -> String {
             json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
                 "choices":[{"index":0,"delta":{"role":"assistant","content":"reading"},"finish_reason":null}]}),
             json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
-                "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"fs.read","arguments":"{\"path\":\"README.md\"}"}}]},"finish_reason":null}]}),
+                "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"fs_read","arguments":"{\"path\":\"README.md\"}"}}]},"finish_reason":null}]}),
             json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
                 "choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],
                 "usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}),
@@ -85,7 +85,7 @@ fn response(kind: ProviderKind) -> String {
             json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
             json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"reading"}}),
             json!({"type":"content_block_stop","index":0}),
-            json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call-1","name":"fs.read","input":{}}}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call-1","name":"fs_read","input":{}}}),
             json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"README.md\"}"}}),
             json!({"type":"content_block_stop","index":1}),
             json!({"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":2}}),
@@ -120,7 +120,7 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
                 base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
                 model: "test-model".into(),
                 max_output_tokens: 100,
-                allowed_tool_ids: Some(vec!["fs.read".into()]),
+                allowed_tool_ids: Some(vec!["fs_read".into()]),
                 ..Default::default()
             };
             let body = if rejected {
@@ -161,13 +161,13 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
                         .to_lowercase()
                         .contains("authorization: bearer local-test-key"));
                     assert_eq!(request["parallel_tool_calls"], true);
-                    assert_eq!(request["tools"][0]["function"]["name"], "fs.read");
+                    assert_eq!(request["tools"][0]["function"]["name"], "fs_read");
                 }
                 ProviderKind::Anthropic => {
                     assert!(headers.starts_with("POST /v1/messages "));
                     assert!(headers.to_lowercase().contains("x-api-key: local-test-key"));
                     assert!(request.get("parallel_tool_calls").is_none());
-                    assert_eq!(request["tools"][0]["name"], "fs.read");
+                    assert_eq!(request["tools"][0]["name"], "fs_read");
                 }
             }
             let events: Vec<_> = rx
@@ -241,7 +241,7 @@ fn tool_call_cut_by_usage_cap(kind: ProviderKind) -> String {
             json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
                 "choices":[{"index":0,"delta":{"role":"assistant","content":"reading"},"finish_reason":null}]}),
             json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
-                "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"fs.read","arguments":"{\"path\":"}}]},"finish_reason":null}]}),
+                "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"fs_read","arguments":"{\"path\":"}}]},"finish_reason":null}]}),
             json!({"id":"message-1","object":"chat.completion.chunk","created":0,"model":"test-model",
                 "choices":[{"index":0,"delta":{},"finish_reason":"length"}],
                 "usage":{"prompt_tokens":10,"completion_tokens":100,"total_tokens":110}}),
@@ -251,7 +251,7 @@ fn tool_call_cut_by_usage_cap(kind: ProviderKind) -> String {
             json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
             json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"reading"}}),
             json!({"type":"content_block_stop","index":0}),
-            json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call-1","name":"fs.read","input":{}}}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call-1","name":"fs_read","input":{}}}),
             json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}),
             json!({"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"output_tokens":100}}),
             json!({"type":"message_stop"}),
@@ -286,7 +286,7 @@ async fn provider_wire_reports_an_open_tool_call_as_a_truncation() {
             base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
             model: "test-model".into(),
             max_output_tokens: 100,
-            allowed_tool_ids: Some(vec!["fs.read".into()]),
+            allowed_tool_ids: Some(vec!["fs_read".into()]),
             ..Default::default()
         };
         let server = tokio::spawn(serve(listener, false, tool_call_cut_by_usage_cap(kind)));
@@ -617,7 +617,7 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
                 ] {
                     let mut chunk = frame.clone();
                     chunk["choices"][0]["delta"]["tool_calls"][0] = if arguments == "{" {
-                        json!({"index":index,"id":format!("call-{}",index+1),"type":"function","function":{"name":"fs.read","arguments":arguments}})
+                        json!({"index":index,"id":format!("call-{}",index+1),"type":"function","function":{"name":"fs_read","arguments":arguments}})
                     } else {
                         json!({"index":index,"function":{"arguments":arguments}})
                     };
@@ -627,7 +627,7 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
                 // Anthropic delivers complete content blocks in order; both
                 // calls still belong to the same parallel execution batch.
                 frames.extend([
-                    json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"call-2","name":"fs.read","input":{}}}),
+                    json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"call-2","name":"fs_read","input":{}}}),
                     json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"README.md\"}"}}),
                     json!({"type":"content_block_stop","index":2}),
                 ]);
@@ -707,7 +707,7 @@ async fn provider_wire_replay_sends_identical_requests_after_signed_tool_respons
             api_key_env: key.into(),
             base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
             model: "test-model".into(),
-            allowed_tool_ids: Some(vec!["fs.read".into()]),
+            allowed_tool_ids: Some(vec!["fs_read".into()]),
             ..Default::default()
         };
         let (tx, rx) = crossbeam_channel::unbounded();

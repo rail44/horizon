@@ -49,7 +49,7 @@ pub(super) fn cap(full: &str, cap_chars: usize, spill_path: Option<&Path>) -> Ca
 
     let location = match spill_path {
         Some(path) => format!(
-            "full output at {} — re-filter with `fs.read` or `fs.grep` instead of re-running",
+            "full output at {} — re-filter with `fs_read` or `fs_grep` instead of re-running",
             path.display()
         ),
         None => "the full output could not be saved to a temp file".to_string(),

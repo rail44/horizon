@@ -122,7 +122,7 @@ mod tests {
     /// on and the session still delivers a report.
     ///
     /// End to end on the deterministic fallback provider (no API key, so no
-    /// network): the `fs.read path:` line drives a genuine `fs.read`
+    /// network): the `fs_read path:` line drives a genuine `fs_read`
     /// through the tool pipeline, and the rig turn loop folds whatever
     /// result comes back.
     #[test]
@@ -149,7 +149,7 @@ mod tests {
         };
         let started = horizon_agent::tools::ExplorationHost::start(
             &host,
-            format!("fs.read path: {}", outside_file.display()),
+            format!("fs_read path: {}", outside_file.display()),
         )
         .expect("the explore session starts");
 
@@ -169,7 +169,7 @@ mod tests {
         assert!(
             collected
                 .iter()
-                .any(|event| matches!(event, Event::ToolCallRequested(request) if request.tool_id == "fs.read")),
+                .any(|event| matches!(event, Event::ToolCallRequested(request) if request.tool_id == "fs_read")),
             "the session must have attempted the read: {collected:?}"
         );
         assert!(

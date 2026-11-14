@@ -71,14 +71,18 @@ impl std::fmt::Debug for ExternalTool {
 static EXTERNAL_TOOLS: RwLock<Vec<ExternalTool>> = RwLock::new(Vec::new());
 
 /// Registers tools from another crate. Called at process startup, before any
-/// session is spawned. Refuses the whole batch when an id is empty, repeats
-/// within it, or is already taken by a built-in or a registered tool.
+/// session is spawned. Refuses the whole batch when an id is not a name a
+/// provider accepts ([`super::catalog::is_valid_tool_id`]), repeats within
+/// it, or is already taken by a built-in or a registered tool.
 pub fn register_external_tools(tools: Vec<ExternalTool>) -> Result<(), String> {
     let mut registered = EXTERNAL_TOOLS.write().unwrap_or_else(|e| e.into_inner());
     let mut seen = std::collections::HashSet::new();
     for tool in &tools {
-        if tool.id.trim().is_empty() {
-            return Err("an external tool has an empty id".to_string());
+        if !super::catalog::is_valid_tool_id(&tool.id) {
+            return Err(format!(
+                "tool id `{}` is not 1-64 of a-z, A-Z, 0-9, `_` and `-`",
+                tool.id
+            ));
         }
         let taken = super::catalog::is_builtin(&tool.id)
             || registered.iter().any(|existing| existing.id == tool.id);
@@ -162,7 +166,7 @@ mod tests {
 
     #[test]
     fn an_output_type_renders_its_documented_fields_after_the_description() {
-        let mut documented = tool("test.legend", echo());
+        let mut documented = tool("test_legend", echo());
         documented.output = Some(ExternalOutput {
             type_name: "Echoed".into(),
             schema: json!({
@@ -176,12 +180,12 @@ mod tests {
         register_external_tools(vec![documented]).unwrap();
         let entry = crate::tools::definitions()
             .into_iter()
-            .find(|definition| definition.id == "test.legend")
+            .find(|definition| definition.id == "test_legend")
             .unwrap();
         assert!(
             entry
                 .description
-                .starts_with("test.legend description\n\nEchoed fields:\n"),
+                .starts_with("test_legend description\n\nEchoed fields:\n"),
             "{}",
             entry.description
         );
@@ -197,41 +201,52 @@ mod tests {
 
     #[test]
     fn a_registered_tool_joins_the_catalog() {
-        register_external_tools(vec![tool("test.catalog", echo())]).unwrap();
+        register_external_tools(vec![tool("test_catalog", echo())]).unwrap();
         let entry = crate::tools::definitions()
             .into_iter()
-            .find(|definition| definition.id == "test.catalog")
+            .find(|definition| definition.id == "test_catalog")
             .expect("registered tool is listed");
-        assert_eq!(entry.description, "test.catalog description");
-        assert!(is_registered("test.catalog"));
-        assert!(requires_trusted_project("test.catalog"));
+        assert_eq!(entry.description, "test_catalog description");
+        assert!(is_registered("test_catalog"));
+        assert!(requires_trusted_project("test_catalog"));
     }
 
     #[test]
     fn a_built_in_id_is_refused() {
-        let error = register_external_tools(vec![tool("fs.read", echo())]).unwrap_err();
-        assert!(error.contains("fs.read"), "{error}");
+        let error = register_external_tools(vec![tool("fs_read", echo())]).unwrap_err();
+        assert!(error.contains("fs_read"), "{error}");
         assert!(!crate::tools::definitions()
             .iter()
-            .any(|definition| definition.id == "fs.read"
-                && definition.description == "fs.read description"));
+            .any(|definition| definition.id == "fs_read"
+                && definition.description == "fs_read description"));
     }
 
     #[test]
     fn a_repeated_id_refuses_the_whole_batch() {
         let error =
-            register_external_tools(vec![tool("test.twice", echo()), tool("test.twice", echo())])
+            register_external_tools(vec![tool("test_twice", echo()), tool("test_twice", echo())])
                 .unwrap_err();
-        assert!(error.contains("test.twice"), "{error}");
-        assert!(!is_registered("test.twice"));
+        assert!(error.contains("test_twice"), "{error}");
+        assert!(!is_registered("test_twice"));
+    }
+
+    #[test]
+    fn an_id_a_provider_refuses_refuses_the_whole_batch() {
+        let error = register_external_tools(vec![
+            tool("test_valid", echo()),
+            tool("test.dotted", echo()),
+        ])
+        .unwrap_err();
+        assert!(error.contains("test.dotted"), "{error}");
+        assert!(!is_registered("test_valid"));
     }
 
     #[test]
     fn a_registered_tool_is_planned_to_run_without_approval() {
-        register_external_tools(vec![tool("test.plan", echo())]).unwrap();
+        register_external_tools(vec![tool("test_plan", echo())]).unwrap();
         let request = crate::contract::ToolCallRequest {
             call_id: crate::contract::ToolCallId("call-ext".to_string()),
-            tool_id: "test.plan".to_string(),
+            tool_id: "test_plan".to_string(),
             input: json!({ "anything": true }).into(),
             occurrence_id: crate::contract::OccurrenceId("call-ext".to_string()),
         };
@@ -244,22 +259,22 @@ mod tests {
 
     #[test]
     fn an_untrusted_project_is_not_offered_a_trust_requiring_tool() {
-        let mut open = tool("test.open", echo());
+        let mut open = tool("test_open", echo());
         open.requires_trusted_project = false;
-        register_external_tools(vec![tool("test.gated", echo()), open]).unwrap();
+        register_external_tools(vec![tool("test_gated", echo()), open]).unwrap();
         let offered = |trusted: bool| -> Vec<String> {
             crate::providers::rig::offered_tool_ids(None, trusted)
         };
-        assert!(offered(true).contains(&"test.gated".to_string()));
-        assert!(!offered(false).contains(&"test.gated".to_string()));
-        assert!(offered(false).contains(&"test.open".to_string()));
+        assert!(offered(true).contains(&"test_gated".to_string()));
+        assert!(!offered(false).contains(&"test_gated".to_string()));
+        assert!(offered(false).contains(&"test_open".to_string()));
     }
 
     #[test]
     fn execution_passes_the_session_and_roots_and_maps_errors() {
         register_external_tools(vec![
             tool(
-                "test.roots",
+                "test_roots",
                 Arc::new(|call| {
                     Ok(json!({
                         "session": call.session_id.to_string(),
@@ -268,21 +283,21 @@ mod tests {
                     }))
                 }),
             ),
-            tool("test.fails", Arc::new(|_| Err("nope".to_string()))),
+            tool("test_fails", Arc::new(|_| Err("nope".to_string()))),
         ])
         .unwrap();
         let root = std::env::temp_dir();
         let state = crate::tools::ToolSessionBuilder::new(root.clone()).build();
         let session = crate::contract::SessionId::from_uuid(uuid::Uuid::from_u128(7));
 
-        let ok = execute(&state, session, "test.roots", &json!({ "a": 1 })).unwrap();
+        let ok = execute(&state, session, "test_roots", &json!({ "a": 1 })).unwrap();
         assert_eq!(ok["session"], uuid::Uuid::from_u128(7).to_string());
         assert_eq!(ok["workspace"], root.display().to_string());
         assert_eq!(ok["input"], json!({ "a": 1 }));
 
-        let failed = execute(&state, session, "test.fails", &json!({})).unwrap();
+        let failed = execute(&state, session, "test_fails", &json!({})).unwrap();
         assert_eq!(failed, json!({ "is_error": true, "message": "nope" }));
 
-        assert!(execute(&state, session, "test.unknown", &json!({})).is_none());
+        assert!(execute(&state, session, "test_unknown", &json!({})).is_none());
     }
 }

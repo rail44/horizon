@@ -149,7 +149,7 @@ mod tests {
         let request = ToolCallRequest {
             call_id: ToolCallId("blocked".into()),
             occurrence_id: OccurrenceId::new(),
-            tool_id: "fs.write".into(),
+            tool_id: "fs_write".into(),
             input: serde_json::json!({}).into(),
         };
         let history = vec![Event::ToolCallRequested(request.clone())];

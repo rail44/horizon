@@ -6,8 +6,8 @@ use super::error_output;
 use crate::tools::state::ToolSessionState;
 
 /// Enforces the read-before-mutation gate: `path` must have a recorded
-/// mtime from an earlier `fs.read` (or a prior
-/// `fs.write`/`fs.edit` in this session — each records the mtime
+/// mtime from an earlier `fs_read` (or a prior
+/// `fs_write`/`fs_edit` in this session — each records the mtime
 /// it leaves behind) that still matches
 /// what's on disk. See `docs/agent-tools-design.md`, "Edit Semantics".
 pub(super) fn check_staleness(

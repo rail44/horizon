@@ -79,7 +79,7 @@ Two auto-allowed (read-only) tools, shaped like the Letta filesystem
 finding — grep-familiar primitives, no vector store, no SQL exposure (both
 remain non-goals per `docs/agent-duckdb-state-design.md`):
 
-- **`recall.search`** — case-insensitive substring search over committed
+- **`recall_search`** — case-insensitive substring search over committed
   message text (`agent_messages`, `NOT is_delta`), tool-call arguments
   (`agent_tool_calls.input_json`), and tool results
   (`agent_tool_results.output_json`). Input: `query` (optional if
@@ -87,7 +87,7 @@ remain non-goals per `docs/agent-duckdb-state-design.md`):
   (default `"session"` — the calling session), optional `session_id`
   (search that one session instead of the caller's own; `scope` must then
   be absent or `"session"` — combining it with `"all"` is an error, and an
-  unparseable id errors the same way `recall.read`'s does), optional
+  unparseable id errors the same way `recall_read`'s does), optional
   `limit` (default
   20), optional `turn_outcome` filter. Omitting `query` while giving
   `turn_outcome` is *listing mode* (`docs/agent-feedback-design.md`'s
@@ -98,9 +98,9 @@ remain non-goals per `docs/agent-duckdb-state-design.md`):
   rows carry session id, sequence,
   kind, role/tool id, a bounded snippet around the first match, and the
   event's wall-clock time; the total match count is always reported
-  (`fs.grep`'s cap-and-report discipline). Matching is a parameterized SQL
+  (`fs_grep`'s cap-and-report discipline). Matching is a parameterized SQL
   `LIKE` with escaped input — the model never writes SQL.
-- **`recall.read`** — the "open" to search's "grep": reads committed
+- **`recall_read`** — the "open" to search's "grep": reads committed
   messages and tool calls/results for one session in sequence order,
   `from_sequence`/`limit`-windowed and character-capped, so the agent can
   pull the full context around a hit instead of relying on snippets.

@@ -10,7 +10,7 @@
   "trials": [
     {
       "id": "tool_extension",
-      "change": "Optional fs.read max_chars and displayed content_char_limit",
+      "change": "Optional fs_read max_chars and displayed content_char_limit",
       "production_files_before": 3,
       "production_files_after": 3,
       "owners": [
@@ -143,7 +143,7 @@
     "Use a separate worktree at revisions.before or revisions.after; never merge probe branches into main.",
     "cargo nextest run --profile sandboxed --workspace --locked -E 'test(change_probe) | test(warning_allowlists_match_deserialized_fields)'",
     "Omit font_size_step from the terminal diagnostic allowlist, run horizon-config tests excluding change_probe, then restore. Baseline passes; improved invariant fails.",
-    "Restore baseline fs.read catalog or ToolCallResult constructor independently and run the matching probe test; each must fail, then restore and rerun all probes.",
+    "Restore baseline fs_read catalog or ToolCallResult constructor independently and run the matching probe test; each must fail, then restore and rerun all probes.",
     "Before only: misspell the ResetFontSize request literal in to_request and run its probe; it must fail. After: there is no independent request-name literal."
   ],
   "artifacts": {

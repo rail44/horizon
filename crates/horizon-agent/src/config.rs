@@ -125,14 +125,14 @@ pub(crate) const DEFAULT_BASH_TIMEOUT_DEFAULT_SECS: u64 = 300;
 pub(crate) const DEFAULT_BASH_TIMEOUT_MAX_SECS: u64 = 1_800;
 pub(crate) const DEFAULT_BASH_OUTPUT_CAP_CHARS: usize = 30_000;
 pub(crate) const DEFAULT_BASH_DRAIN_GRACE_SECS: u64 = 2;
-/// Default `fs.read` window when the caller does not choose one. The tool
+/// Default `fs_read` window when the caller does not choose one. The tool
 /// accepts an explicit window up to 2,000 lines, but the smaller default keeps
 /// an exploratory read from turning into a whole-file context dump.
 pub(crate) const DEFAULT_FS_READ_LINE_CAP: usize = 500;
-/// Default number of matches `fs.grep` returns when a call doesn't pass its
+/// Default number of matches `fs_grep` returns when a call doesn't pass its
 /// own `limit`. Was `fs::grep`'s `DEFAULT_LIMIT`.
 pub(crate) const DEFAULT_FS_GREP_RESULT_LIMIT: usize = 100;
-/// Same idea as [`DEFAULT_FS_GREP_RESULT_LIMIT`], for `fs.glob`. Was
+/// Same idea as [`DEFAULT_FS_GREP_RESULT_LIMIT`], for `fs_glob`. Was
 /// `fs::glob`'s `DEFAULT_LIMIT`.
 pub(crate) const DEFAULT_FS_GLOB_RESULT_LIMIT: usize = 200;
 /// Consecutive-tool-driven-turn safety-net cap
@@ -578,7 +578,7 @@ pub struct RigAgentConfig {
     /// `trusted_projects` list — threaded in from
     /// `StartSession::trusted_project` by `spawn_rig_session` so
     /// `rig_tool_definitions` can filter the knowledge tools
-    /// (`knowledge.read`/`knowledge.write`) out of the advertised
+    /// (`knowledge_read`/`knowledge_write`) out of the advertised
     /// catalog for untrusted sessions. Defaults to `false`
     /// (fail-closed), matching `StartSession::trusted_project`'s own
     /// `#[serde(default)]`.
@@ -841,10 +841,10 @@ pub struct BashToolConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FsToolConfig {
-    /// Maximum total bytes `fs.grep` reads in one traversal. Was
+    /// Maximum total bytes `fs_grep` reads in one traversal. Was
     /// `fs::grep`'s `MAX_GREP_BYTES`.
     pub grep_max_bytes: u64,
-    /// Maximum files a single `fs.glob`/`fs.grep` traversal visits. Was
+    /// Maximum files a single `fs_glob`/`fs_grep` traversal visits. Was
     /// `fs::traverse`'s `MAX_VISITED_FILES`.
     pub traversal_max_files: usize,
 }

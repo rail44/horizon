@@ -13,7 +13,7 @@ pub(super) fn affected_files(
     };
     use crate::contract::tool_output::{decode, EditOutcome, FileEdits, FileWritten};
     match tool_id {
-        "fs.edit" => decode::<FileEdits>(output)
+        "fs_edit" => decode::<FileEdits>(output)
             .map(|result| {
                 let inputs = edit_entries(input);
                 result
@@ -38,7 +38,7 @@ pub(super) fn affected_files(
                     .collect()
             })
             .unwrap_or_default(),
-        "fs.write" => decode::<FileWritten>(output)
+        "fs_write" => decode::<FileWritten>(output)
             .map(|result| {
                 vec![FileEffect {
                     path: result.path,
@@ -52,7 +52,7 @@ pub(super) fn affected_files(
     }
 }
 
-/// One entry of an `fs.edit` call's `edits` list (`crate::tools::fs::edit`).
+/// One entry of an `fs_edit` call's `edits` list (`crate::tools::fs::edit`).
 /// Public alongside [`edit_entries`] so `src/agent/turns`'s own body
 /// renderer reads the batch exactly the way this classifier does.
 pub struct EditEntry<'a> {
@@ -61,7 +61,7 @@ pub struct EditEntry<'a> {
     pub new_string: &'a str,
 }
 
-/// Reads an `fs.edit` call's `edits` list in input order. An entry with no
+/// Reads an `fs_edit` call's `edits` list in input order. An entry with no
 /// `path` is skipped (there is nothing to display it against); a missing or
 /// non-array `edits` yields an empty list, so a malformed call renders as an
 /// empty batch rather than panicking.
@@ -84,7 +84,7 @@ pub fn edit_entries(input: &Value) -> Vec<EditEntry<'_>> {
         .unwrap_or_default()
 }
 
-/// The distinct paths an `fs.edit` batch touches, in first-touch order.
+/// The distinct paths an `fs_edit` batch touches, in first-touch order.
 pub(super) fn distinct_edit_paths<'a>(edits: &[EditEntry<'a>]) -> Vec<&'a str> {
     let mut paths: Vec<&str> = Vec::new();
     for edit in edits {

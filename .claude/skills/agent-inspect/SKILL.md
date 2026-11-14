@@ -164,7 +164,7 @@ jq -R 'fromjson? // empty' "$LOG" | jq -cs '
 `foreach` in `[...]` so `map` yields an array of arrays, then use `add` to
 concatenate them into one flat array — not `flatten`, which recurses into
 nested arrays and will also shred any event whose JSON happens to contain an
-array-valued field (e.g. `fs.glob` results).
+array-valued field (e.g. `fs_glob` results).
 
 ### Attribute a gap using the provider-request lifecycle events
 

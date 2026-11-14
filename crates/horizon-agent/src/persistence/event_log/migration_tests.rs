@@ -336,7 +336,7 @@ fn v3_conversion_keeps_provider_metadata_and_resolves_reused_clearing_ids() {
         let request = ToolCallRequest {
             call_id: ToolCallId("reused".into()),
             occurrence_id: OccurrenceId(format!("occ-{index}")),
-            tool_id: "fs.read".into(),
+            tool_id: "fs_read".into(),
             input: json!({"path":format!("file-{index}")}).into(),
         };
         let mut row = old_record(

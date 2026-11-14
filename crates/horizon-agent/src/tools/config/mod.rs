@@ -1,10 +1,10 @@
-//! `config.read` and `config.write`, the config role's tools. Their resolved
+//! `config_read` and `config_write`, the config role's tools. Their resolved
 //! user-config path and prior-read guard differ from workspace filesystem tools.
 //!
-//! **Why `config.write` bypasses `workspace_root` confinement.**
+//! **Why `config_write` bypasses `workspace_root` confinement.**
 //! `tools::fs::safety::resolve_path` confines every filesystem tool to the
 //! session's workspace root -- the untrusted-repository boundary
-//! (`docs/trust-boundaries.md`). `config.write` deliberately does not go
+//! (`docs/trust-boundaries.md`). `config_write` deliberately does not go
 //! through it: its one and only target is the single config file
 //! `horizon-agentd` itself resolves (`$HORIZON_CONFIG` >
 //! `$XDG_CONFIG_HOME/horizon/config.toml` > `~/.config/horizon/config.toml`,
@@ -14,8 +14,8 @@
 //! arbitrary path the model supplies. `docs/agent-tools-design.md` already
 //! notes `bash` can
 //! write this same file with no additional tool at all; cataloging
-//! `config.write` globally (`tools::catalog::definitions`) adds no new
-//! *capability* to the system for that reason. What `config.write`
+//! `config_write` globally (`tools::catalog::definitions`) adds no new
+//! *capability* to the system for that reason. What `config_write`
 //! contributes is a *narrower* one: paired with a role's `allowed_tool_ids`
 //! (`roles::CONFIG_ROLE`), it lets a session be restricted to touching only
 //! this one file and nothing else in the filesystem or shell -- see
@@ -50,7 +50,7 @@ pub(super) fn write(
     )
 }
 
-/// The pure body of `config.read`, taking the resolved path as a parameter
+/// The pure body of `config_read`, taking the resolved path as a parameter
 /// (rather than resolving it itself) so it's testable without touching real
 /// env vars or the developer's own config file -- the same
 /// pure-function/path-parameter style `config`'s own precedence-resolution
@@ -80,7 +80,7 @@ fn read_at(tool_state: &ToolSessionState, path: Option<&Path>) -> Response {
                 exists: false,
                 content: None,
                 message: Some(
-                    "config file does not exist yet -- write it with config.write to create it"
+                    "config file does not exist yet -- write it with config_write to create it"
                         .into(),
                 ),
             })
@@ -128,7 +128,7 @@ mod tests {
         assert!(result["content"].as_str().unwrap().contains("accent"));
         assert!(
             tool_state.recorded_mtime(&path).is_some(),
-            "a successful read must record the mtime for config.write's staleness gate"
+            "a successful read must record the mtime for config_write's staleness gate"
         );
 
         let _ = std::fs::remove_file(&path);

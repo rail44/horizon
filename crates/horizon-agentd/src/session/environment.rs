@@ -81,7 +81,7 @@ impl SessionEnvironment<'_> {
         };
         // Use the same resolved root as the provider's prompt-side skill
         // listing. Otherwise an isolated session can be told that a repository
-        // skill exists and then have `skill.read` look for its body in the
+        // skill exists and then have `skill_read` look for its body in the
         // daemon's checkout instead of the session's worktree (backlog 58).
         let skill_root = skill_discovery_root(workspace_root.as_deref());
         // Leg 4b (`docs/agent-approval-design.md`): the network proxy is now

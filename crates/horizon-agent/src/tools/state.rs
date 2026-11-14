@@ -59,7 +59,7 @@ impl Default for RecallContext {
 }
 
 /// Per-session file-tool state: the workspace root every absolute path is
-/// confined to, the mtimes recorded by `fs.read`/`fs.write`/`fs.edit` for
+/// confined to, the mtimes recorded by `fs_read`/`fs_write`/`fs_edit` for
 /// the staleness gate (`docs/agent-tools-design.md`, "Edit Semantics"), and
 /// the resolved `[agent]` tool tuning (`agent::config::AgentToolsConfig`).
 /// v1 confines every session to a single root: the process's current
@@ -121,7 +121,7 @@ struct Inner {
     /// Host-resolved path to Horizon's single config file
     /// (`$HORIZON_CONFIG`, falling back to `$XDG_CONFIG_HOME/horizon/
     /// config.toml`, falling back to `~/.config/horizon/config.toml`), for
-    /// `tools::config`'s `config.read`/`config.write`.
+    /// `tools::config`'s `config_read`/`config_write`.
     /// This crate can't resolve that path itself (see `config`'s module
     /// doc -- it has no dependency on `horizon-config`), so it's injected
     /// post-construction the same way [`ToolSessionBuilder::with_skills`] injects the
@@ -131,7 +131,7 @@ struct Inner {
     /// [`ToolSessionBuilder::with_config_path`] right after construction.
     /// `None` everywhere else (this crate's own tests, Horizon's UI-side
     /// dummy-tool-state test helper), same as before this seam existed:
-    /// `config.read`/`config.write` degrade to an actionable error instead
+    /// `config_read`/`config_write` degrade to an actionable error instead
     /// of guessing a path.
     config_path: Option<PathBuf>,
     /// Whether this session has no client that could answer an approval
@@ -213,7 +213,7 @@ struct Inner {
     /// `horizon-agentd`'s `session::run_session` can construct a
     /// `horizon_board::Store` (it knows the workspace root and the logd
     /// socket). `None` (every construction site in this crate's own tests)
-    /// makes `board.read`/`board.comment` resolve to an actionable error
+    /// makes `board_read`/`board_comment` resolve to an actionable error
     /// rather than a silent no-op.
     board: Option<Arc<dyn crate::tools::board::BoardHost>>,
     /// The primary checkout this session may modify only after one explicit
@@ -484,13 +484,13 @@ impl ToolSessionState {
     }
 
     /// This session's composed skill registry (see [`Inner::skills`]) --
-    /// what `tools::config`'s `skill.read` dispatch reads from.
+    /// what `tools::config`'s `skill_read` dispatch reads from.
     pub(crate) fn skill_registry(&self) -> &SkillRegistry {
         &self.inner.skills
     }
 
     /// The host-resolved config-file path (see [`Inner::config_path`]) --
-    /// what `tools::config`'s `config.read`/`config.write` dispatch reads
+    /// what `tools::config`'s `config_read`/`config_write` dispatch reads
     /// from.
     pub(crate) fn config_path(&self) -> Option<&Path> {
         self.inner.config_path.as_deref()
@@ -524,7 +524,7 @@ impl ToolSessionState {
 
 /// The per-session runtime the approval UI needs: the tool state above, a
 /// handle to the session's live frame/event-log sink so a Horizon-executed
-/// approval (`fs.write`/`fs.edit`/`bash`) can fold its result in exactly the
+/// approval (`fs_write`/`fs_edit`/`bash`) can fold its result in exactly the
 /// way an auto-allowed tool call does (see `agent::tools::approval`), and
 /// the sender side of the channel a `bash` call's eventual result is
 /// delivered back to the UI thread on (see `tools::bash::BashCompletion`).

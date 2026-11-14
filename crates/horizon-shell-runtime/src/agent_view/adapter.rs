@@ -467,9 +467,9 @@ fn call(
 fn verb_and_target(items: &[AgentFrameItem], view: &ToolCallView) -> (&'static str, String) {
     let target = || view.target.clone().unwrap_or_default();
     match view.tool_id.as_str() {
-        "fs.read" => ("Read", target()),
-        "fs.edit" => ("Edit", target()),
-        "fs.write" => ("Write", target()),
+        "fs_read" => ("Read", target()),
+        "fs_edit" => ("Edit", target()),
+        "fs_write" => ("Write", target()),
         "bash" => {
             let command = tool_input(items, view)
                 .and_then(|input| str_field(input, "command"))
@@ -477,7 +477,7 @@ fn verb_and_target(items: &[AgentFrameItem], view: &ToolCallView) -> (&'static s
                 .map(str::to_string);
             ("Run", command.unwrap_or_else(target))
         }
-        "fs.grep" | "fs.glob" => ("Search", target()),
+        "fs_grep" | "fs_glob" => ("Search", target()),
         _ => (
             "Call",
             match &view.target {
@@ -512,7 +512,7 @@ fn permission_reason(items: &[AgentFrameItem], identity: &ToolCallIdentity) -> O
 /// A finished call's body; an unfinished one shows only a proposed edit or
 /// write.
 fn body(items: &[AgentFrameItem], view: &ToolCallView) -> Option<CallBody> {
-    if !view.finished() && !matches!(view.tool_id.as_str(), "fs.edit" | "fs.write") {
+    if !view.finished() && !matches!(view.tool_id.as_str(), "fs_edit" | "fs_write") {
         return None;
     }
     let body = match tool_call_body(items, view)? {
@@ -641,7 +641,7 @@ mod tests {
                     user_message("fix it"),
                     tool_finished(
                         "r1",
-                        "fs.read",
+                        "fs_read",
                         json!({"path": "src/a.rs"}),
                         json!({"content": "x", "start_line": 1, "end_line": 1, "total_lines": 1}),
                     ),
@@ -718,13 +718,13 @@ mod tests {
             user_message("go"),
             tool_finished(
                 "e1",
-                "fs.edit",
+                "fs_edit",
                 json!({"edits": [{"path": "a.rs", "old_string": "a", "new_string": "b"}]}),
                 edit_result("a.rs"),
             ),
             tool_finished(
                 "e2",
-                "fs.edit",
+                "fs_edit",
                 json!({"edits": [{"path": "b.rs", "old_string": "a", "new_string": "b"}]}),
                 edit_result("b.rs"),
             ),
@@ -742,7 +742,7 @@ mod tests {
             ),
             tool_finished(
                 "g1",
-                "fs.grep",
+                "fs_grep",
                 json!({"base_path": ".", "pattern": "font_size"}),
                 json!({"returned_count": 3, "matches": [], "truncated": false}),
             ),
@@ -800,7 +800,7 @@ mod tests {
             assistant_delta(""),
             tool_finished(
                 "g1",
-                "fs.grep",
+                "fs_grep",
                 json!({"base_path": ".", "pattern": "x"}),
                 json!({"returned_count": 1, "matches": [], "truncated": false}),
             ),
@@ -841,7 +841,7 @@ mod tests {
             user_message("write it"),
             tool_requested(
                 "w1",
-                "fs.write",
+                "fs_write",
                 json!({"path": "~/.config/x.toml", "content": "a = 1"}),
             ),
             approval_requested("w1"),
@@ -1070,7 +1070,7 @@ mod tests {
                 let id = format!("call-{turn}-{call}");
                 items.push(tool_finished(
                     &id,
-                    "fs.edit",
+                    "fs_edit",
                     json!({"path": "/repo/src/lib.rs", "edits": [{"old_string": "fn old() {}\n".repeat(20), "new_string": "fn new() {}\n".repeat(20)}]}),
                     edit_result("/repo/src/lib.rs"),
                 ));

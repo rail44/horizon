@@ -10,14 +10,14 @@ page does not restate them as policy.
 
 With slice 1 in place, the sandbox is the perimeter and isolation is no
 longer a policy input: `bash` runs sandboxed and automatic in every
-session when the OS sandbox is available, `fs.write`/`fs.edit` are
+session when the OS sandbox is available, `fs_write`/`fs_edit` are
 automatic inside the workspace root, and approvals exist only for
 crossings of the containment boundary (git metadata, paths outside the
 root, network). Host execution remains only as the fallback on a host
 without a working sandbox.
 
 With slice 2, a session that wants a disposable copy of the repository
-asks for one with a tool, `worktree.enter`. With slice 3 there is one
+asks for one with a tool, `worktree_enter`. With slice 3 there is one
 session kind: the spawn-time isolation choice is gone, and a session
 gets a worktree only by entering one.
 
@@ -25,7 +25,7 @@ gets a worktree only by entering one.
 
 - **Classification** (`crates/horizon-agent/src/policy.rs`,
   `classify_input`): the table under "One session kind, sandbox as the
-  perimeter" below. An `fs.write`/`fs.edit` target inside the workspace
+  perimeter" below. An `fs_write`/`fs_edit` target inside the workspace
   root's `.git` is not automatic: `plan_prepared_call` raises a
   `Standard` approval for it before classification.
 - **The `AlwaysAsk` outcome for `bash` without a sandbox** is a
@@ -41,7 +41,7 @@ gets a worktree only by entering one.
 - **A worktree is entered, never spawned into**: every spawn starts in a
   directory (`docs/session-relationship-design.md`, decision 3), and a
   session gets its own worktree through environment activation
-  (`worktree.enter` below, or the board's `implement`). Whether the
+  (`worktree_enter` below, or the board's `implement`). Whether the
   session owns its worktree is persisted in every event-log record's
   `session_context.isolated_worktree`; restore re-adopts the worktree
   (`session/resume.rs`, `session/resume/environment.rs`).
@@ -81,9 +81,9 @@ gets a worktree only by entering one.
 | `bash`, no git metadata write | yes | `Contained` → `SandboxedBash` |
 | `bash`, git metadata write | yes | `AlwaysAsk` → `GitOperation` approval (unchanged path) |
 | `bash` | no | `AlwaysAsk` → `Standard` host-execution approval (fallback only) |
-| `fs.write`, `fs.edit` | either | `Contained` |
+| `fs_write`, `fs_edit` | either | `Contained` |
 
-`fs.write`/`fs.edit` do not use the OS sandbox; their confinement to
+`fs_write`/`fs_edit` do not use the OS sandbox; their confinement to
 `workspace_root` is the tool's own path check (`tools/state.rs`), so
 their classification does not depend on sandbox availability. The
 host-execution approval survives only where `horizon_sandbox::is_available()`
@@ -118,15 +118,15 @@ checkout (a `.git` directory yields that directory as the metadata root),
 and the approved call runs sandboxed with that grant and the existing
 `hooks/`/`config` exclusions.
 
-### `worktree.enter`
+### `worktree_enter`
 
-A built-in tool, `worktree.enter`, in the `<domain>.<verb>` vocabulary
-of `fs.read`, `board.update`, `workspace.snapshot`. The domain is git's
+A built-in tool, `worktree_enter`, in the `<domain>.<verb>` vocabulary
+of `fs_read`, `board_update`, `workspace_snapshot`. The domain is git's
 own term; `workspace.*` is taken by the shell's tab/pane structure.
 
 - **Input**: none (`tools/input`, the `Empty` input type).
-- **Approval**: automatic (`AutoAllowRead`), like `workspace.snapshot` and
-  `board.read`: a fixed, validated operation performed by the daemon, not
+- **Approval**: automatic (`AutoAllowRead`), like `workspace_snapshot` and
+  `board_read`: a fixed, validated operation performed by the daemon, not
   an arbitrary command.
 - **Execution**: the `HostTools::enter_worktree` boundary
   (`tools/execution.rs`), implemented by `horizon-agentd`'s
@@ -198,7 +198,7 @@ parent's directory. A terminal issuer counts the same way: an agent
 spawned from a terminal (`horizon new-agent` run in it, or the palette
 with the terminal focused) starts in that terminal's cwd as
 `horizon-terminald` last published it, else the Horizon process's cwd. A child that needs a disposable copy calls
-`worktree.enter` as its first step; the worktree branches from that
+`worktree_enter` as its first step; the worktree branches from that
 directory's `HEAD`, and activation records the parent as the child's
 derivation edge (`parent_session_id`).
 
@@ -222,7 +222,7 @@ Three slices, each landing on its own:
    host execution becomes the sandbox-unavailable fallback. This alone
    removes the failure mode measured on board #65 for sessions started in
    the main checkout. No wire change.
-2. **`worktree.enter`.** The tool and the mid-session root change over
+2. **`worktree_enter`.** The tool and the mid-session root change over
    the existing environment activation path; restore needs no change.
    The spawn-time isolation still exists in this slice, so both ways of
    getting a worktree coexist briefly.

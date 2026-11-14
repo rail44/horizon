@@ -101,7 +101,7 @@ pub struct RoleDefinition {
     /// Whether this is a *standing* role -- a long-lived, context-carrying
     /// agent that maintains a memory document across turns
     /// (`docs/standing-agent-memory-design.md`). A standing role's session
-    /// gets the `memory.update` tool, a turn-end checkpoint that forces it
+    /// gets the `memory_update` tool, a turn-end checkpoint that forces it
     /// to update (or explicitly skip) its memory each turn, and a
     /// provider-view projection that prepends the current memory document
     /// in place of the old turn-by-turn history. The board keeper (removed
@@ -124,12 +124,12 @@ pub struct RoleDefinition {
 /// agent-prompting.md` Part 2's audit said was needed before committing to
 /// a role design. Helps the user adjust `[theme]`/`[theme.ansi]`/
 /// `[keybindings]` in Horizon's config file conversationally, via the
-/// `horizon-config` skill and the `config.*`/`skill.read` tools -- see
+/// `horizon-config` skill and the `config.*`/`skill_read` tools -- see
 /// `tools::config` and the skill's own `SKILL.md` for the mechanics.
 ///
 /// `include_repository_instructions: false`: this role can write
 /// `~/.config/horizon/config.toml` (or wherever `HORIZON_CONFIG` points),
-/// a single host-owned file the `config.write` tool deliberately reaches
+/// a single host-owned file the `config_write` tool deliberately reaches
 /// outside the usual `workspace_root` confinement to edit (see
 /// `tools::config`'s own doc comment). A host-config-writing agent must
 /// not also ingest arbitrary repository `AGENTS.md`/`CLAUDE.md` content --
@@ -142,7 +142,7 @@ pub const CONFIG_ROLE: RoleDefinition = RoleDefinition {
     id: "config",
     title: "Configuration Agent",
     prompt_section: CONFIG_ROLE_PROMPT_SECTION,
-    allowed_tool_ids: Some(&["skill.read", "config.read", "config.write"]),
+    allowed_tool_ids: Some(&["skill_read", "config_read", "config_write"]),
     model: None,
     iteration_cap: None,
     include_repository_instructions: false,
@@ -156,17 +156,17 @@ const CONFIG_ROLE_PROMPT_SECTION: &str = "You are Horizon's configuration assist
      the user adjust Horizon's color theme and keybindings by editing its config file \
      conversationally.\n\
      \n\
-     Before proposing any change, read the `horizon-config` skill (via `skill.read`) and the \
-     user's current config file (via `config.read`) -- do not guess at the file's format, \
+     Before proposing any change, read the `horizon-config` skill (via `skill_read`) and the \
+     user's current config file (via `config_read`) -- do not guess at the file's format, \
      valid names, or current contents.\n\
      \n\
-     Apply a change by writing the complete file with `config.write`, preserving every existing \
+     Apply a change by writing the complete file with `config_write`, preserving every existing \
      entry the user didn't ask you to change -- never write a partial file.\n\
      \n\
-     Theme and keybinding changes apply automatically once the user approves a `config.write`; \
+     Theme and keybinding changes apply automatically once the user approves a `config_write`; \
      no restart is needed for those two sections, though other sections of the file still \
-     require one. You have no filesystem or shell access beyond `skill.read`/`config.read`/\
-     `config.write` -- do not suggest running commands or reading other files.";
+     require one. You have no filesystem or shell access beyond `skill_read`/`config_read`/\
+     `config_write` -- do not suggest running commands or reading other files.";
 
 /// [`EXPLORE_ROLE`]'s id, named as a constant because two things outside
 /// this module have to recognize it without constructing a
@@ -217,13 +217,13 @@ pub(crate) const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
     title: "Exploration Session",
     prompt_section: EXPLORE_ROLE_PROMPT_SECTION,
     allowed_tool_ids: Some(&[
-        "fs.read",
-        "fs.grep",
-        "fs.glob",
-        "recall.search",
-        "recall.read",
-        "recall.sessions",
-        "knowledge.read",
+        "fs_read",
+        "fs_grep",
+        "fs_glob",
+        "recall_search",
+        "recall_read",
+        "recall_sessions",
+        "knowledge_read",
     ]),
     model: None,
     iteration_cap: Some(EXPLORE_ITERATION_CAP),
@@ -240,8 +240,8 @@ const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: anoth
      question. Answer with concrete paths, line numbers, and findings, complete enough that the \
      requester need not repeat your reading.\n\
      \n\
-     Your toolset is read-only: fs.read, fs.grep, fs.glob, recall.search, recall.read, \
-     recall.sessions, knowledge.read. You have no shell, cannot edit or create files, and cannot \
+     Your toolset is read-only: fs_read, fs_grep, fs_glob, recall_search, recall_read, \
+     recall_sessions, knowledge_read. You have no shell, cannot edit or create files, and cannot \
      run tests or commands -- asking for those fails and wastes the turn budget. When the answer \
      genuinely needs execution, say so in your final message and hand the step back to the \
      requester instead of attempting it.";
@@ -361,14 +361,14 @@ mod tests {
         let allowed = CONFIG_ROLE
             .allowed_tool_ids
             .expect("config role must restrict its tools");
-        assert_eq!(allowed, &["skill.read", "config.read", "config.write"]);
+        assert_eq!(allowed, &["skill_read", "config_read", "config_write"]);
         assert!(!allowed.contains(&"bash"), "config role must exclude bash");
         assert!(
-            !allowed.contains(&"fs.read"),
+            !allowed.contains(&"fs_read"),
             "config role must exclude filesystem tools"
         );
         assert!(
-            !allowed.contains(&"fs.write"),
+            !allowed.contains(&"fs_write"),
             "config role must exclude filesystem tools"
         );
     }
@@ -407,13 +407,13 @@ mod tests {
         assert_eq!(
             allowed,
             &[
-                "fs.read",
-                "fs.grep",
-                "fs.glob",
-                "recall.search",
-                "recall.read",
-                "recall.sessions",
-                "knowledge.read",
+                "fs_read",
+                "fs_grep",
+                "fs_glob",
+                "recall_search",
+                "recall_read",
+                "recall_sessions",
+                "knowledge_read",
             ]
         );
         // The prompt counts the same tools out in prose. It exists because a
@@ -429,11 +429,11 @@ mod tests {
         for forbidden in [
             "task",
             "bash",
-            "fs.write",
-            "fs.edit",
+            "fs_write",
+            "fs_edit",
             "web_fetch",
             "web_search",
-            "config.write",
+            "config_write",
         ] {
             assert!(
                 !allowed.contains(&forbidden),
@@ -506,7 +506,7 @@ mod tests {
             id: "test-external-role",
             title: "Test External Role",
             prompt_section: "You are a test role.",
-            allowed_tool_ids: Some(&["fs.read"]),
+            allowed_tool_ids: Some(&["fs_read"]),
             model: None,
             iteration_cap: None,
             include_repository_instructions: false,
@@ -520,7 +520,7 @@ mod tests {
         assert_eq!(role.id, "test-external-role");
         assert_eq!(
             role.allowed_tool_ids,
-            Some(&["fs.read"][..]),
+            Some(&["fs_read"][..]),
             "external role's allowlist must be preserved"
         );
     }

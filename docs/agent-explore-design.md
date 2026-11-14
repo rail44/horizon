@@ -1,4 +1,4 @@
-# Parallel Exploration Sessions — `task` (originally `agent.explore`)
+# Parallel Exploration Sessions — `task` (originally `agent_explore`)
 
 Decided 2026-07-25 in an owner consultation, on the measurements in
 `docs/research/agent-read-navigation-prior-art-2026-07-25.md` and the two
@@ -6,7 +6,7 @@ failed dogfooding runs described below. This document is the scope record
 for the implementing worker.
 
 The model-visible tool id is **`task`** as of the 2026-07-27 addendum at the
-bottom of this file; the dated sections below still say `agent.explore`,
+bottom of this file; the dated sections below still say `agent_explore`,
 which is what it was called when they were written. The internal role id is
 still `"explore"` — see that addendum for why the two deliberately differ.
 
@@ -19,10 +19,10 @@ sessions given the same implementation brief (fix the mid-turn
 `WaitingForUser` emissions) both died at the model's context ceiling —
 final request ~196k input tokens against a 262,144-token window with
 65,536 reserved for output — after reading the consumer side of a
-3,361-line module. The `fs.grep` locations-only change (`d74a75e`) cut
+3,361-line module. The `fs_grep` locations-only change (`d74a75e`) cut
 tool output 28%, but reads compensated (+73%): the ceiling moved from 60
 to 82 requests and remained fatal. The edit itself was never the cost:
-`fs.edit` accounts for 0–1% of resend weight in every measured session.
+`fs_edit` accounts for 0–1% of resend weight in every measured session.
 
 The exploration fragments do not need to live in the requesting session's
 history at all. What the requester needs is the conclusion ("the emit
@@ -33,7 +33,7 @@ the fragments stay behind and are discarded.
 
 ## Decision
 
-1. **New production tool `agent.explore`.** Input: a prompt stating the
+1. **New production tool `agent_explore`.** Input: a prompt stating the
    exploration question and the expected deliverable. The tool spawns a
    read-only **parallel session**, waits for its turn to finish, and
    returns the session's final assistant text (plus the spawned session id
@@ -57,8 +57,8 @@ the fragments stay behind and are discarded.
    the analytics join key). It is never attached to a pane. On completion
    the tool terminates it.
 
-4. **Read-only toolset, no recursion.** Allowed tools: `fs.read`,
-   `fs.grep`, `fs.glob` only. `agent.explore` itself is excluded, so
+4. **Read-only toolset, no recursion.** Allowed tools: `fs_read`,
+   `fs_grep`, `fs_glob` only. `agent_explore` itself is excluded, so
    recursion is structurally impossible. Every allowed tool is
    `AutoAllowRead`, which is not the same as "no approval can occur": a
    read whose path leaves the workspace root is routed to the approval
@@ -154,7 +154,7 @@ context window; what it does not inherit must be told.
 
 ### B. Follow-up turns
 
-`agent.explore` gains an optional `session_id` input. When present, the
+`agent_explore` gains an optional `session_id` input. When present, the
 prompt is sent as a further user message to that still-alive exploration
 session and the call waits for that session's next turn to end; when
 absent, behavior is unchanged (fresh spawn). Rationale, from run 4: the
@@ -186,7 +186,7 @@ Discard-on-completion is plain termination; the requester is untouched.
 
 - **Tail sanitization is mandatory**: at delegation time the requester's
   persisted event stream ends mid-turn, with at least one tool call (the
-  `agent.explore` call itself) lacking a result. Seeding must close or
+  `agent_explore` call itself) lacking a result. Seeding must close or
   drop unpaired calls, or the provider rejects the history.
 - **Ceiling inheritance is the known cost**: the child's exploration room
   is (model window − requester's current size). Fresh spawns always have
@@ -219,7 +219,7 @@ measurable; not part of this slice.
 
 ### Measurement plan
 
-Same brief (backlog 48's duplicate-`fs.edit` investigation, with the
+Same brief (backlog 48's duplicate-`fs_edit` investigation, with the
 measured evidence embedded in the brief per the run-4 lesson), one run
 per arm to start, judged qualitatively like the four `WaitingForUser`
 runs:
@@ -242,7 +242,7 @@ Owner decision, verbatim: 「委譲についてforkと会話継続を削りま�
 直しつつ(ターン畳み込みの)設計を相談するうえで邪魔になるので」 -- both
 addendum B (follow-up turns) and addendum C (fork seeding) got in the way
 of fixing turn-folding behavior and discussing its design, so both are
-removed. `agent.explore` returns to v1's shape: one-shot, fresh-seeded,
+removed. `agent_explore` returns to v1's shape: one-shot, fresh-seeded,
 spawn-and-wait. Concretely:
 
 - **Fork seeding is gone.** `HORIZON_EXPLORE_SEED`, `tools::explore::
@@ -250,7 +250,7 @@ spawn-and-wait. Concretely:
   `contract::StartSession::seed_history`, and `tools::explore::
   sanitize_seed_history` are all removed. Every exploration starts from
   nothing but its prompt.
-- **Follow-up is gone.** `ExplorationHost::follow_up`, `agent.explore`'s
+- **Follow-up is gone.** `ExplorationHost::follow_up`, `agent_explore`'s
   `session_id` input, and the "an exploration outlives the turn it
   answered" lifetime rule (addendum B) are removed along with it.
   `tools::explore`'s `Input` is the prompt alone. An exploration session is
@@ -337,7 +337,7 @@ to work.
 
 ### The rename
 
-`agent.explore` → **`task`** as the model-visible id
+`agent_explore` → **`task`** as the model-visible id
 (`tools::explore::TOOL_ID`; the module keeps its name). Cell C3: the plain
 `task` name plus a generic task-tool description moved Kimi from a
 degraded 2/3–5/5 baseline to 4/5 and was neutral for MiniMax. Renaming
@@ -354,7 +354,7 @@ already-persisted records for no model-visible benefit.
 ### The two routing clauses
 
 The single hedged line the base system prompt used to carry ("Delegate
-open-ended, multi-file exploration to agent.explore when it is available;
+open-ended, multi-file exploration to agent_explore when it is available;
 keep its report, not a raw read/grep sweep of your own") is gone. In its
 place, `prompt::DELEGATION_ROUTING_SECTION` carries the two measured
 winners verbatim:
@@ -403,7 +403,7 @@ spawns. `None` (role-less) means the unrestricted catalog and therefore
 inclusion; `Some(list)` includes it only if `task` is in the list.
 
 The case this exists for is an exploration session itself: its role allows
-`fs.read`/`fs.grep`/`fs.glob` and deliberately not `task` (decision 4,
+`fs_read`/`fs_grep`/`fs_glob` and deliberately not `task` (decision 4,
 which is what makes recursion structurally impossible), so telling it "your
 FIRST action must be task" would be an instruction it could only fail. The
 `config` role is excluded by the same rule. Both paths are covered by
@@ -463,7 +463,7 @@ emission.
 **`task` is for investigation and planning only.** The same session
 delegated the *implementation* to `task` children twice ("Read the files
 as needed for the changes you make"). Task children are read-only by
-construction (the `fs.read`/`fs.grep`/`fs.glob` whitelist of decision 4),
+construction (the `fs_read`/`fs_grep`/`fs_glob` whitelist of decision 4),
 so each degenerated into another exploration that spent its turn budget
 producing nothing actionable. The generic `task` name reads as
 write-capable in these models' training distribution, so the constraint

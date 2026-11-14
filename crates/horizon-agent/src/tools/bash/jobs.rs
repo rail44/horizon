@@ -11,7 +11,7 @@ use crate::contract::SessionId;
 use crate::tools::input::BashJob;
 use crate::tools::output::{BashOutput, Response};
 
-/// How much of a job's log `bash.output` shows before it reports the rest as
+/// How much of a job's log `bash_output` shows before it reports the rest as
 /// truncated. Named so the catalog description can state the same number the
 /// reader applies, instead of retyping it and drifting.
 pub(crate) const OUTPUT_CHAR_CAP: usize = 4_000;
@@ -124,11 +124,11 @@ pub(crate) fn register(
 }
 
 /// Install the actual process kill. A cancel that already won runs it now.
-/// Called by the bash worker once its child exists, so `bash.cancel` reaches
+/// Called by the bash worker once its child exists, so `bash_cancel` reaches
 /// the same process-tree kill a timeout and a turn cancel use.
 ///
 /// Every sandboxed run calls this, but only a background call has an entry:
-/// without one there is no `bash.cancel` to reach, so nothing is installed
+/// without one there is no `bash_cancel` to reach, so nothing is installed
 /// and the process keeps running. Turn cancels and session teardown reach the
 /// process through its execution registration, not through this registry.
 pub(crate) fn attach_cancel(
@@ -172,7 +172,7 @@ pub(crate) fn receipt(id: Uuid, entry: &Arc<Mutex<Entry>>) -> serde_json::Value 
         "job_id": id.to_string(),
         "state": guard.state.as_str(),
         "log_path": guard.log_path.display().to_string(),
-        "message": "Started in the background. Use bash.output for its current state and log; its completion will arrive as a notification.",
+        "message": "Started in the background. Use bash_output for its current state and log; its completion will arrive as a notification.",
     })
 }
 
@@ -231,7 +231,7 @@ pub(crate) fn finish(id: Uuid, state: JobState, result: &BashOutput) {
         );
     }
     let notification = format!(
-        "A background bash job has finished. This is a system notification, not a message from the user. job_id: {id}; state: {}; summary: {summary}; log: {}. Use bash.output to read it.",
+        "A background bash job has finished. This is a system notification, not a message from the user. job_id: {id}; state: {}; summary: {summary}; log: {}. Use bash_output to read it.",
         reported_state.as_str(),
         log_path.display()
     );
@@ -295,7 +295,7 @@ pub(crate) fn take_notifications(owner: SessionId) -> Vec<String> {
 
 pub(crate) fn output(owner: SessionId, input: &BashJob) -> Response {
     let Ok(id) = Uuid::parse_str(&input.job_id) else {
-        return crate::tools::output::error("bash.output requires a valid job id");
+        return crate::tools::output::error("bash_output requires a valid job id");
     };
     let Some(entry) = owned_entry(owner, id) else {
         return crate::tools::output::error("no bash job with that id belongs to this session");
@@ -316,7 +316,7 @@ pub(crate) fn output(owner: SessionId, input: &BashJob) -> Response {
 
 pub(crate) fn cancel_tool(owner: SessionId, input: &BashJob) -> Response {
     let Ok(id) = Uuid::parse_str(&input.job_id) else {
-        return crate::tools::output::error("bash.cancel requires a valid job id");
+        return crate::tools::output::error("bash_cancel requires a valid job id");
     };
     match cancel(owner, id) {
         Some(value) => Response::external(value),
@@ -405,7 +405,7 @@ mod tests {
         assert!(!killed.load(std::sync::atomic::Ordering::SeqCst));
     }
 
-    /// A `bash.cancel` that lands before the worker attaches the kill still
+    /// A `bash_cancel` that lands before the worker attaches the kill still
     /// kills the process once it is attached; a later cancel runs the
     /// attached kill.
     #[test]

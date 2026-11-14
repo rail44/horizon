@@ -18,7 +18,7 @@ use crate::tools::ToolSessionState;
 pub(crate) enum Classification {
     /// Auto by construction (tier 1): runs without asking. Containment
     /// stands in for consent: the OS sandbox for `bash`, the tool's own
-    /// workspace-root path check for `fs.write`/`fs.edit`
+    /// workspace-root path check for `fs_write`/`fs_edit`
     /// (`docs/sandbox-perimeter-design.md`).
     Contained,
     /// Crosses the containment boundary (tier 2 --
@@ -26,7 +26,7 @@ pub(crate) enum Classification {
     /// judge's canonical case (MCP/non-sandboxed tools; network egress is
     /// excluded, see leg 4b's own `DomainDenialRetry` path). No *real*
     /// tool in this crate's catalog is classified this way today (there are
-    /// no MCP/external tools wired in yet); `mock.boundary_crossing` is the
+    /// no MCP/external tools wired in yet); `mock_boundary_crossing` is the
     /// fixture that exercises this classification until a real
     /// boundary-crossing tool exists.
     BoundaryCrossing,
@@ -52,16 +52,16 @@ pub(crate) enum BoundaryDisposition {
 /// actually engage `horizon-sandbox`'s containment (checked, not assumed --
 /// see `horizon_sandbox::is_available`).
 ///
-/// `fs.write`/`fs.edit` do not run in the OS sandbox; their confinement is
+/// `fs_write`/`fs_edit` do not run in the OS sandbox; their confinement is
 /// the tool's own workspace-root path check, so sandbox availability does
 /// not affect them. A target inside the repository's gitdir is decided
 /// before this classification (`plan_prepared_call`).
 ///
-/// `config.write` always asks -- it edits Horizon's own config file, not
+/// `config_write` always asks -- it edits Horizon's own config file, not
 /// anything inside a session's workspace.
 fn classify_input(tool_id: &str, input: &ToolInput, sandbox_available: bool) -> Classification {
     match tool_id {
-        "fs.write" | "fs.edit" => Classification::Contained,
+        "fs_write" | "fs_edit" => Classification::Contained,
         "bash" if sandbox_available && !input.requires_metadata_write() => {
             Classification::Contained
         }
@@ -69,8 +69,8 @@ fn classify_input(tool_id: &str, input: &ToolInput, sandbox_available: bool) -> 
         // Test-only fixture -- see `Classification::BoundaryCrossing`'s doc
         // comment. Not sensitive to `sandbox_available`: a boundary crossing
         // is defined by running outside the containment perimeter.
-        "web_search" | "web_fetch" | "mock.boundary_crossing" => Classification::BoundaryCrossing,
-        // `config.write`, `mock.approval_required`, and anything else this
+        "web_search" | "web_fetch" | "mock_boundary_crossing" => Classification::BoundaryCrossing,
+        // `config_write`, `mock_approval_required`, and anything else this
         // crate ever catalogs as `RequireApproval` in the future: always
         // ask unless explicitly classified above -- the conservative
         // default the design doc asks for.
@@ -133,12 +133,12 @@ pub(crate) fn plan_prepared_call(
     if crate::tools::is_external_tool(&request.tool_id) {
         return ToolPlan::Automatic(AutomaticTool::Synchronous);
     }
-    if matches!(request.tool_id.as_str(), "fs.write" | "fs.edit") {
+    if matches!(request.tool_id.as_str(), "fs_write" | "fs_edit") {
         if let Some(root) = tool_state.primary_checkout_without_write_access() {
             return approval(
                 format!(
                     "`{}` would write inside the shared primary checkout `{}`. Allow direct \
-                     edits for this session, or call `worktree.enter` to work in a disposable \
+                     edits for this session, or call `worktree_enter` to work in a disposable \
                      worktree instead?",
                     request.tool_id,
                     root.display()
@@ -152,8 +152,8 @@ pub(crate) fn plan_prepared_call(
             if call_escapes_root(tool_state, &request.input) {
                 let path = request.input.read_path().expect("validated escaping path");
                 let verb = match request.tool_id.as_str() {
-                    "fs.grep" => "search",
-                    "fs.glob" => "find files in",
+                    "fs_grep" => "search",
+                    "fs_glob" => "find files in",
                     _ => "read",
                 };
                 approval(format!("`{}` requested to {verb} `{path}`, which is outside the session's workspace root. Allow this?", request.tool_id), ApprovalKind::Standard)
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn fs_mutations_are_contained_regardless_of_sandbox_availability() {
         let input = serde_json::json!({});
-        for tool_id in ["fs.write", "fs.edit"] {
+        for tool_id in ["fs_write", "fs_edit"] {
             for sandbox in [false, true] {
                 assert_eq!(
                     classify_call(tool_id, &input, sandbox),
@@ -397,7 +397,7 @@ mod tests {
         let input = serde_json::json!({ "content": "" });
         for sandbox_available in [false, true] {
             assert_eq!(
-                classify_call("config.write", &input, sandbox_available),
+                classify_call("config_write", &input, sandbox_available),
                 Classification::AlwaysAsk
             );
         }
@@ -407,7 +407,7 @@ mod tests {
     fn unknown_and_test_tool_ids_default_to_always_ask() {
         let input = serde_json::json!({});
         assert_eq!(
-            classify_call("mock.approval_required", &input, true),
+            classify_call("mock_approval_required", &input, true),
             Classification::AlwaysAsk
         );
         assert_eq!(
@@ -421,7 +421,7 @@ mod tests {
         let input = serde_json::json!({});
         for sandbox_available in [false, true] {
             assert_eq!(
-                classify_call("mock.boundary_crossing", &input, sandbox_available),
+                classify_call("mock_boundary_crossing", &input, sandbox_available),
                 Classification::BoundaryCrossing
             );
         }
@@ -536,7 +536,7 @@ mod tests {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
         let events = policy_events(
             &requested_with_input(
-                "fs.write",
+                "fs_write",
                 serde_json::json!({"path": "/tmp/example", "content": "hello"}),
             ),
             &tool_state,
@@ -567,7 +567,7 @@ mod tests {
                 &tool_state,
                 &ToolCallRequest {
                     call_id: crate::contract::ToolCallId("call-read".into()),
-                    tool_id: "fs.read".into(),
+                    tool_id: "fs_read".into(),
                     input: serde_json::json!({ "path": path }).into(),
                     occurrence_id: crate::contract::OccurrenceId("call-read".into()),
                 },
@@ -608,11 +608,11 @@ mod tests {
 
         for (tool_id, input) in [
             (
-                "fs.write",
+                "fs_write",
                 serde_json::json!({"path": hook, "content": "#!/bin/sh"}),
             ),
             (
-                "fs.edit",
+                "fs_edit",
                 serde_json::json!({"edits": [
                     {"path": tracked, "old_string": "before", "new_string": "after"},
                     {"path": root_path.join(".git/config"), "old_string": "a", "new_string": "b"},
@@ -643,7 +643,7 @@ mod tests {
             &tool_state,
             &ToolCallRequest {
                 call_id: crate::contract::ToolCallId("call-tracked".into()),
-                tool_id: "fs.write".into(),
+                tool_id: "fs_write".into(),
                 input: serde_json::json!({"path": tracked, "content": "after"}).into(),
                 occurrence_id: crate::contract::OccurrenceId("call-tracked".into()),
             },
@@ -695,7 +695,7 @@ mod tests {
         };
 
         let write = request(
-            "fs.write",
+            "fs_write",
             serde_json::json!({"path": root.path().join("src/lib.rs"), "content": "change"}),
         );
         let ToolPlan::Approval(approval) = plan_tool_call(&tool_state, &write) else {
@@ -731,7 +731,7 @@ mod tests {
     fn an_unknown_tool_id_never_gets_an_approval_prompt() {
         // The 2026-07-19 dogfooding bug: an unrecognized tool id (not in
         // `tools::catalog::definitions` at all, e.g. the model calling
-        // `write` instead of `fs.write`) used to default to
+        // `write` instead of `fs_write`) used to default to
         // `ToolPermission::RequireApproval`, reaching a real human approval
         // prompt for a tool call that could never actually run.
         // `tools::execution::execute_agent_tool` (exercised separately, on
@@ -756,7 +756,7 @@ mod tests {
     fn mock_approval_required_always_gets_a_prompt_even_when_isolated() {
         let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir()).build();
         let events = policy_events(
-            &requested("mock.approval_required"),
+            &requested("mock_approval_required"),
             &tool_state,
             SessionId::new(),
         );
@@ -775,12 +775,12 @@ mod tests {
         let session_id = SessionId::new();
 
         let boundary_events = policy_events(
-            &requested("mock.boundary_crossing"),
+            &requested("mock_boundary_crossing"),
             &tool_state,
             session_id,
         );
         let always_ask_events = policy_events(
-            &requested("mock.approval_required"),
+            &requested("mock_approval_required"),
             &tool_state,
             session_id,
         );

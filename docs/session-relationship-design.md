@@ -62,11 +62,11 @@ messaging need, so it is designed once, here.
      directory yet (a terminal whose first cwd has not arrived) falls
      back to the Horizon process's cwd.
    - *worktree* — a session gets its **own worktree** only by entering
-     one after it starts: the `worktree.enter` tool, or the board's
+     one after it starts: the `worktree_enter` tool, or the board's
      `implement` action, both through environment activation. Spawning
      never creates a worktree; there is no per-spawn or per-origin
      isolation choice.
-   - *base ref is derived, not chosen*: `worktree.enter` branches from
+   - *base ref is derived, not chosen*: `worktree_enter` branches from
      the session root's own working-tree `HEAD`
      (`git rev-parse HEAD`), including local commits that have not been
      pushed to `origin/main` (the "launching session's source commit"

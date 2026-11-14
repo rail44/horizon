@@ -34,10 +34,10 @@
 //!    role-less session ([`SkillRegistry::prompt_section_for_all`]), or just
 //!    a role's `skill_ids` for a role-bearing one
 //!    ([`SkillRegistry::prompt_section_for_ids`]).
-//! 2. **Read on demand**: the `skill.read` tool ([`execute_read`]) returns
+//! 2. **Read on demand**: the `skill_read` tool ([`execute_read`]) returns
 //!    one skill's full body, re-read from disk at read time for a
 //!    repository skill (see [`Skill::body`]) so an edit followed by a fresh
-//!    `skill.read` in the same session sees the new content.
+//!    `skill_read` in the same session sees the new content.
 //! 3. **Deeper resources**: not built -- no skill here references further
 //!    files/scripts yet (Part 3.2's third disclosure tier). Add it if a
 //!    future skill needs it.
@@ -53,7 +53,7 @@ use std::path::{Path, PathBuf};
 use crate::instructions::{ancestor_dirs_from_git_root, cap_to_chars};
 
 /// Where a skill's body actually lives -- cached in the binary for an
-/// embedded skill, or re-read from disk on every `skill.read` for a
+/// embedded skill, or re-read from disk on every `skill_read` for a
 /// repository skill (the "edit -> observe" loop the repository layer exists
 /// for; see the module doc's trust note on why this is accepted).
 #[derive(Clone, Debug)]
@@ -68,7 +68,7 @@ enum SkillBody {
 #[derive(Clone, Debug)]
 pub(crate) struct Skill {
     /// The identifier used both in a role's `skill_ids` and in
-    /// `skill.read`'s `id` input -- taken verbatim from the `SKILL.md`
+    /// `skill_read`'s `id` input -- taken verbatim from the `SKILL.md`
     /// frontmatter's `name:` field (not the containing directory's name,
     /// for a repository skill).
     pub(crate) name: String,
@@ -79,7 +79,7 @@ pub(crate) struct Skill {
 }
 
 impl Skill {
-    /// This skill's full Markdown body, returned by `skill.read`. Cached
+    /// This skill's full Markdown body, returned by `skill_read`. Cached
     /// for an embedded skill; re-read and re-parsed from disk for a
     /// repository skill. A repository skill whose file has since been
     /// deleted or no longer parses returns an explanatory placeholder
@@ -174,7 +174,7 @@ pub fn register_external_skill_sources(sources: Vec<&'static str>) {
     }
 }
 
-/// Bounds a skill's body as returned by `skill.read` -- a repository skill
+/// Bounds a skill's body as returned by `skill_read` -- a repository skill
 /// is arbitrary user-controlled content (unlike an embedded one, sized by
 /// this crate's own authors), so it needs the same size-cap discipline
 /// `config::RigAgentConfig::repository_instructions_cap_chars` applies to
@@ -271,13 +271,13 @@ impl SkillRegistry {
 /// Shared body for [`SkillRegistry::prompt_section_for_all`]/
 /// [`SkillRegistry::prompt_section_for_ids`]: "`<name>` -- `<description>`"
 /// per skill plus one line telling the agent to read a skill via
-/// `skill.read` before relying on it -- `docs/research/agent-prompting.md`
+/// `skill_read` before relying on it -- `docs/research/agent-prompting.md`
 /// Part 3.2's "metadata now, body on demand" shape. `None` if `skills`
 /// yields nothing, so a session with nothing to disclose adds no extra
 /// section at all.
 fn skills_prompt_section<'a>(skills: impl Iterator<Item = &'a Skill>) -> Option<String> {
     let mut section = String::from(
-        "Skills available for this session -- read one with `skill.read` before relying on \
+        "Skills available for this session -- read one with `skill_read` before relying on \
          its contents:\n",
     );
     let mut any = false;
@@ -294,7 +294,7 @@ fn skills_prompt_section<'a>(skills: impl Iterator<Item = &'a Skill>) -> Option<
 /// Reads and parses each `SKILL.md` in full at discovery time (there's no
 /// cheaper way to reach just the frontmatter with this crate's hand-rolled
 /// parser), but only the parsed `name`/`description` are kept here -- the
-/// body is re-read fresh from disk on every `skill.read` (see
+/// body is re-read fresh from disk on every `skill_read` (see
 /// [`Skill::body`]), not cached from this pass. A directory whose
 /// `SKILL.md` doesn't parse warns and is skipped rather than failing the
 /// whole session (config-file-style never-crash policy -- mirrors
@@ -375,7 +375,7 @@ fn parse_skill_md(source: &str) -> Option<ParsedSkillMd> {
     })
 }
 
-/// Executes the `skill.read` tool against `registry` (this session's
+/// Executes the `skill_read` tool against `registry` (this session's
 /// composed [`SkillRegistry`]): returns `id`'s full body (capped at
 /// [`SKILL_BODY_CAP_CHARS`]), or an error listing every id this session can
 /// see if `id` does not match one. Argument decoding belongs to tools::input.
@@ -469,7 +469,7 @@ mod tests {
             .get("horizon-distill")
             .expect("horizon-distill must be registered");
         assert!(!distill_skill.description.is_empty());
-        assert!(distill_skill.body().contains("recall.search"));
+        assert!(distill_skill.body().contains("recall_search"));
 
         let github_pr_skill = registry
             .get("github-pr")
@@ -505,7 +505,7 @@ mod tests {
         assert!(section.contains("horizon-config"));
         assert!(section.contains("horizon-cli"));
         assert!(section.contains("github-pr"));
-        assert!(section.contains("skill.read"));
+        assert!(section.contains("skill_read"));
     }
 
     #[test]
@@ -655,7 +655,7 @@ mod tests {
         let second = execute_read(&registry, &serde_json::json!({ "id": "my-skill" }));
         assert_eq!(
             second["body"], "edited body",
-            "skill.read must re-read a repository skill's body from disk, not a cached copy"
+            "skill_read must re-read a repository skill's body from disk, not a cached copy"
         );
     }
 
@@ -718,6 +718,6 @@ mod tests {
             .prompt_section_for_ids(&["test-external-skill"])
             .expect("must build a section for the external skill");
         assert!(section.contains("test-external-skill"));
-        assert!(section.contains("skill.read"));
+        assert!(section.contains("skill_read"));
     }
 }

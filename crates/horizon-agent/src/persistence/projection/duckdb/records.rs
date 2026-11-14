@@ -203,7 +203,7 @@ impl RecallEntryKind {
 
 /// [`super::Store::search_history`]'s result: the rows within its `limit`,
 /// plus the total match count across the whole search (scope included) so a
-/// caller (`recall.search`) can report "there were N total, here are the
+/// caller (`recall_search`) can report "there were N total, here are the
 /// first `limit`" instead of silently truncating.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RecallSearchReport {

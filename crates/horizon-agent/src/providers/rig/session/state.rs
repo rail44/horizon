@@ -55,7 +55,7 @@ pub(crate) struct SessionLoopState {
 
     // --- Standing-agent memory (`docs/standing-agent-memory-design.md`) ----
     /// The current memory document, maintained incrementally as
-    /// `memory.update` results arrive. Seeded from the event log at spawn;
+    /// `memory_update` results arrive. Seeded from the event log at spawn;
     /// the provider-view projection prepends it (replacing old history) for
     /// standing roles. `None` for non-standing roles (no memory mechanism).
     pub(in crate::providers::rig) memory: Option<StandingMemory>,

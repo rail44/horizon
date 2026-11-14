@@ -8,7 +8,7 @@
 //! `src/agent/` module re-exports this crate's modules for its own
 //! internal `crate::agent::*` paths and supplies the small amount of
 //! Horizon-side state this crate can't hold itself (session id conversion,
-//! config-file loading, the `workspace.snapshot` host tool) — see that
+//! config-file loading, the `workspace_snapshot` host tool) — see that
 //! module for the seam.
 
 pub mod auxiliary;

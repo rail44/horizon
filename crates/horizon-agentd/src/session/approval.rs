@@ -399,7 +399,7 @@ mod tests {
 
     fn out_of_root_candidate(call_id: &str, path: &std::path::Path) -> ApprovalCandidate {
         let mut candidate = judge_candidate(call_id);
-        candidate.request.tool_id = "fs.read".into();
+        candidate.request.tool_id = "fs_read".into();
         candidate.request.input = serde_json::json!({"path": path.display().to_string()}).into();
         candidate
     }
@@ -614,7 +614,7 @@ mod tests {
     /// `resolve_approval` runs, so it exists regardless of which
     /// `ApprovalOutcome` variant (`Executed`/`Started`/`Forward`/
     /// `AlreadyResolved`) the resolve takes. This case exercises the
-    /// `Forward` branch (the `mock.approval_required` path: not a
+    /// `Forward` branch (the `mock_approval_required` path: not a
     /// Horizon-executed tool, so the decision is forwarded to the
     /// provider unchanged). The audit row carries the right
     /// `ApprovalDecisionPayload` and the frame's `occurrence_id`, so the
@@ -632,7 +632,7 @@ mod tests {
             .extend_provider_events([
                 ProviderEvent::from(Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
-                    tool_id: "mock.approval_required".to_string(),
+                    tool_id: "mock_approval_required".to_string(),
                     input: serde_json::json!({}).into(),
                     occurrence_id: occurrence_id.clone(),
                 })),
@@ -704,7 +704,7 @@ mod tests {
                 horizon_agent::contract::ToolCallRequest {
                     call_id: call_id.clone(),
                     occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
-                    tool_id: "mock.approval_required".into(),
+                    tool_id: "mock_approval_required".into(),
                     input: serde_json::json!({}).into(),
                 },
             )
@@ -731,7 +731,7 @@ mod tests {
                     call_id: call_id.clone(),
                     occurrence_id: occurrence_id.clone(),
                 },
-                reason: Some("wrong tool, try fs.read".to_string()),
+                reason: Some("wrong tool, try fs_read".to_string()),
             },
         );
 
@@ -741,7 +741,7 @@ mod tests {
         });
         match resolved {
             Some(ApprovalDecisionPayload::Deny { reason }) => {
-                assert_eq!(reason.as_deref(), Some("wrong tool, try fs.read"));
+                assert_eq!(reason.as_deref(), Some("wrong tool, try fs_read"));
             }
             other => panic!("expected a Deny decision, got {other:?}"),
         }
@@ -770,7 +770,7 @@ mod tests {
                 horizon_agent::contract::ToolCallRequest {
                     call_id: call_id.clone(),
                     occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
-                    tool_id: "mock.approval_required".into(),
+                    tool_id: "mock_approval_required".into(),
                     input: serde_json::json!({}).into(),
                 },
             )

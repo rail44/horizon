@@ -118,7 +118,7 @@ pub fn start_approval_gate(
 /// approved it -- `tools::approval`'s single entry point for the tools this
 /// crate itself executes (as opposed to `bash`, which runs on its own
 /// background thread, and `Provider::Forward`-ed tools like
-/// `mock.approval_required`). The synchronous registry selects the owning implementation.
+/// `mock_approval_required`). The synchronous registry selects the owning implementation.
 pub(crate) fn execute_approved(
     tool_state: &ToolSessionState,
     input: &input::ToolInput,

@@ -29,17 +29,24 @@ plugin-provided tools, running agent commands inside terminal sessions.
 | bash  | require approval | Fresh process per command (below)                  |
 | web_search | boundary: auto | Fixed Exa endpoint; shadow-judged             |
 | web_fetch | boundary: exact-host grant | Bounded SSRF-safe fetch           |
-| worktree.enter | auto-allow | No input; moves the session into a fresh worktree (below) |
+| worktree_enter | auto-allow | No input; moves the session into a fresh worktree (below) |
+
+A tool id is the function name the provider sees, so it is OpenAI's
+`^[a-zA-Z0-9_-]{1,64}$`: `fs_read`, not `fs.read`. An OpenAI-compatible
+provider may refuse the whole request over one other name (DeepInfra began
+to on 2026-11-14), so the ids were renamed from dotted to underscored that
+day, sessions recorded before it are not rewritten, and
+`register_external_tools` refuses an id outside the pattern.
 
 All tools require **absolute paths**; relative paths are rejected with an
 actionable error (models measurably mishandle relative paths — SWE-bench-era
 finding restated in Anthropic's agent guidance).
 
-`worktree.enter` (`tools/worktree.rs`) takes no arguments. Through the
+`worktree_enter` (`tools/worktree.rs`) takes no arguments. Through the
 `HostTools::enter_worktree` boundary, `horizon-agentd` resolves the session
 root's `HEAD` to a commit, refuses a session that already owns a worktree,
 and queues `Command::ActivateWorktree` at that commit for the calling
-session: the activation `board.session implement` also requests. The
+session: the activation `board_session implement` also requests. The
 result is `{requested, base, message}`; the root moves at the provider's
 next turn boundary, and the model's next turn receives a note naming the
 new root, branch, and base (or the activation failure). See
@@ -70,9 +77,9 @@ memory log range) remain semantic validation; schema generation does not
 replace them. Board and host-provided tool contracts are separate.
 
 Limits are now rejected instead of silently clamped. For example,
-`fs.read.limit=5000` must be corrected to at most 2000; `limit="10"` is a
+`fs_read.limit=5000` must be corrected to at most 2000; `limit="10"` is a
 type error rather than the default window. Removed fields such as
-`fs.grep.context` are unknown-field errors.
+`fs_grep.context` are unknown-field errors.
 
 ### Result contract (2026-09-26)
 
@@ -84,7 +91,7 @@ for a built-in outcome. External board/host adapters retain their own JSON
 convention. The provider still receives `{outcome, output}` from the recorded
 `ToolCallResult`, both live and on resume.
 
-`fs.edit` records each entry as `Applied { occurrences }`, `Failed { message }`,
+`fs_edit` records each entry as `Applied { occurrences }`, `Failed { message }`,
 or `NotAttempted`. Completed views count only recorded applied edits, including
 those before a later failure. Expanded rows label failed/unattempted entries and
 show only applied replacement diffs. Line totals remain reconstructed replacement
@@ -107,16 +114,16 @@ without that field use the raw display fallback and are not reused as fresh resu
 
 ### Results
 
-`fs.read` is for a known file or a relevant line window, not content
-discovery. Its catalog routes specific-content questions to `fs.grep`,
-unknown paths to `fs.glob`, and independent known files to parallel reads.
+`fs_read` is for a known file or a relevant line window, not content
+discovery. Its catalog routes specific-content questions to `fs_grep`,
+unknown paths to `fs_glob`, and independent known files to parallel reads.
 The default window is 500 lines; an explicit request may reach 2,000 lines.
 The rendered content also stops at 50,000 characters on a line boundary and
 returns `next_offset`, so a continuation is explicit rather than an
 accidental whole-file response. Each result carries a version derived from
 the file mtime and size.
 
-`fs.grep` accepts either one file or a directory and returns **locations
+`fs_grep` accepts either one file or a directory and returns **locations
 only** — one `path` + `line_number` per match plus the total count, never
 the matching line or surrounding context (`d74a75e`, 2026-07-25; the
 measurement behind the reversal is in
@@ -124,7 +131,7 @@ measurement behind the reversal is in
 follow-up session analysis: context lines cost ~5x the locations and only
 16% of them were ever revisited by later reads). The complete serialized
 result is capped at 50,000 characters. These are harness invariants rather
-than prompt-only conventions; content questions route to `fs.read` with a
+than prompt-only conventions; content questions route to `fs_read` with a
 window around the reported line.
 
 A provider request carries the session's canonical history verbatim. Horizon
@@ -141,13 +148,13 @@ content is produced rather than after the fact.
 The measurement and prior-art basis for the read/grep bounds is recorded in
 `research/agent-tool-output-and-read-routing-2026-07-24.md`.
 
-`fs.read`/`fs.grep`/`fs.glob` reach two places without approval: the
+`fs_read`/`fs_grep`/`fs_glob` reach two places without approval: the
 session's workspace root, and the session's own Git metadata — the gitdir a
 linked worktree's `.git` pointer file names, plus the repository's common
 dir, resolved by the same `tools::metadata_writable_roots` the Git-operation
 approval uses. Without the second, a session in a linked worktree could not
 read its own `.git/HEAD` while a session in an ordinary checkout reads it as
-an in-root file. Reads only: `fs.write`/`fs.edit` stay confined to the
+an in-root file. Reads only: `fs_write`/`fs_edit` stay confined to the
 workspace root. Anything else goes through the approval gate.
 
 ## Edit Semantics
@@ -155,7 +162,7 @@ workspace root. Anything else goes through the approval gate.
 The industry has converged on exact-string replacement with uniqueness
 enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
 
-- **`fs.edit` takes a list of edits and nothing else**:
+- **`fs_edit` takes a list of edits and nothing else**:
   `{"edits": [{path, old_string, new_string, replace_all?}, …]}`, at least
   one entry, no single-edit top-level shape (owner decision 2026-07-28).
   Batching is therefore the ordinary path rather than a capability the
@@ -184,9 +191,9 @@ enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
 - **Staleness gate, enforced mechanically:** a file must have been read in
   this session, and its mtime must be unchanged since that read, or the edit
   is rejected ("file changed on disk — read it again"). Read-before-edit is a
-  harness invariant, not prompt discipline. Note that `fs.edit` itself
+  harness invariant, not prompt discipline. Note that `fs_edit` itself
   records the mtime it leaves behind, so a subsequent edit is allowed without
-  an intervening `fs.read`; this is intentional (it is what lets edits chain
+  an intervening `fs_read`; this is intentional (it is what lets edits chain
   without a read round trip per edit), but it means a resubmitted identical
   edit passes the gate — and when `new_string` contains `old_string`
   (insertion-shaped edits), the resubmission matches again and silently
@@ -199,9 +206,9 @@ enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
 - No fuzzy-match fallback in v1. Gemini ships a four-tier fuzzy cascade;
   Claude Code deliberately ships none. Start strict, collect failure data,
   add leniency only if the data demands it.
-- A process-wide per-path lock serializes `fs.write` and `fs.edit`
+- A process-wide per-path lock serializes `fs_write` and `fs_edit`
   mutations that target the same file, including calls from different
-  sessions. An `fs.edit` call holds every path in its list for the whole
+  sessions. An `fs_edit` call holds every path in its list for the whole
   call, acquired in lexical order to avoid deadlocks.
 
 ### `fs.patch`, removed 2026-07-28
@@ -235,7 +242,7 @@ user-visible `batch` tool.
   hooks, and Git commands commonly outlive the old 60/120-second budgets.
 - Output capped in-context (~30k chars, head+tail preserved); the full output
   spills to a temp file under `$TMPDIR` (`/tmp` on Linux), outside the
-  workspace root, and the path is returned in the result. `fs.read`/`fs.grep`
+  workspace root, and the path is returned in the result. `fs_read`/`fs_grep`
   are workspace-confined and reject that path as "escapes the workspace
   root", so a selective re-read of the spill must go through `bash`
   (`cat`/`grep`) — and under the sandbox even `bash` cannot reach the host's
@@ -585,12 +592,12 @@ runs through the ordinary path — same per-session FIFO, sandbox policy, grants
 approval origin, and process-tree kill — and its terminal result is stored on
 the job, not folded as a second result for the call that launched it.
 
-- `bash.output` reads a job's current state and log. It works while the job is
+- `bash_output` reads a job's current state and log. It works while the job is
   running and after it ends. The in-context output is bounded; the full log
   stays at the reported `log_path` under the session's
   `.horizon-sandbox-tmp/`.
-- `bash.cancel` kills the job's process tree. The real exit information stays
-  readable through `bash.output`.
+- `bash_cancel` kills the job's process tree. The real exit information stays
+  readable through `bash_output`.
 - A finished job queues a notification on the same channel as a finished
   `task`, so the next provider round learns about it without polling. The
   notification names the state, exit summary, job id, and log path.
@@ -628,14 +635,14 @@ path-mutation syscalls — apply the same rule
 Approval is session-scoped and not persisted. Approving either a
 filesystem-retry or the host-execution fallback records that this session may
 write its primary checkout, and the next sandboxed run gets the ordinary
-writable root back. `fs.write`/`fs.edit` run outside the OS sandbox, so they
+writable root back. `fs_write`/`fs_edit` run outside the OS sandbox, so they
 keep a pre-execution approval for the same checkout. Isolated worktrees and
 non-primary roots never see either prompt.
-## Session-first history: `recall.sessions` (2026-11-04)
+## Session-first history: `recall_sessions` (2026-11-04)
 
-`recall.sessions` lists persisted sessions newest-first, one row per session:
+`recall_sessions` lists persisted sessions newest-first, one row per session:
 last activity, first/latest user request, latest turn outcome, turn count,
-approval count, and the first sequence for `recall.read`. Optional `limit`,
+approval count, and the first sequence for `recall_read`. Optional `limit`,
 `since`/`until` (Unix ms), `session_id`, and latest-`turn_outcome` filters are
 available.
 
@@ -646,7 +653,7 @@ and `denial_count` counts filesystem/network/mach-service/ungrantable
 evidence. A successful run that also recorded a denial is a command success
 plus a denial, not a tool error.
 
-`task` children (the explore role) advertise `recall.search`, `recall.read`,
-`recall.sessions`, and `knowledge.read` alongside the read-only filesystem
+`task` children (the explore role) advertise `recall_search`, `recall_read`,
+`recall_sessions`, and `knowledge_read` alongside the read-only filesystem
 tools, so a delegated investigation can survey persisted history and project
 knowledge. `bash` and every write tool remain unavailable to them.

@@ -311,7 +311,7 @@ their wiring:
   modals (palette, session manager, view chooser, model picker), the
   control plane's requests, and the runtime reloads. The model itself —
   tabs, panes, layout tree, session attachments, mode state, the pure
-  command model, the `workspace.snapshot` payload — is
+  command model, the `workspace_snapshot` payload — is
   `crates/horizon-workspace`.
 - `terminald.rs` / `agentd.rs` — the two runtimes as the shell holds them:
   a handle that a reload replaces. The clients themselves are

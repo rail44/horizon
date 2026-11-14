@@ -2,7 +2,7 @@ use std::path::Path;
 
 use ignore::{DirEntry, WalkBuilder};
 
-/// Directory names pruned unconditionally during `fs.glob`/`fs.grep`
+/// Directory names pruned unconditionally during `fs_glob`/`fs_grep`
 /// traversal, regardless of what (if anything) `.gitignore` says: version-
 /// control metadata and dependency/build-output directories that are
 /// typically large, rarely relevant to a code search, and often full of
@@ -14,7 +14,7 @@ use ignore::{DirEntry, WalkBuilder};
 pub(super) const SKIPPED_DIR_NAMES: &[&str] = &[".git", "target", "node_modules"];
 
 /// The note surfaced in a tool result when a traversal cap (file count or,
-/// for `fs.grep`, total bytes read) cut a scan short, so the model can
+/// for `fs_grep`, total bytes read) cut a scan short, so the model can
 /// adapt — narrow `base_path`/`pattern` — instead of silently receiving
 /// incomplete results with no explanation.
 pub(super) fn scan_truncated_note(visited: usize) -> String {
@@ -37,7 +37,7 @@ fn is_skipped_dir(entry: &DirEntry) -> bool {
 }
 
 /// A walk over `base` built on the `ignore` crate — the same walker
-/// ripgrep uses — so `fs.glob`/`fs.grep` respect `.gitignore`, `.ignore`,
+/// ripgrep uses — so `fs_glob`/`fs_grep` respect `.gitignore`, `.ignore`,
 /// and the user's global gitignore the way any other tool working in the
 /// repository would. Per `WalkBuilder`'s default `require_git`, the git-
 /// flavored ignore files only take effect when `base` is inside an actual
@@ -53,7 +53,7 @@ fn is_skipped_dir(entry: &DirEntry) -> bool {
 /// `node_modules` (or no `.gitignore`/git repo at all) still skips them.
 ///
 /// Callers are responsible for enforcing the traversal file-count cap
-/// (`agent::config::FsToolConfig::traversal_max_files`, and for `fs.grep` a
+/// (`agent::config::FsToolConfig::traversal_max_files`, and for `fs_grep` a
 /// byte budget too) since only they know how to report which cap tripped.
 pub(super) fn walk(base: &Path) -> impl Iterator<Item = DirEntry> {
     WalkBuilder::new(base)

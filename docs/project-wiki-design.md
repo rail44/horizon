@@ -139,7 +139,7 @@ Diagrams are deferred; gpui-component (7591a35) has no mermaid rendering.
   change that ("一旦、リポジトリを変えることはない前提でよいですが、
   使用感次第で変わりウルトは思います").
 - **Pages are written through dedicated tools**, both a partial edit
-  (exact-string replacement, as `fs.edit`) and a whole-page write for new
+  (exact-string replacement, as `fs_edit`) and a whole-page write for new
   or regenerated pages. The store sits outside every workspace, so
   without them every write needs an approval.
 - **Anchors borrow the W3C Web Annotation Data Model** (Recommendation,
@@ -342,8 +342,8 @@ owner's call.
    and resuming on the next message.
 
    Done 2026-11-09 on the same branch (`crates/horizon-agentd/src/wiki_flow.rs`,
-   `crates/horizon-wiki/src/agent.rs`): `wiki.list`, `wiki.read` (also
-   `concepts`), `wiki.write` and `wiki.edit`, offered in trusted projects
+   `crates/horizon-wiki/src/agent.rs`): `wiki_list`, `wiki_read` (also
+   `concepts`), `wiki_write` and `wiki_edit`, offered in trusted projects
    only, as the knowledge tools are; the `wiki-thread` role (read-only
    repository and web tools plus the wiki's, the `project-wiki` skill) and
    the skill registered from `horizon-wiki`. A thread's session id is a
@@ -362,8 +362,8 @@ owner's call.
    legends (2026-11-09): an `ExternalTool` carries its result type's
    schema (`ExternalOutput`), the catalog renders its documented fields
    after the prose as it does for built-in tools, and the wiki tools'
-   results are typed (`WikiPages`, `WikiPageText`, …). `wiki.read` is not
-   truncated: pages are a few KB, and `wiki.edit` needs the exact text
+   results are typed (`WikiPages`, `WikiPageText`, …). `wiki_read` is not
+   truncated: pages are a few KB, and `wiki_edit` needs the exact text
    (owner asked; no cap recommended and taken).
 4. **Shell**: `ViewKind::Wiki` and `src/wiki/` from the Markdown view —
    commenting from a selection, highlighting anchors, the thread, file
@@ -455,7 +455,7 @@ owner's call.
   as `concepts.md` beside the pages (owner's choice), so open point "Where
   the concept file lives" is closed. Still open: a Horizon agent needs an
   approval to write to the store, which sits outside every workspace; a
-  dedicated write path like `knowledge.write` would remove that, and
+  dedicated write path like `knowledge_write` would remove that, and
   whether one is wanted is undecided. The full pass found four more stale
   module comments beyond the pilot's, fixed on the same branch.
 - **Choosing links to docs and the board.** The pilot used path mentions

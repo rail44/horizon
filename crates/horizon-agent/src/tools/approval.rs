@@ -44,21 +44,21 @@ impl From<Result<ToolUpdate, String>> for ApprovalOutcome {
 /// Tool ids Horizon executes itself once approved, rather than notifying
 /// the provider via `ApproveToolCall`/`DenyToolCall` and waiting for it to
 /// report a result. See `docs/agent-tools-design.md`, "Approval Wiring".
-/// `fs.read`/`fs.glob`/`fs.grep` join here because an out-of-workspace-root
+/// `fs_read`/`fs_glob`/`fs_grep` join here because an out-of-workspace-root
 /// read routes through the approval gate (see `execution::execute_agent_tool`'s
-/// `call_escapes_root` check); `config.write` joins for the same reason -- all
+/// `call_escapes_root` check); `config_write` joins for the same reason -- all
 /// are "runs to completion synchronously" shape -- see
 /// [`resolve_synchronous_tool`].
 fn is_horizon_executed_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,
-        "fs.read"
-            | "fs.glob"
-            | "fs.grep"
-            | "fs.write"
-            | "fs.edit"
+        "fs_read"
+            | "fs_glob"
+            | "fs_grep"
+            | "fs_write"
+            | "fs_edit"
             | "bash"
-            | "config.write"
+            | "config_write"
             | "web_fetch"
     )
 }
@@ -274,8 +274,8 @@ fn resolve_web_fetch(
     outcome
 }
 
-/// `fs.write`/`fs.edit`/`config.write` and the approved-out-of-root read
-/// tools (`fs.read`/`fs.glob`/`fs.grep`): all run to completion synchronously,
+/// `fs_write`/`fs_edit`/`config_write` and the approved-out-of-root read
+/// tools (`fs_read`/`fs_glob`/`fs_grep`): all run to completion synchronously,
 /// so their approve/deny always resolves to `Executed`. Dispatches through
 /// `tools::execute_approved`, which picks the owning module by tool id.
 fn resolve_synchronous_tool(
@@ -285,7 +285,7 @@ fn resolve_synchronous_tool(
 ) -> ApprovalOutcome {
     match decision {
         ApprovalDecision::Approve => {
-            if matches!(request.tool_id.as_str(), "fs.write" | "fs.edit") {
+            if matches!(request.tool_id.as_str(), "fs_write" | "fs_edit") {
                 runtime.tool_state.approve_primary_checkout();
             }
             ApprovalOutcome::from(ToolUpdate::execute(&runtime.live_state, request, || {

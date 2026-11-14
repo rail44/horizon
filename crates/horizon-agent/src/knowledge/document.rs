@@ -1,7 +1,7 @@
 //! The persisted knowledge document format, independent of storage and tool execution.
 
 /// An entry's publication status. Only `Active` entries appear in the
-/// always-loaded prompt index; `knowledge.read` returns any status.
+/// always-loaded prompt index; `knowledge_read` returns any status.
 #[derive(
     Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
 )]
@@ -170,7 +170,7 @@ pub(super) fn parse_knowledge_md(source: &str) -> Option<ParsedKnowledgeMd> {
 }
 
 /// Serializes an entry back to the `---`-delimited file format. Used by
-/// `knowledge.write` to persist an upserted entry.
+/// `knowledge_write` to persist an upserted entry.
 pub(super) fn serialize_entry(entry: &ParsedKnowledgeMd) -> String {
     fn fmt_array(items: &[String]) -> String {
         if items.is_empty() {
