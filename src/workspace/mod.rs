@@ -47,7 +47,6 @@ use crate::agent::{self, Agent, AgentSession};
 use crate::board;
 use crate::markdown::{self, Markdown};
 use crate::terminal::{self, Session, Terminal, TerminalView};
-use crate::theme_settings;
 use crate::wake::Wake;
 use crate::wiki::Wiki;
 
@@ -605,36 +604,6 @@ impl Shell {
                     }
                     .view()
                 }
-                (PaneKind::View(ViewKind::ThemeSettings), ..) => {
-                    let config = kept.config.borrow().clone();
-                    let scheme = self.theme.with_untracked(|theme| *theme.scheme());
-                    let fallback = theme_settings::fallback(&scheme);
-                    let seed = horizon_theme::seed::Seed::from_current_config(&config, fallback);
-                    let save = kept.save_theme.clone();
-                    theme_settings::view(
-                        seed,
-                        self.theme,
-                        theme_settings::Host {
-                            // The seed's theme, at the font size in use.
-                            apply: Box::new(move |seed| {
-                                let kept = shell.kept();
-                                let mut config = kept.config.borrow().clone();
-                                config.theme = seed.to_raw_config().theme;
-                                let size = shell.theme.with_untracked(|theme| theme.font_size);
-                                let mut theme = Theme::from_config(&config);
-                                theme.font_size = size;
-                                *kept.config.borrow_mut() = config;
-                                shell.theme.set(theme);
-                            }),
-                            save: Box::new(move |seed| match &save {
-                                Some(save) => save(seed),
-                                None => horizon_theme::save::save(seed)
-                                    .map_err(|error| error.to_string()),
-                            }),
-                            path: horizon_config::resolved_path(),
-                        },
-                    )
-                }
                 (PaneKind::View(ViewKind::Plugin), ..) => {
                     let shown = (self.model).with_untracked(|model| model.pane_plugin(id).cloned());
                     let named = RwSignal::new(Vec::new());
@@ -1018,11 +987,7 @@ impl Shell {
     }
 
     /// A new pane at `placement` showing the plugin `plugin`.
-    pub(super) fn create_plugin(
-        &self,
-        plugin: horizon_workspace::PluginPane,
-        placement: Placement,
-    ) {
+    pub fn create_plugin(&self, plugin: horizon_workspace::PluginPane, placement: Placement) {
         self.create_pane(ViewKind::Plugin, placement, move |model, pane| {
             model.set_pane_plugin(pane, plugin);
         });

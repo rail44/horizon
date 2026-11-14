@@ -13,9 +13,11 @@ use horizon_theme::seed::{AccentValue, HueSlot, ResolvedFallback, Seed};
 use horizon_theme_css::Theme;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
+use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Callback, Component, El, el};
 
 use crate::parts::{ColorPicker, Drags, Range, Select, Slider};
+use crate::plugin::{Command, Mounted, Plugin};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -369,4 +371,36 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
         .child(seed_section)
         .child(preview);
     drags.wire(root)
+}
+
+/// The theme settings as a plugin. They keep nothing of their own: the
+/// seed is the configuration's.
+pub struct ThemeSettingsPlugin {
+    pub seed: Seed,
+    pub theme: RwSignal<Theme>,
+    pub host: Host,
+}
+
+impl Plugin for ThemeSettingsPlugin {
+    const NAME: &'static str = "theme-settings";
+    const TITLE: &'static str = "Theme Settings";
+    type State = ();
+    type Command = std::convert::Infallible;
+    type Asked = std::convert::Infallible;
+
+    fn commands() -> Vec<Command<std::convert::Infallible>> {
+        Vec::new()
+    }
+
+    fn mount(
+        self,
+        _: (),
+        _: Callback<std::convert::Infallible>,
+    ) -> Mounted<(), std::convert::Infallible> {
+        Mounted {
+            view: view(self.seed, self.theme, self.host),
+            run: Callback::new(|never| match never {}),
+            state: Signal::stored_local(()),
+        }
+    }
 }

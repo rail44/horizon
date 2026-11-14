@@ -36,7 +36,7 @@ fn matching(query: &str) -> Vec<(String, Choice)> {
     }
     choices.push((
         "Theme Settings".to_string(),
-        Choice::View(ViewKind::ThemeSettings),
+        Choice::Plugin(plugins::theme_settings()),
     ));
     choices.push(("Board".to_string(), Choice::Plugin(plugins::list())));
     choices.push(("Wiki".to_string(), Choice::View(ViewKind::Wiki)));

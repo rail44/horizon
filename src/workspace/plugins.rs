@@ -17,6 +17,9 @@ use crate::board::plugin::{
 use crate::board::{list, thread};
 use crate::plugin::{Mounted, Plugin};
 use crate::preview::{PreviewPlugin, Target};
+use crate::theme_settings::{self, ThemeSettingsPlugin};
+use horizon_theme::seed::Seed;
+use horizon_theme_css::Theme;
 
 /// A plugin's command, as the palette lists it and a key binding names
 /// it.
@@ -46,6 +49,7 @@ pub(super) fn commands() -> Vec<Listed> {
     let mut commands = listed::<BoardListPlugin>();
     commands.extend(listed::<BoardThreadPlugin>());
     commands.extend(listed::<PreviewPlugin>());
+    commands.extend(listed::<ThemeSettingsPlugin>());
     commands
 }
 
@@ -139,6 +143,37 @@ impl Shell {
                 };
                 self.mount(pane, plugin, state, |never| match never {})
             }
+            ThemeSettingsPlugin::NAME => {
+                let config = kept.config.borrow().clone();
+                let scheme = self.theme.with_untracked(|theme| *theme.scheme());
+                let fallback = theme_settings::fallback(&scheme);
+                let seed = Seed::from_current_config(&config, fallback);
+                let save = kept.save_theme.clone();
+                let host = theme_settings::Host {
+                    // The seed's theme, at the font size in use.
+                    apply: Box::new(move |seed| {
+                        let kept = shell.kept();
+                        let mut config = kept.config.borrow().clone();
+                        config.theme = seed.to_raw_config().theme;
+                        let size = shell.theme.with_untracked(|theme| theme.font_size);
+                        let mut theme = Theme::from_config(&config);
+                        theme.font_size = size;
+                        *kept.config.borrow_mut() = config;
+                        shell.theme.set(theme);
+                    }),
+                    save: Box::new(move |seed| match &save {
+                        Some(save) => save(seed),
+                        None => horizon_theme::save::save(seed).map_err(|error| error.to_string()),
+                    }),
+                    path: horizon_config::resolved_path(),
+                };
+                let plugin = ThemeSettingsPlugin {
+                    seed,
+                    theme: self.theme,
+                    host,
+                };
+                self.mount(pane, plugin, state, |never| match never {})
+            }
             _ => None,
         }
     }
@@ -193,6 +228,11 @@ pub(super) fn preview_of(target: Option<Target>) -> PluginPane {
 /// What a preview pane shows, as the model keeps it.
 pub(super) fn previewed(plugin: &PluginPane) -> Option<Option<Target>> {
     (plugin.name == PREVIEW).then(|| serde_json::from_value(plugin.state.clone()).ok().flatten())
+}
+
+/// A theme settings pane.
+pub(super) fn theme_settings() -> PluginPane {
+    pane::<ThemeSettingsPlugin>(())
 }
 
 /// A list pane.

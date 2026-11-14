@@ -789,7 +789,7 @@ fn the_board_opens_in_a_tab_and_a_task_s_thread_beside_its_list() {
 #[test]
 fn the_theme_settings_apply_a_seed_as_it_changes_and_save_it_when_asked() {
     use horizon::workspace::Placement;
-    use horizon_workspace::ViewKind;
+    use horizon_workspace::PluginPane;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -804,9 +804,12 @@ fn the_theme_settings_apply_a_seed_as_it_changes_and_save_it_when_asked() {
     });
     let scheme = |opened: &Opened| opened.shell.theme.with_untracked(|theme| *theme.scheme());
     let before = scheme(&opened);
-    opened
-        .shell
-        .create_view(ViewKind::ThemeSettings, Placement::NewTab);
+    let settings = PluginPane {
+        name: "theme-settings".to_string(),
+        title: "Theme Settings".to_string(),
+        state: serde_json::Value::Null,
+    };
+    opened.shell.create_plugin(settings, Placement::NewTab);
     opened.app.run_effects();
     opened.app.resolve();
     // The derived colors, as swatches: sixteen, three, five, four, four.
