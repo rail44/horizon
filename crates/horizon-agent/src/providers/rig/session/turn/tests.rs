@@ -67,7 +67,7 @@ async fn cap_summary_request_disables_tools_without_changing_session_config() {
             api_key_env: key_var.into(),
             base_url: Some(base_url),
             model: "summary-model".into(),
-            allowed_tool_ids: Some(vec!["fs.read".into()]),
+            allowed_tool_ids: Some(vec!["fs_read".into()]),
             ..Default::default()
         },
         events_tx,
@@ -78,7 +78,7 @@ async fn cap_summary_request_disables_tools_without_changing_session_config() {
             rig_core::completion::message::ToolCall::new(
                 rig_core::message::CallId::from_wire("last-call"),
                 rig_core::completion::message::ToolFunction::new(
-                    rig_core::message::ToolName::new("fs.read").expect("tool id"),
+                    rig_core::message::ToolName::new("fs_read").expect("tool id"),
                     json!({"path":"file"}),
                 ),
             ),
@@ -91,7 +91,7 @@ async fn cap_summary_request_disables_tools_without_changing_session_config() {
     );
     let summarized = tokio::time::timeout(
         Duration::from_secs(5),
-        state.run_cap_summary_turn(&result, "fs.read"),
+        state.run_cap_summary_turn(&result, "fs_read"),
     )
     .await
     .expect("summary request timed out");
@@ -200,7 +200,7 @@ async fn accepted_memory_updates_and_no_update_declarations_satisfy_the_checkpoi
                     sibling.clone(),
                     ToolCallDescriptor {
                         identity: crate::test_support::tool_identity(&sibling),
-                        tool_id: "fs.read".into(),
+                        tool_id: "fs_read".into(),
                         args: json!({"path": "/pending"}),
                     },
                 ),

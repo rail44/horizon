@@ -118,7 +118,7 @@ pub(super) fn session_extra_sections(
 /// task"), so the wording keeps no "when it is available" escape clause;
 /// instead the block is simply absent from a prompt whose session has no
 /// such tool. An exploration session is exactly that case: its role allows
-/// `fs.read`/`fs.grep`/`fs.glob` only (`roles::EXPLORE_ROLE`, which
+/// `fs_read`/`fs_grep`/`fs_glob` only (`roles::EXPLORE_ROLE`, which
 /// deliberately excludes this tool so explorations cannot recurse), and
 /// instructing it to delegate first would be an instruction it could only
 /// fail.

@@ -158,7 +158,7 @@ fn grants_for_project(
 /// Returns the directory repository-local skills must be discovered from.
 /// This deliberately mirrors `SessionEnvironment::for_workspace_root`: an
 /// explicit, host-resolved session root wins, otherwise both the prompt and
-/// `skill.read` fall back to the daemon's current directory (and finally
+/// `skill_read` fall back to the daemon's current directory (and finally
 /// `/`). Keeping the fallback in a named helper makes the two production
 /// skill registries' common root directly testable.
 pub(super) fn skill_discovery_root(workspace_root: Option<&Path>) -> PathBuf {
@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(
             skill_discovery_root(Some(&session_root)),
             session_root,
-            "skill.read must not discover from the daemon cwd"
+            "skill_read must not discover from the daemon cwd"
         );
     }
 

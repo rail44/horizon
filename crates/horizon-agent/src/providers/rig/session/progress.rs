@@ -117,7 +117,7 @@ mod tests {
                         call_id.clone(),
                         ToolCallDescriptor {
                             identity: crate::test_support::tool_identity(&call_id),
-                            tool_id: "fs.read".into(),
+                            tool_id: "fs_read".into(),
                             args: json!({}),
                         },
                     )
@@ -146,10 +146,10 @@ mod tests {
         let identity = crate::test_support::tool_identity(&ToolCallId("halted".into()));
         let result = identity.result(json!({"content": "already executed"}));
         let mut state = Execution::default();
-        state.halt(result.clone(), "fs.read".into());
+        state.halt(result.clone(), "fs_read".into());
         assert!(state.cancel_tools().is_empty());
         assert!(state.accept(&result).is_none());
-        assert_eq!(state.take_halted(), Some((result, "fs.read".into())));
+        assert_eq!(state.take_halted(), Some((result, "fs_read".into())));
         assert!(state.take_halted().is_none());
     }
 }

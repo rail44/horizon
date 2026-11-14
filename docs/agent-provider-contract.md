@@ -467,5 +467,5 @@ replacement by an identified retry. The same outcome drives provider messages,
 replay, approval projection and the transcript; arbitrary output text cannot
 supply it. Provider tool messages contain `{outcome, output}`. Superseded results
 retire an attempt without answering the pending provider call. Only a successful
-`memory.update` result applies a digest or satisfies its checkpoint.
+`memory_update` result applies a digest or satisfies its checkpoint.
 See [history format and conversion](agent-history-format.md) for the offline cutover.

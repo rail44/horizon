@@ -460,7 +460,7 @@ impl SessionLoopState {
     /// rather than as a danger-styled error block).
     ///
     /// The result that tripped the guard (`arrived_result`) is *real*: its
-    /// tool already executed (an `fs.write` is already on disk) and the app
+    /// tool already executed (an `fs_write` is already on disk) and the app
     /// already surfaced its genuine `ToolCallFinished`. Any *other*
     /// still-pending calls in the batch (only possible on the doom-loop path —
     /// see the module doc) are settled by the host through the same barrier
@@ -630,7 +630,7 @@ const CAP_SUMMARY_INSTRUCTION: &str = "You have reached the turn limit for this 
 /// decision 2, checkpoint). One chance; a second miss closes the turn with a
 /// `MemoryCheckpointMissed` event.
 const MEMORY_CHECKPOINT_REMINDER: &str = "You have not updated your memory document this turn. \
-     Before ending the turn, call memory.update to record what you learned (or declare no_update \
+     Before ending the turn, call memory_update to record what you learned (or declare no_update \
      with a reason). The turn cannot end without one of these.";
 
 #[cfg(test)]

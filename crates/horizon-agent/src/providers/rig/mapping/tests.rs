@@ -21,7 +21,7 @@ fn result(request: &ToolCallRequest, text: &str) -> ToolCallResult {
 #[test]
 fn reused_provider_ids_keep_each_executed_tool_name() {
     {
-        let first = request("fs.read", "first");
+        let first = request("fs_read", "first");
         let second = request("bash", "second");
         let first_result = result(&first, "read");
         let second_result = result(&second, "ran");
@@ -34,7 +34,7 @@ fn reused_provider_ids_keep_each_executed_tool_name() {
             ]),
             vec![
                 Message::from(rig_tool_call_from_request(&first)),
-                rig_tool_result_message(&first_result, "fs.read"),
+                rig_tool_result_message(&first_result, "fs_read"),
                 Message::from(rig_tool_call_from_request(&second)),
                 rig_tool_result_message(&second_result, "bash"),
             ]
@@ -143,8 +143,8 @@ fn a_later_answer_does_not_hide_an_unanswered_earlier_use_of_the_id() {
 
 #[test]
 fn an_unknown_occurrence_cannot_answer_a_known_provider_id() {
-    let announced = request("fs.read", "known");
-    let unknown = request("fs.read", "unknown");
+    let announced = request("fs_read", "known");
+    let unknown = request("fs_read", "unknown");
     assert_eq!(
         rig_messages_from_horizon_events(&[
             Event::ToolCallRequested(announced.clone()),
@@ -152,7 +152,7 @@ fn an_unknown_occurrence_cannot_answer_a_known_provider_id() {
         ]),
         vec![
             Message::from(rig_tool_call_from_request(&announced)),
-            rig_tool_result_message(&cancelled_tool_call_result(announced.identity()), "fs.read"),
+            rig_tool_result_message(&cancelled_tool_call_result(announced.identity()), "fs_read"),
         ]
     );
 }
@@ -229,9 +229,9 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
         };
         result
     };
-    execute("fs.read", json!({"path": path}));
+    execute("fs_read", json!({"path": path}));
     let result = execute(
-        "fs.edit",
+        "fs_edit",
         json!({"edits": [
             {"path": path, "old_string": "old", "new_string": "new", "replace_all": true},
             {"path": path, "old_string": "absent", "new_string": "never"},
@@ -275,7 +275,7 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
     let messages = rig_messages_from_horizon_events(&replay);
     assert_eq!(
         messages.last(),
-        Some(&rig_tool_result_message(&result, "fs.edit"))
+        Some(&rig_tool_result_message(&result, "fs_edit"))
     );
     let stored = crate::persistence::projection::duckdb::DuckdbStoreHandle::new(store);
     let restored =

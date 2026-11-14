@@ -110,10 +110,10 @@ impl BoardHost for AgentdBoardHost {
         self.state.register_board(self.root.clone());
         let runtime = runtime()?;
         match request.tool_id.as_str() {
-            "board.update" => runtime
+            "board_update" => runtime
                 .block_on(self.update(&request.input))
                 .map(|value| (value, Vec::new())),
-            "board.session" => runtime.block_on(crate::board_flow::operate(
+            "board_session" => runtime.block_on(crate::board_flow::operate(
                 self.state.clone(),
                 &self.store,
                 &self.root,

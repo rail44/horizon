@@ -224,7 +224,7 @@ fn message_committed_promotes_pre_tool_delta_across_tool_call_boundary() {
         }),
         agent::Event::ToolCallRequested(agent::ToolCallRequest {
             call_id: (agent::ToolCallId("call-1".to_string())).clone(),
-            tool_id: "fs.read".to_string(),
+            tool_id: "fs_read".to_string(),
             input: serde_json::json!({ "path": "/tmp/x" }).into(),
             occurrence_id: crate::contract::OccurrenceId(
                 (agent::ToolCallId("call-1".to_string())).0.clone(),
@@ -301,7 +301,7 @@ fn message_committed_promotes_first_delta_and_drops_post_tool_delta() {
         }),
         agent::Event::ToolCallRequested(agent::ToolCallRequest {
             call_id: (agent::ToolCallId("call-1".to_string())).clone(),
-            tool_id: "fs.read".to_string(),
+            tool_id: "fs_read".to_string(),
             input: serde_json::json!({ "path": "/tmp/x" }).into(),
             occurrence_id: crate::contract::OccurrenceId(
                 (agent::ToolCallId("call-1".to_string())).0.clone(),
@@ -326,7 +326,7 @@ fn message_committed_promotes_first_delta_and_drops_post_tool_delta() {
             }),
             AgentFrameItem::ToolCallRequested(agent::ToolCallRequest {
                 call_id: (agent::ToolCallId("call-1".to_string())).clone(),
-                tool_id: "fs.read".to_string(),
+                tool_id: "fs_read".to_string(),
                 input: serde_json::json!({ "path": "/tmp/x" }).into(),
                 occurrence_id: crate::contract::OccurrenceId(
                     (agent::ToolCallId("call-1".to_string())).0.clone()
@@ -510,7 +510,7 @@ fn runtime_state_store_folds_tool_call_progress_but_excludes_it_from_the_jsonl_l
         .extend_provider_events([
             agent::ProviderEvent::tool_call_progress(agent::ToolCallProgress {
                 key: "call-1".to_string(),
-                tool_id: Some("fs.write".to_string()),
+                tool_id: Some("fs_write".to_string()),
                 bytes: 128,
             }),
             agent::ProviderEvent::from(agent::Event::MessageCommitted(agent::Message {
@@ -558,7 +558,7 @@ fn tool_call_progress_updates_in_place_and_closes_before_the_real_request() {
         .extend_provider_events([crate::contract::ProviderEvent::tool_call_progress(
             agent::ToolCallProgress {
                 key: "stream-1".to_string(),
-                tool_id: Some("fs.write".to_string()),
+                tool_id: Some("fs_write".to_string()),
                 bytes: 96,
             },
         )])
@@ -567,7 +567,7 @@ fn tool_call_progress_updates_in_place_and_closes_before_the_real_request() {
     assert!(matches!(
         &frame.items[0],
         AgentFrameItem::ToolCallPreparing(progress)
-            if progress.bytes == 96 && progress.tool_id.as_deref() == Some("fs.write")
+            if progress.bytes == 96 && progress.tool_id.as_deref() == Some("fs_write")
     ));
 
     // The stream key can differ from the provider's finalized call ID.
@@ -576,7 +576,7 @@ fn tool_call_progress_updates_in_place_and_closes_before_the_real_request() {
             crate::contract::ProviderEvent::ToolCallProgressClosed("stream-1".into()),
             agent::Event::ToolCallRequested(agent::ToolCallRequest {
                 call_id: agent::ToolCallId("call-1".into()),
-                tool_id: "fs.write".into(),
+                tool_id: "fs_write".into(),
                 input: serde_json::json!({ "path": "/tmp/x" }).into(),
                 occurrence_id: crate::contract::OccurrenceId::new(),
             })
@@ -586,7 +586,7 @@ fn tool_call_progress_updates_in_place_and_closes_before_the_real_request() {
     assert_eq!(frame.items.len(), 1);
     assert!(matches!(
         &frame.items[0],
-        AgentFrameItem::ToolCallRequested(request) if request.tool_id == "fs.write"
+        AgentFrameItem::ToolCallRequested(request) if request.tool_id == "fs_write"
     ));
 }
 
@@ -867,7 +867,7 @@ fn horizon_policy_adds_approval_for_requested_tool() {
     let events = policy_events(
         &agent::Event::ToolCallRequested(agent::ToolCallRequest {
             call_id: call_id.clone(),
-            tool_id: "mock.approval_required".to_string(),
+            tool_id: "mock_approval_required".to_string(),
             input: serde_json::json!({}).into(),
             occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
         }),
@@ -1112,7 +1112,7 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
     ));
     let identity = match recv_event(&rx) {
         agent::Event::ToolCallRequested(request) => {
-            assert_eq!(request.tool_id, "mock.approval_required");
+            assert_eq!(request.tool_id, "mock_approval_required");
             request.identity()
         }
         other => panic!("expected a tool call request, got {other:?}"),
@@ -1457,7 +1457,7 @@ fn operator_intervention_event_kind_discriminators_are_stable() {
         call_id: agent::ToolCallId("call-x".to_string()),
         occurrence_id: agent::OccurrenceId("occ-x".to_string()),
         decision: agent::ApprovalDecisionPayload::Deny {
-            reason: Some("retry with fs.read".to_string()),
+            reason: Some("retry with fs_read".to_string()),
         },
     });
     assert_eq!(event_kind(&approval), "approval_resolved");

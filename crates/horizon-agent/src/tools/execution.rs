@@ -10,7 +10,7 @@ use crate::tools::state::{session_runtime, ToolSessionState};
 use crate::tools::{bash, board};
 use serde_json::Value;
 
-/// Boundary for tools needing shell-owned state, such as `workspace.snapshot`.
+/// Boundary for tools needing shell-owned state, such as `workspace_snapshot`.
 /// The daemon supplies its host-channel adapter; implementations return `None`
 /// only for unrecognized ids. Local synchronous tools use the closed registry.
 pub trait HostTools {
@@ -19,10 +19,10 @@ pub trait HostTools {
     fn execute_auto(&self, tool_id: &str, input: &serde_json::Value) -> Option<serde_json::Value>;
 
     /// Requests that `session` move into a fresh worktree branched from its
-    /// current `HEAD` (`worktree.enter`), returning the resolved base commit.
+    /// current `HEAD` (`worktree_enter`), returning the resolved base commit.
     /// `Err` carries a message for the model, and nothing is requested.
     fn enter_worktree(&self, _session: SessionId) -> Result<String, String> {
-        Err("worktree.enter is unavailable for this session".into())
+        Err("worktree_enter is unavailable for this session".into())
     }
 }
 
@@ -222,10 +222,10 @@ fn execute_synchronous(
         }
     }
     match request.tool_id.as_str() {
-        "board.update" | "board.session" => {
+        "board_update" | "board_session" => {
             return board::execute_operation(tool_state, session_id, request)
         }
-        "board.comment" => return board::execute_comment(tool_state, session_id, request),
+        "board_comment" => return board::execute_comment(tool_state, session_id, request),
         _ => {}
     }
     if let Some(output) = super::external::execute(
@@ -328,12 +328,12 @@ mod tests {
         for judged in [false, true] {
             for (id, input, kind) in [
                 (
-                    "fs.write",
+                    "fs_write",
                     serde_json::json!({"path": marker, "content": "wrong", "extra": 1}),
                     ApprovalKind::Standard,
                 ),
                 (
-                    "fs.edit",
+                    "fs_edit",
                     serde_json::json!({"edits": [{"path": marker, "old_string": "original", "new_string": "wrong"}, {"path": marker}]}),
                     ApprovalKind::Standard,
                 ),
@@ -417,12 +417,12 @@ mod tests {
         for (mode, tool_id, input) in [
             (
                 AutomaticTool::Synchronous,
-                "workspace.snapshot",
+                "workspace_snapshot",
                 serde_json::json!({}),
             ),
             (
                 AutomaticTool::ContainedFilesystem,
-                "fs.write",
+                "fs_write",
                 serde_json::json!({"path": marker, "content":"unsafe"}),
             ),
             (

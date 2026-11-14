@@ -328,7 +328,7 @@ mod tests {
         message_round_trip(&DrainRequest {});
         message_round_trip(&HostToolRequest {
             request_id: "req-1".into(),
-            tool_id: "workspace.snapshot".into(),
+            tool_id: "workspace_snapshot".into(),
             input: serde_json::json!({"nested": [1, {"k": true}]}),
         });
     }
@@ -358,13 +358,13 @@ mod tests {
             task_session_id: SessionId::new(),
             description: "scan".into(),
             state: TaskProgressState::Running,
-            activity: Some("fs.grep".into()),
+            activity: Some("fs_grep".into()),
             started_at_epoch_ms: 1_700_000_000_000,
         });
         for event in [
             ToolCallProgressEvent::Progress {
                 key: "call-1".into(),
-                tool_id: Some("fs.edit".into()),
+                tool_id: Some("fs_edit".into()),
                 bytes: 64,
             },
             ToolCallProgressEvent::Progress {

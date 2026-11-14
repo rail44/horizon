@@ -31,7 +31,7 @@ fn round(
         rig_core::completion::AssistantContent::ToolCall(ToolCall::new(
             rig_core::message::CallId::from_wire(provider),
             ToolFunction::new(
-                rig_core::message::ToolName::new("fs.read").expect("tool id"),
+                rig_core::message::ToolName::new("fs_read").expect("tool id"),
                 serde_json::json!({"path":path}),
             ),
         )),
@@ -47,7 +47,7 @@ fn round(
     history
         .append_result(
             &identity.result(serde_json::json!({"content":"x".repeat(size)})),
-            "fs.read",
+            "fs_read",
         )
         .unwrap();
 }

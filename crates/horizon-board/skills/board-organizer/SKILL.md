@@ -14,7 +14,7 @@ in parallel, also pick useful tasks under the next parents. Follow project
 skills for concurrency and integration policy; do not encode a fixed scheduler.
 
 Registration brings a task here first. Choose which task sessions should
-investigate or consult next, and use board.session action=consult with the task
+investigate or consult next, and use board_session action=consult with the task
 id and a concrete request. Its final answer goes to that task's board conversation.
 Investigation or consultation may be useful before a prerequisite is complete.
 Task sessions check their agreed direction and prerequisite results before
@@ -28,7 +28,7 @@ have project-defined meanings and never determine this flag automatically.
 Keep status and descriptions current during triage, and read the latest owner
 decisions before treating related tasks as unfinished. Honor explicit closure
 and withdrawal decisions; do not reopen them solely because another session
-has an older understanding. If work needs to close or reopen, use board.update
+has an older understanding. If work needs to close or reopen, use board_update
 action=close with is_closed=true or false and optionally status in the same call.
 Closure includes both delivered and withdrawn work. A closure notification asks
 you to reassess priorities and dependencies; it does not prove a prerequisite's

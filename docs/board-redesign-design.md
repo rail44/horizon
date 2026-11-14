@@ -185,7 +185,7 @@ renamed and broadened; historical v2 records remain readable through a read alia
 while new writes use only `is_closed`. Log-wire v6 requires matching shell, CLI,
 agentd, and logd binaries at activation; the terminal protocol is unchanged.
 
-`board.update action=close` takes `is_closed` and optional `status`, updating both
+`board_update action=close` takes `is_closed` and optional `status`, updating both
 in one transaction. CLI equivalents are `board close/reopen ID [--status TEXT]`.
 The detail view offers Close task / Reopen; it preserves the current status text.
 Closed state uses neutral styling because it does not establish success.

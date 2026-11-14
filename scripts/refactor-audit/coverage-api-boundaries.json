@@ -182,7 +182,7 @@
       "decision": "refactor",
       "reason": "Preserve the existing public registration seams, private registry contents, trust gates and judge fallback. Unknown roles remain errors. External board definitions/registration behavior are excluded. Only the no-repository test fixture changes: select a genuinely non-repository temp root because /tmp has .git; no product discovery rule or global TMPDIR override changes.",
       "validation": [
-        "No-repository instruction, skill and fs.glob cases pass with the shared test-only fixture. Role, trusted discovery and judge tests pass in the full gate."
+        "No-repository instruction, skill and fs_glob cases pass with the shared test-only fixture. Role, trusted discovery and judge tests pass in the full gate."
       ],
       "status": "reviewed",
       "files": {

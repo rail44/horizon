@@ -230,7 +230,7 @@ pub(super) fn rig_tool_result_message(result: &ToolCallResult, tool_id: &str) ->
     }
 }
 
-/// One `fs.read` of `path` — the deterministic fallback's hook for driving
+/// One `fs_read` of `path` — the deterministic fallback's hook for driving
 /// a real file read (an out-of-workspace one included) through the whole
 /// tool pipeline without a network provider. See
 /// `completion::deterministic_rig_response`.
@@ -238,7 +238,7 @@ pub(super) fn rig_fs_read_call(path: &str) -> ToolCall {
     ToolCall::new(
         rig_core::message::CallId::from_wire("rig-fs-read-1"),
         ToolFunction::new(
-            rig_core::message::ToolName::new("fs.read").expect("fs.read is a tool id"),
+            rig_core::message::ToolName::new("fs_read").expect("fs_read is a tool id"),
             serde_json::json!({ "path": path }),
         ),
     )
@@ -248,29 +248,29 @@ pub(super) fn rig_workspace_snapshot_call() -> ToolCall {
     ToolCall::new(
         rig_core::message::CallId::from_wire("rig-workspace-snapshot-1"),
         ToolFunction::new(
-            rig_core::message::ToolName::new("workspace.snapshot")
-                .expect("workspace.snapshot is a tool id"),
+            rig_core::message::ToolName::new("workspace_snapshot")
+                .expect("workspace_snapshot is a tool id"),
             serde_json::json!({}),
         ),
     )
 }
 
-/// `count` distinct `workspace.snapshot` calls (a fresh call id and an
+/// `count` distinct `workspace_snapshot` calls (a fresh call id and an
 /// index in the arguments per call, so each has its own doom-loop
 /// fingerprint) — the deterministic fallback's hook for exercising a
 /// parallel-tool-call batch (e.g. `deterministic_rig_response`'s "multi
 /// tool" trigger) without a network provider. Mirrors the shape of a real
 /// completion that requests several tool calls at once (the production
 /// incident this covers: a MiniMax completion routinely requesting 4
-/// parallel `fs.read`s).
+/// parallel `fs_read`s).
 pub(super) fn rig_multi_snapshot_calls(count: usize) -> Vec<ToolCall> {
     (1..=count)
         .map(|index| {
             ToolCall::new(
                 rig_core::message::CallId::from_wire(format!("rig-multi-snapshot-{index}")),
                 ToolFunction::new(
-                    rig_core::message::ToolName::new("workspace.snapshot")
-                        .expect("workspace.snapshot is a tool id"),
+                    rig_core::message::ToolName::new("workspace_snapshot")
+                        .expect("workspace_snapshot is a tool id"),
                     serde_json::json!({ "n": index }),
                 ),
             )

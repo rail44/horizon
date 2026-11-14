@@ -19,7 +19,7 @@ area: agent, worktree
 The new worktree branches from `origin/main`, not from the session that
 launched it. In the observed run, the launching checkout was at `f32f411` but
 Agent #67's worktree was at the older `4b0acac` from `origin/main`. The agent
-therefore inspected stale source and reported a retired `fs.read` default.
+therefore inspected stale source and reported a retired `fs_read` default.
 
 ## Expected
 

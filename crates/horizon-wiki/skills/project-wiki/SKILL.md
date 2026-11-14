@@ -32,9 +32,9 @@ Each page's frontmatter carries an `id` (`urn:uuid:...`) that comments point
 at: keep it when rewriting a page, and never copy it into another page.
 
 Nothing in the store is ever placed in the repository. A Horizon agent writes
-pages with the `wiki.write` (whole page) and `wiki.edit` (exact-string
+pages with the `wiki_write` (whole page) and `wiki_edit` (exact-string
 replacements) tools, which keep the `id` and need no approval, and reads them
-with `wiki.read` and `wiki.list`. Any other agent writes the files directly;
+with `wiki_read` and `wiki_list`. Any other agent writes the files directly;
 the store is outside any workspace, so under containment that needs an
 approval -- ask for it rather than writing pages into the repository.
 

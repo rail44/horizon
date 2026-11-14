@@ -155,7 +155,7 @@ DuckDB is rebuilt from JSONL and is not the primary append path.
 > append failure only warns and moves on -- see `run_writer`'s doc comment);
 > what changed is that a session's history is now queryable in DuckDB
 > within the same run it happened in, not only after the next restart. This
-> is also what powers the `recall.search`/`recall.read` agent tools (see
+> is also what powers the `recall_search`/`recall_read` agent tools (see
 > `tools::recall`).
 >
 > **A same-path second `Store::open` is unsound, not just redundant.** An
@@ -483,7 +483,7 @@ session -- new or resumed -- could start, and `session/new` timed out. The
 slot is now read without waiting, per use (`SharedDuckdbStore::current`:
 `Pending`, `Ready`, or `Unavailable`), and a session's `RecallContext`
 holds the slot itself rather than its value. While the rebuild is pending,
-`recall.search`/`recall.read` answer "the history index is still being
+`recall_search`/`recall_read` answer "the history index is still being
 rebuilt; retry later"; once it lands, the same session's next recall
 queries the store, without a restart. The rig provider reads the slot once
 at session start and proceeds with no store while it is pending, and only

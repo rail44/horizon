@@ -1,11 +1,11 @@
-//! `memory.update` tool dispatch and the standing-agent memory document
+//! `memory_update` tool dispatch and the standing-agent memory document
 //! (`docs/standing-agent-memory-design.md`).
 //!
 //! A standing-role session (one whose `RoleDefinition::standing` is true)
 //! maintains a **memory document** — a structured summary of the project's
 //! state that carries across turns, so a long-lived agent (the keeper) does
 //! not start from zero each spawn. The agent edits this document one field at
-//! a time via the typed `memory.update` tool; the harness persists each edit
+//! a time via the typed `memory_update` tool; the harness persists each edit
 //! as an `Event::MemoryDigest` and reconstructs the current document by
 //! replaying them (`memory_document_from_events`).
 //!
@@ -17,8 +17,8 @@
 //! the schema structurally forbids it: you specify the fields you changed and
 //! what to do with each, never the whole document.
 //!
-//! **No host trait.** Unlike `board.comment` (which writes to an external
-//! store via `BoardHost`), `memory.update` has no side effect beyond the event
+//! **No host trait.** Unlike `board_comment` (which writes to an external
+//! store via `BoardHost`), `memory_update` has no side effect beyond the event
 //! the session loop emits. The handler here is pure: it validates the input
 //! and returns a confirmation. The session loop
 //! (`providers::rig::session::state`, `Command::ToolCallResult` arm) parses the
@@ -35,7 +35,7 @@ use crate::tools::output::error as error_output;
 use crate::tools::output::*;
 
 /// The model-visible tool id.
-pub(crate) const TOOL_ID: &str = "memory.update";
+pub(crate) const TOOL_ID: &str = "memory_update";
 
 /// A field's display label, the heading `render` gives it and the name a
 /// digest summary uses.
@@ -163,7 +163,7 @@ pub fn memory_document_from_events(events: &[Event]) -> MemoryDocument {
 // Tool input parsing
 // ---------------------------------------------------------------------------
 
-/// Parses a `memory.update` tool-call input into a `MemoryDigest`, validating
+/// Parses a `memory_update` tool-call input into a `MemoryDigest`, validating
 /// that it is well-formed: exactly one of "field operations" or "no update"
 /// is present, `Set`/`Append` operations carry content, and field/op values
 /// are recognized. Used both by the tool handler (to validate and confirm)
@@ -174,7 +174,7 @@ pub(crate) fn parse_update(input: &Value) -> Result<MemoryDigest, String> {
     input.digest()
 }
 
-/// Executes the `memory.update` auto-allowed tool: validates the input and
+/// Executes the `memory_update` auto-allowed tool: validates the input and
 /// returns a confirmation. The registry selects this handler before input validation.
 ///
 /// **No side effect here.** The session loop owns the state mutation and event

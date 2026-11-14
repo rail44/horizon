@@ -14,7 +14,7 @@ use crate::tools::state::ToolSessionState;
 /// would pass it lexically and then escape when the OS resolves the path.
 /// `.` components are harmless and are normalized away.
 ///
-/// For a path that doesn't exist yet (e.g. a new `fs.write` target), the
+/// For a path that doesn't exist yet (e.g. a new `fs_write` target), the
 /// nearest existing ancestor is canonicalized and the requested tail
 /// re-appended, so a symlink escape higher in the tree is still caught
 /// before anything is created.
@@ -75,10 +75,10 @@ fn canonicalize(requested: &str) -> Result<PathBuf, Response> {
 /// gate.
 #[derive(Clone, Copy)]
 enum Confinement {
-    /// The workspace root only — `fs.write`/`fs.edit`.
+    /// The workspace root only — `fs_write`/`fs_edit`.
     WorkspaceRoot,
     /// The workspace root plus this session's Git metadata roots —
-    /// `fs.read`/`fs.glob`/`fs.grep`. See [`git_metadata_roots`].
+    /// `fs_read`/`fs_glob`/`fs_grep`. See [`git_metadata_roots`].
     ReadableRoots,
 }
 
@@ -91,7 +91,7 @@ enum Confinement {
 ///
 /// A session in an ordinary checkout reaches this metadata through its own
 /// in-root `.git/`; a session in a linked worktree cannot, because the
-/// worktree keeps it elsewhere. Reads only — `fs.write`/`fs.edit` stay
+/// worktree keeps it elsewhere. Reads only — `fs_write`/`fs_edit` stay
 /// confined to the workspace root.
 fn git_metadata_roots(tool_state: &ToolSessionState) -> Vec<PathBuf> {
     tool_state

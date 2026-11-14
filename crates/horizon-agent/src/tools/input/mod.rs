@@ -43,28 +43,28 @@ macro_rules! inputs {
 }
 
 inputs! {
-    ReadFile(ReadFile) => "fs.read",
-    Glob(Glob) => "fs.glob",
-    Grep(Grep) => "fs.grep",
-    WriteFile(WriteFile) => "fs.write",
-    EditFiles(EditFiles) => "fs.edit",
+    ReadFile(ReadFile) => "fs_read",
+    Glob(Glob) => "fs_glob",
+    Grep(Grep) => "fs_grep",
+    WriteFile(WriteFile) => "fs_write",
+    EditFiles(EditFiles) => "fs_edit",
     Bash(Bash) => "bash",
-    BashJobOutput(BashJob) => "bash.output",
-    BashJobCancel(BashJob) => "bash.cancel",
-    ReadConfig(Empty) => "config.read",
-    WriteConfig(ConfigWrite) => "config.write",
-    ReadSkill(ReadEntry) => "skill.read",
-    SearchRecall(RecallSearch) => "recall.search",
-    ReadRecall(RecallRead) => "recall.read",
-    ListRecallSessions(RecallSessions) => "recall.sessions",
-    ReadKnowledge(ReadEntry) => "knowledge.read",
-    WriteKnowledge(KnowledgeWrite) => "knowledge.write",
-    UpdateMemory(MemoryUpdate) => "memory.update",
+    BashJobOutput(BashJob) => "bash_output",
+    BashJobCancel(BashJob) => "bash_cancel",
+    ReadConfig(Empty) => "config_read",
+    WriteConfig(ConfigWrite) => "config_write",
+    ReadSkill(ReadEntry) => "skill_read",
+    SearchRecall(RecallSearch) => "recall_search",
+    ReadRecall(RecallRead) => "recall_read",
+    ListRecallSessions(RecallSessions) => "recall_sessions",
+    ReadKnowledge(ReadEntry) => "knowledge_read",
+    WriteKnowledge(KnowledgeWrite) => "knowledge_write",
+    UpdateMemory(MemoryUpdate) => "memory_update",
     Task(Task) => "task",
     TaskOutput(TaskOutput) => "task_output",
     WebSearch(WebSearch) => "web_search",
     WebFetch(WebFetch) => "web_fetch",
-    EnterWorktree(Empty) => "worktree.enter",
+    EnterWorktree(Empty) => "worktree_enter",
 }
 
 fn schema_for<T: JsonSchema>() -> Value {
@@ -116,7 +116,7 @@ impl ToolInput {
         Ok(())
     }
 
-    /// The target paths of an `fs.write`/`fs.edit` call; empty for every
+    /// The target paths of an `fs_write`/`fs_edit` call; empty for every
     /// other tool.
     pub(crate) fn write_paths(&self) -> Vec<&str> {
         match self {

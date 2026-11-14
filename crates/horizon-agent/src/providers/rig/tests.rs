@@ -611,7 +611,7 @@ fn converts_rig_tool_call_to_horizon_tool_request() {
     assert!(matches!(
         events.as_slice(),
         [Event::ToolCallRequested(request)]
-            if request.tool_id == "workspace.snapshot"
+            if request.tool_id == "workspace_snapshot"
                 && request.call_id.0 == "rig-workspace-snapshot-1"
     ));
 }
@@ -643,7 +643,7 @@ fn builds_versioned_rig_tool_call_provider_payload() {
     );
     assert_eq!(
         payload["rig"]["tool_call"]["function"]["name"],
-        "workspace.snapshot"
+        "workspace_snapshot"
     );
 }
 
@@ -674,7 +674,7 @@ fn rig_tool_call_request_mints_a_distinct_occurrence_per_call() {
         rig_tool_call_request(ToolCall::new(
             rig_core::message::CallId::from_wire("functions.fs.edit:66"),
             ToolFunction::new(
-                rig_core::message::ToolName::new("fs.edit").expect("tool id"),
+                rig_core::message::ToolName::new("fs_edit").expect("tool id"),
                 serde_json::json!({ "path": "a.txt" }),
             ),
         ))
@@ -729,14 +729,14 @@ fn duckdb_store_preserves_rig_provider_payload_for_tool_call() {
 fn converts_rig_tool_definition_without_leaking_rig_type() {
     let definition = horizon_tool_definition_from_rig(
         ToolDefinition::new(
-            rig_core::message::ToolName::new("workspace.snapshot").expect("tool id"),
+            rig_core::message::ToolName::new("workspace_snapshot").expect("tool id"),
             "Read workspace state",
             serde_json::json!({ "type": "object" }),
         ),
         ToolPermission::AutoAllowRead,
     );
 
-    assert_eq!(definition.id, "workspace.snapshot");
+    assert_eq!(definition.id, "workspace_snapshot");
     assert_eq!(definition.permission, ToolPermission::AutoAllowRead);
 }
 
@@ -749,7 +749,7 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
         }),
         Event::ToolCallRequested(ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
-            tool_id: "workspace.snapshot".to_string(),
+            tool_id: "workspace_snapshot".to_string(),
             input: serde_json::json!({}).into(),
             occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         }),
@@ -774,7 +774,7 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
         &messages[1],
         RigMessage::Assistant(rig_core::completion::message::AssistantMessage { content, .. })
             if matches!(content.first(), Some(AssistantContent::ToolCall(call))
-                if call.id.wire() == "call-1" && call.function.name == "workspace.snapshot")
+                if call.id.wire() == "call-1" && call.function.name == "workspace_snapshot")
     ));
     assert!(matches!(&messages[2], RigMessage::User { content }
         if matches!(content.first(), Some(UserContent::ToolResult(result))
@@ -1114,7 +1114,7 @@ fn assert_pairing_valid(messages: &[RigMessage]) {
 fn tool_call_request(call_id: &str) -> Event {
     Event::ToolCallRequested(ToolCallRequest {
         call_id: ToolCallId(call_id.to_string()),
-        tool_id: "workspace.snapshot".to_string(),
+        tool_id: "workspace_snapshot".to_string(),
         input: serde_json::json!({}).into(),
         occurrence_id: crate::contract::OccurrenceId((ToolCallId(call_id.to_string())).0.clone()),
     })
@@ -1305,7 +1305,7 @@ fn cancelled_partial_assistant_message_keeps_streamed_text_and_tool_calls() {
 // layer's chat template, which iterates `arguments` as a mapping.
 
 /// The `HostTools` seam is irrelevant to these tests -- they dispatch
-/// `fs.read`, which this crate implements itself -- so nothing is handled
+/// `fs_read`, which this crate implements itself -- so nothing is handled
 /// here and every call falls through to `tools::fs`.
 struct NoHostTools;
 
@@ -1323,7 +1323,7 @@ fn streamed_tool_call(arguments: serde_json::Value) -> ToolCall {
     ToolCall::new(
         rig_core::message::CallId::from_wire("call-1"),
         ToolFunction::new(
-            rig_core::message::ToolName::new("fs.read").expect("tool id"),
+            rig_core::message::ToolName::new("fs_read").expect("tool id"),
             arguments,
         ),
     )
@@ -1348,7 +1348,7 @@ fn dispatch_repaired_tool_call(root: &std::path::Path, mut call: ToolCall) -> se
     let crate::tools::Execution::Applied(crate::tools::ToolUpdate::Finished { events, .. }) =
         execution
     else {
-        panic!("fs.read must execute synchronously");
+        panic!("fs_read must execute synchronously");
     };
     events
         .into_iter()
@@ -1473,13 +1473,13 @@ fn replayed_tool_call_events_are_normalized_when_history_is_rebuilt() {
     let events = vec![
         Event::ToolCallRequested(ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
-            tool_id: "fs.read".to_string(),
+            tool_id: "fs_read".to_string(),
             input: serde_json::Value::String("{\"path\":\"/tmp/x\"}".to_string()).into(),
             occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         }),
         Event::ToolCallRequested(ToolCallRequest {
             call_id: ToolCallId("call-2".to_string()),
-            tool_id: "fs.read".to_string(),
+            tool_id: "fs_read".to_string(),
             input: serde_json::Value::String("not json at all".to_string()).into(),
             occurrence_id: crate::contract::OccurrenceId("call-2".to_string()),
         }),
@@ -1782,7 +1782,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     let call_b = ToolCall::new(
         rig_core::message::CallId::from_wire("call-b"),
         ToolFunction::new(
-            rig_core::message::ToolName::new("fs.read").expect("tool id"),
+            rig_core::message::ToolName::new("fs_read").expect("tool id"),
             serde_json::json!({ "path": "/x" }),
         ),
     );
@@ -1801,7 +1801,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         id_b.clone(),
         ToolCallDescriptor {
             identity: crate::test_support::tool_identity(&id_b),
-            tool_id: "fs.read".to_string(),
+            tool_id: "fs_read".to_string(),
             args: serde_json::json!({ "path": "/x" }),
         },
     )]);
@@ -1838,7 +1838,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         state.halt_turn_loop(
             GuardHalt::IterationCapExceeded,
             &arrived,
-            "workspace.snapshot"
+            "workspace_snapshot"
         ),
         async {
             let request = loop {
@@ -1868,7 +1868,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     // appended immediately, since it never gets a second chance to land.
     assert_eq!(
         state.execution.take_halted(),
-        Some((arrived.clone(), "workspace.snapshot".to_string())),
+        Some((arrived.clone(), "workspace_snapshot".to_string())),
         "the real, already-executed result must be stashed for Continue/a new user message"
     );
     assert_eq!(state.rig_history.len(), 3);
@@ -2353,7 +2353,7 @@ fn doom_loop_does_not_trip_on_identical_outputs_with_different_args() {
     // (tool, args, result) fingerprint.
     for pattern in ["alpha", "beta", "gamma"] {
         let fingerprint = tool_result_fingerprint(
-            "fs.grep",
+            "fs_grep",
             &serde_json::json!({ "pattern": pattern }),
             &empty_matches,
         );
@@ -2367,7 +2367,7 @@ fn doom_loop_trips_on_identical_tool_args_output_fingerprints_at_the_window_boun
     let args = serde_json::json!({ "pattern": "alpha" });
     let output = serde_json::json!({ "matches": [] });
 
-    let fingerprint = tool_result_fingerprint("fs.grep", &args, &output);
+    let fingerprint = tool_result_fingerprint("fs_grep", &args, &output);
     for _ in 0..TEST_DOOM_LOOP_WINDOW - 1 {
         assert_eq!(guard.record_fingerprint(fingerprint), None);
     }
@@ -2381,7 +2381,7 @@ fn doom_loop_trips_on_identical_tool_args_output_fingerprints_at_the_window_boun
 //
 // Regression coverage for the production incident (session 3aef2770) where
 // a single completion requesting several parallel tool calls (MiniMax
-// routinely requests 4 parallel `fs.read`s) made the session loop run one
+// routinely requests 4 parallel `fs_read`s) made the session loop run one
 // completion per *arriving result* instead of waiting for the whole batch:
 // protocol-malformed history, a burst of stray "anything else?" turns, and
 // the iteration-cap guard burning N times faster than intended.
@@ -2747,9 +2747,9 @@ fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
 
     let definitions = rig_tool_definitions(None, true);
 
-    // `memory.update` is deliberately excluded for a role-less session
+    // `memory_update` is deliberately excluded for a role-less session
     // (no allow list = "all tools") — it is a standing-role-only tool.
-    let expected: Vec<_> = all.iter().filter(|d| d.id != "memory.update").collect();
+    let expected: Vec<_> = all.iter().filter(|d| d.id != "memory_update").collect();
     assert_eq!(definitions.len(), expected.len());
     for definition in &expected {
         assert!(
@@ -2759,14 +2759,14 @@ fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
         );
     }
     assert!(
-        !definitions.iter().any(|d| d.name == "memory.update"),
-        "memory.update must not be advertised without an explicit allow list"
+        !definitions.iter().any(|d| d.name == "memory_update"),
+        "memory_update must not be advertised without an explicit allow list"
     );
 }
 
 #[test]
 fn rig_tool_definitions_with_an_allow_list_is_restricted_to_it() {
-    let allowed = vec!["fs.read".to_string(), "fs.glob".to_string()];
+    let allowed = vec!["fs_read".to_string(), "fs_glob".to_string()];
 
     let definitions = rig_tool_definitions(Some(&allowed), true);
 
@@ -2774,7 +2774,7 @@ fn rig_tool_definitions_with_an_allow_list_is_restricted_to_it() {
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
     assert_eq!(
         names,
-        HashSet::from(["fs.read", "fs.glob"]),
+        HashSet::from(["fs_read", "fs_glob"]),
         "only the allow-listed tool ids should be advertised"
     );
 }
@@ -2929,14 +2929,14 @@ fn role_adjusted_config_restricts_allowed_tool_ids_to_the_roles_list() {
     let allowed = config
         .allowed_tool_ids
         .expect("config role must set an allow list");
-    assert_eq!(allowed, vec!["skill.read", "config.read", "config.write"]);
+    assert_eq!(allowed, vec!["skill_read", "config_read", "config_write"]);
     let definitions = rig_tool_definitions(Some(&allowed), true);
     assert_eq!(definitions.len(), 3);
 }
 
 /// `docs/agent-explore-design.md`'s first test requirement, at the point
 /// the restriction actually reaches the model: an exploration session
-/// advertises exactly `fs.read`/`fs.grep`/`fs.glob` and nothing else --
+/// advertises exactly `fs_read`/`fs_grep`/`fs_glob` and nothing else --
 /// notably not `task` itself, which is what makes recursion
 /// impossible to express rather than merely discouraged.
 #[test]
@@ -2957,13 +2957,13 @@ fn an_exploration_session_advertises_exactly_the_read_only_toolset() {
     assert_eq!(
         advertised,
         vec![
-            "fs.read",
-            "fs.glob",
-            "fs.grep",
-            "recall.search",
-            "recall.read",
-            "recall.sessions",
-            "knowledge.read",
+            "fs_read",
+            "fs_glob",
+            "fs_grep",
+            "recall_search",
+            "recall_read",
+            "recall_sessions",
+            "knowledge_read",
         ]
     );
     assert_eq!(
@@ -3152,7 +3152,7 @@ fn session_extra_sections_lists_every_skill_then_repository_instructions_for_a_r
     assert!(
         sections[1].contains("horizon-config")
             && sections[1].contains("horizon-cli")
-            && sections[1].contains("skill.read"),
+            && sections[1].contains("skill_read"),
         "a role-less session must list every available skill, got: {:?}",
         sections[1]
     );
@@ -3334,7 +3334,7 @@ fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instru
         sections[0]
     );
     assert!(
-        sections[1].contains("horizon-config") && sections[1].contains("skill.read"),
+        sections[1].contains("horizon-config") && sections[1].contains("skill_read"),
         "the skills section must come second, got: {:?}",
         sections[1]
     );
@@ -3380,13 +3380,13 @@ fn task_output_is_advertised_only_alongside_task() {
 
     // An allowlist that names `task_output` but not `task` still gets
     // neither -- the rule is about ownership, not about spelling.
-    let inconsistent = names(Some(&["fs.read".to_string(), "task_output".to_string()]));
-    assert_eq!(inconsistent, vec!["fs.read".to_string()]);
+    let inconsistent = names(Some(&["fs_read".to_string(), "task_output".to_string()]));
+    assert_eq!(inconsistent, vec!["fs_read".to_string()]);
 }
 
 // --- knowledge tool advertise gating on trusted_project ------------------
 //
-// `knowledge.read`/`knowledge.write` are withheld from the advertised
+// `knowledge_read`/`knowledge_write` are withheld from the advertised
 // catalog for untrusted sessions — the same trust gate that suppresses
 // the project-knowledge prompt index (`session_extra_sections`).
 
@@ -3396,12 +3396,12 @@ fn knowledge_tools_are_advertised_for_a_trusted_session() {
     let definitions = rig_tool_definitions(None, true);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
     assert!(
-        names.contains("knowledge.read"),
-        "knowledge.read must be advertised for a trusted session: {names:?}"
+        names.contains("knowledge_read"),
+        "knowledge_read must be advertised for a trusted session: {names:?}"
     );
     assert!(
-        names.contains("knowledge.write"),
-        "knowledge.write must be advertised for a trusted session: {names:?}"
+        names.contains("knowledge_write"),
+        "knowledge_write must be advertised for a trusted session: {names:?}"
     );
 }
 
@@ -3411,17 +3411,17 @@ fn knowledge_tools_are_not_advertised_for_an_untrusted_session() {
     let definitions = rig_tool_definitions(None, false);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
     assert!(
-        !names.contains("knowledge.read"),
-        "knowledge.read must not be advertised for an untrusted session: {names:?}"
+        !names.contains("knowledge_read"),
+        "knowledge_read must not be advertised for an untrusted session: {names:?}"
     );
     assert!(
-        !names.contains("knowledge.write"),
-        "knowledge.write must not be advertised for an untrusted session: {names:?}"
+        !names.contains("knowledge_write"),
+        "knowledge_write must not be advertised for an untrusted session: {names:?}"
     );
-    // Other tools (e.g. skill.read) must still be present.
+    // Other tools (e.g. skill_read) must still be present.
     assert!(
-        names.contains("skill.read"),
-        "skill.read must remain advertised regardless of trust: {names:?}"
+        names.contains("skill_read"),
+        "skill_read must remain advertised regardless of trust: {names:?}"
     );
 }
 

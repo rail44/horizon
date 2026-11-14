@@ -1236,7 +1236,7 @@ async fn host_tool_requests_are_answered_through_the_responder() {
 
     let answer = fake.connection.send_request(HostToolRequest {
         request_id: "req-1".into(),
-        tool_id: "workspace.snapshot".into(),
+        tool_id: "workspace_snapshot".into(),
         input: serde_json::json!({}),
     });
     let request = tokio::task::spawn_blocking(move || {

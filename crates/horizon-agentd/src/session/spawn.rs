@@ -107,7 +107,7 @@ fn selection_for_provider_id(
 /// worktree passes `restored_worktree` only after
 /// [`worktree::adopt_isolated_worktree`] recomputes and validates its
 /// Git/path relationships. No spawn creates a worktree; a session gets one
-/// through environment activation (`worktree.enter`, board #65).
+/// through environment activation (`worktree_enter`, board #65).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_session_thread(
     state: Arc<AgentdState>,

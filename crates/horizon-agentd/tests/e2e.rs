@@ -766,7 +766,7 @@ async fn list_agents_reflects_live_sessions_after_new_agent() {
     assert_eq!(sessions[0].cwd, v2::AbsolutePath::new(test_cwd()));
 }
 
-/// An auto-allow *host* tool (`workspace.snapshot`) executes agentd-side
+/// An auto-allow *host* tool (`workspace_snapshot`) executes agentd-side
 /// but can't answer itself -- it round-trips a `_horizon/host_tool`
 /// request (guardrail 4) and folds the client's answer into the same
 /// finished tool call an ordinary auto tool would produce.
@@ -786,7 +786,7 @@ async fn auto_tool_executes_agentd_side_via_host_tool_round_trip() {
     let Some(Inbound::HostTool(request, responder)) = collected.pop() else {
         unreachable!()
     };
-    assert_eq!(request.tool_id, "workspace.snapshot");
+    assert_eq!(request.tool_id, "workspace_snapshot");
     responder
         .respond(acp::HostToolResponse {
             output: serde_json::json!({ "tab_count": 1 }),
@@ -806,7 +806,7 @@ async fn auto_tool_executes_agentd_side_via_host_tool_round_trip() {
     );
     assert!(
         collected.iter().filter_map(tool_update).any(|call| {
-            call.title == MaybeUndefined::Value("workspace.snapshot".to_string())
+            call.title == MaybeUndefined::Value("workspace_snapshot".to_string())
                 && has_status(call, v2::ToolCallStatus::Pending)
         }),
         "expected the tool call to have been requested too, got: {collected:?}"
@@ -1046,7 +1046,7 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
     let requested = collected.iter().rev().find_map(tool_update).unwrap();
     assert_eq!(
         requested.title,
-        MaybeUndefined::Value("mock.approval_required".to_string())
+        MaybeUndefined::Value("mock_approval_required".to_string())
     );
     let progress_ticks: Vec<usize> = collected
         .iter()
@@ -1074,7 +1074,7 @@ async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log
         let has_tool_call_requested = candidate.records.iter().any(|record| {
             matches!(
                 &record.event,
-                Event::ToolCallRequested(request) if request.tool_id == "mock.approval_required"
+                Event::ToolCallRequested(request) if request.tool_id == "mock_approval_required"
             )
         });
         if has_tool_call_requested {
@@ -1505,7 +1505,7 @@ fn resolved_info(inbound: &Inbound, session_id: SessionId) -> Option<acp::Sessio
 }
 
 /// Delegation: a child spawned from a parent session, in the parent's
-/// directory, records no edge until it enters a worktree; `worktree.enter`
+/// directory, records no edge until it enters a worktree; `worktree_enter`
 /// then branches from that directory's HEAD and records the parent as the
 /// derivation edge, live and in the persisted context.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1700,7 +1700,7 @@ async fn worktree_enter_after_a_restart_still_records_the_spawn_source_as_parent
     assert_eq!(context.workspace_root.as_ref(), Some(&root));
 }
 
-/// `worktree.enter` end to end: a shared session asks for a worktree, the
+/// `worktree_enter` end to end: a shared session asks for a worktree, the
 /// activation lands at the turn boundary, the client learns the new root
 /// live, later writes are confined to it, and a daemon restart resumes the
 /// session in the same worktree.
@@ -1727,8 +1727,8 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
     let (call, meta) = collected
         .iter()
         .find_map(finished_tool)
-        .expect("the worktree.enter call finishes before the switch");
-    assert_eq!(meta.tool_id, "worktree.enter");
+        .expect("the worktree_enter call finishes before the switch");
+    assert_eq!(meta.tool_id, "worktree_enter");
     let output = call.raw_output.as_opt_ref().flatten().unwrap();
     assert_eq!(output["requested"], true, "{output}");
     assert_eq!(output["base"], head.as_str(), "{output}");
@@ -1736,7 +1736,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
         !collected
             .iter()
             .any(|inbound| matches!(inbound, Inbound::Permission(..))),
-        "worktree.enter is automatic: {collected:?}"
+        "worktree_enter is automatic: {collected:?}"
     );
 
     let root = resolved_root(collected.last().unwrap(), session_id).unwrap();
@@ -1800,7 +1800,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
         !collected
             .iter()
             .any(|inbound| matches!(inbound, Inbound::Permission(..))),
-        "fs.write inside the new root is automatic: {collected:?}"
+        "fs_write inside the new root is automatic: {collected:?}"
     );
     assert_eq!(
         std::fs::read_to_string(&inside).unwrap(),
@@ -1826,7 +1826,7 @@ async fn worktree_enter_moves_a_shared_session_and_survives_a_restart() {
     assert_eq!(info_meta(&resumed).workspace_root.as_ref(), Some(&root));
     let _ = resume(&mut client, session_id).await.unwrap();
 
-    // The old root is now outside the session's root: `fs.write` refuses it.
+    // The old root is now outside the session's root: `fs_write` refuses it.
     let outside = repo.path().join("outside.txt");
     prompt(
         &client,
@@ -2388,7 +2388,7 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
         Event::ConversationRecorded(ConversationRecord::Input {kind:ConversationInputKind::User,text:"earlier question".into()}),
         Event::ConversationRecorded(ConversationRecord::ToolAnnounced {
             response_id:"interrupted-response".into(),identity:identity.clone(),codec:2,
-            tool_call:serde_json::json!({"id":{"provider":"pending"},"function":{"name":"fs.read","arguments":{"path":"never-dispatched"}}}).into(),
+            tool_call:serde_json::json!({"id":{"provider":"pending"},"function":{"name":"fs_read","arguments":{"path":"never-dispatched"}}}).into(),
             reasoning:serde_json::json!([]).into(),
         }),
     ].into_iter().map(Into::into).collect()).unwrap();

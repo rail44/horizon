@@ -7,7 +7,7 @@ fn request(index: usize) -> ToolCallRequest {
     ToolCallRequest {
         call_id: ToolCallId("reused".into()),
         occurrence_id: OccurrenceId(format!("attempt-{index}")),
-        tool_id: "fs.read".into(),
+        tool_id: "fs_read".into(),
         input: json!({"path":format!("file-{index}")}).into(),
     }
 }
@@ -42,7 +42,7 @@ fn long_conversation_replays_two_clearing_passes_and_explicit_input_boundaries()
             let result = request
                 .identity()
                 .result(json!({"content":"x".repeat(16_384)}));
-            live.append_result(&result, "fs.read").unwrap();
+            live.append_result(&result, "fs_read").unwrap();
             events.push(Event::ToolCallFinished(result));
         }
         let cleared = clearing.run_pass(&live).unwrap();
@@ -94,7 +94,7 @@ fn exact_provider_metadata_and_parallel_result_order_survive_early_results() {
         let tool = ToolCall {
             id: rig_core::message::CallId::from_wire(format!("wire-{index}")),
             function: ToolFunction::new(
-                rig_core::message::ToolName::new("fs.read").expect("tool id"),
+                rig_core::message::ToolName::new("fs_read").expect("tool id"),
                 json!({"path":index.to_string()}),
             ),
             native: Some(super::super::mapping::native_from_provider_item(
@@ -145,7 +145,7 @@ fn exact_provider_metadata_and_parallel_result_order_survive_early_results() {
         .record_response("response".into(), &message, identities, &tx)
         .unwrap();
     for result in &results {
-        history.append_result(result, "fs.read").unwrap();
+        history.append_result(result, "fs_read").unwrap();
     }
     let events: Vec<_> = rx
         .try_iter()
@@ -282,7 +282,7 @@ fn retired_codec_records_are_left_out_without_failing_restoration() {
     {
         *codec = 1;
         // rig 0.42's shape: a bare string id, which 0.44 cannot decode.
-        *tool_call = json!({"id": request.call_id.0, "function": {"name": "fs.read",
+        *tool_call = json!({"id": request.call_id.0, "function": {"name": "fs_read",
             "arguments": {"path": "file"}}, "signature": "signed"})
         .into();
     }

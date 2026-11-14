@@ -69,7 +69,7 @@ fn a_still_running_call_has_no_summary() {
 #[test]
 fn fs_edit_derives_a_diffstat_from_old_and_new_string() {
     let call = classify(
-        "fs.edit",
+        "fs_edit",
         &json!({
             "edits": [{
                 "path": "src/agent/view.rs",
@@ -87,7 +87,7 @@ fn fs_edit_derives_a_diffstat_from_old_and_new_string() {
 #[test]
 fn fs_write_reports_created_vs_overwritten() {
     let call = classify(
-        "fs.write",
+        "fs_write",
         &json!({"path": "new.rs", "content": "fn main() {}"}),
         Some(&json!({"path": "new.rs", "bytes_written": 12, "created": true})),
     );
@@ -113,14 +113,14 @@ fn an_fs_edit_batch_reads_as_its_own_cardinality_and_keeps_every_affected_file()
             {"index": 2, "path": "/w/a.rs", "status": "applied", "occurrences": 1},
         ],
     });
-    let call = classify("fs.edit", &input, Some(&output));
+    let call = classify("fs_edit", &input, Some(&output));
     assert_eq!(call.verb, "Edit");
     assert_eq!(call.target.as_deref(), Some("3 edits in 2 files"));
     // Summed across the batch: three replacements, one of which adds a
     // line.
     assert_eq!(call.summary.as_deref(), Some("+4 -3"));
     assert_eq!(
-        affected_files("fs.edit", &input, Some(&output))
+        affected_files("fs_edit", &input, Some(&output))
             .iter()
             .map(|file| file.path.as_str())
             .collect::<Vec<_>>(),
@@ -131,7 +131,7 @@ fn an_fs_edit_batch_reads_as_its_own_cardinality_and_keeps_every_affected_file()
 #[test]
 fn an_fs_edit_batch_within_one_file_sums_its_planned_diffstat() {
     let call = classify(
-        "fs.edit",
+        "fs_edit",
         &json!({
             "edits": [
                 {"path": "/w/a.rs", "old_string": "old", "new_string": "new"},

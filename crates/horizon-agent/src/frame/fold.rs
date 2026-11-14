@@ -509,7 +509,7 @@ mod response_tests {
         for key in ["a", "b", "a"] {
             live.extend_provider_events([ProviderEvent::ToolCallProgress(ToolCallProgress {
                 key: key.into(),
-                tool_id: Some("fs.read".into()),
+                tool_id: Some("fs_read".into()),
                 bytes: 3,
             })])
             .unwrap();

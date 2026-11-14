@@ -54,7 +54,7 @@ impl SessionLoopState {
         descriptor: &super::ToolCallDescriptor,
     ) {
         // Standing-agent memory (`docs/standing-agent-memory-
-        // design.md`): a `memory.update` result applies the
+        // design.md`): a `memory_update` result applies the
         // parsed digest to the session's memory document (the
         // tool handler already validated it and returned a
         // confirmation — this is the state-mutation half) and
@@ -129,7 +129,7 @@ mod tests {
         let sibling = ToolCallId("still-outstanding".into());
         let descriptor = |call_id: &ToolCallId| ToolCallDescriptor {
             identity: crate::test_support::tool_identity(call_id),
-            tool_id: "fs.read".into(),
+            tool_id: "fs_read".into(),
             args: serde_json::json!({"path": "file"}),
         };
         let mut state = SessionLoopState {

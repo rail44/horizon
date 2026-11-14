@@ -38,7 +38,7 @@ the child and replay from the log, and agent-code hot reload falls out for
 free (the daily-driver dogfooding requirement). An ACP adapter would let
 any frontend drive the same runtime. Near-term discipline: no
 Horizon-specific types leak into the agent core (Horizon-coupled tools like
-`workspace.snapshot` stay pluggable catalog entries). Future enforcement:
+`workspace_snapshot` stay pluggable catalog entries). Future enforcement:
 split the mechanism into its own crate when convenient.
 
 Dylib-based hot reload was considered and rejected for this tier: Rust has

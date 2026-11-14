@@ -61,7 +61,7 @@ active | needs-review | expired`) followed by a free markdown body.
    over the files** — the same `agent-events.jsonl` →
    `agent-state.duckdb` pattern this repo already runs — never a
    second authority. Meanwhile usage tracking costs nothing today:
-   `knowledge.read`/`write` are tools, so every read and write already
+   `knowledge_read`/`write` are tools, so every read and write already
    lands in the event log with a session id, and session outcome
    labels are already projected — "did sessions that read entry X fare
    better" is a DuckDB join, not new telemetry.
@@ -78,7 +78,7 @@ active | needs-review | expired`) followed by a free markdown body.
 3. **Delivery is two-tier, matching skills' progressive disclosure.**
    An always-loaded index (id + description only, 16k-char cap,
    newest-`updated`-first on overflow) rides the system prompt as a
-   fifth extra section; `knowledge.read` pulls one entry's body on
+   fifth extra section; `knowledge_read` pulls one entry's body on
    demand. Rationale: the always-loaded part is what saves tokens (a
    retrieval round-trip costs a provider round; the index is a cached
    static prefix), and description quality drives discovery (skills
@@ -87,7 +87,7 @@ active | needs-review | expired`) followed by a free markdown body.
    docs/ still cost 8 of 25 tool errors in a day — is why the index is
    always-on rather than search-only.
 4. **The agent writes directly; validation is structural, audit is the
-   event log.** `knowledge.write` (upsert) requires a slug id, a
+   event log.** `knowledge_write` (upsert) requires a slug id, a
    non-empty description, and non-empty sources; it is not
    approval-gated (owner decision: per-item review gates are
    unnecessary in a personal project — Letta's +36.8%-with-human-
@@ -130,7 +130,7 @@ Taken from two external sources read the same day — Anthropic's
 "FrontierMemory 1.0" (2026-10) — after checking each against the live
 store (23 entries) and the event log. Measured at the time: 276
 sessions had turns since the layer shipped; 14 of them ever called
-`knowledge.read`, 7 of those being distillation/update sessions; 14
+`knowledge_read`, 7 of those being distillation/update sessions; 14
 of 23 entries had no anchors, so decision 7 could not fire for them;
 descriptions carried progress state ("open, awaiting a fork push",
 "landed") and edit history ("refreshed", "superseded"), and two
@@ -154,7 +154,7 @@ entries contradicted each other.
   This is what makes decision 7 reach every entry.
 - **A manual verification pass** (`horizon-distill` §6): candidates
   are entries whose anchors changed since `updated` or that state
-  progress, weighted by `knowledge.read` counts via `recall.search`;
+  progress, weighted by `knowledge_read` counts via `recall_search`;
   each is re-derived from its sources and current code (decision 2)
   and rewritten, expired, or flagged `needs-review`. Source:
   Anthropic's dreaming-corrects-memory result and its suggestion to

@@ -681,7 +681,7 @@ fn a_judge_escalation_in_an_unattended_session_refuses_instead_of_prompting() {
 
     let request = horizon_agent::contract::ToolCallRequest {
         call_id: ToolCallId("unattended-escalated".to_string()),
-        tool_id: "fs.read".to_string(),
+        tool_id: "fs_read".to_string(),
         input: serde_json::json!({ "path": "/etc/hostname" }).into(),
         occurrence_id: horizon_agent::contract::OccurrenceId("unattended-escalated".to_string()),
     };
@@ -764,7 +764,7 @@ fn a_judge_approved_out_of_root_read_still_runs_in_an_unattended_session() {
 
     let request = horizon_agent::contract::ToolCallRequest {
         call_id: ToolCallId("unattended-allowed".to_string()),
-        tool_id: "fs.read".to_string(),
+        tool_id: "fs_read".to_string(),
         input: serde_json::json!({ "path": file.display().to_string() }).into(),
         occurrence_id: horizon_agent::contract::OccurrenceId("unattended-allowed".to_string()),
     };
@@ -817,7 +817,7 @@ fn duplicate_escalation_verdict_does_not_duplicate_the_human_prompt() {
     let mut outgoing_rx = connection.subscribe_agent(session_id);
     let request = horizon_agent::contract::ToolCallRequest {
         call_id: ToolCallId("duplicate-judge".to_string()),
-        tool_id: "mock.approval_required".to_string(),
+        tool_id: "mock_approval_required".to_string(),
         input: serde_json::json!({}).into(),
         occurrence_id: horizon_agent::contract::OccurrenceId("duplicate-judge".to_string()),
     };
@@ -1015,7 +1015,7 @@ fn synchronous_and_async_results_preserve_sibling_approval_and_publish_before_de
             worker,
         );
         let mut primary = judge_candidate("primary");
-        primary.request.tool_id = "fs.write".into();
+        primary.request.tool_id = "fs_write".into();
         primary.request.input = serde_json::json!({"path": dir.path().join("written").display().to_string(), "content": "once"}).into();
         let sibling = judge_candidate("sibling");
         live.extend_provider_events(

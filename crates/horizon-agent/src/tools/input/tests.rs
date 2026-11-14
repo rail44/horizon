@@ -3,36 +3,36 @@ use serde_json::json;
 
 pub(crate) fn samples() -> Vec<(&'static str, Value)> {
     vec![
-        ("fs.read", json!({"path": "/tmp/input-example"})),
-        ("fs.glob", json!({"base_path": "/tmp", "pattern": "*.rs"})),
-        ("fs.grep", json!({"base_path": "/tmp", "pattern": "hello"})),
+        ("fs_read", json!({"path": "/tmp/input-example"})),
+        ("fs_glob", json!({"base_path": "/tmp", "pattern": "*.rs"})),
+        ("fs_grep", json!({"base_path": "/tmp", "pattern": "hello"})),
         (
-            "fs.write",
+            "fs_write",
             json!({"path": "/tmp/input-example", "content": "hello"}),
         ),
         (
-            "fs.edit",
+            "fs_edit",
             json!({"edits": [{"path": "/tmp/input-example", "old_string": "hello", "new_string": "world"}]}),
         ),
         ("bash", json!({"command": "echo hello"})),
-        ("config.read", json!({})),
+        ("config_read", json!({})),
         (
-            "config.write",
+            "config_write",
             json!({"content": "[provider]\nmodel = 'example'"}),
         ),
-        ("skill.read", json!({"id": "example"})),
-        ("recall.search", json!({"query": "hello"})),
-        ("recall.read", json!({"from_sequence": 0})),
-        ("recall.sessions", json!({})),
-        ("bash.output", json!({"job_id": "job-1"})),
-        ("bash.cancel", json!({"job_id": "job-1"})),
-        ("knowledge.read", json!({"id": "example"})),
+        ("skill_read", json!({"id": "example"})),
+        ("recall_search", json!({"query": "hello"})),
+        ("recall_read", json!({"from_sequence": 0})),
+        ("recall_sessions", json!({})),
+        ("bash_output", json!({"job_id": "job-1"})),
+        ("bash_cancel", json!({"job_id": "job-1"})),
+        ("knowledge_read", json!({"id": "example"})),
         (
-            "knowledge.write",
+            "knowledge_write",
             json!({"id": "example", "description": "Example", "body": "hello", "sources": ["session:example"]}),
         ),
         (
-            "memory.update",
+            "memory_update",
             json!({"goal": {"op": "set", "content": "hello"}}),
         ),
         (
@@ -45,7 +45,7 @@ pub(crate) fn samples() -> Vec<(&'static str, Value)> {
         ),
         ("web_search", json!({"query": "hello"})),
         ("web_fetch", json!({"url": "https://example.com/docs"})),
-        ("worktree.enter", json!({})),
+        ("worktree_enter", json!({})),
     ]
 }
 
@@ -100,13 +100,13 @@ fn every_advertised_builtin_uses_its_typed_schema_and_rejects_unknown_fields() {
 #[test]
 fn numeric_defaults_and_bounds_match_the_advertisement() {
     for (id, field, default, maximum) in [
-        ("fs.read", "offset", 1, u64::MAX),
-        ("fs.read", "limit", 500, 2000),
-        ("fs.glob", "limit", 200, u64::MAX),
-        ("fs.grep", "limit", 100, u64::MAX),
+        ("fs_read", "offset", 1, u64::MAX),
+        ("fs_read", "limit", 500, 2000),
+        ("fs_glob", "limit", 200, u64::MAX),
+        ("fs_grep", "limit", 100, u64::MAX),
         ("bash", "timeout_secs", 300, 1800),
-        ("recall.search", "limit", 20, 100),
-        ("recall.read", "limit", 20, 100),
+        ("recall_search", "limit", 20, 100),
+        ("recall_read", "limit", 20, 100),
         ("web_search", "num_results", 5, 10),
         ("web_search", "max_characters", 2000, 4000),
         ("web_fetch", "max_characters", 20000, 50000),
@@ -186,73 +186,73 @@ fn text_limits_count_unicode_characters_and_reject_blank_input() {
 fn nested_fields_and_cross_field_rules_are_checked_before_dispatch() {
     for (id, input, field) in [
         (
-            "fs.edit",
+            "fs_edit",
             json!({"edits": [{"path": "a", "old_string": "a", "new_string": "b", "replace_all": "true"}]}),
             "replace_all",
         ),
         (
-            "fs.edit",
+            "fs_edit",
             json!({"edits": [{"path": "a", "old_string": "a", "new_string": "b"}, {"path": "b", "old_string": "c"}]}),
             "edits[1]",
         ),
         (
-            "fs.edit",
+            "fs_edit",
             json!({"edits": [{"path": "a", "old_string": "a", "new_string": "b", "extra": true}]}),
             "extra",
         ),
         (
-            "fs.edit",
+            "fs_edit",
             json!({"edits": [{"path": "a", "old_string": "", "new_string": "b"}]}),
             "old_string",
         ),
         (
-            "fs.edit",
+            "fs_edit",
             json!({"edits": [{"path": "a", "old_string": "same", "new_string": "same"}]}),
             "new_string",
         ),
         (
-            "recall.search",
+            "recall_search",
             json!({"scope": "all", "session_id": uuid::Uuid::nil(), "query": "hello"}),
             "session_id",
         ),
         (
-            "knowledge.write",
+            "knowledge_write",
             json!({"id": "example", "description": "Example", "body": "", "sources": ["good", 1]}),
             "sources[1]",
         ),
         (
-            "knowledge.write",
+            "knowledge_write",
             json!({"id": "example", "description": "Example", "body": "", "sources": []}),
             "sources",
         ),
         (
-            "memory.update",
+            "memory_update",
             json!({"goal": {"op": "set", "content": "hello", "extra": 1}}),
             "goal",
         ),
         (
-            "memory.update",
+            "memory_update",
             json!({"goal": {"op": "set", "content": "hello"}, "folded_log_range": {"from_seq": "1", "to_seq": 2}}),
             "from_seq",
         ),
         (
-            "fs.edit",
+            "fs_edit",
             json!({"edits": [["/tmp/example", "old", "new", false]]}),
             "edits",
         ),
         (
-            "memory.update",
+            "memory_update",
             json!({"no_update": ["reason"]}),
             "no_update",
         ),
         (
-            "memory.update",
+            "memory_update",
             json!({"goal": {"op": "set", "content": "hello"}, "folded_log_range": [1, 2]}),
             "folded_log_range",
         ),
-        ("memory.update", json!({"goal": ["set", "hello"]}), "goal"),
+        ("memory_update", json!({"goal": ["set", "hello"]}), "goal"),
         (
-            "memory.update",
+            "memory_update",
             json!({"goal": {"op": "set", "content": "hello"}, "no_update": {"reason": "none"}}),
             "no_update",
         ),

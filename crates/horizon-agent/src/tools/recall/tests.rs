@@ -32,7 +32,7 @@ fn recall_reports_a_pending_rebuild_and_works_once_the_same_slot_is_set() {
             store: slot.clone(),
         },
     );
-    let search = || execute_auto(&tool_state, "recall.search", &json!({ "query": "widget" }));
+    let search = || execute_auto(&tool_state, "recall_search", &json!({ "query": "widget" }));
 
     let pending = format!("{:?}", search());
     assert!(
@@ -52,7 +52,7 @@ fn recall_reports_a_pending_rebuild_and_works_once_the_same_slot_is_set() {
         )
         .unwrap();
     slot.set(Some(DuckdbStoreHandle::new(store)));
-    let output = search().expect("recall.search handled");
+    let output = search().expect("recall_search handled");
     assert_eq!(
         output["total"], 1,
         "the same context must now query: {output}"
@@ -70,7 +70,7 @@ fn recall_over_an_unavailable_slot_keeps_the_existing_message() {
     );
     let output = format!(
         "{:?}",
-        execute_auto(&tool_state, "recall.read", &json!({ "from_sequence": 0 }))
+        execute_auto(&tool_state, "recall_read", &json!({ "from_sequence": 0 }))
     );
     assert!(
         output.contains("could not be rebuilt completely"),
@@ -181,8 +181,8 @@ fn sessions_return_one_bounded_summary_per_session_with_separate_failure_classes
         }
     }
 
-    let output = execute_auto(&tool_state, "recall.sessions", &json!({"limit": 10}))
-        .expect("recall.sessions handled");
+    let output = execute_auto(&tool_state, "recall_sessions", &json!({"limit": 10}))
+        .expect("recall_sessions handled");
     let sessions = output["sessions"].as_array().unwrap();
     assert_eq!(sessions.len(), 2);
     let summary = sessions
@@ -201,7 +201,7 @@ fn sessions_return_one_bounded_summary_per_session_with_separate_failure_classes
 
     let filtered = execute_auto(
         &tool_state,
-        "recall.sessions",
+        "recall_sessions",
         &json!({"turn_outcome": "completed"}),
     )
     .unwrap();
@@ -225,8 +225,8 @@ fn search_defaults_to_this_session_and_flags_it_as_own() {
         ],
     );
 
-    let output = execute_auto(&tool_state, "recall.search", &json!({ "query": "widget" }))
-        .expect("recall.search handled");
+    let output = execute_auto(&tool_state, "recall_search", &json!({ "query": "widget" }))
+        .expect("recall_search handled");
     assert_eq!(
         output["total"], 1,
         "default scope must be this session only"
@@ -256,10 +256,10 @@ fn search_scope_all_crosses_sessions_and_flags_own_session_correctly() {
 
     let output = execute_auto(
         &tool_state,
-        "recall.search",
+        "recall_search",
         &json!({ "query": "widget", "scope": "all" }),
     )
-    .expect("recall.search handled");
+    .expect("recall_search handled");
     assert_eq!(output["total"], 2);
     let hits = output["hits"].as_array().expect("hits array");
     assert_eq!(hits.len(), 2);
@@ -290,10 +290,10 @@ fn search_with_an_explicit_session_id_hits_only_that_session() {
 
     let output = execute_auto(
         &tool_state,
-        "recall.search",
+        "recall_search",
         &json!({ "query": "widget", "session_id": session_id_json(session_b) }),
     )
-    .expect("recall.search handled");
+    .expect("recall_search handled");
 
     assert_eq!(
         output["total"], 1,
@@ -328,14 +328,14 @@ fn search_accepts_session_id_together_with_an_explicit_session_scope() {
 
     let output = execute_auto(
         &tool_state,
-        "recall.search",
+        "recall_search",
         &json!({
             "query": "widget",
             "scope": "session",
             "session_id": session_id_json(session_b),
         }),
     )
-    .expect("recall.search handled");
+    .expect("recall_search handled");
 
     assert_eq!(output["total"], 1);
     let hits = output["hits"].as_array().expect("hits array");
@@ -358,14 +358,14 @@ fn search_rejects_session_id_combined_with_scope_all() {
 
     let output = execute_auto(
         &tool_state,
-        "recall.search",
+        "recall_search",
         &json!({
             "query": "widget",
             "scope": "all",
             "session_id": session_id_json(session_b),
         }),
     )
-    .expect("recall.search handled");
+    .expect("recall_search handled");
 
     assert_eq!(output["is_error"], true);
     assert!(output["message"].as_str().unwrap().contains("session_id"));
@@ -381,10 +381,10 @@ fn search_rejects_an_invalid_session_id() {
 
     let output = execute_auto(
         &tool_state,
-        "recall.search",
+        "recall_search",
         &json!({ "query": "widget", "session_id": "not-a-session-id" }),
     )
-    .expect("recall.search handled");
+    .expect("recall_search handled");
 
     assert_eq!(output["is_error"], true);
     assert!(output["message"].as_str().unwrap().contains("session_id"));
@@ -399,10 +399,10 @@ fn search_without_a_configured_db_path_errors_clearly() {
 
     let output = execute_auto(
         &tool_state,
-        "recall.search",
+        "recall_search",
         &json!({ "query": "anything" }),
     )
-    .expect("recall.search handled");
+    .expect("recall_search handled");
     assert_eq!(output["is_error"], true);
 }
 
@@ -432,8 +432,8 @@ fn search_session_scope_without_a_session_id_errors_instead_of_falling_back_to_a
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 
-    let output = execute_auto(&tool_state, "recall.search", &json!({ "query": "widget" }))
-        .expect("recall.search handled");
+    let output = execute_auto(&tool_state, "recall_search", &json!({ "query": "widget" }))
+        .expect("recall_search handled");
     assert_eq!(output["is_error"], true);
 
     let _ = std::fs::remove_file(path);
@@ -456,10 +456,10 @@ fn read_caps_total_text_output_and_notes_truncation() {
 
     let output = execute_auto(
         &tool_state,
-        "recall.read",
+        "recall_read",
         &json!({ "from_sequence": 0, "limit": 100 }),
     )
-    .expect("recall.read handled");
+    .expect("recall_read handled");
 
     let entries = output["entries"].as_array().expect("entries array");
     let total_chars: usize = entries
@@ -484,8 +484,8 @@ fn read_without_a_configured_db_path_errors_clearly() {
     let tool_state =
         ToolSessionState::for_current_dir(AgentToolsConfig::default(), RecallContext::default());
 
-    let output = execute_auto(&tool_state, "recall.read", &json!({ "from_sequence": 0 }))
-        .expect("recall.read handled");
+    let output = execute_auto(&tool_state, "recall_read", &json!({ "from_sequence": 0 }))
+        .expect("recall_read handled");
     assert_eq!(output["is_error"], true);
 }
 
@@ -588,10 +588,10 @@ fn search_filters_by_turn_outcome() {
 
     let output = execute_auto(
         &tool_state,
-        "recall.search",
+        "recall_search",
         &json!({ "query": "widget", "turn_outcome": "halted" }),
     )
-    .expect("recall.search handled");
+    .expect("recall_search handled");
 
     assert_eq!(output["total"], 1, "only the halted turn's hit must match");
     let hits = output["hits"].as_array().expect("hits array");
@@ -620,7 +620,7 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
             role_id: None,
             event: Event::ToolCallRequested(ToolCallRequest {
                 call_id: call_id.clone(),
-                tool_id: "fs.read".to_string(),
+                tool_id: "fs_read".to_string(),
                 input: serde_json::json!({ "path": "widget.txt" }).into(),
                 occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
             }),
@@ -658,22 +658,22 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 
-    let output = execute_auto(&tool_state, "recall.search", &json!({ "query": "widget" }))
-        .expect("recall.search handled");
-    // When `store.search_history` returns `Err`, `recall.search` yields
+    let output = execute_auto(&tool_state, "recall_search", &json!({ "query": "widget" }))
+        .expect("recall_search handled");
+    // When `store.search_history` returns `Err`, `recall_search` yields
     // `error_output(...)` (an object with no `hits` key) rather than an empty
     // array, so this `as_array()` is the point that trips under load. Include
     // the full `output` JSON in the panic so the next occurrence names the
     // underlying DuckDB error instead of swallowing it.
     let hits = output["hits"].as_array().unwrap_or_else(|| {
-        panic!("expected a `hits` array in recall.search output but got: {output}")
+        panic!("expected a `hits` array in recall_search output but got: {output}")
     });
 
     let tool_result_hit = hits
         .iter()
         .find(|hit| hit["kind"] == "tool_result")
         .unwrap_or_else(|| {
-            panic!("expected a tool_result hit in recall.search output but got: {output}")
+            panic!("expected a tool_result hit in recall_search output but got: {output}")
         });
     assert_eq!(tool_result_hit["is_error"], true);
     assert_eq!(tool_result_hit["turn_outcome"], "failed");
@@ -682,7 +682,7 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
         .iter()
         .find(|hit| hit["kind"] == "tool_call")
         .unwrap_or_else(|| {
-            panic!("expected a tool_call hit in recall.search output but got: {output}")
+            panic!("expected a tool_call hit in recall_search output but got: {output}")
         });
     assert_eq!(
         tool_call_hit["is_error"],
@@ -725,10 +725,10 @@ fn search_without_query_but_with_turn_outcome_lists_matches() {
 
     let output = execute_auto(
         &tool_state,
-        "recall.search",
+        "recall_search",
         &json!({ "turn_outcome": "halted" }),
     )
-    .expect("recall.search handled");
+    .expect("recall_search handled");
 
     assert_eq!(
         output["total"], 1,
@@ -749,7 +749,7 @@ fn search_without_query_and_without_turn_outcome_errors_clearly() {
         tool_state_with_seeded_store(session_id, vec![(session_id, vec!["widget"])]);
 
     let output =
-        execute_auto(&tool_state, "recall.search", &json!({})).expect("recall.search handled");
+        execute_auto(&tool_state, "recall_search", &json!({})).expect("recall_search handled");
     assert_eq!(output["is_error"], true);
     assert!(output["message"]
         .as_str()
@@ -767,10 +767,10 @@ fn search_rejects_an_unknown_turn_outcome_value() {
 
     let output = execute_auto(
         &tool_state,
-        "recall.search",
+        "recall_search",
         &json!({ "query": "widget", "turn_outcome": "bogus" }),
     )
-    .expect("recall.search handled");
+    .expect("recall_search handled");
     assert_eq!(output["is_error"], true);
     assert!(output["message"].as_str().unwrap().contains("turn_outcome"));
 
@@ -793,7 +793,7 @@ fn read_entries_carry_is_error_on_tool_results() {
             [
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
-                    tool_id: "fs.read".to_string(),
+                    tool_id: "fs_read".to_string(),
                     input: serde_json::json!({}).into(),
                     occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
@@ -812,8 +812,8 @@ fn read_entries_carry_is_error_on_tool_results() {
     };
     let tool_state = ToolSessionState::for_current_dir(AgentToolsConfig::default(), recall);
 
-    let output = execute_auto(&tool_state, "recall.read", &json!({ "from_sequence": 0 }))
-        .expect("recall.read handled");
+    let output = execute_auto(&tool_state, "recall_read", &json!({ "from_sequence": 0 }))
+        .expect("recall_read handled");
     let entries = output["entries"].as_array().expect("entries array");
     let tool_result_entry = entries
         .iter()
@@ -833,7 +833,7 @@ fn read_entries_carry_is_error_on_tool_results() {
 #[test]
 fn catalog_lists_recall_tools_as_auto_allow_read() {
     let definitions = crate::tools::definitions();
-    for id in ["recall.search", "recall.read"] {
+    for id in ["recall_search", "recall_read"] {
         let definition = definitions
             .iter()
             .find(|definition| definition.id == id)
@@ -854,13 +854,13 @@ fn catalog_advertises_recall_search_session_id() {
     let definitions = crate::tools::definitions();
     let definition = definitions
         .iter()
-        .find(|definition| definition.id == "recall.search")
-        .expect("catalog must list `recall.search`");
+        .find(|definition| definition.id == "recall_search")
+        .expect("catalog must list `recall_search`");
     // The schema is `additionalProperties: false`, so an undeclared
     // argument is rejected before it ever reaches this module.
     assert!(
         definition.input_schema["properties"]["session_id"].is_object(),
-        "recall.search's schema must declare `session_id`"
+        "recall_search's schema must declare `session_id`"
     );
     assert!(
         definition.description.contains("session_id"),

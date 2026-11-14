@@ -168,9 +168,9 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
   - `ToolCallRequested` / `Started` / `Finished` は toolCallId =
     occurrence_id の `tool_call_update` 系列（初出で作成）。`ToolOutcome` は
     status（completed / failed / cancelled）と `_meta.horizon.outcome` に
-    分ける。kind はカタログから（`fs.read`→read、`fs.edit`→edit、
-    `bash`→execute、`web_fetch`→fetch、`fs.grep`/`fs.glob`→search）。
-    `fs.edit` の diff content は `transcript/diff.rs` の再構成を agentd 側で
+    分ける。kind はカタログから（`fs_read`→read、`fs_edit`→edit、
+    `bash`→execute、`web_fetch`→fetch、`fs_grep`/`fs_glob`→search）。
+    `fs_edit` の diff content は `transcript/diff.rs` の再構成を agentd 側で
     行う。
 - **承認の往復。** `ApprovalRequested` はイベントではなく agentd 発の
   `session/request_permission` 要求になる。承認待ちごとに spawn したタスクが

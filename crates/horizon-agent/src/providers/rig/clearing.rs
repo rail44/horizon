@@ -132,7 +132,7 @@ pub(super) fn history_for_provider_request(
         let described = argument
             .map(|arg| format!("{} {arg}", site.tool.function.name.as_str()))
             .unwrap_or_else(|| site.tool.function.name.as_str().to_string());
-        let placeholder = format!("[cleared old tool result: {described} ({} chars). The full result is retained in the session event log — use recall.search / recall.read, or re-run the tool.]", result_chars(site.result));
+        let placeholder = format!("[cleared old tool result: {described} ({} chars). The full result is retained in the session event log — use recall_search / recall_read, or re-run the tool.]", result_chars(site.result));
         let Message::User { content } = &mut messages[site.message_index] else {
             unreachable!()
         };

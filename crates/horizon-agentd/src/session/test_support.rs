@@ -59,7 +59,7 @@ pub(crate) fn test_state() -> Arc<AgentdState> {
 pub(super) fn judge_candidate(call_id: &str) -> ApprovalCandidate {
     let request = horizon_agent::contract::ToolCallRequest {
         call_id: ToolCallId(call_id.to_string()),
-        tool_id: "mock.approval_required".to_string(),
+        tool_id: "mock_approval_required".to_string(),
         input: serde_json::json!({}).into(),
         occurrence_id: horizon_agent::contract::OccurrenceId(call_id.to_string()),
     };

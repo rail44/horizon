@@ -1,19 +1,19 @@
 ---
 name: horizon-distill
-description: Run a distillation pass -- mine this workspace's labeled agent history for repeatable lessons and write them to the knowledge layer (knowledge.write), or verify the entries already there against current code and their cited history. Use this on the owner's explicit request to distill lessons ("run a distillation pass", "what have we learned", "turn recent failures into a skill") or to check existing entries ("verify the knowledge entries", "check knowledge for staleness"), not as a background or automatic activity.
+description: Run a distillation pass -- mine this workspace's labeled agent history for repeatable lessons and write them to the knowledge layer (knowledge_write), or verify the entries already there against current code and their cited history. Use this on the owner's explicit request to distill lessons ("run a distillation pass", "what have we learned", "turn recent failures into a skill") or to check existing entries ("verify the knowledge entries", "check knowledge for staleness"), not as a background or automatic activity.
 ---
 
 # Distilling lessons from labeled history
 
 This is a **skill-guided generic session**, not a special role: you use
-the same tools any generic session has (`recall.search`/`recall.read`,
-`fs.read`, `knowledge.read`, `knowledge.write`), aimed at a specific job
+the same tools any generic session has (`recall_search`/`recall_read`,
+`fs_read`, `knowledge_read`, `knowledge_write`), aimed at a specific job
 -- turning outcome labels already sitting in persisted history into
 entries in the knowledge layer. Operation is manual and on-demand: run
 this only when the owner asks for a distillation pass, not proactively or
 on a timer.
 
-Distillation writes to the **knowledge layer** (`knowledge.write`) -- the
+Distillation writes to the **knowledge layer** (`knowledge_write`) -- the
 user-side store surfaced back to every session through the system
 prompt's Project knowledge index. Promoting a distilled entry to a
 committed repository skill (a `SKILL.md` under `.horizon/skills/` or the
@@ -35,12 +35,12 @@ exact failure, and usually the exact file or command. Search for the
 error, then read each hit in context:
 
 ```
-recall.search { "query": "<an error substring you saw>", "scope": "all" }
+recall_search { "query": "<an error substring you saw>", "scope": "all" }
 ```
 
 This is query mode -- it finds `tool_result` hits with `is_error: true`.
 The substring can be a path, a tool name, or a message fragment. Read the
-surrounding turn with `recall.read` to see *why* it failed and whether
+surrounding turn with `recall_read` to see *why* it failed and whether
 the failure was the agent's mistake or an environment problem.
 
 **Denied approvals.** Every denial is a zero-friction human signal that
@@ -48,7 +48,7 @@ the agent proposed something it shouldn't have -- it's already in the
 approval outcome, no separate feedback mechanism needed:
 
 ```
-recall.search { "query": "denied by user", "scope": "all" }
+recall_search { "query": "denied by user", "scope": "all" }
 ```
 
 Read the surrounding context for each to learn *what* was proposed and
@@ -60,14 +60,14 @@ corrected instruction mid-turn, that is a direct, high-value teaching
 signal. It is also the scarcest: most turns never produce one. Treat
 each hit as gold, and expect few of them.
 
-**Turn Failed or Cancelled.** Use `recall.search`'s listing mode -- omit
+**Turn Failed or Cancelled.** Use `recall_search`'s listing mode -- omit
 `query`, give `turn_outcome`, scope `"all"` so you see across every
 session, not just this one:
 
 ```
-recall.search { "turn_outcome": "halted", "scope": "all" }
-recall.search { "turn_outcome": "failed", "scope": "all" }
-recall.search { "turn_outcome": "cancelled", "scope": "all" }
+recall_search { "turn_outcome": "halted", "scope": "all" }
+recall_search { "turn_outcome": "failed", "scope": "all" }
+recall_search { "turn_outcome": "cancelled", "scope": "all" }
 ```
 
 `"halted"` is the doom-loop verdict -- a strong failure signal. `"failed"`
@@ -86,7 +86,7 @@ there.
 
 **Always read full context before concluding.** A search hit's snippet is
 at most ~200 characters -- never enough to safely draw a lesson from. For
-every hit worth following up, call `recall.read` with that hit's
+every hit worth following up, call `recall_read` with that hit's
 `session_id` and `from_sequence` to see the turn (and the messages/tool
 calls around it) in full before treating it as evidence.
 
@@ -95,11 +95,11 @@ calls around it) in full before treating it as evidence.
 Before writing anything, look at the **Project knowledge** index in your
 system prompt -- it lists every knowledge entry already in the store,
 each with a one-line `description`. If an existing entry looks close to
-what you are about to write, `knowledge.read` it and compare the body to
+what you are about to write, `knowledge_read` it and compare the body to
 yours.
 
 - If your evidence shows an existing entry is **wrong or stale**,
-  overwrite it with an upsert (`knowledge.write` with the same `id`)
+  overwrite it with an upsert (`knowledge_write` with the same `id`)
   rather than adding a second entry next to it. Fixing is preferred over
   appending.
 - If your lesson is genuinely new, pick a fresh `id` (lowercase
@@ -139,7 +139,7 @@ Write a lesson only if it clears all of:
 
 ## 4. Writing rules
 
-Write entries with `knowledge.write`. The fields:
+Write entries with `knowledge_write`. The fields:
 
 - `id` -- lowercase alphanumeric, hyphen-separated.
 - `description` -- one line (aim for under ~200 characters), shown in
@@ -155,7 +155,7 @@ Write entries with `knowledge.write`. The fields:
 - `body` -- free-form Markdown; the full lesson.
 - `sources` -- **required**. Cite verifiable provenance as
   `session:<uuid8> seq:<range>` for every incident the lesson rests on
-  (e.g. `session:872d18b7 seq:79-8756`), so the owner can `recall.read`
+  (e.g. `session:872d18b7 seq:79-8756`), so the owner can `recall_read`
   the exact turns and spot-check your reasoning. More than one incident?
   cite each.
 - `anchors` -- required in practice: the repository-relative paths the
@@ -193,7 +193,7 @@ instead of or after a distillation pass. Its job is correcting what is
 already there, not adding entries.
 
 1. **Find entries whose ground moved.** For each active entry, take its
-   `anchors` and `updated` from `knowledge.read`, then ask git whether
+   `anchors` and `updated` from `knowledge_read`, then ask git whether
    any anchored path changed since:
 
    ```
@@ -203,20 +203,20 @@ already there, not adding entries.
    Any output makes the entry a candidate. Entries with no anchors are
    candidates by default -- nothing else can tell you they are still
    true.
-2. **Weigh by use.** `recall.search { "query": "<entry id>", "scope":
-   "all" }` returns `tool_call` hits whose tool is `knowledge.read`;
+2. **Weigh by use.** `recall_search { "query": "<entry id>", "scope":
+   "all" }` returns `tool_call` hits whose tool is `knowledge_read`;
    count them. Check candidates that are read often first -- a wrong
    entry that sessions read does the most damage. Also treat any entry
    whose description or body states progress (landed / open / waiting
    on X) as a candidate, whatever its anchors say.
 3. **Re-derive, don't re-word.** For each candidate, read the turns its
-   `sources` cite (`recall.read`) and the current code at its anchors,
+   `sources` cite (`recall_read`) and the current code at its anchors,
    and decide from those what is true now -- never from the entry's own
    previous wording, which is how refined memory turns generic and
    lossy.
 4. **Act.** Still true: if the description or body breaks §3/§4
    (state, edit history, a summary instead of an instruction, missing
-   anchors), rewrite it with `knowledge.write` under the same `id`.
+   anchors), rewrite it with `knowledge_write` under the same `id`.
    Partly true: rewrite it to what is true now. No longer true and
    nothing durable remains: write it back with `status: expired`. Not
    sure: `status: needs-review`, and say why in the conversation.

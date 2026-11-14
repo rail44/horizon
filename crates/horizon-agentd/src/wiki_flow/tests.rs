@@ -205,7 +205,7 @@ fn registration_adds_the_role_skill_and_tools_once() {
         .iter()
         .any(|role| role.id == THREAD_ROLE_ID));
     // Each wiki tool id is taken now.
-    for tool in ["wiki.list", "wiki.read", "wiki.write", "wiki.edit"] {
+    for tool in ["wiki_list", "wiki_read", "wiki_write", "wiki_edit"] {
         let again = ExternalTool {
             id: tool.into(),
             title: String::new(),

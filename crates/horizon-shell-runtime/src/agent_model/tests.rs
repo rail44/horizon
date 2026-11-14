@@ -269,7 +269,7 @@ fn status_alone_settles_the_outcome_when_meta_carries_none() {
         v2::SessionUpdate::ToolCallUpdate(tool_update(
             "occ-1",
             Some(v2::ToolCallStatus::Cancelled),
-            Some(meta("call-1", "fs.read", None)),
+            Some(meta("call-1", "fs_read", None)),
         )),
     );
     let views = build_tool_call_views(&model.frame.items);
@@ -488,7 +488,7 @@ fn argument_progress_is_replaced_in_place_and_removed_on_close() {
         model.apply(AgentEvent::ToolCallProgress(
             ToolCallProgressEvent::Progress {
                 key: "call-1".into(),
-                tool_id: Some("fs.edit".into()),
+                tool_id: Some("fs_edit".into()),
                 bytes,
             },
         ));
@@ -525,12 +525,12 @@ fn running_task_progress_upserts_in_launch_order_and_finished_retires() {
     model.apply(progress(
         second,
         TaskProgressState::Running,
-        Some("fs.grep"),
+        Some("fs_grep"),
     ));
-    model.apply(progress(first, TaskProgressState::Running, Some("fs.read")));
+    model.apply(progress(first, TaskProgressState::Running, Some("fs_read")));
     assert_eq!(model.tasks.len(), 2);
     assert_eq!(model.tasks[0].task_session_id, first);
-    assert_eq!(model.tasks[0].activity.as_deref(), Some("fs.read"));
+    assert_eq!(model.tasks[0].activity.as_deref(), Some("fs_read"));
     model.apply(progress(first, TaskProgressState::Finished, None));
     assert_eq!(model.tasks.len(), 1);
     assert_eq!(model.tasks[0].task_session_id, second);

@@ -144,7 +144,7 @@ fn call() -> ToolCall {
     ToolCall::new(
         rig_core::message::CallId::from_wire("call-1"),
         ToolFunction::new(
-            rig_core::message::ToolName::new("fs.read").expect("tool id"),
+            rig_core::message::ToolName::new("fs_read").expect("tool id"),
             serde_json::json!("{\"path\":\"README.md\"}"),
         ),
     )
@@ -233,7 +233,7 @@ fn failed_response_does_not_commit_text_but_keeps_tool_call_durability() {
         let mut response = ResponseCollector::new(&config(), tx);
         response.push(text_item("partial"));
         // An opened tool part that never ends is what marks a truncated batch.
-        response.push(tool_start_item("workspace.snapshot"));
+        response.push(tool_start_item("workspace_snapshot"));
         if with_call {
             response.push(tool_end_item(call()));
         }
@@ -295,7 +295,7 @@ fn unfinished_call_and_usage_cap_withhold_a_normal_final_answer() {
     let (tx, _) = crossbeam_channel::unbounded();
     let mut response = ResponseCollector::new(&config(), tx);
     response.push(text_item("partial"));
-    response.push(tool_start_item("workspace.snapshot"));
+    response.push(tool_start_item("workspace_snapshot"));
     response.push(tool_arguments_item("{"));
     // What a reply cut mid-call looks like: the call is in the reply's content
     // with the arguments as far as they came, and the response names it as
@@ -304,7 +304,7 @@ fn unfinished_call_and_usage_cap_withhold_a_normal_final_answer() {
     let call = ToolCall::new(
         rig_core::message::CallId::from_wire("call-1"),
         ToolFunction::new(
-            rig_core::message::ToolName::new("workspace.snapshot").expect("tool id"),
+            rig_core::message::ToolName::new("workspace_snapshot").expect("tool id"),
             serde_json::json!({}),
         ),
     );
@@ -338,11 +338,11 @@ fn a_reply_with_no_open_call_finishes_despite_streamed_tool_parts() {
     response.push(text_item("done"));
     // A part that opened and ended is not an unfinished call: the response says
     // nothing was left open, so the turn is a normal finish.
-    response.push(tool_start_item("workspace.snapshot"));
+    response.push(tool_start_item("workspace_snapshot"));
     response.push(tool_end_item(ToolCall::new(
         rig_core::message::CallId::from_wire("call-1"),
         ToolFunction::new(
-            rig_core::message::ToolName::new("workspace.snapshot").expect("tool id"),
+            rig_core::message::ToolName::new("workspace_snapshot").expect("tool id"),
             serde_json::json!({}),
         ),
     )));

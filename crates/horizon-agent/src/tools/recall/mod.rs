@@ -1,4 +1,4 @@
-//! `recall.search`/`recall.read`: agent-facing tools over the persisted
+//! `recall_search`/`recall_read`: agent-facing tools over the persisted
 //! DuckDB projection (`persistence::projection::duckdb`) -- MemGPT's "agent
 //! queries its own external context" recall primitive, as opposed to
 //! summarizing it away (see `docs/research/letta.md` §1, §10, and the
@@ -6,7 +6,7 @@
 //! read-only access to this session's (or, with `scope: "all"`, every
 //! session's, or with an explicit `session_id`, one named session's)
 //! already-persisted history -- no different in trust terms from
-//! `fs.read`.
+//! `fs_read`.
 //!
 //! Both tools query through the *shared* `Arc<Mutex<Store>>` handle in
 //! `ToolSessionState::recall_context`'s `RecallContext::store` (locking
@@ -41,7 +41,7 @@ use crate::tools::state::ToolSessionState;
 /// itself this yields a snippet of roughly 200 characters, per the task
 /// brief's "~200 chars with ellipses".
 const SNIPPET_RADIUS_CHARS: usize = 100;
-/// Total character budget for one `recall.read` response, across every
+/// Total character budget for one `recall_read` response, across every
 /// returned entry's `text` combined -- mirrors `tools::bash`'s in-context
 /// output cap (`docs/agent-tools-design.md`): a session's own persisted
 /// history can be arbitrarily large, and pulling too much of it back into
@@ -71,14 +71,14 @@ pub(super) fn search(
         crate::tools::input::RecallScope::All => None,
         crate::tools::input::RecallScope::Session => match named_session_id.or(recall.session_id) {
             Some(session) => Some(session),
-            None => return error_output("recall.search requires a session id for scope=session"),
+            None => return error_output("recall_search requires a session id for scope=session"),
         },
     };
 
     let report = store.query(|store| store.search_history(scope, query, limit, turn_outcome));
     let report = match report {
         Ok(report) => report,
-        Err(error) => return error_output(format!("recall.search failed: {error}")),
+        Err(error) => return error_output(format!("recall_search failed: {error}")),
     };
 
     let own_session_id = recall.session_id;
@@ -149,7 +149,7 @@ pub(super) fn read(
         .or(recall.session_id)
     else {
         return error_output(
-            "recall.read requires a session_id (this session has none configured)",
+            "recall_read requires a session_id (this session has none configured)",
         );
     };
     let from_sequence = input.from_sequence;
@@ -158,7 +158,7 @@ pub(super) fn read(
     let entries = store.query(|store| store.read_history_window(session_id, from_sequence, limit));
     let entries = match entries {
         Ok(entries) => entries,
-        Err(error) => return error_output(format!("recall.read failed: {error}")),
+        Err(error) => return error_output(format!("recall_read failed: {error}")),
     };
 
     let mut used_chars = 0usize;
@@ -192,7 +192,7 @@ pub(super) fn read(
     }
 
     Response::succeeded(RecallRead { entries: rows, note: truncated.then(|| format!(
-        "output truncated at ~{READ_TOTAL_CHAR_CAP} characters; call recall.read again with a later from_sequence to continue"
+        "output truncated at ~{READ_TOTAL_CHAR_CAP} characters; call recall_read again with a later from_sequence to continue"
     )) })
 }
 
@@ -216,7 +216,7 @@ pub(super) fn sessions(
     });
     let rows = match rows {
         Ok(rows) => rows,
-        Err(error) => return error_output(format!("recall.sessions failed: {error}")),
+        Err(error) => return error_output(format!("recall_sessions failed: {error}")),
     };
     Response::succeeded(RecallSessions {
         sessions: rows

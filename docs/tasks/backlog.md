@@ -157,18 +157,18 @@ entries live in `backlog-resolved.md` keeping their original numbers
     2026-07-30.
 
 65. **Verify `replace_all` retires the bash editing escapes.** Baseline,
-    nineteen days of logs to 2026-07-26: 272 `fs.edit` calls, 9 editing
+    nineteen days of logs to 2026-07-26: 272 `fs_edit` calls, 9 editing
     operations escaped to bash (`perl -i` ×5, `sed -i` ×3, one python
     rewrite) because a global replacement could not be expressed, plus 2
-    multiple-match errors. After `fs.edit` gained `replace_all` +
+    multiple-match errors. After `fs_edit` gained `replace_all` +
     `occurrences` (merge `6cbb24e`), re-measure over a comparable window:
     the escapes should drop to ~0 and multi-match errors should convert
     to `replace_all` uses. If escapes persist, the routing (tool
     description) is the next suspect, not the capability. Recorded
     2026-07-26.
-    Measurement note 2026-07-28: `fs.edit` became list-only the same week
+    Measurement note 2026-07-28: `fs_edit` became list-only the same week
     (`fs.patch` deleted with it, see `docs/agent-tools-design.md`), so
-    "one `fs.edit` call" is no longer "one replacement" — count
+    "one `fs_edit` call" is no longer "one replacement" — count
     replacements from each result's `edits` array, not from call rows, or
     the post-change window will look artificially cheap next to the 272
     baseline. The escape-count question itself is unaffected.

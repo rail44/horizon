@@ -32,7 +32,7 @@ pub(crate) fn call_escapes_root(
     safety::escapes_root(tool_state, path_arg)
 }
 
-/// The first `fs.write`/`fs.edit` target that resolves inside the workspace
+/// The first `fs_write`/`fs_edit` target that resolves inside the workspace
 /// root's own `.git` entry (a plain checkout's gitdir, or a linked
 /// worktree's pointer file). Such a write is not contained: the same entry
 /// is excluded from the bash sandbox's writable range
@@ -60,8 +60,8 @@ pub(crate) fn out_of_root_refusal(
     let path_arg = read_path_arg(tool_id, input)?;
     let workspace_root = tool_state.workspace_root()?;
     let verb = match tool_id {
-        "fs.grep" => "search",
-        "fs.glob" => "list",
+        "fs_grep" => "search",
+        "fs_glob" => "list",
         _ => "read",
     };
     let mut message = format!(
@@ -85,8 +85,8 @@ pub(crate) fn out_of_root_refusal(
 
 fn read_path_arg<'a>(tool_id: &str, input: &'a Value) -> Option<&'a str> {
     match tool_id {
-        "fs.read" => input.get("path").and_then(Value::as_str),
-        "fs.glob" | "fs.grep" => input.get("base_path").and_then(Value::as_str),
+        "fs_read" => input.get("path").and_then(Value::as_str),
+        "fs_glob" | "fs_grep" => input.get("base_path").and_then(Value::as_str),
         _ => None,
     }
 }

@@ -166,7 +166,7 @@ mod tests {
         let feedback = vec![
             ProviderEvent::tool_call_progress(ToolCallProgress {
                 key: "streaming-call".into(),
-                tool_id: Some("fs.read".into()),
+                tool_id: Some("fs_read".into()),
                 bytes: 12,
             }),
             ProviderEvent::session_model("model".into()),

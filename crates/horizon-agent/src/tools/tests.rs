@@ -22,17 +22,17 @@ use crate::tools::test_support::{execute_agent_tool, process_agent_provider_even
 
 /// A `HostTools` stub for tests that need *some* auto-allow host tool to
 /// exercise dispatch/processing plumbing, but don't care about real
-/// Horizon-side output — the real `workspace.snapshot` implementation lives
+/// Horizon-side output — the real `workspace_snapshot` implementation lives
 /// in Horizon (`agent::host_tools`) since it reads `Workspace`, a type this
 /// crate can't depend on (see `docs/agent-runtime-split-design.md`). Returns
-/// a fixed, empty snapshot for `workspace.snapshot` and `None` for anything
+/// a fixed, empty snapshot for `workspace_snapshot` and `None` for anything
 /// else, so unrelated tool ids still fall through to `tools::fs`.
 struct StubHostTools;
 
 impl HostTools for StubHostTools {
     fn execute_auto(&self, tool_id: &str, _input: &serde_json::Value) -> Option<serde_json::Value> {
         match tool_id {
-            "workspace.snapshot" => Some(json!({ "stub": true })),
+            "workspace_snapshot" => Some(json!({ "stub": true })),
             _ => None,
         }
     }
@@ -181,7 +181,7 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
 #[test]
 fn workspace_snapshot_tool_is_read_only_auto_allow() {
     assert_eq!(
-        permission_for_tool("workspace.snapshot"),
+        permission_for_tool("workspace_snapshot"),
         Some(ToolPermission::AutoAllowRead)
     );
 }
@@ -189,23 +189,23 @@ fn workspace_snapshot_tool_is_read_only_auto_allow() {
 #[test]
 fn fs_read_glob_grep_are_auto_allow_read_and_write_edit_require_approval() {
     assert_eq!(
-        permission_for_tool("fs.read"),
+        permission_for_tool("fs_read"),
         Some(ToolPermission::AutoAllowRead)
     );
     assert_eq!(
-        permission_for_tool("fs.glob"),
+        permission_for_tool("fs_glob"),
         Some(ToolPermission::AutoAllowRead)
     );
     assert_eq!(
-        permission_for_tool("fs.grep"),
+        permission_for_tool("fs_grep"),
         Some(ToolPermission::AutoAllowRead)
     );
     assert_eq!(
-        permission_for_tool("fs.write"),
+        permission_for_tool("fs_write"),
         Some(ToolPermission::RequireApproval)
     );
     assert_eq!(
-        permission_for_tool("fs.edit"),
+        permission_for_tool("fs_edit"),
         Some(ToolPermission::RequireApproval)
     );
 }
@@ -234,7 +234,7 @@ fn processing_preserves_provider_payload_on_original_event_only() {
         ProviderEvent::with_provider_payload(
             Event::ToolCallRequested(ToolCallRequest {
                 call_id: call_id.clone(),
-                tool_id: "workspace.snapshot".to_string(),
+                tool_id: "workspace_snapshot".to_string(),
                 input: json!({}).into(),
                 occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
             }),
@@ -258,14 +258,14 @@ fn processing_preserves_provider_payload_on_original_event_only() {
         )));
 }
 
-// --- fs.read -----------------------------------------------------------
+// --- fs_read -----------------------------------------------------------
 
 #[test]
 fn fs_read_rejects_relative_path() {
     let tool_state = dummy_tool_state();
     let output =
-        sync_tools::execute_auto(&tool_state, "fs.read", &json!({ "path": "relative.txt" }))
-            .expect("fs.read is auto-executed");
+        sync_tools::execute_auto(&tool_state, "fs_read", &json!({ "path": "relative.txt" }))
+            .expect("fs_read is auto-executed");
 
     assert!(is_error(&output));
     assert!(output["message"].as_str().unwrap().contains("absolute"));
@@ -281,16 +281,16 @@ fn fs_read_rejects_path_escaping_workspace_root() {
     let tool_state = ToolSessionState::new(root);
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": outside_file.display().to_string() }),
     )
-    .expect("fs.read is auto-executed");
+    .expect("fs_read is auto-executed");
 
     assert!(is_error(&output));
     assert!(output["message"].as_str().unwrap().contains("escapes"));
 }
 
-/// An out-of-root `fs.read` routes to the approval gate, not auto-execute.
+/// An out-of-root `fs_read` routes to the approval gate, not auto-execute.
 #[test]
 fn fs_read_out_of_root_routes_to_approval() {
     let root = temp_workspace("ootr-routing");
@@ -305,7 +305,7 @@ fn fs_read_out_of_root_routes_to_approval() {
         SessionId::new(),
         &ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
-            tool_id: "fs.read".to_string(),
+            tool_id: "fs_read".to_string(),
             input: json!({ "path": outside_file.display().to_string() }).into(),
             occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         },
@@ -314,7 +314,7 @@ fn fs_read_out_of_root_routes_to_approval() {
     assert!(matches!(execution, Execution::AwaitApproval(_)));
 }
 
-/// An in-root `fs.read` still auto-executes (the routing is only for
+/// An in-root `fs_read` still auto-executes (the routing is only for
 /// out-of-root paths).
 #[test]
 fn fs_read_in_root_auto_executes() {
@@ -329,7 +329,7 @@ fn fs_read_in_root_auto_executes() {
         SessionId::new(),
         &ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
-            tool_id: "fs.read".to_string(),
+            tool_id: "fs_read".to_string(),
             input: json!({ "path": file.display().to_string() }).into(),
             occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         },
@@ -342,7 +342,7 @@ fn fs_read_in_root_auto_executes() {
 }
 
 /// `execute_approved` with `allow_out_of_root = true` (the post-approval
-/// path for `fs.read`) reads an out-of-root file successfully.
+/// path for `fs_read`) reads an out-of-root file successfully.
 #[test]
 fn fs_read_approved_reads_out_of_root_file() {
     let root = temp_workspace("ootr-approved");
@@ -353,7 +353,7 @@ fn fs_read_approved_reads_out_of_root_file() {
     let tool_state = ToolSessionState::new(root);
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": outside_file.display().to_string() }),
     );
 
@@ -364,7 +364,7 @@ fn fs_read_approved_reads_out_of_root_file() {
         .contains("external content"));
 }
 
-/// `fs.grep` and `fs.glob` out-of-root base paths also route to approval.
+/// `fs_grep` and `fs_glob` out-of-root base paths also route to approval.
 #[test]
 fn fs_grep_and_glob_out_of_root_route_to_approval() {
     let root = temp_workspace("ootr-grep-glob");
@@ -379,7 +379,7 @@ fn fs_grep_and_glob_out_of_root_route_to_approval() {
         SessionId::new(),
         &ToolCallRequest {
             call_id: ToolCallId("call-grep".to_string()),
-            tool_id: "fs.grep".to_string(),
+            tool_id: "fs_grep".to_string(),
             input: input.clone().into(),
             occurrence_id: crate::contract::OccurrenceId("call-grep".to_string()),
         },
@@ -392,7 +392,7 @@ fn fs_grep_and_glob_out_of_root_route_to_approval() {
         SessionId::new(),
         &ToolCallRequest {
             call_id: ToolCallId("call-glob".to_string()),
-            tool_id: "fs.glob".to_string(),
+            tool_id: "fs_glob".to_string(),
             input: json!({ "base_path": outside.display().to_string(), "pattern": "*.txt" }).into(),
             occurrence_id: crate::contract::OccurrenceId("call-glob".to_string()),
         },
@@ -470,7 +470,7 @@ fn reads_reach_a_linked_worktrees_own_git_metadata() {
     ] {
         let request = read_request(
             "call-meta-read",
-            "fs.read",
+            "fs_read",
             json!({ "path": path.display().to_string() }),
         );
         let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -485,14 +485,14 @@ fn reads_reach_a_linked_worktrees_own_git_metadata() {
 
     for (tool_id, input) in [
         (
-            "fs.grep",
+            "fs_grep",
             json!({
                 "base_path": layout.common_git_dir.display().to_string(),
                 "pattern": "refs",
             }),
         ),
         (
-            "fs.glob",
+            "fs_glob",
             json!({
                 "base_path": layout.worktree_git_dir.display().to_string(),
                 "pattern": "*",
@@ -517,7 +517,7 @@ fn reads_reach_a_linked_worktrees_own_git_metadata() {
     fs::remove_dir_all(layout.root).unwrap();
 }
 
-/// Reads reaching the Git metadata buys writes nothing: `fs.write`/`fs.edit`
+/// Reads reaching the Git metadata buys writes nothing: `fs_write`/`fs_edit`
 /// stay confined to the workspace root, so even the post-approval execution
 /// path refuses them there.
 #[test]
@@ -529,7 +529,7 @@ fn writes_never_reach_the_git_metadata_a_read_may() {
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.write",
+        "fs_write",
         &json!({ "path": head.display().to_string(), "content": "ref: refs/heads/hijacked\n" }),
     );
     assert!(is_error(&output), "{output}");
@@ -537,7 +537,7 @@ fn writes_never_reach_the_git_metadata_a_read_may() {
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.edit",
+        "fs_edit",
         &json!({
             "edits": [{
                 "path": head.display().to_string(),
@@ -564,7 +564,7 @@ fn an_attended_session_still_asks_for_an_out_of_root_read() {
     let tool_state = ToolSessionState::new(root);
     let request = read_request(
         "call-attended",
-        "fs.read",
+        "fs_read",
         json!({ "path": outside_file.display().to_string() }),
     );
 
@@ -603,7 +603,7 @@ fn the_refusal_names_the_workspace_root() {
         &tool_state,
         &read_request(
             "call-refused",
-            "fs.read",
+            "fs_read",
             json!({ "path": outside_file.display().to_string() }),
         ),
     )
@@ -660,7 +660,7 @@ fn the_refusal_points_at_this_workspaces_copy_of_another_checkouts_path() {
             &tool_state,
             &read_request(
                 "call-other-checkout",
-                "fs.read",
+                "fs_read",
                 json!({ "path": other.join("src").join("lib.rs").display().to_string() }),
             ),
         )
@@ -689,7 +689,7 @@ fn fs_read_missing_path_arg_does_not_route_to_approval() {
         SessionId::new(),
         &ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
-            tool_id: "fs.read".to_string(),
+            tool_id: "fs_read".to_string(),
             input: json!({}).into(),
             occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         },
@@ -714,10 +714,10 @@ fn fs_read_windows_lines_and_reports_truncation_notice() {
     let tool_state = ToolSessionState::new(root);
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": file.display().to_string(), "limit": 3 }),
     )
-    .expect("fs.read is auto-executed");
+    .expect("fs_read is auto-executed");
 
     assert!(!is_error(&output));
     assert_eq!(output["start_line"], 1);
@@ -746,19 +746,19 @@ fn fs_read_uses_a_smaller_default_but_allows_an_explicit_larger_window() {
 
     let default_output = sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": file.display().to_string() }),
     )
-    .expect("fs.read is auto-executed");
+    .expect("fs_read is auto-executed");
     assert_eq!(default_output["end_line"], 500);
     assert_eq!(default_output["next_offset"], 501);
 
     let explicit_output = sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": file.display().to_string(), "limit": 2000 }),
     )
-    .expect("fs.read is auto-executed");
+    .expect("fs_read is auto-executed");
     assert_eq!(explicit_output["end_line"], 2000);
     assert_eq!(explicit_output["next_offset"], 2001);
 }
@@ -776,10 +776,10 @@ fn fs_read_caps_total_content_at_a_line_boundary_and_returns_next_offset() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": file.display().to_string(), "limit": 100 }),
     )
-    .expect("fs.read is auto-executed");
+    .expect("fs_read is auto-executed");
 
     let content = output["content"].as_str().unwrap();
     assert!(content.chars().count() <= 50_000);
@@ -807,7 +807,7 @@ fn execute_agent_tool_dispatches_fs_read_through_auto_execution() {
     let tool_state = ToolSessionState::new(root);
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
-        tool_id: "fs.read".to_string(),
+        tool_id: "fs_read".to_string(),
         input: json!({ "path": target.display().to_string() }).into(),
         occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
@@ -836,10 +836,10 @@ fn unavailable_synchronous_tools_return_identified_failure_to_the_provider() {
 
     let tool_state = ToolSessionState::without_root();
     for tool_id in [
-        "knowledge.read",
-        "knowledge.write",
-        "fs.read",
-        "workspace.snapshot",
+        "knowledge_read",
+        "knowledge_write",
+        "fs_read",
+        "workspace_snapshot",
     ] {
         let request = ToolCallRequest {
             call_id: ToolCallId("unavailable".into()),
@@ -874,7 +874,7 @@ fn unavailable_synchronous_tools_return_identified_failure_to_the_provider() {
 }
 //
 // The 2026-07-19 dogfooding bug: the model called a nonexistent `write` tool
-// (the catalog id is `fs.write`); a real `Event::ApprovalRequested` reached
+// (the catalog id is `fs_write`); a real `Event::ApprovalRequested` reached
 // the human, and only *after* approving did the call fail with a bare
 // session `Event::Error` the model never saw as a tool outcome (no matching
 // `ToolCallFinished`, so the turn stalled). An unknown tool id must instead
@@ -911,7 +911,7 @@ fn execute_agent_tool_reports_an_unknown_tool_as_an_error_tool_result() {
     let message = result.output["message"].as_str().unwrap();
     assert!(message.contains("Unknown tool `write`"));
     assert!(
-        message.contains("fs.write"),
+        message.contains("fs_write"),
         "message should list available tools so the model can self-correct: {message}"
     );
 }
@@ -962,7 +962,7 @@ fn process_agent_provider_event_never_asks_approval_for_an_unknown_tool_and_cont
         .any(|command| matches!(command, Command::ToolCallResult(r) if r.call_id == call_id)));
 }
 
-// --- fs.write ------------------------------------------------------------
+// --- fs_write ------------------------------------------------------------
 
 #[test]
 fn fs_write_creates_parent_dirs_for_new_file() {
@@ -972,7 +972,7 @@ fn fs_write_creates_parent_dirs_for_new_file() {
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.write",
+        "fs_write",
         &json!({ "path": target.display().to_string(), "content": "hello" }),
     );
 
@@ -990,7 +990,7 @@ fn fs_write_overwrite_without_prior_read_is_error() {
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.write",
+        "fs_write",
         &json!({ "path": target.display().to_string(), "content": "overwritten" }),
     );
 
@@ -1011,13 +1011,13 @@ fn fs_write_overwrite_after_read_succeeds() {
 
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     );
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.write",
+        "fs_write",
         &json!({ "path": target.display().to_string(), "content": "overwritten" }),
     );
 
@@ -1035,7 +1035,7 @@ fn fs_write_overwrite_stale_after_external_modification_is_error() {
 
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     );
     fs::write(&target, "changed underneath").unwrap();
@@ -1043,7 +1043,7 @@ fn fs_write_overwrite_stale_after_external_modification_is_error() {
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.write",
+        "fs_write",
         &json!({ "path": target.display().to_string(), "content": "overwritten" }),
     );
 
@@ -1063,7 +1063,7 @@ fn fs_write_rejects_new_file_path_escaping_workspace_root() {
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.write",
+        "fs_write",
         &json!({ "path": target.display().to_string(), "content": "x" }),
     );
 
@@ -1072,9 +1072,9 @@ fn fs_write_rejects_new_file_path_escaping_workspace_root() {
     assert!(!target.exists());
 }
 
-// --- fs.edit ---------------------------------------------------------------
+// --- fs_edit ---------------------------------------------------------------
 
-/// `fs.edit` takes only a list, so even a single replacement is one-element
+/// `fs_edit` takes only a list, so even a single replacement is one-element
 /// `edits`.
 fn one_edit(path: &Path, old_string: &str, new_string: &str) -> serde_json::Value {
     json!({
@@ -1094,7 +1094,7 @@ fn fs_edit_without_prior_read_is_error() {
     let tool_state = ToolSessionState::new(root);
 
     let output =
-        sync_tools::execute_approved(&tool_state, "fs.edit", &one_edit(&target, "world", "there"));
+        sync_tools::execute_approved(&tool_state, "fs_edit", &one_edit(&target, "world", "there"));
 
     assert!(is_error(&output));
     assert!(output["message"]
@@ -1111,13 +1111,13 @@ fn fs_edit_zero_matches_is_error() {
     let tool_state = ToolSessionState::new(root);
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     );
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.edit",
+        "fs_edit",
         &one_edit(&target, "not present", "x"),
     );
 
@@ -1135,12 +1135,12 @@ fn fs_edit_multiple_matches_is_error() {
     let tool_state = ToolSessionState::new(root);
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     );
 
     let output =
-        sync_tools::execute_approved(&tool_state, "fs.edit", &one_edit(&target, "dup", "x"));
+        sync_tools::execute_approved(&tool_state, "fs_edit", &one_edit(&target, "dup", "x"));
 
     assert!(is_error(&output));
     assert!(output["message"]
@@ -1157,12 +1157,12 @@ fn fs_edit_success_updates_mtime_and_allows_chained_edit() {
     let tool_state = ToolSessionState::new(root);
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     );
 
     let first =
-        sync_tools::execute_approved(&tool_state, "fs.edit", &one_edit(&target, "world", "there"));
+        sync_tools::execute_approved(&tool_state, "fs_edit", &one_edit(&target, "world", "there"));
     assert!(!is_error(&first));
     assert_eq!(first["edits"][0]["occurrences"], 1);
     assert_eq!(first["applied_count"], 1);
@@ -1172,7 +1172,7 @@ fn fs_edit_success_updates_mtime_and_allows_chained_edit() {
     // No re-read in between: the edit above must have refreshed the
     // recorded mtime itself, or this would fail the staleness gate.
     let second =
-        sync_tools::execute_approved(&tool_state, "fs.edit", &one_edit(&target, "there", "again"));
+        sync_tools::execute_approved(&tool_state, "fs_edit", &one_edit(&target, "there", "again"));
     assert!(!is_error(&second));
     assert_eq!(fs::read_to_string(&target).unwrap(), "hello again");
 }
@@ -1185,7 +1185,7 @@ fn fs_edit_stale_after_external_modification_is_error() {
     let tool_state = ToolSessionState::new(root);
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     );
 
@@ -1193,7 +1193,7 @@ fn fs_edit_stale_after_external_modification_is_error() {
     bump_mtime(&target);
 
     let output =
-        sync_tools::execute_approved(&tool_state, "fs.edit", &one_edit(&target, "world", "there"));
+        sync_tools::execute_approved(&tool_state, "fs_edit", &one_edit(&target, "world", "there"));
 
     assert!(is_error(&output));
     assert!(output["message"]
@@ -1210,13 +1210,13 @@ fn fs_edit_replace_all_replaces_every_occurrence_and_reports_count() {
     let tool_state = ToolSessionState::new(root);
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     );
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.edit",
+        "fs_edit",
         &json!({
             "edits": [{
                 "path": target.display().to_string(),
@@ -1243,13 +1243,13 @@ fn fs_edit_zero_matches_is_error_even_with_replace_all() {
     let tool_state = ToolSessionState::new(root);
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     );
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.edit",
+        "fs_edit",
         &json!({
             "edits": [{
                 "path": target.display().to_string(),
@@ -1275,14 +1275,14 @@ fn fs_edit_applies_a_batch_across_several_files_in_one_call() {
     for path in [&first, &second] {
         sync_tools::execute_auto(
             &tool_state,
-            "fs.read",
+            "fs_read",
             &json!({ "path": path.display().to_string() }),
         );
     }
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.edit",
+        "fs_edit",
         &json!({
             "edits": [
                 { "path": first.display().to_string(), "old_string": "one", "new_string": "ONE" },
@@ -1307,7 +1307,7 @@ fn fs_edit_applies_a_batch_across_several_files_in_one_call() {
 #[test]
 fn fs_edit_composes_edits_to_the_same_file_without_tripping_the_staleness_gate() {
     // The second edit's `old_string` only exists because the first one
-    // wrote it, and no `fs.read` runs in between: same-call sequencing must
+    // wrote it, and no `fs_read` runs in between: same-call sequencing must
     // see the evolving content and must not read this call's own write as
     // an external modification.
     let root = temp_workspace("edit-batch-compose");
@@ -1316,13 +1316,13 @@ fn fs_edit_composes_edits_to_the_same_file_without_tripping_the_staleness_gate()
     let tool_state = ToolSessionState::new(root);
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     );
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.edit",
+        "fs_edit",
         &json!({
             "edits": [
                 { "path": target.display().to_string(), "old_string": "world", "new_string": "there" },
@@ -1350,14 +1350,14 @@ fn fs_edit_stops_at_the_first_failure_and_reports_every_edits_outcome() {
     for path in [&first, &second, &third] {
         sync_tools::execute_auto(
             &tool_state,
-            "fs.read",
+            "fs_read",
             &json!({ "path": path.display().to_string() }),
         );
     }
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.edit",
+        "fs_edit",
         &json!({
             "edits": [
                 { "path": first.display().to_string(), "old_string": "one", "new_string": "ONE" },
@@ -1392,14 +1392,14 @@ fn fs_edit_rejects_a_malformed_list_before_applying_anything() {
     let tool_state = ToolSessionState::new(root);
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     );
 
     // The second entry has no `new_string`; the first one must not have run.
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.edit",
+        "fs_edit",
         &json!({
             "edits": [
                 { "path": target.display().to_string(), "old_string": "one", "new_string": "ONE" },
@@ -1418,11 +1418,11 @@ fn fs_edit_requires_a_non_empty_edits_list() {
     let root = temp_workspace("edit-batch-empty");
     let tool_state = ToolSessionState::new(root);
 
-    let missing = sync_tools::execute_approved(&tool_state, "fs.edit", &json!({}));
+    let missing = sync_tools::execute_approved(&tool_state, "fs_edit", &json!({}));
     assert!(is_error(&missing));
     assert!(missing["message"].as_str().unwrap().contains("`edits`"));
 
-    let empty = sync_tools::execute_approved(&tool_state, "fs.edit", &json!({ "edits": [] }));
+    let empty = sync_tools::execute_approved(&tool_state, "fs_edit", &json!({ "edits": [] }));
     assert!(is_error(&empty));
     assert!(empty["message"]
         .as_str()
@@ -1430,7 +1430,7 @@ fn fs_edit_requires_a_non_empty_edits_list() {
         .contains("at least one entry"));
 }
 
-// --- fs.glob / fs.grep ------------------------------------------------
+// --- fs_glob / fs_grep ------------------------------------------------
 
 #[test]
 fn fs_glob_bounds_results_and_reports_total_count() {
@@ -1442,10 +1442,10 @@ fn fs_glob_bounds_results_and_reports_total_count() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.glob",
+        "fs_glob",
         &json!({ "base_path": root.display().to_string(), "pattern": "*.txt", "limit": 2 }),
     )
-    .expect("fs.glob is auto-executed");
+    .expect("fs_glob is auto-executed");
 
     assert!(!is_error(&output));
     assert_eq!(output["returned_count"], 2);
@@ -1468,10 +1468,10 @@ fn fs_grep_bounds_results_and_reports_total_count() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.grep",
+        "fs_grep",
         &json!({ "base_path": root.display().to_string(), "pattern": "TODO", "limit": 2 }),
     )
-    .expect("fs.grep is auto-executed");
+    .expect("fs_grep is auto-executed");
 
     assert!(!is_error(&output));
     assert_eq!(output["returned_count"], 2);
@@ -1486,10 +1486,10 @@ fn fs_grep_rejects_invalid_regex() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.grep",
+        "fs_grep",
         &json!({ "base_path": root.display().to_string(), "pattern": "(unclosed" }),
     )
-    .expect("fs.grep is auto-executed");
+    .expect("fs_grep is auto-executed");
 
     assert!(is_error(&output));
 }
@@ -1507,20 +1507,20 @@ fn fs_grep_searches_one_file_and_returns_locations_only() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.grep",
+        "fs_grep",
         &json!({
             "base_path": file.display().to_string(),
             "pattern": "TODO"
         }),
     )
-    .expect("fs.grep is auto-executed");
+    .expect("fs_grep is auto-executed");
 
     assert!(!is_error(&output));
     assert_eq!(output["total_matches"], 1);
     assert_eq!(output["matches"][0]["path"], file.display().to_string());
     assert_eq!(output["matches"][0]["line_number"], 3);
     // A location carries nothing else: no matching line, no surrounding
-    // context. `fs.read` answers what the line says.
+    // context. `fs_read` answers what the line says.
     assert!(output["matches"][0]["line"].is_null());
     assert!(output["matches"][0]["context_before"].is_null());
     assert!(output["matches"][0]["context_after"].is_null());
@@ -1541,14 +1541,14 @@ fn fs_grep_caps_the_complete_tool_result() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.grep",
+        "fs_grep",
         &json!({
             "base_path": file.display().to_string(),
             "pattern": "TODO",
             "limit": 2000
         }),
     )
-    .expect("fs.grep is auto-executed");
+    .expect("fs_grep is auto-executed");
 
     assert!(output.to_string().chars().count() <= 50_000);
     assert_eq!(output["total_matches"], 2000);
@@ -1576,10 +1576,10 @@ fn fs_glob_skips_default_ignored_directories() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.glob",
+        "fs_glob",
         &json!({ "base_path": root.display().to_string(), "pattern": "*.txt" }),
     )
-    .expect("fs.glob is auto-executed");
+    .expect("fs_glob is auto-executed");
 
     assert!(!is_error(&output));
     assert_eq!(output["total_matches"], 1);
@@ -1597,10 +1597,10 @@ fn fs_grep_skips_default_ignored_directories() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.grep",
+        "fs_grep",
         &json!({ "base_path": root.display().to_string(), "pattern": "content" }),
     )
-    .expect("fs.grep is auto-executed");
+    .expect("fs_grep is auto-executed");
 
     assert!(!is_error(&output));
     assert_eq!(output["total_matches"], 1);
@@ -1629,10 +1629,10 @@ fn fs_glob_respects_gitignore_in_a_git_repository() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.glob",
+        "fs_glob",
         &json!({ "base_path": root.display().to_string(), "pattern": "*" }),
     )
-    .expect("fs.glob is auto-executed");
+    .expect("fs_glob is auto-executed");
 
     assert!(!is_error(&output));
     let matches: Vec<&str> = output["matches"]
@@ -1653,10 +1653,10 @@ fn fs_grep_respects_gitignore_in_a_git_repository() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.grep",
+        "fs_grep",
         &json!({ "base_path": root.display().to_string(), "pattern": "content" }),
     )
-    .expect("fs.grep is auto-executed");
+    .expect("fs_grep is auto-executed");
 
     assert!(!is_error(&output));
     assert_eq!(output["total_matches"], 1);
@@ -1681,10 +1681,10 @@ fn fs_glob_ignores_gitignore_file_outside_a_git_repository() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.glob",
+        "fs_glob",
         &json!({ "base_path": root.display().to_string(), "pattern": "*.log" }),
     )
-    .expect("fs.glob is auto-executed");
+    .expect("fs_glob is auto-executed");
 
     assert!(!is_error(&output));
     assert_eq!(output["total_matches"], 1);
@@ -1702,10 +1702,10 @@ fn fs_glob_still_walks_plain_dotfiles() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.glob",
+        "fs_glob",
         &json!({ "base_path": root.display().to_string(), "pattern": "*" }),
     )
-    .expect("fs.glob is auto-executed");
+    .expect("fs_glob is auto-executed");
 
     assert!(!is_error(&output));
     assert!(output["matches"]
@@ -1732,10 +1732,10 @@ fn fs_glob_stops_at_file_count_cap_and_notes_truncation() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.glob",
+        "fs_glob",
         &json!({ "base_path": root.display().to_string(), "pattern": "*.txt" }),
     )
-    .expect("fs.glob is auto-executed");
+    .expect("fs_glob is auto-executed");
 
     assert!(!is_error(&output));
     let total_matches = output["total_matches"].as_u64().unwrap();
@@ -1762,10 +1762,10 @@ fn fs_grep_stops_at_byte_cap_and_notes_truncation() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.grep",
+        "fs_grep",
         &json!({ "base_path": root.display().to_string(), "pattern": "x" }),
     )
-    .expect("fs.grep is auto-executed");
+    .expect("fs_grep is auto-executed");
 
     assert!(!is_error(&output));
     let total_matches = output["total_matches"].as_u64().unwrap();
@@ -1815,7 +1815,7 @@ fn requested_frame(call_id: &ToolCallId, tool_id: &str, input: serde_json::Value
 #[test]
 fn resolve_approval_forwards_non_horizon_executed_tools() {
     let call_id = ToolCallId("call-1".to_string());
-    let frame = requested_frame(&call_id, "mock.approval_required", json!({}));
+    let frame = requested_frame(&call_id, "mock_approval_required", json!({}));
     let session_id = SessionId::new();
 
     let outcome = resolve_approval(
@@ -1834,7 +1834,7 @@ fn resolve_approval_forwards_non_horizon_executed_tools() {
 #[test]
 fn resolve_auto_approval_forwards_standard_candidate_without_a_prompt() {
     let call_id = ToolCallId("call-auto".to_string());
-    let mut frame = requested_frame(&call_id, "mock.approval_required", json!({}));
+    let mut frame = requested_frame(&call_id, "mock_approval_required", json!({}));
     frame
         .items
         .retain(|item| !matches!(item, AgentFrameItem::ApprovalRequested(_)));
@@ -1865,7 +1865,7 @@ fn resolve_approval_forwards_when_no_runtime_registered() {
     let call_id = ToolCallId("call-1".to_string());
     let frame = requested_frame(
         &call_id,
-        "fs.write",
+        "fs_write",
         json!({ "path": "/tmp/does-not-matter.txt", "content": "x" }),
     );
     // A fresh session id that was never registered via `register_session_runtime`.
@@ -1896,7 +1896,7 @@ fn resolve_approval_executes_fs_write_on_approve() {
     let call_id = ToolCallId("call-1".to_string());
     let frame = requested_frame(
         &call_id,
-        "fs.write",
+        "fs_write",
         json!({ "path": target.display().to_string(), "content": "approved content" }),
     );
 
@@ -1914,7 +1914,7 @@ fn resolve_approval_executes_fs_write_on_approve() {
     );
 
     let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
-        panic!("expected fs.write to be executed by Horizon");
+        panic!("expected fs_write to be executed by Horizon");
     };
     let frame = live.frame();
 
@@ -1942,7 +1942,7 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
         );
         let request = ToolCallRequest {
             call_id: ToolCallId("dispatch".into()),
-            tool_id: "fs.write".into(),
+            tool_id: "fs_write".into(),
             input: json!({"path":target, "content":"approved content"}).into(),
             occurrence_id: crate::contract::OccurrenceId::new(),
         };
@@ -2036,7 +2036,7 @@ fn resolve_approval_denies_fs_edit_without_running_it() {
     register_session_runtime(session_id, tool_state, live.clone(), dummy_bash_results());
 
     let call_id = ToolCallId("call-1".to_string());
-    let frame = requested_frame(&call_id, "fs.edit", one_edit(&target, "world", "there"));
+    let frame = requested_frame(&call_id, "fs_edit", one_edit(&target, "world", "there"));
 
     live.extend_provider_events([Event::ToolCallRequested(
         frame.tool_call_request(&call_id).unwrap().clone(),
@@ -2052,7 +2052,7 @@ fn resolve_approval_denies_fs_edit_without_running_it() {
     );
 
     let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
-        panic!("expected fs.edit denial to be resolved by Horizon");
+        panic!("expected fs_edit denial to be resolved by Horizon");
     };
     assert_eq!(result.output["is_error"], true);
     assert_eq!(result.output["message"], "denied by user");
@@ -2067,7 +2067,7 @@ fn resolve_approval_denies_fs_edit_without_running_it() {
 #[test]
 fn resolve_approval_approve_that_fails_on_its_own_does_not_set_the_denied_marker() {
     // Distinguishes a genuine denial from an *approved* call that fails for
-    // its own reasons (fs.edit's "old_string not found" here): both are
+    // its own reasons (fs_edit's "old_string not found" here): both are
     // `is_error: true`, but only a denial sets `ToolCallResult::denied`.
     let root = temp_workspace("approval-approve-then-fail");
     let target = root.join("file.txt");
@@ -2078,9 +2078,9 @@ fn resolve_approval_approve_that_fails_on_its_own_does_not_set_the_denied_marker
     register_session_runtime(session_id, tool_state, live.clone(), dummy_bash_results());
 
     let call_id = ToolCallId("call-1".to_string());
-    // No prior `fs.read` for this path -- `fs.edit` requires one, so this
+    // No prior `fs_read` for this path -- `fs_edit` requires one, so this
     // approve runs the tool (it's not a denial) but the tool itself fails.
-    let frame = requested_frame(&call_id, "fs.edit", one_edit(&target, "world", "there"));
+    let frame = requested_frame(&call_id, "fs_edit", one_edit(&target, "world", "there"));
 
     live.extend_provider_events([Event::ToolCallRequested(
         frame.tool_call_request(&call_id).unwrap().clone(),
@@ -2096,7 +2096,7 @@ fn resolve_approval_approve_that_fails_on_its_own_does_not_set_the_denied_marker
     );
 
     let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
-        panic!("expected fs.edit approve to resolve synchronously");
+        panic!("expected fs_edit approve to resolve synchronously");
     };
     assert_eq!(result.output["is_error"], true);
     assert!(
@@ -2127,7 +2127,7 @@ fn resolve_approval_second_approve_is_noop() {
     let call_id = ToolCallId("call-1".to_string());
     let frame = live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),
-        tool_id: "fs.write".to_string(),
+        tool_id: "fs_write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "first" }).into(),
         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
@@ -2140,7 +2140,7 @@ fn resolve_approval_second_approve_is_noop() {
         ApprovalDecision::Approve,
     );
     let ApprovalOutcome::Applied(ToolUpdate::Finished { .. }) = first else {
-        panic!("first approve should execute fs.write");
+        panic!("first approve should execute fs_write");
     };
     let updated_frame = live_state.frame();
     assert_eq!(fs::read_to_string(&target).unwrap(), "first");
@@ -2179,7 +2179,7 @@ fn resolve_approval_deny_then_approve_is_noop() {
     let call_id = ToolCallId("call-1".to_string());
     let frame = live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),
-        tool_id: "fs.write".to_string(),
+        tool_id: "fs_write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "should never land" })
             .into(),
         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
@@ -2193,7 +2193,7 @@ fn resolve_approval_deny_then_approve_is_noop() {
         ApprovalDecision::Deny { reason: None },
     );
     let ApprovalOutcome::Applied(ToolUpdate::Finished { .. }) = denied else {
-        panic!("deny of fs.write should be resolved by Horizon");
+        panic!("deny of fs_write should be resolved by Horizon");
     };
     let updated_frame = live_state.frame();
     assert!(!target.exists());
@@ -2215,7 +2215,7 @@ fn resolve_approval_deny_then_approve_is_noop() {
 fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
     // Root-caused 2026-07-18 (a real owner session, rig/OpenAI-compatible
     // provider): the provider reused the exact same call_id string for two
-    // structurally different `fs.write`/`fs.edit` calls in one session --
+    // structurally different `fs_write`/`fs_edit` calls in one session --
     // the first fully resolved (approved and finished) well before the
     // model ever requested the second. The old `has_tool_call_finished`/
     // `has_tool_call_started` whole-session scan mistook the *first*
@@ -2244,7 +2244,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
     // unrelated cycle that closes before the id is ever reused.
     let frame = live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
         call_id: call_id.clone(),
-        tool_id: "fs.write".to_string(),
+        tool_id: "fs_write".to_string(),
         input: json!({ "path": target_a.display().to_string(), "content": "first" }).into(),
         occurrence_id: crate::contract::OccurrenceId::new(),
     })]);
@@ -2257,7 +2257,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
     );
     assert!(
         matches!(first, ApprovalOutcome::Applied(ToolUpdate::Finished { .. })),
-        "first occurrence's approve should execute fs.write"
+        "first occurrence's approve should execute fs_write"
     );
     assert_eq!(fs::read_to_string(&target_a).unwrap(), "first");
 
@@ -2266,7 +2266,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
     let after_second_request =
         live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
             call_id: call_id.clone(),
-            tool_id: "fs.write".to_string(),
+            tool_id: "fs_write".to_string(),
             input: json!({ "path": target_b.display().to_string(), "content": "second" }).into(),
             occurrence_id: crate::contract::OccurrenceId::new(),
         })]);
@@ -2302,14 +2302,14 @@ fn fs_write_auto_executes_in_an_isolated_session_with_the_audit_marker() {
     let target = root.join("new.txt");
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
-        tool_id: "fs.write".to_string(),
+        tool_id: "fs_write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "hi" }).into(),
         occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
     let Execution::Applied(crate::tools::ToolUpdate::Finished { events, .. }) = execution else {
-        panic!("expected a synchronous applied update for a contained fs.write");
+        panic!("expected a synchronous applied update for a contained fs_write");
     };
     assert!(events
         .iter()
@@ -2333,17 +2333,17 @@ fn fs_edit_auto_executes_in_an_isolated_session() {
     let target = root.join("file.txt");
     fs::write(&target, "before").unwrap();
     let tool_state = crate::tools::ToolSessionBuilder::new(root).build();
-    // fs.edit's staleness gate needs a prior fs.read recorded -- mirrors
+    // fs_edit's staleness gate needs a prior fs_read recorded -- mirrors
     // `fs_edit_success_updates_mtime_and_allows_chained_edit` above.
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     )
-    .expect("fs.read is auto-executed");
+    .expect("fs_read is auto-executed");
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
-        tool_id: "fs.edit".to_string(),
+        tool_id: "fs_edit".to_string(),
         input: one_edit(&target, "before", "after").into(),
         occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
@@ -2354,7 +2354,7 @@ fn fs_edit_auto_executes_in_an_isolated_session() {
             execution,
             Execution::Applied(crate::tools::ToolUpdate::Finished { .. })
         ),
-        "expected a synchronous applied update for a contained fs.edit, got {execution:?}"
+        "expected a synchronous applied update for a contained fs_edit, got {execution:?}"
     );
     assert_eq!(fs::read_to_string(&target).unwrap(), "after");
 }
@@ -2366,7 +2366,7 @@ fn fs_write_auto_executes_in_a_non_isolated_session() {
     let target = root.join("new.txt");
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
-        tool_id: "fs.write".to_string(),
+        tool_id: "fs_write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "hi" }).into(),
         occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
@@ -2391,13 +2391,13 @@ fn fs_edit_auto_executes_in_a_non_isolated_session() {
     let tool_state = ToolSessionState::new(root); // isolation defaults to false
     sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": target.display().to_string() }),
     )
-    .expect("fs.read is auto-executed");
+    .expect("fs_read is auto-executed");
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
-        tool_id: "fs.edit".to_string(),
+        tool_id: "fs_edit".to_string(),
         input: one_edit(&target, "before", "after").into(),
         occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
@@ -2420,7 +2420,7 @@ fn fs_write_into_the_gitdir_waits_for_approval_and_writes_nothing() {
     let target = root.join(".git").join("hooks").join("pre-commit");
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
-        tool_id: "fs.write".to_string(),
+        tool_id: "fs_write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "#!/bin/sh" }).into(),
         occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
@@ -2436,7 +2436,7 @@ fn policy_plan_omits_the_approval_prompt_for_a_contained_fs_write() {
     let events = crate::tools::test_support::policy_events(
         &Event::ToolCallRequested(ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
-            tool_id: "fs.write".to_string(),
+            tool_id: "fs_write".to_string(),
             input: json!({ "path": "/tmp/x", "content": "hi" }).into(),
             occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         }),
@@ -4016,7 +4016,7 @@ fn resolve_approval_denies_bash_without_running_it() {
     );
 
     let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
-        panic!("denying bash should resolve synchronously, like fs.write/fs.edit");
+        panic!("denying bash should resolve synchronously, like fs_write/fs_edit");
     };
     assert_eq!(result.output["is_error"], true);
     assert_eq!(result.output["message"], "denied by user");
@@ -4033,7 +4033,7 @@ fn resolve_approval_denies_bash_without_running_it() {
 
 /// Regression test for the 2026-07 repeated-approval OOM incident's root
 /// cause: `resolve_approval_second_approve_is_noop` (above) proves the
-/// `AlreadyResolved` guard for `fs.write`, whose `ToolCallStarted` and
+/// `AlreadyResolved` guard for `fs_write`, whose `ToolCallStarted` and
 /// `ToolCallFinished` are always folded together -- but `bash`'s approve
 /// only folds `ToolCallStarted` immediately, leaving `ToolCallFinished` to
 /// arrive whenever the child actually exits. A duplicate Approve arriving
@@ -4124,8 +4124,8 @@ fn fs_read_rejects_parent_dir_component() {
     // paths can't be trusted in general.
     let requested = format!("{}/sub/../file.txt", root.display());
 
-    let output = sync_tools::execute_auto(&tool_state, "fs.read", &json!({ "path": requested }))
-        .expect("fs.read is auto-executed");
+    let output = sync_tools::execute_auto(&tool_state, "fs_read", &json!({ "path": requested }))
+        .expect("fs_read is auto-executed");
 
     assert!(is_error(&output));
     assert!(output["message"].as_str().unwrap().contains("`..`"));
@@ -4138,8 +4138,8 @@ fn fs_read_normalizes_cur_dir_components() {
     let tool_state = ToolSessionState::new(root.clone());
     let requested = format!("{}/./file.txt", root.display());
 
-    let output = sync_tools::execute_auto(&tool_state, "fs.read", &json!({ "path": requested }))
-        .expect("fs.read is auto-executed");
+    let output = sync_tools::execute_auto(&tool_state, "fs_read", &json!({ "path": requested }))
+        .expect("fs_read is auto-executed");
 
     assert!(!is_error(&output));
     assert!(output["content"].as_str().unwrap().contains("hello"));
@@ -4161,7 +4161,7 @@ fn fs_write_rejects_parent_dir_traversal_through_missing_dir() {
 
     let output = sync_tools::execute_approved(
         &tool_state,
-        "fs.write",
+        "fs_write",
         &json!({ "path": requested, "content": "escaped" }),
     );
 
@@ -4180,10 +4180,10 @@ fn fs_tools_reject_all_paths_when_workspace_root_unavailable() {
 
     let output = sync_tools::execute_auto(
         &tool_state,
-        "fs.read",
+        "fs_read",
         &json!({ "path": file.display().to_string() }),
     )
-    .expect("fs.read is auto-executed");
+    .expect("fs_read is auto-executed");
 
     assert!(is_error(&output));
     assert!(output["message"]

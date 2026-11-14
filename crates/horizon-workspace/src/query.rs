@@ -338,7 +338,7 @@ impl Workspace {
     /// visible index anymore. `pane_title_for` is the `PaneId`-keyed
     /// counterpart (`docs/recursive-layout-design.md`'s slice 2), though
     /// it too currently has no production caller of its own -- the
-    /// `workspace.snapshot` payload's pane titles go through
+    /// `workspace_snapshot` payload's pane titles go through
     /// `pane_summaries`/`pane_title(&Pane)` instead
     /// (`crates/horizon-workspace/src/snapshot.rs`).
     #[cfg(test)]

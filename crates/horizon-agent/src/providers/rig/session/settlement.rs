@@ -121,7 +121,7 @@ mod tests {
                         identity.call_id.clone(),
                         ToolCallDescriptor {
                             identity,
-                            tool_id: "fs.read".into(),
+                            tool_id: "fs_read".into(),
                             args: json!({"path":"pending.txt"}),
                         },
                     )]),
@@ -157,13 +157,13 @@ mod tests {
         let written = ToolCallRequest {
             call_id: ToolCallId("write".into()),
             occurrence_id: OccurrenceId::new(),
-            tool_id: "fs.write".into(),
+            tool_id: "fs_write".into(),
             input: json!({"path":root.join("changed.txt"),"content":"actual change\n"}).into(),
         };
         let pending = ToolCallRequest {
             call_id: ToolCallId("pending".into()),
             occurrence_id: OccurrenceId::new(),
-            tool_id: "fs.read".into(),
+            tool_id: "fs_read".into(),
             input: json!({"path":"not-run.txt"}).into(),
         };
         let (events, receive) = crossbeam_channel::unbounded();
@@ -297,7 +297,7 @@ mod tests {
         );
         let succeeded_edits = crate::frame::tool_call_occurrences(&live.frame().items)
             .into_iter()
-            .filter(|call| matches!(call.request.tool_id.as_str(), "fs.edit" | "fs.write"))
+            .filter(|call| matches!(call.request.tool_id.as_str(), "fs_edit" | "fs_write"))
             .filter(|call| {
                 call.result
                     .is_some_and(|result| result.outcome == crate::contract::ToolOutcome::Succeeded)

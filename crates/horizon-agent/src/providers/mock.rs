@@ -282,7 +282,7 @@ fn respond_to_user_message(
             occurrence_id: occurrence_id.clone(),
         });
         for (bytes, tool_id) in [
-            (0usize, Some("mock.approval_required".to_string())),
+            (0usize, Some("mock_approval_required".to_string())),
             (64, None),
             (512, None),
         ] {
@@ -297,7 +297,7 @@ fn respond_to_user_message(
         let _ = events_tx.send(
             Event::ToolCallRequested(ToolCallRequest {
                 call_id,
-                tool_id: "mock.approval_required".to_string(),
+                tool_id: "mock_approval_required".to_string(),
                 input: serde_json::json!({ "message": text }).into(),
                 occurrence_id,
             })
@@ -305,7 +305,7 @@ fn respond_to_user_message(
         );
         return ControlFlow::Continue(());
     }
-    // Test hooks for `worktree.enter` and what follows it, so
+    // Test hooks for `worktree_enter` and what follows it, so
     // `horizon-agentd`'s e2e suite can move a session into a worktree and
     // check where its later writes land without a network provider.
     if lower_text.contains("enter a worktree") {
@@ -313,7 +313,7 @@ fn respond_to_user_message(
             events_tx,
             pending_tool_call,
             "mock-worktree-enter-1",
-            "worktree.enter",
+            "worktree_enter",
             serde_json::json!({}),
         );
         return ControlFlow::Continue(());
@@ -333,7 +333,7 @@ fn respond_to_user_message(
             events_tx,
             pending_tool_call,
             "mock-write-1",
-            "fs.write",
+            "fs_write",
             serde_json::json!({ "path": path.trim(), "content": "written by the mock\n" }),
         );
         return ControlFlow::Continue(());
@@ -348,7 +348,7 @@ fn respond_to_user_message(
         let _ = events_tx.send(
             Event::ToolCallRequested(ToolCallRequest {
                 call_id,
-                tool_id: "workspace.snapshot".to_string(),
+                tool_id: "workspace_snapshot".to_string(),
                 input: serde_json::json!({}).into(),
                 occurrence_id,
             })
@@ -387,7 +387,7 @@ fn respond_to_user_message(
     if lower_text.contains("bash") {
         // Manual test hook for exercising the *real*
         // `bash` approval/execution path (not just the
-        // approval-only `mock.approval_required` tool)
+        // approval-only `mock_approval_required` tool)
         // without a network provider -- used by
         // `horizon-agentd`'s e2e suite to prove bash
         // actually runs agentd-side.
@@ -409,7 +409,7 @@ fn respond_to_user_message(
         return ControlFlow::Continue(());
     }
     if let Some(query) = lower_text.strip_prefix("recall ") {
-        // Test hook for the read-only `recall.search` tool over every
+        // Test hook for the read-only `recall_search` tool over every
         // session's history, so `horizon-agentd`'s e2e suite can exercise
         // recall without a network provider.
         let call_id = ToolCallId("mock-recall-1".to_string());
@@ -421,7 +421,7 @@ fn respond_to_user_message(
         let _ = events_tx.send(
             Event::ToolCallRequested(ToolCallRequest {
                 call_id,
-                tool_id: "recall.search".to_string(),
+                tool_id: "recall_search".to_string(),
                 input: serde_json::json!({ "query": query.trim(), "scope": "all" }).into(),
                 occurrence_id,
             })
@@ -439,7 +439,7 @@ fn respond_to_user_message(
         let _ = events_tx.send(
             Event::ToolCallRequested(ToolCallRequest {
                 call_id: call_id.clone(),
-                tool_id: "mock.approval_required".to_string(),
+                tool_id: "mock_approval_required".to_string(),
                 input: serde_json::json!({ "message": text }).into(),
                 occurrence_id,
             })
@@ -612,15 +612,15 @@ mod tests {
             (
                 "streaming tool snapshot bash slow",
                 "mock-streaming-tool-1",
-                "mock.approval_required",
+                "mock_approval_required",
             ),
             (
                 "snapshot bash tool slow",
                 "workspace-snapshot-1",
-                "workspace.snapshot",
+                "workspace_snapshot",
             ),
             ("bash tool slow", "mock-bash-1", "bash"),
-            ("tool slow", "mock-tool-1", "mock.approval_required"),
+            ("tool slow", "mock-tool-1", "mock_approval_required"),
         ] {
             let handle = provider.start_session(StartSession {
                 session_id: SessionId::new(),

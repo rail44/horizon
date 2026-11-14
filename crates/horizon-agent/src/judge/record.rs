@@ -167,7 +167,7 @@ mod tests {
                 call_id: crate::contract::ToolCallId(call_id.into()),
                 occurrence_id: crate::contract::OccurrenceId("judge-occ".into()),
             },
-            tool_id: "mock.boundary_crossing".to_string(),
+            tool_id: "mock_boundary_crossing".to_string(),
             args: serde_json::json!({}),
             tool_description: None,
             prior_user_messages: Vec::new(),

@@ -21,6 +21,13 @@ pub(crate) fn definitions() -> Vec<Definition> {
     definitions
 }
 
+/// Whether `tool_id` can be sent to a provider as a function name: OpenAI's
+/// `^[a-zA-Z0-9_-]{1,64}$`, which OpenAI-compatible providers enforce.
+pub(crate) fn is_valid_tool_id(tool_id: &str) -> bool {
+    (1..=64).contains(&tool_id.len())
+        && (tool_id.bytes()).all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
 pub(crate) fn is_builtin(tool_id: &str) -> bool {
     catalog().iter().any(|definition| definition.id == tool_id)
 }
@@ -49,7 +56,7 @@ fn catalog() -> &'static [Definition] {
 fn build_definitions() -> Vec<Definition> {
     vec![
         Definition {
-            id: "workspace.snapshot".to_string(),
+            id: "workspace_snapshot".to_string(),
             title: "Workspace Snapshot".to_string(),
             description: "Read tabs, panes, sessions, and active workspace state.".to_string(),
             input_schema: json!({
@@ -76,8 +83,8 @@ fn build_definitions() -> Vec<Definition> {
             legend_after(
                 &format!(
                     "Read a known text file or a relevant line window, with line numbers. \
-                Requires an absolute path. Use fs.grep to locate specific content before \
-                reading a large file, and fs.glob when the file path is unknown. Pass \
+                Requires an absolute path. Use fs_grep to locate specific content before \
+                reading a large file, and fs_glob when the file path is unknown. Pass \
                 offset/limit to continue through a file; the result stops at {} content \
                 characters and returns next_offset. Each line is truncated at {} \
                 characters. Read independent known files in parallel, and prefer one \
@@ -101,7 +108,7 @@ fn build_definitions() -> Vec<Definition> {
                 &format!(
                     "Find where text occurs. Search one file or all files under a directory \
                 with a regular expression, optionally restricted by glob. Read what a \
-                location says with fs.read, passing offset and limit around the reported \
+                location says with fs_read, passing offset and limit around the reported \
                 line. For an open-ended exploration that would take several rounds of \
                 searching and reading, call task instead and keep only its report. \
                 Requires an absolute base path. Traversal stops at {} scanned files.",
@@ -173,7 +180,7 @@ fn build_definitions() -> Vec<Definition> {
         },
         #[cfg(any(test, feature = "test-fixtures"))]
         Definition {
-            id: "mock.approval_required".to_string(),
+            id: "mock_approval_required".to_string(),
             title: "Mock Approval Required".to_string(),
             description: "Test tool that exercises the approval flow.".to_string(),
             input_schema: json!({
@@ -183,13 +190,13 @@ fn build_definitions() -> Vec<Definition> {
             permission: ToolPermission::RequireApproval,
         },
         #[cfg(any(test, feature = "test-fixtures"))]
-        // Test-only, mirroring `mock.approval_required` above: this fixture
+        // Test-only, mirroring `mock_approval_required` above: this fixture
         // exercises the judge's human-gated boundary path independently of
         // the production web tools and their transport setup
         // approval gate at the
         // `policy::plan_tool_call` seam.
         Definition {
-            id: "mock.boundary_crossing".to_string(),
+            id: "mock_boundary_crossing".to_string(),
             title: "Mock Boundary Crossing".to_string(),
             description: "Test tool that exercises the judge's boundary-crossing \
                 path."
@@ -200,14 +207,14 @@ fn build_definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::RequireApproval,
         },
-        // config.read/config.write (`tools::config`) are the config role's
+        // config_read/config_write (`tools::config`) are the config role's
         // only allowed tools (`roles::CONFIG_ROLE`). Cataloging them
         // globally here adds no new *capability* -- `bash` can already
         // read/write this same file with no dedicated tool at all
         // (`docs/agent-tools-design.md`) -- the restriction they exist for
         // happens at the role's `allowed_tool_ids`, not here. See
         // `tools::config`'s own doc comment for the full trust reasoning.
-        // `skill.read` is different: every session can call it, role-less
+        // `skill_read` is different: every session can call it, role-less
         // or not -- see `skills`' module doc.
         SynchronousTool::ReadConfig.definition(
             "Read Horizon Config".to_string(),
@@ -223,7 +230,7 @@ fn build_definitions() -> Vec<Definition> {
                 (validated as well-formed TOML before writing). Preserve every entry the user \
                 didn't ask to change -- this replaces the whole file, not just one section. \
                 Overwriting an existing file requires it to have been read in this session \
-                (via config.read) with no changes on disk since."
+                (via config_read) with no changes on disk since."
                 .to_string(),
 
         ),
@@ -234,7 +241,7 @@ fn build_definitions() -> Vec<Definition> {
                 Case-insensitive substring match. Streaming deltas/reasoning are not included, \
                 only what was actually committed. Default scope is this session; pass \
                 scope: \"all\" to search every persisted session, or session_id to search one \
-                other session (the two cannot be combined). Use recall.read to pull full \
+                other session (the two cannot be combined). Use recall_read to pull full \
                 context around a hit. Hits carry outcome labels: a tool_result hit has \
                 is_error, and every hit has turn_outcome (how the turn it belongs to ended, if \
                 it has). Use turn_outcome to find how past work ended -- e.g. search with \
@@ -243,7 +250,7 @@ fn build_definitions() -> Vec<Definition> {
                 mode: instead of matching a substring, this lists every hit with that outcome \
                 (still newest-first, still capped by limit) -- e.g. list how recent work ended \
                 with turn_outcome: \"halted\" and no query, to cluster halted turns before \
-                digging into any one of them with recall.read. At least one of `query`/ \
+                digging into any one of them with recall_read. At least one of `query`/ \
                 `turn_outcome` is required."
                 .to_string(),
 
@@ -252,7 +259,7 @@ fn build_definitions() -> Vec<Definition> {
             "Read Persisted History Window".to_string(),
             "Read an ordered window of committed messages, tool calls, and tool \
                 results for a session starting at a given sequence number -- use after \
-                recall.search to pull full context around a hit. Defaults to this session if \
+                recall_search to pull full context around a hit. Defaults to this session if \
                 session_id is omitted. Output is capped in total size; call again with a later \
                 from_sequence to continue."
                 .to_string(),
@@ -272,7 +279,7 @@ fn build_definitions() -> Vec<Definition> {
             "Cancel a Background Bash Job".to_string(),
             "Stop a background bash job started by this session by killing its whole process \
                 tree. The job's real exit information and log remain readable through \
-                bash.output."
+                bash_output."
                 .to_string(),
         ),
         SynchronousTool::ListSessions.definition(
@@ -280,7 +287,7 @@ fn build_definitions() -> Vec<Definition> {
             legend_after(
                 "List persisted sessions newest-first, one row per session. Optional limit, \
                  since/until Unix milliseconds, session_id, and latest turn_outcome filters \
-                 are available. Use this before recall.read when you need to survey recent \
+                 are available. Use this before recall_read when you need to survey recent \
                  work rather than search event text.",
                 super::output_legend::legend::<super::output::RecallSession>("RecallSession"),
             ),
@@ -367,7 +374,7 @@ fn build_definitions() -> Vec<Definition> {
             ),
         ),
         Definition {
-            id: "board.read".to_string(),
+            id: "board_read".to_string(),
             title: "Read Board".to_string(),
             description: "Read the task board. If `id` is given, show that item with its \
                 full comment thread; otherwise list all items in rank order, optionally \
@@ -392,21 +399,21 @@ fn build_definitions() -> Vec<Definition> {
             permission: ToolPermission::AutoAllowRead,
         },
         Definition {
-            id: "board.update".into(),
+            id: "board_update".into(),
             title: "Update Board Task".into(),
             description: "Create or edit ordinary tasks, set parent/dependencies, reorder among siblings, or record project-defined status and closure. For move, provide position and relative_to for before/after. Use close with is_closed=true for finished or withdrawn work, or false to reopen; optional status is updated atomically. Status text alone never changes is_closed.".into(),
             input_schema: super::board::update_schema(),
             permission: ToolPermission::AutoAllowRead,
         },
         Definition {
-            id: "board.session".into(),
+            id: "board_session".into(),
             title: "Work on Board Task".into(),
             description: "consult: send a task session a request whose final answer goes to that task's board conversation. implement: request a worktree at explicit base for your assigned task, retaining this session. Wait for the environment outcome before editing. review: ask the task's separate reviewer to inspect base..tip with checks; its final answer returns to you. send: deliver text to a session, optionally requesting a reply to a session UUID. Inputs never cancel a running tool.".into(),
             input_schema: super::board::session_schema(),
             permission: ToolPermission::AutoAllowRead,
         },
         Definition {
-            id: "board.comment".to_string(),
+            id: "board_comment".to_string(),
             title: "Add Board Comment".to_string(),
             description: "Add a comment to a board item. The comment author is set \
                 automatically from this session's id — you cannot set it. Comments are \
@@ -435,11 +442,11 @@ fn build_definitions() -> Vec<Definition> {
             "Update your memory document — the structured summary of project \
                 state that carries your context across turns. Each call edits individual \
                 fields incrementally (set/append/clear); never regenerate the whole document. \
-                Every turn must end with either a memory.update call or a `no_update` \
+                Every turn must end with either a memory_update call or a `no_update` \
                 declaration — the harness enforces this checkpoint. Fields: goal, decisions, \
                 completed, in_progress, stuck, next_step, related (files and symbols). \
                 `folded_log_range` optionally records the raw event-log sequence range \
-                this update condenses, so recall.read can fetch the originals."
+                this update condenses, so recall_read can fetch the originals."
                 .to_string(),
 
         ),
@@ -465,12 +472,32 @@ mod tests {
             .unwrap_or_else(|| panic!("`{id}` must be in the catalog"))
     }
 
+    /// Every built-in id goes to a provider as a function name, and an
+    /// OpenAI-compatible provider refuses the whole request over one it does
+    /// not accept.
+    #[test]
+    fn every_builtin_id_is_a_name_a_provider_accepts() {
+        for definition in catalog() {
+            assert!(
+                is_valid_tool_id(&definition.id),
+                "`{}` is not a function name a provider accepts",
+                definition.id
+            );
+        }
+        for id in ["fs_read", "a-b", "A9"] {
+            assert!(is_valid_tool_id(id), "{id}");
+        }
+        for id in ["", "fs.read", "a b", &"x".repeat(65)] {
+            assert!(!is_valid_tool_id(id), "{id}");
+        }
+    }
+
     /// A tool whose result the model must interpret carries its field legend,
     /// generated from the output type, so a field cannot disappear from the
     /// description without disappearing from the type first.
     #[test]
     fn tool_descriptions_carry_the_generated_field_legend() {
-        let description = definition("recall.sessions").description;
+        let description = definition("recall_sessions").description;
         for field in [
             "session_id",
             "turn_count",
@@ -482,7 +509,7 @@ mod tests {
         ] {
             assert!(
                 description.contains(field),
-                "`recall.sessions` describes no `{field}`; the legend is missing \
+                "`recall_sessions` describes no `{field}`; the legend is missing \
                  or the output type changed without the catalog following"
             );
         }
@@ -495,48 +522,48 @@ mod tests {
     /// the drift it exists to prevent.
     #[test]
     fn descriptions_state_the_limits_the_code_enforces() {
-        let read = definition("fs.read").description;
+        let read = definition("fs_read").description;
         assert!(
             read.contains(&crate::tools::fs::MAX_CONTENT_CHARS.to_string()),
-            "fs.read must state its content cap"
+            "fs_read must state its content cap"
         );
         assert!(
             read.contains(&crate::tools::fs::MAX_LINE_LEN.to_string()),
-            "fs.read must state its per-line cap"
+            "fs_read must state its per-line cap"
         );
 
-        let grep = definition("fs.grep").description;
+        let grep = definition("fs_grep").description;
         assert!(
             grep.contains(&crate::config::FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT.to_string()),
-            "fs.grep must state its traversal cap"
+            "fs_grep must state its traversal cap"
         );
 
-        let job = definition("bash.output").description;
+        let job = definition("bash_output").description;
         assert!(
             job.contains(&crate::tools::bash::jobs::OUTPUT_CHAR_CAP.to_string()),
-            "bash.output must state how much of the log it shows"
+            "bash_output must state how much of the log it shows"
         );
     }
 
     /// Every tool whose result the model must interpret carries a legend.
     ///
-    /// The per-field test above pins `recall.sessions`; this one pins the rest,
+    /// The per-field test above pins `recall_sessions`; this one pins the rest,
     /// so a tool cannot quietly drop the field half of its description while its
     /// output type keeps growing.
     #[test]
     fn every_interpreting_tool_carries_a_legend() {
         for (tool, type_name) in [
-            ("fs.read", "FileRead"),
-            ("fs.glob", "Matches"),
-            ("fs.grep", "Matches"),
-            ("fs.write", "FileWritten"),
-            ("fs.edit", "FileEdits"),
+            ("fs_read", "FileRead"),
+            ("fs_glob", "Matches"),
+            ("fs_grep", "Matches"),
+            ("fs_write", "FileWritten"),
+            ("fs_edit", "FileEdits"),
             ("bash", "BashOutput"),
-            ("recall.sessions", "RecallSession"),
+            ("recall_sessions", "RecallSession"),
             ("task_output", "TaskOutput"),
-            ("skill.read", "SkillRead"),
-            ("knowledge.read", "KnowledgeRead"),
-            ("knowledge.write", "KnowledgeWritten"),
+            ("skill_read", "SkillRead"),
+            ("knowledge_read", "KnowledgeRead"),
+            ("knowledge_write", "KnowledgeWritten"),
             ("web_search", "WebSearch"),
             ("web_fetch", "WebFetch"),
         ] {
@@ -552,7 +579,7 @@ mod tests {
     /// reads is the meaning written beside the type.
     #[test]
     fn the_legend_carries_the_output_types_field_documentation() {
-        let description = definition("recall.sessions").description;
+        let description = definition("recall_sessions").description;
         assert!(
             description.contains("Tool results carrying sandbox containment refusals"),
             "the `denial_count` meaning must come from its doc comment"
@@ -567,11 +594,11 @@ mod tests {
         );
     }
 
-    /// `worktree.enter` takes no arguments, needs no approval, and tells
+    /// `worktree_enter` takes no arguments, needs no approval, and tells
     /// the model the switch waits for the turn boundary.
     #[test]
     fn worktree_enter_is_automatic_and_takes_no_input() {
-        let enter = definition("worktree.enter");
+        let enter = definition("worktree_enter");
 
         assert_eq!(enter.permission, ToolPermission::AutoAllowRead);
         assert_eq!(enter.input_schema["type"], "object");
@@ -619,13 +646,13 @@ mod tests {
             "the old `session_id` follow-up field must stay unrepresentable"
         );
         assert!(
-            !definitions().iter().any(|d| d.id == "agent.explore"),
+            !definitions().iter().any(|d| d.id == "agent_explore"),
             "the pre-rename id must be gone from the catalog"
         );
     }
 
     /// The description says the task session orients itself, and
-    /// `fs.grep`'s routing tail names the tool by its current id rather
+    /// `fs_grep`'s routing tail names the tool by its current id rather
     /// than a stale one.
     #[test]
     fn task_and_grep_descriptions_route_consistently() {
@@ -668,14 +695,14 @@ mod tests {
             task.description
         );
 
-        let grep = definition("fs.grep");
+        let grep = definition("fs_grep");
         assert!(
             grep.description.contains("call task instead"),
             "{}",
             grep.description
         );
         assert!(
-            !grep.description.contains("agent.explore"),
+            !grep.description.contains("agent_explore"),
             "{}",
             grep.description
         );

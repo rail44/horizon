@@ -94,7 +94,7 @@ pub(crate) fn wake(session_id: SessionId) {
     notify::wake(session_id);
 }
 
-/// The model-visible tool id. Renamed from `agent.explore` on 2026-07-27:
+/// The model-visible tool id. Renamed from `agent_explore` on 2026-07-27:
 /// the plain `task` name measurably improved delegation adoption for one of
 /// the two production models and was neutral for the other
 /// (`docs/research/agent-delegation-and-batching-probes-2026-07-27.md`,

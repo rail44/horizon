@@ -206,7 +206,7 @@ pub struct SessionNew {
 }
 
 /// The agent (child) asking the client to run a host-coupled tool (e.g.
-/// `workspace.snapshot`) over this same connection -- guardrail 4. Sent as
+/// `workspace_snapshot`) over this same connection -- guardrail 4. Sent as
 /// `_horizon/host_tool`; the `request_id` correlates the reply because a
 /// session thread blocks on the matching [`HostToolResponse`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -237,7 +237,7 @@ mod tests {
             AgentWireEvent::AttachmentClosed(AttachmentEnd::SessionEnded),
             AgentWireEvent::Event(Event::ToolCallRequested(crate::contract::ToolCallRequest {
                 call_id: (crate::contract::ToolCallId("call-1".to_string())).clone(),
-                tool_id: "fs.read".to_string(),
+                tool_id: "fs_read".to_string(),
                 input: serde_json::json!({"path": "a.txt"}).into(),
                 occurrence_id: crate::contract::OccurrenceId(
                     (crate::contract::ToolCallId("call-1".to_string()))
@@ -247,7 +247,7 @@ mod tests {
             })),
             AgentWireEvent::ToolCallProgress(ToolCallProgress {
                 key: "call-1".to_string(),
-                tool_id: Some("fs.read".to_string()),
+                tool_id: Some("fs_read".to_string()),
                 bytes: 64,
             }),
             AgentWireEvent::ToolCallProgressClosed("call-1".into()),

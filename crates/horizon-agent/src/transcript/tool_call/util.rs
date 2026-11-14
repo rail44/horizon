@@ -46,7 +46,7 @@ pub fn truncate_chars(text: &str, max: usize) -> (String, bool) {
 /// A simple common-prefix/common-suffix line diffstat between `old` and
 /// `new` -- not a full diff algorithm (no interior-line matching), but
 /// enough to report `+added -removed` for one `old_string`/`new_string`
-/// replacement, the shape of every entry in an `fs.edit` batch (see
+/// replacement, the shape of every entry in an `fs_edit` batch (see
 /// `crate::tools::fs::edit`); a whole call's counts are these summed
 /// across its `edits` list. Derived from
 /// [`super::super::reconstruct_line_diff`] rather than computed independently, so

@@ -1,4 +1,4 @@
-//! `knowledge.read` / `knowledge.write` tool dispatch — the thin
+//! `knowledge_read` / `knowledge_write` tool dispatch — the thin
 //! adapter between the auto-allow execution chain (`tools::execution::
 //! execute_auto_tool`) and `crate::knowledge`'s handlers. Each handler
 //! takes the session's project main root (resolved from

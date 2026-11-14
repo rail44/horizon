@@ -32,7 +32,7 @@ open: macOS, where the new shell has not been run.
 The containment perimeter moves from "spawned isolated" to the sandbox
 itself: one session kind, `bash` always sandboxed with the gitdir excluded
 from the writable root, host execution only as the no-sandbox fallback,
-and a `worktree.enter` tool in place of the spawn-time isolation knob.
+and a `worktree_enter` tool in place of the spawn-time isolation knob.
 Decided on board #65; design and staging in
 [the perimeter design](sandbox-perimeter-design.md).
 
@@ -203,7 +203,7 @@ lands:
   `e8300d7`, `ca36ea9`, `6167199`; design
   `docs/session-relationship-design.md`): daemon-side lineage tree,
   isolated worktree spawn under `.horizon/worktrees/` (spawn-time
-  isolation since replaced by `worktree.enter`, board #65 /
+  isolation since replaced by `worktree_enter`, board #65 /
   `docs/sandbox-perimeter-design.md`),
   clean-only worktree cleanup on terminate, the open-directory command
   (palette + CLI + session-manager row action), the session-manager
@@ -386,7 +386,7 @@ lands:
   turns explicitly enable native parallel tool calls; independent calls may
   overlap, same-path writes serialize, and bash retains its per-session FIFO.
   **Superseded 2026-07-28** (owner decision): `fs.patch` is deleted — 5
-  failures in 6 lifetime uses — and batching now lives in `fs.edit`, whose
+  failures in 6 lifetime uses — and batching now lives in `fs_edit`, whose
   input is a list of edits and nothing else. Path locks and parallel tool
   calls are unchanged. Evidence:
   `docs/research/agent-editing-phase-analysis-2026-07-28.md`.
@@ -449,7 +449,7 @@ lands:
   2026-07-26..27 consumption campaign. `providers/rig/clearing.rs` replaces
   the *content* of old tool results with a one-line reference placeholder
   naming the tool, its key argument, the elided size, and the two honest
-  recovery routes (`recall.search`/`recall.read`, or re-run); the call and
+  recovery routes (`recall_search`/`recall_read`, or re-run); the call and
   its `call_id` are untouched. The cleared set is decided **once per pass and
   frozen** — recorded as `Event::HistoryCleared` so every later request and
   every resume applies the identical set (stable prefix, cache paid once per
@@ -473,7 +473,7 @@ lands:
   5x each with identical windows). Structural contributors identified so far,
   not yet attributed by weight: round-trip count multiplies everything (across
   the last ~1.5 days of log, 872 of 973 tool-bearing requests carried exactly
-  one tool call, although `parallel_tool_calls: true` is sent and the `fs.read`
+  one tool call, although `parallel_tool_calls: true` is sent and the `fs_read`
   description invites batching); an early large tool result is re-sent once per
   remaining turn (agent #67's opening repo-wide grep returned 49,678
   characters — the 50k cap — on turn 1); and a ~7,020-token fixed preamble
@@ -482,19 +482,19 @@ lands:
   measured while pruning was still active; no session has run since it was
   removed, so the current baseline is unmeasured.
   **Direction chosen 2026-07-25 (owner consultation):** the mock fixtures
-  left the production catalog (`d1bac65`) and `fs.grep` now answers
+  left the production catalog (`d1bac65`) and `fs_grep` now answers
   where-not-what (`d74a75e`, −28% tool output on the replayed brief), but
   two same-brief sessions still died at the model's context ceiling —
   exploration fragments accumulating in a monotonic history are the
   structural cause. The chosen remedy is **parallel exploration sessions**
-  (`agent.explore`, `docs/agent-explore-design.md`): open-ended
+  (`agent_explore`, `docs/agent-explore-design.md`): open-ended
   exploration runs in a disposable read-only peer session sharing the
   requester's workspace_root, and only its final report enters the
   requester's history. Semantic-navigation alternatives (LSP tools,
   ast-grep, repo maps, SWE-agent-style viewers) were surveyed and set
   aside for now — current evidence favors plain agent-driven retrieval,
   and the 2024-era ACI findings are too weak a basis (owner assessment).
-  **`agent.explore` LANDED 2026-07-26** (merge `280730a`; implemented by a
+  **`agent_explore` LANDED 2026-07-26** (merge `280730a`; implemented by a
   worker — the first Opus 5 worker trial, 333k tokens, gate green on the
   first hand-back — and reviewed before integration): `EXPLORE_ROLE`
   (read-only allowlist, turn cap 25, doubles as the restart-cleanup
@@ -515,7 +515,7 @@ lands:
   fork-seeded arm broke outright under `hf:MiniMaxAI/MiniMax-M3` (a
   provider 400 on the fork-cloned history shape) while both fresh-mode
   explorations that hit the iteration cap returned only a generic error
-  with the work discarded. `agent.explore` is back to one-shot,
+  with the work discarded. `agent_explore` is back to one-shot,
   fresh-seeded, spawn-and-wait; iteration-cap exhaustion now forces one
   tools-disabled wrap-up completion and returns the partial report as a
   success (`RoleDefinition::summarize_on_cap`, OpenCode/Hermes precedent).
@@ -811,7 +811,7 @@ external notification path.
 
 - 2026-08-06 Board keeper agent: first board "package" (feature + agent
   definition + skill), external role/skill registration seams,
-  `board.read`/`board.comment` tools (`docs/board-keeper-design.md`)
+  `board_read`/`board_comment` tools (`docs/board-keeper-design.md`)
 
 - 2026-07-22 Pane/scroll performance boundary: cached fixed-bounds Terminal
   and ThemeSettings leaves with an uncached composite Agent around its nested

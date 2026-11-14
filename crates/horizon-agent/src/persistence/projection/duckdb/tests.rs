@@ -26,7 +26,7 @@ fn stores_events_and_rebuilds_agent_frame() {
                 }),
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
-                    tool_id: "workspace.snapshot".to_string(),
+                    tool_id: "workspace_snapshot".to_string(),
                     input: serde_json::json!({}).into(),
                     occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
@@ -68,7 +68,7 @@ fn exposes_queryable_message_tool_and_approval_projections() {
                 }),
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
-                    tool_id: "workspace.snapshot".to_string(),
+                    tool_id: "workspace_snapshot".to_string(),
                     input: serde_json::json!({ "include": "tabs" }).into(),
                     occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
@@ -92,7 +92,7 @@ fn exposes_queryable_message_tool_and_approval_projections() {
     assert_eq!(messages[0].role, MessageRole::Assistant);
 
     let calls = store.tool_calls_for_session(session_id).expect("calls");
-    assert_eq!(calls[0].tool_id, "workspace.snapshot");
+    assert_eq!(calls[0].tool_id, "workspace_snapshot");
     assert_eq!(calls[0].input["include"], "tabs");
 
     let approvals = store.approvals_for_session(session_id).expect("approvals");
@@ -214,7 +214,7 @@ fn file_backed_store_reopens_persisted_events_and_projections() {
                     }),
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: call_id.clone(),
-                        tool_id: "workspace.snapshot".to_string(),
+                        tool_id: "workspace_snapshot".to_string(),
                         input: serde_json::json!({}).into(),
                         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                     }),
@@ -277,7 +277,7 @@ fn file_backed_store_reopens_session_snapshots_for_restore_read_model() {
                     }),
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: call_id.clone(),
-                        tool_id: "workspace.snapshot".to_string(),
+                        tool_id: "workspace_snapshot".to_string(),
                         input: serde_json::json!({}).into(),
                         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                     }),
@@ -348,7 +348,7 @@ fn rebuilds_query_projections_from_durable_events() {
                 }),
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
-                    tool_id: "workspace.snapshot".to_string(),
+                    tool_id: "workspace_snapshot".to_string(),
                     input: serde_json::json!({}).into(),
                     occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
@@ -471,14 +471,14 @@ fn rebuilds_store_from_agent_event_log_records() {
             session_context: None,
             event_kind: event_kind(&Event::ToolCallRequested(ToolCallRequest {
                 call_id: call_id.clone(),
-                tool_id: "workspace.snapshot".to_string(),
+                tool_id: "workspace_snapshot".to_string(),
                 input: serde_json::json!({}).into(),
                 occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
             }))
             .to_string(),
             event: Event::ToolCallRequested(ToolCallRequest {
                 call_id: call_id.clone(),
-                tool_id: "workspace.snapshot".to_string(),
+                tool_id: "workspace_snapshot".to_string(),
                 input: serde_json::json!({}).into(),
                 occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
             }),
@@ -546,7 +546,7 @@ fn rebuilds_store_from_agent_event_log_records() {
             .tool_calls_for_session(session_id)
             .expect("tool calls")[0]
             .tool_id,
-        "workspace.snapshot"
+        "workspace_snapshot"
     );
     assert_eq!(
         store
@@ -751,7 +751,7 @@ fn tool_result_is_error_reflects_the_output_jsons_own_flag() {
             [
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: ok_call.clone(),
-                    tool_id: "fs.read".to_string(),
+                    tool_id: "fs_read".to_string(),
                     input: serde_json::json!({}).into(),
                     occurrence_id: crate::contract::OccurrenceId(ok_call.0.clone()),
                 }),
@@ -762,7 +762,7 @@ fn tool_result_is_error_reflects_the_output_jsons_own_flag() {
                 )),
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: err_call.clone(),
-                    tool_id: "fs.read".to_string(),
+                    tool_id: "fs_read".to_string(),
                     input: serde_json::json!({}).into(),
                     occurrence_id: crate::contract::OccurrenceId(err_call.0.clone()),
                 }),

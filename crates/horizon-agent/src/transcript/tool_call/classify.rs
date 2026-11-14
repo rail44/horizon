@@ -43,7 +43,7 @@ fn classify_tool(
     output: Option<&Value>,
 ) -> Option<(String, Option<String>, Option<String>)> {
     Some(match tool_id {
-        "fs.edit" => {
+        "fs_edit" => {
             let edits = edit_entries(input);
             let paths = distinct_edit_paths(&edits);
             let planned_diffstat = edits.iter().fold((0, 0), |(added, removed), edit| {
@@ -82,7 +82,7 @@ fn classify_tool(
                 }),
             )
         }
-        "fs.write" => {
+        "fs_write" => {
             let path = str_field(input, "path").unwrap_or_default().to_string();
             let summary = output
                 .and_then(decode::<FileWritten>)
@@ -104,7 +104,7 @@ fn classify_tool(
                 .map(|result| result.summary());
             ("Bash".to_string(), Some(head), summary)
         }
-        "fs.read" => {
+        "fs_read" => {
             let path = str_field(input, "path").unwrap_or_default().to_string();
             let summary = output
                 .and_then(decode::<FileRead>)
@@ -112,26 +112,26 @@ fn classify_tool(
                 .map(|lines| format!("{lines} lines"));
             ("Read".to_string(), Some(path), summary)
         }
-        "fs.grep" | "fs.glob" => {
+        "fs_grep" | "fs_glob" => {
             let pattern = str_field(input, "pattern").unwrap_or_default().to_string();
             let summary = output
                 .and_then(|output| match tool_id {
-                    "fs.grep" => {
+                    "fs_grep" => {
                         decode::<Matches<Location>>(output).map(|result| result.returned_count)
                     }
                     _ => decode::<Matches<String>>(output).map(|result| result.returned_count),
                 })
                 .map(|count| format!("{count} matches"));
-            let verb = if tool_id == "fs.grep" { "Grep" } else { "Glob" };
+            let verb = if tool_id == "fs_grep" { "Grep" } else { "Glob" };
             (verb.to_string(), Some(pattern), summary)
         }
-        "workspace.snapshot" => ("Snapshot".to_string(), None, None),
-        "worktree.enter" => ("Enter Worktree".to_string(), None, None),
-        "config.read" => ("Config Read".to_string(), None, None),
-        "config.write" => ("Config Write".to_string(), None, None),
-        "recall.search" => ("Recall Search".to_string(), None, None),
-        "recall.read" => ("Recall Read".to_string(), None, None),
-        "skill.read" => {
+        "workspace_snapshot" => ("Snapshot".to_string(), None, None),
+        "worktree_enter" => ("Enter Worktree".to_string(), None, None),
+        "config_read" => ("Config Read".to_string(), None, None),
+        "config_write" => ("Config Write".to_string(), None, None),
+        "recall_search" => ("Recall Search".to_string(), None, None),
+        "recall_read" => ("Recall Read".to_string(), None, None),
+        "skill_read" => {
             let id = str_field(input, "id").unwrap_or_default().to_string();
             ("Skill".to_string(), Some(id), None)
         }

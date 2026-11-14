@@ -32,12 +32,12 @@ decoration is reserved for modals and badges).
    e.g. `Edit src/agent/view/mod.rs · 2 hunks`. Click expands the
    body; collapsed is the default for every tool state including
    errors (errors are color-marked in the header).
-3. **Per-tool renderers, no raw-output path for file tools.** fs.edit
+3. **Per-tool renderers, no raw-output path for file tools.** fs_edit
    renders a line diff (reconstructed by joining the finished result
-   to its originating request's `old_string`/`new_string`), fs.write
+   to its originating request's `old_string`/`new_string`), fs_write
    renders a highlighted content preview, bash renders command +
-   captured output as preformatted text, fs.read/glob/grep/
-   workspace.snapshot render terse result summaries. Raw JSON is the
+   captured output as preformatted text, fs_read/glob/grep/
+   workspace_snapshot render terse result summaries. Raw JSON is the
    fallback for unknown tools only.
 4. **Diff rendering** uses dedicated theme roles (added/removed
    surfaces); line background carries the change, the sign column is

@@ -6,7 +6,7 @@ use crate::tools::output::*;
 use crate::tools::output::error as error_output;
 use crate::tools::state::ToolSessionState;
 
-/// The pure-ish body of `config.write`: takes the resolved target path as a
+/// The pure-ish body of `config_write`: takes the resolved target path as a
 /// parameter (see `super::read_at`'s doc comment on why) so it's testable
 /// without touching a real `$HOME`/`$XDG_CONFIG_HOME`.
 pub(super) fn execute(
@@ -66,7 +66,7 @@ pub(super) fn execute(
 fn check_staleness(tool_state: &ToolSessionState, path: &Path) -> Result<(), Response> {
     let Some(recorded) = tool_state.recorded_mtime(path) else {
         return Err(error_output(format!(
-            "`{}` has not been read this session -- read it with config.read first",
+            "`{}` has not been read this session -- read it with config_read first",
             path.display()
         )));
     };
@@ -77,7 +77,7 @@ fn check_staleness(tool_state: &ToolSessionState, path: &Path) -> Result<(), Res
 
     if current != recorded {
         return Err(error_output(format!(
-            "`{}` changed on disk -- read it again with config.read",
+            "`{}` changed on disk -- read it again with config_read",
             path.display()
         )));
     }
@@ -166,7 +166,7 @@ mod tests {
         let tool_state = ToolSessionState::without_root();
         let path = temp_path("stale");
         std::fs::write(&path, "[theme]\naccent = \"#000000\"\n").unwrap();
-        // Simulate config.read having been called earlier with a
+        // Simulate config_read having been called earlier with a
         // deliberately wrong recorded mtime -- standing in for the file
         // changing on disk between the read and this write.
         tool_state.record_mtime(path.clone(), std::time::SystemTime::UNIX_EPOCH);

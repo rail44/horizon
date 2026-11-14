@@ -37,7 +37,7 @@ pub(crate) fn session_schema() -> Value {
     }})
 }
 
-/// The daemon capability `board.read` and `board.comment` are built on: read
+/// The daemon capability `board_read` and `board_comment` are built on: read
 /// the board (list items or show one) and append a comment. Implemented by
 /// `horizon-agentd` (`session::AgentdBoardHost`) using `horizon_board::Store`
 /// and installed on each session's `ToolSessionState` via
@@ -80,7 +80,7 @@ pub trait BoardHost: Send + Sync {
     }
 }
 
-/// Executes an auto-allowed board read tool (`board.read`). Returns `None` for
+/// Executes an auto-allowed board read tool (`board_read`). Returns `None` for
 /// any other tool id, so the caller can try elsewhere — same contract as
 /// `tools::knowledge::execute_auto`.
 pub(crate) fn execute_auto(
@@ -88,12 +88,12 @@ pub(crate) fn execute_auto(
     tool_id: &str,
     input: &Value,
 ) -> Option<Value> {
-    if tool_id != "board.read" {
+    if tool_id != "board_read" {
         return None;
     }
     let Some(host) = tool_state.board_host() else {
         return Some(error_output(
-            "board.read is not available: no board host is installed for this session",
+            "board_read is not available: no board host is installed for this session",
         ));
     };
     // If `id` is present, show that item; otherwise list all (optionally
@@ -116,8 +116,8 @@ pub(crate) fn execute_auto(
     }
 }
 
-/// Executes `board.comment` — a write, but `AutoAllowRead` so it skips the
-/// approval gate (the event log is the audit trail, same as `knowledge.write`).
+/// Executes `board_comment` — a write, but `AutoAllowRead` so it skips the
+/// approval gate (the event log is the audit trail, same as `knowledge_write`).
 /// Special-cased in `execute_agent_tool` (not routed through
 /// `execute_auto_tool`) because it needs the session id for the comment author,
 /// which `execute_auto_tool`'s signature doesn't carry.
@@ -130,20 +130,20 @@ pub(crate) fn execute_comment(
         return synchronous(
             request,
             error_output(
-                "board.comment is not available: no board host is installed for this session",
+                "board_comment is not available: no board host is installed for this session",
             ),
         );
     };
     let Some(id) = request.input.get("id").and_then(Value::as_u64) else {
         return synchronous(
             request,
-            error_output("board.comment requires an `id` integer argument"),
+            error_output("board_comment requires an `id` integer argument"),
         );
     };
     let Some(text) = request.input.get("text").and_then(Value::as_str) else {
         return synchronous(
             request,
-            error_output("board.comment requires a `text` string argument"),
+            error_output("board_comment requires a `text` string argument"),
         );
     };
     // The author is the session id — the model never controls it, so a
@@ -225,7 +225,7 @@ mod tests {
             .with_board_host(Some(Arc::new(SendingHost(recipient))));
         let request = ToolCallRequest {
             call_id: ToolCallId("request".into()),
-            tool_id: "board.session".into(),
+            tool_id: "board_session".into(),
             occurrence_id: crate::contract::OccurrenceId::new(),
             input: json!({"action":"review","id":1}).into(),
         };

@@ -83,13 +83,13 @@ Progressive disclosure keeps its three stages:
 1. **Always loaded**: a session whose role lists skills gets one extra
    prompt section — "`<name>` — `<description>`" per skill plus a single
    line telling the agent to read a skill before relying on it.
-2. **Loaded on trigger**: the `skill.read` tool (auto-allowed read)
+2. **Loaded on trigger**: the `skill_read` tool (auto-allowed read)
    returns a skill's markdown body.
 3. **Loaded as needed**: a skill body can point at tools (here:
-   `config.read`) for anything live.
+   `config_read`) for anything live.
 
 Role-less sessions get no skills section and remain byte-identical to
-today's prompt. `fs.read` was not reused as the loading tool (Part 3.2's
+today's prompt. `fs_read` was not reused as the loading tool (Part 3.2's
 original sketch) because embedded skills are not on disk and the config
 role deliberately has no filesystem access.
 
@@ -105,7 +105,7 @@ creating a session. Unknown or internal role ids are rejected.
 - prompt section: Horizon configuration assistant framing — read the
   skill and the current config before proposing changes; write the
   complete file; changes apply on approval.
-- tools: `skill.read`, `config.read`, `config.write` — nothing else. No
+- tools: `skill_read`, `config_read`, `config_write` — nothing else. No
   bash, no fs.
 - `include_repository_instructions: false`. **Trust note:** repository
   instruction files (AGENTS.md/CLAUDE.md) are exactly the prompt-injection
@@ -116,20 +116,20 @@ creating a session. Unknown or internal role ids are rejected.
 
 ### Config tools and their trust reasoning
 
-`fs.write` cannot reach `~/.config/horizon/config.toml`: the fs tools are
+`fs_write` cannot reach `~/.config/horizon/config.toml`: the fs tools are
 confined to the session's workspace root by design. Widening that sandbox
 for one file would be backwards; instead the config agent gets two
 dedicated tools that can touch **only** the one host-owned path, resolved
 by the same `HORIZON_CONFIG` > XDG > `~/.config` chain `horizon-agentd`
 already uses for its own config read:
 
-- `config.read` (auto-allowed): resolved path + contents, or an explicit
+- `config_read` (auto-allowed): resolved path + contents, or an explicit
   "does not exist yet" (the onboarding case).
-- `config.write` (requires approval): whole-file write. Rejects content
+- `config_write` (requires approval): whole-file write. Rejects content
   that does not parse as TOML (the error goes back to the agent, which
   can self-correct before ever reaching the user); requires a prior
-  `config.read` when the file exists and refuses if the file changed
-  since (the same prior-read + staleness discipline as `fs.write`);
+  `config_read` when the file exists and refuses if the file changed
+  since (the same prior-read + staleness discipline as `fs_write`);
   creates parents; writes atomically (temp file + rename).
 
 Cataloging these globally adds no capability — `bash` (also
@@ -171,7 +171,7 @@ from the startup fallback, where there is nothing applied yet to keep).
 `Reload Config` is a first-class command (palette, keybinding id
 `reload-config`, CLI `horizon reload-config`) per the "operations go
 through the command model" convention. On top of that primitive, Horizon
-observes a successful `config.write` tool result in the agent event stream
+observes a successful `config_write` tool result in the agent event stream
 and executes the same command automatically — approve the write, see the
 theme change.
 
@@ -221,8 +221,8 @@ to end (live provider, 2026-07-06):
   tool ids, `model: None`, two booleans, one skill id. Every attempt to
   put *knowledge* in it (schema, valid names, editing rules) read better
   in the skill, and the live sessions confirmed the agent treats the
-  skill as the authority — each run began with `skill.read` +
-  `config.read` before proposing anything, preserved unrelated config
+  skill as the authority — each run began with `skill_read` +
+  `config_read` before proposing anything, preserved unrelated config
   entries, and correctly told the user which sections apply live versus
   at restart, all of which it can only have learned from the skill body.
 - **What the role did could not have been a skill.** The tool allowlist
@@ -255,7 +255,7 @@ Written 2026-07-07 (owner decisions made in-session; implementation follows
 this section). Where v1 left skills embedded-only and gated behind a role,
 v2 does two things: adds a second, on-disk skill source that can be edited
 without rebuilding the binary, and gives skills to role-less sessions too —
-so `skill.read` finally has a generic-session consumer, not just the config
+so `skill_read` finally has a generic-session consumer, not just the config
 role.
 
 ### The repository skill layer: `.horizon/skills/<id>/SKILL.md`
@@ -294,8 +294,8 @@ revisiting (see `docs/trust-boundaries.md`).
 session start (there's no cheaper way to reach just the frontmatter with
 this crate's hand-rolled parser, but the body is discarded immediately
 after parsing) — a repository skill's `Skill` value stores a path, not a
-cached body. `skill.read` re-reads and re-parses that path from disk on
-every call, so an edit followed by a fresh `skill.read` in the same
+cached body. `skill_read` re-reads and re-parses that path from disk on
+every call, so an edit followed by a fresh `skill_read` in the same
 session sees the new content without a session restart — the "edit,
 observe" loop this layer exists for. A repository skill's body is capped
 at `skills::SKILL_BODY_CAP_CHARS` (a plain constant, not a config knob —
@@ -316,7 +316,7 @@ cwd-derived state already has between call sites):
 - `providers::rig::session::session_extra_sections` builds one for the
   prompt section (below).
 - `horizon-agentd`'s `session::run_session` builds a second one for
-  `skill.read`'s dispatch, installed onto `tools::ToolSessionState` via a
+  `skill_read`'s dispatch, installed onto `tools::ToolSessionState` via a
   new builder method (`ToolSessionState::with_skills`) rather than a
   `for_current_dir` parameter — mirroring how `RecallContext` was threaded
   in, except set post-construction so that constructor's signature (and
