@@ -50,6 +50,7 @@ impl EventHandler for Dispatch {
             }
             if PREVENTED.replace(false) {
                 state.prevent_default();
+                self.0.prevented.set(true);
             }
             if STOPPED.replace(false) {
                 return;
@@ -62,6 +63,7 @@ impl EventHandler for Dispatch {
             }
             if PREVENTED.replace(false) {
                 state.prevent_default();
+                self.0.prevented.set(true);
             }
             if STOPPED.replace(false) || !event.bubbles {
                 break;

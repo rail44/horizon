@@ -98,7 +98,9 @@ the design's spine — see `docs/workspace-mode-design.md` for the full
 rationale):
 
 - **Focus**: where keyboard input flows. A focused terminal pane receives
-  everything, kitty-faithfully; a focused agent pane receives composer text.
+  everything, kitty-faithfully; a focused agent pane takes its own keys
+  (Enter moves into the composer, Escape in the composer moves back out),
+  so text selected in its conversation is copied with Ctrl+C.
 - **Cursor**: the pane, tab, or session that Horizon commands act on. Command
   targets (see "What Becomes A Command" above) resolve to the cursor.
   Normally cursor and focus coincide, but they can diverge — a command can

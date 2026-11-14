@@ -100,7 +100,8 @@ fn slider(
     };
     let percent = move || format!("{}%", range.share(value.get()) * 100.);
     let drags = drags.clone();
-    el("div")
+    let slider = el("div");
+    slider
         .class(styles::SLIDER)
         .attr("tabindex", "0")
         .on("pointerdown", move |event| {
@@ -110,8 +111,10 @@ fn slider(
             toward(pointer.page_x());
             let toward = toward.clone();
             drags.begin(move |x, _| toward(x));
-            // Not the start of a selection in the text around it.
+            // Not the start of a selection in the text around it, which
+            // keeps the focus where it was too: the press gives it the keys.
             prevent_default();
+            slider.focus();
         })
         // An arrow is a step, and ten with Shift; Page Up and Down are
         // ten; Home and End are the ends.

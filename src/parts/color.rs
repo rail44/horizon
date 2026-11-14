@@ -288,7 +288,10 @@ fn color_picker(
                             };
                             on_area(pointer.page_x(), pointer.page_y());
                             area_drags.begin(on_area.clone());
+                            // Keeps the focus where it was too: the press
+                            // gives the area the keys.
                             prevent_default();
+                            area.focus();
                         }),
                 )
                 .child(
@@ -305,6 +308,7 @@ fn color_picker(
                         let on_bar = on_bar.clone();
                         bar_drags.begin(move |x, _| on_bar(x));
                         prevent_default();
+                        bar.focus();
                     }),
                 )
                 .child(
