@@ -194,3 +194,38 @@
   - ACP では、エージェントは別のプロセスとして配られる(Registry の `binary` / `npx` / `uvx`)。
 - **`horizon-logd`**: ボードのログを持つ。この調査では、wasm で書けない理由は見つけていない(未調査)。
 - **Horizon がすでに持つもの**: 3 つのデーモンに共通の起動の仕組み(`spawn.rs`)は、形 1 の「host が起動して持つ」側にあたる。`horizon-agentd` と `horizon-terminald` の版の照合(`HORIZON_ACP_EXT_VERSION` の比較、terminal の `MIN_SUPPORTED == current`)は「完全一致」の型にあたる。
+
+## 試作の結果(2026-11-14)
+
+view(wasm)とバックエンド(ネイティブ)の間を WIT で書き、wRPC で繋ぐ形を、使い捨ての試作で確かめた。
+
+- **使った版**: wit-bindgen-wrpc 0.12.0、wrpc-transport 0.30.0、wasmtime 50.0.1(`component-model-async`)、wit-bindgen 0.63.0
+- **置き場所**: `$CLAUDE_JOB_DIR/tmp`。リポジトリには入れていない
+
+### ネイティブ同士(Unix ソケット、wRPC)
+
+- **呼び出し**: WIT から生成した client と server で、`result` を返す呼び出しと `stream<string>` が動いた。
+  - stream の項目は、生成されるたびに届いた(50 ms ごとに 5 件)。
+- **速さ**: 小さな呼び出しを 1000 回続けて 43 ms(release build)。Unix ソケットでは、呼び出し 1 回ごとに接続を 1 本張る(wRPC の README)。
+- **大きさの上限**: 256 MiB の `list<u8>` も断られずに届いた(304 ms)。既定の上限はないとみられ、要るなら自分で設ける。
+- **版の扱い**: 呼び出しの名前に WIT のパッケージの版が入る(`probe:agent/backend@0.2.0#send-prompt`)。
+  - 版の違う client が呼ぶと、デーモンは「handler が登録されていない」と記録し、client には `incomplete results` という分かりにくい誤りが返った。
+  - 版を突き合わせる仕組みはない。
+
+### wasmtime 50 での同期と非同期の同居
+
+- **実行の設定**: 非同期の import(WIT の `async func`)を使うには、store を component-model-async の設定にする必要がある。
+- **同期の export の呼び方**: その設定では、同期の export も通常の同期の呼び出し(`call_render(&mut store)`)では呼べず、「`*_async` を使え」という誤りになった。`run_concurrent` の中で `Accessor` 経由で呼べば動いた。
+- **同居の結果**: 非同期の export が非同期の import(200 ms)を待っている間に、同じ instance の同期の export を host から呼べ、すぐに返った。guest からの同期の import(文書の操作に見立てたもの)も、どちらの中からでも呼べた。
+
+### 全体を繋いだ経路
+
+- 経路: wasm の view の非同期 import → host → wRPC → 別プロセスのネイティブのデーモン
+- 結果: 応答まで約 1 ms で通った。
+- 注意: この試作の host の中継は、その interface 専用に生成したコードで書いた。
+
+### wRPC 側の事情(2026-11-14 時点)
+
+- **polyfilling の削除**: wasm の component の import を、実行時に wRPC へ繋ぐ機能(polyfilling)が、2026-11-13 の main で削除された(commit 613a50976c「drop wrpc:rpc and polyfilling」)。wasmtime 向けの部品は、今後は export を公開するだけになる。
+- **wasmtime の版とのずれ**: リリース済みの `wrpc-runtime-wasmtime` 0.31.0 は wasmtime 45 に依存し、main は wasmtime 51.0.0-rc.1 に依存している。
+- **変更の頻度**: main には、破壊的な変更が 2026-11-11〜13 の 3 日で 6 件入っている。
