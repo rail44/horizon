@@ -75,8 +75,13 @@ pub(super) fn take_in(extensions: Vec<Rc<Extension>>) {
     EXTENSIONS.with(|kept| *kept.borrow_mut() = extensions);
 }
 
+/// The extensions loaded.
+pub(super) fn extensions() -> Vec<Rc<Extension>> {
+    EXTENSIONS.with(|kept| kept.borrow().clone())
+}
+
 /// The extension named `name`, if one was loaded.
-fn extension(name: &str) -> Option<Rc<Extension>> {
+pub(super) fn extension(name: &str) -> Option<Rc<Extension>> {
     EXTENSIONS.with(|kept| {
         kept.borrow()
             .iter()

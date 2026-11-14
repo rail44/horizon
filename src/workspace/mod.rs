@@ -56,6 +56,7 @@ mod board_sessions;
 mod chooser;
 mod commands;
 mod control;
+mod finder;
 pub(crate) mod held;
 mod keymap;
 mod keys;
@@ -316,6 +317,9 @@ pub enum Modal {
     Chooser(Placement),
     /// Which model an agent session goes on with.
     Models(SessionId),
+    /// Which file the new pane of this extension at this place is made
+    /// on.
+    Finder(&'static str, Placement),
 }
 
 /// A pane on the page.
@@ -777,9 +781,10 @@ impl Shell {
     /// A new pane at `placement`: of the view chosen, when there is more
     /// than terminals to choose from.
     fn place(&self, placement: Placement) {
-        match self.kept().spawn_agent {
-            Some(_) => self.open(Modal::Chooser(placement)),
-            None => self.create(SessionKind::Terminal, None, placement),
+        if self.kept().spawn_agent.is_some() || !plugins::extensions().is_empty() {
+            self.open(Modal::Chooser(placement));
+        } else {
+            self.create(SessionKind::Terminal, None, placement);
         }
     }
 
@@ -1165,6 +1170,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
                 Modal::Palette => palette::view(shell),
                 Modal::Sessions => sessions::view(shell),
                 Modal::Chooser(placement) => chooser::view(shell, *placement),
+                Modal::Finder(plugin, placement) => finder::view(shell, plugin, *placement),
                 Modal::Models(session) => match shell.kept().models.clone() {
                     Some(source) => models::view(shell, *session, source),
                     None => el("div"),

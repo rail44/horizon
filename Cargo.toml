@@ -122,6 +122,7 @@ anyrender_vello = "0.15"
 blitz-paint = { workspace = true }
 blitz-shell = { workspace = true, features = ["custom-widget"] }
 crossbeam-channel = "0.5"
+ignore = "0.4"
 futures = "0.3"
 kurbo = "0.13"
 # The parser `horizon-wiki` reads a page with: a wiki page is drawn from the

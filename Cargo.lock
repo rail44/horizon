@@ -2978,6 +2978,7 @@ dependencies = [
  "horizon-wiki",
  "horizon-wire",
  "horizon-workspace",
+ "ignore",
  "keyboard-types",
  "kurbo",
  "markdown",

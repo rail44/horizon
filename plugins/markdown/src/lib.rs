@@ -55,6 +55,12 @@ impl Guest for Plugin {
         mounted.unwrap_or_default()
     }
 
+    fn create(file: horizon_ui::guest::File) -> State {
+        State {
+            path: Some(file.path()),
+        }
+    }
+
     fn state() -> State {
         let path = SHOWN.with(|shown| shown.borrow().clone());
         State {

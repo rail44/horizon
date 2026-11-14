@@ -17,9 +17,10 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::{Dispose, GetUntracked};
 use serde::Deserialize;
 use wasmtime::component::types::{ComponentItem, Type};
-use wasmtime::component::{Instance, Val};
+use wasmtime::component::{Instance, ResourceAny, Val};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 use crate::plugin_host::{Asks, Compiled, Loaded, compile, instantiate};
@@ -32,8 +33,20 @@ struct Manifest {
     plugin: ManifestPlugin,
     #[serde(default)]
     commands: BTreeMap<String, ManifestCommand>,
+    /// How each parameter of `create` is asked for, by the parameter's name.
+    #[serde(default)]
+    create: BTreeMap<String, ManifestParameter>,
     #[serde(default)]
     access: Access,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestParameter {
+    /// For a file: the extensions of the files to choose among; any file
+    /// when there are none.
+    #[serde(default)]
+    extensions: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -76,10 +89,20 @@ pub struct Extension {
     pub name: &'static str,
     pub title: String,
     pub commands: Vec<ExtensionCommand>,
+    /// What a new pane of it is made from, if it says (`create`).
+    pub creates: Option<Creates>,
     compiled: Compiled,
     read: Vec<PathBuf>,
     /// What a pane keeps of it: the type `state` gives.
     state: Type,
+}
+
+/// What an extension's `create` takes to make a new pane's state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Creates {
+    /// A file, chosen among those with one of `extensions` (any file when
+    /// there are none).
+    File { extensions: Vec<String> },
 }
 
 /// `text`, kept for as long as the shell runs: a command's name and texts
@@ -95,6 +118,8 @@ struct Shape {
     /// The commands its `commands` interface exports, in the order they
     /// were read.
     commands: Vec<String>,
+    /// The name of the file parameter `create` takes, if it exports one.
+    created_on: Option<String>,
 }
 
 /// Reads what the component exports, and holds it to what an extension
@@ -102,7 +127,20 @@ struct Shape {
 fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
     let engine = &compiled.engine;
     let exported = compiled.component.component_type();
+    // The host's file resource, as the component names it.
+    let file = (exported.imports(engine))
+        .filter(|(name, _)| name.starts_with("horizon:ui/files"))
+        .find_map(|(_, item)| match item.ty {
+            ComponentItem::ComponentInstance(instance) => {
+                (instance.exports(engine)).find_map(|(name, item)| match item.ty {
+                    ComponentItem::Resource(file) if name == "file" => Some(file),
+                    _ => None,
+                })
+            }
+            _ => None,
+        });
     let mut state = None;
+    let mut created_on = None;
     let mut commands = Vec::new();
     let mut mount = false;
     let mut events = false;
@@ -111,6 +149,21 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
             ("mount", ComponentItem::ComponentFunc(_)) => mount = true,
             ("state", ComponentItem::ComponentFunc(function)) => {
                 state = function.results().next();
+            }
+            ("create", ComponentItem::ComponentFunc(function)) => {
+                let parameters: Vec<_> = function.params().collect();
+                let [(name, Type::Own(resource))] = parameters.as_slice() else {
+                    return Err(
+                        "`create` takes what the host cannot ask for yet: it can ask for one file"
+                            .to_string(),
+                    );
+                };
+                if Some(resource) != file.as_ref() {
+                    return Err(format!(
+                        "`create` takes `{name}`, which is not the host's `file`"
+                    ));
+                }
+                created_on = Some(name.to_string());
             }
             ("commands", ComponentItem::ComponentInstance(instance)) => {
                 for (command, item) in instance.exports(engine) {
@@ -141,7 +194,11 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
     if !events {
         return Err("the component does not export `horizon:ui/events`".to_string());
     }
-    Ok(Shape { state, commands })
+    Ok(Shape {
+        state,
+        commands,
+        created_on,
+    })
 }
 
 /// Holds the commands the component exports and the ones the manifest
@@ -171,11 +228,24 @@ impl Extension {
         let at = directory.join("plugin.toml");
         let manifest =
             std::fs::read_to_string(&at).map_err(|error| format!("{}: {error}", at.display()))?;
-        let manifest: Manifest =
+        let mut manifest: Manifest =
             toml::from_str(&manifest).map_err(|error| format!("{}: {error}", at.display()))?;
         let compiled = compile(&directory.join(&manifest.plugin.component))?;
-        let Shape { state, commands } = shape_of(&compiled)?;
+        let Shape {
+            state,
+            commands,
+            created_on,
+        } = shape_of(&compiled)?;
         match_commands(&commands, &manifest.commands)?;
+        // (What the manifest says of how `create`'s file is asked for.)
+        let creates = created_on.map(|parameter| Creates::File {
+            extensions: (manifest.create.remove(&parameter))
+                .unwrap_or_default()
+                .extensions,
+        });
+        if let Some(name) = manifest.create.keys().next() {
+            return Err(format!("`create` has no parameter `{name}`"));
+        }
         let commands = (manifest.commands.into_iter())
             .map(|(name, command)| ExtensionCommand {
                 name: kept(name),
@@ -188,6 +258,7 @@ impl Extension {
             name: kept(manifest.plugin.name),
             title: manifest.plugin.title,
             commands,
+            creates,
             compiled,
             read: manifest
                 .access
@@ -219,6 +290,37 @@ impl Extension {
             extension: self.clone(),
             loaded,
         })
+    }
+}
+
+impl Extension {
+    /// The state of a new pane on the file at `path`, as text: what the
+    /// extension's `create` makes of it, asked of an instance made for the
+    /// question.
+    pub fn create(self: &Rc<Self>, path: &Path) -> Result<String, String> {
+        let failed = RwSignal::new(None::<String>);
+        let state =
+            (self.instantiate(Asks::default(), Wake::default(), failed)).and_then(|running| {
+                let path = path.to_path_buf();
+                let state = running.loaded.call(|instance, store| {
+                    Box::pin(async move {
+                        let create = function(instance, store, None, "create")?;
+                        let file = store.data_mut().file(path)?;
+                        let file = ResourceAny::try_from_resource(file, &mut *store)?;
+                        let mut answer = [Val::Bool(false)];
+                        create
+                            .call_async(&mut *store, &[Val::Resource(file)], &mut answer)
+                            .await?;
+                        Ok(answer[0].clone())
+                    })
+                });
+                let said = failed.get_untracked();
+                state
+                    .and_then(|state| state.to_wave().ok())
+                    .ok_or_else(|| said.unwrap_or_else(|| "`create` gave no state".to_string()))
+            });
+        failed.dispose();
+        state
     }
 }
 
