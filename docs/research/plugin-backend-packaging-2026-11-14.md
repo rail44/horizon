@@ -229,3 +229,15 @@ view(wasm)とバックエンド(ネイティブ)の間を WIT で書き、wRPC �
 - **polyfilling の削除**: wasm の component の import を、実行時に wRPC へ繋ぐ機能(polyfilling)が、2026-11-13 の main で削除された(commit 613a50976c「drop wrpc:rpc and polyfilling」)。wasmtime 向けの部品は、今後は export を公開するだけになる。
 - **wasmtime の版とのずれ**: リリース済みの `wrpc-runtime-wasmtime` 0.31.0 は wasmtime 45 に依存し、main は wasmtime 51.0.0-rc.1 に依存している。
 - **変更の頻度**: main には、破壊的な変更が 2026-11-11〜13 の 3 日で 6 件入っている。
+
+### component の中で wRPC を動かす形(d)
+
+upstream が勧める形を試した。view(wasm)の中で wit-bindgen-wrpc の client を動かし、`wasi:sockets` の TCP(localhost)でデーモンを呼ぶ。
+
+- **upstream の例の作り**: wRPC の例(`examples/rust/hello-component-tcp-proxy`、v0.18.0)は、同期の export の中で tokio の current-thread の実行環境を作り、`block_on` する。I/O は、wasip2 の `wasi::io::poll::poll` を 10 ms の timeout つきで回すループで駆動する。例のコメントには「WASI 0.3 では不要になる」とある。
+  - wrpc-transport 0.30.0 は、内部で `tokio::spawn` と `JoinSet` を使う。
+  - wRPC の guest の側には、WASI 0.3 に対応する作業の跡が見つからなかった(リポジトリと issue を検索した)。
+- **試作の結果**: 動いた。ただし、非同期の export(`act`)の中で `block_on` している間は instance が塞がった。
+  - 50 ms の時点で host が頼んだ同期の `render(2)` は、バックエンドの応答(200 ms)が済んだ後の 203 ms まで実行されなかった。
+  - 同じ呼び出しは、host が import を中継する形では 53 ms に実行された。
+- **host の側の設定**: wasmtime-wasi 50 では、guest の TCP には `inherit_network()` に加えて `allow_tcp(true)` が要る。これがないと、ソケットの作成が `access-denied` になる。
