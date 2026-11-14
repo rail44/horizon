@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use horizon_acp::ProviderSummary;
 use horizon_ui::El;
 use horizon_ui::reactive_graph::signal::RwSignal;
-use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, With};
+use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, With, WithUntracked};
 use horizon_workspace::{SessionId, Workspace};
 
 use super::picker::{self, Picked, Row};
@@ -64,8 +64,10 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
             .filter(|(_, provider)| holds(&provider.name, query))
             .collect()
     };
+    // Untracked, as `matching_providers` is: `rows` has already read
+    // `listed` for the provider when it gets here.
     let matching_models = move |provider: usize, query: &str| -> Vec<String> {
-        let all = listed.with(|listed| listed.get(&provider).cloned().flatten());
+        let all = listed.with_untracked(|listed| listed.get(&provider).cloned().flatten());
         (all.unwrap_or_default().into_iter())
             .filter(|model| holds(model, query))
             .collect()
@@ -134,7 +136,7 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
                     return;
                 }
                 // Its models are asked for once.
-                let asked = listed.with(|listed| listed.contains_key(&provider));
+                let asked = listed.with_untracked(|listed| listed.contains_key(&provider));
                 if !asked {
                     listed.update(|listed| {
                         listed.insert(provider, None);
