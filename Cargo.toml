@@ -97,6 +97,7 @@ horizon-board = { path = "crates/horizon-board" }
 horizon-board-view = { path = "crates/horizon-board-view" }
 horizon-workspace = { path = "crates/horizon-workspace" }
 keyboard-types = "0.8"
+nucleo-matcher = "0.3"
 pulldown-cmark = "0.13"
 
 # What a view built into a preview plugin (`preview-plugin`, wasm) does
