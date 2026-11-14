@@ -1293,3 +1293,45 @@ fn shown_file(model: &Workspace, pane: horizon_workspace::PaneId) -> Option<std:
     let state = &model.pane_plugin(pane)?.state;
     serde_json::from_value(state["path"].clone()).ok()
 }
+
+#[test]
+fn a_tab_with_a_tasks_thread_open_is_left_and_come_back_to() {
+    use horizon_board::{BoardEvent, Item, Store, sample_envelopes};
+    let tasks = [(1, "first", "a"), (2, "second", "b")].map(|(id, title, rank)| Item {
+        id,
+        title: title.to_string(),
+        rank: rank.to_string(),
+        ..Item::default()
+    });
+    let events = tasks
+        .into_iter()
+        .map(|item| BoardEvent::ItemStored { id: item.id, item });
+    let opened = open_with(Opening {
+        board: Some(horizon::board::Source::Ready(Store::in_memory(
+            sample_envelopes(events),
+        ))),
+        ..Opening::default()
+    });
+    opened.chord();
+    opened.character(":");
+    opened.commit("open board");
+    opened.named(NamedKey::Enter);
+    opened.until("the tasks", || {
+        horizon_ui::testing::text(&opened.app).contains("second")
+    });
+    opened.named(NamedKey::Enter);
+    opened.until("the task", || opened.all("actions").len() == 1);
+
+    // Away from it: the thread, off the page in a split whose boxes are
+    // gone, goes on being laid out after.
+    opened.chord();
+    opened.named(NamedKey::Tab);
+    assert_eq!(opened.model(Workspace::active_tab_index), 0);
+    assert!(opened.all("actions").is_empty());
+    opened.app.resolve();
+
+    // And back: the thread is shown as it was.
+    opened.named(NamedKey::Tab);
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
+    assert_eq!(opened.all("actions").len(), 1);
+}

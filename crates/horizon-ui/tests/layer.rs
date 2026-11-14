@@ -233,6 +233,35 @@ fn rows_scrolled_out_of_a_list_do_not_take_the_clicks_above_it() {
 }
 
 #[test]
+fn an_element_taken_out_of_the_page_has_no_box_once_the_box_around_it_is_gone() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let log = asked.clone();
+    let mut parts = None;
+    let app = App::new(400, 300, CSS, || {
+        let kept = el("div").class("button").text("kept");
+        let around = el("div").class("row").child(kept);
+        // What a view of a pane in a tab not shown goes on asking.
+        horizon_ui::each_layout(move |page| log.borrow_mut().push(page.bounds(kept)));
+        parts = Some((kept, around));
+        el("div").class("column").child(around)
+    });
+    let (kept, around) = parts.unwrap();
+    app.resolve();
+    assert!(asked.borrow().last().unwrap().is_some());
+
+    // As a tab switched away from does: the pane is kept, the boxes of
+    // its split are freed.
+    kept.detach();
+    around.remove();
+    app.run_effects();
+    app.resolve();
+    assert_eq!(*asked.borrow().last().unwrap(), None);
+}
+
+#[test]
 fn what_is_added_to_an_element_while_it_is_out_of_the_page_is_laid_out_when_it_is_back() {
     let shown = RwSignal::new(false);
     let mut parts = None;
