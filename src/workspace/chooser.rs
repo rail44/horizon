@@ -1,6 +1,7 @@
 //! The view chooser: which view a new pane shows. A terminal, an agent,
 //! an agent in one of the roles a person can start one in, the theme
-//! settings, the board, or the wiki.
+//! settings, the board, the wiki, or an extension; an extension that
+//! makes its pane on a file has the file found next.
 
 use horizon_agent::roles::{RoleId, user_launchable};
 use horizon_ui::El;
@@ -8,7 +9,9 @@ use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
 use horizon_workspace::{PluginPane, SessionKind};
 
 use super::picker::{self, Picked, Row};
-use super::{Placement, Shell, plugins, styles};
+use super::{Modal, Placement, Shell, plugins, styles};
+use crate::extension::Extension;
+use std::rc::Rc;
 
 /// What a new pane shows.
 enum Choice {
@@ -16,6 +19,7 @@ enum Choice {
     Plugin(PluginPane),
     /// The wiki of the project the shell was started in.
     Wiki,
+    Extension(Rc<Extension>),
 }
 
 /// The views to choose from whose titles hold `query`.
@@ -41,6 +45,9 @@ fn matching(query: &str) -> Vec<(String, Choice)> {
     ));
     choices.push(("Board".to_string(), Choice::Plugin(plugins::list())));
     choices.push(("Wiki".to_string(), Choice::Wiki));
+    for extension in plugins::extensions() {
+        choices.push((extension.title.clone(), Choice::Extension(extension)));
+    }
     let query = query.trim().to_ascii_lowercase();
     choices.retain(|(title, ..)| query.is_empty() || title.to_ascii_lowercase().contains(&query));
     choices
@@ -69,6 +76,17 @@ pub(super) fn view(shell: Shell, placement: Placement) -> El {
                 Choice::Session(kind, role) => shell.create(kind, role, placement),
                 Choice::Wiki => shell.create_wiki(placement),
                 Choice::Plugin(plugin) => shell.create_plugin(plugin, placement),
+                Choice::Extension(extension) if extension.creates.is_some() => {
+                    shell.open(Modal::Finder(extension.name, placement));
+                }
+                Choice::Extension(extension) => shell.create_plugin(
+                    PluginPane {
+                        name: extension.name.to_string(),
+                        title: extension.title.clone(),
+                        state: serde_json::Value::Null,
+                    },
+                    placement,
+                ),
             }
         }
     };

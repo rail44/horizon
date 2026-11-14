@@ -1,7 +1,7 @@
 //! An extension shown in a pane of the shell: the Markdown view built as a
 //! wasm component (`plugins/markdown`), loaded from its package, its state
-//! kept in the model as it changes and its command carried out from the
-//! palette.
+//! kept in the model as it changes, its command carried out from the
+//! palette, and a new pane of it made on a file found by typing.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -10,9 +10,12 @@ use horizon::workspace::{Opening, Placement, Shell, Spawn, css, view};
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
+use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::traits::WithUntracked;
 use horizon_ui::testing::click_at;
+use horizon_workspace::commands::CommandId;
 use horizon_workspace::{PluginPane, Workspace};
+use keyboard_types::{Key, Modifiers, NamedKey};
 
 mod support;
 
@@ -85,6 +88,30 @@ impl Opened {
 
     fn text(&self) -> String {
         horizon_ui::testing::text(&self.app)
+    }
+
+    fn key(&self, key: Key) {
+        let text = match &key {
+            Key::Character(text) => Some(text.as_str().into()),
+            _ => None,
+        };
+        self.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+            text,
+            key,
+            code: keyboard_types::Code::Unidentified,
+            modifiers: Modifiers::default(),
+            location: keyboard_types::Location::Standard,
+            is_auto_repeating: false,
+            is_composing: false,
+            state: KeyState::Pressed,
+        }));
+        self.app.resolve();
+    }
+
+    fn type_text(&self, text: &str) {
+        for character in text.chars() {
+            self.key(Key::Character(character.to_string()));
+        }
     }
 }
 
@@ -166,6 +193,29 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
     // task, and the pane reads it again.
     std::fs::write(&first, "# Uno\n").unwrap();
     opened.until("the file read again", || opened.text().contains("Uno"));
+
+    // A new pane of the extension: chosen among the views, then the file
+    // it is made on found by typing among the files under the directory
+    // the shell works in.
+    std::env::set_current_dir(&directory).unwrap();
+    opened.shell.execute(CommandId::NewTab);
+    opened.app.resolve();
+    opened.type_text("markdown");
+    opened.key(Key::Named(NamedKey::Enter));
+    opened.until("the files listed", || opened.text().contains("2/2"));
+    opened.type_text("sec");
+    opened.until("the file found", || opened.text().contains("1/2"));
+    opened.key(Key::Named(NamedKey::Enter));
+    opened.until("the pane on the file", || opened.text().contains("Two"));
+    let made = opened
+        .model(|model| model.cursor_pane_id())
+        .expect("the pane made");
+    assert_ne!(made, pane);
+    let state = opened.model(|model| {
+        let plugin = model.pane_plugin(made).expect("the pane's plugin");
+        plugin.state.as_str().unwrap_or_default().to_string()
+    });
+    assert!(state.contains("second.md"), "{state}");
 
     // What is saved of the pane: the extension's name and its state.
     let saved = opened.model(|model| model.to_persisted_json().unwrap());

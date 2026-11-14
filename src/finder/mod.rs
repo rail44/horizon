@@ -1,23 +1,29 @@
 //! A file found by typing: a field, and under it the files of a list
 //! whose paths hold what was typed, the best first ([`matching`]). The
 //! arrows and Tab move the choice, Enter takes it, Escape leaves.
-
-use std::cell::Cell;
-use std::rc::Rc;
+//!
+//! A row is the file's path as it is written, its directories muted. A
+//! path too long for the row loses its start, so the file's name stays.
 
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::computed::Memo;
-use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With, WithUntracked};
 use horizon_ui::reactive_graph::wrappers::read::Signal;
-use horizon_ui::{Callable, Callback, Component, El, el, prevent_default, stop_propagation};
+use horizon_ui::{
+    Callable, Callback, Component, El, dispatched, each_layout, el, prevent_default, relayout,
+    stop_propagation,
+};
 use keyboard_types::{Key, NamedKey};
 
 use crate::parts::{Field, Prompt};
 
+#[cfg(not(target_family = "wasm"))]
+mod listing;
 mod matching;
 
+#[cfg(not(target_family = "wasm"))]
+pub use listing::{Listed, list};
 pub use matching::{Found, Results, find};
 
 mod styles {
@@ -39,39 +45,25 @@ mod styles {
         .item.chosen { background: var(--surface-selected); }
         .name { flex: none; }
         .hit { color: var(--accent); font-weight: 600; }
-        .directory { min-width: 0; overflow: hidden; color: var(--text-muted); }
-        .item.path .directory { flex: 0 1 auto; display: flex; justify-content: flex-end; }
-        .item.path .directory > .whole { flex: none; }
-        .item.named { gap: var(--u8); }
-        .item.named .directory { flex: 1; text-overflow: ellipsis;
-                                 font-size: var(--meta-size); }
+        .cut { display: none; flex: none; margin-right: var(--u2); color: var(--text-muted); }
+        .cut.shown { display: block; }
+        .directory { flex: 0 1 auto; min-width: 0; overflow: hidden; display: flex;
+                     justify-content: flex-end; color: var(--text-muted); }
+        .whole { flex: none; }
     "}
 }
 
 /// How many of the files found are listed.
 const LISTED: usize = 100;
 
-/// A row's height and the list's, in CSS pixels (the sheet's).
+/// A row's height, in CSS pixels (the sheet's).
 const ROW: f64 = 34.;
-const LIST: f64 = 366.;
-
-/// How a file's row is laid out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Layout {
-    /// The path as it is written, its directories muted; a path too long
-    /// loses its start.
-    Path,
-    /// The file's name, then its directory, smaller and muted; a
-    /// directory too long loses its end.
-    NameFirst,
-}
 
 pub struct Finder {
     /// The files to find among, as paths from where they were listed.
     pub files: Signal<Vec<String>>,
     /// Whether more files are still being listed.
     pub listing: Signal<bool>,
-    pub layout: Layout,
     /// Told the path of the file taken.
     pub picked: Callback<String>,
     /// Told when Escape leaves.
@@ -97,38 +89,42 @@ fn marked(characters: &[char], first: usize, hits: &[u32]) -> Vec<El> {
 }
 
 /// The row of a file found.
-fn row(found: &Found, layout: Layout) -> El {
+fn row(found: &Found) -> El {
     let characters: Vec<char> = found.path.chars().collect();
     // (Where the name starts: after the last slash.)
     let name = (characters.iter().rposition(|character| *character == '/')).map_or(0, |at| at + 1);
-    let named =
+    let whole =
         el("div")
-            .class(styles::NAME)
-            .children(marked(&characters[name..], name, &found.hits));
-    match layout {
-        Layout::Path => {
-            let whole = el("div").class(styles::WHOLE).children(marked(
-                &characters[..name],
-                0,
-                &found.hits,
-            ));
-            el("div")
-                .class((styles::ITEM, styles::PATH))
-                .child(el("div").class(styles::DIRECTORY).child(whole))
-                .child(named)
+            .class(styles::WHOLE)
+            .children(marked(&characters[..name], 0, &found.hits));
+    let directory = el("div").class(styles::DIRECTORY).child(whole);
+    // Whether the directories do not fit: they are then cut at the start,
+    // and the row says so.
+    let cut = RwSignal::new(false);
+    each_layout(move |page| {
+        let (Some((whole, _)), Some((room, _))) = (page.size(whole), page.size(directory)) else {
+            return;
+        };
+        let now = whole > room + 0.5;
+        if cut.get_untracked() != now {
+            cut.set(now);
+            relayout();
         }
-        Layout::NameFirst => {
-            let directory = &characters[..name.saturating_sub(1)];
+    });
+    el("div")
+        .class(styles::ITEM)
+        .child(
             el("div")
-                .class((styles::ITEM, styles::NAMED))
-                .child(named)
-                .child(el("div").class(styles::DIRECTORY).children(marked(
-                    directory,
-                    0,
-                    &found.hits,
-                )))
-        }
-    }
+                .class(styles::CUT)
+                .class_dyn(move || cut.get().then_some(styles::SHOWN))
+                .text("\u{2026}"),
+        )
+        .child(directory)
+        .child(el("div").class(styles::NAME).children(marked(
+            &characters[name..],
+            name,
+            &found.hits,
+        )))
 }
 
 impl Component for Finder {
@@ -136,7 +132,6 @@ impl Component for Finder {
         let Finder {
             files,
             listing,
-            layout,
             picked,
             left,
         } = self;
@@ -162,29 +157,31 @@ impl Component for Finder {
             .focus();
         let items = el("div").class(styles::ITEMS).each(
             move || results.with(|results| results.found.iter().cloned().enumerate().collect()),
-            |(index, found): &(usize, Found)| (*index, found.clone().path, found.hits.clone()),
+            |(index, found): &(usize, Found)| (*index, found.path.clone(), found.hits.clone()),
             move |(index, found)| {
                 let index = *index;
-                row(found, layout)
+                row(found)
                     .class_dyn(move || (chosen.get() == index).then_some(styles::CHOSEN))
                     .on("click", move |_| take(index))
             },
         );
-        // The chosen row is kept in sight.
-        let scrolled = Rc::new(Cell::new(0f64));
-        Effect::new(move |_| {
-            let top = chosen.get() as f64 * ROW;
-            let now = scrolled.get();
-            let to = if top < now {
-                top
-            } else if top + ROW > now + LIST {
-                top + ROW - LIST
-            } else {
-                return;
-            };
-            scrolled.set(to);
-            items.scroll_to(0., to);
-        });
+        // The row chosen with a key is kept in sight.
+        let choose = move |index: usize| {
+            chosen.set(index);
+            dispatched(move |page| {
+                let (Some((scrolled, _)), Some((_, height))) =
+                    (page.scrolled(items), page.size(items))
+                else {
+                    return;
+                };
+                let top = index as f64 * ROW;
+                if top < scrolled {
+                    items.scroll_to(0., top);
+                } else if top + ROW > scrolled + height {
+                    items.scroll_to(0., top + ROW - height);
+                }
+            });
+        };
         let count = move || {
             let matched = results.with(|results| results.matched);
             let all = files.with(Vec::len);
@@ -203,10 +200,10 @@ impl Component for Finder {
                 let now = chosen.get_untracked().min(last);
                 let (down, up) = ((now + 1).min(last), now.saturating_sub(1));
                 match &key.key {
-                    Key::Named(NamedKey::ArrowDown) => chosen.set(down),
-                    Key::Named(NamedKey::ArrowUp) => chosen.set(up),
-                    Key::Named(NamedKey::Tab) if key.modifiers.shift() => chosen.set(up),
-                    Key::Named(NamedKey::Tab) => chosen.set(down),
+                    Key::Named(NamedKey::ArrowDown) => choose(down),
+                    Key::Named(NamedKey::ArrowUp) => choose(up),
+                    Key::Named(NamedKey::Tab) if key.modifiers.shift() => choose(up),
+                    Key::Named(NamedKey::Tab) => choose(down),
                     Key::Named(NamedKey::Escape) => left.run(()),
                     Key::Named(NamedKey::Enter) => take(now),
                     // Anything else is the field's.

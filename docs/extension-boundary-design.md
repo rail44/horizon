@@ -260,6 +260,27 @@ The decisions and who made them are on board #76. What they come to:
   for one with a file chooser, and the CLI takes a path, made absolute
   where the CLI runs. The CLI asks the running Horizon for the commands
   and their types over the control socket.
+- **A new pane's state is made by a function the extension exports**
+  (`create`), whose parameters the host asks for the same way. Built so
+  far: one `file` parameter, asked for from the view chooser. The
+  extension is instantiated for the question, `create` is called with the
+  file, and the state it gives is what the new pane is mounted on
+  (`Extension::create`). The manifest's `[create.<parameter>]` says how a
+  parameter is asked for: for a file, the `extensions` to choose among.
+  An extension without `create` gets a pane with no state. The export
+  cannot be named `open`: a Rust guest's standard library defines that
+  symbol.
+- **A file is found by typing** (`src/finder/`): the files under a
+  directory, listed off the UI thread with `.gitignore` and `.ignore`
+  kept to (`.git` left out, dot files listed), matched against what is
+  typed the way fzf's path scheme does (`nucleo-matcher`). Every word has
+  to be found, case matters once a capital is typed, and among equals the
+  shorter path comes first; with nothing typed every file is listed,
+  shortest path first. The best hundred are shown, each as its path with
+  the directories muted and the typed characters marked; a path too long
+  loses its start. The directory is the one the cursor's pane's session
+  works in, or the one the shell was started in. A file outside it is
+  named on the command line.
 - **The built-in views are written to the same shape** (`src/plugin.rs`'s
   `Plugin`: a name, a state type, the commands, `mount`). Every view is
   one, the terminal and the agent included: they are built in and run in
@@ -290,5 +311,4 @@ The decisions and who made them are on board #76. What they come to:
 
 Open: keeping a plugin's CSS to its own tree; how the boundary is versioned;
 where extensions live and how they are built; the preview pane as one of
-them; a command's title and description, which its type does not carry;
-the file chooser itself.
+them; a command's parameters and a pane made from the command line.

@@ -335,6 +335,8 @@ their wiring:
 - `board/` — the task board as two session-less views, the list and the
   thread, over `crates/horizon-board`; what they decide from is
   `crates/horizon-board-view`. See `docs/board-redesign-design.md`.
+- `finder/` — a file found by typing: the list, the matching, and the
+  listing of a directory's files off the UI thread.
 - `markdown/` — the Markdown view (`horizon markdown <path>`), and the
   single-file watch other views share.
 - `wiki/` — a page of the project wiki (`crates/horizon-wiki`) with the
