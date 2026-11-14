@@ -69,13 +69,28 @@ fn view(name: &str) -> Option<El> {
     }
 }
 
-horizon_ui::plugin!(
-    names: vec![
-        "board-list".to_string(),
-        "board-list-empty".to_string(),
-        "parts".to_string(),
-    ],
-    // (Each view brings its own style sheet.)
-    css: String::new(),
-    view: view,
-);
+wit_bindgen::generate!({
+    path: "../crates/horizon-ui/wit",
+    world: "preview",
+    with: {
+        "horizon:ui/document": horizon_ui::guest::bindings::horizon::ui::document,
+        "horizon:ui/host": horizon_ui::guest::bindings::horizon::ui::host,
+    },
+});
+
+struct Previews;
+
+impl Guest for Previews {
+    fn names() -> Vec<String> {
+        ["board-list", "board-list-empty", "parts"]
+            .map(String::from)
+            .to_vec()
+    }
+
+    fn mount(name: String) -> Option<u64> {
+        horizon_ui::guest::mount(|| view(&name))
+    }
+}
+
+export!(Previews);
+horizon_ui::export_view!();

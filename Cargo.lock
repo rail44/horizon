@@ -3175,6 +3175,7 @@ dependencies = [
  "horizon",
  "horizon-board",
  "horizon-ui",
+ "wit-bindgen 0.41.0",
 ]
 
 [[package]]

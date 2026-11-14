@@ -38,14 +38,14 @@ use crate::component::Component;
 pub mod bindings {
     wit_bindgen::generate!({
         path: "wit",
-        world: "plugin",
+        world: "view",
         pub_export_macro: true,
-        export_macro_name: "export_plugin",
+        export_macro_name: "export_events",
     });
 }
 
+use bindings::exports::horizon::ui::events::{EventData, Handled, KeyEvent, PointerEvent};
 use bindings::horizon::ui::document as host;
-use bindings::{EventData, Handled};
 
 thread_local! {
     /// The sheets the host has been given, by id.
@@ -432,7 +432,7 @@ pub fn relayout() {
 
 // -- what the host calls ----------------------------------------------------
 
-fn key_event(event: &bindings::KeyEvent) -> BlitzKeyEvent {
+fn key_event(event: &KeyEvent) -> BlitzKeyEvent {
     let key = match (&event.named, &event.character) {
         (Some(named), _) => {
             NamedKey::from_str(named).map_or(Key::Named(NamedKey::Unidentified), Key::Named)
@@ -452,7 +452,7 @@ fn key_event(event: &bindings::KeyEvent) -> BlitzKeyEvent {
     }
 }
 
-fn pointer_event(event: &bindings::PointerEvent) -> BlitzPointerEvent {
+fn pointer_event(event: &PointerEvent) -> BlitzPointerEvent {
     BlitzPointerEvent {
         id: BlitzPointerId::Mouse,
         is_primary: true,
@@ -509,8 +509,8 @@ fn event(name: &str, target: NodeId, data: &EventData) -> Option<DomEvent> {
     Some(DomEvent::new(target, data))
 }
 
-/// Builds the preview `view` makes, under an owner that is the plugin's
-/// for as long as it is loaded.
+/// Builds the view `view` makes, under an owner that is the plugin's for
+/// as long as it is loaded.
 pub fn mount(view: impl FnOnce() -> Option<El>) -> Option<u64> {
     let _ = Executor::init_futures_executor();
     let owner = Owner::new();
@@ -578,49 +578,54 @@ pub fn run_effects() {
     Executor::poll_local();
 }
 
-/// Makes this crate a plugin: `$names` lists its previews, `$css` is
-/// their style sheet and `$view` builds one by name.
+/// Hands a URL to the desktop.
+pub fn open_url(url: &str) {
+    bindings::horizon::ui::host::open_url(url);
+}
+
+/// The title of the plugin's pane in the tab strip.
+pub fn set_title(title: &str) {
+    bindings::horizon::ui::host::set_title(title);
+}
+
+/// A file the person chose, or the command line named.
+pub use bindings::horizon::ui::host::File;
+
+/// Exports what every plugin exports (`events`): a plugin's crate calls
+/// it once, beside its own exports.
 #[macro_export]
-macro_rules! plugin {
-    (names: $names:expr, css: $css:expr, view: $view:expr $(,)?) => {
-        struct __HorizonPlugin;
+macro_rules! export_view {
+    () => {
+        const _: () = {
+            struct HorizonEvents;
 
-        impl $crate::guest::bindings::Guest for __HorizonPlugin {
-            fn names() -> Vec<String> {
-                $names
+            impl $crate::guest::bindings::exports::horizon::ui::events::Guest for HorizonEvents {
+                fn handle(
+                    node: u64,
+                    target: u64,
+                    event: String,
+                    capture: bool,
+                    data: $crate::guest::bindings::exports::horizon::ui::events::EventData,
+                ) -> $crate::guest::bindings::exports::horizon::ui::events::Handled {
+                    $crate::guest::handle(node, target, &event, capture, &data)
+                }
+
+                fn after_dispatch() {
+                    $crate::guest::after_dispatch();
+                }
+
+                fn after_layout() {
+                    $crate::guest::after_layout();
+                }
+
+                fn run_effects() {
+                    $crate::guest::run_effects();
+                }
             }
 
-            fn css() -> String {
-                $css
-            }
-
-            fn mount(name: String) -> Option<u64> {
-                $crate::guest::mount(|| $view(&name))
-            }
-
-            fn handle(
-                node: u64,
-                target: u64,
-                event: String,
-                capture: bool,
-                data: $crate::guest::bindings::EventData,
-            ) -> $crate::guest::bindings::Handled {
-                $crate::guest::handle(node, target, &event, capture, &data)
-            }
-
-            fn after_dispatch() {
-                $crate::guest::after_dispatch()
-            }
-
-            fn after_layout() {
-                $crate::guest::after_layout()
-            }
-
-            fn run_effects() {
-                $crate::guest::run_effects()
-            }
-        }
-
-        $crate::guest::bindings::export_plugin!(__HorizonPlugin with_types_in $crate::guest::bindings);
+            $crate::guest::bindings::export_events!(
+                HorizonEvents with_types_in $crate::guest::bindings
+            );
+        };
     };
 }

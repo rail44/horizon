@@ -14,6 +14,7 @@ crate-type = ["cdylib"]
 horizon-ui = { path = "../crates/horizon-ui" }
 horizon = { path = ".." }
 horizon-board = { path = "../crates/horizon-board" }
+wit-bindgen = "0.41"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

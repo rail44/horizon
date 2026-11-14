@@ -54,9 +54,10 @@ interface document {
     has-focus-within: func(node: u64) -> bool;
 }
 
-world plugin {
-    import document;
-
+/// What every plugin exports: the events at the nodes it listens at,
+/// and the work it asks for once an event is dispatched. The SDK
+/// (`horizon-ui`'s guest) implements and exports it.
+interface events {
     record key-event {
         /// A named key (`Enter`), or the characters a key gives.
         named: option<string>,
@@ -96,16 +97,50 @@ world plugin {
         asks-page: bool,
     }
 
+    /// An event at a node the plugin listens at.
+    handle: func(node: u64, target: u64, event: string, capture: bool, data: event-data) -> handled;
+    /// After an event was dispatched: the work that asked the page.
+    after-dispatch: func();
+    /// After a layout: the work that follows one.
+    after-layout: func();
+    /// Runs the effects of the signals written since the last call.
+    run-effects: func();
+}
+
+/// What the host does for a plugin beyond the document.
+interface host {
+    /// Hands a URL to the desktop.
+    open-url: func(url: string);
+    /// The title of the plugin's pane in the tab strip.
+    set-title: func(title: string);
+
+    /// A file the person chose, or the command line named.
+    resource file {
+        path: func() -> string;
+    }
+}
+
+/// What a plugin imports: a plugin's world includes it, and declares
+/// only what is its own.
+world imports {
+    import document;
+    import host;
+}
+
+/// The shared exports with the imports: what the SDK's bindings are made
+/// from.
+world view {
+    include imports;
+    export events;
+}
+
+/// A preview plugin's own exports (`preview-plugin`), beside the shared
+/// ones.
+world preview {
+    include imports;
+
     /// The previews the plugin has, by name.
     export names: func() -> list<string>;
-    /// The style sheet of what the plugin shows.
-    export css: func() -> string;
     /// Builds a preview: its root node.
     export mount: func(name: string) -> option<u64>;
-    /// An event at a node the plugin listens at.
-    export handle: func(node: u64, target: u64, event: string, capture: bool, data: event-data) -> handled;
-    export after-dispatch: func();
-    export after-layout: func();
-    /// Runs the effects of the signals written since the last call.
-    export run-effects: func();
 }
