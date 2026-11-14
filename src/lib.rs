@@ -18,6 +18,7 @@ pub mod control;
 pub mod desktop_notify;
 #[cfg(not(target_family = "wasm"))]
 pub mod extension;
+pub mod finder;
 pub mod markdown;
 pub mod parts;
 #[cfg(not(target_family = "wasm"))]
