@@ -10,7 +10,7 @@ edition = "2021"
 # the normal setup installs a prebuilt library instead -- see AGENTS.md
 # "Build setup".
 bundled-duckdb = ["duckdb/bundled"]
-# Exposes the `mock.approval_required` and `mock.boundary_crossing` test
+# Exposes the `mock_approval_required` and `mock_boundary_crossing` test
 # fixtures in `tools::catalog::definitions`. Off in production builds so
 # these tools are never advertised to a real model provider. Tests inside
 # `horizon-agent` get them automatically via `cfg(test)`; downstream crates
