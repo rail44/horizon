@@ -30,6 +30,7 @@ use horizon_agent_display::{
 };
 
 mod pane;
+pub mod plugin;
 mod session;
 
 pub use pane::live;

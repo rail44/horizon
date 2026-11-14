@@ -151,6 +151,7 @@ impl Plugin for BoardListPlugin {
         Mounted {
             view,
             run,
+            enabled: None,
             state: Signal::stored_local(()),
         }
     }
@@ -271,6 +272,7 @@ impl Plugin for BoardThreadPlugin {
         Mounted {
             view,
             run,
+            enabled: None,
             state: Signal::stored_local(state),
         }
     }

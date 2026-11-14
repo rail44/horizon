@@ -177,14 +177,10 @@ font_size = 13.0
 # horizontally), split-down (same chooser, but vertically), new-tab (opens the
 # chooser to open a new tab), focus-next-pane, close-active-pane,
 # close-active-tab, terminate-active-session, terminate-all-detached-sessions,
-# approve-tool-call, deny-tool-call, cancel-agent-turn, continue-agent-turn,
-# switch-model, reload-agent-runtime, reload-terminal-runtime (restarts horizon-terminald --
+# reload-agent-runtime, reload-terminal-runtime (restarts horizon-terminald --
 # destructive: every terminal session ends), reload-config, manage-sessions
 # (opens the session manager modal), open-terminal-in-session-directory,
 # open-board,
-# copy-terminal-selection / paste-into-terminal (the active terminal's copy
-# and paste; bound by default to ctrl+shift+c / ctrl+shift+v, and on macOS
-# to cmd+c / cmd+v as well),
 # increase-font-size / decrease-font-size / reset-font-size (move the live
 # app-wide font size: terminal, agent transcript, board; already bound by default to the platform-standard zoom
 # chords -- cmd+= / cmd+- / cmd+0 on macOS, ctrl+= / ctrl+- / ctrl+0 on
@@ -199,8 +195,12 @@ font_size = 13.0
 # rather than a global shortcut, so this only matters if you want one back.
 #
 # The commands of a plugin a pane shows are accepted too (see
-# `src/board/plugin.rs`): such a chord acts on the pane the cursor is on,
-# when that pane's plugin has the command -- the board list's
+# `src/plugin.rs`): such a chord acts on the pane the cursor is on, when that
+# pane's plugin has the command -- a terminal's copy-terminal-selection /
+# paste-into-terminal (bound by default to ctrl+shift+c / ctrl+shift+v, and on
+# macOS to cmd+c / cmd+v as well); an agent's approve-tool-call,
+# deny-tool-call, cancel-agent-turn, continue-agent-turn, switch-model; the
+# board list's
 # toggle-board-expansion, toggle-board-finished-band, open-board-related-item,
 # add-board-task, move-board-task-up, move-board-task-down,
 # reorder-board-task, open-board-organizer; the board thread's

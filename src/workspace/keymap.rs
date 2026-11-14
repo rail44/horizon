@@ -136,17 +136,17 @@ pub struct Keymap {
 /// The chords bound with no configuration: the font size's, and a
 /// terminal's copy and paste, on the chords that leave the program in it
 /// its Ctrl+C and Ctrl+V.
-const BUILT_IN: &[(&str, CommandId)] = &[
-    ("ctrl+=", CommandId::IncreaseFontSize),
-    ("ctrl++", CommandId::IncreaseFontSize),
-    ("ctrl+-", CommandId::DecreaseFontSize),
-    ("ctrl+0", CommandId::ResetFontSize),
-    ("ctrl+shift+c", CommandId::CopyTerminalSelection),
-    ("ctrl+shift+v", CommandId::PasteIntoTerminal),
+const BUILT_IN: &[(&str, Bound)] = &[
+    ("ctrl+=", Bound::Command(CommandId::IncreaseFontSize)),
+    ("ctrl++", Bound::Command(CommandId::IncreaseFontSize)),
+    ("ctrl+-", Bound::Command(CommandId::DecreaseFontSize)),
+    ("ctrl+0", Bound::Command(CommandId::ResetFontSize)),
+    ("ctrl+shift+c", Bound::Plugin("copy-terminal-selection")),
+    ("ctrl+shift+v", Bound::Plugin("paste-into-terminal")),
     #[cfg(target_os = "macos")]
-    ("meta+c", CommandId::CopyTerminalSelection),
+    ("meta+c", Bound::Plugin("copy-terminal-selection")),
     #[cfg(target_os = "macos")]
-    ("meta+v", CommandId::PasteIntoTerminal),
+    ("meta+v", Bound::Plugin("paste-into-terminal")),
 ];
 
 impl Default for Keymap {
@@ -155,7 +155,7 @@ impl Default for Keymap {
         Self {
             workspace_mode: chord(DEFAULT_WORKSPACE_MODE),
             bindings: (BUILT_IN.iter())
-                .map(|(keys, command)| (chord(keys), Bound::Command(*command)))
+                .map(|(keys, bound)| (chord(keys), *bound))
                 .collect(),
         }
     }
@@ -261,11 +261,11 @@ mod tests {
         let chord = Modifiers::CONTROL | Modifiers::SHIFT;
         assert_eq!(
             keymap.bound(&character("C", chord)),
-            Some(Bound::Command(CommandId::CopyTerminalSelection))
+            Some(Bound::Plugin("copy-terminal-selection"))
         );
         assert_eq!(
             keymap.bound(&character("V", chord)),
-            Some(Bound::Command(CommandId::PasteIntoTerminal))
+            Some(Bound::Plugin("paste-into-terminal"))
         );
         assert_eq!(keymap.bound(&character("c", Modifiers::CONTROL)), None);
         assert_eq!(keymap.bound(&character("v", Modifiers::CONTROL)), None);

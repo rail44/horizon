@@ -34,7 +34,7 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
     // view's key.
     let bound = bound.filter(|bound| match bound {
         Bound::Command(command) => command_enabled(*command, shell.command_state()),
-        Bound::Plugin(name) => shell.cursor_plugin_commands().contains(name),
+        Bound::Plugin(name) => shell.plugin_command_enabled(name),
         Bound::OpenPalette => true,
     });
     if toggles {

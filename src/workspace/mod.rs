@@ -38,15 +38,17 @@ use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Track, Update, With, WithUntracked, WithValue,
 };
 use horizon_ui::reactive_graph::wrappers::read::Signal;
-use horizon_ui::{El, each_layout, el, relayout, stop_propagation};
+use horizon_ui::{Callback, El, each_layout, el, relayout, stop_propagation};
 use horizon_workspace::title::derive_session_title;
 use horizon_workspace::types::TabSummary;
 use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, Workspace};
 
-use crate::agent::{self, Agent, AgentSession};
+use crate::agent::plugin::{AgentAsked, AgentPlugin};
+use crate::agent::{Agent, AgentSession};
 use crate::board;
 use crate::markdown;
-use crate::terminal::{self, Session, Terminal, TerminalView};
+use crate::terminal::plugin::TerminalPlugin;
+use crate::terminal::{Session, Terminal};
 use crate::wake::Wake;
 
 mod arrangement;
@@ -514,12 +516,15 @@ impl Shell {
                     if let Some(waker) = kept.waker.borrow().clone() {
                         session.set_waker(waker);
                     }
-                    let (root, view) = terminal::build(TerminalView {
+                    let (mounted, view) = TerminalPlugin {
                         session,
                         look: Signal::derive(move || shell.theme.with(Theme::terminal)),
                         open_url: Some(kept.open_url.clone()),
-                    });
+                    }
+                    .mount_keeping();
                     terminal = Some((session_id, view));
+                    let (root, plugin) = self.shown::<TerminalPlugin>(id, mounted);
+                    shown_plugin = Some(plugin);
                     root
                 }
                 // (Its session is attached to again when the runtime is
@@ -562,10 +567,13 @@ impl Shell {
                         session.set_waker(waker);
                     }
                     session.set_summarizer(kept.summarizer.borrow().clone());
-                    let (root, view) = agent::live(session, move || {
-                        shell.switch_model(session_id);
+                    let ask = Callback::new(move |asked| match asked {
+                        AgentAsked::SwitchModel => shell.switch_model(session_id),
                     });
+                    let (mounted, view) = AgentPlugin { session }.mount_keeping(ask);
                     agent = Some(view);
+                    let (root, plugin) = self.shown::<AgentPlugin>(id, mounted);
+                    shown_plugin = Some(plugin);
                     root
                 }
                 (PaneKind::View, ..) => {
@@ -861,6 +869,17 @@ impl Shell {
             .filter(|listed| listed.plugin == plugin)
             .map(|listed| listed.name)
             .collect()
+    }
+
+    /// Whether the command `name` of the plugin the cursor's pane shows
+    /// can be carried out now.
+    fn plugin_command_enabled(&self, name: &str) -> bool {
+        let pane = self.model.with_untracked(Workspace::cursor_pane_id);
+        let kept = self.kept();
+        let panes = kept.panes.borrow();
+        let shown = pane.and_then(|pane| panes.get(&pane)?.plugin.clone());
+        drop(panes);
+        shown.is_some_and(|shown| shown.enabled(name))
     }
 
     /// Carries out the command `name` of the plugin the cursor's pane

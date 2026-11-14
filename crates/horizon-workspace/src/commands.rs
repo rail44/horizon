@@ -34,14 +34,6 @@ command_ids! {
         CloseActiveTab,
         TerminateActiveSession,
         TerminateAllDetachedSessions,
-        ApproveToolCall,
-        DenyToolCall,
-        CancelAgentTurn,
-        ContinueAgentTurn,
-        /// Opens the provider→model picker for the active agent session
-        /// (parent task #1's Phase 2). Palette-only -- no default keybinding
-        /// (binding id `"switch-model"`).
-        SwitchModel,
         ReloadAgentRuntime,
         /// Restarts `horizon-terminald` (`docs/terminald-split-design.md`
         /// decision 3). Deliberately separate from
@@ -78,10 +70,6 @@ command_ids! {
         /// or the built-in default), ending a zoom session. Default chord /
         /// override id: `"reset-font-size"`.
         ResetFontSize,
-        /// Copies the active terminal's selection to the clipboard.
-        CopyTerminalSelection,
-        /// Pastes the clipboard's text into the active terminal.
-        PasteIntoTerminal,
     }
 }
 
@@ -114,18 +102,7 @@ pub struct CommandState {
     pub tab_count: usize,
     pub visible_pane_count: usize,
     pub has_active_session: bool,
-    /// Whether the active session is a terminal's.
-    pub has_active_terminal: bool,
     pub detached_session_count: usize,
-    pub has_pending_approval: bool,
-    pub has_turn_in_flight: bool,
-    /// Whether the active agent session is sitting on a turn the turn-loop
-    /// guard halted -- `CommandId::ContinueAgentTurn`'s enablement signal
-    /// (`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s
-    /// resolution, decision 3). Independent of `has_turn_in_flight`: a
-    /// guard halt returns the session to `WaitingForUser`, so the two are
-    /// never both true at once for the same session.
-    pub has_paused_turn: bool,
     /// Whether the active session has a known `directory` --
     /// `CommandId::OpenTerminalInSessionDirectory`'s enablement signal
     /// (`docs/session-relationship-design.md` decision 4a). Kept as a
@@ -196,36 +173,6 @@ impl CommandId {
                 CommandCategory::Workspace,
                 "Terminate every detached session (not attached to any pane).",
             ),
-            CommandId::ApproveToolCall => (
-                "approve-tool-call",
-                "Approve Pending Tool Call",
-                CommandCategory::Agent,
-                "Approve the pending tool call awaiting approval.",
-            ),
-            CommandId::DenyToolCall => (
-                "deny-tool-call",
-                "Deny Pending Tool Call",
-                CommandCategory::Agent,
-                "Deny the pending tool call awaiting approval.",
-            ),
-            CommandId::CancelAgentTurn => (
-                "cancel-agent-turn",
-                "Cancel Agent Turn",
-                CommandCategory::Agent,
-                "Cancel the agent turn currently in flight.",
-            ),
-            CommandId::ContinueAgentTurn => (
-                "continue-agent-turn",
-                "Continue Agent Turn",
-                CommandCategory::Agent,
-                "Resume a turn the turn-loop guard paused, without a new message.",
-            ),
-            CommandId::SwitchModel => (
-                "switch-model",
-                "Switch Model…",
-                CommandCategory::Agent,
-                "Switch the active agent session's provider and model.",
-            ),
             CommandId::ReloadAgentRuntime => (
                 "reload-agent-runtime",
                 "Reload Agent Runtime",
@@ -282,18 +229,6 @@ impl CommandId {
                 CommandCategory::Workspace,
                 "Restore the startup-configured default font size.",
             ),
-            CommandId::CopyTerminalSelection => (
-                "copy-terminal-selection",
-                "Copy Terminal Selection",
-                CommandCategory::Workspace,
-                "Copy the active terminal's selection to the clipboard.",
-            ),
-            CommandId::PasteIntoTerminal => (
-                "paste-into-terminal",
-                "Paste into Terminal",
-                CommandCategory::Workspace,
-                "Paste the clipboard's text into the active terminal.",
-            ),
         };
         CommandSpec {
             id: self,
@@ -334,9 +269,6 @@ pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
         | CommandId::IncreaseFontSize
         | CommandId::DecreaseFontSize
         | CommandId::ResetFontSize => true,
-        CommandId::CopyTerminalSelection | CommandId::PasteIntoTerminal => {
-            state.has_active_terminal
-        }
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // Unlike `CloseActivePane` -- workspace-mode `x` falls through to
         // closing the tab when the pane is the last one
@@ -348,10 +280,6 @@ pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
         CommandId::CloseActiveTab => state.tab_count > 0,
         CommandId::TerminateActiveSession => state.has_active_session,
         CommandId::TerminateAllDetachedSessions => state.detached_session_count > 0,
-        CommandId::ApproveToolCall | CommandId::DenyToolCall => state.has_pending_approval,
-        CommandId::CancelAgentTurn => state.has_turn_in_flight,
-        CommandId::ContinueAgentTurn => state.has_paused_turn,
-        CommandId::SwitchModel => state.has_active_session,
         CommandId::OpenTerminalInSessionDirectory => state.has_active_session_directory,
     }
 }
@@ -395,67 +323,37 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 24);
-        assert_eq!(commands[0].id, CommandId::SplitRight);
+        assert_eq!(commands.len(), 17);
+        let ids: Vec<CommandId> = commands.iter().map(|command| command.id).collect();
+        assert_eq!(
+            ids,
+            [
+                CommandId::SplitRight,
+                CommandId::SplitDown,
+                CommandId::NewTab,
+                CommandId::FocusNextPane,
+                CommandId::CloseActivePane,
+                CommandId::CloseActiveTab,
+                CommandId::TerminateActiveSession,
+                CommandId::TerminateAllDetachedSessions,
+                CommandId::ReloadAgentRuntime,
+                CommandId::ReloadTerminalRuntime,
+                CommandId::OpenSessionManager,
+                CommandId::ReloadConfig,
+                CommandId::OpenTerminalInSessionDirectory,
+                CommandId::OpenBoard,
+                CommandId::IncreaseFontSize,
+                CommandId::DecreaseFontSize,
+                CommandId::ResetFontSize,
+            ]
+        );
         assert_eq!(commands[0].title, "Split Right…");
-        assert_eq!(commands[1].id, CommandId::SplitDown);
-        assert_eq!(commands[1].title, "Split Down…");
-        assert_eq!(commands[2].id, CommandId::NewTab);
         assert_eq!(commands[2].title, "New Tab…");
-        assert_eq!(commands[6].id, CommandId::TerminateActiveSession);
         assert_eq!(commands[6].title, "Terminate Active Session");
-        assert_eq!(commands[7].id, CommandId::TerminateAllDetachedSessions);
-        assert_eq!(commands[7].title, "Terminate All Detached Sessions");
-        assert_eq!(commands[10].id, CommandId::CancelAgentTurn);
-        assert_eq!(commands[10].title, "Cancel Agent Turn");
-        assert_eq!(commands[11].id, CommandId::ContinueAgentTurn);
-        assert_eq!(commands[11].title, "Continue Agent Turn");
-        assert_eq!(commands[12].id, CommandId::SwitchModel);
-        assert_eq!(commands[12].title, "Switch Model…");
-        assert_eq!(commands[14].id, CommandId::ReloadTerminalRuntime);
-        assert_eq!(commands[14].title, "Reload Terminal Runtime");
-        assert_eq!(commands[15].id, CommandId::OpenSessionManager);
-        assert_eq!(commands[15].title, "Manage Sessions");
-        assert_eq!(commands[16].id, CommandId::ReloadConfig);
-        assert_eq!(commands[16].title, "Reload Config");
-        assert_eq!(commands[17].id, CommandId::OpenTerminalInSessionDirectory);
-        assert_eq!(commands[17].title, "Open Terminal in Session Directory");
-        assert_eq!(commands[18].id, CommandId::OpenBoard);
-        assert_eq!(commands[18].title, "Open Board");
-        assert_eq!(commands[19].id, CommandId::IncreaseFontSize);
-        assert_eq!(commands[19].title, "Increase Font Size");
-        assert_eq!(commands[20].id, CommandId::DecreaseFontSize);
-        assert_eq!(commands[20].title, "Decrease Font Size");
-        assert_eq!(commands[21].id, CommandId::ResetFontSize);
-        assert_eq!(commands[21].title, "Reset Font Size");
-    }
-
-    #[test]
-    fn the_terminal_clipboard_commands_need_an_active_terminal() {
-        let mut state = CommandState {
-            tab_count: 1,
-            visible_pane_count: 1,
-            has_active_terminal: false,
-            has_active_session: true,
-            detached_session_count: 0,
-            has_pending_approval: false,
-            has_turn_in_flight: false,
-            has_paused_turn: false,
-            has_active_session_directory: false,
-        };
-        for command in [
-            CommandId::CopyTerminalSelection,
-            CommandId::PasteIntoTerminal,
-        ] {
-            assert!(!command_enabled(command, state));
-        }
-        state.has_active_terminal = true;
-        for command in [
-            CommandId::CopyTerminalSelection,
-            CommandId::PasteIntoTerminal,
-        ] {
-            assert!(command_enabled(command, state));
-        }
+        assert_eq!(commands[9].title, "Reload Terminal Runtime");
+        assert_eq!(commands[10].title, "Manage Sessions");
+        assert_eq!(commands[13].title, "Open Board");
+        assert_eq!(commands[16].title, "Reset Font Size");
     }
 
     #[test]
@@ -465,12 +363,8 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -519,12 +413,8 @@ mod tests {
         let entries = command_entries(CommandState {
             tab_count: 1,
             visible_pane_count: 1,
-            has_active_terminal: false,
             has_active_session: true,
             detached_session_count: 0,
-            has_pending_approval: false,
-            has_turn_in_flight: false,
-            has_paused_turn: false,
             has_active_session_directory: false,
         });
 
@@ -547,12 +437,8 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 2,
-                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -561,12 +447,8 @@ mod tests {
             CommandState {
                 tab_count: 2,
                 visible_pane_count: 1,
-                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -580,12 +462,8 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -600,12 +478,8 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -614,12 +488,8 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -628,12 +498,8 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -642,12 +508,8 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -664,12 +526,8 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -682,12 +540,8 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -696,12 +550,8 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -714,12 +564,8 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -728,136 +574,8 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 2,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
-                has_active_session_directory: false,
-            }
-        ));
-    }
-
-    #[test]
-    fn approve_and_deny_tool_call_require_pending_approval() {
-        assert!(!command_enabled(
-            CommandId::ApproveToolCall,
-            CommandState {
-                tab_count: 1,
-                visible_pane_count: 1,
-                has_active_terminal: false,
-                has_active_session: true,
-                detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
-                has_active_session_directory: false,
-            }
-        ));
-        assert!(command_enabled(
-            CommandId::ApproveToolCall,
-            CommandState {
-                tab_count: 1,
-                visible_pane_count: 1,
-                has_active_terminal: false,
-                has_active_session: true,
-                detached_session_count: 0,
-                has_pending_approval: true,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
-                has_active_session_directory: false,
-            }
-        ));
-        assert!(!command_enabled(
-            CommandId::DenyToolCall,
-            CommandState {
-                tab_count: 1,
-                visible_pane_count: 1,
-                has_active_terminal: false,
-                has_active_session: true,
-                detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
-                has_active_session_directory: false,
-            }
-        ));
-        assert!(command_enabled(
-            CommandId::DenyToolCall,
-            CommandState {
-                tab_count: 1,
-                visible_pane_count: 1,
-                has_active_terminal: false,
-                has_active_session: true,
-                detached_session_count: 0,
-                has_pending_approval: true,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
-                has_active_session_directory: false,
-            }
-        ));
-    }
-
-    #[test]
-    fn cancel_agent_turn_requires_turn_in_flight() {
-        assert!(!command_enabled(
-            CommandId::CancelAgentTurn,
-            CommandState {
-                tab_count: 1,
-                visible_pane_count: 1,
-                has_active_terminal: false,
-                has_active_session: true,
-                detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
-                has_active_session_directory: false,
-            }
-        ));
-        assert!(command_enabled(
-            CommandId::CancelAgentTurn,
-            CommandState {
-                tab_count: 1,
-                visible_pane_count: 1,
-                has_active_terminal: false,
-                has_active_session: true,
-                detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: true,
-                has_paused_turn: false,
-                has_active_session_directory: false,
-            }
-        ));
-    }
-
-    #[test]
-    fn continue_agent_turn_requires_a_paused_turn() {
-        assert!(!command_enabled(
-            CommandId::ContinueAgentTurn,
-            CommandState {
-                tab_count: 1,
-                visible_pane_count: 1,
-                has_active_terminal: false,
-                has_active_session: true,
-                detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
-                has_active_session_directory: false,
-            }
-        ));
-        assert!(command_enabled(
-            CommandId::ContinueAgentTurn,
-            CommandState {
-                tab_count: 1,
-                visible_pane_count: 1,
-                has_active_terminal: false,
-                has_active_session: true,
-                detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: true,
                 has_active_session_directory: false,
             }
         ));
@@ -868,12 +586,8 @@ mod tests {
         let entries = command_entries(CommandState {
             tab_count: 2,
             visible_pane_count: 2,
-            has_active_terminal: false,
             has_active_session: true,
             detached_session_count: 0,
-            has_pending_approval: false,
-            has_turn_in_flight: false,
-            has_paused_turn: false,
             has_active_session_directory: false,
         });
 
@@ -898,12 +612,8 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -912,12 +622,8 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: false,
             }
         ));
@@ -926,12 +632,8 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
-                has_pending_approval: false,
-                has_turn_in_flight: false,
-                has_paused_turn: false,
                 has_active_session_directory: true,
             }
         ));

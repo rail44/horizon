@@ -1386,6 +1386,7 @@ impl crate::plugin::Plugin for WikiPlugin {
         crate::plugin::Mounted {
             view,
             run: Callback::new(|never| match never {}),
+            enabled: None,
             state: horizon_ui::reactive_graph::wrappers::read::Signal::derive_local(move || {
                 horizon_ui::reactive_graph::traits::Get::get(&shown)
             }),

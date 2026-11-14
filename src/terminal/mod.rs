@@ -40,6 +40,7 @@ use horizon_ui::reactive_graph::traits::{Get, GetUntracked};
 use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Component, El, copy, each_layout, el, prevent_default};
 
+pub mod plugin;
 mod session;
 mod shaping;
 

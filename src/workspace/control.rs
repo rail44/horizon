@@ -301,13 +301,17 @@ impl Shell {
             }),
             "state" => {
                 let state = self.command_state();
+                // (What the agent on the cursor's pane is doing.)
+                let standing = (self.active_agent())
+                    .map(|session| session.standing())
+                    .unwrap_or_default();
                 EnvelopeBody::State(State {
                     tab_count: state.tab_count,
                     visible_pane_count: state.visible_pane_count,
                     has_active_session: state.has_active_session,
                     detached_session_count: state.detached_session_count,
-                    has_pending_approval: state.has_pending_approval,
-                    has_turn_in_flight: state.has_turn_in_flight,
+                    has_pending_approval: standing.pending_approval,
+                    has_turn_in_flight: standing.turn_in_flight,
                     destructive_commands: destructive_commands(),
                 })
             }

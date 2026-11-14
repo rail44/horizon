@@ -59,5 +59,11 @@ pub struct Command<C> {
 pub struct Mounted<S: 'static, C: 'static> {
     pub view: El,
     pub run: Callback<C>,
+    /// Whether a command can be carried out now; every one can when
+    /// `None`.
+    pub enabled: Option<Enabled<C>>,
     pub state: Signal<S, LocalStorage>,
 }
+
+/// Says whether a command can be carried out now.
+pub type Enabled<C> = horizon_ui::reactive_graph::callback::UnsyncCallback<C, bool>;

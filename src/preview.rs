@@ -720,6 +720,7 @@ impl PanePlugin for PreviewPlugin {
         Mounted {
             view,
             run: horizon_ui::Callback::new(move |PreviewCommand::Reload| preview.reload()),
+            enabled: None,
             state: Signal::stored_local(target),
         }
     }

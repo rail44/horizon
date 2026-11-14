@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use horizon_workspace::{PaneId, PluginPane, SessionId, Workspace};
 
 use super::Shell;
+use crate::agent::plugin::AgentPlugin;
 use crate::background::Background;
 use crate::board::plugin::{
     BoardListPlugin, BoardThreadPlugin, ListAsked, ThreadAsked, ThreadState,
@@ -20,6 +21,7 @@ use crate::board::{list, thread};
 use crate::markdown::{DocumentState, MarkdownPlugin};
 use crate::plugin::{Mounted, Plugin};
 use crate::preview::{PreviewPlugin, Target};
+use crate::terminal::plugin::TerminalPlugin;
 use crate::theme_settings::{self, ThemeSettingsPlugin};
 use crate::wiki::WikiPlugin;
 use horizon_theme::seed::Seed;
@@ -56,6 +58,8 @@ pub(super) fn commands() -> Vec<Listed> {
     commands.extend(listed::<ThemeSettingsPlugin>());
     commands.extend(listed::<MarkdownPlugin>());
     commands.extend(listed::<WikiPlugin>());
+    commands.extend(listed::<TerminalPlugin>());
+    commands.extend(listed::<AgentPlugin>());
     commands
 }
 
@@ -78,6 +82,7 @@ pub(super) const PREVIEW: &str = PreviewPlugin::NAME;
 pub(super) struct Shown {
     pub plugin: &'static str,
     run: Rc<dyn Fn(&str) -> bool>,
+    enabled: Rc<dyn Fn(&str) -> bool>,
 }
 
 impl Shown {
@@ -85,6 +90,11 @@ impl Shown {
     /// none of that name.
     pub fn run(&self, name: &str) -> bool {
         (self.run)(name)
+    }
+
+    /// Whether the command named `name` can be carried out now.
+    pub fn enabled(&self, name: &str) -> bool {
+        (self.enabled)(name)
     }
 }
 
@@ -207,9 +217,24 @@ impl Shell {
         state: &serde_json::Value,
         ask: impl Fn(P::Asked) + 'static,
     ) -> Option<(El, Shown)> {
-        let shell = *self;
         let state: P::State = serde_json::from_value(state.clone()).ok()?;
-        let Mounted { view, run, state } = plugin.mount(state, Callback::new(ask));
+        Some(self.shown::<P>(pane, plugin.mount(state, Callback::new(ask))))
+    }
+
+    /// What a pane keeps of `P`'s view: the state it keeps goes to the
+    /// model as it changes.
+    pub(super) fn shown<P: Plugin>(
+        &self,
+        pane: PaneId,
+        mounted: Mounted<P::State, P::Command>,
+    ) -> (El, Shown) {
+        let shell = *self;
+        let Mounted {
+            view,
+            run,
+            enabled,
+            state,
+        } = mounted;
         Effect::new(move |_| {
             let kept = self::pane::<P>(state.get());
             let changed = shell.model.with_untracked(|model| {
@@ -221,18 +246,28 @@ impl Shell {
                     .update(|model| _ = model.set_pane_plugin(pane, kept));
             }
         });
-        let commands = P::commands();
+        let commands = Rc::new(P::commands());
+        let named = commands.clone();
         let run = move |name: &str| {
-            let command = commands.iter().find(|command| command.name == name);
+            let command = named.iter().find(|command| command.name == name);
             command.map(|command| run.run(command.command)).is_some()
         };
-        Some((
+        let enabled = move |name: &str| {
+            let Some(command) = commands.iter().find(|command| command.name == name) else {
+                return false;
+            };
+            enabled
+                .as_ref()
+                .is_none_or(|enabled| enabled.run(command.command))
+        };
+        (
             view,
             Shown {
                 plugin: P::NAME,
                 run: Rc::new(run),
+                enabled: Rc::new(enabled),
             },
-        ))
+        )
     }
 }
 

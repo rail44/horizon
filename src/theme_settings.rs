@@ -400,6 +400,7 @@ impl Plugin for ThemeSettingsPlugin {
         Mounted {
             view: view(self.seed, self.theme, self.host),
             run: Callback::new(|never| match never {}),
+            enabled: None,
             state: Signal::stored_local(()),
         }
     }

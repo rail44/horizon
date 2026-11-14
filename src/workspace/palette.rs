@@ -46,7 +46,7 @@ fn matching(shell: Shell, query: &str) -> Vec<Entry> {
             title: listed.title,
             description: listed.description,
             destructive: listed.destructive,
-            enabled: true,
+            enabled: shell.plugin_command_enabled(listed.name),
             run: Run::Plugin(listed.name),
         });
     let own = filter_command_entries(command_entries(shell.command_state()), query);
