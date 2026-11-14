@@ -231,7 +231,10 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         .with_untracked(|model| model.visible_panes()[0].id);
     assert!(shell.agent(pane).is_some());
 
-    // What is typed is sent with Enter, shown, and answered.
+    // Enter goes into the view's field; what is typed there is sent with
+    // Enter, shown, and answered.
+    app.resolve();
+    press(&app, Key::Named(NamedKey::Enter), Modifiers::default());
     app.dispatch(UiEvent::Ime(BlitzImeEvent::Commit(
         "hello there".to_string(),
     )));
@@ -301,6 +304,8 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     assert!(!agentd.handle().same_runtime(&before));
     assert_eq!(shell.model.with_untracked(Workspace::tab_count), 2);
     until("what was said", &|| text().contains("hello there"));
+    // The pane made again has the keys on the view: Enter into its field.
+    enter();
     commit("and again");
     enter();
     until("the second answer", &|| {

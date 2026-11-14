@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::atomic::Ordering;
 
 use any_spawner::Executor;
-use blitz_dom::{BaseDocument, Document, DocumentConfig, EventDriver, UserAgentStylesheet};
+use blitz_dom::{BaseDocument, Document, DocumentConfig, EventDriver, NodeId, UserAgentStylesheet};
 use blitz_traits::events::UiEvent;
 use blitz_traits::shell::{ColorScheme, Viewport};
 use reactive_graph::owner::Owner;
@@ -120,10 +120,10 @@ impl App {
     /// Hands the document an input event, runs the handlers it reaches and
     /// then the effects of what they wrote.
     pub fn dispatch(&self, event: UiEvent) {
+        // Where a button went down or came up, and whether it went down.
         let pressed = match &event {
-            UiEvent::PointerDown(pointer) | UiEvent::PointerUp(pointer) => {
-                Some((pointer.page_x(), pointer.page_y()))
-            }
+            UiEvent::PointerDown(pointer) => Some((pointer.page_x(), pointer.page_y(), true)),
+            UiEvent::PointerUp(pointer) => Some((pointer.page_x(), pointer.page_y(), false)),
             _ => None,
         };
         if let UiEvent::Paste(text) = &event {
@@ -138,9 +138,13 @@ impl App {
         }
         let mut document = self.shared.document.clone();
         let handler = Dispatch(self.shared.clone());
+        self.shared.prevented.set(false);
         EventDriver::new(&mut document as &mut dyn Document, handler).handle_ui_event(event);
-        if let Some((x, y)) = pressed {
-            self.focus_from(x, y);
+        let prevented = self.shared.prevented.replace(false);
+        match pressed {
+            Some((x, y, true)) if !prevented => self.focus_on_press(x, y),
+            Some((x, y, false)) => self.focus_from(x, y),
+            _ => {}
         }
         enter(&self.shared);
         let dispatched = std::mem::take(&mut *self.shared.dispatched.borrow_mut());
@@ -150,10 +154,30 @@ impl App {
         self.run_effects();
     }
 
-    /// A press on something that cannot take focus leaves the page itself
-    /// focused, and keys then go to the page and to no view. A browser
-    /// gives the focus to the nearest thing around the press that can take
-    /// it; this does that.
+    /// A press gives the focus to the nearest thing around it that can
+    /// take it, as a browser does when the button goes down. blitz-dom
+    /// moves the focus on a press only into a text field it lands on, so a
+    /// field would keep the focus through a press, or a drag selecting
+    /// text, anywhere else. DioxusLabs/blitz#1213 (open) moves the focus
+    /// this way in blitz-dom itself; this goes once a Blitz with it is in.
+    /// A handler that prevents the press's default keeps the focus where it
+    /// is, as there. Unlike there, so does a press with nothing around it
+    /// that can take the focus: with the page itself focused, keys reach
+    /// no view and not the shell either.
+    fn focus_on_press(&self, x: f32, y: f32) {
+        let mut document = self.shared.document.borrow_mut();
+        let Some(found) = nearest_focusable(&document, x, y) else {
+            return;
+        };
+        if document.get_focussed_node_id() != Some(found) {
+            document.set_focus_to(found);
+        }
+    }
+
+    /// A click on something that cannot take focus leaves the page itself
+    /// focused (blitz-dom drops the focus then), and keys then go to the
+    /// page and to no view. A browser gives the focus to the nearest thing
+    /// around the press that can take it; this does that.
     fn focus_from(&self, x: f32, y: f32) {
         let mut document = self.shared.document.borrow_mut();
         let on_a_view = document.get_focussed_node_id().is_some_and(|id| {
@@ -163,16 +187,8 @@ impl App {
         if on_a_view {
             return;
         }
-        let mut node = document.hit(x, y).map(|hit| hit.node_id);
-        while let Some(id) = node {
-            let Some(found) = document.get_node(id) else {
-                return;
-            };
-            if found.attr(blitz_dom::local_name!("tabindex")).is_some() {
-                document.set_focus_to(id);
-                return;
-            }
-            node = found.parent;
+        if let Some(found) = nearest_focusable(&document, x, y) {
+            document.set_focus_to(found);
         }
     }
 
@@ -182,6 +198,20 @@ impl App {
     pub fn ime_cursor_area(&self) -> Option<(f32, f32, f32, f32)> {
         ime_cursor_area(&self.shared.document.borrow())
     }
+}
+
+/// The element at `(x, y)`, or the nearest one around it, that can take
+/// the focus.
+fn nearest_focusable(document: &BaseDocument, x: f32, y: f32) -> Option<NodeId> {
+    let mut node = document.hit(x, y).map(|hit| hit.node_id);
+    while let Some(id) = node {
+        let found = document.get_node(id)?;
+        if found.is_focussable() {
+            return Some(id);
+        }
+        node = found.parent;
+    }
+    None
 }
 
 /// An [`App`] as the document a shell shows: input goes through the

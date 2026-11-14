@@ -321,6 +321,8 @@ fn a_running_turn_carries_the_state_and_stop_and_an_approval_is_answered_by_key_
     );
 
     opened.asked.borrow_mut().clear();
+    // `Stop` took the focus when pressed; the keys answer from the field.
+    opened.click(opened.agent.field.0);
     opened.enter();
     opened.press(
         keyboard_types::NamedKey::Escape,
@@ -467,4 +469,122 @@ fn a_long_history_is_scrolled_through_with_few_units_built() {
         assert!(steps < 400, "still at {}", opened.scrolled());
     }
     assert!(opened.text().contains("src/board/spec.rs"));
+}
+
+/// What the document put on the clipboard.
+#[derive(Default)]
+struct Clipboard(std::sync::Mutex<Vec<String>>);
+
+impl horizon_ui::blitz_traits::shell::ShellProvider for Clipboard {
+    fn set_clipboard_text(
+        &self,
+        text: String,
+    ) -> Result<(), horizon_ui::blitz_traits::shell::ClipboardError> {
+        self.0.lock().unwrap().push(text);
+        Ok(())
+    }
+}
+
+impl Opened {
+    fn focused(&self) -> Option<NodeId> {
+        self.app.document().borrow().get_focussed_node_id()
+    }
+
+    fn ctrl_c(&self) {
+        self.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+            key: keyboard_types::Key::Character("c".into()),
+            code: keyboard_types::Code::KeyC,
+            modifiers: keyboard_types::Modifiers::CONTROL,
+            location: keyboard_types::Location::Standard,
+            is_auto_repeating: false,
+            is_composing: false,
+            state: KeyState::Pressed,
+            text: None,
+        }));
+        self.app.resolve();
+    }
+
+    /// Drags across the middle of a node's box, from its left edge to its
+    /// right, and lets go.
+    fn drag_across(&self, node: NodeId) {
+        use horizon_ui::testing::{Pointer, pointer};
+        let (x, y, width, height) = {
+            let document = self.app.document();
+            let document = document.borrow();
+            let bounds = document.get_client_bounding_rect(node).expect("a box");
+            (bounds.x, bounds.y, bounds.width, bounds.height)
+        };
+        let y = (y + height / 2.) as f32;
+        let (from, to) = ((x + 4.) as f32, (x + width - 4.) as f32);
+        pointer(&self.app, from, y, Pointer::Move);
+        pointer(&self.app, from, y, Pointer::Down);
+        pointer(&self.app, to, y, Pointer::Drag);
+        pointer(&self.app, to, y, Pointer::Up);
+        self.app.resolve();
+    }
+}
+
+#[test]
+fn text_selected_in_the_conversation_is_copied_while_the_field_had_the_focus() {
+    let session = Session::long(1);
+    let opened = open(&session);
+    let clipboard = std::sync::Arc::new(Clipboard::default());
+    (opened.app.document().borrow_mut()).set_shell_provider(clipboard.clone());
+    assert_eq!(opened.focused(), Some(opened.agent.field.0));
+
+    let request = opened.all("user")[0];
+    opened.drag_across(request);
+    // The press took the focus out of the field, into the view.
+    assert_eq!(opened.focused(), Some(opened.all("agent")[0]));
+    let selected = (opened.app.document().borrow().get_selected_text()).expect("a selection");
+    assert!(selected.contains("番目の依頼"), "{selected}");
+    opened.ctrl_c();
+    assert_eq!(*clipboard.0.lock().unwrap(), [selected]);
+}
+
+#[test]
+fn enter_goes_into_the_field_and_escape_comes_out() {
+    let mut session = Session::long(1);
+    let opened = open(&session);
+    let view = opened.all("agent")[0];
+    opened.click(opened.all("user")[0]);
+    assert_eq!(opened.focused(), Some(view));
+
+    opened.enter();
+    assert_eq!(opened.focused(), Some(opened.agent.field.0));
+    // What is typed then is the field's, and Enter in it sends.
+    opened.commit("続けて");
+    opened.enter();
+    assert_eq!(*opened.asked.borrow(), [Asked::Send("続けて".into())]);
+    assert_eq!(opened.focused(), Some(opened.agent.field.0));
+
+    opened.press(
+        keyboard_types::NamedKey::Escape,
+        keyboard_types::Code::Escape,
+        false,
+    );
+    assert_eq!(opened.focused(), Some(view));
+
+    // Waiting on an approval with nothing typed, Escape in the field
+    // denies it and stays.
+    session.begin_turn("設定を書き換えて");
+    session.call(
+        "Write",
+        "~/.config/horizon/config.toml",
+        Some("外のファイル"),
+    );
+    opened.show(&session);
+    opened.enter();
+    opened.asked.borrow_mut().clear();
+    opened.press(
+        keyboard_types::NamedKey::Escape,
+        keyboard_types::Code::Escape,
+        false,
+    );
+    assert!(
+        matches!(opened.asked.borrow().as_slice(), [Asked::Deny(_)]),
+        "{:?}",
+        opened.asked.borrow()
+    );
+    assert_eq!(opened.focused(), Some(opened.agent.field.0));
 }

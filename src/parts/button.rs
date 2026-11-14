@@ -88,8 +88,9 @@ impl Component for Button<'_> {
         };
         button
             .on(by_pointer, move |_| on_press.run(()))
-            // A click on what the keys can reach moves the keys to it,
-            // unless that is prevented.
+            // A press, and a click, on what the keys can reach move the
+            // keys to it, unless that is prevented.
+            .on("pointerdown", |_| prevent_default())
             .on("click", |_| prevent_default())
             // blitz-dom does not press a button for a key.
             .on("keydown", move |event| {

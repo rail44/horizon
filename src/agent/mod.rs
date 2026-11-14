@@ -302,6 +302,10 @@ pub fn view_with(shown: Shown, ask: impl Fn(Asked) + 'static, column: Column) ->
             ),
     );
 
+    // The view itself takes the focus, so that a press on the conversation
+    // leaves the field and Ctrl+C copies what is selected there; Enter
+    // goes back into the field, and Escape in it comes out again.
+    let root = el("div").attr("tabindex", "0");
     let rows = RwSignal::new(1usize);
     state
         .field
@@ -326,11 +330,24 @@ pub fn view_with(shown: Shown, ask: impl Fn(Asked) + 'static, column: Column) ->
             let DomEventData::KeyDown(key) = &event.data else {
                 return;
             };
-            if key.key == Key::Named(NamedKey::Enter) && !key.modifiers.shift() && !key.is_composing
-            {
-                prevent_default();
-                state.submit();
-                rows.set(1);
+            if key.is_composing {
+                return;
+            }
+            match &key.key {
+                Key::Named(NamedKey::Enter) if !key.modifiers.shift() => {
+                    prevent_default();
+                    state.submit();
+                    rows.set(1);
+                }
+                // Waiting on an approval with nothing typed, Escape denies
+                // it; otherwise it leaves the field for the view.
+                Key::Named(NamedKey::Escape) => {
+                    if !state.deny_pending() {
+                        root.focus();
+                    }
+                    stop_propagation();
+                }
+                _ => {}
             }
         });
 
@@ -359,26 +376,24 @@ pub fn view_with(shown: Shown, ask: impl Fn(Asked) + 'static, column: Column) ->
             ),
     );
 
-    let root = el("div")
+    let root = root
         .class(styles::AGENT)
         .on("keydown", move |event| {
             let DomEventData::KeyDown(key) = &event.data else {
                 return;
             };
-            if key.key == Key::Named(NamedKey::Escape) && state.deny_pending() {
-                stop_propagation();
+            // The view's own keys, not the field's on their way out.
+            if event.target != root.0 || key.is_composing {
+                return;
             }
-        })
-        // A press on something that cannot take focus leaves nothing
-        // focused, and keys then go to the page instead of the view: the
-        // field has the focus again once the press is over.
-        .on("pointerup", move |_| {
-            let field = state.field;
-            dispatched(move |page| {
-                if !page.has_focus(field) {
-                    field.focus();
+            match &key.key {
+                Key::Named(NamedKey::Enter) if key.modifiers.is_empty() => {
+                    prevent_default();
+                    state.field.focus();
                 }
-            });
+                Key::Named(NamedKey::Escape) if state.deny_pending() => stop_propagation(),
+                _ => {}
+            }
         })
         .child(state.column)
         .child(composer);

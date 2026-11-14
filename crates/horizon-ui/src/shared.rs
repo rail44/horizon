@@ -41,6 +41,9 @@ pub(crate) struct Shared {
     /// out, and whether that is the element itself or the first thing
     /// inside it that takes focus.
     pub(crate) focus: Cell<Option<(NodeId, bool)>>,
+    /// Whether a handler of the input event being dispatched asked the
+    /// document not to do what it would have done with it.
+    pub(crate) prevented: Cell<bool>,
     /// Whether work done after a layout asked for another.
     pub(crate) relayout: Cell<bool>,
     /// The elements that take text without being text fields.
@@ -86,6 +89,7 @@ impl Shared {
             later: RefCell::default(),
             dispatched: RefCell::default(),
             focus: Cell::new(None),
+            prevented: Cell::new(false),
             relayout: Cell::new(false),
             text_targets: RefCell::default(),
             composing_for: Cell::new(None),
