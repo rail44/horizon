@@ -88,6 +88,83 @@ fn kept(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
 }
 
+/// What a component declares of itself, read from its type.
+struct Shape {
+    /// The type `state` gives: what a pane keeps of the extension.
+    state: Type,
+    /// The commands its `commands` interface exports, in the order they
+    /// were read.
+    commands: Vec<String>,
+}
+
+/// Reads what the component exports, and holds it to what an extension
+/// must export.
+fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
+    let engine = &compiled.engine;
+    let exported = compiled.component.component_type();
+    let mut state = None;
+    let mut commands = Vec::new();
+    let mut mount = false;
+    let mut events = false;
+    for (name, item) in exported.exports(engine) {
+        match (name, item.ty) {
+            ("mount", ComponentItem::ComponentFunc(_)) => mount = true,
+            ("state", ComponentItem::ComponentFunc(function)) => {
+                state = function.results().next();
+            }
+            ("commands", ComponentItem::ComponentInstance(instance)) => {
+                for (command, item) in instance.exports(engine) {
+                    let ComponentItem::ComponentFunc(function) = item.ty else {
+                        continue;
+                    };
+                    if function.params().next().is_some() {
+                        return Err(format!(
+                            "the command `{command}` takes parameters, which an extension's \
+                             commands cannot yet"
+                        ));
+                    }
+                    commands.push(command.to_string());
+                }
+            }
+            (name, ComponentItem::ComponentInstance(_))
+                if name.starts_with("horizon:ui/events") =>
+            {
+                events = true;
+            }
+            _ => {}
+        }
+    }
+    let state = state.ok_or("the component exports no `state`")?;
+    if !mount {
+        return Err("the component exports no `mount`".to_string());
+    }
+    if !events {
+        return Err("the component does not export `horizon:ui/events`".to_string());
+    }
+    Ok(Shape { state, commands })
+}
+
+/// Holds the commands the component exports and the ones the manifest
+/// names to each other: each must name the other.
+fn match_commands(
+    exported: &[String],
+    named: &BTreeMap<String, ManifestCommand>,
+) -> Result<(), String> {
+    for function in exported {
+        if !named.contains_key(function) {
+            return Err(format!(
+                "the manifest says nothing of the command `{function}`"
+            ));
+        }
+    }
+    for name in named.keys() {
+        if !exported.contains(name) {
+            return Err(format!("the component has no command `{name}`"));
+        }
+    }
+    Ok(())
+}
+
 impl Extension {
     /// The package in `directory`.
     pub fn load(directory: &Path) -> Result<Self, String> {
@@ -97,61 +174,8 @@ impl Extension {
         let manifest: Manifest =
             toml::from_str(&manifest).map_err(|error| format!("{}: {error}", at.display()))?;
         let compiled = compile(&directory.join(&manifest.plugin.component))?;
-        let engine = &compiled.engine;
-        let shape = compiled.component.component_type();
-        let mut state = None;
-        let mut functions = Vec::new();
-        let mut mount = false;
-        let mut events = false;
-        for (name, item) in shape.exports(engine) {
-            match (name, item.ty) {
-                ("mount", ComponentItem::ComponentFunc(_)) => mount = true,
-                ("state", ComponentItem::ComponentFunc(function)) => {
-                    state = function.results().next();
-                }
-                ("commands", ComponentItem::ComponentInstance(instance)) => {
-                    for (command, item) in instance.exports(engine) {
-                        let ComponentItem::ComponentFunc(function) = item.ty else {
-                            continue;
-                        };
-                        if function.params().next().is_some() {
-                            return Err(format!(
-                                "the command `{command}` takes parameters, which an extension's \
-                                 commands cannot yet"
-                            ));
-                        }
-                        functions.push(command.to_string());
-                    }
-                }
-                (name, ComponentItem::ComponentInstance(_))
-                    if name.starts_with("horizon:ui/events") =>
-                {
-                    events = true;
-                }
-                _ => {}
-            }
-        }
-        let state = state.ok_or("the component exports no `state`")?;
-        if !mount {
-            return Err("the component exports no `mount`".to_string());
-        }
-        if !events {
-            return Err("the component does not export `horizon:ui/events`".to_string());
-        }
-        // The commands the component has are the ones the manifest names.
-        let named: Vec<&String> = manifest.commands.keys().collect();
-        for function in &functions {
-            if !manifest.commands.contains_key(function) {
-                return Err(format!(
-                    "the manifest says nothing of the command `{function}`"
-                ));
-            }
-        }
-        for name in named {
-            if !functions.contains(name) {
-                return Err(format!("the component has no command `{name}`"));
-            }
-        }
+        let Shape { state, commands } = shape_of(&compiled)?;
+        match_commands(&commands, &manifest.commands)?;
         let commands = (manifest.commands.into_iter())
             .map(|(name, command)| ExtensionCommand {
                 name: kept(name),
@@ -307,4 +331,49 @@ pub fn load_all(directories: &[String]) -> Vec<Rc<Extension>> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn named(commands: &[&str]) -> BTreeMap<String, ManifestCommand> {
+        (commands.iter())
+            .map(|name| {
+                (
+                    name.to_string(),
+                    ManifestCommand {
+                        title: String::new(),
+                        description: String::new(),
+                        destructive: false,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn matching_command_lists_agree() {
+        let exported = vec!["back".to_string()];
+        assert!(match_commands(&exported, &named(&["back"])).is_ok());
+    }
+
+    #[test]
+    fn an_exported_command_the_manifest_omits_is_refused() {
+        let exported = vec!["back".to_string(), "forward".to_string()];
+        let error = match_commands(&exported, &named(&["back"])).unwrap_err();
+        assert!(error.contains("forward"), "{error}");
+    }
+
+    #[test]
+    fn a_named_command_the_component_lacks_is_refused() {
+        let exported = vec!["back".to_string()];
+        let error = match_commands(&exported, &named(&["back", "forward"])).unwrap_err();
+        assert!(error.contains("forward"), "{error}");
+    }
+
+    #[test]
+    fn a_component_without_commands_matches_an_empty_manifest() {
+        assert!(match_commands(&[], &BTreeMap::new()).is_ok());
+    }
 }

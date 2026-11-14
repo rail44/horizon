@@ -134,6 +134,36 @@ struct State {
     dragging: Cell<Option<bool>>,
 }
 
+impl State {
+    /// A view of `given`'s session, before anything of it is drawn.
+    fn new(given: TerminalView) -> Self {
+        let TerminalView {
+            session,
+            look,
+            open_url,
+        } = given;
+        Self {
+            session,
+            look: RefCell::new(look.get_untracked()),
+            restyled: Cell::new(0),
+            frame: RefCell::new(None),
+            seen: Cell::new(0),
+            cells: Cell::new((1., 0, 0)),
+            origin: Cell::new((0., 0.)),
+            preedit: RefCell::new(String::new()),
+            focused: Cell::new(false),
+            copied: RefCell::new(None),
+            outgoing: RefCell::new(None),
+            scrollback: RefCell::default(),
+            wheel: Cell::new(0.),
+            clicked: Cell::new(None),
+            reporting: Cell::new(None),
+            open_url,
+            dragging: Cell::new(None),
+        }
+    }
+}
+
 /// A terminal session, drawn and typed into.
 ///
 /// The session is whoever placed the view's, and outlives it. What the
@@ -350,30 +380,8 @@ fn key_code(key: &BlitzKeyEvent) -> Option<(KeyCode, Option<String>)> {
 
 /// Builds the view, with the way into it.
 pub fn build(given: TerminalView) -> (El, Terminal) {
-    let TerminalView {
-        session,
-        look,
-        open_url,
-    } = given;
-    let state = Rc::new(State {
-        session,
-        look: RefCell::new(look.get_untracked()),
-        restyled: Cell::new(0),
-        frame: RefCell::new(None),
-        seen: Cell::new(0),
-        cells: Cell::new((1., 0, 0)),
-        origin: Cell::new((0., 0.)),
-        preedit: RefCell::new(String::new()),
-        focused: Cell::new(false),
-        copied: RefCell::new(None),
-        outgoing: RefCell::new(None),
-        scrollback: RefCell::default(),
-        wheel: Cell::new(0.),
-        clicked: Cell::new(None),
-        reporting: Cell::new(None),
-        open_url,
-        dragging: Cell::new(None),
-    });
+    let TerminalView { look, .. } = given;
+    let state = Rc::new(State::new(given));
     // The colors a program is told when it asks (OSC 4, 10, 11, 12) are
     // the ones it is drawn in, whenever they change.
     let restyled = state.clone();

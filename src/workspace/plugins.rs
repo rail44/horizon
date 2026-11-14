@@ -286,24 +286,13 @@ impl Shell {
         pane: PaneId,
         mounted: Mounted<P::State, P::Command>,
     ) -> (El, Shown) {
-        let shell = *self;
         let Mounted {
             view,
             run,
             enabled,
             state,
         } = mounted;
-        Effect::new(move |_| {
-            let kept = self::pane::<P>(state.get());
-            let changed = shell.model.with_untracked(|model| {
-                (model.pane_plugin(pane)).is_some_and(|plugin| *plugin != kept)
-            });
-            if changed {
-                shell
-                    .model
-                    .update(|model| _ = model.set_pane_plugin(pane, kept));
-            }
-        });
+        self.keep(pane, move || self::pane::<P>(state.get()));
         let commands = Rc::new(P::commands());
         let named = commands.clone();
         let run = move |name: &str| {
@@ -326,6 +315,23 @@ impl Shell {
                 enabled: Rc::new(enabled),
             },
         )
+    }
+
+    /// Has the model keep what `now` says a pane keeps of its plugin,
+    /// whenever that differs from what the model has.
+    fn keep(&self, pane: PaneId, now: impl Fn() -> PluginPane + 'static) {
+        let shell = *self;
+        Effect::new(move |_| shell.kept_in_model(pane, now()));
+    }
+
+    /// Keeps `now` in the model for `pane`, if the model says otherwise.
+    fn kept_in_model(&self, pane: PaneId, now: PluginPane) {
+        let changed = (self.model)
+            .with_untracked(|model| model.pane_plugin(pane).is_some_and(|kept| *kept != now));
+        if changed {
+            self.model
+                .update(|model| _ = model.set_pane_plugin(pane, now));
+        }
     }
 }
 
@@ -380,13 +386,7 @@ impl Shell {
                 title: title.get_untracked(),
                 state: state.unwrap_or_default(),
             };
-            let changed = (shell.model)
-                .with_untracked(|model| model.pane_plugin(pane).is_some_and(|kept| *kept != now));
-            if changed {
-                shell
-                    .model
-                    .update(|model| _ = model.set_pane_plugin(pane, now));
-            }
+            shell.kept_in_model(pane, now);
         });
         let shown = Shown {
             plugin: name,

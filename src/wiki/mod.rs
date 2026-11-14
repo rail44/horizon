@@ -319,6 +319,49 @@ fn one_line(text: &str) -> String {
 }
 
 impl State {
+    /// A view of a wiki: its signals, its held handles, and the two
+    /// elements the view is built around.
+    fn new(given: Wiki) -> Self {
+        let Wiki {
+            open_url,
+            on_navigate,
+            wake,
+            ..
+        } = given;
+        Self {
+            path: RwSignal::new(None),
+            page: RwSignal::new_local(None),
+            error: RwSignal::new(None),
+            focused: RwSignal::new(None),
+            expanded: RwSignal::new(HashSet::new()),
+            target: RwSignal::new(None),
+            selection: RwSignal::new(None),
+            notice: RwSignal::new(None),
+            history: RwSignal::new(Vec::new()),
+            typed: RwSignal::new(String::new()),
+            layout: RwSignal::new(CommentLayout::Margin),
+            margin: RwSignal::new(None),
+            tops: RwSignal::new(HashMap::new()),
+            reach: RwSignal::new(0.),
+            held: StoredValue::new_local(Rc::new(Held {
+                on_navigate,
+                background: Background::new(wake.clone()),
+                wake,
+                open_url,
+                changed: Changed::default(),
+                watches: RefCell::default(),
+                pieces: RefCell::default(),
+                blocks: RefCell::default(),
+                beside: RefCell::default(),
+                asides: RefCell::default(),
+                reveal: Cell::new(None),
+                owner: Cell::new(None),
+            })),
+            element: el("div").class(styles::WIKI).attr("tabindex", "0"),
+            scroll: el("div").class(styles::SCROLL),
+        }
+    }
+
     fn held(&self) -> Rc<Held> {
         self.held.with_value(Rc::clone)
     }
@@ -823,44 +866,8 @@ fn thread(state: State, placed: &PlacedThread, replying: bool) -> El {
 
 /// Builds the view, opened on `path`: a page's file in a project's wiki.
 pub fn build(given: Wiki) -> (El, State) {
-    let Wiki {
-        path,
-        open_url,
-        on_navigate,
-        wake,
-    } = given;
-    let state = State {
-        path: RwSignal::new(None),
-        page: RwSignal::new_local(None),
-        error: RwSignal::new(None),
-        focused: RwSignal::new(None),
-        expanded: RwSignal::new(HashSet::new()),
-        target: RwSignal::new(None),
-        selection: RwSignal::new(None),
-        notice: RwSignal::new(None),
-        history: RwSignal::new(Vec::new()),
-        typed: RwSignal::new(String::new()),
-        layout: RwSignal::new(CommentLayout::Margin),
-        margin: RwSignal::new(None),
-        tops: RwSignal::new(HashMap::new()),
-        reach: RwSignal::new(0.),
-        held: StoredValue::new_local(Rc::new(Held {
-            on_navigate,
-            background: Background::new(wake.clone()),
-            wake,
-            open_url,
-            changed: Changed::default(),
-            watches: RefCell::default(),
-            pieces: RefCell::default(),
-            blocks: RefCell::default(),
-            beside: RefCell::default(),
-            asides: RefCell::default(),
-            reveal: Cell::new(None),
-            owner: Cell::new(None),
-        })),
-        element: el("div").class(styles::WIKI).attr("tabindex", "0"),
-        scroll: el("div").class(styles::SCROLL),
-    };
+    let path = given.path.clone();
+    let state = State::new(given);
     let (root, scroll) = (state.element, state.scroll);
     let held = state.held();
     if let Some(path) = path {
