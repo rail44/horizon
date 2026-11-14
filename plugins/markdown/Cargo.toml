@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 [target.'cfg(target_family = "wasm")'.dependencies]
 horizon-ui = { path = "../../crates/horizon-ui" }
 horizon = { path = "../.." }
-wit-bindgen = "0.41"
+wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

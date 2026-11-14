@@ -15,7 +15,9 @@ wit_bindgen::generate!({
     world: "horizon-ext:markdown/markdown",
     with: {
         "horizon:ui/document": horizon_ui::guest::bindings::horizon::ui::document,
-        "horizon:ui/host": horizon_ui::guest::bindings::horizon::ui::host,
+        "horizon:ui/desktop": horizon_ui::guest::bindings::horizon::ui::desktop,
+        "horizon:ui/pane": horizon_ui::guest::bindings::horizon::ui::pane,
+        "horizon:ui/files": horizon_ui::guest::bindings::horizon::ui::files,
     },
 });
 

@@ -29,9 +29,11 @@ shell's renderer with the shell's fonts, beside the native panes.
   work after a layout when the shell's does (`after-layout`), with the
   page lent for the length of that call.
 - The plugin gets no WASI grants (no files, sockets or environment), at
-  most 512 MiB of memory, and five seconds for any one call: a watchdog
-  thread moves the engine's epoch on when a call outlasts that, and the
-  call traps. A plugin that traps is let go of, and the pane says what it
+  most 512 MiB of memory, and five seconds for any one call or turn of
+  its tasks: a watchdog thread moves the engine's epoch on when a call
+  outlasts that, and the call traps. The engine is shared by every
+  pane's plugin, so a store checks, when the epoch moves, whether its
+  own call has gone on that long. A plugin that traps is let go of, and the pane says what it
   said.
 
 What does not cross to a plugin: a paint widget, `takes_text`, `on_paste`,

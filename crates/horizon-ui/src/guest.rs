@@ -580,16 +580,74 @@ pub fn run_effects() {
 
 /// Hands a URL to the desktop.
 pub fn open_url(url: &str) {
-    bindings::horizon::ui::host::open_url(url);
+    bindings::horizon::ui::desktop::open_url(url);
 }
 
 /// The title of the plugin's pane in the tab strip.
 pub fn set_title(title: &str) {
-    bindings::horizon::ui::host::set_title(title);
+    bindings::horizon::ui::pane::set_title(title);
 }
 
 /// A file the person chose, or the command line named.
-pub use bindings::horizon::ui::host::File;
+pub use bindings::horizon::ui::files::File;
+
+type Task = std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>;
+
+thread_local! {
+    /// Tasks asked for and not started yet.
+    static ASKED: RefCell<Vec<Task>> = const { RefCell::new(Vec::new()) };
+    /// What wakes the task that starts them.
+    static STARTER: RefCell<Option<std::task::Waker>> = const { RefCell::new(None) };
+}
+
+/// Runs `task` as one of the plugin's own tasks: it goes on after the call
+/// that asked for it, the host giving it a turn whenever it is woken.
+pub fn spawn(task: impl std::future::Future<Output = ()> + 'static) {
+    ASKED.with(|asked| asked.borrow_mut().push(Box::pin(task)));
+    if let Some(starter) = STARTER.with(|starter| starter.borrow().clone()) {
+        starter.wake();
+    }
+}
+
+/// Starts the task that starts the tasks asked for (`events.tasks`).
+pub fn start_tasks() {
+    wit_bindgen::spawn_local(std::future::poll_fn(|context| {
+        STARTER.with(|starter| *starter.borrow_mut() = Some(context.waker().clone()));
+        for task in ASKED.with(|asked| std::mem::take(&mut *asked.borrow_mut())) {
+            wit_bindgen::spawn_local(task);
+        }
+        std::task::Poll::<()>::Pending
+    }));
+}
+
+/// A file watched: until it is dropped, `changed` is called whenever the
+/// file changed and has sat still, and the plugin's effects run after.
+pub struct Watch(Rc<Cell<bool>>);
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.0.set(true);
+    }
+}
+
+/// Watches the file at `path`.
+pub fn watch(path: &str, changed: impl Fn() + 'static) -> Watch {
+    let dropped = Rc::new(Cell::new(false));
+    let stops = dropped.clone();
+    let path = path.to_string();
+    spawn(async move {
+        while !stops.get() {
+            let waited = bindings::horizon::ui::files::wait_for_change(path.clone()).await;
+            if stops.get() || waited.is_err() {
+                break;
+            }
+            changed();
+            run_effects();
+            relayout();
+        }
+    });
+    Watch(dropped)
+}
 
 /// Exports what every plugin exports (`events`): a plugin's crate calls
 /// it once, beside its own exports.
@@ -620,6 +678,10 @@ macro_rules! export_view {
 
                 fn run_effects() {
                     $crate::guest::run_effects();
+                }
+
+                async fn tasks() {
+                    $crate::guest::start_tasks();
                 }
             }
 

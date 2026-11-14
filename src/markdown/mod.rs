@@ -277,13 +277,16 @@ fn build(given: Markdown) -> (El, Controls) {
             }
         });
     }
-    // (A plugin has no watch of its own yet: the file is read as it is.)
+    // A plugin's watch is the host's (`files.wait-for-change`).
     #[cfg(target_family = "wasm")]
     {
         let _ = wake;
         Effect::new(move |_| {
-            let _ = state.path.get();
+            let path = state.path.get();
             scroll.scroll_to(0., 0.);
+            path.map(|path| {
+                horizon_ui::guest::watch(&path.to_string_lossy(), move || state.reload())
+            })
         });
     }
 

@@ -105,26 +105,43 @@ interface events {
     after-layout: func();
     /// Runs the effects of the signals written since the last call.
     run-effects: func();
+    /// Starts what runs the plugin's own tasks (a file's changes waited
+    /// on, ...), and comes back: they go on, the host giving them a turn
+    /// whenever one of them is woken.
+    tasks: async func();
 }
 
-/// What the host does for a plugin beyond the document.
-interface host {
+/// What the host does for a plugin on the desktop.
+interface desktop {
     /// Hands a URL to the desktop.
     open-url: func(url: string);
-    /// The title of the plugin's pane in the tab strip.
-    set-title: func(title: string);
+}
 
+/// What the host does for a plugin with the pane it is shown in.
+interface pane {
+    /// The pane's title in the tab strip.
+    set-title: func(title: string);
+}
+
+/// What the host does for a plugin with files.
+interface files {
     /// A file the person chose, or the command line named.
     resource file {
         path: func() -> string;
     }
+
+    /// Comes back once the file at `path` changed and has sat still; an
+    /// error when it cannot be watched.
+    wait-for-change: async func(path: string) -> result<_, string>;
 }
 
 /// What a plugin imports: a plugin's world includes it, and declares
 /// only what is its own.
 world imports {
     import document;
-    import host;
+    import desktop;
+    import pane;
+    import files;
 }
 
 /// The shared exports with the imports: what the SDK's bindings are made

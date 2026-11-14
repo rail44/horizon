@@ -6,16 +6,26 @@
 //! and no others. An event that reaches one of those nodes is told to the
 //! plugin.
 //!
+//! A plugin may have tasks of its own (a file's changes waited on): the
+//! store is an async one, its calls are made and finished on the UI
+//! thread, and its tasks are given a turn whenever one of them is woken,
+//! the page woken with it.
+//!
 //! A plugin that traps is let go of. It traps when it takes more memory
-//! than [`MEMORY_LIMIT`], or a call into it goes on for longer than
-//! [`CALL_LIMIT`].
+//! than [`MEMORY_LIMIT`], or a call into it, or a turn of its tasks, goes
+//! on for longer than [`CALL_LIMIT`].
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::{Pin, pin};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::Duration;
+use std::task::{Context, Poll, Waker};
+use std::time::{Duration, Instant};
 
 use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
@@ -23,8 +33,12 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
 use horizon_ui::{El, dispatched, el, host, prevent_default, relayout, stop_propagation};
 use keyboard_types::Key;
-use wasmtime::component::{Component, HasSelf, Instance, Linker, Resource, ResourceTable};
-use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
+use wasmtime::component::{
+    Accessor, Component, HasSelf, Instance, Linker, Resource, ResourceTable,
+};
+use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
+
+use crate::wake::Wake;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 /// No grants: no files, no sockets, no environment.
@@ -35,8 +49,13 @@ pub fn no_grants() -> WasiCtx {
 wasmtime::component::bindgen!({
     path: "crates/horizon-ui/wit",
     world: "view",
-    imports: { default: trappable },
-    with: { "horizon:ui/host.file": File },
+    imports: {
+        "horizon:ui/files.wait-for-change": async | store | trappable,
+        default: trappable,
+    },
+    // A store with an async import takes every call as an async one.
+    exports: { default: async },
+    with: { "horizon:ui/files.file": File },
 });
 
 use self::exports::horizon::ui::events::{EventData, KeyEvent, PointerEvent};
@@ -94,6 +113,8 @@ pub struct State {
     wasi: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
+    /// When the call or the turn under way began.
+    began: Option<Instant>,
     /// What the plugin asked of the host since it was last called: done
     /// once the call is back, on the UI thread.
     asked: Vec<Asked>,
@@ -297,19 +318,36 @@ impl Host for State {
     }
 }
 
-impl self::horizon::ui::host::Host for State {
+impl self::horizon::ui::desktop::Host for State {
     fn open_url(&mut self, url: String) -> wasmtime::Result<()> {
         self.asked.push(Asked::OpenUrl(url));
         Ok(())
     }
+}
 
+impl self::horizon::ui::pane::Host for State {
     fn set_title(&mut self, title: String) -> wasmtime::Result<()> {
         self.asked.push(Asked::SetTitle(title));
         Ok(())
     }
 }
 
-impl self::horizon::ui::host::HostFile for State {
+impl self::horizon::ui::files::Host for State {}
+
+impl<T: Send> self::horizon::ui::files::HostWithStore<T> for HasSelf<State> {
+    async fn wait_for_change(
+        _: &Accessor<T, Self>,
+        path: String,
+    ) -> wasmtime::Result<Result<(), String>> {
+        let Some(change) = crate::markdown::watch::next_change(PathBuf::from(&path)) else {
+            return Ok(Err(format!("{path} cannot be watched")));
+        };
+        change.await;
+        Ok(Ok(()))
+    }
+}
+
+impl self::horizon::ui::files::HostFile for State {
     fn path(&mut self, file: Resource<File>) -> wasmtime::Result<String> {
         Ok(self.table.get(&file)?.0.to_string_lossy().into_owned())
     }
@@ -393,15 +431,79 @@ impl Watchdog {
         Self { calls }
     }
 
-    /// Runs `call`, a call into the plugin of `store`, under the limit.
+    /// Runs `call`, a call into the plugin of `store` or a turn of its
+    /// tasks, under the limit.
     fn timed<R>(&self, store: &mut Store<State>, call: impl FnOnce(&mut Store<State>) -> R) -> R {
+        store.data_mut().began = Some(Instant::now());
         store.set_epoch_deadline(1);
         let _ = self.calls.send(true);
         let answer = call(store);
         let _ = self.calls.send(false);
+        store.data_mut().began = None;
         answer
     }
 }
+
+/// Whether a plugin's tasks asked for a turn, and the page to wake when
+/// they do.
+struct Woken {
+    asked: AtomicBool,
+    page: Wake,
+}
+
+impl std::task::Wake for Woken {
+    fn wake(self: Arc<Self>) {
+        self.asked.store(true, Ordering::Relaxed);
+        self.page.wake();
+    }
+}
+
+impl Woken {
+    fn waker(self: &Arc<Self>) -> Waker {
+        Waker::from(self.clone())
+    }
+
+    /// Whether a turn was asked for since this was last asked; it is then
+    /// taken.
+    fn take(&self) -> bool {
+        self.asked.swap(false, Ordering::Relaxed)
+    }
+}
+
+/// Runs `future`, a call into a plugin, to its end on this thread. A
+/// call into a plugin's export does not wait on anything: it is done on
+/// its first poll, or soon after.
+fn finish<F: Future>(future: F, woken: &Arc<Woken>) -> F::Output {
+    let mut future = pin!(future);
+    let waker = woken.waker();
+    let mut context = Context::from_waker(&waker);
+    loop {
+        if let Poll::Ready(answer) = future.as_mut().poll(&mut context) {
+            return answer;
+        }
+        std::thread::sleep(Duration::from_micros(50));
+    }
+}
+
+/// Comes back the second time it is polled: one turn for the store's
+/// tasks.
+struct OneTurn(bool);
+
+impl Future for OneTurn {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
+        if self.0 {
+            return Poll::Ready(());
+        }
+        self.0 = true;
+        context.waker().wake_by_ref();
+        Poll::Pending
+    }
+}
+
+/// A call into a plugin, borrowing its store until it is done.
+pub type Calling<'a, R> = Pin<Box<dyn Future<Output = wasmtime::Result<R>> + 'a>>;
 
 /// A plugin in use.
 pub struct Loaded {
@@ -410,6 +512,7 @@ pub struct Loaded {
     events: View,
     asks: Asks,
     watchdog: Watchdog,
+    woken: Arc<Woken>,
     /// What the plugin said when it trapped; nothing is asked of it after.
     failed: RwSignal<Option<String>>,
     /// Whether a call into the plugin is under way: it is not called
@@ -418,10 +521,11 @@ pub struct Loaded {
 }
 
 impl Loaded {
-    /// Calls into the plugin, unless it has trapped or is being called.
+    /// Calls into the plugin, unless it has trapped or is being called;
+    /// the tasks the call woke are given a turn after it.
     pub fn call<R>(
         self: &Rc<Self>,
-        call: impl FnOnce(&Instance, &mut Store<State>) -> wasmtime::Result<R>,
+        call: impl for<'a> FnOnce(&'a Instance, &'a mut Store<State>) -> Calling<'a, R>,
     ) -> Option<R> {
         // (The signal goes with the pane; a handler may outlast it a moment.)
         let failed = self.failed.try_get_untracked().flatten().is_some();
@@ -430,7 +534,14 @@ impl Loaded {
         }
         let (answer, listens, asked) = {
             let mut store = self.store.borrow_mut();
-            let answer = (self.watchdog).timed(&mut store, |store| call(&self.instance, store));
+            let woken = &self.woken;
+            let answer = (self.watchdog).timed(&mut store, |store| {
+                finish(call(&self.instance, store), woken)
+            });
+            let answer = match answer {
+                Ok(answer) if woken.take() => self.turned(&mut store).map(|()| answer),
+                answer => answer,
+            };
             let state = store.data_mut();
             (
                 answer,
@@ -484,9 +595,14 @@ impl Loaded {
     fn handle(self: &Rc<Self>, node: NodeId, event: &str, capture: bool, happened: &DomEvent) {
         let data = payload(happened);
         let target = happened.target.as_u64();
+        let event = event.to_string();
         let loaded = self.clone();
         let handled = self.call(|_, store| {
-            (loaded.events()).call_handle(store, node.as_u64(), target, event, capture, &data)
+            Box::pin(async move {
+                (loaded.events())
+                    .call_handle(store, node.as_u64(), target, &event, capture, &data)
+                    .await
+            })
         });
         let Some(handled) = handled else {
             return;
@@ -510,29 +626,59 @@ impl Loaded {
     /// What follows an event: the work that asked the page.
     pub fn after_dispatch(self: &Rc<Self>) -> Option<()> {
         let loaded = self.clone();
-        self.call(|_, store| loaded.events().call_after_dispatch(store))
+        self.call(|_, store| {
+            Box::pin(async move { loaded.events().call_after_dispatch(store).await })
+        })
     }
 
     /// The work that follows a layout.
     pub fn after_layout(self: &Rc<Self>) -> Option<()> {
         let loaded = self.clone();
-        self.call(|_, store| loaded.events().call_after_layout(store))
+        self.call(|_, store| {
+            Box::pin(async move { loaded.events().call_after_layout(store).await })
+        })
     }
 
     /// Runs the plugin's effects.
     pub fn run_effects(self: &Rc<Self>) -> Option<()> {
         let loaded = self.clone();
-        self.call(|_, store| loaded.events().call_run_effects(store))
+        self.call(|_, store| Box::pin(async move { loaded.events().call_run_effects(store).await }))
+    }
+
+    /// One turn for the plugin's tasks, under the limit.
+    fn turned(&self, store: &mut Store<State>) -> wasmtime::Result<()> {
+        let woken = &self.woken;
+        (self.watchdog).timed(store, |store| {
+            finish(store.run_concurrent(async |_| OneTurn(false).await), woken)
+        })
+    }
+
+    /// A turn for the plugin's tasks if one of them asked for it, unless
+    /// the plugin is being called or has trapped.
+    fn turn(self: &Rc<Self>) {
+        if !self.woken.take() {
+            return;
+        }
+        // (A call under way gives the turn when it is back.)
+        if self.calling.get() {
+            self.woken.asked.store(true, Ordering::Relaxed);
+            return;
+        }
+        // (The turn's own work after it -- its asks, its listeners -- is a
+        // call's, made empty.)
+        let loaded = self.clone();
+        self.call(|_, store| Box::pin(async move { loaded.turned(store) }));
     }
 
     /// Has the plugin follow this page: its work after each layout, its
-    /// effects when the page's run.
+    /// tasks' turns and its effects when the page's effects run.
     pub fn follow(self: &Rc<Self>) {
         let (laid_out, effects) = (self.clone(), self.clone());
         horizon_ui::each_layout(move |page| {
             host::lend(page, || laid_out.after_layout());
         });
         horizon_ui::each_effects(move || {
+            effects.turn();
             effects.run_effects();
         });
     }
@@ -551,28 +697,32 @@ pub fn compile(path: &Path) -> Result<Compiled, String> {
     let said = |error: wasmtime::Error| format!("{error:#}");
     let mut config = Config::new();
     config.wasm_component_model(true);
+    config.wasm_component_model_async(true);
     config.epoch_interruption(true);
     let engine = Engine::new(&config).map_err(said)?;
     let component = Component::from_file(&engine, path).map_err(said)?;
     Ok(Compiled { engine, component })
 }
 
-/// The plugin `compiled` in a store of its own, given `wasi` and `asks`;
+/// The plugin `compiled` in a store of its own, given `wasi` and `asks`,
+/// its tasks started; `wake` wakes the page when they ask for a turn, and
 /// `failed` is told what it said if it traps.
 pub fn instantiate(
     compiled: &Compiled,
     wasi: WasiCtx,
     asks: Asks,
+    wake: Wake,
     failed: RwSignal<Option<String>>,
 ) -> wasmtime::Result<Rc<Loaded>> {
     let mut linker = Linker::<State>::new(&compiled.engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     View::add_to_linker::<_, HasSelf<State>>(&mut linker, |state| state)?;
     let mut store = Store::new(
         &compiled.engine,
         State {
             wasi,
             table: ResourceTable::new(),
+            began: None,
             asked: Vec::new(),
             limits: StoreLimitsBuilder::new().memory_size(MEMORY_LIMIT).build(),
             owned: HashSet::new(),
@@ -580,16 +730,38 @@ pub fn instantiate(
         },
     );
     store.limiter(|state| &mut state.limits);
+    // Another store's call may move the shared engine's epoch on: this
+    // store's call is ended only once it has itself gone on too long.
+    store.epoch_deadline_callback(|store| match store.data().began {
+        Some(began) if began.elapsed() >= CALL_LIMIT => {
+            Err(wasmtime::Error::msg("the plugin took too long"))
+        }
+        _ => Ok(UpdateDeadline::Continue(1)),
+    });
     let watchdog = Watchdog::over(compiled.engine.clone());
+    let woken = Arc::new(Woken {
+        asked: AtomicBool::new(false),
+        page: wake,
+    });
     let instance = watchdog.timed(&mut store, |store| {
-        linker.instantiate(store, &compiled.component)
+        finish(linker.instantiate_async(store, &compiled.component), &woken)
     })?;
     let events = View::new(&mut store, &instance)?;
+    // What runs the plugin's own tasks: it comes back, they go on.
+    watchdog.timed(&mut store, |store| {
+        finish(
+            store.run_concurrent(async |accessor| {
+                events.horizon_ui_events().call_tasks(accessor).await
+            }),
+            &woken,
+        )
+    })??;
     Ok(Rc::new(Loaded {
         store: RefCell::new(store),
         instance,
         events,
         asks,
+        woken,
         watchdog,
         failed,
         calling: Cell::new(false),

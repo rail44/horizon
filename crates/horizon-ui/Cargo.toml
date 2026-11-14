@@ -17,7 +17,7 @@ horizon-ui-macros = { path = "../horizon-ui-macros" }
 blitz-dom = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-wit-bindgen = "0.41"
+wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }
 keyboard-types = "0.8"
 
 [dev-dependencies]

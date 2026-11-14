@@ -175,8 +175,14 @@ between turns it calls the guest plainly.
   two short strings (the copies and the allocation are about 90 ns of
   that), 191 ns with a list of eight coming back.
 
-Not tried: the limit on a call's time (the engine's epoch) together with
-tasks; `stream`; what wasmtime's documentation says of `run_concurrent`,
+The limit on a call's time (the engine's epoch) holds with tasks: the
+preview test of a call that does not come back passes on the async store,
+and a store's epoch callback ends a call only once that store's own call
+or turn has run past the limit, since one engine serves every pane.
+`events.tasks` comes back at once and leaves a task behind that starts
+the tasks a view asks for, so they outlive the export's task.
+
+Not tried: `stream`; what wasmtime's documentation says of `run_concurrent`,
 that a future inside it can be kept from being polled while wasm runs
 (bytecodealliance/wasmtime#11869, #11870). `wit-bindgen`'s `spawn_local`
 needs the crate that spawns and the crate that exports to be one version,
@@ -216,9 +222,21 @@ The decisions and who made them are on board #76. What they come to:
   departs from it on purpose.
 - **The document is synchronous; the world outside may not be.**
   Operations on the document and questions about the layout are plain
-  calls. Waiting for a file to change, a timer, or work off the UI thread
-  is WASI 0.3's `async`: a guest's tasks can be run from the UI thread's
-  loop ("Who drives").
+  calls. Waiting on the world outside is a component-model `async`
+  function, and a guest's tasks are run from the UI thread's loop ("Who
+  drives"): the store is an async one, every call into it is finished
+  on the UI thread, and a woken task wakes the page, whose effects give
+  the plugin's tasks one turn (`src/plugin_host.rs`). The guest's tasks
+  are started by `events.tasks`, which the SDK implements; a view starts
+  one with `horizon_ui::guest::spawn`.
+- **What the host offers beside the document is grouped by what it is
+  about**, one interface each in `horizon:ui`: `desktop` (`open-url`),
+  `pane` (`set-title`), `files` (the `file` resource, and
+  `wait-for-change`). A file's changes are watched by the host:
+  `wasi:filesystem` 0.3 has no way to wait for one, and the host already
+  watches files for its own views (`src/markdown/watch.rs`). A view
+  watches one with `horizon_ui::guest::watch`, which reruns the plugin's
+  effects after each change.
 - **wasmtime 50.** Done.
 - **The first extension is the Markdown view**, taking the built-in one's
   place once it passes the same tests. It reads files through WASI, with
@@ -270,8 +288,7 @@ The decisions and who made them are on board #76. What they come to:
   Markdown view is the first (`plugins/markdown`), beside the built-in one
   until it does all the built-in one does.
 
-Open: an extension's life (watching a file);
-keeping a plugin's CSS to its own tree; how the boundary is versioned;
+Open: keeping a plugin's CSS to its own tree; how the boundary is versioned;
 where extensions live and how they are built; the preview pane as one of
 them; a command's title and description, which its type does not carry;
 the file chooser itself.

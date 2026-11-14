@@ -33,9 +33,12 @@ mod own {
         path: "crates/horizon-ui/wit",
         world: "preview",
         imports: { default: trappable },
+        exports: { default: async },
         with: {
             "horizon:ui/document": crate::plugin_host::horizon::ui::document,
-            "horizon:ui/host": crate::plugin_host::horizon::ui::host,
+            "horizon:ui/desktop": crate::plugin_host::horizon::ui::desktop,
+            "horizon:ui/pane": crate::plugin_host::horizon::ui::pane,
+            "horizon:ui/files": crate::plugin_host::horizon::ui::files,
         },
     });
 }
@@ -93,7 +96,7 @@ impl Preview {
 }
 
 /// One preview of a compiled plugin, or what was said in place of it.
-fn shown(compiled: Result<Compiled, String>, name: Option<&str>) -> El {
+fn shown(compiled: Result<Compiled, String>, name: Option<&str>, wake: Wake) -> El {
     let failed = RwSignal::new(None::<String>);
     let root = el("div").class(styles::SHOWN).when(
         move || failed.get().is_some(),
@@ -104,10 +107,11 @@ fn shown(compiled: Result<Compiled, String>, name: Option<&str>) -> El {
         },
     );
     let loaded = compiled.and_then(|compiled| {
-        let loaded = instantiate(&compiled, no_grants(), Asks::default(), failed);
+        let loaded = instantiate(&compiled, no_grants(), Asks::default(), wake, failed);
         let loaded = loaded.map_err(|error| format!("{error:#}"))?;
         // (The plugin's own exports, beside those every plugin has.)
-        let previews = loaded.call(|instance, store| own::Preview::new(store, instance));
+        let previews = loaded
+            .call(|instance, store| Box::pin(async move { own::Preview::new(store, instance) }));
         let previews = previews.ok_or_else(|| "the plugin is not a preview plugin".to_string())?;
         Ok((loaded, Rc::new(previews)))
     });
@@ -120,8 +124,11 @@ fn shown(compiled: Result<Compiled, String>, name: Option<&str>) -> El {
     };
     let name = match name {
         Some(name) => Some(name.to_string()),
-        None => (loaded.call(|_, store| previews.call_names(store)))
-            .and_then(|names| names.into_iter().next()),
+        None => {
+            let previews = previews.clone();
+            (loaded.call(|_, store| Box::pin(async move { previews.call_names(store).await })))
+                .and_then(|names| names.into_iter().next())
+        }
     };
     let Some(name) = name else {
         failed.update(|failed| {
@@ -129,7 +136,11 @@ fn shown(compiled: Result<Compiled, String>, name: Option<&str>) -> El {
         });
         return root;
     };
-    match loaded.call(|_, store| previews.call_mount(store, &name)) {
+    let mounted = {
+        let name = name.clone();
+        loaded.call(|_, store| Box::pin(async move { previews.call_mount(store, &name).await }))
+    };
+    match mounted {
         Some(Some(mounted)) => {
             root.child(El(NodeId::from_u64(mounted)));
         }
@@ -154,6 +165,7 @@ pub fn view(
         read: RwSignal::new(None),
     };
     let compiling = background.clone();
+    let shown_wake = wake.clone();
     Effect::new(move |_| {
         let (Some(target), reads) = (state.target.get(), state.reads.get()) else {
             return;
@@ -212,6 +224,7 @@ pub fn view(
                 let shown = shown(
                     compiled.unwrap_or_else(|| Err("nothing was read".to_string())),
                     target.name.as_deref(),
+                    shown_wake.clone(),
                 );
                 arrived.set(Some(shown));
                 shown

@@ -23,6 +23,7 @@ use wasmtime::component::{Instance, Val};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 use crate::plugin_host::{Asks, Compiled, Loaded, compile, instantiate};
+use crate::wake::Wake;
 
 /// What a package's manifest says.
 #[derive(Deserialize)]
@@ -179,6 +180,7 @@ impl Extension {
     pub fn instantiate(
         self: &Rc<Self>,
         asks: Asks,
+        wake: Wake,
         failed: RwSignal<Option<String>>,
     ) -> Result<Running, String> {
         let mut wasi = WasiCtxBuilder::new();
@@ -187,7 +189,7 @@ impl Extension {
             wasi.preopened_dir(directory, &*path, FsPerms::ReadOnly)
                 .map_err(|error| format!("{}: {error}", directory.display()))?;
         }
-        let loaded = instantiate(&self.compiled, wasi.build(), asks, failed)
+        let loaded = instantiate(&self.compiled, wasi.build(), asks, wake, failed)
             .map_err(|error| format!("{error:#}"))?;
         Ok(Running {
             extension: self.clone(),
@@ -215,10 +217,12 @@ impl Running {
             None => Val::Option(None),
         };
         let root = self.loaded.call(|instance, store| {
-            let mount = function(instance, store, None, "mount")?;
-            let mut answer = [Val::U64(0)];
-            mount.call(&mut *store, &[given], &mut answer)?;
-            Ok(answer[0].clone())
+            Box::pin(async move {
+                let mount = function(instance, store, None, "mount")?;
+                let mut answer = [Val::U64(0)];
+                mount.call_async(&mut *store, &[given], &mut answer).await?;
+                Ok(answer[0].clone())
+            })
         });
         match root {
             Some(Val::U64(root)) => Ok(root),
@@ -229,10 +233,12 @@ impl Running {
     /// What the pane keeps of it now, as text.
     pub fn state(&self) -> Option<String> {
         let value = self.loaded.call(|instance, store| {
-            let state = function(instance, store, None, "state")?;
-            let mut answer = [Val::Bool(false)];
-            state.call(&mut *store, &[], &mut answer)?;
-            Ok(answer[0].clone())
+            Box::pin(async move {
+                let state = function(instance, store, None, "state")?;
+                let mut answer = [Val::Bool(false)];
+                state.call_async(&mut *store, &[], &mut answer).await?;
+                Ok(answer[0].clone())
+            })
         })?;
         value.to_wave().ok()
     }
@@ -247,12 +253,15 @@ impl Running {
         {
             return false;
         }
+        let name = name.to_string();
         let ran = self.loaded.call(|instance, store| {
-            let commands = instance
-                .get_export_index(&mut *store, None, "commands")
-                .ok_or_else(|| wasmtime::Error::msg("no commands"))?;
-            let command = function(instance, store, Some(&commands), name)?;
-            command.call(&mut *store, &[], &mut [])
+            Box::pin(async move {
+                let commands = instance
+                    .get_export_index(&mut *store, None, "commands")
+                    .ok_or_else(|| wasmtime::Error::msg("no commands"))?;
+                let command = function(instance, store, Some(&commands), &name)?;
+                command.call_async(&mut *store, &[], &mut []).await
+            })
         });
         ran.is_some()
     }

@@ -162,6 +162,11 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
         kept(&opened).1.contains("first.md")
     });
 
+    // The file changed on disk: the host's watch wakes the extension's
+    // task, and the pane reads it again.
+    std::fs::write(&first, "# Uno\n").unwrap();
+    opened.until("the file read again", || opened.text().contains("Uno"));
+
     // What is saved of the pane: the extension's name and its state.
     let saved = opened.model(|model| model.to_persisted_json().unwrap());
     assert!(saved.contains("markdown-extension"), "{saved}");

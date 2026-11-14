@@ -355,7 +355,7 @@ impl Shell {
             set_title: Some(Rc::new(move |text| title.set(text))),
         };
         let name = extension.name;
-        let running = match extension.instantiate(asks, failed) {
+        let running = match extension.instantiate(asks, kept.wake.clone(), failed) {
             Ok(running) => Rc::new(running),
             Err(error) => {
                 failed.set(Some(error));
