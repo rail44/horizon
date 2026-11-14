@@ -30,7 +30,7 @@ pub fn workspace_snapshot(workspace: &Workspace) -> serde_json::Value {
                 "tab_index": pane.tab_index,
                 "pane_index": pane.pane_index,
                 "title": pane.title,
-                "kind": format!("{:?}", pane.kind).to_ascii_lowercase(),
+                "kind": pane.plugin,
                 "active": pane.active,
                 "tab_active": pane.tab_active,
             }))

@@ -1,5 +1,5 @@
 use super::types::{
-    Pane, PaneId, PaneKind, PaneSummary, SessionSummary, Tab, TabId, TabSummary, Workspace,
+    Pane, PaneId, PaneSummary, SessionKind, SessionSummary, Tab, TabId, TabSummary, Workspace,
     WorkspaceSession,
 };
 use crate::SessionId;
@@ -36,19 +36,25 @@ impl Workspace {
     /// above (which stay as they are for every other caller -- the
     /// control plane, palette, and workspace-mode's own flat cursor index
     /// are all untouched by this slice).
-    pub fn pane_kind(&self, pane_id: PaneId) -> Option<PaneKind> {
-        self.panes
-            .iter()
-            .find(|pane| pane.id == pane_id)
-            .map(|pane| pane.kind)
-    }
-
-    /// The plugin a plugin view pane shows ([`Pane::plugin`]).
     pub fn pane_plugin(&self, pane_id: PaneId) -> Option<&crate::PluginPane> {
         self.panes
             .iter()
             .find(|pane| pane.id == pane_id)
-            .and_then(|pane| pane.plugin.as_ref())
+            .map(|pane| &pane.plugin)
+    }
+
+    /// The session a pane shows, if it shows one.
+    pub fn pane_session_id(&self, pane_id: PaneId) -> Option<SessionId> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == pane_id)
+            .and_then(|pane| pane.session_id)
+    }
+
+    /// The session `pane` shows, when it is one of `kind`.
+    fn pane_session_of(&self, pane: &Pane, kind: SessionKind) -> Option<SessionId> {
+        let session = pane.session_id?;
+        (self.session_kind(session) == Some(kind)).then_some(session)
     }
 
     /// Where `pane_id` sits, as the `(tab index, pane index)` pair
@@ -65,42 +71,26 @@ impl Workspace {
         })
     }
 
-    /// Every pane of the tab that holds `pane_id`, in layout order, with
-    /// its kind. What a pane-local decision reads when it has to look at
-    /// its tab rather than at itself -- the board's list finding the
-    /// thread pane beside it, a thread finding its list. Empty when no tab
-    /// holds `pane_id`.
-    pub fn tab_pane_kinds(&self, pane_id: PaneId) -> Vec<(PaneId, PaneKind)> {
+    /// Every pane of the tab that holds `pane_id`, in layout order. What a
+    /// pane-local decision reads when it has to look at its tab rather than
+    /// at itself -- the board's list finding the thread pane beside it, a
+    /// thread finding its list. Empty when no tab holds `pane_id`.
+    pub fn tab_panes(&self, pane_id: PaneId) -> Vec<PaneId> {
         self.tabs
             .iter()
             .find(|tab| tab.root.pane_ids().contains(&pane_id))
-            .map(|tab| {
-                tab.root
-                    .pane_ids()
-                    .into_iter()
-                    .filter_map(|id| {
-                        self.panes
-                            .iter()
-                            .find(|pane| pane.id == id)
-                            .map(|pane| (id, pane.kind))
-                    })
-                    .collect()
-            })
+            .map(|tab| tab.root.pane_ids())
             .unwrap_or_default()
     }
 
     pub fn terminal_session_id(&self, pane_id: PaneId) -> Option<SessionId> {
-        self.panes
-            .iter()
-            .find(|pane| pane.id == pane_id && pane.kind == PaneKind::Terminal)
-            .and_then(|pane| pane.session_id)
+        let pane = self.panes.iter().find(|pane| pane.id == pane_id)?;
+        self.pane_session_of(pane, SessionKind::Terminal)
     }
 
     pub fn agent_session_id(&self, pane_id: PaneId) -> Option<SessionId> {
-        self.panes
-            .iter()
-            .find(|pane| pane.id == pane_id && pane.kind == PaneKind::Agent)
-            .and_then(|pane| pane.session_id)
+        let pane = self.panes.iter().find(|pane| pane.id == pane_id)?;
+        self.pane_session_of(pane, SessionKind::Agent)
     }
 
     /// Test-only now: no production caller remains (2026-07-18 visibility
@@ -156,10 +146,7 @@ impl Workspace {
 
     pub fn active_terminal_session_id(&self) -> Option<SessionId> {
         let active = self.active_tab()?.active;
-        self.panes
-            .iter()
-            .find(|pane| pane.id == active && pane.kind == PaneKind::Terminal)
-            .and_then(|pane| pane.session_id)
+        self.terminal_session_id(active)
     }
 
     pub fn active_session_id(&self) -> Option<SessionId> {
@@ -198,10 +185,7 @@ impl Workspace {
     #[cfg(test)]
     pub fn visible_terminal_session_id(&self, index: usize) -> Option<SessionId> {
         let pane_id = self.visible_pane_id(index)?;
-        self.panes
-            .iter()
-            .find(|pane| pane.id == pane_id && pane.kind == PaneKind::Terminal)
-            .and_then(|pane| pane.session_id)
+        self.terminal_session_id(pane_id)
     }
 
     /// Test-only now: the GPUI shell's recursive renderer
@@ -212,10 +196,7 @@ impl Workspace {
     #[cfg(test)]
     pub fn visible_agent_session_id(&self, index: usize) -> Option<SessionId> {
         let pane_id = self.visible_pane_id(index)?;
-        self.panes
-            .iter()
-            .find(|pane| pane.id == pane_id && pane.kind == PaneKind::Agent)
-            .and_then(|pane| pane.session_id)
+        self.agent_session_id(pane_id)
     }
 
     /// Test-only now: the workspace overview's header text
@@ -307,7 +288,7 @@ impl Workspace {
                                 tab_index,
                                 pane_index,
                                 title: self.pane_title(pane),
-                                kind: pane.kind,
+                                plugin: pane.plugin.name.clone(),
                                 active: tab.active == pane_id,
                                 tab_active: tab.id == self.active_tab,
                             })
@@ -327,13 +308,6 @@ impl Workspace {
             .iter()
             .filter_map(|id| self.panes.iter().find(|pane| pane.id == *id))
             .collect()
-    }
-
-    /// Test-only now: its only caller, `Workspace::split_active_with_new_
-    /// session`, is itself `#[cfg(test)]` (2026-07-18 visibility audit).
-    #[cfg(test)]
-    pub(crate) fn visible_pane_kind(&self, index: usize) -> Option<PaneKind> {
-        self.visible_panes().get(index).map(|pane| pane.kind)
     }
 
     pub(crate) fn active_visible_index(&self) -> usize {
@@ -408,13 +382,10 @@ impl Workspace {
             .unwrap_or_else(|| pane.title())
     }
 
-    /// `pub(crate)`, not `pub(super)`, so `app::runtime::spawn_cwd` can
-    /// resolve a spawn-source session's kind without going through the
-    /// pane layer (a *detached* source session -- one with no pane at all
-    /// -- still has a kind, just no `PaneId` to look one up from).
-    pub fn session_pane_kind(&self, session_id: SessionId) -> Option<PaneKind> {
-        self.session(session_id)
-            .map(|session| PaneKind::from(session.kind))
+    /// The kind of a session the workspace has, whether a pane shows it
+    /// or not.
+    pub fn session_kind(&self, session_id: SessionId) -> Option<SessionKind> {
+        self.session(session_id).map(|session| session.kind)
     }
 
     pub(crate) fn session(&self, session_id: SessionId) -> Option<&WorkspaceSession> {

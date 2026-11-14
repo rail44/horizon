@@ -163,13 +163,13 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{PaneKind, SplitAxis};
+    use crate::types::{SessionKind, SplitAxis};
     use crate::SessionId;
 
     #[test]
     fn cursor_follows_focus_outside_the_mode() {
         let mut workspace = Workspace::mvp();
-        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let second = workspace.split_active(SessionKind::Terminal, SessionId::new());
 
         assert!(!workspace.is_workspace_mode_active());
         assert_eq!(workspace.cursor_pane_id(), Some(second));
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn entering_seeds_the_cursor_at_the_focused_pane() {
         let mut workspace = Workspace::mvp();
-        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let second = workspace.split_active(SessionKind::Terminal, SessionId::new());
 
         workspace.enter_workspace_mode();
 
@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn re_entering_while_active_does_not_reset_the_cursor() {
         let mut workspace = Workspace::mvp();
-        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let second = workspace.split_active(SessionKind::Terminal, SessionId::new());
         workspace.activate_visible_pane(0);
         workspace.enter_workspace_mode();
         workspace.move_cursor(Direction::Right);
@@ -209,7 +209,7 @@ mod tests {
     fn moving_the_cursor_leaves_focus_untouched() {
         let mut workspace = Workspace::mvp();
         let first = workspace.visible_pane_id(0).expect("first pane");
-        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let second = workspace.split_active(SessionKind::Terminal, SessionId::new());
         // `split_active` itself focuses the new (second) pane -- reset to
         // the first so this test starts from a known focus position.
         workspace.activate_visible_pane(0);
@@ -228,7 +228,7 @@ mod tests {
     fn cursor_does_not_move_past_either_edge_of_a_horizontal_split() {
         let mut workspace = Workspace::mvp();
         let first = workspace.visible_pane_id(0).expect("first pane");
-        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let second = workspace.split_active(SessionKind::Terminal, SessionId::new());
         workspace.activate_visible_pane(0);
         workspace.enter_workspace_mode();
 
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn commit_moves_focus_to_the_cursor_and_exits() {
         let mut workspace = Workspace::mvp();
-        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let second = workspace.split_active(SessionKind::Terminal, SessionId::new());
         workspace.activate_visible_pane(0);
         workspace.enter_workspace_mode();
         workspace.move_cursor(Direction::Right);
@@ -299,7 +299,7 @@ mod tests {
         // in `src/workspace/render.rs` calls `activate_pane` only).
         let mut workspace = Workspace::mvp();
         let first = workspace.visible_pane_id(0).expect("first pane");
-        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let second = workspace.split_active(SessionKind::Terminal, SessionId::new());
         workspace.activate_visible_pane(0);
         workspace.enter_workspace_mode();
         workspace.move_cursor(Direction::Right);
@@ -318,7 +318,7 @@ mod tests {
         // leave focus untouched rather than double-applying it.
         let mut workspace = Workspace::mvp();
         let first = workspace.visible_pane_id(0).expect("first pane");
-        let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let second = workspace.split_active(SessionKind::Terminal, SessionId::new());
         workspace.activate_visible_pane(0);
 
         workspace.commit_workspace_mode_to(second);
@@ -331,7 +331,7 @@ mod tests {
     fn cancel_snaps_the_cursor_back_to_the_untouched_focus() {
         let mut workspace = Workspace::mvp();
         let first = workspace.visible_pane_id(0).expect("first pane");
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.split_active(SessionKind::Terminal, SessionId::new());
         workspace.activate_visible_pane(0);
         workspace.enter_workspace_mode();
         workspace.move_cursor(Direction::Right);
@@ -347,7 +347,7 @@ mod tests {
     fn move_and_commit_are_no_ops_outside_the_mode() {
         let mut workspace = Workspace::mvp();
         let first = workspace.visible_pane_id(0).expect("first pane");
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.split_active(SessionKind::Terminal, SessionId::new());
         workspace.activate_visible_pane(0);
 
         workspace.move_cursor(Direction::Right);

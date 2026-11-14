@@ -10,7 +10,7 @@
 use std::rc::Rc;
 
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Update, WithUntracked};
-use horizon_workspace::{PaneKind, SessionId, SessionInventory, SessionKind, Workspace};
+use horizon_workspace::{SessionId, SessionInventory, SessionKind, Workspace};
 
 use super::{Modal, Reloading, RunningAgent, Shell};
 
@@ -25,11 +25,14 @@ impl Shell {
     /// Lets go of the views of the panes of `kind` and has the panes
     /// arranged again, which makes them anew. (Not here: this is also
     /// called after a layout, when no element can be made.)
-    fn remake_panes(&self, kind: PaneKind) {
+    fn remake_panes(&self, kind: SessionKind) {
         let kept = self.kept();
         let panes: Vec<_> = self.model.with_untracked(|model| {
             (model.all_pane_ids().into_iter())
-                .filter(|id| model.pane_kind(*id) == Some(kind))
+                .filter(|id| {
+                    let session = model.pane_session_id(*id);
+                    session.and_then(|session| model.session_kind(session)) == Some(kind)
+                })
                 .collect()
         });
         for id in panes {
@@ -73,7 +76,7 @@ impl Shell {
         // the runtime's to keep. Their panes say what is going on.
         kept.agents.borrow_mut().clear();
         kept.looked_for.borrow_mut().clear();
-        self.remake_panes(PaneKind::Agent);
+        self.remake_panes(SessionKind::Agent);
         let restart = reload.restart.clone();
         self.in_background(
             move || restart(()),
@@ -121,7 +124,7 @@ impl Shell {
         }
         kept.reloading.set(None);
         kept.refocus.set(true);
-        self.remake_panes(PaneKind::Agent);
+        self.remake_panes(SessionKind::Agent);
     }
 
     pub(super) fn reload_terminal_runtime(&self) {

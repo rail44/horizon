@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::SessionId;
 
-use super::{LayoutNode, PaneId, PaneKind, SessionKind, TabId};
+use super::{LayoutNode, PaneId, SessionKind, TabId};
 
 #[derive(Clone, Debug)]
 pub struct Workspace {
@@ -62,12 +62,11 @@ pub struct WorkspaceSession {
 #[derive(Clone, Debug)]
 pub struct Pane {
     pub id: PaneId,
-    pub kind: PaneKind,
     pub session_id: Option<SessionId>,
-    /// The plugin a view shows, and its state (`PaneKind::View`).
-    /// Persisted, so the pane restores on the same state; `None` for every
-    /// other kind.
-    pub plugin: Option<PluginPane>,
+    /// The plugin the pane shows, and its state. Persisted, so the pane
+    /// restores on the same state. A session's pane shows its kind's
+    /// plugin ([`SessionKind::plugin`]).
+    pub plugin: PluginPane,
 }
 
 /// What a plugin view pane keeps of its plugin.
@@ -103,29 +102,17 @@ impl WorkspaceSession {
 }
 
 impl Pane {
-    pub fn new(kind: PaneKind, session_id: Option<SessionId>) -> Self {
+    pub fn new(plugin: PluginPane, session_id: Option<SessionId>) -> Self {
         Self {
             id: PaneId::new(),
-            kind,
             session_id,
-            plugin: None,
+            plugin,
         }
     }
 
-    /// The plugin's title for a view, else the kind's.
+    /// The plugin's title.
     pub fn title(&self) -> String {
-        match &self.plugin {
-            Some(plugin) => plugin.title.clone(),
-            None => pane_kind_title(self.kind).to_string(),
-        }
-    }
-}
-
-fn pane_kind_title(kind: PaneKind) -> &'static str {
-    match kind {
-        PaneKind::Terminal => "Terminal",
-        PaneKind::Agent => "AI Agent",
-        PaneKind::View => "View",
+        self.plugin.title.clone()
     }
 }
 

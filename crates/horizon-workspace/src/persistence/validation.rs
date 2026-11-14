@@ -1,8 +1,8 @@
 //! Validate persisted sessions, layout membership, and attachment references.
 
 use super::{
-    state_error, PaneKindState, PaneState, SessionId, SessionKind, WorkspaceState,
-    WorkspaceStateError, WORKSPACE_STATE_VERSION,
+    state_error, PaneState, SessionId, SessionKind, WorkspaceState, WorkspaceStateError,
+    WORKSPACE_STATE_VERSION,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -117,47 +117,37 @@ fn validate_attachment(
     sessions: &HashMap<SessionId, SessionKind>,
     attached_sessions: &mut HashSet<SessionId>,
 ) -> Result<(), WorkspaceStateError> {
-    let plugin_view = matches!(pane.kind, PaneKindState::View);
-    if pane.plugin.is_some() != plugin_view {
+    let Some(session_id) = pane.session_id else {
+        // A view of no session shows any plugin but a session kind's.
+        let session_plugin = [SessionKind::Terminal, SessionKind::Agent]
+            .into_iter()
+            .any(|kind| kind.plugin_name() == pane.plugin.name);
+        if session_plugin {
+            return Err(state_error(format!(
+                "pane {:?} shows a session's plugin but has no session attachment",
+                pane.id
+            )));
+        }
+        return Ok(());
+    };
+    let Some(session_kind) = sessions.get(&session_id) else {
         return Err(state_error(format!(
-            "pane {:?} is a plugin view only if it carries a plugin",
+            "pane {:?} references unknown session {session_id:?}",
             pane.id
         )));
+    };
+    if pane.plugin.name != session_kind.plugin_name() {
+        return Err(state_error(format!(
+            "pane {:?} shows {} but its session {session_id:?} is of kind {}",
+            pane.id,
+            pane.plugin.name,
+            session_kind.label()
+        )));
     }
-    match pane.kind.expected_session_kind() {
-        None => {
-            if pane.session_id.is_some() {
-                return Err(state_error(format!(
-                    "view pane {:?} must not have a session attachment",
-                    pane.id
-                )));
-            }
-        }
-        Some(expected_kind) => {
-            let Some(session_id) = pane.session_id else {
-                return Err(state_error(format!(
-                    "pane {:?} has no session attachment",
-                    pane.id
-                )));
-            };
-            let Some(session_kind) = sessions.get(&session_id) else {
-                return Err(state_error(format!(
-                    "pane {:?} references unknown session {session_id:?}",
-                    pane.id
-                )));
-            };
-            if *session_kind != expected_kind {
-                return Err(state_error(format!(
-                    "pane {:?} and session {session_id:?} have different kinds",
-                    pane.id
-                )));
-            }
-            if !attached_sessions.insert(session_id) {
-                return Err(state_error(format!(
-                    "session {session_id:?} is attached to multiple panes"
-                )));
-            }
-        }
+    if !attached_sessions.insert(session_id) {
+        return Err(state_error(format!(
+            "session {session_id:?} is attached to multiple panes"
+        )));
     }
     Ok(())
 }

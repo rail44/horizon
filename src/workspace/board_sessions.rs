@@ -11,7 +11,7 @@ use horizon_board_view::activity::BoardSessionActivity;
 
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Update, WithUntracked};
 use horizon_ui::{Callable, Callback, relayout};
-use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, Workspace};
+use horizon_workspace::{PaneId, SessionId, SessionKind, Workspace};
 
 use super::{RunningAgent, Shell};
 
@@ -42,7 +42,7 @@ impl Shell {
         };
         let session = running.session;
         let other_kind = self.model.with_untracked(|model| {
-            (model.session_pane_kind(session)).is_some_and(|kind| kind != PaneKind::Agent)
+            (model.session_kind(session)).is_some_and(|kind| kind != SessionKind::Agent)
         });
         if other_kind {
             return Err("the session id belongs to a different session kind".to_string());
@@ -168,8 +168,8 @@ impl Shell {
                 let shown = running.and_then(|running| {
                     let session = running.session;
                     // One ended while this was on its way is not put back.
-                    let known = (shell.model)
-                        .with_untracked(|model| model.session_pane_kind(session).is_some());
+                    let known =
+                        (shell.model).with_untracked(|model| model.session_kind(session).is_some());
                     if registered.contains(&session) && !known {
                         return Ok(());
                     }
@@ -195,7 +195,7 @@ impl Shell {
     /// went wrong.
     pub fn open_task_session(&self, session: SessionId, failed: Callback<String>) {
         let kept = self.kept();
-        let known = (self.model).with_untracked(|model| model.session_pane_kind(session).is_some());
+        let known = (self.model).with_untracked(|model| model.session_kind(session).is_some());
         let Some(runtime) = kept.agent_runtime.as_ref().filter(|_| !known) else {
             self.go_to_session(session);
             return;

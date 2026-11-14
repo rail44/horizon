@@ -41,7 +41,7 @@ use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Callback, El, each_layout, el, relayout, stop_propagation};
 use horizon_workspace::title::derive_session_title;
 use horizon_workspace::types::TabSummary;
-use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, Workspace};
+use horizon_workspace::{PaneId, SessionId, SessionKind, SplitAxis, Workspace};
 
 use crate::agent::plugin::{AgentAsked, AgentPlugin};
 use crate::agent::{Agent, AgentSession};
@@ -439,10 +439,10 @@ impl Shell {
         let kept = self.kept();
         let (panes, sessions) = self.model.with_untracked(|model| {
             let panes: Vec<_> = (model.all_pane_ids().into_iter())
-                .filter_map(|id| {
-                    let session =
-                        (model.terminal_session_id(id)).or_else(|| model.agent_session_id(id));
-                    Some((id, model.pane_kind(id)?, session))
+                .map(|id| {
+                    let session = (model.pane_session_id(id))
+                        .and_then(|session| Some((model.session_kind(session)?, session)));
+                    (id, session)
                 })
                 .collect();
             let sessions: HashSet<SessionId> = (model.session_summaries().iter())
@@ -474,16 +474,16 @@ impl Shell {
                 view.element.remove();
             }
         }
-        for (id, kind, session) in panes {
+        for (id, session) in panes {
             if kept.panes.borrow().contains_key(&id) {
                 continue;
             }
-            let view = self.pane(id, kind, session);
+            let view = self.pane(id, session);
             kept.panes.borrow_mut().insert(id, view);
         }
     }
 
-    fn pane(&self, id: PaneId, kind: PaneKind, session: Option<SessionId>) -> PaneView {
+    fn pane(&self, id: PaneId, session: Option<(SessionKind, SessionId)>) -> PaneView {
         let (shell, kept) = (*self, self.kept());
         let owner = kept.owner.child();
         let (mut terminal, mut agent) = (None, None);
@@ -496,8 +496,8 @@ impl Shell {
                 .unwrap_or_default()
         };
         let element = owner.with(|| {
-            let content = match (kind, session, &kept.spawn_agent) {
-                (PaneKind::Terminal, Some(session_id), _) => {
+            let content = match (session, &kept.spawn_agent) {
+                (Some((SessionKind::Terminal, session_id)), _) => {
                     let running = kept.sessions.borrow().get(&session_id).cloned();
                     let session = running.unwrap_or_else(|| {
                         let start = start(session_id);
@@ -529,7 +529,7 @@ impl Shell {
                 }
                 // (Its session is attached to again when the runtime is
                 // back, and the pane made again.)
-                (PaneKind::Agent, Some(_), _)
+                (Some((SessionKind::Agent, _)), _)
                     if kept.reloading.get() == Some(Reloading::Agents) =>
                 {
                     el("div")
@@ -537,7 +537,7 @@ impl Shell {
                         .attr("tabindex", "0")
                         .text("Reloading the agent runtime")
                 }
-                (PaneKind::Agent, Some(session_id), Some(spawn)) => {
+                (Some((SessionKind::Agent, session_id)), Some(spawn)) => {
                     let running = kept.agents.borrow().get(&session_id).cloned();
                     let session = running.unwrap_or_else(|| {
                         let start = start(session_id);
@@ -576,7 +576,7 @@ impl Shell {
                     shown_plugin = Some(plugin);
                     root
                 }
-                (PaneKind::View, ..) => {
+                (None, _) => {
                     let shown = (self.model).with_untracked(|model| model.pane_plugin(id).cloned());
                     let named = RwSignal::new(Vec::new());
                     let mounted = shown.and_then(|shown| self.mount_plugin(id, &shown, named));
@@ -902,13 +902,11 @@ impl Shell {
     /// The pane of `pane`'s tab that shows the plugin `name`.
     fn tab_plugin_pane(&self, pane: PaneId, name: &str) -> Option<PaneId> {
         self.model.with_untracked(|model| {
-            (model.tab_pane_kinds(pane).into_iter())
-                .map(|(pane, _)| pane)
-                .find(|pane| {
-                    model
-                        .pane_plugin(*pane)
-                        .is_some_and(|plugin| plugin.name == name)
-                })
+            (model.tab_panes(pane).into_iter()).find(|pane| {
+                model
+                    .pane_plugin(*pane)
+                    .is_some_and(|plugin| plugin.name == name)
+            })
         })
     }
 

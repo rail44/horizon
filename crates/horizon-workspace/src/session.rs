@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::types::{PaneKind, SessionKind, Workspace, WorkspaceSession};
+use super::types::{SessionKind, Workspace, WorkspaceSession};
 use crate::SessionId;
 
 impl Workspace {
@@ -97,16 +97,10 @@ impl Workspace {
     /// shows up immediately as a detached session ("survival made
     /// visible"), attachable/terminable like any other.
     pub fn register_detached_session(&mut self, kind: SessionKind, session_id: SessionId) {
-        self.ensure_session(kind.into(), Some(session_id));
+        self.ensure_session(kind, session_id);
     }
 
-    pub(crate) fn ensure_session(&mut self, kind: PaneKind, session_id: Option<SessionId>) {
-        let Some(session_id) = session_id else {
-            return;
-        };
-        let Some(session_kind) = kind.session_kind() else {
-            return;
-        };
+    pub(crate) fn ensure_session(&mut self, session_kind: SessionKind, session_id: SessionId) {
         if self.sessions.iter().any(|session| session.id == session_id) {
             return;
         }

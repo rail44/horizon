@@ -300,12 +300,12 @@ impl LayoutNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PaneKind, SessionId};
+    use crate::{SessionId, SessionKind};
 
     #[test]
     fn set_split_weights_normalizes_view_sizes() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.split_active(SessionKind::Terminal, SessionId::new());
         let tab_id = workspace.active_tab;
         let root = &workspace.tabs[0].root;
         let anchors: Vec<_> = match root {
@@ -330,7 +330,7 @@ mod tests {
     fn set_split_weights_uses_child_anchors_to_disambiguate_nested_splits() {
         let mut workspace = Workspace::mvp();
         let first = workspace.active_tab().expect("tab").active;
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.split_active(SessionKind::Terminal, SessionId::new());
         workspace.activate_pane(first);
         workspace.split_session_with_new_session(
             workspace.active_session_id().expect("session"),
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn set_split_weights_rejects_invalid_measurements_without_mutating() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.split_active(SessionKind::Terminal, SessionId::new());
         let tab_id = workspace.active_tab;
         let anchors = workspace.tabs[0].root.pane_ids();
         let before = weights(&workspace.tabs[0].root);

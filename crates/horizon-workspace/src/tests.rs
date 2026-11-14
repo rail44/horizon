@@ -1,5 +1,6 @@
 use super::types::{LayoutNode, PaneSummary, SessionSummary, TabSummary};
 use super::*;
+use crate::operations::Content;
 use crate::SessionId;
 
 #[test]
@@ -15,7 +16,7 @@ fn terminal_pane_references_top_level_session() {
 fn split_creates_new_attachment_for_session() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();
-    let pane_id = workspace.split_active(PaneKind::Terminal, Some(session_id));
+    let pane_id = workspace.split_active(SessionKind::Terminal, session_id);
 
     assert_eq!(workspace.visible_pane_id(1), Some(pane_id));
     assert_eq!(workspace.visible_terminal_session_id(1), Some(session_id));
@@ -26,9 +27,14 @@ fn split_creates_new_attachment_for_session() {
 fn pane_id_accessors_resolve_kind_session_and_title_for_a_specific_pane() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();
-    let pane_id = workspace.split_active(PaneKind::Agent, Some(session_id));
+    let pane_id = workspace.split_active(SessionKind::Agent, session_id);
 
-    assert_eq!(workspace.pane_kind(pane_id), Some(PaneKind::Agent));
+    assert_eq!(
+        workspace
+            .pane_plugin(pane_id)
+            .map(|plugin| plugin.name.as_str()),
+        Some("agent")
+    );
     assert_eq!(workspace.agent_session_id(pane_id), Some(session_id));
     assert_eq!(workspace.terminal_session_id(pane_id), None);
     assert!(workspace.pane_title_for(pane_id).is_some());
@@ -41,15 +47,22 @@ fn pane_id_accessors_resolve_kind_session_and_title_for_a_specific_pane() {
 fn a_view_pane_has_no_session_and_registers_none() {
     let mut workspace = Workspace::mvp();
     let session_count_before = workspace.session_count();
-    let pane_id = workspace.open_tab(PaneKind::View, None);
+    let pane_id = workspace.open_tab(Content::View(view()));
 
-    assert_eq!(workspace.pane_kind(pane_id), Some(PaneKind::View));
+    assert_eq!(
+        workspace
+            .pane_plugin(pane_id)
+            .map(|plugin| plugin.name.as_str()),
+        Some("preview")
+    );
     assert_eq!(workspace.active_session_id(), None);
     // No session is created for a view pane -- `ensure_session` no-ops on
     // `None`, so the session count is untouched.
     assert_eq!(workspace.session_count(), session_count_before);
-    // With no plugin yet, it is titled for its kind.
-    assert_eq!(workspace.pane_title_for(pane_id), Some("View".to_string()));
+    assert_eq!(
+        workspace.pane_title_for(pane_id),
+        Some("Preview".to_string())
+    );
 }
 
 #[test]
@@ -61,7 +74,12 @@ fn split_active_tab_with_view_adds_a_session_less_pane_beside_the_focus() {
     let view_pane = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
 
     assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, view_pane]);
-    assert_eq!(workspace.pane_kind(view_pane), Some(PaneKind::View));
+    assert_eq!(
+        workspace
+            .pane_plugin(view_pane)
+            .map(|plugin| plugin.name.as_str()),
+        Some("preview")
+    );
     assert_eq!(workspace.session_count(), session_count_before);
     // Splitting dives into the new pane, same as every other split.
     assert!(workspace.is_active_pane(view_pane));
@@ -95,13 +113,18 @@ fn plugin(name: &str, title: &str, state: serde_json::Value) -> PluginPane {
 fn a_plugin_pane_has_no_session_and_registers_none() {
     let mut workspace = Workspace::mvp();
     let session_count_before = workspace.session_count();
-    let pane_id = workspace.open_tab(PaneKind::View, None);
+    let pane_id = workspace.open_tab(Content::View(view()));
     assert!(workspace.set_pane_plugin(
         pane_id,
         plugin("board-list", "Board", serde_json::Value::Null)
     ));
 
-    assert_eq!(workspace.pane_kind(pane_id), Some(PaneKind::View));
+    assert_eq!(
+        workspace
+            .pane_plugin(pane_id)
+            .map(|plugin| plugin.name.as_str()),
+        Some("board-list")
+    );
     assert_eq!(workspace.active_session_id(), None);
     assert_eq!(workspace.session_count(), session_count_before);
     assert_eq!(workspace.pane_title_for(pane_id), Some("Board".to_string()));
@@ -116,7 +139,12 @@ fn split_active_tab_with_a_plugin_view_adds_a_session_less_pane_beside_the_focus
     let view_pane = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
 
     assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, view_pane]);
-    assert_eq!(workspace.pane_kind(view_pane), Some(PaneKind::View));
+    assert_eq!(
+        workspace
+            .pane_plugin(view_pane)
+            .map(|plugin| plugin.name.as_str()),
+        Some("preview")
+    );
     assert_eq!(workspace.session_count(), session_count_before);
     assert!(workspace.is_active_pane(view_pane));
 }
@@ -156,26 +184,16 @@ fn a_plugin_view_carries_its_plugin_and_state() {
 /// What the board's linking reads: the panes of one pane's own tab, in
 /// layout order, and nothing from any other tab.
 #[test]
-fn tab_pane_kinds_reports_the_panes_of_that_panes_own_tab() {
+fn tab_panes_reports_the_panes_of_that_panes_own_tab() {
     let mut workspace = Workspace::mvp();
     let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
     let list = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
     let thread = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
     let elsewhere = workspace.open_tab_with_view_activated(view(), false);
 
-    assert_eq!(
-        workspace.tab_pane_kinds(list),
-        vec![
-            (terminal_pane, PaneKind::Terminal),
-            (list, PaneKind::View),
-            (thread, PaneKind::View),
-        ]
-    );
-    assert_eq!(
-        workspace.tab_pane_kinds(elsewhere),
-        vec![(elsewhere, PaneKind::View)]
-    );
-    assert!(workspace.tab_pane_kinds(PaneId::new()).is_empty());
+    assert_eq!(workspace.tab_panes(list), vec![terminal_pane, list, thread]);
+    assert_eq!(workspace.tab_panes(elsewhere), vec![elsewhere]);
+    assert!(workspace.tab_panes(PaneId::new()).is_empty());
 }
 
 #[test]
@@ -188,7 +206,12 @@ fn opening_a_view_tab_without_activating_leaves_the_active_tab_alone() {
     assert_eq!(workspace.tab_count(), 2);
     assert_eq!(workspace.active_tab_index(), first_tab);
     // The pane exists and is addressable even though nothing dove into it.
-    assert_eq!(workspace.pane_kind(pane_id), Some(PaneKind::View));
+    assert_eq!(
+        workspace
+            .pane_plugin(pane_id)
+            .map(|plugin| plugin.name.as_str()),
+        Some("preview")
+    );
 }
 
 #[test]
@@ -203,7 +226,12 @@ fn splitting_a_target_session_with_a_view_adds_a_session_less_pane_beside_it() {
         .expect("the target session has a pane");
 
     assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, pane_id]);
-    assert_eq!(workspace.pane_kind(pane_id), Some(PaneKind::View));
+    assert_eq!(
+        workspace
+            .pane_plugin(pane_id)
+            .map(|plugin| plugin.name.as_str()),
+        Some("preview")
+    );
     assert_eq!(workspace.session_count(), session_count_before);
 }
 
@@ -223,7 +251,7 @@ fn splitting_an_unknown_session_with_a_view_spawns_nothing() {
 fn pane_position_locates_a_pane_in_a_tab_that_is_not_the_active_one() {
     let mut workspace = Workspace::mvp();
     let first_pane = workspace.visible_pane_id(0).expect("first pane");
-    workspace.open_tab(PaneKind::Terminal, Some(SessionId::new()));
+    workspace.open_tab(Content::Session(SessionKind::Terminal, SessionId::new()));
 
     assert_eq!(workspace.pane_position(first_pane), Some((0, 0)));
     assert_eq!(workspace.pane_position(PaneId::new()), None);
@@ -233,7 +261,7 @@ fn pane_position_locates_a_pane_in_a_tab_that_is_not_the_active_one() {
 fn is_active_pane_reflects_the_tabs_own_active_pane_by_id() {
     let mut workspace = Workspace::mvp();
     let first_pane_id = workspace.visible_pane_id(0).expect("first pane");
-    let second_pane_id = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    let second_pane_id = workspace.split_active(SessionKind::Terminal, SessionId::new());
 
     // split_active dives into the new pane.
     assert!(workspace.is_active_pane(second_pane_id));
@@ -249,7 +277,7 @@ fn is_active_pane_reflects_the_tabs_own_active_pane_by_id() {
 fn visible_index_of_resolves_a_pane_id_to_its_visible_position() {
     let mut workspace = Workspace::mvp();
     let first_pane_id = workspace.visible_pane_id(0).expect("first pane");
-    let second_pane_id = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    let second_pane_id = workspace.split_active(SessionKind::Terminal, SessionId::new());
 
     assert_eq!(workspace.visible_index_of(first_pane_id), Some(0));
     assert_eq!(workspace.visible_index_of(second_pane_id), Some(1));
@@ -267,7 +295,7 @@ fn visible_index_of_is_none_for_a_pane_id_not_in_the_active_tab() {
 fn cursor_pane_id_follows_the_workspace_mode_cursor() {
     let mut workspace = Workspace::mvp();
     let first_pane_id = workspace.visible_pane_id(0).expect("first pane");
-    let second_pane_id = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    let second_pane_id = workspace.split_active(SessionKind::Terminal, SessionId::new());
     workspace.activate_visible_pane(0);
     workspace.enter_workspace_mode();
 
@@ -282,8 +310,8 @@ fn cursor_pane_id_follows_the_workspace_mode_cursor() {
 fn all_pane_ids_includes_panes_in_every_tab_not_just_the_active_one() {
     let mut workspace = Workspace::mvp();
     let first_pane_id = workspace.visible_pane_id(0).expect("first pane");
-    let second_pane_id = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
-    let third_pane_id = workspace.open_tab(PaneKind::Agent, Some(SessionId::new()));
+    let second_pane_id = workspace.split_active(SessionKind::Terminal, SessionId::new());
+    let third_pane_id = workspace.open_tab(Content::Session(SessionKind::Agent, SessionId::new()));
 
     let all = workspace.all_pane_ids();
 
@@ -300,17 +328,17 @@ fn split_active_with_new_session_uses_active_pane_kind() {
     let (terminal_kind, terminal_session_id) = workspace
         .split_active_with_new_session()
         .expect("terminal split");
-    assert_eq!(terminal_kind, PaneKind::Terminal);
+    assert_eq!(terminal_kind, SessionKind::Terminal);
     assert_eq!(
         workspace.visible_terminal_session_id(1),
         Some(terminal_session_id)
     );
 
-    workspace.open_tab(PaneKind::Agent, Some(SessionId::new()));
+    workspace.open_tab(Content::Session(SessionKind::Agent, SessionId::new()));
     let (agent_kind, agent_session_id) = workspace
         .split_active_with_new_session()
         .expect("agent split");
-    assert_eq!(agent_kind, PaneKind::Agent);
+    assert_eq!(agent_kind, SessionKind::Agent);
     assert_eq!(
         workspace.visible_agent_session_id(1),
         Some(agent_session_id)
@@ -321,7 +349,7 @@ fn split_active_with_new_session_uses_active_pane_kind() {
 fn pane_location_for_session_resolves_the_hosting_pane() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(session_id));
+    workspace.split_active(SessionKind::Terminal, session_id);
 
     assert_eq!(
         workspace.pane_location_for_session(session_id),
@@ -333,7 +361,7 @@ fn pane_location_for_session_resolves_the_hosting_pane() {
 fn pane_location_for_session_is_none_once_detached() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(session_id));
+    workspace.split_active(SessionKind::Terminal, session_id);
     workspace.close_visible_pane(1);
 
     assert_eq!(workspace.pane_location_for_session(session_id), None);
@@ -343,7 +371,7 @@ fn pane_location_for_session_is_none_once_detached() {
 fn detach_reports_session_and_removes_reference() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();
-    let pane_id = workspace.split_active(PaneKind::Terminal, Some(session_id));
+    let pane_id = workspace.split_active(SessionKind::Terminal, session_id);
 
     assert_eq!(workspace.detach_pane(pane_id), Some(session_id));
     assert!(!workspace.session_is_referenced(session_id));
@@ -371,7 +399,7 @@ fn close_visible_pane_keeps_last_pane() {
 fn close_visible_pane_detaches_when_another_pane_remains() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(session_id));
+    workspace.split_active(SessionKind::Terminal, session_id);
 
     assert_eq!(workspace.close_visible_pane(1), Some(session_id));
     assert_eq!(workspace.visible_panes().len(), 1);
@@ -384,7 +412,7 @@ fn close_visible_pane_detaches_when_another_pane_remains() {
 fn close_cursor_pane_closes_the_cursor_pane_not_the_focus() {
     let mut workspace = Workspace::mvp();
     let first = workspace.visible_pane_id(0).expect("first pane");
-    let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    let second = workspace.split_active(SessionKind::Terminal, SessionId::new());
     // `split_active` dives into the new pane; reset focus to the first so
     // the cursor and focus start on different panes.
     workspace.activate_visible_pane(0);
@@ -405,7 +433,7 @@ fn close_cursor_pane_closes_the_cursor_pane_not_the_focus() {
 fn close_cursor_pane_targets_the_focused_pane_outside_the_mode() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();
-    let second = workspace.split_active(PaneKind::Terminal, Some(session_id));
+    let second = workspace.split_active(SessionKind::Terminal, session_id);
     assert!(workspace.is_active_pane(second));
 
     assert!(workspace.close_cursor_pane());
@@ -453,7 +481,7 @@ fn close_cursor_pane_or_tab_closes_only_the_pane_when_others_remain() {
     let mut workspace = Workspace::mvp();
     let first = workspace.visible_pane_id(0).expect("first pane");
     let second_session = SessionId::new();
-    let second = workspace.split_active(PaneKind::Terminal, Some(second_session));
+    let second = workspace.split_active(SessionKind::Terminal, second_session);
     // `split_active` dives into the new pane, so the mode's cursor seeds there.
     workspace.enter_workspace_mode();
     assert_eq!(workspace.cursor_pane_id(), Some(second));
@@ -494,7 +522,7 @@ fn close_cursor_pane_or_tab_on_last_pane_activates_the_neighbor_tab() {
     let mut workspace = Workspace::mvp();
     let first_session = workspace.active_terminal_session_id().expect("session");
     let second_session = SessionId::new();
-    workspace.open_tab(PaneKind::Terminal, Some(second_session));
+    workspace.open_tab(Content::Session(SessionKind::Terminal, second_session));
     workspace.enter_workspace_mode();
 
     assert_eq!(
@@ -523,7 +551,7 @@ fn close_cursor_pane_or_tab_is_inert_on_a_zero_tab_workspace() {
 fn detached_session_summaries_list_unattached_sessions() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(session_id));
+    workspace.split_active(SessionKind::Terminal, session_id);
     workspace.close_visible_pane(1);
 
     assert_eq!(
@@ -545,7 +573,7 @@ fn session_summaries_include_attached_and_detached_sessions() {
     let mut workspace = Workspace::mvp();
     let attached_session = workspace.active_terminal_session_id().expect("session");
     let detached_session = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(detached_session));
+    workspace.split_active(SessionKind::Terminal, detached_session);
     workspace.close_visible_pane(1);
 
     assert_eq!(
@@ -606,7 +634,7 @@ fn set_session_parent_is_reflected_in_session_summaries() {
 fn session_identity_survives_detach_and_reattach() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(session_id));
+    workspace.split_active(SessionKind::Terminal, session_id);
 
     assert_eq!(
         workspace.visible_pane_title(1),
@@ -653,11 +681,11 @@ fn a_registered_detached_session_is_attachable() {
 fn session_display_numbers_are_not_reused_after_terminate() {
     let mut workspace = Workspace::mvp();
     let second_session = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(second_session));
+    workspace.split_active(SessionKind::Terminal, second_session);
     workspace.terminate_session(second_session);
 
     let third_session = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(third_session));
+    workspace.split_active(SessionKind::Terminal, third_session);
 
     assert_eq!(
         workspace.visible_pane_title(1),
@@ -669,7 +697,7 @@ fn session_display_numbers_are_not_reused_after_terminate() {
 fn attach_existing_session_to_split_reuses_session_kind() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();
-    workspace.open_tab(PaneKind::Agent, Some(session_id));
+    workspace.open_tab(Content::Session(SessionKind::Agent, session_id));
     workspace.close_tab_index(1);
 
     let pane_id = workspace
@@ -677,7 +705,7 @@ fn attach_existing_session_to_split_reuses_session_kind() {
         .expect("attached pane");
 
     assert_eq!(workspace.visible_pane_id(1), Some(pane_id));
-    assert_eq!(workspace.visible_panes()[1].kind, PaneKind::Agent);
+    assert_eq!(workspace.visible_panes()[1].plugin.name, "agent");
     assert!(workspace.session_is_referenced(session_id));
     assert_eq!(workspace.detached_session_count(), 0);
 }
@@ -689,7 +717,7 @@ fn open_tab_with_new_session_attaches_requested_kind() {
     let session_id = workspace.open_tab_with_new_session_activated(crate::SessionKind::Agent, true);
 
     assert_eq!(workspace.visible_agent_session_id(0), Some(session_id));
-    assert_eq!(workspace.visible_panes()[0].kind, PaneKind::Agent);
+    assert_eq!(workspace.visible_panes()[0].plugin.name, "agent");
     assert!(workspace.session_is_referenced(session_id));
 }
 
@@ -699,7 +727,7 @@ fn opening_tab_is_reflected_in_tab_summaries() {
     let first_session = workspace.active_terminal_session_id().expect("session");
     let agent_session = SessionId::new();
 
-    workspace.open_tab(PaneKind::Agent, Some(agent_session));
+    workspace.open_tab(Content::Session(SessionKind::Agent, agent_session));
 
     assert_eq!(
         workspace.tab_summaries(),
@@ -725,12 +753,12 @@ fn opening_tab_is_reflected_in_tab_summaries() {
 #[test]
 fn activate_tab_index_switches_visible_panes() {
     let mut workspace = Workspace::mvp();
-    workspace.open_tab(PaneKind::Agent, None);
+    workspace.open_tab(Content::View(SessionKind::Agent.plugin()));
 
     assert!(workspace.activate_tab_index(0));
-    assert_eq!(workspace.visible_panes()[0].kind, PaneKind::Terminal);
+    assert_eq!(workspace.visible_panes()[0].plugin.name, "terminal");
     assert!(!workspace.activate_tab_index(9));
-    assert_eq!(workspace.visible_panes()[0].kind, PaneKind::Terminal);
+    assert_eq!(workspace.visible_panes()[0].plugin.name, "terminal");
 }
 
 #[test]
@@ -754,7 +782,7 @@ fn close_tab_index_removes_tab_panes_and_returns_sessions() {
     let mut workspace = Workspace::mvp();
     let first_session = workspace.active_terminal_session_id().expect("session");
     let second_session = SessionId::new();
-    workspace.open_tab(PaneKind::Terminal, Some(second_session));
+    workspace.open_tab(Content::Session(SessionKind::Terminal, second_session));
 
     assert_eq!(workspace.close_tab_index(1), vec![second_session]);
     assert_eq!(workspace.tab_count(), 1);
@@ -769,7 +797,7 @@ fn close_tab_index_removes_tab_panes_and_returns_sessions() {
 fn close_active_pane_detaches_active_session() {
     let mut workspace = Workspace::mvp();
     let second_session = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(second_session));
+    workspace.split_active(SessionKind::Terminal, second_session);
 
     assert_eq!(workspace.close_active_pane(), Some(second_session));
     assert_eq!(workspace.visible_panes().len(), 1);
@@ -781,7 +809,7 @@ fn close_active_tab_returns_active_tab_sessions() {
     let mut workspace = Workspace::mvp();
     let first_session = workspace.active_terminal_session_id().expect("session");
     let second_session = SessionId::new();
-    workspace.open_tab(PaneKind::Terminal, Some(second_session));
+    workspace.open_tab(Content::Session(SessionKind::Terminal, second_session));
 
     assert_eq!(workspace.close_active_tab(), vec![second_session]);
     assert_eq!(workspace.tab_count(), 1);
@@ -791,8 +819,8 @@ fn close_active_tab_returns_active_tab_sessions() {
 #[test]
 fn close_active_tab_activates_neighbor() {
     let mut workspace = Workspace::mvp();
-    workspace.open_tab(PaneKind::Agent, None);
-    workspace.open_tab(PaneKind::Terminal, Some(SessionId::new()));
+    workspace.open_tab(Content::View(SessionKind::Agent.plugin()));
+    workspace.open_tab(Content::Session(SessionKind::Terminal, SessionId::new()));
 
     assert!(workspace.tab_summaries()[2].active);
     assert_eq!(workspace.close_tab_index(2).len(), 1);
@@ -805,7 +833,7 @@ fn close_active_tab_activates_neighbor() {
 fn close_inactive_tab_preserves_active_tab() {
     let mut workspace = Workspace::mvp();
     let first_session = workspace.active_terminal_session_id().expect("session");
-    workspace.open_tab(PaneKind::Agent, None);
+    workspace.open_tab(Content::View(SessionKind::Agent.plugin()));
 
     assert_eq!(workspace.active_title(), "AI Agent");
     assert_eq!(workspace.close_tab_index(0), vec![first_session]);
@@ -816,7 +844,7 @@ fn close_inactive_tab_preserves_active_tab() {
 #[test]
 fn activate_visible_pane_switches_active_pane() {
     let mut workspace = Workspace::mvp();
-    workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    workspace.split_active(SessionKind::Terminal, SessionId::new());
 
     assert_eq!(workspace.active_visible_index(), 1);
     assert!(workspace.activate_visible_pane(0));
@@ -828,7 +856,7 @@ fn activate_visible_pane_switches_active_pane() {
 #[test]
 fn pane_summaries_include_split_panes_by_tab() {
     let mut workspace = Workspace::mvp();
-    workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    workspace.split_active(SessionKind::Terminal, SessionId::new());
 
     assert_eq!(
         workspace.pane_summaries(),
@@ -837,7 +865,7 @@ fn pane_summaries_include_split_panes_by_tab() {
                 tab_index: 0,
                 pane_index: 0,
                 title: "Terminal #1".to_string(),
-                kind: PaneKind::Terminal,
+                plugin: "terminal".to_string(),
                 active: false,
                 tab_active: true,
             },
@@ -845,7 +873,7 @@ fn pane_summaries_include_split_panes_by_tab() {
                 tab_index: 0,
                 pane_index: 1,
                 title: "Terminal #2".to_string(),
-                kind: PaneKind::Terminal,
+                plugin: "terminal".to_string(),
                 active: true,
                 tab_active: true,
             },
@@ -856,8 +884,8 @@ fn pane_summaries_include_split_panes_by_tab() {
 #[test]
 fn activate_pane_index_switches_tab_and_pane() {
     let mut workspace = Workspace::mvp();
-    workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
-    workspace.open_tab(PaneKind::Agent, None);
+    workspace.split_active(SessionKind::Terminal, SessionId::new());
+    workspace.open_tab(Content::View(SessionKind::Agent.plugin()));
 
     assert_eq!(workspace.active_tab_index(), 1);
     assert!(workspace.activate_pane_index(0, 0));
@@ -872,7 +900,7 @@ fn activate_pane_index_switches_tab_and_pane() {
 #[test]
 fn active_tab_index_tracks_active_tab() {
     let mut workspace = Workspace::mvp();
-    workspace.open_tab(PaneKind::Agent, None);
+    workspace.open_tab(Content::View(SessionKind::Agent.plugin()));
 
     assert_eq!(workspace.active_tab_index(), 1);
     assert!(workspace.activate_tab_index(0));
@@ -884,7 +912,7 @@ fn terminate_session_removes_session_and_attachments() {
     let mut workspace = Workspace::mvp();
     let first_session = workspace.active_terminal_session_id().expect("session");
     let second_session = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(second_session));
+    workspace.split_active(SessionKind::Terminal, second_session);
 
     assert!(workspace.terminate_session(second_session));
     assert_eq!(workspace.session_count(), 1);
@@ -903,9 +931,9 @@ fn terminate_session_on_the_active_tab_activates_the_neighbor_tab() {
     let mut workspace = Workspace::mvp();
     let first_session = workspace.active_terminal_session_id().expect("session");
     let middle_session = SessionId::new();
-    workspace.open_tab(PaneKind::Terminal, Some(middle_session));
+    workspace.open_tab(Content::Session(SessionKind::Terminal, middle_session));
     let exiting_session = SessionId::new();
-    workspace.open_tab(PaneKind::Terminal, Some(exiting_session));
+    workspace.open_tab(Content::Session(SessionKind::Terminal, exiting_session));
 
     assert!(workspace.terminate_session(exiting_session));
 
@@ -924,7 +952,7 @@ fn terminate_session_on_the_last_tab_falls_back_to_the_left_neighbor() {
     let mut workspace = Workspace::mvp();
     let first_session = workspace.active_terminal_session_id().expect("session");
     let second_session = SessionId::new();
-    workspace.open_tab(PaneKind::Terminal, Some(second_session));
+    workspace.open_tab(Content::Session(SessionKind::Terminal, second_session));
 
     assert!(workspace.terminate_session(second_session));
 
@@ -938,7 +966,7 @@ fn terminate_active_session_returns_removed_session() {
     let mut workspace = Workspace::mvp();
     let first_session = workspace.active_terminal_session_id().expect("session");
     let second_session = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(second_session));
+    workspace.split_active(SessionKind::Terminal, second_session);
 
     assert_eq!(workspace.terminate_active_session(), Some(second_session));
     assert_eq!(workspace.session_count(), 1);
@@ -958,7 +986,7 @@ fn terminate_active_session_targets_the_cursor_not_focus_in_workspace_mode() {
     let mut workspace = Workspace::mvp();
     let first_session = workspace.active_terminal_session_id().expect("session");
     let second_session = SessionId::new();
-    let second = workspace.split_active(PaneKind::Terminal, Some(second_session));
+    let second = workspace.split_active(SessionKind::Terminal, second_session);
     let first = workspace.visible_pane_id(0).expect("first pane");
 
     // Focus the first pane, then move the workspace-mode cursor onto the
@@ -996,9 +1024,9 @@ fn repeated_splits_of_the_focused_pane_stay_in_one_row() {
     // rather than nest (docs/recursive-layout-design.md's shallow-nesting
     // invariant).
     let mut workspace = Workspace::mvp();
-    workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
-    workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
-    workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    workspace.split_active(SessionKind::Terminal, SessionId::new());
+    workspace.split_active(SessionKind::Terminal, SessionId::new());
+    workspace.split_active(SessionKind::Terminal, SessionId::new());
 
     assert_eq!(workspace.visible_panes().len(), 4);
     let root = &workspace.tabs[workspace.active_tab_index()].root;
@@ -1020,7 +1048,7 @@ fn split_session_with_new_session_targets_the_sessions_own_pane() {
     let mut workspace = Workspace::mvp();
     let first_session = workspace.active_terminal_session_id().expect("session");
     let second_session = SessionId::new();
-    workspace.split_active(PaneKind::Terminal, Some(second_session));
+    workspace.split_active(SessionKind::Terminal, second_session);
     workspace.activate_visible_pane(0);
 
     let third_session = workspace

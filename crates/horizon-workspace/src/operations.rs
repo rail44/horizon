@@ -1,8 +1,30 @@
 use super::types::{
-    LayoutNode, Pane, PaneId, PaneKind, PluginPane, SessionKind, SplitAxis, Tab, TabId, Workspace,
+    LayoutNode, Pane, PaneId, PluginPane, SessionKind, SplitAxis, Tab, TabId, Workspace,
     WorkspaceSession,
 };
 use crate::SessionId;
+
+/// What a new pane holds: a session of a kind, shown with its kind's
+/// plugin, or a plugin's view of no session.
+#[derive(Clone, Debug)]
+pub(crate) enum Content {
+    Session(SessionKind, SessionId),
+    View(PluginPane),
+}
+
+impl Workspace {
+    /// A pane on `content`, its session registered when the workspace did
+    /// not have it.
+    fn new_pane(&mut self, content: Content) -> Pane {
+        match content {
+            Content::Session(kind, session_id) => {
+                self.ensure_session(kind, session_id);
+                Pane::new(kind.plugin(), Some(session_id))
+            }
+            Content::View(plugin) => Pane::new(plugin, None),
+        }
+    }
+}
 
 /// What [`Workspace::close_cursor_pane_or_tab`] actually did -- the shell
 /// mirrors the pane-close vs. tab-close lifecycle off this, and the
@@ -24,7 +46,7 @@ pub enum CloseCursorOutcome {
 impl Workspace {
     pub fn mvp() -> Self {
         let session_id = SessionId::new();
-        let terminal = Pane::new(PaneKind::Terminal, Some(session_id));
+        let terminal = Pane::new(SessionKind::Terminal.plugin(), Some(session_id));
         let active = terminal.id;
         let tab = Tab {
             id: TabId::new(),
@@ -43,9 +65,8 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn open_tab(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
-        self.ensure_session(kind, session_id);
-        let pane = Pane::new(kind, session_id);
+    pub(crate) fn open_tab(&mut self, content: Content) -> PaneId {
+        let pane = self.new_pane(content);
         let pane_id = pane.id;
         let tab = Tab {
             id: TabId::new(),
@@ -77,7 +98,7 @@ impl Workspace {
     ) -> SessionId {
         let previous_active_tab = self.active_tab;
         let session_id = SessionId::new();
-        self.open_tab(kind.into(), Some(session_id));
+        self.open_tab(Content::Session(kind, session_id));
         if !activate {
             self.active_tab = previous_active_tab;
         }
@@ -89,8 +110,7 @@ impl Workspace {
     /// return, so this returns the new pane's id.
     pub fn open_tab_with_view_activated(&mut self, plugin: PluginPane, activate: bool) -> PaneId {
         let previous_active_tab = self.active_tab;
-        let pane_id = self.open_tab(PaneKind::View, None);
-        self.set_pane_plugin(pane_id, plugin);
+        let pane_id = self.open_tab(Content::View(plugin));
         if !activate {
             self.active_tab = previous_active_tab;
         }
@@ -104,11 +124,10 @@ impl Workspace {
     /// "split the active tab with an explicit session id" shape most tests
     /// build their fixtures with.
     #[cfg(test)]
-    pub fn split_active(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
+    pub fn split_active(&mut self, kind: SessionKind, session_id: SessionId) -> PaneId {
         self.split_tab(
             self.active_tab,
-            kind,
-            session_id,
+            Content::Session(kind, session_id),
             true,
             SplitAxis::Horizontal,
         )
@@ -128,12 +147,11 @@ impl Workspace {
     fn split_tab(
         &mut self,
         tab_id: TabId,
-        kind: PaneKind,
-        session_id: Option<SessionId>,
+        content: Content,
         activate: bool,
         axis: SplitAxis,
     ) -> PaneId {
-        self.split_pane_in_tab(tab_id, None, kind, session_id, activate, axis)
+        self.split_pane_in_tab(tab_id, None, content, activate, axis)
     }
 
     /// Splits `tab_id` with a new `kind` pane at `target_pane_id` (the
@@ -146,13 +164,11 @@ impl Workspace {
         &mut self,
         tab_id: TabId,
         target_pane_id: Option<PaneId>,
-        kind: PaneKind,
-        session_id: Option<SessionId>,
+        content: Content,
         activate: bool,
         axis: SplitAxis,
     ) -> PaneId {
-        self.ensure_session(kind, session_id);
-        let pane = Pane::new(kind, session_id);
+        let pane = self.new_pane(content);
         let pane_id = pane.id;
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
             let target = target_pane_id.unwrap_or(tab.active);
@@ -179,10 +195,10 @@ impl Workspace {
     /// re-deriving "split with a new session of the active pane's own kind"
     /// at each call site would be more code than this one method.
     #[cfg(test)]
-    pub fn split_active_with_new_session(&mut self) -> Option<(PaneKind, SessionId)> {
-        let kind = self.visible_pane_kind(self.active_visible_index())?;
+    pub fn split_active_with_new_session(&mut self) -> Option<(SessionKind, SessionId)> {
+        let kind = self.session_kind(self.active_session_id()?)?;
         let session_id = SessionId::new();
-        self.split_active(kind, Some(session_id));
+        self.split_active(kind, session_id);
         Some((kind, session_id))
     }
 
@@ -214,8 +230,7 @@ impl Workspace {
         self.split_pane_in_tab(
             tab_id,
             Some(target_pane_id),
-            kind.into(),
-            Some(session_id),
+            Content::Session(kind, session_id),
             activate,
             axis,
         );
@@ -232,9 +247,7 @@ impl Workspace {
     /// the shell calls this immediately after the chooser closes, with
     /// nothing else able to move focus meanwhile.
     pub fn split_active_tab_with_view(&mut self, plugin: PluginPane, axis: SplitAxis) -> PaneId {
-        let pane_id = self.split_tab(self.active_tab, PaneKind::View, None, true, axis);
-        self.set_pane_plugin(pane_id, plugin);
-        pane_id
+        self.split_tab(self.active_tab, Content::View(plugin), true, axis)
     }
 
     /// [`Self::split_session_with_new_session`] for a session-less view: the
@@ -250,16 +263,13 @@ impl Workspace {
         activate: bool,
     ) -> Option<PaneId> {
         let (tab_id, target_pane_id) = self.split_target_for_session(target_session_id)?;
-        let pane_id = self.split_pane_in_tab(
+        Some(self.split_pane_in_tab(
             tab_id,
             Some(target_pane_id),
-            PaneKind::View,
-            None,
+            Content::View(plugin),
             activate,
             axis,
-        );
-        self.set_pane_plugin(pane_id, plugin);
-        Some(pane_id)
+        ))
     }
 
     /// Attaches a detached `session_id` as a split in the active tab,
@@ -278,11 +288,10 @@ impl Workspace {
         session_id: SessionId,
         activate: bool,
     ) -> Option<PaneId> {
-        let kind = self.session_pane_kind(session_id)?;
+        let kind = self.session_kind(session_id)?;
         Some(self.split_tab(
             self.active_tab,
-            kind,
-            Some(session_id),
+            Content::Session(kind, session_id),
             activate,
             SplitAxis::Horizontal,
         ))
@@ -391,17 +400,17 @@ impl Workspace {
         true
     }
 
-    /// Points a plugin view at `plugin`: which plugin it shows, and the
-    /// state. `false`, a no-op, when `pane_id` is unknown or is not a
-    /// plugin view.
+    /// Points a view pane at `plugin`: which plugin it shows, and the
+    /// state. `false`, a no-op, when `pane_id` is unknown or shows a
+    /// session, whose plugin is its kind's.
     pub fn set_pane_plugin(&mut self, pane_id: PaneId, plugin: PluginPane) -> bool {
         let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == pane_id) else {
             return false;
         };
-        if pane.kind != PaneKind::View {
+        if pane.session_id.is_some() {
             return false;
         }
-        pane.plugin = Some(plugin);
+        pane.plugin = plugin;
         true
     }
 

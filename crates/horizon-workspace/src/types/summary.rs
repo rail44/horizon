@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::SessionId;
 
-use super::{PaneKind, SessionKind};
+use super::SessionKind;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TabSummary {
@@ -34,7 +34,8 @@ pub struct PaneSummary {
     pub tab_index: usize,
     pub pane_index: usize,
     pub title: String,
-    pub kind: PaneKind,
+    /// The plugin the pane shows, by name.
+    pub plugin: String,
     pub active: bool,
     pub tab_active: bool,
 }

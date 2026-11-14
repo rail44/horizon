@@ -7,8 +7,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    LayoutChild, LayoutNode, Pane, PaneId, PaneKind, PluginPane, SessionKind, SplitAxis, Tab,
-    TabId, Workspace, WorkspaceSession,
+    LayoutChild, LayoutNode, Pane, PaneId, PluginPane, SessionKind, SplitAxis, Tab, TabId,
+    Workspace, WorkspaceSession,
 };
 use crate::SessionId;
 
@@ -107,15 +107,12 @@ struct LayoutChildState {
 #[serde(deny_unknown_fields)]
 struct PaneState {
     id: PaneId,
-    kind: PaneKindState,
     session_id: Option<SessionId>,
-    /// Only a view carries one; absent from every other pane's JSON.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    plugin: Option<PluginPaneState>,
+    plugin: PluginPaneState,
 }
 
-/// A plugin view's plugin: its name, the pane's title, and the state the
-/// plugin keeps, as the plugin writes it.
+/// A pane's plugin: its name, the pane's title, and the state the plugin
+/// keeps, as the plugin writes it.
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PluginPaneState {
@@ -153,40 +150,12 @@ struct SessionState {
     title: String,
 }
 
-/// A session's persisted kind -- always session-backed
-/// (`Terminal`/`Agent`), unlike [`PaneKindState`], since a `PaneKind::View`
-/// pane never has a session at all (see `WorkspaceState::validate`'s pane
-/// loop, which checks a view pane has no `session_id` rather than looking
-/// one up here).
+/// A session's persisted kind.
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum SessionKindState {
     Terminal,
     Agent,
-}
-
-/// A pane's persisted kind, as a bare string (`"terminal"`, `"agent"`,
-/// `"view"`) -- distinct from [`SessionKindState`] because a view pane has
-/// no session kind. Which plugin a view shows is `PaneState::plugin`.
-#[derive(Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum PaneKindState {
-    Terminal,
-    Agent,
-    View,
-}
-
-impl PaneKindState {
-    /// The session kind a pane of this persisted kind must attach --
-    /// `None` for `View`, which must instead have no `session_id` at all
-    /// (see the pane loop in `WorkspaceState::validate`).
-    fn expected_session_kind(self) -> Option<SessionKind> {
-        match self {
-            Self::Terminal => Some(SessionKind::Terminal),
-            Self::Agent => Some(SessionKind::Agent),
-            Self::View => None,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -421,9 +390,8 @@ impl LayoutState {
                 Self::Pane {
                     pane: PaneState {
                         id: pane.id,
-                        kind: PaneKindState::from(pane.kind),
                         session_id: pane.session_id,
-                        plugin: pane.plugin.as_ref().map(PluginPaneState::from),
+                        plugin: PluginPaneState::from(&pane.plugin),
                     },
                 }
             }
@@ -475,9 +443,8 @@ impl LayoutState {
                 let id = pane.id;
                 panes.push(Pane {
                     id,
-                    kind: PaneKind::from(pane.kind),
                     session_id: pane.session_id,
-                    plugin: pane.plugin.map(PluginPane::from),
+                    plugin: PluginPane::from(pane.plugin),
                 });
                 LayoutNode::Pane(id)
             }
@@ -509,26 +476,6 @@ impl From<SessionKindState> for SessionKind {
         match kind {
             SessionKindState::Terminal => Self::Terminal,
             SessionKindState::Agent => Self::Agent,
-        }
-    }
-}
-
-impl From<PaneKind> for PaneKindState {
-    fn from(kind: PaneKind) -> Self {
-        match kind {
-            PaneKind::Terminal => Self::Terminal,
-            PaneKind::Agent => Self::Agent,
-            PaneKind::View => Self::View,
-        }
-    }
-}
-
-impl From<PaneKindState> for PaneKind {
-    fn from(kind: PaneKindState) -> Self {
-        match kind {
-            PaneKindState::Terminal => Self::Terminal,
-            PaneKindState::Agent => Self::Agent,
-            PaneKindState::View => Self::View,
         }
     }
 }
@@ -572,6 +519,8 @@ fn sort_session_ids(ids: &mut [SessionId]) {
 mod tests {
     use serde_json::{json, Value};
 
+    use crate::operations::Content;
+
     /// A view pane's plugin, for a test about the pane rather than the
     /// view.
     fn view() -> PluginPane {
@@ -589,7 +538,7 @@ mod tests {
         let mut workspace = Workspace::mvp();
         let terminal = workspace.active_session_id().expect("terminal");
         let agent = SessionId::new();
-        workspace.split_active(PaneKind::Agent, Some(agent));
+        workspace.split_active(SessionKind::Agent, agent);
         workspace.register_detached_session(crate::SessionKind::Terminal, SessionId::new());
         workspace
             .sessions
@@ -658,15 +607,19 @@ mod tests {
 
         let json = workspace.to_persisted_json().expect("serialize");
         let value: Value = serde_json::from_str(&json).expect("json");
-        assert_eq!(
-            value["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"],
-            json!("view")
-        );
+        let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
+        assert_eq!(pane["plugin"]["name"], json!("preview"));
+        assert!(pane.get("kind").is_none());
         assert!(value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"].is_null());
 
         let restored = Workspace::from_persisted_json(&json).expect("restore");
 
-        assert_eq!(restored.pane_kind(view_pane), Some(PaneKind::View));
+        assert_eq!(
+            restored
+                .pane_plugin(view_pane)
+                .map(|plugin| plugin.name.as_str()),
+            Some("preview")
+        );
         assert_eq!(
             restored
                 .panes
@@ -699,15 +652,15 @@ mod tests {
         let json = workspace.to_persisted_json().expect("serialize");
         let value: Value = serde_json::from_str(&json).expect("json");
         let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
-        assert_eq!(pane["kind"], json!("view"));
+        assert!(pane.get("kind").is_none());
         assert_eq!(
             pane["plugin"],
             json!({"name": "board-thread", "title": "Thread", "state": {"task": 42}})
         );
         assert!(pane["session_id"].is_null());
-        // Panes without a plugin write no `plugin` key at all.
+        // A session's pane shows its kind's plugin.
         let terminal = &value["tabs"][0]["root"]["children"][0]["node"]["pane"];
-        assert!(terminal.get("plugin").is_none());
+        assert_eq!(terminal["plugin"]["name"], json!("terminal"));
 
         let restored = Workspace::from_persisted_json(&json).expect("restore");
         assert_eq!(restored.pane_plugin(view_pane), Some(&plugin));
@@ -773,7 +726,7 @@ mod tests {
     #[test]
     fn validation_rejects_non_positive_weight_and_noncanonical_split() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.split_active(SessionKind::Terminal, SessionId::new());
         let mut value: Value =
             serde_json::from_str(&workspace.to_persisted_json().expect("serialize")).expect("json");
         value["tabs"][0]["root"]["children"][0]["weight"] = json!(0.0);
@@ -796,7 +749,7 @@ mod tests {
     #[test]
     fn validation_rejects_duplicate_ids_kind_mismatch_and_stale_counter() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Agent, Some(SessionId::new()));
+        workspace.split_active(SessionKind::Agent, SessionId::new());
 
         let mut duplicate = json_value(&workspace);
         let first_id = duplicate["sessions"][0]["id"].clone();
@@ -804,8 +757,9 @@ mod tests {
         assert_invalid(duplicate, "duplicate session id");
 
         let mut mismatch = json_value(&workspace);
-        mismatch["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"] = json!("terminal");
-        assert_invalid(mismatch, "different kinds");
+        mismatch["tabs"][0]["root"]["children"][1]["node"]["pane"]["plugin"]["name"] =
+            json!("terminal");
+        assert_invalid(mismatch, "is of kind agent");
 
         let mut counter = json_value(&workspace);
         counter["next_terminal_display_number"] = json!(1);
@@ -815,7 +769,7 @@ mod tests {
     #[test]
     fn validation_preserves_session_then_layout_then_attachment_error_order() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.split_active(SessionKind::Terminal, SessionId::new());
         let mut value = json_value(&workspace);
         value["sessions"][0]["title"] = json!("");
         value["tabs"][0]["root"]["children"][0]["weight"] = json!(0.0);
@@ -830,7 +784,7 @@ mod tests {
     #[test]
     fn validation_rejects_a_session_shared_by_distinct_panes() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        workspace.split_active(SessionKind::Terminal, SessionId::new());
         let mut value = json_value(&workspace);
         let first = value["tabs"][0]["root"]["children"][0]["node"]["pane"]["session_id"].clone();
         value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"] = first;
@@ -853,7 +807,7 @@ mod tests {
         // known -- a view pane must have none at all.
         let borrowed_session_id = value["sessions"][0]["id"].clone();
         value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"] = borrowed_session_id;
-        assert_invalid(value, "must not have a session attachment");
+        assert_invalid(value, "shows preview but its session");
     }
 
     #[test]
@@ -861,9 +815,9 @@ mod tests {
         let mut workspace = Workspace::mvp();
         let retained = workspace.active_session_id().expect("terminal");
         let missing_agent = SessionId::new();
-        workspace.split_active(PaneKind::Agent, Some(missing_agent));
+        workspace.split_active(SessionKind::Agent, missing_agent);
         let second_tab = SessionId::new();
-        workspace.open_tab(PaneKind::Terminal, Some(second_tab));
+        workspace.open_tab(Content::Session(SessionKind::Terminal, second_tab));
         let daemon_only = SessionId::new();
 
         let outcome = workspace
