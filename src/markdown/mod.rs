@@ -14,7 +14,9 @@ use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
-use horizon_ui::{Callable, Callback, Component, El, dispatched, each_layout, el, relayout};
+use horizon_ui::{Callable, Callback, Component, El, dispatched, el};
+#[cfg(not(target_family = "wasm"))]
+use horizon_ui::{each_layout, relayout};
 
 use crate::parts::{Chip, Tone};
 use horizon_workspace::markdown::{LinkTarget, parse, resolve_link};
@@ -23,6 +25,7 @@ use keyboard_types::{Key, NamedKey};
 use crate::wake::Wake;
 
 mod render;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod watch;
 
 pub use render::{Headings, render};
@@ -157,13 +160,33 @@ impl State {
 
 impl Component for Markdown {
     fn view(self) -> El {
+        build(self).0
+    }
+}
+
+/// What a plugin showing the view carries its commands out on.
+#[derive(Clone, Copy)]
+pub struct Controls {
+    state: State,
+}
+
+impl Controls {
+    /// Goes back to the file a link was followed from, if there is one.
+    pub fn back(&self) {
+        self.state.back();
+    }
+}
+
+impl Markdown {
+    /// The view, and what its commands are carried out on.
+    pub fn view_with_controls(self) -> (El, Controls) {
         build(self)
     }
 }
 
 /// A change of the file the view shows is read in once the file has sat
 /// still, `wake` making the page take it in.
-fn build(given: Markdown) -> El {
+fn build(given: Markdown) -> (El, Controls) {
     let Markdown {
         path,
         open_url,
@@ -236,21 +259,33 @@ fn build(given: Markdown) -> El {
         },
     );
     // A new file starts at its top, and is the one watched from then on.
-    let changed = watch::Changed::default();
-    let noted = changed.clone();
-    // (The watch is what the effect keeps: the one before it ends when
-    // the next takes its place.)
-    Effect::new(move |_| {
-        let path = state.path.get();
-        scroll.scroll_to(0., 0.);
-        path.and_then(|path| watch::on(path, noted.clone(), wake.clone()))
-    });
-    each_layout(move |_| {
-        if changed.settled() {
-            state.reload();
-            relayout();
-        }
-    });
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let changed = watch::Changed::default();
+        let noted = changed.clone();
+        // (The watch is what the effect keeps: the one before it ends when
+        // the next takes its place.)
+        Effect::new(move |_| {
+            let path = state.path.get();
+            scroll.scroll_to(0., 0.);
+            path.and_then(|path| watch::on(path, noted.clone(), wake.clone()))
+        });
+        each_layout(move |_| {
+            if changed.settled() {
+                state.reload();
+                relayout();
+            }
+        });
+    }
+    // (A plugin has no watch of its own yet: the file is read as it is.)
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = wake;
+        Effect::new(move |_| {
+            let _ = state.path.get();
+            scroll.scroll_to(0., 0.);
+        });
+    }
 
     let root = el("div").class(styles::MARKDOWN).attr("tabindex", "0");
     root.on("keydown", move |event| {
@@ -302,15 +337,17 @@ fn build(given: Markdown) -> El {
         },
     )
     .child(scroll);
-    root
+    (root, Controls { state })
 }
 
 /// What a pane of a document view keeps: the file it shows.
+#[cfg(not(target_family = "wasm"))]
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DocumentState {
     pub path: Option<PathBuf>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl DocumentState {
     /// The file's name, as a pane's title.
     pub fn file_name(&self) -> Option<String> {
@@ -321,11 +358,13 @@ impl DocumentState {
 
 /// The view as a plugin: a pane keeps the file it shows, which a link
 /// followed moves.
+#[cfg(not(target_family = "wasm"))]
 pub struct MarkdownPlugin {
     pub open_url: OpenUrl,
     pub wake: Wake,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl crate::plugin::Plugin for MarkdownPlugin {
     const NAME: &'static str = "markdown";
     const TITLE: &'static str = "Markdown";

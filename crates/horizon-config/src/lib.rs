@@ -94,6 +94,10 @@ pub struct RawConfig {
     /// each entry is the project's main-repository toplevel, a session in
     /// an isolated worktree resolves back to it, and matching is exact.
     pub trusted_projects: Vec<String>,
+    /// `extensions`: the directories of the extension packages panes can
+    /// show, each holding a `plugin.toml` and the component it names. Read
+    /// at startup.
+    pub extensions: Vec<String>,
 }
 
 /// Which rig-backed provider *client* an entry builds: the first-scope kinds

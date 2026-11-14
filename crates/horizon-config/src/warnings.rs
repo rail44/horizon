@@ -58,6 +58,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "theme",
     "grants",
     "trusted_projects",
+    "extensions",
 ];
 
 /// The top-level `{ provider, model }` pair keys, and the keys of their

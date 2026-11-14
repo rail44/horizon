@@ -407,6 +407,16 @@ cyan = "#56b6c2"
 # trusted_projects = ["/home/you/src/github.com/you/your-project"]
 
 # ---------------------------------------------------------------------------
+# extensions — views built as wasm components (docs/extension-boundary-design.md).
+#
+# A top-level array of directories, each an extension package: a `plugin.toml`
+# (its name, title, component file, its commands' titles and descriptions,
+# and what it may read) beside the component it names. A pane can then show
+# the extension by its name. Read at startup; a package that does not load is
+# reported on stderr and left out. A leading "~/" is expanded against $HOME.
+# extensions = ["/home/you/src/github.com/you/horizon/plugins/markdown"]
+
+# ---------------------------------------------------------------------------
 # Environment-only overrides — no [agent] file key exists for any of these
 # any more (the whole section retired 2026-07-18), but the event log's and
 # DuckDB projection's paths are still relocatable via env var:

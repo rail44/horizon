@@ -257,7 +257,20 @@ The decisions and who made them are on board #76. What they come to:
   (wRPC between a wasm view and a native backend, and why it blocks) is
   in `docs/research/plugin-backend-packaging-2026-11-14.md`.
 
-Open: an extension's life (loading, watching a file, opening a URL);
+- **An extension is a package**: a wasm component and a manifest
+  (`plugin.toml`). The component's world includes `horizon-ui`'s
+  `imports` world and declares only what is its own: its state's type,
+  `mount` and `state` over it, and a `commands` interface. What every
+  plugin exports (`horizon:ui/events`) the SDK implements and exports;
+  the preview plugin is built the same way. The manifest gives the name,
+  the title, the commands' titles and descriptions (WIT has no values, and
+  doc comments do not reach a component), and the directories it may
+  read; it is matched with the component's commands when the package is
+  loaded (`src/extension.rs`). A pane keeps the state as WAVE text. The
+  Markdown view is the first (`plugins/markdown`), beside the built-in one
+  until it does all the built-in one does.
+
+Open: an extension's life (watching a file);
 keeping a plugin's CSS to its own tree; how the boundary is versioned;
 where extensions live and how they are built; the preview pane as one of
 them; a command's title and description, which its type does not carry;

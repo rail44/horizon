@@ -1064,6 +1064,7 @@ fn strip(shell: Shell) -> El {
 /// Builds the shell over `opening`, in its configuration's theme; `spawn`
 /// starts the session of each terminal pane that has none running.
 pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
+    plugins::take_in(crate::extension::load_all(&opening.config.extensions));
     let model = RwSignal::new(opening.model);
     let theme = Theme::from_config(&opening.config);
     let configured_size = Cell::new(theme.font_size);

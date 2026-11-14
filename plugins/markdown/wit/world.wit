@@ -1,0 +1,16 @@
+package horizon-ext:markdown@0.1.0;
+
+world markdown {
+    include horizon:ui/imports;
+
+    record state {
+        path: option<string>,
+    }
+
+    export mount: func(state: option<state>) -> u64;
+    export state: func() -> state;
+
+    export commands: interface {
+        back: func();
+    }
+}

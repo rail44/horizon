@@ -1,0 +1,19 @@
+[package]
+name = "horizon-markdown-plugin"
+description = "The Markdown view as an extension: a wasm component a pane loads."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Built for `wasm32-wasip2` (`scripts/check-extension.sh`); for any other
+# target the crate is empty.
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+horizon-ui = { path = "../../crates/horizon-ui" }
+horizon = { path = "../.." }
+wit-bindgen = "0.41"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

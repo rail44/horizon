@@ -26,6 +26,7 @@ members = [
     "crates/horizon-ui-macros",
     "crates/horizon-theme-css",
     "preview-plugin",
+    "plugins/markdown",
 ]
 resolver = "3"
 # The DuckDB extensions are a sub-workspace (pinned to DuckDB's unstable C
@@ -83,6 +84,7 @@ horizon-board = { path = "crates/horizon-board" }
 horizon-board-view = { path = "crates/horizon-board-view" }
 horizon-workspace = { path = "crates/horizon-workspace" }
 keyboard-types = "0.8"
+pulldown-cmark = "0.13"
 
 # What a view built into a preview plugin (`preview-plugin`, wasm) does
 # not have: the modules that need these are native-only in `src/lib.rs`.
@@ -117,9 +119,9 @@ notify = "8"
 # such run of text it shapes.
 parley = { version = "0.12", features = ["complex-scripts"] }
 peniko = "0.6"
-pulldown-cmark = "0.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "1"
 tokio = { version = "1.52", features = ["rt", "net", "time", "macros", "io-util", "sync"] }
 termwiz = { version = "0.23.3", features = ["use_serde"] }
 unicode-width = "0.2"
@@ -134,6 +136,7 @@ wasmtime = { version = "50", default-features = false, features = [
     "cranelift",
     "component-model",
     "parallel-compilation",
+    "wave",
 ] }
 wasmtime-wasi = "50"
 

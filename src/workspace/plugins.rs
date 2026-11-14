@@ -3,10 +3,23 @@
 
 use std::rc::Rc;
 
+use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::GetUntracked;
 use horizon_ui::reactive_graph::traits::{Get, Set, Update, WithUntracked};
-use horizon_ui::{Callable, Callback, El};
+use horizon_ui::{Callable, Callback, El, el};
+
+mod styles {
+    horizon_ui::css_module! {"
+    .extension { flex: 1; min-height: 0; display: flex; flex-direction: column;
+                 background: var(--background); color: var(--text); }
+    .extension > * { flex: 1; min-height: 0; }
+    .extension > .failed { flex: none; padding: var(--u16); color: var(--danger);
+                           font-size: var(--meta-size); line-height: var(--meta-line);
+                           white-space: pre-wrap; }
+"}
+}
 use std::path::{Path, PathBuf};
 
 use horizon_workspace::{PaneId, PluginPane, SessionId, Workspace};
@@ -18,8 +31,10 @@ use crate::board::plugin::{
     BoardListPlugin, BoardThreadPlugin, ListAsked, ThreadAsked, ThreadState,
 };
 use crate::board::{list, thread};
+use crate::extension::Extension;
 use crate::markdown::{DocumentState, MarkdownPlugin};
 use crate::plugin::{Mounted, Plugin};
+use crate::plugin_host::Asks;
 use crate::preview::{PreviewPlugin, Target};
 use crate::terminal::plugin::TerminalPlugin;
 use crate::theme_settings::{self, ThemeSettingsPlugin};
@@ -50,6 +65,26 @@ fn listed<P: Plugin>() -> Vec<Listed> {
         .collect()
 }
 
+thread_local! {
+    /// The extensions this shell loaded (`config.toml`'s `extensions`).
+    static EXTENSIONS: std::cell::RefCell<Vec<Rc<Extension>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Takes in the extensions a pane can show.
+pub(super) fn take_in(extensions: Vec<Rc<Extension>>) {
+    EXTENSIONS.with(|kept| *kept.borrow_mut() = extensions);
+}
+
+/// The extension named `name`, if one was loaded.
+fn extension(name: &str) -> Option<Rc<Extension>> {
+    EXTENSIONS.with(|kept| {
+        kept.borrow()
+            .iter()
+            .find(|extension| extension.name == name)
+            .cloned()
+    })
+}
+
 /// Every plugin's commands, in the order the palette lists them.
 pub(super) fn commands() -> Vec<Listed> {
     let mut commands = listed::<BoardListPlugin>();
@@ -60,6 +95,17 @@ pub(super) fn commands() -> Vec<Listed> {
     commands.extend(listed::<WikiPlugin>());
     commands.extend(listed::<TerminalPlugin>());
     commands.extend(listed::<AgentPlugin>());
+    EXTENSIONS.with(|kept| {
+        for extension in kept.borrow().iter() {
+            commands.extend(extension.commands.iter().map(|command| Listed {
+                plugin: extension.name,
+                name: command.name,
+                title: command.title,
+                description: command.description,
+                destructive: command.destructive,
+            }));
+        }
+    });
     commands
 }
 
@@ -86,6 +132,15 @@ pub(super) struct Shown {
 }
 
 impl Shown {
+    /// What a pane keeps of a plugin that could not be shown.
+    fn none(plugin: &'static str) -> Self {
+        Self {
+            plugin,
+            run: Rc::new(|_: &str| false),
+            enabled: Rc::new(|_: &str| false),
+        }
+    }
+
     /// Carries out the command named `name`; `false` when the plugin has
     /// none of that name.
     pub fn run(&self, name: &str) -> bool {
@@ -204,7 +259,10 @@ impl Shell {
                 };
                 self.mount(pane, plugin, state, |never| match never {})
             }
-            _ => None,
+            name => {
+                let extension = extension(name)?;
+                Some(self.mount_extension(pane, extension, shown))
+            }
         }
     }
 
@@ -268,6 +326,74 @@ impl Shell {
                 enabled: Rc::new(enabled),
             },
         )
+    }
+}
+
+impl Shell {
+    /// A pane of `extension` on the state the model keeps for it, which
+    /// goes back to the model as it changes, with the pane's title.
+    fn mount_extension(
+        &self,
+        pane: PaneId,
+        extension: Rc<Extension>,
+        shown: &PluginPane,
+    ) -> (El, Shown) {
+        let shell = *self;
+        let kept = self.kept();
+        let failed = RwSignal::new(None::<String>);
+        let title = RwSignal::new(shown.title.clone());
+        let root = el("div").class(styles::EXTENSION).when(
+            move || failed.get().is_some(),
+            move || {
+                el("div")
+                    .class(styles::FAILED)
+                    .text_dyn(move || failed.get().unwrap_or_default())
+            },
+        );
+        let asks = Asks {
+            open_url: Some(kept.open_url.clone()),
+            set_title: Some(Rc::new(move |text| title.set(text))),
+        };
+        let name = extension.name;
+        let running = match extension.instantiate(asks, failed) {
+            Ok(running) => Rc::new(running),
+            Err(error) => {
+                failed.set(Some(error));
+                return (root, Shown::none(name));
+            }
+        };
+        match running.mount(shown.state.as_str()) {
+            Ok(node) => {
+                root.child(El(NodeId::from_u64(node)));
+            }
+            Err(error) => failed.update(|failed| {
+                failed.get_or_insert(error);
+            }),
+        }
+        running.follow();
+        // What the pane keeps, and its title, after the page's effects.
+        let keeping = running.clone();
+        horizon_ui::each_effects(move || {
+            let state = keeping.state().map(serde_json::Value::String);
+            let now = PluginPane {
+                name: name.to_string(),
+                title: title.get_untracked(),
+                state: state.unwrap_or_default(),
+            };
+            let changed = (shell.model)
+                .with_untracked(|model| model.pane_plugin(pane).is_some_and(|kept| *kept != now));
+            if changed {
+                shell
+                    .model
+                    .update(|model| _ = model.set_pane_plugin(pane, now));
+            }
+        });
+        let shown = Shown {
+            plugin: name,
+            run: Rc::new(move |command: &str| running.run(command)),
+            enabled: Rc::new(|_: &str| true),
+        };
+        (root, shown)
     }
 }
 

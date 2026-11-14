@@ -1,0 +1,11 @@
+[plugin]
+name = "markdown-extension"
+title = "Markdown"
+component = "markdown.wasm"
+
+[commands.back]
+title = "Back"
+description = "Go back to the file a link was followed from."
+
+[access]
+read = ["/"]
