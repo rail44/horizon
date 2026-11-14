@@ -70,6 +70,19 @@ blitz-shell = { path = "vendor/blitz-shell" }
 blitz-dom = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
 blitz-paint = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
 blitz-traits = { git = "https://github.com/DioxusLabs/blitz", rev = "bf5813a1c042c2dad5b80e36f6a612b85adb85dd" }
+# winit at upstream's fix for Wayland clipboard text (rust-windowing/winit
+# db09864, "winit-wayland: fix some text not being copied due to missing
+# mime types"), not in a release yet. 0.31.0-beta.4 offers copied text as
+# `text/plain; charset=utf-8` and `text/plain` only, without the standard
+# `text/plain;charset=utf-8` or `UTF8_STRING`, so an application that reads
+# one of those pastes nothing of what Horizon copied. The crates move
+# together: winit-wayland alone leaves two winit-cores in the graph. Drop
+# these once a release has the fix.
+winit = { git = "https://github.com/rust-windowing/winit", rev = "db098642637c7e073327c298831678f46a1bb5ed" }
+winit-core = { git = "https://github.com/rust-windowing/winit", rev = "db098642637c7e073327c298831678f46a1bb5ed" }
+winit-common = { git = "https://github.com/rust-windowing/winit", rev = "db098642637c7e073327c298831678f46a1bb5ed" }
+winit-wayland = { git = "https://github.com/rust-windowing/winit", rev = "db098642637c7e073327c298831678f46a1bb5ed" }
+winit-x11 = { git = "https://github.com/rust-windowing/winit", rev = "db098642637c7e073327c298831678f46a1bb5ed" }
 
 [package]
 name = "horizon"
