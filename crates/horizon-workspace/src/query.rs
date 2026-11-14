@@ -51,24 +51,6 @@ impl Workspace {
             .and_then(|pane| pane.plugin.as_ref())
     }
 
-    /// The file a document view pane shows ([`Pane::document`]).
-    pub fn pane_document(&self, pane_id: PaneId) -> Option<&std::path::Path> {
-        self.panes
-            .iter()
-            .find(|pane| pane.id == pane_id)
-            .and_then(|pane| pane.document.as_deref())
-    }
-
-    /// The `kind` pane already showing `path`, if any.
-    pub fn document_pane(&self, kind: crate::ViewKind, path: &std::path::Path) -> Option<PaneId> {
-        self.panes
-            .iter()
-            .find(|pane| {
-                pane.kind == PaneKind::View(kind) && pane.document.as_deref() == Some(path)
-            })
-            .map(|pane| pane.id)
-    }
-
     /// Where `pane_id` sits, as the `(tab index, pane index)` pair
     /// [`Workspace::activate_pane_index`] takes -- how a caller holding
     /// only a `PaneId` activates a pane in a tab that is not the active

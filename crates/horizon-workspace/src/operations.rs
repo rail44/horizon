@@ -1,6 +1,6 @@
 use super::types::{
-    LayoutNode, Pane, PaneId, PaneKind, PluginPane, SessionKind, SplitAxis, Tab, TabId, ViewKind,
-    Workspace, WorkspaceSession,
+    LayoutNode, Pane, PaneId, PaneKind, PluginPane, SessionKind, SplitAxis, Tab, TabId, Workspace,
+    WorkspaceSession,
 };
 use crate::SessionId;
 
@@ -87,9 +87,10 @@ impl Workspace {
     /// [`Self::open_tab_with_new_session_activated`] for a session-less
     /// view: same `activate` semantics, but there is no session id to
     /// return, so this returns the new pane's id.
-    pub fn open_tab_with_view_activated(&mut self, kind: ViewKind, activate: bool) -> PaneId {
+    pub fn open_tab_with_view_activated(&mut self, plugin: PluginPane, activate: bool) -> PaneId {
         let previous_active_tab = self.active_tab;
-        let pane_id = self.open_tab(PaneKind::View(kind), None);
+        let pane_id = self.open_tab(PaneKind::View, None);
+        self.set_pane_plugin(pane_id, plugin);
         if !activate {
             self.active_tab = previous_active_tab;
         }
@@ -230,8 +231,10 @@ impl Workspace {
     /// active tab's own focus directly; that's equivalent in practice since
     /// the shell calls this immediately after the chooser closes, with
     /// nothing else able to move focus meanwhile.
-    pub fn split_active_tab_with_view(&mut self, kind: ViewKind, axis: SplitAxis) -> PaneId {
-        self.split_tab(self.active_tab, PaneKind::View(kind), None, true, axis)
+    pub fn split_active_tab_with_view(&mut self, plugin: PluginPane, axis: SplitAxis) -> PaneId {
+        let pane_id = self.split_tab(self.active_tab, PaneKind::View, None, true, axis);
+        self.set_pane_plugin(pane_id, plugin);
+        pane_id
     }
 
     /// [`Self::split_session_with_new_session`] for a session-less view: the
@@ -242,19 +245,21 @@ impl Workspace {
     pub fn split_session_with_view(
         &mut self,
         target_session_id: SessionId,
-        kind: ViewKind,
+        plugin: PluginPane,
         axis: SplitAxis,
         activate: bool,
     ) -> Option<PaneId> {
         let (tab_id, target_pane_id) = self.split_target_for_session(target_session_id)?;
-        Some(self.split_pane_in_tab(
+        let pane_id = self.split_pane_in_tab(
             tab_id,
             Some(target_pane_id),
-            PaneKind::View(kind),
+            PaneKind::View,
             None,
             activate,
             axis,
-        ))
+        );
+        self.set_pane_plugin(pane_id, plugin);
+        Some(pane_id)
     }
 
     /// Attaches a detached `session_id` as a split in the active tab,
@@ -386,30 +391,6 @@ impl Workspace {
         true
     }
 
-    /// Points an existing session-less pane at a different view kind,
-    /// keeping the pane itself -- its id, its place in the layout tree,
-    /// and whatever view entity the shell holds for it. The board's list
-    /// aims the tab's thread pane at another task this way. `false`, a
-    /// no-op, when `pane_id` is unknown or is session-backed: a pane
-    /// carrying a session cannot become session-less without detaching
-    /// that session, which is a different operation.
-    pub fn retarget_view_pane(&mut self, pane_id: PaneId, kind: ViewKind) -> bool {
-        let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == pane_id) else {
-            return false;
-        };
-        if !matches!(pane.kind, PaneKind::View(_)) {
-            return false;
-        }
-        pane.kind = PaneKind::View(kind);
-        if !kind.carries_document() {
-            pane.document = None;
-        }
-        if kind != ViewKind::Plugin {
-            pane.plugin = None;
-        }
-        true
-    }
-
     /// Points a plugin view at `plugin`: which plugin it shows, and the
     /// state. `false`, a no-op, when `pane_id` is unknown or is not a
     /// plugin view.
@@ -417,36 +398,10 @@ impl Workspace {
         let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == pane_id) else {
             return false;
         };
-        if pane.kind != PaneKind::View(ViewKind::Plugin) {
+        if pane.kind != PaneKind::View {
             return false;
         }
         pane.plugin = Some(plugin);
-        true
-    }
-
-    /// The state a plugin view keeps. `false`, a no-op, when `pane_id`
-    /// shows no plugin.
-    pub fn set_pane_plugin_state(&mut self, pane_id: PaneId, state: serde_json::Value) -> bool {
-        let plugin = (self.panes.iter_mut())
-            .find(|pane| pane.id == pane_id)
-            .and_then(|pane| pane.plugin.as_mut());
-        let Some(plugin) = plugin else {
-            return false;
-        };
-        plugin.state = state;
-        true
-    }
-
-    /// Points a document view (Markdown, Wiki) at `path`. `false`, a
-    /// no-op, when `pane_id` is unknown or is not a document view.
-    pub fn set_pane_document(&mut self, pane_id: PaneId, path: std::path::PathBuf) -> bool {
-        let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == pane_id) else {
-            return false;
-        };
-        if !matches!(pane.kind, PaneKind::View(kind) if kind.carries_document()) {
-            return false;
-        }
-        pane.document = Some(path);
         true
     }
 

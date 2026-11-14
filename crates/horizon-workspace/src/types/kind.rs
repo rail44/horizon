@@ -2,68 +2,16 @@
 pub enum PaneKind {
     Terminal,
     Agent,
-    /// A first-party, session-less view (`docs/theme-settings-view-
-    /// design.md`'s "first session-less first-party view"). Carries a
-    /// [`ViewKind`] rather than growing a new top-level `PaneKind` variant
-    /// per view, so future viewers (image/markdown/git-diff, roadmap
-    /// foundation 3) extend `ViewKind` instead -- callers that only care
-    /// whether a pane is session-backed keep matching just `View(_)`.
-    View(ViewKind),
+    /// A session-less view a plugin shows. Which plugin, and the state
+    /// the pane keeps of it, ride on the pane
+    /// ([`Pane::plugin`](super::Pane::plugin)), so the kind stays `Copy`.
+    View,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionKind {
     Terminal,
     Agent,
-}
-
-/// Which first-party view a [`PaneKind::View`] pane hosts. `ThemeSettings`
-/// is the first (`docs/theme-settings-view-design.md`); every variant here
-/// is a distinct native Rust view with no daemon session attached.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum ViewKind {
-    ThemeSettings,
-    /// A view a plugin shows. Which plugin, and the state the pane keeps
-    /// of it, ride on the pane ([`Pane::plugin`](super::Pane::plugin))
-    /// rather than on this kind, so the kind stays `Copy`.
-    Plugin,
-    /// A view compiled into a wasm plugin and shown from it
-    /// (`docs/preview-pane-design.md`). Which file and which named
-    /// preview a pane shows is shell-side state keyed by pane id, not part
-    /// of this kind: the kind stays `Copy` and the persisted schema stays a
-    /// bare tag.
-    Preview,
-    /// A Markdown file read from disk. The file is the pane's
-    /// [`Pane::document`](super::Pane::document) rather than part of this
-    /// kind, so the kind stays `Copy`.
-    Markdown,
-    /// A page of the project wiki with its comment threads
-    /// (`src/wiki/`). The page's file is the pane's
-    /// [`Pane::document`](super::Pane::document), as a Markdown pane's is.
-    Wiki,
-}
-
-impl ViewKind {
-    /// A pane's fallback title. `&'static str`: a session-less pane's
-    /// title comes from its kind alone, and the board thread's task title
-    /// lives in the store, which the model never reads.
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::ThemeSettings => "Theme Settings",
-            Self::Plugin => "View",
-            Self::Preview => "Preview",
-            Self::Markdown => "Markdown",
-            Self::Wiki => "Wiki",
-        }
-    }
-}
-
-impl ViewKind {
-    /// Whether a pane of this kind shows a file, kept on
-    /// [`Pane::document`](super::Pane::document).
-    pub fn carries_document(self) -> bool {
-        matches!(self, Self::Markdown | Self::Wiki)
-    }
 }
 
 impl PaneKind {
@@ -75,7 +23,7 @@ impl PaneKind {
         match self {
             Self::Terminal => Some(SessionKind::Terminal),
             Self::Agent => Some(SessionKind::Agent),
-            Self::View(_) => None,
+            Self::View => None,
         }
     }
 }

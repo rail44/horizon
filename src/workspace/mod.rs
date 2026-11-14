@@ -41,7 +41,7 @@ use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{El, each_layout, el, relayout, stop_propagation};
 use horizon_workspace::title::derive_session_title;
 use horizon_workspace::types::TabSummary;
-use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, ViewKind, Workspace};
+use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, Workspace};
 
 use crate::agent::{self, Agent, AgentSession};
 use crate::board;
@@ -568,7 +568,7 @@ impl Shell {
                     agent = Some(view);
                     root
                 }
-                (PaneKind::View(ViewKind::Plugin), ..) => {
+                (PaneKind::View, ..) => {
                     let shown = (self.model).with_untracked(|model| model.pane_plugin(id).cloned());
                     let named = RwSignal::new(Vec::new());
                     let mounted = shown.and_then(|shown| self.mount_plugin(id, &shown, named));
@@ -907,9 +907,10 @@ impl Shell {
                     model.activate_pane(thread);
                 }
                 None => {
-                    let thread =
-                        model.split_active_tab_with_view(ViewKind::Plugin, SplitAxis::Horizontal);
-                    model.set_pane_plugin(thread, plugins::thread_on(task));
+                    model.split_active_tab_with_view(
+                        plugins::thread_on(task),
+                        SplitAxis::Horizontal,
+                    );
                 }
             }
         });
@@ -945,34 +946,18 @@ impl Shell {
         });
     }
 
-    /// A new pane at `placement` showing a view that has no session.
-    pub fn create_view(&self, kind: ViewKind, placement: Placement) {
-        self.create_pane(kind, placement, |_, _| {});
-    }
-
     /// A new pane at `placement` showing the plugin `plugin`.
     pub fn create_plugin(&self, plugin: horizon_workspace::PluginPane, placement: Placement) {
-        self.create_pane(ViewKind::Plugin, placement, move |model, pane| {
-            model.set_pane_plugin(pane, plugin);
-        });
-    }
-
-    /// A new view pane at `placement`, `made` before its view is.
-    fn create_pane(
-        &self,
-        kind: ViewKind,
-        placement: Placement,
-        made: impl FnOnce(&mut Workspace, PaneId),
-    ) {
         self.change(|model| {
-            let pane = match placement {
-                Placement::NewTab => model.open_tab_with_view_activated(kind, true),
+            match placement {
+                Placement::NewTab => model.open_tab_with_view_activated(plugin, true),
                 Placement::SplitRight => {
-                    model.split_active_tab_with_view(kind, SplitAxis::Horizontal)
+                    model.split_active_tab_with_view(plugin, SplitAxis::Horizontal)
                 }
-                Placement::SplitDown => model.split_active_tab_with_view(kind, SplitAxis::Vertical),
+                Placement::SplitDown => {
+                    model.split_active_tab_with_view(plugin, SplitAxis::Vertical)
+                }
             };
-            made(model, pane);
             model.exit_workspace_mode();
         });
     }

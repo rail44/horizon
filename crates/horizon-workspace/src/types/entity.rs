@@ -64,12 +64,9 @@ pub struct Pane {
     pub id: PaneId,
     pub kind: PaneKind,
     pub session_id: Option<SessionId>,
-    /// The file a document view shows (`ViewKind::Markdown`). Persisted, so
-    /// the pane restores on the same file; `None` for every other kind.
-    pub document: Option<PathBuf>,
-    /// The plugin a plugin view shows, and its state
-    /// (`ViewKind::Plugin`). Persisted, so the pane restores on the same
-    /// state; `None` for every other kind.
+    /// The plugin a view shows, and its state (`PaneKind::View`).
+    /// Persisted, so the pane restores on the same state; `None` for every
+    /// other kind.
     pub plugin: Option<PluginPane>,
 }
 
@@ -111,22 +108,16 @@ impl Pane {
             id: PaneId::new(),
             kind,
             session_id,
-            document: None,
             plugin: None,
         }
     }
 
-    /// The document's file name when the pane shows one, else its
-    /// plugin's title, else the kind's.
+    /// The plugin's title for a view, else the kind's.
     pub fn title(&self) -> String {
-        if let Some(plugin) = &self.plugin {
-            return plugin.title.clone();
+        match &self.plugin {
+            Some(plugin) => plugin.title.clone(),
+            None => pane_kind_title(self.kind).to_string(),
         }
-        self.document
-            .as_deref()
-            .and_then(|path| path.file_name())
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| pane_kind_title(self.kind).to_string())
     }
 }
 
@@ -134,7 +125,7 @@ fn pane_kind_title(kind: PaneKind) -> &'static str {
     match kind {
         PaneKind::Terminal => "Terminal",
         PaneKind::Agent => "AI Agent",
-        PaneKind::View(view_kind) => view_kind.title(),
+        PaneKind::View => "View",
     }
 }
 

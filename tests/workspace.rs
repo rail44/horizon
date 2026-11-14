@@ -698,7 +698,7 @@ fn the_control_plane_opens_a_markdown_file_in_a_pane_that_follows_its_links() {
 #[test]
 fn the_board_opens_in_a_tab_and_a_task_s_thread_beside_its_list() {
     use horizon_board::{BoardEvent, Item, Store, sample_envelopes};
-    use horizon_workspace::{PaneKind, ViewKind};
+    use horizon_workspace::PaneKind;
 
     let tasks = [(1, "first", "a"), (2, "second", "b")].map(|(id, title, rank)| Item {
         id,
@@ -733,7 +733,7 @@ fn the_board_opens_in_a_tab_and_a_task_s_thread_beside_its_list() {
     opened.commit("open board");
     opened.named(NamedKey::Enter);
     assert_eq!(opened.model(Workspace::tab_count), 2);
-    assert_eq!(kinds(&opened), [PaneKind::View(ViewKind::Plugin)]);
+    assert_eq!(kinds(&opened), [PaneKind::View]);
     assert_eq!(plugins(&opened), [Some("board-list")]);
     let list_pane = opened.panes()[0];
     opened.until("the tasks", || {

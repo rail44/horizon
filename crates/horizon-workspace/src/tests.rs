@@ -41,20 +41,15 @@ fn pane_id_accessors_resolve_kind_session_and_title_for_a_specific_pane() {
 fn a_view_pane_has_no_session_and_registers_none() {
     let mut workspace = Workspace::mvp();
     let session_count_before = workspace.session_count();
-    let pane_id = workspace.open_tab(PaneKind::View(ViewKind::ThemeSettings), None);
+    let pane_id = workspace.open_tab(PaneKind::View, None);
 
-    assert_eq!(
-        workspace.pane_kind(pane_id),
-        Some(PaneKind::View(ViewKind::ThemeSettings))
-    );
+    assert_eq!(workspace.pane_kind(pane_id), Some(PaneKind::View));
     assert_eq!(workspace.active_session_id(), None);
     // No session is created for a view pane -- `ensure_session` no-ops on
     // `None`, so the session count is untouched.
     assert_eq!(workspace.session_count(), session_count_before);
-    assert_eq!(
-        workspace.pane_title_for(pane_id),
-        Some("Theme Settings".to_string())
-    );
+    // With no plugin yet, it is titled for its kind.
+    assert_eq!(workspace.pane_title_for(pane_id), Some("View".to_string()));
 }
 
 #[test]
@@ -63,14 +58,10 @@ fn split_active_tab_with_view_adds_a_session_less_pane_beside_the_focus() {
     let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
     let session_count_before = workspace.session_count();
 
-    let view_pane =
-        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+    let view_pane = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
 
     assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, view_pane]);
-    assert_eq!(
-        workspace.pane_kind(view_pane),
-        Some(PaneKind::View(ViewKind::ThemeSettings))
-    );
+    assert_eq!(workspace.pane_kind(view_pane), Some(PaneKind::View));
     assert_eq!(workspace.session_count(), session_count_before);
     // Splitting dives into the new pane, same as every other split.
     assert!(workspace.is_active_pane(view_pane));
@@ -80,12 +71,16 @@ fn split_active_tab_with_view_adds_a_session_less_pane_beside_the_focus() {
 fn closing_a_view_pane_detaches_no_session() {
     let mut workspace = Workspace::mvp();
     let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
-    let view_pane =
-        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+    let view_pane = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
 
     // Trivially destructive: nothing to detach, since there is no session.
     assert_eq!(workspace.close_pane(view_pane), None);
     assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane]);
+}
+
+/// A view pane's plugin, for a test about the pane rather than the view.
+fn view() -> PluginPane {
+    plugin("preview", "Preview", serde_json::Value::Null)
 }
 
 fn plugin(name: &str, title: &str, state: serde_json::Value) -> PluginPane {
@@ -100,16 +95,13 @@ fn plugin(name: &str, title: &str, state: serde_json::Value) -> PluginPane {
 fn a_plugin_pane_has_no_session_and_registers_none() {
     let mut workspace = Workspace::mvp();
     let session_count_before = workspace.session_count();
-    let pane_id = workspace.open_tab(PaneKind::View(ViewKind::Plugin), None);
+    let pane_id = workspace.open_tab(PaneKind::View, None);
     assert!(workspace.set_pane_plugin(
         pane_id,
         plugin("board-list", "Board", serde_json::Value::Null)
     ));
 
-    assert_eq!(
-        workspace.pane_kind(pane_id),
-        Some(PaneKind::View(ViewKind::Plugin))
-    );
+    assert_eq!(workspace.pane_kind(pane_id), Some(PaneKind::View));
     assert_eq!(workspace.active_session_id(), None);
     assert_eq!(workspace.session_count(), session_count_before);
     assert_eq!(workspace.pane_title_for(pane_id), Some("Board".to_string()));
@@ -121,13 +113,10 @@ fn split_active_tab_with_a_plugin_view_adds_a_session_less_pane_beside_the_focus
     let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
     let session_count_before = workspace.session_count();
 
-    let view_pane = workspace.split_active_tab_with_view(ViewKind::Plugin, SplitAxis::Horizontal);
+    let view_pane = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
 
     assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, view_pane]);
-    assert_eq!(
-        workspace.pane_kind(view_pane),
-        Some(PaneKind::View(ViewKind::Plugin))
-    );
+    assert_eq!(workspace.pane_kind(view_pane), Some(PaneKind::View));
     assert_eq!(workspace.session_count(), session_count_before);
     assert!(workspace.is_active_pane(view_pane));
 }
@@ -136,7 +125,7 @@ fn split_active_tab_with_a_plugin_view_adds_a_session_less_pane_beside_the_focus
 fn closing_a_plugin_pane_detaches_no_session() {
     let mut workspace = Workspace::mvp();
     let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
-    let view_pane = workspace.split_active_tab_with_view(ViewKind::Plugin, SplitAxis::Horizontal);
+    let view_pane = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
 
     assert_eq!(workspace.close_pane(view_pane), None);
     assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane]);
@@ -148,47 +137,20 @@ fn closing_a_plugin_pane_detaches_no_session() {
 fn a_plugin_view_carries_its_plugin_and_state() {
     let mut workspace = Workspace::mvp();
     let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
-    let thread = workspace.split_active_tab_with_view(ViewKind::Plugin, SplitAxis::Horizontal);
+    let thread = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
     let shown = plugin("board-thread", "Thread", serde_json::json!({"task": 7}));
     assert!(workspace.set_pane_plugin(thread, shown.clone()));
     assert_eq!(workspace.pane_plugin(thread), Some(&shown));
 
-    assert!(workspace.set_pane_plugin_state(thread, serde_json::json!({"task": 12})));
-    assert_eq!(
-        workspace.pane_plugin(thread).map(|plugin| &plugin.state),
-        Some(&serde_json::json!({"task": 12}))
-    );
+    let moved = plugin("board-thread", "Thread", serde_json::json!({"task": 12}));
+    assert!(workspace.set_pane_plugin(thread, moved.clone()));
+    assert_eq!(workspace.pane_plugin(thread), Some(&moved));
     assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, thread]);
 
     // A session-backed pane is not a plugin view, and an unknown id is
     // not a pane at all.
     assert!(!workspace.set_pane_plugin(terminal_pane, shown.clone()));
-    assert!(!workspace.set_pane_plugin_state(terminal_pane, serde_json::Value::Null));
     assert!(!workspace.set_pane_plugin(PaneId::new(), shown));
-    // Another view in its place lets the plugin go.
-    assert!(workspace.retarget_view_pane(thread, ViewKind::Markdown));
-    assert_eq!(workspace.pane_plugin(thread), None);
-}
-
-/// Retargeting keeps the pane: same id, same place in the tab, a new kind.
-#[test]
-fn retargeting_a_view_pane_keeps_the_pane_and_changes_only_its_kind() {
-    let mut workspace = Workspace::mvp();
-    let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
-    let view = workspace.split_active_tab_with_view(ViewKind::Preview, SplitAxis::Horizontal);
-
-    assert!(workspace.retarget_view_pane(view, ViewKind::ThemeSettings));
-
-    assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, view]);
-    assert_eq!(
-        workspace.pane_kind(view),
-        Some(PaneKind::View(ViewKind::ThemeSettings))
-    );
-    // A session-backed pane is not a view pane, and an unknown id is not a
-    // pane at all.
-    assert!(!workspace.retarget_view_pane(terminal_pane, ViewKind::Preview));
-    assert_eq!(workspace.pane_kind(terminal_pane), Some(PaneKind::Terminal));
-    assert!(!workspace.retarget_view_pane(PaneId::new(), ViewKind::Preview));
 }
 
 /// What the board's linking reads: the panes of one pane's own tab, in
@@ -197,41 +159,23 @@ fn retargeting_a_view_pane_keeps_the_pane_and_changes_only_its_kind() {
 fn tab_pane_kinds_reports_the_panes_of_that_panes_own_tab() {
     let mut workspace = Workspace::mvp();
     let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
-    let list = workspace.split_active_tab_with_view(ViewKind::Plugin, SplitAxis::Horizontal);
-    let thread = workspace.split_active_tab_with_view(ViewKind::Preview, SplitAxis::Horizontal);
-    let elsewhere = workspace.open_tab_with_view_activated(ViewKind::Plugin, false);
+    let list = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
+    let thread = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
+    let elsewhere = workspace.open_tab_with_view_activated(view(), false);
 
     assert_eq!(
         workspace.tab_pane_kinds(list),
         vec![
             (terminal_pane, PaneKind::Terminal),
-            (list, PaneKind::View(ViewKind::Plugin)),
-            (thread, PaneKind::View(ViewKind::Preview)),
+            (list, PaneKind::View),
+            (thread, PaneKind::View),
         ]
     );
     assert_eq!(
         workspace.tab_pane_kinds(elsewhere),
-        vec![(elsewhere, PaneKind::View(ViewKind::Plugin))]
+        vec![(elsewhere, PaneKind::View)]
     );
     assert!(workspace.tab_pane_kinds(PaneId::new()).is_empty());
-}
-
-#[test]
-fn a_preview_pane_has_no_session_and_registers_none() {
-    let mut workspace = Workspace::mvp();
-    let session_count_before = workspace.session_count();
-    let pane_id = workspace.open_tab(PaneKind::View(ViewKind::Preview), None);
-
-    assert_eq!(
-        workspace.pane_kind(pane_id),
-        Some(PaneKind::View(ViewKind::Preview))
-    );
-    assert_eq!(workspace.active_session_id(), None);
-    assert_eq!(workspace.session_count(), session_count_before);
-    assert_eq!(
-        workspace.pane_title_for(pane_id),
-        Some("Preview".to_string())
-    );
 }
 
 #[test]
@@ -239,15 +183,12 @@ fn opening_a_view_tab_without_activating_leaves_the_active_tab_alone() {
     let mut workspace = Workspace::mvp();
     let first_tab = workspace.active_tab_index();
 
-    let pane_id = workspace.open_tab_with_view_activated(ViewKind::Preview, false);
+    let pane_id = workspace.open_tab_with_view_activated(view(), false);
 
     assert_eq!(workspace.tab_count(), 2);
     assert_eq!(workspace.active_tab_index(), first_tab);
     // The pane exists and is addressable even though nothing dove into it.
-    assert_eq!(
-        workspace.pane_kind(pane_id),
-        Some(PaneKind::View(ViewKind::Preview))
-    );
+    assert_eq!(workspace.pane_kind(pane_id), Some(PaneKind::View));
 }
 
 #[test]
@@ -258,14 +199,11 @@ fn splitting_a_target_session_with_a_view_adds_a_session_less_pane_beside_it() {
     let session_count_before = workspace.session_count();
 
     let pane_id = workspace
-        .split_session_with_view(target, ViewKind::Preview, SplitAxis::Horizontal, true)
+        .split_session_with_view(target, view(), SplitAxis::Horizontal, true)
         .expect("the target session has a pane");
 
     assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, pane_id]);
-    assert_eq!(
-        workspace.pane_kind(pane_id),
-        Some(PaneKind::View(ViewKind::Preview))
-    );
+    assert_eq!(workspace.pane_kind(pane_id), Some(PaneKind::View));
     assert_eq!(workspace.session_count(), session_count_before);
 }
 
@@ -275,12 +213,7 @@ fn splitting_an_unknown_session_with_a_view_spawns_nothing() {
     let panes_before = workspace.visible_pane_ids();
 
     assert_eq!(
-        workspace.split_session_with_view(
-            SessionId::new(),
-            ViewKind::Preview,
-            SplitAxis::Horizontal,
-            true
-        ),
+        workspace.split_session_with_view(SessionId::new(), view(), SplitAxis::Horizontal, true),
         None
     );
     assert_eq!(workspace.visible_pane_ids(), panes_before);
@@ -502,8 +435,7 @@ fn close_cursor_pane_keeps_the_last_pane_and_the_mode_untouched() {
 #[test]
 fn close_cursor_pane_reports_a_closed_session_less_pane() {
     let mut workspace = Workspace::mvp();
-    let view_pane =
-        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+    let view_pane = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
     // The split dives into the view pane, so the cursor seeds there.
     workspace.enter_workspace_mode();
     assert_eq!(workspace.cursor_pane_id(), Some(view_pane));

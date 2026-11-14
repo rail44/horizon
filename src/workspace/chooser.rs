@@ -5,7 +5,7 @@
 use horizon_agent::roles::{RoleId, user_launchable};
 use horizon_ui::El;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
-use horizon_workspace::{PluginPane, SessionKind, ViewKind};
+use horizon_workspace::{PluginPane, SessionKind};
 
 use super::picker::{self, Picked, Row};
 use super::{Placement, Shell, plugins, styles};
@@ -13,8 +13,9 @@ use super::{Placement, Shell, plugins, styles};
 /// What a new pane shows.
 enum Choice {
     Session(SessionKind, Option<RoleId>),
-    View(ViewKind),
     Plugin(PluginPane),
+    /// The wiki of the project the shell was started in.
+    Wiki,
 }
 
 /// The views to choose from whose titles hold `query`.
@@ -39,7 +40,7 @@ fn matching(query: &str) -> Vec<(String, Choice)> {
         Choice::Plugin(plugins::theme_settings()),
     ));
     choices.push(("Board".to_string(), Choice::Plugin(plugins::list())));
-    choices.push(("Wiki".to_string(), Choice::View(ViewKind::Wiki)));
+    choices.push(("Wiki".to_string(), Choice::Wiki));
     let query = query.trim().to_ascii_lowercase();
     choices.retain(|(title, ..)| query.is_empty() || title.to_ascii_lowercase().contains(&query));
     choices
@@ -66,8 +67,7 @@ pub(super) fn view(shell: Shell, placement: Placement) -> El {
             shell.modal.set(None);
             match choice {
                 Choice::Session(kind, role) => shell.create(kind, role, placement),
-                Choice::View(ViewKind::Wiki) => shell.create_wiki(placement),
-                Choice::View(kind) => shell.create_view(kind, placement),
+                Choice::Wiki => shell.create_wiki(placement),
                 Choice::Plugin(plugin) => shell.create_plugin(plugin, placement),
             }
         }

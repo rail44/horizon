@@ -1,7 +1,7 @@
 //! Validate persisted sessions, layout membership, and attachment references.
 
 use super::{
-    state_error, PaneKindState, PaneState, SessionId, SessionKind, ViewKindState, WorkspaceState,
+    state_error, PaneKindState, PaneState, SessionId, SessionKind, WorkspaceState,
     WorkspaceStateError, WORKSPACE_STATE_VERSION,
 };
 use std::collections::{HashMap, HashSet};
@@ -117,18 +117,7 @@ fn validate_attachment(
     sessions: &HashMap<SessionId, SessionKind>,
     attached_sessions: &mut HashSet<SessionId>,
 ) -> Result<(), WorkspaceStateError> {
-    if pane.document.is_some()
-        && !matches!(
-            pane.kind,
-            PaneKindState::View(ViewKindState::Markdown | ViewKindState::Wiki)
-        )
-    {
-        return Err(state_error(format!(
-            "pane {:?} carries a document but is not a document view",
-            pane.id
-        )));
-    }
-    let plugin_view = matches!(pane.kind, PaneKindState::View(ViewKindState::Plugin));
+    let plugin_view = matches!(pane.kind, PaneKindState::View);
     if pane.plugin.is_some() != plugin_view {
         return Err(state_error(format!(
             "pane {:?} is a plugin view only if it carries a plugin",

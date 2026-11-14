@@ -3,13 +3,12 @@ mod validation;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
     LayoutChild, LayoutNode, Pane, PaneId, PaneKind, PluginPane, SessionKind, SplitAxis, Tab,
-    TabId, ViewKind, Workspace, WorkspaceSession,
+    TabId, Workspace, WorkspaceSession,
 };
 use crate::SessionId;
 
@@ -110,12 +109,7 @@ struct PaneState {
     id: PaneId,
     kind: PaneKindState,
     session_id: Option<SessionId>,
-    /// Only a document view carries one; absent from every other pane's
-    /// JSON.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    document: Option<PathBuf>,
-    /// Only a plugin view carries one; absent from every other pane's
-    /// JSON.
+    /// Only a view carries one; absent from every other pane's JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     plugin: Option<PluginPaneState>,
 }
@@ -171,39 +165,15 @@ enum SessionKindState {
     Agent,
 }
 
-/// A pane's persisted kind. Serializes as a bare string for the
-/// session-backed variants (`"terminal"`/`"agent"`, unchanged from before
-/// `PaneKind::View` existed) and as `{"view": "theme_settings"}` for a
-/// first-party view pane (serde's default externally-tagged
-/// representation for a newtype variant) -- distinct from
-/// [`SessionKindState`] because a view pane's kind space
-/// ([`ViewKindState`]) has no session-kind counterpart.
+/// A pane's persisted kind, as a bare string (`"terminal"`, `"agent"`,
+/// `"view"`) -- distinct from [`SessionKindState`] because a view pane has
+/// no session kind. Which plugin a view shows is `PaneState::plugin`.
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum PaneKindState {
     Terminal,
     Agent,
-    View(ViewKindState),
-}
-
-/// Persisted counterpart of [`ViewKind`]; add a variant here alongside a
-/// new `ViewKind` for every future first-party view.
-#[derive(Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ViewKindState {
-    ThemeSettings,
-    /// The plugin and its state ride on the pane (`PaneState::plugin`).
-    Plugin,
-    /// A preview pane restores empty: the artifact path and preview name
-    /// live in the shell's pane map, which does not survive the process, so
-    /// a restored pane shows its "nothing loaded" state until `horizon
-    /// preview` points it at an artifact again.
-    Preview,
-    /// The file rides on the pane (`PaneState::document`), so a Markdown
-    /// pane restores on the file it showed.
-    Markdown,
-    /// The page's file rides on the pane as a Markdown pane's does.
-    Wiki,
+    View,
 }
 
 impl PaneKindState {
@@ -214,7 +184,7 @@ impl PaneKindState {
         match self {
             Self::Terminal => Some(SessionKind::Terminal),
             Self::Agent => Some(SessionKind::Agent),
-            Self::View(_) => None,
+            Self::View => None,
         }
     }
 }
@@ -453,7 +423,6 @@ impl LayoutState {
                         id: pane.id,
                         kind: PaneKindState::from(pane.kind),
                         session_id: pane.session_id,
-                        document: pane.document.clone(),
                         plugin: pane.plugin.as_ref().map(PluginPaneState::from),
                     },
                 }
@@ -508,7 +477,6 @@ impl LayoutState {
                     id,
                     kind: PaneKind::from(pane.kind),
                     session_id: pane.session_id,
-                    document: pane.document,
                     plugin: pane.plugin.map(PluginPane::from),
                 });
                 LayoutNode::Pane(id)
@@ -550,7 +518,7 @@ impl From<PaneKind> for PaneKindState {
         match kind {
             PaneKind::Terminal => Self::Terminal,
             PaneKind::Agent => Self::Agent,
-            PaneKind::View(view_kind) => Self::View(ViewKindState::from(view_kind)),
+            PaneKind::View => Self::View,
         }
     }
 }
@@ -560,31 +528,7 @@ impl From<PaneKindState> for PaneKind {
         match kind {
             PaneKindState::Terminal => Self::Terminal,
             PaneKindState::Agent => Self::Agent,
-            PaneKindState::View(view_kind) => Self::View(ViewKind::from(view_kind)),
-        }
-    }
-}
-
-impl From<ViewKind> for ViewKindState {
-    fn from(kind: ViewKind) -> Self {
-        match kind {
-            ViewKind::ThemeSettings => Self::ThemeSettings,
-            ViewKind::Plugin => Self::Plugin,
-            ViewKind::Preview => Self::Preview,
-            ViewKind::Markdown => Self::Markdown,
-            ViewKind::Wiki => Self::Wiki,
-        }
-    }
-}
-
-impl From<ViewKindState> for ViewKind {
-    fn from(kind: ViewKindState) -> Self {
-        match kind {
-            ViewKindState::ThemeSettings => Self::ThemeSettings,
-            ViewKindState::Plugin => Self::Plugin,
-            ViewKindState::Preview => Self::Preview,
-            ViewKindState::Markdown => Self::Markdown,
-            ViewKindState::Wiki => Self::Wiki,
+            PaneKindState::View => Self::View,
         }
     }
 }
@@ -627,6 +571,16 @@ fn sort_session_ids(ids: &mut [SessionId]) {
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
+
+    /// A view pane's plugin, for a test about the pane rather than the
+    /// view.
+    fn view() -> PluginPane {
+        PluginPane {
+            name: "preview".to_string(),
+            title: "Preview".to_string(),
+            state: Value::Null,
+        }
+    }
 
     use super::*;
 
@@ -700,26 +654,19 @@ mod tests {
     fn state_round_trip_preserves_a_view_pane_without_a_session() {
         let mut workspace = Workspace::mvp();
         let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
-        let view_pane =
-            workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+        let view_pane = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
 
         let json = workspace.to_persisted_json().expect("serialize");
-        // The persisted shape for a view pane's kind (no session-backed
-        // counterpart to reuse): serde's default externally-tagged
-        // representation for a newtype variant.
         let value: Value = serde_json::from_str(&json).expect("json");
         assert_eq!(
             value["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"],
-            json!({"view": "theme_settings"})
+            json!("view")
         );
         assert!(value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"].is_null());
 
         let restored = Workspace::from_persisted_json(&json).expect("restore");
 
-        assert_eq!(
-            restored.pane_kind(view_pane),
-            Some(PaneKind::View(ViewKind::ThemeSettings))
-        );
+        assert_eq!(restored.pane_kind(view_pane), Some(PaneKind::View));
         assert_eq!(
             restored
                 .panes
@@ -741,8 +688,7 @@ mod tests {
     #[test]
     fn state_round_trip_preserves_a_plugin_pane_and_its_state() {
         let mut workspace = Workspace::mvp();
-        let view_pane =
-            workspace.split_active_tab_with_view(ViewKind::Plugin, SplitAxis::Horizontal);
+        let view_pane = workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
         let plugin = PluginPane {
             name: "board-thread".to_string(),
             title: "Thread".to_string(),
@@ -753,7 +699,7 @@ mod tests {
         let json = workspace.to_persisted_json().expect("serialize");
         let value: Value = serde_json::from_str(&json).expect("json");
         let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
-        assert_eq!(pane["kind"], json!({"view": "plugin"}));
+        assert_eq!(pane["kind"], json!("view"));
         assert_eq!(
             pane["plugin"],
             json!({"name": "board-thread", "title": "Thread", "state": {"task": 42}})
@@ -777,118 +723,24 @@ mod tests {
     #[test]
     fn only_a_plugin_view_restores_with_a_plugin() {
         let mut workspace = Workspace::mvp();
-        let view_pane =
-            workspace.split_active_tab_with_view(ViewKind::Plugin, SplitAxis::Horizontal);
-        assert!(
-            workspace.to_persisted_json().is_err(),
-            "a plugin view with no plugin is not written"
-        );
-
-        let plugin = PluginPane {
-            name: "board-list".to_string(),
-            title: "Board".to_string(),
-            state: Value::Null,
+        workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
+        let json = workspace.to_persisted_json().expect("serialize");
+        let value: Value = serde_json::from_str(&json).expect("json");
+        let edited = |edit: &dyn Fn(&mut Value)| {
+            let mut value = value.clone();
+            edit(&mut value);
+            serde_json::to_string(&value).expect("serialize the edit")
         };
-        assert!(workspace.set_pane_plugin(view_pane, plugin));
-        let json = workspace.to_persisted_json().expect("serialize");
-        let mut value: Value = serde_json::from_str(&json).expect("json");
-        value["tabs"][0]["root"]["children"][0]["node"]["pane"]["plugin"] =
-            json!({"name": "board-list", "title": "Board", "state": null});
-        let edited = serde_json::to_string(&value).expect("serialize the edit");
-        assert!(Workspace::from_persisted_json(&edited).is_err());
-    }
-
-    /// A preview pane's artifact path and preview name live in the shell's
-    /// pane map, not here, so what survives a restart is the pane itself in
-    /// its "nothing loaded" state.
-    #[test]
-    fn state_round_trip_preserves_a_preview_pane_without_a_session_or_an_artifact() {
-        let mut workspace = Workspace::mvp();
-        let view_pane =
-            workspace.split_active_tab_with_view(ViewKind::Preview, SplitAxis::Horizontal);
-
-        let json = workspace.to_persisted_json().expect("serialize");
-        let value: Value = serde_json::from_str(&json).expect("json");
-        let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
-        assert_eq!(pane["kind"], json!({"view": "preview"}));
-        assert!(pane["session_id"].is_null());
-        // Nothing artifact-shaped is persisted alongside the kind.
-        assert!(pane.get("path").is_none());
-
-        let restored = Workspace::from_persisted_json(&json).expect("restore");
-
-        assert_eq!(
-            restored.pane_kind(view_pane),
-            Some(PaneKind::View(ViewKind::Preview))
-        );
-        assert_eq!(restored.session_count(), workspace.session_count());
-        assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
-    }
-
-    #[test]
-    fn state_round_trip_restores_a_wiki_pane_on_its_page() {
-        let mut workspace = Workspace::mvp();
-        let view_pane = workspace.split_active_tab_with_view(ViewKind::Wiki, SplitAxis::Horizontal);
-        assert!(workspace.set_pane_document(view_pane, "/wiki/sandbox.md".into()));
-        let json = workspace.to_persisted_json().expect("serialize");
-        let value: Value = serde_json::from_str(&json).expect("json");
-        let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
-        assert_eq!(pane["kind"], json!({"view": "wiki"}));
-        let restored = Workspace::from_persisted_json(&json).expect("restore");
-        // A Markdown pane on the same file is a different pane.
-        assert_eq!(
-            restored.document_pane(ViewKind::Wiki, "/wiki/sandbox.md".as_ref()),
-            Some(view_pane)
-        );
-        assert_eq!(
-            restored.document_pane(ViewKind::Markdown, "/wiki/sandbox.md".as_ref()),
-            None
-        );
-    }
-
-    #[test]
-    fn state_round_trip_restores_a_markdown_pane_on_its_document() {
-        let mut workspace = Workspace::mvp();
-        let view_pane =
-            workspace.split_active_tab_with_view(ViewKind::Markdown, SplitAxis::Horizontal);
-        assert!(workspace.set_pane_document(view_pane, "/notes/index.md".into()));
-
-        let json = workspace.to_persisted_json().expect("serialize");
-        let value: Value = serde_json::from_str(&json).expect("json");
-        let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
-        assert_eq!(pane["kind"], json!({"view": "markdown"}));
-        assert_eq!(pane["document"], json!("/notes/index.md"));
-        // Panes without a document write no `document` key at all.
-        let terminal = &value["tabs"][0]["root"]["children"][0]["node"]["pane"];
-        assert!(terminal.get("document").is_none());
-
-        let restored = Workspace::from_persisted_json(&json).expect("restore");
-        assert_eq!(
-            restored.pane_document(view_pane),
-            Some(std::path::Path::new("/notes/index.md"))
-        );
-        assert_eq!(
-            restored.document_pane(ViewKind::Markdown, "/notes/index.md".as_ref()),
-            Some(view_pane)
-        );
-        assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
-    }
-
-    #[test]
-    fn only_a_markdown_pane_takes_or_restores_a_document() {
-        let mut workspace = Workspace::mvp();
-        let preview =
-            workspace.split_active_tab_with_view(ViewKind::Preview, SplitAxis::Horizontal);
-        assert!(!workspace.set_pane_document(preview, "/notes/index.md".into()));
-
-        let mut value: Value =
-            serde_json::from_str(&workspace.to_persisted_json().expect("serialize")).expect("json");
-        value["tabs"][0]["root"]["children"][1]["node"]["pane"]["document"] =
-            json!("/notes/index.md");
-        assert!(matches!(
-            Workspace::from_persisted_json(&value.to_string()),
-            Err(WorkspaceStateError::Invalid(_))
-        ));
+        let view_without = edited(&|value| {
+            let pane = &mut value["tabs"][0]["root"]["children"][1]["node"]["pane"];
+            pane.as_object_mut().expect("a pane").remove("plugin");
+        });
+        assert!(Workspace::from_persisted_json(&view_without).is_err());
+        let terminal_with = edited(&|value| {
+            value["tabs"][0]["root"]["children"][0]["node"]["pane"]["plugin"] =
+                json!({"name": "board-list", "title": "Board", "state": null});
+        });
+        assert!(Workspace::from_persisted_json(&terminal_with).is_err());
     }
 
     #[test]
@@ -995,7 +847,7 @@ mod tests {
     #[test]
     fn validation_rejects_a_view_pane_with_a_session_attachment() {
         let mut workspace = Workspace::mvp();
-        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+        workspace.split_active_tab_with_view(view(), SplitAxis::Horizontal);
         let mut value = json_value(&workspace);
         // Any session id is rejected here regardless of whether it's
         // known -- a view pane must have none at all.

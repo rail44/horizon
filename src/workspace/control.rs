@@ -8,7 +8,7 @@ use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::control_invoke::{self, Command};
 use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_workspace::commands::{CommandId, core_commands};
-use horizon_workspace::{PaneId, SessionId, SessionKind, ViewKind, Workspace};
+use horizon_workspace::{PaneId, SessionId, SessionKind, Workspace};
 
 use super::{Shell, Start, plugins};
 use crate::preview::Target;
@@ -197,16 +197,14 @@ impl Shell {
             return Ok(EnvelopeBody::Ok { session_id: None });
         }
         let document = plugins::document(name, Some(path)).ok_or("not a document view")?;
-        let kind = ViewKind::Plugin;
         let mut opened = None;
         self.model_changed(|model| {
             opened = match split {
-                Some((target, axis)) => model.split_session_with_view(target, kind, axis, activate),
-                None => Some(model.open_tab_with_view_activated(kind, activate)),
+                Some((target, axis)) => {
+                    model.split_session_with_view(target, document, axis, activate)
+                }
+                None => Some(model.open_tab_with_view_activated(document, activate)),
             };
-            if let Some(pane) = opened {
-                model.set_pane_plugin(pane, document);
-            }
         });
         // (The model has the pane's file before its view is made.)
         self.reconcile();
@@ -258,15 +256,10 @@ impl Shell {
                 self.model_changed(|model| {
                     opened = match split {
                         Some((session, axis)) => {
-                            model.split_session_with_view(session, ViewKind::Plugin, axis, activate)
+                            model.split_session_with_view(session, shown, axis, activate)
                         }
-                        None => {
-                            Some(model.open_tab_with_view_activated(ViewKind::Plugin, activate))
-                        }
+                        None => Some(model.open_tab_with_view_activated(shown, activate)),
                     };
-                    if let Some(pane) = opened {
-                        model.set_pane_plugin(pane, shown);
-                    }
                 });
                 self.reconcile();
                 opened.ok_or("unknown split target session")?
