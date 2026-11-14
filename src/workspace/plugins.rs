@@ -16,6 +16,7 @@ use crate::board::plugin::{
 };
 use crate::board::{list, thread};
 use crate::plugin::{Mounted, Plugin};
+use crate::preview::{PreviewPlugin, Target};
 
 /// A plugin's command, as the palette lists it and a key binding names
 /// it.
@@ -44,6 +45,7 @@ fn listed<P: Plugin>() -> Vec<Listed> {
 pub(super) fn commands() -> Vec<Listed> {
     let mut commands = listed::<BoardListPlugin>();
     commands.extend(listed::<BoardThreadPlugin>());
+    commands.extend(listed::<PreviewPlugin>());
     commands
 }
 
@@ -59,6 +61,7 @@ pub(super) fn pane<P: Plugin>(state: P::State) -> PluginPane {
 /// The board's two plugins, by name.
 pub(super) const LIST: &str = BoardListPlugin::NAME;
 pub(super) const THREAD: &str = BoardThreadPlugin::NAME;
+pub(super) const PREVIEW: &str = PreviewPlugin::NAME;
 
 /// What a pane keeps of the plugin it shows.
 #[derive(Clone)]
@@ -129,6 +132,13 @@ impl Shell {
                     ThreadAsked::BackToList => shell.back_to_board_list(pane),
                 })
             }
+            PreviewPlugin::NAME => {
+                let plugin = PreviewPlugin {
+                    background: background(),
+                    wake: kept.wake.clone(),
+                };
+                self.mount(pane, plugin, state, |never| match never {})
+            }
             _ => None,
         }
     }
@@ -173,6 +183,16 @@ impl Shell {
             },
         ))
     }
+}
+
+/// A preview pane on `target`.
+pub(super) fn preview_of(target: Option<Target>) -> PluginPane {
+    pane::<PreviewPlugin>(target)
+}
+
+/// What a preview pane shows, as the model keeps it.
+pub(super) fn previewed(plugin: &PluginPane) -> Option<Option<Target>> {
+    (plugin.name == PREVIEW).then(|| serde_json::from_value(plugin.state.clone()).ok().flatten())
 }
 
 /// A list pane.

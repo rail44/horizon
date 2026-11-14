@@ -78,11 +78,6 @@ command_ids! {
         /// or the built-in default), ending a zoom session. Default chord /
         /// override id: `"reset-font-size"`.
         ResetFontSize,
-        /// Reads the plugin file of the cursor's preview pane again. The
-        /// pane also does on its own when the file changes; this is the
-        /// manual path. Palette-only -- no default keybinding (binding id
-        /// `"reload-preview"`).
-        ReloadPreview,
         /// Copies the active terminal's selection to the clipboard.
         CopyTerminalSelection,
         /// Pastes the clipboard's text into the active terminal.
@@ -287,12 +282,6 @@ impl CommandId {
                 CommandCategory::Workspace,
                 "Restore the startup-configured default font size.",
             ),
-            CommandId::ReloadPreview => (
-                "reload-preview",
-                "Reload Preview",
-                CommandCategory::Workspace,
-                "Reload the active preview pane's plugin from disk.",
-            ),
             CommandId::CopyTerminalSelection => (
                 "copy-terminal-selection",
                 "Copy Terminal Selection",
@@ -344,8 +333,7 @@ pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
         | CommandId::OpenBoard
         | CommandId::IncreaseFontSize
         | CommandId::DecreaseFontSize
-        | CommandId::ResetFontSize
-        | CommandId::ReloadPreview => true,
+        | CommandId::ResetFontSize => true,
         CommandId::CopyTerminalSelection | CommandId::PasteIntoTerminal => {
             state.has_active_terminal
         }
@@ -407,7 +395,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 25);
+        assert_eq!(commands.len(), 24);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);

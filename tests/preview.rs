@@ -375,8 +375,7 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
     use horizon_control::host::executor::ControlRequest;
     use horizon_terminal_core::TerminalSize;
     use horizon_ui::reactive_graph::traits::WithUntracked;
-    use horizon_workspace::commands::CommandId;
-    use horizon_workspace::{PaneKind, ViewKind, Workspace};
+    use horizon_workspace::Workspace;
 
     let mut shell: Option<Shell> = None;
     let app = App::new(1200, 800, css(), || {
@@ -409,7 +408,11 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
     let previews = || {
         shell.model.with_untracked(|model: &Workspace| {
             (model.all_pane_ids().into_iter())
-                .filter(|pane| model.pane_kind(*pane) == Some(PaneKind::View(ViewKind::Preview)))
+                .filter(|pane| {
+                    model
+                        .pane_plugin(*pane)
+                        .is_some_and(|plugin| plugin.name == "preview")
+                })
                 .collect::<Vec<_>>()
         })
     };
@@ -431,11 +434,13 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
     let answer = ask(serde_json::json!({ "path": plugin(), "name": "board-list-empty" }));
     assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
     assert_eq!(previews().len(), 1);
-    opened.until("the empty list", || opened.titles().is_empty());
+    opened.until("the empty list", || {
+        !opened.all("shown").is_empty() && opened.titles().is_empty()
+    });
 
     // The command reads the file again.
     let shown = opened.all("shown")[0];
-    shell.execute(CommandId::ReloadPreview);
+    assert!(shell.execute_plugin("reload-preview"));
     opened.app.run_effects();
     opened.until("a reload", || {
         opened.all("shown").first().is_some_and(|now| *now != shown)

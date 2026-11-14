@@ -57,11 +57,12 @@ cargo build -p horizon-preview-plugin --target wasm32-wasip2
 
 ## The pane
 
-`ViewKind::Preview` is a session-less view kind. The workspace model
-carries only the kind: which file and which of its previews a pane shows
-is the pane's own (`preview::Preview`), so nothing path-shaped is saved.
-After a restart a preview pane comes back empty, and an empty preview
-pane under the cursor takes the next `horizon preview`.
+A preview pane is the `preview` plugin (`src/plugin.rs`,
+`preview::PreviewPlugin`). Its state is the file and which of its previews
+it shows, which the workspace saves, so after a restart the pane comes
+back on the same file. A pane with nothing to show yet is empty, and an
+empty preview pane under the cursor takes the next `horizon preview`.
+A pane given another file or preview is made again on it.
 
 The file is compiled off the UI thread. While it is, the pane says so,
 and what it showed before stays until the new one is ready. The pane
@@ -82,8 +83,8 @@ shows already is read again by that pane, with the preview asked for;
 otherwise an empty preview pane under the cursor takes it; otherwise a new
 tab or split opens. Without `--name` the plugin's first preview is shown.
 
-`Reload Preview` (binding id `reload-preview`, no default chord) reads the
-file of the cursor's preview pane again.
+`Reload Preview` (the plugin's command `reload-preview`, no default
+chord) reads the file of the cursor's preview pane again.
 
 An agent's own checks are windowless. Opening a preview in the running
 Horizon is how an agent asks a person to look at a view.

@@ -47,6 +47,7 @@ wasmtime::component::bindgen!({
 use self::horizon::ui::document::{Bounds, Host};
 use crate::background::Background;
 use crate::markdown::watch;
+use crate::plugin::{Command, Mounted, Plugin as PanePlugin};
 use crate::wake::Wake;
 
 /// The most memory a plugin may take.
@@ -497,7 +498,7 @@ fn instantiate(
 
 /// What a preview pane shows: a plugin's file, and which of its previews
 /// (its first, with no name).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub struct Target {
     pub path: PathBuf,
     pub name: Option<String>,
@@ -679,4 +680,47 @@ pub fn view(
         }
     });
     (root, state)
+}
+
+/// The preview as a plugin: a pane keeps what it shows, and comes back
+/// on it.
+pub struct PreviewPlugin {
+    pub background: Background,
+    pub wake: Wake,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreviewCommand {
+    Reload,
+}
+
+impl PanePlugin for PreviewPlugin {
+    const NAME: &'static str = "preview";
+    const TITLE: &'static str = "Preview";
+    type State = Option<Target>;
+    type Command = PreviewCommand;
+    type Asked = std::convert::Infallible;
+
+    fn commands() -> Vec<Command<PreviewCommand>> {
+        vec![Command {
+            name: "reload-preview",
+            title: "Reload Preview",
+            description: "Reload the active preview pane's plugin from disk.",
+            destructive: false,
+            command: PreviewCommand::Reload,
+        }]
+    }
+
+    fn mount(
+        self,
+        target: Option<Target>,
+        _: horizon_ui::Callback<std::convert::Infallible>,
+    ) -> Mounted<Option<Target>, PreviewCommand> {
+        let (view, preview) = view(Signal::stored(target.clone()), self.background, self.wake);
+        Mounted {
+            view,
+            run: horizon_ui::Callback::new(move |PreviewCommand::Reload| preview.reload()),
+            state: Signal::stored_local(target),
+        }
+    }
 }

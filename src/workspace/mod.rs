@@ -44,10 +44,8 @@ use horizon_workspace::types::TabSummary;
 use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, ViewKind, Workspace};
 
 use crate::agent::{self, Agent, AgentSession};
-use crate::background::Background;
 use crate::board;
 use crate::markdown::{self, Markdown};
-use crate::preview::{self, Preview};
 use crate::terminal::{self, Session, Terminal, TerminalView};
 use crate::theme_settings;
 use crate::wake::Wake;
@@ -333,8 +331,6 @@ struct PaneView {
     agent: Option<Agent>,
     /// The plugin a plugin view shows.
     plugin: Option<plugins::Shown>,
-    /// A preview pane's view, and what the shell has it show.
-    preview: Option<(Preview, RwSignal<Option<preview::Target>>)>,
     /// The sessions a board view says its tasks are bound to.
     bound: Option<RwSignal<Vec<SessionId>>>,
 }
@@ -492,7 +488,6 @@ impl Shell {
         let owner = kept.owner.child();
         let (mut terminal, mut agent) = (None, None);
         let mut shown_plugin = None;
-        let mut shown_preview = None;
         let mut bound = None;
         let start = |session| {
             kept.starting
@@ -656,16 +651,6 @@ impl Shell {
                             .text("This view's plugin is not here."),
                     }
                 }
-                // Which plugin and which of its previews is this pane's
-                // alone, and not the model's: it comes back empty.
-                (PaneKind::View(ViewKind::Preview), ..) => {
-                    let background = Background::new(kept.wake.clone());
-                    // What it shows is the shell's to say, pane by pane.
-                    let target = RwSignal::new(None);
-                    let (root, view) = preview::view(target.into(), background, kept.wake.clone());
-                    shown_preview = Some((view, target));
-                    root
-                }
                 _ => el("div")
                     .class(styles::EMPTY)
                     .attr("tabindex", "0")
@@ -693,7 +678,6 @@ impl Shell {
             terminal,
             agent,
             plugin: shown_plugin,
-            preview: shown_preview,
             bound,
         }
     }
@@ -1088,11 +1072,6 @@ impl Shell {
         });
         self.reconcile();
         self.focus_active();
-    }
-
-    /// The preview a pane shows.
-    pub fn preview(&self, pane: PaneId) -> Option<Preview> {
-        Some(self.kept().panes.borrow().get(&pane)?.preview.as_ref()?.0)
     }
 
     /// The agent view a pane shows.

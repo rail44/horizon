@@ -6,11 +6,11 @@ use horizon_control::contract::{EnvelopeBody, Query, SessionEntry, Sessions, Sta
 use horizon_control::host::executor::{ControlRequest, error_body};
 use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::control_invoke::{self, Command};
-use horizon_ui::reactive_graph::traits::{GetUntracked, Set, WithUntracked};
+use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_workspace::commands::{CommandId, core_commands};
 use horizon_workspace::{PaneId, SessionId, SessionKind, ViewKind, Workspace};
 
-use super::{Shell, Start};
+use super::{Shell, Start, plugins};
 use crate::preview::Target;
 
 /// The answer to a command this shell has no view or runtime for yet.
@@ -227,13 +227,11 @@ impl Shell {
         if !target.path.is_file() {
             return Err(format!("not a file: {}", target.path.display()));
         }
-        let previews: Vec<(PaneId, Option<Target>)> = {
-            let kept = self.kept();
-            let panes = kept.panes.borrow();
-            (panes.iter())
-                .filter_map(|(pane, view)| Some((*pane, view.preview?.1.get_untracked())))
+        let previews: Vec<(PaneId, Option<Target>)> = self.model.with_untracked(|model| {
+            (model.all_pane_ids().into_iter())
+                .filter_map(|pane| Some((pane, plugins::previewed(model.pane_plugin(pane)?)?)))
                 .collect()
-        };
+        });
         let showing = |path: &std::path::Path| {
             (previews.iter())
                 .find(|(_, shown)| shown.as_ref().is_some_and(|shown| shown.path == path))
@@ -241,34 +239,37 @@ impl Shell {
         let cursor = self.model.with_untracked(Workspace::cursor_pane_id);
         let empty =
             (previews.iter()).find(|(pane, shown)| shown.is_none() && Some(*pane) == cursor);
-        let pane = match showing(&target.path).or(empty) {
-            Some((pane, _)) => *pane,
+        // The pane is made again on what it is to show, which reads the
+        // file anew even if it is the one it showed.
+        let path = target.path.clone();
+        let shown = plugins::preview_of(Some(target));
+        let pane = match showing(&path).or(empty) {
+            Some((pane, _)) => {
+                let pane = *pane;
+                self.model
+                    .update(|model| _ = model.set_pane_plugin(pane, shown));
+                self.remake_pane(pane);
+                pane
+            }
             None => {
                 let mut opened = None;
                 self.model_changed(|model| {
                     opened = match split {
-                        Some((session, axis)) => model.split_session_with_view(
-                            session,
-                            ViewKind::Preview,
-                            axis,
-                            activate,
-                        ),
+                        Some((session, axis)) => {
+                            model.split_session_with_view(session, ViewKind::Plugin, axis, activate)
+                        }
                         None => {
-                            Some(model.open_tab_with_view_activated(ViewKind::Preview, activate))
+                            Some(model.open_tab_with_view_activated(ViewKind::Plugin, activate))
                         }
                     };
+                    if let Some(pane) = opened {
+                        model.set_pane_plugin(pane, shown);
+                    }
                 });
                 self.reconcile();
                 opened.ok_or("unknown split target session")?
             }
         };
-        // The pane is told what to show, and reads the file anew even if
-        // it is the one it showed.
-        let (preview, shown) = (self.kept().panes.borrow().get(&pane))
-            .and_then(|view| view.preview)
-            .ok_or("the pane has no preview")?;
-        shown.set(Some(target));
-        preview.reload();
         if activate {
             self.change(|model| {
                 if let Some((tab, pane)) = model.pane_position(pane) {

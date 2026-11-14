@@ -124,12 +124,6 @@ impl Shell {
                     request_paste();
                 }
             }
-            CommandId::ReloadPreview => {
-                let pane = self.model.with_untracked(Workspace::cursor_pane_id);
-                if let Some(preview) = pane.and_then(|pane| self.preview(pane)) {
-                    preview.reload();
-                }
-            }
             CommandId::OpenTerminalInSessionDirectory => {
                 let directory = self.model.with_untracked(|model| {
                     let session = model.active_session_id()?;

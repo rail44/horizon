@@ -182,7 +182,6 @@ font_size = 13.0
 # destructive: every terminal session ends), reload-config, manage-sessions
 # (opens the session manager modal), open-terminal-in-session-directory,
 # open-board,
-# reload-preview (reload the active preview pane's plugin from disk),
 # copy-terminal-selection / paste-into-terminal (the active terminal's copy
 # and paste; bound by default to ctrl+shift+c / ctrl+shift+v, and on macOS
 # to cmd+c / cmd+v as well),
@@ -206,7 +205,8 @@ font_size = 13.0
 # add-board-task, move-board-task-up, move-board-task-down,
 # reorder-board-task, open-board-organizer; the board thread's
 # open-board-task-session, back-board-list, post-board-message,
-# save-board-state, toggle-board-closed, open-board-organizer.
+# save-board-state, toggle-board-closed, open-board-organizer; a preview
+# pane's reload-preview (reload its plugin from disk).
 #
 # Likewise, the reserved pseudo-command `workspace-mode` overrides the
 # chord that enters workspace mode (`ctrl+'` by default -- see
