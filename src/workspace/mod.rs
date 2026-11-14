@@ -38,17 +38,16 @@ use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Track, Update, With, WithUntracked, WithValue,
 };
 use horizon_ui::reactive_graph::wrappers::read::Signal;
-use horizon_ui::{Callback, Component, El, each_layout, el, relayout, stop_propagation};
+use horizon_ui::{El, each_layout, el, relayout, stop_propagation};
 use horizon_workspace::title::derive_session_title;
 use horizon_workspace::types::TabSummary;
 use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, ViewKind, Workspace};
 
 use crate::agent::{self, Agent, AgentSession};
 use crate::board;
-use crate::markdown::{self, Markdown};
+use crate::markdown;
 use crate::terminal::{self, Session, Terminal, TerminalView};
 use crate::wake::Wake;
-use crate::wiki::Wiki;
 
 mod arrangement;
 mod board_sessions;
@@ -569,41 +568,6 @@ impl Shell {
                     agent = Some(view);
                     root
                 }
-                (PaneKind::View(ViewKind::Markdown), ..) => {
-                    let path = (self.model)
-                        .with_untracked(|model| model.pane_document(id).map(PathBuf::from));
-                    Markdown {
-                        path,
-                        open_url: kept.open_url.clone(),
-                        wake: kept.wake.clone(),
-                        // The file it shows is the pane's in the model, so
-                        // that it comes back on the same one: a link
-                        // followed moves it.
-                        on_navigate: Some(Callback::new(move |path: PathBuf| {
-                            shell.model.update(|model| {
-                                model.set_pane_document(id, path);
-                            });
-                        })),
-                    }
-                    .view()
-                }
-                (PaneKind::View(ViewKind::Wiki), ..) => {
-                    let path = (self.model)
-                        .with_untracked(|model| model.pane_document(id).map(PathBuf::from));
-                    Wiki {
-                        path,
-                        open_url: kept.open_url.clone(),
-                        wake: kept.wake.clone(),
-                        // The page it shows is the pane's in the model, as
-                        // a Markdown pane's file is.
-                        on_navigate: Some(Callback::new(move |path: PathBuf| {
-                            shell.model.update(|model| {
-                                model.set_pane_document(id, path);
-                            });
-                        })),
-                    }
-                    .view()
-                }
                 (PaneKind::View(ViewKind::Plugin), ..) => {
                     let shown = (self.model).with_untracked(|model| model.pane_plugin(id).cloned());
                     let named = RwSignal::new(Vec::new());
@@ -1019,24 +983,9 @@ impl Shell {
         let page = (std::env::current_dir().ok())
             .and_then(|directory| horizon_wiki::Store::for_dir(&directory))
             .and_then(|store| store.page_path("index").ok());
-        // The pane's page is in the model before its view is made.
-        self.model_changed(|model| {
-            let pane = match placement {
-                Placement::NewTab => model.open_tab_with_view_activated(ViewKind::Wiki, true),
-                Placement::SplitRight => {
-                    model.split_active_tab_with_view(ViewKind::Wiki, SplitAxis::Horizontal)
-                }
-                Placement::SplitDown => {
-                    model.split_active_tab_with_view(ViewKind::Wiki, SplitAxis::Vertical)
-                }
-            };
-            if let Some(page) = page {
-                model.set_pane_document(pane, page);
-            }
-            model.exit_workspace_mode();
-        });
-        self.reconcile();
-        self.focus_active();
+        if let Some(wiki) = plugins::document(plugins::WIKI, page) {
+            self.create_plugin(wiki, placement);
+        }
     }
 
     /// The agent view a pane shows.

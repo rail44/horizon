@@ -7,7 +7,9 @@ use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, Set, Update, WithUntracked};
 use horizon_ui::{Callable, Callback, El};
-use horizon_workspace::{PaneId, PluginPane, SessionId};
+use std::path::{Path, PathBuf};
+
+use horizon_workspace::{PaneId, PluginPane, SessionId, Workspace};
 
 use super::Shell;
 use crate::background::Background;
@@ -15,9 +17,11 @@ use crate::board::plugin::{
     BoardListPlugin, BoardThreadPlugin, ListAsked, ThreadAsked, ThreadState,
 };
 use crate::board::{list, thread};
+use crate::markdown::{DocumentState, MarkdownPlugin};
 use crate::plugin::{Mounted, Plugin};
 use crate::preview::{PreviewPlugin, Target};
 use crate::theme_settings::{self, ThemeSettingsPlugin};
+use crate::wiki::WikiPlugin;
 use horizon_theme::seed::Seed;
 use horizon_theme_css::Theme;
 
@@ -50,6 +54,8 @@ pub(super) fn commands() -> Vec<Listed> {
     commands.extend(listed::<BoardThreadPlugin>());
     commands.extend(listed::<PreviewPlugin>());
     commands.extend(listed::<ThemeSettingsPlugin>());
+    commands.extend(listed::<MarkdownPlugin>());
+    commands.extend(listed::<WikiPlugin>());
     commands
 }
 
@@ -57,7 +63,7 @@ pub(super) fn commands() -> Vec<Listed> {
 pub(super) fn pane<P: Plugin>(state: P::State) -> PluginPane {
     PluginPane {
         name: P::NAME.to_string(),
-        title: P::TITLE.to_string(),
+        title: P::title(&state),
         state: serde_json::to_value(state).unwrap_or_default(),
     }
 }
@@ -174,6 +180,20 @@ impl Shell {
                 };
                 self.mount(pane, plugin, state, |never| match never {})
             }
+            MarkdownPlugin::NAME => {
+                let plugin = MarkdownPlugin {
+                    open_url: kept.open_url.clone(),
+                    wake: kept.wake.clone(),
+                };
+                self.mount(pane, plugin, state, |never| match never {})
+            }
+            WikiPlugin::NAME => {
+                let plugin = WikiPlugin {
+                    open_url: kept.open_url.clone(),
+                    wake: kept.wake.clone(),
+                };
+                self.mount(pane, plugin, state, |never| match never {})
+            }
             _ => None,
         }
     }
@@ -191,18 +211,14 @@ impl Shell {
         let state: P::State = serde_json::from_value(state.clone()).ok()?;
         let Mounted { view, run, state } = plugin.mount(state, Callback::new(ask));
         Effect::new(move |_| {
-            let Ok(state) = serde_json::to_value(state.get()) else {
-                return;
-            };
+            let kept = self::pane::<P>(state.get());
             let changed = shell.model.with_untracked(|model| {
-                model
-                    .pane_plugin(pane)
-                    .is_some_and(|plugin| plugin.state != state)
+                (model.pane_plugin(pane)).is_some_and(|plugin| *plugin != kept)
             });
             if changed {
                 shell
                     .model
-                    .update(|model| _ = model.set_pane_plugin_state(pane, state));
+                    .update(|model| _ = model.set_pane_plugin(pane, kept));
             }
         });
         let commands = P::commands();
@@ -233,6 +249,30 @@ pub(super) fn previewed(plugin: &PluginPane) -> Option<Option<Target>> {
 /// A theme settings pane.
 pub(super) fn theme_settings() -> PluginPane {
     pane::<ThemeSettingsPlugin>(())
+}
+
+/// The two document views, by name.
+pub(super) const MARKDOWN: &str = MarkdownPlugin::NAME;
+pub(super) const WIKI: &str = WikiPlugin::NAME;
+
+/// A pane of the document view `name` on `path`.
+pub(super) fn document(name: &str, path: Option<PathBuf>) -> Option<PluginPane> {
+    let state = DocumentState { path };
+    match name {
+        MARKDOWN => Some(pane::<MarkdownPlugin>(state)),
+        WIKI => Some(pane::<WikiPlugin>(state)),
+        _ => None,
+    }
+}
+
+/// The pane of the document view `name` that shows `path`, if any.
+pub(super) fn document_pane(model: &Workspace, name: &str, path: &Path) -> Option<PaneId> {
+    (model.all_pane_ids().into_iter()).find(|pane| {
+        model.pane_plugin(*pane).is_some_and(|plugin| {
+            let state = serde_json::from_value::<DocumentState>(plugin.state.clone());
+            plugin.name == name && state.is_ok_and(|state| state.path.as_deref() == Some(path))
+        })
+    })
 }
 
 /// A list pane.

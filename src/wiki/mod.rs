@@ -1345,3 +1345,50 @@ pub fn build(given: Wiki) -> (El, State) {
     .child(scroll);
     (root, state)
 }
+
+/// The page as a plugin: a pane keeps the page's file, which a link
+/// followed moves.
+pub struct WikiPlugin {
+    pub open_url: OpenUrl,
+    pub wake: Wake,
+}
+
+impl crate::plugin::Plugin for WikiPlugin {
+    const NAME: &'static str = "wiki";
+    const TITLE: &'static str = "Wiki";
+    type State = crate::markdown::DocumentState;
+    type Command = std::convert::Infallible;
+    type Asked = std::convert::Infallible;
+
+    fn commands() -> Vec<crate::plugin::Command<std::convert::Infallible>> {
+        Vec::new()
+    }
+
+    fn title(state: &crate::markdown::DocumentState) -> String {
+        state.file_name().unwrap_or_else(|| Self::TITLE.to_string())
+    }
+
+    fn mount(
+        self,
+        state: crate::markdown::DocumentState,
+        _: Callback<std::convert::Infallible>,
+    ) -> crate::plugin::Mounted<crate::markdown::DocumentState, std::convert::Infallible> {
+        let shown = RwSignal::new(state.clone());
+        let view = Wiki {
+            path: state.path,
+            open_url: self.open_url,
+            wake: self.wake,
+            on_navigate: Some(Callback::new(move |path| {
+                shown.set(crate::markdown::DocumentState { path: Some(path) })
+            })),
+        }
+        .view();
+        crate::plugin::Mounted {
+            view,
+            run: Callback::new(|never| match never {}),
+            state: horizon_ui::reactive_graph::wrappers::read::Signal::derive_local(move || {
+                horizon_ui::reactive_graph::traits::Get::get(&shown)
+            }),
+        }
+    }
+}

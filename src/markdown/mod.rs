@@ -304,3 +304,64 @@ fn build(given: Markdown) -> El {
     .child(scroll);
     root
 }
+
+/// What a pane of a document view keeps: the file it shows.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct DocumentState {
+    pub path: Option<PathBuf>,
+}
+
+impl DocumentState {
+    /// The file's name, as a pane's title.
+    pub fn file_name(&self) -> Option<String> {
+        let name = self.path.as_deref()?.file_name()?;
+        Some(name.to_string_lossy().into_owned())
+    }
+}
+
+/// The view as a plugin: a pane keeps the file it shows, which a link
+/// followed moves.
+pub struct MarkdownPlugin {
+    pub open_url: OpenUrl,
+    pub wake: Wake,
+}
+
+impl crate::plugin::Plugin for MarkdownPlugin {
+    const NAME: &'static str = "markdown";
+    const TITLE: &'static str = "Markdown";
+    type State = DocumentState;
+    type Command = std::convert::Infallible;
+    type Asked = std::convert::Infallible;
+
+    fn commands() -> Vec<crate::plugin::Command<std::convert::Infallible>> {
+        Vec::new()
+    }
+
+    fn title(state: &DocumentState) -> String {
+        state.file_name().unwrap_or_else(|| Self::TITLE.to_string())
+    }
+
+    fn mount(
+        self,
+        state: DocumentState,
+        _: Callback<std::convert::Infallible>,
+    ) -> crate::plugin::Mounted<DocumentState, std::convert::Infallible> {
+        let shown = RwSignal::new(state.clone());
+        let view = Markdown {
+            path: state.path,
+            open_url: self.open_url,
+            wake: self.wake,
+            on_navigate: Some(Callback::new(move |path| {
+                shown.set(DocumentState { path: Some(path) })
+            })),
+        }
+        .view();
+        crate::plugin::Mounted {
+            view,
+            run: Callback::new(|never| match never {}),
+            state: horizon_ui::reactive_graph::wrappers::read::Signal::derive_local(move || {
+                horizon_ui::reactive_graph::traits::Get::get(&shown)
+            }),
+        }
+    }
+}

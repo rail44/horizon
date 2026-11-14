@@ -140,12 +140,12 @@ impl Shell {
                 path,
                 split,
                 activate,
-            } => self.open_document(ViewKind::Markdown, path, split, activate),
+            } => self.open_document(plugins::MARKDOWN, path, split, activate),
             Command::Wiki {
                 path,
                 split,
                 activate,
-            } => self.open_document(ViewKind::Wiki, path, split, activate),
+            } => self.open_document(plugins::WIKI, path, split, activate),
             Command::Preview {
                 path,
                 name,
@@ -170,11 +170,11 @@ impl Shell {
         }
     }
 
-    /// A pane on the file at `path`, shown as `kind` shows one: the pane
-    /// that shows it already, or a new one.
+    /// A pane on the file at `path`, shown as the document view `name`
+    /// shows one: the pane that shows it already, or a new one.
     fn open_document(
         &self,
-        kind: ViewKind,
+        name: &str,
         path: std::path::PathBuf,
         split: Option<(SessionId, horizon_workspace::SplitAxis)>,
         activate: bool,
@@ -183,7 +183,7 @@ impl Shell {
             return Err(format!("not a file: {}", path.display()));
         }
         // A pane that shows the file already reads it again.
-        let shown = (self.model).with_untracked(|model| model.document_pane(kind, &path));
+        let shown = (self.model).with_untracked(|model| plugins::document_pane(model, name, &path));
         if let Some(pane) = shown {
             // (A view opens on its file: the pane's is made again.)
             self.remake_pane(pane);
@@ -196,6 +196,8 @@ impl Shell {
             }
             return Ok(EnvelopeBody::Ok { session_id: None });
         }
+        let document = plugins::document(name, Some(path)).ok_or("not a document view")?;
+        let kind = ViewKind::Plugin;
         let mut opened = None;
         self.model_changed(|model| {
             opened = match split {
@@ -203,7 +205,7 @@ impl Shell {
                 None => Some(model.open_tab_with_view_activated(kind, activate)),
             };
             if let Some(pane) = opened {
-                model.set_pane_document(pane, path);
+                model.set_pane_plugin(pane, document);
             }
         });
         // (The model has the pane's file before its view is made.)

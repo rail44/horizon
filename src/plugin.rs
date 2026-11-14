@@ -17,7 +17,8 @@ pub use horizon_ui::Callback;
 pub trait Plugin {
     /// What the workspace saves a pane of it under.
     const NAME: &'static str;
-    /// A pane's title in the tab strip.
+    /// A pane's title in the tab strip, unless [`Plugin::title`] says
+    /// otherwise.
     const TITLE: &'static str;
     /// What a pane of it keeps across runs.
     type State: Serialize + DeserializeOwned + Clone + PartialEq + 'static;
@@ -28,6 +29,12 @@ pub trait Plugin {
 
     /// Its commands, in the order the palette lists them.
     fn commands() -> Vec<Command<Self::Command>>;
+
+    /// A pane's title in the tab strip, on `state`.
+    fn title(state: &Self::State) -> String {
+        let _ = state;
+        Self::TITLE.to_string()
+    }
 
     /// A pane's view, on `state`. `ask` hears what the view asks for.
     fn mount(

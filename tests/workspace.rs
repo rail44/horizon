@@ -673,9 +673,7 @@ fn the_control_plane_opens_a_markdown_file_in_a_pane_that_follows_its_links() {
     assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
     assert_eq!(opened.model(Workspace::tab_count), 2);
     let pane = opened.panes()[0];
-    let shown = |opened: &Opened| {
-        opened.model(|model| model.pane_document(pane).map(std::path::PathBuf::from))
-    };
+    let shown = |opened: &Opened| opened.model(|model| shown_file(model, pane));
     assert_eq!(shown(&opened), Some(first.clone()));
     // The tab is named for the file.
     let title = |opened: &Opened| opened.model(|model| model.tab_summaries()[1].title.clone());
@@ -849,7 +847,6 @@ fn the_theme_settings_apply_a_seed_as_it_changes_and_save_it_when_asked() {
 fn the_control_plane_opens_a_wiki_page_in_a_pane() {
     use horizon_control::contract::{EnvelopeBody, Invoke};
     use horizon_control::host::executor::ControlRequest;
-    use horizon_workspace::{PaneKind, ViewKind};
 
     let directory = std::env::temp_dir().join(format!("hzb-wiki-{}", std::process::id()));
     let store = horizon_wiki::Store::at(directory.join("project"));
@@ -867,12 +864,9 @@ fn the_control_plane_opens_a_wiki_page_in_a_pane() {
     opened.app.run_effects();
     opened.app.resolve();
     let pane = opened.panes()[0];
+    assert_eq!(opened.shell.plugin(pane), Some("wiki"));
     assert_eq!(
-        opened.model(|model| model.pane_kind(pane)),
-        Some(PaneKind::View(ViewKind::Wiki))
-    );
-    assert_eq!(
-        opened.model(|model| model.pane_document(pane).map(std::path::PathBuf::from)),
+        opened.model(|model| shown_file(model, pane)),
         Some(page.clone())
     );
     opened.until("the page", || opened.all("heading").len() == 1);
@@ -881,10 +875,7 @@ fn the_control_plane_opens_a_wiki_page_in_a_pane() {
         opened.model(|model| model.tab_summaries()[1].title.clone()),
         "index.md"
     );
-    assert_eq!(
-        opened.model(|model| model.pane_document(pane).map(std::path::PathBuf::from)),
-        Some(page)
-    );
+    assert_eq!(opened.model(|model| shown_file(model, pane)), Some(page));
     let _ = std::fs::remove_dir_all(&directory);
 }
 
@@ -1295,4 +1286,10 @@ fn a_shell_with_nothing_happening_has_nothing_to_draw() {
         "{}",
         terminal.text()
     );
+}
+
+/// The file the document view in `pane` shows, as the model keeps it.
+fn shown_file(model: &Workspace, pane: horizon_workspace::PaneId) -> Option<std::path::PathBuf> {
+    let state = &model.pane_plugin(pane)?.state;
+    serde_json::from_value(state["path"].clone()).ok()
 }
