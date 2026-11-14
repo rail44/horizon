@@ -329,8 +329,8 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     app.run_effects();
     app.resolve();
     let board = shown()[0].0;
-    assert!(shell.board_list(board).is_some());
-    shell.execute(CommandId::OpenBoardOrganizer);
+    assert_eq!(shell.plugin(board), Some("board-list"));
+    assert!(shell.execute_plugin("open-board-organizer"));
     until("the organizer", &|| agents().len() == 2);
     until("the organizer's pane", &|| {
         shown().len() == 2 && shell.agent(shown()[1].0).is_some()
@@ -343,7 +343,10 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
             .with_untracked(|model| model.agent_session_id(pane))
     );
     // Asked for again, it is the same session, in the pane it has.
-    shell.execute(CommandId::OpenBoardOrganizer);
+    horizon_ui::reactive_graph::traits::Update::update(&shell.model, |model| {
+        model.activate_pane(board);
+    });
+    assert!(shell.execute_plugin("open-board-organizer"));
     app.run_effects();
     app.resolve();
     std::thread::sleep(Duration::from_millis(300));
@@ -418,8 +421,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
                     .unwrap();
             }
         });
-    let list = shell.board_list(board).expect("the list");
-    let told = |session| list.activity.get_untracked().get(&session).copied();
+    let told = |session| shell.session_activity(session);
     let found = |activity: Option<BoardSessionActivity>| {
         activity.is_some_and(|activity| {
             !matches!(

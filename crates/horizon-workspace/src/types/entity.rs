@@ -67,6 +67,21 @@ pub struct Pane {
     /// The file a document view shows (`ViewKind::Markdown`). Persisted, so
     /// the pane restores on the same file; `None` for every other kind.
     pub document: Option<PathBuf>,
+    /// The plugin a plugin view shows, and its state
+    /// (`ViewKind::Plugin`). Persisted, so the pane restores on the same
+    /// state; `None` for every other kind.
+    pub plugin: Option<PluginPane>,
+}
+
+/// What a plugin view pane keeps of its plugin.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PluginPane {
+    /// The plugin's name.
+    pub name: String,
+    /// The pane's title in the tab strip.
+    pub title: String,
+    /// What the plugin keeps, as it saves it.
+    pub state: serde_json::Value,
 }
 
 impl WorkspaceSession {
@@ -97,12 +112,16 @@ impl Pane {
             kind,
             session_id,
             document: None,
+            plugin: None,
         }
     }
 
-    /// The document's file name when the pane shows one, else the kind's
-    /// title.
+    /// The document's file name when the pane shows one, else its
+    /// plugin's title, else the kind's.
     pub fn title(&self) -> String {
+        if let Some(plugin) = &self.plugin {
+            return plugin.title.clone();
+        }
         self.document
             .as_deref()
             .and_then(|path| path.file_name())

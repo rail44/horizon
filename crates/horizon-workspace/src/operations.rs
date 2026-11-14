@@ -1,6 +1,6 @@
 use super::types::{
-    LayoutNode, Pane, PaneId, PaneKind, SessionKind, SplitAxis, Tab, TabId, ViewKind, Workspace,
-    WorkspaceSession,
+    LayoutNode, Pane, PaneId, PaneKind, PluginPane, SessionKind, SplitAxis, Tab, TabId, ViewKind,
+    Workspace, WorkspaceSession,
 };
 use crate::SessionId;
 
@@ -404,6 +404,36 @@ impl Workspace {
         if !kind.carries_document() {
             pane.document = None;
         }
+        if kind != ViewKind::Plugin {
+            pane.plugin = None;
+        }
+        true
+    }
+
+    /// Points a plugin view at `plugin`: which plugin it shows, and the
+    /// state. `false`, a no-op, when `pane_id` is unknown or is not a
+    /// plugin view.
+    pub fn set_pane_plugin(&mut self, pane_id: PaneId, plugin: PluginPane) -> bool {
+        let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == pane_id) else {
+            return false;
+        };
+        if pane.kind != PaneKind::View(ViewKind::Plugin) {
+            return false;
+        }
+        pane.plugin = Some(plugin);
+        true
+    }
+
+    /// The state a plugin view keeps. `false`, a no-op, when `pane_id`
+    /// shows no plugin.
+    pub fn set_pane_plugin_state(&mut self, pane_id: PaneId, state: serde_json::Value) -> bool {
+        let plugin = (self.panes.iter_mut())
+            .find(|pane| pane.id == pane_id)
+            .and_then(|pane| pane.plugin.as_mut());
+        let Some(plugin) = plugin else {
+            return false;
+        };
+        plugin.state = state;
         true
     }
 

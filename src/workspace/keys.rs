@@ -34,6 +34,7 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
     // view's key.
     let bound = bound.filter(|bound| match bound {
         Bound::Command(command) => command_enabled(*command, shell.command_state()),
+        Bound::Plugin(name) => shell.cursor_plugin_commands().contains(name),
         Bound::OpenPalette => true,
     });
     if toggles {
@@ -46,6 +47,7 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
     match bound.filter(|_| !toggles) {
         Some(Bound::OpenPalette) => shell.open(Modal::Palette),
         Some(Bound::Command(command)) => shell.execute(command),
+        Some(Bound::Plugin(name)) => _ = shell.execute_plugin(name),
         None => {}
     }
     if toggles || bound.is_some() {

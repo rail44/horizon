@@ -7,6 +7,8 @@ use horizon_ui::blitz_traits::events::BlitzKeyEvent;
 use horizon_workspace::commands::CommandId;
 use keyboard_types::{Key, NamedKey};
 
+use super::plugins;
+
 /// Binds a chord to opening the palette, which is not a command the
 /// palette lists.
 const OPEN_PALETTE: &str = "open-palette";
@@ -122,6 +124,8 @@ fn key_named(token: &str) -> Option<ChordKey> {
 pub enum Bound {
     OpenPalette,
     Command(CommandId),
+    /// The command of this name of the plugin the cursor's pane shows.
+    Plugin(&'static str),
 }
 
 pub struct Keymap {
@@ -174,12 +178,20 @@ impl Keymap {
                 continue;
             };
             let named = |id: &&CommandId| id.spec().name == command;
+            let plugin = || {
+                (plugins::commands().into_iter())
+                    .find(|listed| listed.name == command)
+                    .map(|listed| Bound::Plugin(listed.name))
+            };
             match command.as_str() {
                 WORKSPACE_MODE => keymap.workspace_mode = parsed,
                 OPEN_PALETTE => keymap.bindings.push((parsed, Bound::OpenPalette)),
                 _ => match CommandId::ALL.iter().find(named) {
                     Some(id) => keymap.bindings.push((parsed, Bound::Command(*id))),
-                    None => skipped("unknown command id"),
+                    None => match plugin() {
+                        Some(bound) => keymap.bindings.push((parsed, bound)),
+                        None => skipped("unknown command id"),
+                    },
                 },
             }
         }
@@ -275,6 +287,7 @@ mod tests {
             "Ctrl+Shift+P" = "open-palette"
             "Ctrl+Space" = "workspace-mode"
             "Ctrl+Shift+X" = "no-such-command"
+            "Ctrl+Shift+A" = "add-board-task"
             "#,
         )
         .unwrap();
@@ -289,6 +302,10 @@ mod tests {
             Some(Bound::OpenPalette)
         );
         assert_eq!(keymap.bound(&character("X", chord)), None);
+        assert_eq!(
+            keymap.bound(&character("A", chord)),
+            Some(Bound::Plugin("add-board-task"))
+        );
         assert!(
             keymap
                 .workspace_mode

@@ -3000,6 +3000,7 @@ dependencies = [
  "peniko",
  "portable-pty",
  "pulldown-cmark",
+ "serde",
  "serde_json",
  "termwiz",
  "tokio",

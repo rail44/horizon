@@ -23,14 +23,10 @@ pub enum SessionKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ViewKind {
     ThemeSettings,
-    /// The board's task list.
-    BoardList,
-    /// One board task's thread. The task id is part of the kind, so the
-    /// pane restores on the same task and two thread panes in one
-    /// workspace are distinct kinds.
-    BoardThread {
-        task: u64,
-    },
+    /// A view a plugin shows. Which plugin, and the state the pane keeps
+    /// of it, ride on the pane ([`Pane::plugin`](super::Pane::plugin))
+    /// rather than on this kind, so the kind stays `Copy`.
+    Plugin,
     /// A view compiled into a wasm plugin and shown from it
     /// (`docs/preview-pane-design.md`). Which file and which named
     /// preview a pane shows is shell-side state keyed by pane id, not part
@@ -54,8 +50,7 @@ impl ViewKind {
     pub fn title(self) -> &'static str {
         match self {
             Self::ThemeSettings => "Theme Settings",
-            Self::BoardList => "Board",
-            Self::BoardThread { .. } => "Thread",
+            Self::Plugin => "View",
             Self::Preview => "Preview",
             Self::Markdown => "Markdown",
             Self::Wiki => "Wiki",

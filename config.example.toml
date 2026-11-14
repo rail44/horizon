@@ -181,11 +181,7 @@ font_size = 13.0
 # switch-model, reload-agent-runtime, reload-terminal-runtime (restarts horizon-terminald --
 # destructive: every terminal session ends), reload-config, manage-sessions
 # (opens the session manager modal), open-terminal-in-session-directory,
-# open-board, toggle-board-expansion, toggle-board-finished-band,
-# open-board-organizer, open-board-task-session, open-board-related-item,
-# back-board-list, add-board-task, post-board-message, move-board-task-up,
-# move-board-task-down, reorder-board-task, save-board-state,
-# toggle-board-closed,
+# open-board,
 # reload-preview (reload the active preview pane's plugin from disk),
 # copy-terminal-selection / paste-into-terminal (the active terminal's copy
 # and paste; bound by default to ctrl+shift+c / ctrl+shift+v, and on macOS
@@ -202,6 +198,15 @@ font_size = 13.0
 # copy from) is not taken: the key goes to the view with the focus. Unbound by default:
 # the palette is a workspace-mode resident (`:` inside the mode, see below)
 # rather than a global shortcut, so this only matters if you want one back.
+#
+# The commands of a plugin a pane shows are accepted too (see
+# `src/board/plugin.rs`): such a chord acts on the pane the cursor is on,
+# when that pane's plugin has the command -- the board list's
+# toggle-board-expansion, toggle-board-finished-band, open-board-related-item,
+# add-board-task, move-board-task-up, move-board-task-down,
+# reorder-board-task, open-board-organizer; the board thread's
+# open-board-task-session, back-board-list, post-board-message,
+# save-board-state, toggle-board-closed, open-board-organizer.
 #
 # Likewise, the reserved pseudo-command `workspace-mode` overrides the
 # chord that enters workspace mode (`ctrl+'` by default -- see

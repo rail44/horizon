@@ -26,6 +26,8 @@ use crate::parts::{Chip, Tone};
 
 pub mod list;
 #[cfg(not(target_family = "wasm"))]
+pub mod plugin;
+#[cfg(not(target_family = "wasm"))]
 pub mod thread;
 
 pub use list::BoardList;

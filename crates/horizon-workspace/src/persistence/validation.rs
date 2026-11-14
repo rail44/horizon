@@ -128,6 +128,13 @@ fn validate_attachment(
             pane.id
         )));
     }
+    let plugin_view = matches!(pane.kind, PaneKindState::View(ViewKindState::Plugin));
+    if pane.plugin.is_some() != plugin_view {
+        return Err(state_error(format!(
+            "pane {:?} is a plugin view only if it carries a plugin",
+            pane.id
+        )));
+    }
     match pane.kind.expected_session_kind() {
         None => {
             if pane.session_id.is_some() {

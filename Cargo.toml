@@ -118,6 +118,7 @@ notify = "8"
 parley = { version = "0.12", features = ["complex-scripts"] }
 peniko = "0.6"
 pulldown-cmark = "0.13"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.52", features = ["rt", "net", "time", "macros", "io-util", "sync"] }
 termwiz = { version = "0.23.3", features = ["use_serde"] }

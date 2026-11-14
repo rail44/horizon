@@ -805,7 +805,9 @@ external notification path.
   The shared session-status query retains a failed turn through idle/replay
   until execution resumes, without changing input acceptance or board data.
   The single list/detail pane this shipped was replaced 2026-09-27 by two
-  panes — `ViewKind::BoardList` and `ViewKind::BoardThread` in `src/board/`.
+  panes — `ViewKind::BoardList` and `ViewKind::BoardThread` in `src/board/`,
+  which became the `board-list` and `board-thread` plugins (`src/plugin.rs`,
+  `src/board/plugin.rs`) on 2026-11-14.
 
 - 2026-08-06 Board keeper agent: first board "package" (feature + agent
   definition + skill), external role/skill registration seams,

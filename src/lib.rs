@@ -20,6 +20,8 @@ pub mod desktop_notify;
 pub mod markdown;
 pub mod parts;
 #[cfg(not(target_family = "wasm"))]
+pub mod plugin;
+#[cfg(not(target_family = "wasm"))]
 pub mod preview;
 #[cfg(not(target_family = "wasm"))]
 pub mod primary;

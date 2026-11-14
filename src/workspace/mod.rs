@@ -8,8 +8,8 @@
 //! resizing and changing tab change only the boxes around it.
 //!
 //! A pane shows a terminal, an agent, a Markdown file, a page of the
-//! project wiki, the theme settings, or the board (its task list, or one
-//! task's thread). Creating one asks which,
+//! project wiki, the theme settings, or a plugin's view (the board's task
+//! list, or one task's thread). Creating one asks which,
 //! in a shell with an agent runtime; a Markdown file is opened by naming
 //! it (`horizon markdown <path>`), and a thread from the list.
 //!
@@ -45,7 +45,7 @@ use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, SplitAxis, Vie
 
 use crate::agent::{self, Agent, AgentSession};
 use crate::background::Background;
-use crate::board::{self, BoardList, BoardThread};
+use crate::board;
 use crate::markdown::{self, Markdown};
 use crate::preview::{self, Preview};
 use crate::terminal::{self, Session, Terminal, TerminalView};
@@ -63,6 +63,7 @@ mod keys;
 mod models;
 mod palette;
 mod picker;
+mod plugins;
 mod reload;
 mod sessions;
 
@@ -330,8 +331,8 @@ struct PaneView {
     owner: Owner,
     terminal: Option<(SessionId, Terminal)>,
     agent: Option<Agent>,
-    board_list: Option<BoardList>,
-    board_thread: Option<BoardThread>,
+    /// The plugin a plugin view shows.
+    plugin: Option<plugins::Shown>,
     /// A preview pane's view, and what the shell has it show.
     preview: Option<(Preview, RwSignal<Option<preview::Target>>)>,
     /// The sessions a board view says its tasks are bound to.
@@ -490,7 +491,7 @@ impl Shell {
         let (shell, kept) = (*self, self.kept());
         let owner = kept.owner.child();
         let (mut terminal, mut agent) = (None, None);
-        let (mut board_list, mut board_thread) = (None, None);
+        let mut shown_plugin = None;
         let mut shown_preview = None;
         let mut bound = None;
         let start = |session| {
@@ -639,54 +640,21 @@ impl Shell {
                         },
                     )
                 }
-                (PaneKind::View(ViewKind::BoardList), ..) => {
-                    let background = Background::new(kept.wake.clone());
-                    let source = self.board_source();
-                    // (The board's project, for what the view asks that
-                    // is the project's.)
-                    let project = source.root();
-                    let (root, view) = board::list::view(
-                        source,
-                        background,
-                        self.board_sessions(&mut bound),
-                        move |asked| match asked {
-                            board::list::Asked::OpenThread(task) => shell.open_thread(id, task),
-                            board::list::Asked::OpenOrganizer { failed } => {
-                                shell.open_board_organizer(id, project.clone(), failed);
-                            }
-                        },
-                    );
-                    board_list = Some(view);
-                    root
-                }
-                (PaneKind::View(ViewKind::BoardThread { task }), ..) => {
-                    let background = Background::new(kept.wake.clone());
-                    // The task is the pane's in the model: the view
-                    // follows it there.
-                    let shown = Memo::new(move |_| {
-                        shell.model.with(|model| match model.pane_kind(id) {
-                            Some(PaneKind::View(ViewKind::BoardThread { task })) => task,
-                            _ => task,
-                        })
-                    });
-                    let source = self.board_source();
-                    let project = source.root();
-                    let (root, view) = board::thread::view(
-                        source,
-                        background,
-                        shown.into(),
-                        self.board_sessions(&mut bound),
-                        move |asked| match asked {
-                            board::thread::Asked::OpenSession { session, failed } => {
-                                shell.open_task_session(session, failed);
-                            }
-                            board::thread::Asked::OpenOrganizer { failed } => {
-                                shell.open_board_organizer(id, project.clone(), failed);
-                            }
-                        },
-                    );
-                    board_thread = Some(view);
-                    root
+                (PaneKind::View(ViewKind::Plugin), ..) => {
+                    let shown = (self.model).with_untracked(|model| model.pane_plugin(id).cloned());
+                    let named = RwSignal::new(Vec::new());
+                    let mounted = shown.and_then(|shown| self.mount_plugin(id, &shown, named));
+                    match mounted {
+                        Some((root, plugin)) => {
+                            bound = Some(named);
+                            shown_plugin = Some(plugin);
+                            root
+                        }
+                        None => el("div")
+                            .class(styles::EMPTY)
+                            .attr("tabindex", "0")
+                            .text("This view's plugin is not here."),
+                    }
                 }
                 // Which plugin and which of its previews is this pane's
                 // alone, and not the model's: it comes back empty.
@@ -724,8 +692,7 @@ impl Shell {
             owner,
             terminal,
             agent,
-            board_list,
-            board_thread,
+            plugin: shown_plugin,
             preview: shown_preview,
             bound,
         }
@@ -954,64 +921,89 @@ impl Shell {
         }
     }
 
-    /// The board list a pane shows, and the thread.
-    pub fn board_list(&self, pane: PaneId) -> Option<BoardList> {
-        self.kept().panes.borrow().get(&pane)?.board_list
+    /// The name of the plugin a pane shows.
+    pub fn plugin(&self, pane: PaneId) -> Option<&'static str> {
+        Some(
+            self.kept()
+                .panes
+                .borrow()
+                .get(&pane)?
+                .plugin
+                .as_ref()?
+                .plugin,
+        )
     }
 
-    pub fn board_thread(&self, pane: PaneId) -> Option<BoardThread> {
-        self.kept().panes.borrow().get(&pane)?.board_thread
+    /// The commands of the plugin the cursor's pane shows, by name.
+    fn cursor_plugin_commands(&self) -> Vec<&'static str> {
+        let pane = self.model.with_untracked(Workspace::cursor_pane_id);
+        let Some(plugin) = pane.and_then(|pane| self.plugin(pane)) else {
+            return Vec::new();
+        };
+        (plugins::commands().into_iter())
+            .filter(|listed| listed.plugin == plugin)
+            .map(|listed| listed.name)
+            .collect()
     }
 
-    /// The board views of the pane the commands act on.
-    fn active_board_list(&self) -> Option<(PaneId, BoardList)> {
-        let pane = self.model.with_untracked(Workspace::cursor_pane_id)?;
-        Some((pane, self.board_list(pane)?))
+    /// Carries out the command `name` of the plugin the cursor's pane
+    /// shows; `false` when it has none of that name.
+    pub fn execute_plugin(&self, name: &str) -> bool {
+        let Some(pane) = self.model.with_untracked(Workspace::cursor_pane_id) else {
+            return false;
+        };
+        let kept = self.kept();
+        let panes = kept.panes.borrow();
+        let Some(shown) = panes.get(&pane).and_then(|view| view.plugin.as_ref()) else {
+            return false;
+        };
+        // (What the command does may change the panes.)
+        let run = shown.clone();
+        drop(panes);
+        run.run(name)
     }
 
-    fn active_board_thread(&self) -> Option<BoardThread> {
-        let pane = self.model.with_untracked(Workspace::cursor_pane_id)?;
-        self.board_thread(pane)
+    /// The pane of `pane`'s tab that shows the plugin `name`.
+    fn tab_plugin_pane(&self, pane: PaneId, name: &str) -> Option<PaneId> {
+        self.model.with_untracked(|model| {
+            (model.tab_pane_kinds(pane).into_iter())
+                .map(|(pane, _)| pane)
+                .find(|pane| {
+                    model
+                        .pane_plugin(*pane)
+                        .is_some_and(|plugin| plugin.name == name)
+                })
+        })
     }
 
     /// Shows `task`'s thread beside the list in `list`'s tab: in the
-    /// tab's thread pane if it has one, else in a split of the list's.
-    /// The thread takes the focus.
+    /// tab's thread pane if it has one, made again on the task, else in a
+    /// split of the list's. The thread takes the focus.
     fn open_thread(&self, list: PaneId, task: u64) {
-        let thread = self.model.with_untracked(|model| {
-            (model.tab_pane_kinds(list).into_iter()).find_map(|(pane, kind)| {
-                matches!(kind, PaneKind::View(ViewKind::BoardThread { .. })).then_some(pane)
-            })
-        });
-        let kind = ViewKind::BoardThread { task };
+        let thread = self.tab_plugin_pane(list, plugins::THREAD);
         self.change(|model| {
             model.exit_workspace_mode();
             model.activate_pane(list);
             match thread {
                 Some(thread) => {
-                    model.retarget_view_pane(thread, kind);
+                    model.set_pane_plugin(thread, plugins::thread_on(task));
                     model.activate_pane(thread);
                 }
                 None => {
-                    model.split_active_tab_with_view(kind, SplitAxis::Horizontal);
+                    let thread =
+                        model.split_active_tab_with_view(ViewKind::Plugin, SplitAxis::Horizontal);
+                    model.set_pane_plugin(thread, plugins::thread_on(task));
                 }
             }
         });
+        if let Some(thread) = thread {
+            self.remake_pane(thread);
+        }
     }
 
-    /// From a thread, back to the list in its tab.
-    fn back_to_board_list(&self) {
-        let list = self.model.with_untracked(|model| {
-            let pane = model.cursor_pane_id()?;
-            let thread = matches!(
-                model.pane_kind(pane),
-                Some(PaneKind::View(ViewKind::BoardThread { .. }))
-            );
-            (model.tab_pane_kinds(pane).into_iter())
-                .find(|(_, kind)| thread && *kind == PaneKind::View(ViewKind::BoardList))
-                .map(|(pane, _)| pane)
-        });
-        if let Some(list) = list {
+    /// From the thread in `thread`, back to the list in its tab.
+    fn back_to_board_list(&self, thread: PaneId) {
+        if let Some(list) = self.tab_plugin_pane(thread, plugins::LIST) {
             self.change(|model| {
                 model.exit_workspace_mode();
                 model.activate_pane(list);
@@ -1038,18 +1030,36 @@ impl Shell {
 
     /// A new pane at `placement` showing a view that has no session.
     pub fn create_view(&self, kind: ViewKind, placement: Placement) {
+        self.create_pane(kind, placement, |_, _| {});
+    }
+
+    /// A new pane at `placement` showing the plugin `plugin`.
+    pub(super) fn create_plugin(
+        &self,
+        plugin: horizon_workspace::PluginPane,
+        placement: Placement,
+    ) {
+        self.create_pane(ViewKind::Plugin, placement, move |model, pane| {
+            model.set_pane_plugin(pane, plugin);
+        });
+    }
+
+    /// A new view pane at `placement`, `made` before its view is.
+    fn create_pane(
+        &self,
+        kind: ViewKind,
+        placement: Placement,
+        made: impl FnOnce(&mut Workspace, PaneId),
+    ) {
         self.change(|model| {
-            match placement {
-                Placement::NewTab => {
-                    model.open_tab_with_view_activated(kind, true);
-                }
+            let pane = match placement {
+                Placement::NewTab => model.open_tab_with_view_activated(kind, true),
                 Placement::SplitRight => {
-                    model.split_active_tab_with_view(kind, SplitAxis::Horizontal);
+                    model.split_active_tab_with_view(kind, SplitAxis::Horizontal)
                 }
-                Placement::SplitDown => {
-                    model.split_active_tab_with_view(kind, SplitAxis::Vertical);
-                }
-            }
+                Placement::SplitDown => model.split_active_tab_with_view(kind, SplitAxis::Vertical),
+            };
+            made(model, pane);
             model.exit_workspace_mode();
         });
     }

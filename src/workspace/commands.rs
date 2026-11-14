@@ -3,16 +3,15 @@
 
 use std::path::Path;
 
-use horizon_board_view::model::{ListCommand, ThreadCommand};
 use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::agent_model::ToolCallIdentity;
 use horizon_terminal_core::TerminalCommand;
-use horizon_ui::reactive_graph::traits::{GetUntracked, Update, WithUntracked};
+use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_ui::request_paste;
 use horizon_workspace::commands::{CommandId, CommandState};
-use horizon_workspace::{CloseCursorOutcome, PaneKind, ViewKind, Workspace};
+use horizon_workspace::{CloseCursorOutcome, Workspace};
 
-use super::{Modal, Placement, Shell};
+use super::{Modal, Placement, Shell, plugins};
 use crate::agent::AgentSession;
 
 impl Shell {
@@ -21,23 +20,11 @@ impl Shell {
         let standing = (self.active_agent())
             .map(|session| session.standing())
             .unwrap_or_default();
-        let on_board = self.model.with_untracked(|model| {
-            let kind = model
-                .cursor_pane_id()
-                .and_then(|pane| model.pane_kind(pane));
-            matches!(
-                kind,
-                Some(PaneKind::View(
-                    ViewKind::BoardList | ViewKind::BoardThread { .. }
-                ))
-            )
-        });
         let kept = self.kept();
         self.model.with_untracked(|model| CommandState {
             tab_count: model.tab_count(),
             visible_pane_count: model.visible_panes().len(),
             has_active_session: model.active_session_id().is_some(),
-            has_cursor_board: on_board,
             has_active_terminal: (model.active_session_id())
                 .is_some_and(|session| kept.sessions.borrow().contains_key(&session)),
             detached_session_count: model.detached_session_count(),
@@ -107,54 +94,7 @@ impl Shell {
                     model.terminate_session(session.id);
                 }
             }),
-            CommandId::OpenBoard => self.create_view(ViewKind::BoardList, Placement::NewTab),
-            // What the board's own views carry out, each for the pane
-            // the cursor is on.
-            CommandId::ToggleBoardExpansion
-            | CommandId::ToggleBoardFinishedBand
-            | CommandId::AddBoardTask
-            | CommandId::MoveBoardTaskUp
-            | CommandId::MoveBoardTaskDown
-            | CommandId::ReorderBoardTask => {
-                let Some((_, list)) = self.active_board_list() else {
-                    return;
-                };
-                let selected = list.selected.get_untracked();
-                let asked = match command {
-                    CommandId::ToggleBoardExpansion => selected.map(ListCommand::ToggleExpansion),
-                    CommandId::ToggleBoardFinishedBand => Some(ListCommand::ToggleFinished),
-                    CommandId::AddBoardTask => Some(ListCommand::AddTask),
-                    CommandId::MoveBoardTaskUp => Some(ListCommand::MoveUp),
-                    CommandId::MoveBoardTaskDown => Some(ListCommand::MoveDown),
-                    // (A drop carries its own move out where it lands.)
-                    _ => Some(ListCommand::Reorder),
-                };
-                if let Some(asked) = asked {
-                    list.execute(asked);
-                }
-            }
-            CommandId::PostBoardMessage
-            | CommandId::ToggleBoardClosed
-            | CommandId::SaveBoardState
-            | CommandId::OpenBoardTaskSession => {
-                let Some(thread) = self.active_board_thread() else {
-                    return;
-                };
-                thread.execute(match command {
-                    CommandId::PostBoardMessage => ThreadCommand::PostMessage,
-                    CommandId::ToggleBoardClosed => ThreadCommand::ToggleClosed,
-                    CommandId::SaveBoardState => ThreadCommand::SaveStatus,
-                    _ => ThreadCommand::OpenTaskSession,
-                });
-            }
-            CommandId::OpenBoardRelatedItem => {
-                if let Some((pane, list)) = self.active_board_list()
-                    && let Some(task) = list.selected.get_untracked()
-                {
-                    self.open_thread(pane, task);
-                }
-            }
-            CommandId::BackBoardList => self.back_to_board_list(),
+            CommandId::OpenBoard => self.create_plugin(plugins::list(), Placement::NewTab),
             CommandId::OpenSessionManager => self.open(Modal::Sessions),
             // A file that cannot be read leaves what is in use as it is.
             CommandId::ReloadConfig => match kept.reload.as_ref().map(|reload| reload()) {
@@ -162,15 +102,6 @@ impl Shell {
                 Some(Err(error)) => eprintln!("horizon config: reload failed: {error}"),
                 None => {}
             },
-            // The board the cursor is on asks for it, and says what goes
-            // wrong.
-            CommandId::OpenBoardOrganizer => {
-                if let Some((_, list)) = self.active_board_list() {
-                    list.open_organizer();
-                } else if let Some(thread) = self.active_board_thread() {
-                    thread.open_organizer();
-                }
-            }
             CommandId::ReloadAgentRuntime => self.reload_agent_runtime(),
             CommandId::ReloadTerminalRuntime => self.reload_terminal_runtime(),
             CommandId::IncreaseFontSize => self.step_font_size(1.),

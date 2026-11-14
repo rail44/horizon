@@ -9,7 +9,6 @@ use std::rc::Rc;
 
 use horizon_board_view::activity::BoardSessionActivity;
 
-use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Update, WithUntracked};
 use horizon_ui::{Callable, Callback, relayout};
 use horizon_workspace::{PaneId, PaneKind, SessionId, SessionKind, Workspace};
@@ -66,19 +65,10 @@ impl Shell {
         Ok(())
     }
 
-    /// What a board view and the shell say to each other of sessions: the
-    /// shell's account of what they are doing, and a place of the pane's
-    /// own for the view to say which its tasks name.
-    pub(super) fn board_sessions(
-        &self,
-        bound: &mut Option<RwSignal<Vec<SessionId>>>,
-    ) -> crate::board::Sessions {
-        let named = RwSignal::new(Vec::new());
-        *bound = Some(named);
-        crate::board::Sessions {
-            activity: self.kept().board_activity.into(),
-            bound: named.write_only(),
-        }
+    /// What the board views are told a session is doing.
+    pub fn session_activity(&self, session: SessionId) -> Option<BoardSessionActivity> {
+        let activity = self.kept().board_activity;
+        activity.with_untracked(|activity| activity.get(&session).copied())
     }
 
     /// Tells the board views what the sessions their tasks are bound to are

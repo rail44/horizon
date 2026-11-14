@@ -58,16 +58,12 @@ command_ids! {
         /// 4a) -- v1's "hunt down the agent's worktree and cd there" fix,
         /// scoped to the active session only.
         OpenTerminalInSessionDirectory,
-        /// Opens the board's task list (`ViewKind::BoardList`): a session-less
-        /// first-party view over the `horizon-board` event store where the owner
+        /// Opens the board's task list (the `board-list` plugin): a
+        /// session-less first-party view over the `horizon-board` event store where the owner
         /// can browse the ranked task hierarchy. The pane is placed as a new
         /// tab or split via the view chooser's placement flow. Palette-only --
         /// no default keybinding (binding id `"open-board"`).
         OpenBoard,
-        /// Folds the selected task's children away, or opens them again.
-        /// No-op unless the active pane is the board's list. Palette-only --
-        /// no default keybinding (binding id `"toggle-board-expansion"`).
-        ToggleBoardExpansion,
         /// Moves the live terminal font size up one step (the shell crate's
         /// `terminal::FONT_SIZE_STEP` px, clamped). Affects the terminal grid
         /// and the agent transcript's base text size without a restart.
@@ -82,25 +78,6 @@ command_ids! {
         /// or the built-in default), ending a zoom session. Default chord /
         /// override id: `"reset-font-size"`.
         ResetFontSize,
-        /// Folds the board list's finished band -- the finished top-level
-        /// tasks gathered behind one row at the bottom -- open or shut.
-        ToggleBoardFinishedBand,
-        OpenBoardTaskSession,
-        /// Opens the task the board list has selected: retargets the tab's
-        /// thread pane at it when there is one, otherwise splits the list pane
-        /// with a fresh thread pane. Focus follows the thread either way.
-        OpenBoardRelatedItem,
-        /// From a thread pane, moves focus to the list pane in the same tab.
-        /// No-op when the tab has none.
-        BackBoardList,
-        AddBoardTask,
-        PostBoardMessage,
-        MoveBoardTaskUp,
-        MoveBoardTaskDown,
-        ReorderBoardTask,
-        SaveBoardState,
-        ToggleBoardClosed,
-        OpenBoardOrganizer,
         /// Reads the plugin file of the cursor's preview pane again. The
         /// pane also does on its own when the file changes; this is the
         /// manual path. Palette-only -- no default keybinding (binding id
@@ -142,8 +119,6 @@ pub struct CommandState {
     pub tab_count: usize,
     pub visible_pane_count: usize,
     pub has_active_session: bool,
-    /// Whether the workspace cursor targets a board pane.
-    pub has_cursor_board: bool,
     /// Whether the active session is a terminal's.
     pub has_active_terminal: bool,
     pub detached_session_count: usize,
@@ -294,12 +269,6 @@ impl CommandId {
                 CommandCategory::Workspace,
                 "Browse the task board's ranked task list.",
             ),
-            CommandId::ToggleBoardExpansion => (
-                "toggle-board-expansion",
-                "Toggle Board Expansion",
-                CommandCategory::Workspace,
-                "Fold the selected task's children away, or open them again.",
-            ),
             CommandId::IncreaseFontSize => (
                 "increase-font-size",
                 "Increase Font Size",
@@ -317,78 +286,6 @@ impl CommandId {
                 "Reset Font Size",
                 CommandCategory::Workspace,
                 "Restore the startup-configured default font size.",
-            ),
-            CommandId::ToggleBoardFinishedBand => (
-                "toggle-board-finished-band",
-                "Show or Hide Finished Tasks",
-                CommandCategory::Workspace,
-                "Fold the board list's finished band open or shut.",
-            ),
-            CommandId::OpenBoardTaskSession => (
-                "open-board-task-session",
-                "Open Task Working History",
-                CommandCategory::Workspace,
-                "Open the ordinary agent session associated with this task.",
-            ),
-            CommandId::OpenBoardRelatedItem => (
-                "open-board-related-item",
-                "Open Board Task",
-                CommandCategory::Workspace,
-                "Open the selected task's thread beside the board list.",
-            ),
-            CommandId::BackBoardList => (
-                "back-board-list",
-                "Back to Task List",
-                CommandCategory::Workspace,
-                "Move focus from this thread back to the board list beside it.",
-            ),
-            CommandId::AddBoardTask => (
-                "add-board-task",
-                "Add Board Task",
-                CommandCategory::Workspace,
-                "Create a task from the name entered in the board.",
-            ),
-            CommandId::PostBoardMessage => (
-                "post-board-message",
-                "Send Board Message",
-                CommandCategory::Workspace,
-                "Send the consultation input to this task session.",
-            ),
-            CommandId::MoveBoardTaskUp => (
-                "move-board-task-up",
-                "Move Board Task Up",
-                CommandCategory::Workspace,
-                "Move this task before its previous sibling.",
-            ),
-            CommandId::MoveBoardTaskDown => (
-                "move-board-task-down",
-                "Move Board Task Down",
-                CommandCategory::Workspace,
-                "Move this task after its next sibling.",
-            ),
-            CommandId::ReorderBoardTask => (
-                "reorder-board-task",
-                "Reorder Board Task",
-                CommandCategory::Workspace,
-                "Apply the dragged task position among its siblings.",
-            ),
-            CommandId::SaveBoardState => (
-                "save-board-state",
-                "Save Task State",
-                CommandCategory::Workspace,
-                "Save the project-defined state entered for this task.",
-            ),
-            CommandId::ToggleBoardClosed => (
-                "toggle-board-closed",
-                "Close or Reopen Task",
-                CommandCategory::Workspace,
-                "Close or reopen the task independently of its project-defined state.",
-            ),
-            CommandId::OpenBoardOrganizer => (
-                "open-board-organizer",
-                "Open Board Organizer",
-                CommandCategory::Workspace,
-                "Create or resume this board’s organizer and open its agent view.",
             ),
             CommandId::ReloadPreview => (
                 "reload-preview",
@@ -445,23 +342,10 @@ pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
         | CommandId::OpenSessionManager
         | CommandId::ReloadConfig
         | CommandId::OpenBoard
-        | CommandId::ToggleBoardExpansion
-        | CommandId::ToggleBoardFinishedBand
         | CommandId::IncreaseFontSize
         | CommandId::DecreaseFontSize
         | CommandId::ResetFontSize
-        | CommandId::OpenBoardTaskSession
-        | CommandId::OpenBoardRelatedItem
-        | CommandId::BackBoardList
-        | CommandId::AddBoardTask
-        | CommandId::PostBoardMessage
-        | CommandId::MoveBoardTaskUp
-        | CommandId::MoveBoardTaskDown
-        | CommandId::ReorderBoardTask
-        | CommandId::SaveBoardState
-        | CommandId::ToggleBoardClosed
         | CommandId::ReloadPreview => true,
-        CommandId::OpenBoardOrganizer => state.has_cursor_board,
         CommandId::CopyTerminalSelection | CommandId::PasteIntoTerminal => {
             state.has_active_terminal
         }
@@ -523,7 +407,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 38);
+        assert_eq!(commands.len(), 25);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -550,14 +434,12 @@ mod tests {
         assert_eq!(commands[17].title, "Open Terminal in Session Directory");
         assert_eq!(commands[18].id, CommandId::OpenBoard);
         assert_eq!(commands[18].title, "Open Board");
-        assert_eq!(commands[19].id, CommandId::ToggleBoardExpansion);
-        assert_eq!(commands[19].title, "Toggle Board Expansion");
-        assert_eq!(commands[20].id, CommandId::IncreaseFontSize);
-        assert_eq!(commands[20].title, "Increase Font Size");
-        assert_eq!(commands[21].id, CommandId::DecreaseFontSize);
-        assert_eq!(commands[21].title, "Decrease Font Size");
-        assert_eq!(commands[22].id, CommandId::ResetFontSize);
-        assert_eq!(commands[22].title, "Reset Font Size");
+        assert_eq!(commands[19].id, CommandId::IncreaseFontSize);
+        assert_eq!(commands[19].title, "Increase Font Size");
+        assert_eq!(commands[20].id, CommandId::DecreaseFontSize);
+        assert_eq!(commands[20].title, "Decrease Font Size");
+        assert_eq!(commands[21].id, CommandId::ResetFontSize);
+        assert_eq!(commands[21].title, "Reset Font Size");
     }
 
     #[test]
@@ -565,7 +447,6 @@ mod tests {
         let mut state = CommandState {
             tab_count: 1,
             visible_pane_count: 1,
-            has_cursor_board: false,
             has_active_terminal: false,
             has_active_session: true,
             detached_session_count: 0,
@@ -596,7 +477,6 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
@@ -606,25 +486,6 @@ mod tests {
                 has_active_session_directory: false,
             }
         ));
-    }
-
-    #[test]
-    fn organizer_requires_the_cursor_to_target_a_board() {
-        let mut state = CommandState {
-            tab_count: 1,
-            visible_pane_count: 2,
-            has_active_session: true,
-            has_cursor_board: false,
-            has_active_terminal: false,
-            detached_session_count: 0,
-            has_pending_approval: false,
-            has_turn_in_flight: false,
-            has_paused_turn: false,
-            has_active_session_directory: true,
-        };
-        assert!(!command_enabled(CommandId::OpenBoardOrganizer, state));
-        state.has_cursor_board = true;
-        assert!(command_enabled(CommandId::OpenBoardOrganizer, state));
     }
 
     #[test]
@@ -670,7 +531,6 @@ mod tests {
         let entries = command_entries(CommandState {
             tab_count: 1,
             visible_pane_count: 1,
-            has_cursor_board: false,
             has_active_terminal: false,
             has_active_session: true,
             detached_session_count: 0,
@@ -699,7 +559,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 2,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -714,7 +573,6 @@ mod tests {
             CommandState {
                 tab_count: 2,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -734,7 +592,6 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
@@ -755,7 +612,6 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
@@ -770,7 +626,6 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
@@ -785,7 +640,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -800,7 +654,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -823,7 +676,6 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
@@ -842,7 +694,6 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
@@ -857,7 +708,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -876,7 +726,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -891,7 +740,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 2,
@@ -910,7 +758,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -925,7 +772,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -940,7 +786,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -955,7 +800,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -974,7 +818,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -989,7 +832,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -1008,7 +850,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -1023,7 +864,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -1040,7 +880,6 @@ mod tests {
         let entries = command_entries(CommandState {
             tab_count: 2,
             visible_pane_count: 2,
-            has_cursor_board: false,
             has_active_terminal: false,
             has_active_session: true,
             detached_session_count: 0,
@@ -1071,7 +910,6 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: false,
                 detached_session_count: 0,
@@ -1086,7 +924,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,
@@ -1101,7 +938,6 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
-                has_cursor_board: false,
                 has_active_terminal: false,
                 has_active_session: true,
                 detached_session_count: 0,

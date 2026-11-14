@@ -43,6 +43,14 @@ impl Workspace {
             .map(|pane| pane.kind)
     }
 
+    /// The plugin a plugin view pane shows ([`Pane::plugin`]).
+    pub fn pane_plugin(&self, pane_id: PaneId) -> Option<&crate::PluginPane> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == pane_id)
+            .and_then(|pane| pane.plugin.as_ref())
+    }
+
     /// The file a document view pane shows ([`Pane::document`]).
     pub fn pane_document(&self, pane_id: PaneId) -> Option<&std::path::Path> {
         self.panes

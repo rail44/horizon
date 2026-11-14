@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    LayoutChild, LayoutNode, Pane, PaneId, PaneKind, SessionKind, SplitAxis, Tab, TabId, ViewKind,
-    Workspace, WorkspaceSession,
+    LayoutChild, LayoutNode, Pane, PaneId, PaneKind, PluginPane, SessionKind, SplitAxis, Tab,
+    TabId, ViewKind, Workspace, WorkspaceSession,
 };
 use crate::SessionId;
 
@@ -114,6 +114,40 @@ struct PaneState {
     /// JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     document: Option<PathBuf>,
+    /// Only a plugin view carries one; absent from every other pane's
+    /// JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    plugin: Option<PluginPaneState>,
+}
+
+/// A plugin view's plugin: its name, the pane's title, and the state the
+/// plugin keeps, as the plugin writes it.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PluginPaneState {
+    name: String,
+    title: String,
+    state: serde_json::Value,
+}
+
+impl From<&PluginPane> for PluginPaneState {
+    fn from(plugin: &PluginPane) -> Self {
+        Self {
+            name: plugin.name.clone(),
+            title: plugin.title.clone(),
+            state: plugin.state.clone(),
+        }
+    }
+}
+
+impl From<PluginPaneState> for PluginPane {
+    fn from(plugin: PluginPaneState) -> Self {
+        Self {
+            name: plugin.name,
+            title: plugin.title,
+            state: plugin.state,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -158,15 +192,8 @@ enum PaneKindState {
 #[serde(rename_all = "snake_case")]
 enum ViewKindState {
     ThemeSettings,
-    /// Serialized as `"board"`: a board pane written before the board
-    /// became two views restores as the list.
-    #[serde(rename = "board")]
-    BoardList,
-    /// `{"board_thread": {"task": 42}}` -- the one view kind carrying a
-    /// payload, so a thread pane restores on the task it was opened for.
-    BoardThread {
-        task: u64,
-    },
+    /// The plugin and its state ride on the pane (`PaneState::plugin`).
+    Plugin,
     /// A preview pane restores empty: the artifact path and preview name
     /// live in the shell's pane map, which does not survive the process, so
     /// a restored pane shows its "nothing loaded" state until `horizon
@@ -427,6 +454,7 @@ impl LayoutState {
                         kind: PaneKindState::from(pane.kind),
                         session_id: pane.session_id,
                         document: pane.document.clone(),
+                        plugin: pane.plugin.as_ref().map(PluginPaneState::from),
                     },
                 }
             }
@@ -481,6 +509,7 @@ impl LayoutState {
                     kind: PaneKind::from(pane.kind),
                     session_id: pane.session_id,
                     document: pane.document,
+                    plugin: pane.plugin.map(PluginPane::from),
                 });
                 LayoutNode::Pane(id)
             }
@@ -540,8 +569,7 @@ impl From<ViewKind> for ViewKindState {
     fn from(kind: ViewKind) -> Self {
         match kind {
             ViewKind::ThemeSettings => Self::ThemeSettings,
-            ViewKind::BoardList => Self::BoardList,
-            ViewKind::BoardThread { task } => Self::BoardThread { task },
+            ViewKind::Plugin => Self::Plugin,
             ViewKind::Preview => Self::Preview,
             ViewKind::Markdown => Self::Markdown,
             ViewKind::Wiki => Self::Wiki,
@@ -553,8 +581,7 @@ impl From<ViewKindState> for ViewKind {
     fn from(kind: ViewKindState) -> Self {
         match kind {
             ViewKindState::ThemeSettings => Self::ThemeSettings,
-            ViewKindState::BoardList => Self::BoardList,
-            ViewKindState::BoardThread { task } => Self::BoardThread { task },
+            ViewKindState::Plugin => Self::Plugin,
             ViewKindState::Preview => Self::Preview,
             ViewKindState::Markdown => Self::Markdown,
             ViewKindState::Wiki => Self::Wiki,
@@ -709,85 +736,66 @@ mod tests {
         assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
     }
 
+    /// A plugin view keeps which plugin it shows and the plugin's state,
+    /// so a restart brings back the same view on the same state.
     #[test]
-    fn state_round_trip_preserves_a_board_list_pane_without_a_session() {
+    fn state_round_trip_preserves_a_plugin_pane_and_its_state() {
         let mut workspace = Workspace::mvp();
-        let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
         let view_pane =
-            workspace.split_active_tab_with_view(ViewKind::BoardList, SplitAxis::Horizontal);
+            workspace.split_active_tab_with_view(ViewKind::Plugin, SplitAxis::Horizontal);
+        let plugin = PluginPane {
+            name: "board-thread".to_string(),
+            title: "Thread".to_string(),
+            state: json!({"task": 42}),
+        };
+        assert!(workspace.set_pane_plugin(view_pane, plugin.clone()));
 
         let json = workspace.to_persisted_json().expect("serialize");
         let value: Value = serde_json::from_str(&json).expect("json");
+        let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
+        assert_eq!(pane["kind"], json!({"view": "plugin"}));
         assert_eq!(
-            value["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"],
-            json!({"view": "board"})
+            pane["plugin"],
+            json!({"name": "board-thread", "title": "Thread", "state": {"task": 42}})
         );
-        assert!(value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"].is_null());
+        assert!(pane["session_id"].is_null());
+        // Panes without a plugin write no `plugin` key at all.
+        let terminal = &value["tabs"][0]["root"]["children"][0]["node"]["pane"];
+        assert!(terminal.get("plugin").is_none());
 
         let restored = Workspace::from_persisted_json(&json).expect("restore");
-
+        assert_eq!(restored.pane_plugin(view_pane), Some(&plugin));
         assert_eq!(
-            restored.pane_kind(view_pane),
-            Some(PaneKind::View(ViewKind::BoardList))
-        );
-        assert_eq!(
-            restored
-                .panes
-                .iter()
-                .find(|pane| pane.id == view_pane)
-                .expect("view pane")
-                .session_id,
-            None
-        );
-        assert_eq!(restored.session_count(), workspace.session_count());
-        assert!(restored.all_pane_ids().contains(&terminal_pane));
-        assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
-    }
-
-    /// A thread pane carries the task it was opened for, so a restart
-    /// brings back that task's thread rather than an unaimed pane.
-    #[test]
-    fn state_round_trip_preserves_a_board_thread_pane_and_its_task() {
-        let mut workspace = Workspace::mvp();
-        let view_pane = workspace
-            .split_active_tab_with_view(ViewKind::BoardThread { task: 42 }, SplitAxis::Horizontal);
-
-        let json = workspace.to_persisted_json().expect("serialize");
-        let value: Value = serde_json::from_str(&json).expect("json");
-        assert_eq!(
-            value["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"],
-            json!({"view": {"board_thread": {"task": 42}}})
-        );
-
-        let restored = Workspace::from_persisted_json(&json).expect("restore");
-
-        assert_eq!(
-            restored.pane_kind(view_pane),
-            Some(PaneKind::View(ViewKind::BoardThread { task: 42 }))
+            restored.pane_title_for(view_pane).as_deref(),
+            Some("Thread")
         );
         assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
     }
 
-    /// `"board"` is the tag a board pane was written with before the board
-    /// became two views, and it is still the list's: a file from then
-    /// restores as a list pane. Substituted into a thread pane's document
-    /// so the tag being parsed is the bare string, not one this test just
-    /// produced.
+    /// A plugin view without its plugin, or another pane with one, is not
+    /// a state this model writes or restores.
     #[test]
-    fn a_pane_persisted_as_the_old_board_restores_as_the_list() {
+    fn only_a_plugin_view_restores_with_a_plugin() {
         let mut workspace = Workspace::mvp();
-        let view_pane = workspace
-            .split_active_tab_with_view(ViewKind::BoardThread { task: 42 }, SplitAxis::Horizontal);
-        let thread_json = workspace.to_persisted_json().expect("serialize");
-        let mut value: Value = serde_json::from_str(&thread_json).expect("json");
-        value["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"] = json!({"view": "board"});
-        let old_file = serde_json::to_string(&value).expect("serialize the old shape");
-
-        let restored = Workspace::from_persisted_json(&old_file).expect("restore");
-        assert_eq!(
-            restored.pane_kind(view_pane),
-            Some(PaneKind::View(ViewKind::BoardList))
+        let view_pane =
+            workspace.split_active_tab_with_view(ViewKind::Plugin, SplitAxis::Horizontal);
+        assert!(
+            workspace.to_persisted_json().is_err(),
+            "a plugin view with no plugin is not written"
         );
+
+        let plugin = PluginPane {
+            name: "board-list".to_string(),
+            title: "Board".to_string(),
+            state: Value::Null,
+        };
+        assert!(workspace.set_pane_plugin(view_pane, plugin));
+        let json = workspace.to_persisted_json().expect("serialize");
+        let mut value: Value = serde_json::from_str(&json).expect("json");
+        value["tabs"][0]["root"]["children"][0]["node"]["pane"]["plugin"] =
+            json!({"name": "board-list", "title": "Board", "state": null});
+        let edited = serde_json::to_string(&value).expect("serialize the edit");
+        assert!(Workspace::from_persisted_json(&edited).is_err());
     }
 
     /// A preview pane's artifact path and preview name live in the shell's

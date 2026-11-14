@@ -372,7 +372,9 @@ their wiring:
   files rather than large monolith modules.
 - **Operations go through the command model.** User-visible operations are
   `CommandId` variants executed via `Shell::execute`
-  (`src/workspace/commands.rs`). Buttons, keyboard shortcuts, and the palette
+  (`src/workspace/commands.rs`), or the commands of the plugin a pane
+  shows (`src/plugin.rs`'s `Plugin::commands`, run on the cursor's pane by
+  `Shell::execute_plugin`). Buttons, keyboard shortcuts, and the palette
   are bindings to commands — do not add ad-hoc behavior in UI handlers.
 - **Close vs. terminate are distinct.** Closing a pane/tab detaches sessions;
   `Terminate Active Session` is the explicit destructive command. Preserve

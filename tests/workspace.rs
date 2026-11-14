@@ -700,8 +700,6 @@ fn the_control_plane_opens_a_markdown_file_in_a_pane_that_follows_its_links() {
 #[test]
 fn the_board_opens_in_a_tab_and_a_task_s_thread_beside_its_list() {
     use horizon_board::{BoardEvent, Item, Store, sample_envelopes};
-    use horizon_ui::reactive_graph::traits::GetUntracked;
-    use horizon_workspace::commands::CommandId;
     use horizon_workspace::{PaneKind, ViewKind};
 
     let tasks = [(1, "first", "a"), (2, "second", "b")].map(|(id, title, rank)| Item {
@@ -722,6 +720,14 @@ fn the_board_opens_in_a_tab_and_a_task_s_thread_beside_its_list() {
     let kinds = |opened: &Opened| -> Vec<PaneKind> {
         opened.model(|model| model.visible_panes().iter().map(|pane| pane.kind).collect())
     };
+    let plugins = |opened: &Opened| -> Vec<_> {
+        (opened.panes().into_iter())
+            .map(|pane| opened.shell.plugin(pane))
+            .collect()
+    };
+    let task = |opened: &Opened, pane| {
+        opened.model(|model| model.pane_plugin(pane).map(|plugin| plugin.state.clone()))
+    };
 
     // The board's list, in a tab of its own, with the keys.
     opened.chord();
@@ -729,41 +735,55 @@ fn the_board_opens_in_a_tab_and_a_task_s_thread_beside_its_list() {
     opened.commit("open board");
     opened.named(NamedKey::Enter);
     assert_eq!(opened.model(Workspace::tab_count), 2);
-    assert_eq!(kinds(&opened), [PaneKind::View(ViewKind::BoardList)]);
+    assert_eq!(kinds(&opened), [PaneKind::View(ViewKind::Plugin)]);
+    assert_eq!(plugins(&opened), [Some("board-list")]);
     let list_pane = opened.panes()[0];
-    let list = opened.shell.board_list(list_pane).expect("the list");
-    opened.until("the tasks", || list.tasks().len() == 2);
-    assert_eq!(list.selected.get_untracked(), Some(1));
+    opened.until("the tasks", || {
+        horizon_ui::testing::text(&opened.app).contains("second")
+    });
 
     // Enter on a task: its thread, beside the list, with the focus.
     opened.named(NamedKey::Enter);
-    assert_eq!(
-        kinds(&opened),
-        [
-            PaneKind::View(ViewKind::BoardList),
-            PaneKind::View(ViewKind::BoardThread { task: 1 })
-        ]
-    );
+    assert_eq!(plugins(&opened), [Some("board-list"), Some("board-thread")]);
     let thread_pane = opened.panes()[1];
+    assert_eq!(
+        task(&opened, thread_pane),
+        Some(serde_json::json!({"task": 1}))
+    );
     assert!(opened.model(|model| model.is_active_pane(thread_pane)));
-    let thread = opened.shell.board_thread(thread_pane).expect("the thread");
     opened.until("the task", || opened.all("actions").len() == 1);
 
-    // Back to the list, and the next task's thread takes the same pane.
-    opened.shell.execute(CommandId::BackBoardList);
+    // The palette lists the commands of the plugin the cursor's pane
+    // shows, and not another plugin's.
+    opened.chord();
+    opened.character(":");
+    opened.commit("add board task");
+    assert_eq!(opened.all("item").len(), 0);
+    opened.named(NamedKey::Escape);
+    // Back to the list from it, and the next task's thread takes the
+    // same pane.
+    opened.character(":");
+    opened.commit("back to task list");
+    assert_eq!(opened.all("item").len(), 1);
+    opened.named(NamedKey::Enter);
     opened.app.run_effects();
     opened.app.resolve();
+    assert!(!opened.mode());
     assert!(opened.model(|model| model.is_active_pane(list_pane)));
     opened.character("j");
-    assert_eq!(list.selected.get_untracked(), Some(2));
     opened.named(NamedKey::Enter);
+    opened.app.run_effects();
+    opened.app.resolve();
     assert_eq!(opened.panes(), vec![list_pane, thread_pane]);
-    assert_eq!(thread.task.get_untracked(), 2);
     assert_eq!(
-        opened.model(|model| model.pane_kind(thread_pane)),
-        Some(PaneKind::View(ViewKind::BoardThread { task: 2 }))
+        task(&opened, thread_pane),
+        Some(serde_json::json!({"task": 2}))
     );
+    assert_eq!(plugins(&opened), [Some("board-list"), Some("board-thread")]);
     assert!(opened.model(|model| model.is_active_pane(thread_pane)));
+    opened.until("the thread, made again", || {
+        opened.all("actions").len() == 1
+    });
 }
 
 #[test]

@@ -226,8 +226,28 @@ The decisions and who made them are on board #76. What they come to:
 - **A view that paints itself comes later**, through a subset of Canvas
   2D if at all.
 
-Open: an extension's life and Horizon's own calls (loading, a pane's state
-kept and given back, what the shell asks of a view, watching a file,
-opening a URL); keeping a plugin's CSS to its own tree; how the boundary
-is versioned; where extensions live and how they are built; the preview
-pane as one of them.
+- **A pane's state is the extension's type.** The extension declares it
+  in WIT, says when it changed (`state-changed`), and gives it when asked
+  (`state()`). The workspace saves it under the extension's name and
+  hands it to `mount` when the pane is made again; another state is a
+  new `mount`, not a change to the mounted view.
+- **What the shell asks of a view is a function the extension exports.**
+  A command is an exported function; the palette and the key bindings
+  list and run the commands of the extension the cursor's pane shows.
+- **A command's parameters are read from its type.** The host reads the
+  exported function's parameter types at run time and asks for each in
+  the palette by its type (a choice for an `enum`, a field for a
+  string or a number). A file is a resource the host defines in its own
+  WIT, since a type's name does not survive to run time; the palette asks
+  for one with a file chooser, and the CLI takes a path, made absolute
+  where the CLI runs. The CLI asks the running Horizon for the commands
+  and their types over the control socket.
+- **The built-in views are written to the same shape** (`src/plugin.rs`'s
+  `Plugin`: a name, a state type, the commands, `mount`). The board's
+  list and thread are the first (`src/board/plugin.rs`).
+
+Open: an extension's life (loading, watching a file, opening a URL);
+keeping a plugin's CSS to its own tree; how the boundary is versioned;
+where extensions live and how they are built; the preview pane as one of
+them; a command's title and description, which its type does not carry;
+the file chooser itself.
