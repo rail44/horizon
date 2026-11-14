@@ -12,7 +12,9 @@ use std::rc::Rc;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Update, WithUntracked};
 use horizon_workspace::{SessionId, SessionInventory, SessionKind, Workspace};
 
+use super::held::{inventory_of, take_in};
 use super::{Modal, Reloading, RunningAgent, Shell};
+use crate::agent::plugin::AgentPlugin;
 
 fn sessions_of(model: &Workspace, kind: SessionKind) -> Vec<SessionId> {
     (model.session_summaries().iter())
@@ -100,21 +102,17 @@ impl Shell {
         };
         // The workspace goes by what the runtime has now, as it does when
         // the shell opens.
+        // (The terminals are as the workspace has them: their runtime was
+        // not asked.)
         self.model.update(|model| {
+            let terminals = sessions_of(model, SessionKind::Terminal);
             let inventory = SessionInventory::new(
-                sessions_of(model, SessionKind::Terminal),
-                running.iter().map(|agent| agent.session).collect(),
+                (terminals.into_iter())
+                    .map(|session| (SessionKind::Terminal, session))
+                    .chain(inventory_of::<AgentPlugin>(&running)),
             );
-            if let Err(error) = model.reconcile_session_inventory(&inventory) {
+            if let Err(error) = take_in(model, inventory, &running) {
                 eprintln!("failed to bring the workspace to the agent runtime: {error}");
-            }
-            for agent in running {
-                if let Some(directory) = agent.directory {
-                    model.set_session_directory(agent.session, directory);
-                }
-                if let Some(parent) = agent.parent {
-                    model.set_session_parent(agent.session, parent);
-                }
             }
         });
         let known = (self.model).with_untracked(|model| sessions_of(model, SessionKind::Agent));

@@ -9,7 +9,8 @@ use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Callback, request_paste};
 
 use super::{OpenUrl, Session, Terminal, TerminalView, build};
-use crate::plugin::{Command, Mounted, Plugin};
+use crate::plugin::{Command, Mounted, Plugin, Running, SessionPlugin};
+use crate::terminald::Terminald;
 
 pub struct TerminalPlugin {
     /// The session the pane shows, which the shell keeps.
@@ -82,5 +83,26 @@ impl Plugin for TerminalPlugin {
         _: Callback<std::convert::Infallible>,
     ) -> Mounted<(), TerminalPaneCommand> {
         self.mount_keeping().0
+    }
+}
+
+impl SessionPlugin for TerminalPlugin {
+    const KIND: horizon_workspace::SessionKind = horizon_workspace::SessionKind::Terminal;
+    type Session = Session;
+    type Runtime = Terminald;
+
+    fn running(runtime: &Terminald) -> Result<Vec<Running>, String> {
+        let running = runtime.handle().terminal_list()?;
+        Ok((running.iter())
+            .map(|terminal| Running {
+                session: horizon_workspace::SessionId::from_uuid(terminal.session_id),
+                directory: None,
+                parent: None,
+            })
+            .collect())
+    }
+
+    fn end(session: &Session) {
+        session.send(TerminalCommand::Shutdown);
     }
 }

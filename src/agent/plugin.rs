@@ -9,7 +9,8 @@ use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Callable, Callback};
 
 use super::{Agent, AgentSession, live};
-use crate::plugin::{Command, Enabled, Mounted, Plugin};
+use crate::agentd::Agentd;
+use crate::plugin::{Command, Enabled, Mounted, Plugin, Running, SessionPlugin};
 
 pub struct AgentPlugin {
     /// The session the pane shows, which the shell keeps.
@@ -133,5 +134,19 @@ impl Plugin for AgentPlugin {
 
     fn mount(self, _: (), ask: Callback<AgentAsked>) -> Mounted<(), AgentPaneCommand> {
         self.mount_keeping(ask).0
+    }
+}
+
+impl SessionPlugin for AgentPlugin {
+    const KIND: horizon_workspace::SessionKind = horizon_workspace::SessionKind::Agent;
+    type Session = AgentSession;
+    type Runtime = Agentd;
+
+    fn running(runtime: &Agentd) -> Result<Vec<Running>, String> {
+        runtime.running()
+    }
+
+    fn end(session: &AgentSession) {
+        session.send(AgentCommand::Close);
     }
 }

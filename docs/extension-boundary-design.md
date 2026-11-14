@@ -243,8 +243,19 @@ The decisions and who made them are on board #76. What they come to:
   where the CLI runs. The CLI asks the running Horizon for the commands
   and their types over the control socket.
 - **The built-in views are written to the same shape** (`src/plugin.rs`'s
-  `Plugin`: a name, a state type, the commands, `mount`). The board's
-  list and thread are the first (`src/board/plugin.rs`).
+  `Plugin`: a name, a state type, the commands, `mount`). Every view is
+  one, the terminal and the agent included: they are built in and run in
+  the shell's process, while their sessions stay in `horizon-terminald`
+  and `horizon-agentd`. A pane is a plugin and, for those two, the
+  session it shows; the session is the host's and is given to the plugin
+  apart from its state. What the host needs of a kind of session -- the
+  sessions its runtime runs, and how one ends -- the plugin provides
+  (`SessionPlugin`), so listing, ending and the startup reconciliation
+  with the runtimes do not depend on the kind.
+- **A view that runs in its own process, and a backend a package brings,
+  wait.** Neither core feature needs them now. What was found on the way
+  (wRPC between a wasm view and a native backend, and why it blocks) is
+  in `docs/research/plugin-backend-packaging-2026-11-14.md`.
 
 Open: an extension's life (loading, watching a file, opening a URL);
 keeping a plugin's CSS to its own tree; how the boundary is versioned;

@@ -27,8 +27,7 @@ use std::task::Waker;
 use horizon_agent::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
 use horizon_agent::roles::RoleId;
 use horizon_config::RawConfig;
-use horizon_shell_runtime::AgentCommand;
-use horizon_terminal_core::{TerminalCommand, TerminalNotification, TerminalUpdate};
+use horizon_terminal_core::{TerminalNotification, TerminalUpdate};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
@@ -50,12 +49,14 @@ use crate::markdown;
 use crate::terminal::plugin::TerminalPlugin;
 use crate::terminal::{Session, Terminal};
 use crate::wake::Wake;
+use held::Held;
 
 mod arrangement;
 mod board_sessions;
 mod chooser;
 mod commands;
 mod control;
+pub(crate) mod held;
 mod keymap;
 mod keys;
 mod models;
@@ -183,12 +184,7 @@ pub trait Models: Send + Sync {
 type Arrived = Box<dyn FnOnce(Shell) + Send>;
 
 /// An agent session a runtime has, with what the runtime knows of it.
-pub struct RunningAgent {
-    pub session: SessionId,
-    pub directory: Option<PathBuf>,
-    /// The session it was derived from.
-    pub parent: Option<SessionId>,
-}
+pub type RunningAgent = crate::plugin::Running;
 
 /// What the runtime is asked off the UI thread.
 type Asks<Of, Answer> = Arc<dyn Fn(Of) -> Result<Answer, String> + Send + Sync>;
@@ -340,8 +336,8 @@ struct Kept {
     panes: RefCell<HashMap<PaneId, PaneView>>,
     /// The sessions of the model, whether a pane shows them or not:
     /// closing a pane lets go of its view and keeps its session.
-    sessions: RefCell<HashMap<SessionId, Rc<Session>>>,
-    agents: RefCell<HashMap<SessionId, Rc<AgentSession>>>,
+    sessions: Held<TerminalPlugin>,
+    agents: Held<AgentPlugin>,
     spawn_agent: Option<SpawnAgent>,
     /// What summarizes an agent session's first message into its title:
     /// the configuration's `small_model`, if it names a usable one.
@@ -450,20 +446,8 @@ impl Shell {
                 .collect();
             (panes, sessions)
         });
-        kept.sessions.borrow_mut().retain(|id, session| {
-            let known = sessions.contains(id);
-            if !known {
-                session.send(TerminalCommand::Shutdown);
-            }
-            known
-        });
-        kept.agents.borrow_mut().retain(|id, session| {
-            let known = sessions.contains(id);
-            if !known {
-                session.send(AgentCommand::Close);
-            }
-            known
-        });
+        kept.sessions.keep_only(&sessions);
+        kept.agents.keep_only(&sessions);
         let gone: Vec<PaneId> = (kept.panes.borrow().keys())
             .filter(|id| !panes.iter().any(|(pane, ..)| pane == *id))
             .copied()
@@ -1083,12 +1067,12 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
     let model = RwSignal::new(opening.model);
     let theme = Theme::from_config(&opening.config);
     let configured_size = Cell::new(theme.font_size);
-    let sessions = (opening.sessions.into_iter())
-        .map(|(id, session)| (id, Rc::new(session)))
-        .collect();
-    let agents = (opening.agent_sessions.into_iter())
-        .map(|(id, session)| (id, Rc::new(session)))
-        .collect();
+    let sessions = Held::default();
+    (sessions.borrow_mut())
+        .extend((opening.sessions.into_iter()).map(|(id, session)| (id, Rc::new(session))));
+    let agents = Held::default();
+    (agents.borrow_mut())
+        .extend((opening.agent_sessions.into_iter()).map(|(id, session)| (id, Rc::new(session))));
     let shell = Shell {
         model,
         theme: RwSignal::new(theme),
@@ -1101,8 +1085,8 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         rearranged: RwSignal::new(0),
         kept: StoredValue::new_local(Rc::new(Kept {
             panes: RefCell::default(),
-            sessions: RefCell::new(sessions),
-            agents: RefCell::new(agents),
+            sessions,
+            agents,
             spawn_agent: opening.agents,
             summarizer: RefCell::new(summarizer(&opening.config)),
             starting: RefCell::default(),

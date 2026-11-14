@@ -67,3 +67,30 @@ pub struct Mounted<S: 'static, C: 'static> {
 
 /// Says whether a command can be carried out now.
 pub type Enabled<C> = horizon_ui::reactive_graph::callback::UnsyncCallback<C, bool>;
+
+/// A plugin whose panes show sessions of one kind, which run in a runtime
+/// of their own: what the host asks of it to list the sessions the
+/// runtime runs and to end one.
+pub trait SessionPlugin: Plugin {
+    const KIND: horizon_workspace::SessionKind;
+    /// A session as the shell holds it.
+    type Session;
+    /// The runtime the sessions run in.
+    type Runtime: ?Sized;
+
+    /// The sessions the runtime runs.
+    fn running(runtime: &Self::Runtime) -> Result<Vec<Running>, String>;
+
+    /// Ends a session the shell holds.
+    fn end(session: &Self::Session);
+}
+
+/// A session a runtime runs, and what the runtime says of it.
+#[derive(Clone, Debug)]
+pub struct Running {
+    pub session: horizon_workspace::SessionId,
+    /// Where it works.
+    pub directory: Option<std::path::PathBuf>,
+    /// The session it was derived from.
+    pub parent: Option<horizon_workspace::SessionId>,
+}

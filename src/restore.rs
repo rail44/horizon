@@ -6,9 +6,13 @@ use horizon_workspace::{
     SessionId, SessionInventory, SessionKind, WORKSPACE_STATE_VERSION, Workspace,
 };
 
+use crate::agent::plugin::AgentPlugin;
 use crate::agentd::Agentd;
+use crate::plugin::SessionPlugin;
 use crate::terminal::Session;
+use crate::terminal::plugin::TerminalPlugin;
 use crate::terminald::Terminald;
+use crate::workspace::held::{inventory_of, take_in};
 use crate::workspace::{Opening, Save};
 
 /// The kept workspace, if there is one to go on from.
@@ -94,34 +98,23 @@ pub fn opening(
         eprintln!("workspace restore failed: {error}");
         Opening::default()
     };
-    let terminald = terminald.handle();
-    let running = match terminald.terminal_list() {
+    let terminals = match TerminalPlugin::running(terminald) {
         Ok(running) => running,
         Err(error) => return failed(error),
     };
-    let running = (running.iter())
-        .map(|terminal| SessionId::from_uuid(terminal.session_id))
-        .collect();
-    let agents = match agentd.map(Agentd::running) {
+    let agents = match agentd.map(AgentPlugin::running) {
         Some(Ok(agents)) => agents,
         Some(Err(error)) => return failed(error),
         None => Vec::new(),
     };
-    let inventory =
-        SessionInventory::new(running, agents.iter().map(|agent| agent.session).collect());
-    if let Err(error) = model.reconcile_session_inventory(&inventory) {
-        return failed(error.to_string());
+    let inventory = SessionInventory::new(
+        inventory_of::<TerminalPlugin>(&terminals).chain(inventory_of::<AgentPlugin>(&agents)),
+    );
+    let running: Vec<_> = terminals.into_iter().chain(agents).collect();
+    if let Err(error) = take_in(&mut model, inventory, &running) {
+        return failed(error);
     }
-    // What the daemon knows of each agent session: where it works, and
-    // what it was derived from.
-    for agent in agents {
-        if let Some(directory) = agent.directory {
-            model.set_session_directory(agent.session, directory);
-        }
-        if let Some(parent) = agent.parent {
-            model.set_session_parent(agent.session, parent);
-        }
-    }
+    let terminald = terminald.handle();
     let of_kind = |model: &Workspace, kind: SessionKind| -> Vec<SessionId> {
         (model.session_summaries().iter())
             .filter(|session| session.kind == kind)

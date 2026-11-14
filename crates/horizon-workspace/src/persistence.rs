@@ -14,15 +14,17 @@ use crate::SessionId;
 
 pub const WORKSPACE_STATE_VERSION: u32 = 1;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// The sessions the runtimes run, each with its kind.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionInventory {
-    pub terminal: Vec<SessionId>,
-    pub agent: Vec<SessionId>,
+    pub sessions: Vec<(SessionKind, SessionId)>,
 }
 
 impl SessionInventory {
-    pub fn new(terminal: Vec<SessionId>, agent: Vec<SessionId>) -> Self {
-        Self { terminal, agent }
+    pub fn new(sessions: impl IntoIterator<Item = (SessionKind, SessionId)>) -> Self {
+        Self {
+            sessions: sessions.into_iter().collect(),
+        }
     }
 }
 
@@ -274,18 +276,13 @@ impl Workspace {
 impl SessionInventory {
     fn validate(&self) -> Result<HashMap<SessionId, SessionKind>, InventoryError> {
         let mut result = HashMap::new();
-        for (ids, kind) in [
-            (&self.terminal, SessionKind::Terminal),
-            (&self.agent, SessionKind::Agent),
-        ] {
-            for id in ids {
-                if let Some(previous) = result.insert(*id, kind) {
-                    return Err(InventoryError(format!(
-                        "session {id:?} appears more than once ({} and {})",
-                        previous.label(),
-                        kind.label()
-                    )));
-                }
+        for (kind, id) in &self.sessions {
+            if let Some(previous) = result.insert(*id, *kind) {
+                return Err(InventoryError(format!(
+                    "session {id:?} appears more than once ({} and {})",
+                    previous.label(),
+                    kind.label()
+                )));
             }
         }
         Ok(result)
@@ -821,10 +818,10 @@ mod tests {
         let daemon_only = SessionId::new();
 
         let outcome = workspace
-            .reconcile_session_inventory(&SessionInventory::new(
-                vec![retained, daemon_only],
-                vec![],
-            ))
+            .reconcile_session_inventory(&SessionInventory::new([
+                (SessionKind::Terminal, retained),
+                (SessionKind::Terminal, daemon_only),
+            ]))
             .expect("reconcile");
 
         assert_eq!(outcome.removed.len(), 2);
@@ -852,7 +849,7 @@ mod tests {
         let detached_before = workspace.session(detached).expect("detached").clone();
 
         let outcome = workspace
-            .reconcile_session_inventory(&SessionInventory::new(vec![], vec![detached]))
+            .reconcile_session_inventory(&SessionInventory::new([(SessionKind::Agent, detached)]))
             .expect("reconcile");
 
         assert_eq!(outcome.removed, vec![attached]);
@@ -870,7 +867,10 @@ mod tests {
         let before = workspace.to_persisted_json().expect("serialize");
         let id = workspace.active_session_id().expect("terminal");
         let error = workspace
-            .reconcile_session_inventory(&SessionInventory::new(vec![id], vec![id]))
+            .reconcile_session_inventory(&SessionInventory::new([
+                (SessionKind::Terminal, id),
+                (SessionKind::Agent, id),
+            ]))
             .expect_err("duplicate must fail");
         assert!(error.to_string().contains("more than once"));
         assert_eq!(workspace.to_persisted_json().expect("serialize"), before);
