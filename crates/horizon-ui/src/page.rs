@@ -24,7 +24,21 @@ pub struct Page<'a>(pub(crate) &'a BaseDocument);
 
 impl Page<'_> {
     /// Where an element's box is on the page.
+    ///
+    /// `None` for an element that is not on the page, and for one whose
+    /// place is added up from boxes that are gone: an element taken out
+    /// of the page (a pane of a tab not shown) keeps the boxes it was
+    /// laid out in until it is laid out again, and those may have been
+    /// freed.
     pub fn bounds(&self, element: El) -> Option<Bounds> {
+        let node = self.0.get_node(element.0)?;
+        if !node.flags.is_in_document() {
+            return None;
+        }
+        let mut around = node.containing_block();
+        while let Some(id) = around {
+            around = self.0.get_node(id)?.containing_block();
+        }
         let bounds = self.0.get_client_bounding_rect(element.0)?;
         Some(Bounds {
             x: bounds.x,
