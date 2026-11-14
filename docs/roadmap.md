@@ -9,10 +9,12 @@ history).
 
 ## Current position (orientation only — the repo is the truth)
 
-The shell is GPUI-based with Horizon's own winit platform layer on
-every OS (native decorations, IME). Terminals and agent sessions are
-hosted by `horizon-agentd` and survive UI restarts; the workspace
-(tabs, weighted splits, focus, attachments) persists and restores.
+The shell is Blitz-based (signals over a CSS document, painted by
+Vello), with every view — terminal, agent, board, Markdown, wiki,
+theme settings, the modals — written against `crates/horizon-ui`.
+Terminals and agent sessions are hosted by `horizon-terminald` and
+`horizon-agentd` and survive UI restarts; the workspace (tabs,
+weighted splits, focus, attachments) persists and restores.
 Terminal input implements Kitty's common disambiguation/event paths with a
 code-resident compliance matrix; its known higher-level gaps are explicit.
 One command model drives workspace mode, the palette, and the
