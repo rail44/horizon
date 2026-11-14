@@ -468,3 +468,72 @@ fn a_long_history_is_scrolled_through_with_few_units_built() {
     }
     assert!(opened.text().contains("src/board/spec.rs"));
 }
+
+// Investigation (not for merge): does a drag over the transcript followed by
+// Ctrl+C put the selected text on the clipboard?
+#[derive(Default)]
+struct Recorded(std::sync::Mutex<Vec<String>>);
+impl horizon_ui::blitz_traits::shell::ShellProvider for Recorded {
+    fn set_clipboard_text(
+        &self,
+        text: String,
+    ) -> Result<(), horizon_ui::blitz_traits::shell::ClipboardError> {
+        self.0.lock().unwrap().push(text);
+        Ok(())
+    }
+}
+
+fn copy_after_drag(release: bool, blur: bool) -> (Option<String>, bool, Vec<String>) {
+    use horizon_ui::testing::{Pointer, pointer};
+    let session = Session::long(1);
+    let opened = open(&session);
+    let recorded = std::sync::Arc::new(Recorded::default());
+    (opened.app.document().borrow_mut()).set_shell_provider(recorded.clone());
+    let user = opened.all("user")[0];
+    let (x, y, w, h) = {
+        let document = opened.app.document();
+        let document = document.borrow();
+        let b = document.get_client_bounding_rect(user).expect("a box");
+        (b.x, b.y, b.width, b.height)
+    };
+    let (y, x0, x1) = ((y + h / 2.) as f32, (x + 4.) as f32, (x + w - 4.) as f32);
+    pointer(&opened.app, x0, y, Pointer::Move);
+    pointer(&opened.app, x0, y, Pointer::Down);
+    pointer(&opened.app, x1, y, Pointer::Drag);
+    if release {
+        pointer(&opened.app, x1, y, Pointer::Up);
+    }
+    opened.app.resolve();
+    if blur {
+        opened.app.document().borrow_mut().clear_focus();
+    }
+    let selected = opened.app.document().borrow().get_selected_text();
+    let field_focused = {
+        let document = opened.app.document();
+        let document = document.borrow();
+        document.get_focussed_node_id() == Some(opened.agent.field.0)
+    };
+    opened.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+        key: keyboard_types::Key::Character("c".into()),
+        code: keyboard_types::Code::KeyC,
+        modifiers: keyboard_types::Modifiers::CONTROL,
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+        text: None,
+    }));
+    opened.app.resolve();
+    let clip = recorded.0.lock().unwrap().clone();
+    (selected, field_focused, clip)
+}
+
+#[test]
+fn investigate_copy_after_drag() {
+    for (release, blur) in [(true, false), (false, false), (true, true)] {
+        let (selected, focused, clip) = copy_after_drag(release, blur);
+        eprintln!(
+            "release={release} blur={blur} selected={selected:?} field_focused={focused} clipboard={clip:?}"
+        );
+    }
+}
