@@ -141,7 +141,11 @@ The arguments are what the plugin says its pane is made from
 (`docs/extension-boundary-design.md`): the client sends them as they
 were typed, with its working directory, and the shell, which knows
 their types, takes a file among them as a path from that directory. A
-pane that shows the same already is made again in its place. Built so
+pane that shows the same already is made again in its place. The plugin
+may be named by its package's directory instead, which is loaded then,
+in place of the extension of its name loaded before: how an extension
+being written is shown in the running Horizon as it was last built,
+with nothing in the configuration. Built so
 far for extensions; the built-in views still have subcommands of their
 own (`new-terminal`, `new-agent`, `markdown`, `preview`, `wiki`), which
 this takes the place of.

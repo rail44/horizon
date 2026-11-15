@@ -80,6 +80,15 @@ pub(super) fn extensions() -> Vec<Rc<Extension>> {
     EXTENSIONS.with(|kept| kept.borrow().clone())
 }
 
+/// Takes `extension` in, in place of the one of its name.
+pub(super) fn put(extension: Rc<Extension>) {
+    EXTENSIONS.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        kept.retain(|loaded| loaded.name != extension.name);
+        kept.push(extension);
+    });
+}
+
 /// The extension named `name`, if one was loaded.
 pub(super) fn extension(name: &str) -> Option<Rc<Extension>> {
     EXTENSIONS.with(|kept| {

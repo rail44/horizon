@@ -285,7 +285,10 @@ the windowless tests that draw and drive a view through it (not part of
 the gate). An extension -- a view built as a wasm component in a package
 with a `plugin.toml`, named in `config.toml`'s `extensions`
 (`src/extension.rs`, `plugins/markdown`) -- is checked the same way by
-`scripts/check-extension.sh`.
+`scripts/check-extension.sh`. One being written is shown in the running
+Horizon with nothing in the configuration: `scripts/package-extension.sh`
+builds its package, and `horizon new <package directory> <arguments>`
+loads the package as it was just built and makes a pane of it.
 
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
 (`docs/workspace-mode-design.md`), then `:` to open the control surface —

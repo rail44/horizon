@@ -273,6 +273,18 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
                 .contains("third.md")
         })
     });
+    // A package named by its directory is loaded then: one the shell was
+    // not started with, or one built again since.
+    let again = serde_json::json!({
+        "plugin": package.to_string_lossy(),
+        "arguments": ["third.md"],
+        "directory": directory.to_string_lossy(),
+        "activate": true,
+    });
+    let answer = ask("new", again);
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    opened.until("the pane made again", || opened.text().contains("Three"));
+
     // What is not there is said.
     let refused = [
         ask("new", new(serde_json::json!(["missing.md"]))),
