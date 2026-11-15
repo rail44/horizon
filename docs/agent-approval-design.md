@@ -53,6 +53,10 @@ research doc).
    classifier that either auto-approves or escalates to the human. The
    judge narrows what reaches the human; it never widens what the
    rules and sandbox would deny (the field-consensus asymmetry).
+   *Proposed 2026-11-15:* the session gains a way to **ask** for a
+   writable area instead of reacting to a denial or having its command
+   syntax guessed, and `GitOperation` becomes a special case that goes
+   away; see `docs/sandbox-area-grants-design.md`.
 3. **Always human.** Irreversible/destructive operations and anything
    the judge flags. (The originally-planned denial-counting backstop —
    3 consecutive / 20 total escalations per turn — is dropped as of the
