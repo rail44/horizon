@@ -9,4 +9,4 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { version = "0.63", features = ["async", "async-spawn"] }
+wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }

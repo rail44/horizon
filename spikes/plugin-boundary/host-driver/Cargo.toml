@@ -1,0 +1,10 @@
+[package]
+name = "host-driver"
+description = "One future per guest that goes on for as long as the guest does: its tasks and the host's calls into it are both driven by polling that one future."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wasmtime = "50"
+wasmtime-wasi = "50"

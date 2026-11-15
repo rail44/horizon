@@ -19,4 +19,20 @@ world guest {
     /// A plain call into the guest while its task is waiting: how far the
     /// task has counted.
     export counted: func() -> u32;
+
+    /// Starts the task that starts the tasks a plain call asks for
+    /// (`later`): it comes back at once.
+    export tasks: async func();
+    /// A plain call that asks for a task: it waits so many milliseconds,
+    /// notes, and adds a hundred to the count.
+    export later: func(milliseconds: u32);
+    /// Starts two tasks: one waits for the other, which waits so many
+    /// milliseconds and then wakes it. The first then adds a thousand to
+    /// the count. The wake is the guest's own, from task to task.
+    export relay: async func(milliseconds: u32);
+    /// Never comes back.
+    export stuck: func();
+    /// Reads a file through WASI, as a plain call does: how many bytes it
+    /// has, or none if it cannot be read.
+    export size-of: func(path: string) -> option<u64>;
 }
