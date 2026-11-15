@@ -647,7 +647,13 @@ impl Shared {
     ) -> Result<(), Error> {
         flush_event_log_before_exit(self.connection.writer());
         eprintln!("horizon-agentd: drained, exiting");
-        std::process::exit(0);
+        // `_exit`, not `exit`: `exit` runs the process's exit handlers and
+        // static destructors while the sessions' threads are still running,
+        // and the daemon then ends in a segmentation fault some of the
+        // time. Nothing they would do is wanted: the log is flushed above,
+        // and standard error is not buffered.
+        // SAFETY: `_exit` only ends the process.
+        unsafe { libc::_exit(0) }
     }
 }
 
