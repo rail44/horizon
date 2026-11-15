@@ -451,8 +451,22 @@ struct Woken {
     page: Wake,
 }
 
+thread_local! {
+    /// How many calls into a plugin this thread is in the middle of
+    /// ([`finish`]).
+    static FINISHING: Cell<u32> = const { Cell::new(0) };
+}
+
 impl std::task::Wake for Woken {
     fn wake(self: Arc<Self>) {
+        // A wake that comes while this thread is finishing a call is the
+        // runtime's, asking for the call to be polled on, which `finish`
+        // does anyway. Taken for a task's, every call would ask for a turn
+        // and wake the page, whose effects call the plugin again: the page
+        // would be woken without end.
+        if FINISHING.with(Cell::get) > 0 {
+            return;
+        }
         self.asked.store(true, Ordering::Relaxed);
         self.page.wake();
     }
@@ -474,6 +488,15 @@ impl Woken {
 /// call into a plugin's export does not wait on anything: it is done on
 /// its first poll, or soon after.
 fn finish<F: Future>(future: F, woken: &Arc<Woken>) -> F::Output {
+    /// Counts this thread out of the call when the call is left.
+    struct Finishing;
+    impl Drop for Finishing {
+        fn drop(&mut self) {
+            FINISHING.with(|finishing| finishing.set(finishing.get() - 1));
+        }
+    }
+    FINISHING.with(|finishing| finishing.set(finishing.get() + 1));
+    let _finishing = Finishing;
     let mut future = pin!(future);
     let waker = woken.waker();
     let mut context = Context::from_waker(&waker);
@@ -521,8 +544,9 @@ pub struct Loaded {
 }
 
 impl Loaded {
-    /// Calls into the plugin, unless it has trapped or is being called;
-    /// the tasks the call woke are given a turn after it.
+    /// Calls into the plugin, unless it has trapped or is being called.
+    /// The plugin's tasks are given a turn after it: the call may have
+    /// started one or woken one, which nothing says from outside.
     pub fn call<R>(
         self: &Rc<Self>,
         call: impl for<'a> FnOnce(&'a Instance, &'a mut Store<State>) -> Calling<'a, R>,
@@ -538,10 +562,12 @@ impl Loaded {
             let answer = (self.watchdog).timed(&mut store, |store| {
                 finish(call(&self.instance, store), woken)
             });
-            let answer = match answer {
-                Ok(answer) if woken.take() => self.turned(&mut store).map(|()| answer),
-                answer => answer,
-            };
+            let answer = answer.and_then(|answer| {
+                // (A turn asked for from another thread meanwhile is this
+                // one.)
+                woken.take();
+                self.turned(&mut store).map(|()| answer)
+            });
             let state = store.data_mut();
             (
                 answer,
@@ -664,10 +690,9 @@ impl Loaded {
             self.woken.asked.store(true, Ordering::Relaxed);
             return;
         }
-        // (The turn's own work after it -- its asks, its listeners -- is a
-        // call's, made empty.)
-        let loaded = self.clone();
-        self.call(|_, store| Box::pin(async move { loaded.turned(store) }));
+        // (The turn is the one a call ends with, and its work after it --
+        // its asks, its listeners -- the call's: a call that does nothing.)
+        self.call(|_, _| Box::pin(async { Ok(()) }));
     }
 
     /// Has the plugin follow this page: its work after each layout, its

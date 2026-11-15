@@ -409,3 +409,99 @@ fn a_package_the_configuration_names_is_read_on_reload_and_again_when_built() {
     opened.until("the pane made again", || opened.text().contains("One"));
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+#[test]
+#[ignore = "needs the extension built for wasm32-wasip2: scripts/check-extension.sh"]
+fn an_extension_with_nothing_happening_has_nothing_to_draw() {
+    use std::task::{Context, Waker};
+
+    use horizon_ui::Live;
+    use horizon_ui::blitz_dom::Document;
+
+    let directory = std::env::temp_dir().join(format!("hzb-ext-still-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("first.md");
+    std::fs::write(&file, "# One\n").unwrap();
+    let package = package(&directory);
+    let config = horizon_config::RawConfig {
+        extensions: vec![package.to_string_lossy().into_owned()],
+        ..horizon_config::RawConfig::default()
+    };
+    let mut shell = None;
+    let app = App::new(1200, 800, "Test", css(), || {
+        let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
+        let (root, built) = view(
+            spawn,
+            Opening {
+                config,
+                ..Opening::default()
+            },
+        );
+        shell = Some(built);
+        root
+    });
+    app.resolve();
+    let shell = shell.unwrap();
+    // One pane of the extension, and one in a preview pane from its
+    // package.
+    let state = format!("{{path: some({:?})}}", file.to_string_lossy());
+    shell.create_plugin(
+        PluginPane {
+            name: "markdown-extension".to_string(),
+            title: "Markdown".to_string(),
+            state: serde_json::Value::String(state),
+        },
+        Placement::NewTab,
+    );
+    shell.control(&ControlRequest::Invoke(Invoke {
+        command: "preview".to_string(),
+        args: serde_json::json!({
+            "path": package.to_string_lossy(),
+            "arguments": ["first.md"],
+            "directory": directory.to_string_lossy(),
+            "split": serde_json::Value::Null,
+            "activate": false,
+        }),
+    }));
+    // As the window's own wiring does: the waker is handed over once, and
+    // the window asks the document whether there is something to draw,
+    // draws if so, and asks again after every draw.
+    let handed = std::cell::Cell::new(false);
+    app.on_poll(move |waker| {
+        if !handed.replace(true) {
+            shell.set_waker(waker.clone());
+        }
+    });
+    let mut live = Live(app);
+    let turn = |live: &mut Live| {
+        let draws = live.poll(Some(Context::from_waker(Waker::noop())));
+        if draws {
+            live.0.resolve();
+        }
+        draws
+    };
+    let still = |live: &mut Live, what: &str| {
+        let (started, mut still) = (Instant::now(), 0);
+        while still < 40 {
+            assert!(started.elapsed() < Duration::from_secs(20), "{what}");
+            still = if turn(live) { 0 } else { still + 1 };
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    still(&mut live, "never still");
+
+    // The file changed: the extension is woken for it, shows it, and is
+    // still again.
+    std::fs::write(&file, "# Uno\n").unwrap();
+    let started = Instant::now();
+    while !horizon_ui::testing::text(&live.0).contains("Uno") {
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "not read again"
+        );
+        turn(&mut live);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    still(&mut live, "never still again");
+    let _ = std::fs::remove_dir_all(&directory);
+}
