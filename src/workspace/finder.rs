@@ -10,9 +10,8 @@ use horizon_ui::{Callback, Component, El, el};
 use horizon_workspace::PluginPane;
 
 use super::{Placement, Shell, plugins, styles};
-use crate::background::Background;
 use crate::extension::Creates;
-use crate::finder::{Finder, list};
+use crate::finder::{Finder, Source};
 
 impl Shell {
     /// Where the files to find are listed from.
@@ -42,14 +41,8 @@ pub(super) fn view(shell: Shell, plugin: &'static str, placement: Placement) -> 
         return scrim;
     };
     let root = shell.finder_root();
-    let background = Background::new(shell.kept().wake.clone());
-    let listed = list(root.clone(), extensions, background.clone());
-    horizon_ui::each_effects(move || {
-        background.take_in();
-    });
     let finder = Finder {
-        files: listed.files.into(),
-        listing: listed.listing.into(),
+        source: Source::under(root.clone(), extensions, shell.kept().wake.clone()),
         picked: Callback::new(move |path: String| {
             shell.modal.set(None);
             match extension.create(&root.join(path)) {

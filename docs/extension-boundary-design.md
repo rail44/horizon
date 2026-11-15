@@ -272,11 +272,13 @@ The decisions and who made them are on board #76. What they come to:
   symbol.
 - **A file is found by typing** (`src/finder/`): the files under a
   directory, listed off the UI thread with `.gitignore` and `.ignore`
-  kept to (`.git` left out, dot files listed), matched against what is
-  typed the way fzf's path scheme does (`nucleo-matcher`). Every word has
-  to be found, case matters once a capital is typed, and among equals the
-  shorter path comes first; with nothing typed every file is listed,
-  shortest path first. The best hundred are shown, each as its path with
+  kept to (`.git` left out, dot files listed), and handed as they are
+  found to `nucleo`, which matches them on threads of its own against
+  what is typed, the way fzf's path scheme does, and wakes the page when
+  it has something new. Every word has to be found, case matters once a
+  capital is typed, and among equals the shorter path comes first; with
+  nothing typed the files are in the order they were listed, each
+  directory's by name. The best hundred are shown, each as its path with
   the directories muted and the typed characters marked; a path too long
   loses its start. The directory is the one the cursor's pane's session
   works in, or the one the shell was started in. A file outside it is

@@ -1,30 +1,14 @@
-//! The files under a directory, listed off the UI thread and handed over
-//! as they are found.
+//! The files under a directory, as a finder lists them.
 //!
 //! What `.gitignore`, `.ignore` and git's own excludes leave out is left
 //! out, and so is `.git` itself; files whose names start with a dot are
 //! listed. Links are followed.
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-
-use horizon_ui::reactive_graph::owner::on_cleanup;
-use horizon_ui::reactive_graph::signal::RwSignal;
-use horizon_ui::reactive_graph::traits::{Set, Update};
-
-use crate::background::Background;
 
 /// How many files are handed over at a time.
 const BATCH: usize = 512;
-
-/// The files listed so far, and whether more are to come.
-#[derive(Clone, Copy)]
-pub struct Listed {
-    /// Paths from the directory listed, with `/` between their parts.
-    pub files: RwSignal<Vec<String>>,
-    pub listing: RwSignal<bool>,
-}
 
 /// Whether `path` is one of the files wanted: any file when `extensions`
 /// is empty, else one whose extension is among them, whatever its case.
@@ -35,9 +19,15 @@ fn wanted(path: &Path, extensions: &[String]) -> bool {
         })
 }
 
-/// The files under `root` with one of `extensions`, each handed to `found`
-/// in batches until `stopped` says to stop.
-fn walk(root: &Path, extensions: &[String], stopped: &AtomicBool, found: impl Fn(Vec<String>)) {
+/// The files under `root` with one of `extensions`, as paths from `root`
+/// with `/` between their parts, handed to `found` in batches until
+/// `stopped` says to stop.
+pub(super) fn walk(
+    root: &Path,
+    extensions: &[String],
+    stopped: &AtomicBool,
+    found: impl Fn(Vec<String>),
+) {
     let mut walk = ignore::WalkBuilder::new(root);
     walk.hidden(false)
         .follow_links(true)
@@ -68,32 +58,6 @@ fn walk(root: &Path, extensions: &[String], stopped: &AtomicBool, found: impl Fn
     if !batch.is_empty() {
         found(batch);
     }
-}
-
-/// Lists the files under `root` with one of `extensions` (any file when
-/// there are none) on a thread of its own. The listing stops when what it
-/// was asked under ends.
-pub fn list(root: PathBuf, extensions: Vec<String>, background: Background) -> Listed {
-    let listed = Listed {
-        files: RwSignal::new(Vec::new()),
-        listing: RwSignal::new(true),
-    };
-    let stopped = Arc::new(AtomicBool::new(false));
-    let stop = stopped.clone();
-    on_cleanup(move || stop.store(true, Ordering::Relaxed));
-    std::thread::spawn(move || {
-        let tell = background.clone();
-        walk(&root, &extensions, &stopped, move |batch| {
-            // (The finder may be gone by now.)
-            tell.tell(move || {
-                listed.files.try_update(|files| files.extend(batch));
-            });
-        });
-        background.tell(move || {
-            listed.listing.try_set(false);
-        });
-    });
-    listed
 }
 
 #[cfg(test)]

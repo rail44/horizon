@@ -4,30 +4,8 @@
 
 use horizon::background::Background;
 use horizon::board::{Source, list};
-use horizon::finder::Finder;
 use horizon_board::{BoardEvent, Comment, Item, Store, sample_envelopes};
-use horizon_ui::reactive_graph::wrappers::read::Signal;
-use horizon_ui::{Callback, Component, El, el};
-
-mod styles {
-    horizon_ui::css_module! {"
-        .stage { display: flex; justify-content: center; align-items: flex-start;
-                 padding-top: var(--u32); }
-    "}
-}
-
-/// The file finder over the Markdown files of Horizon's own repository,
-/// as they were when the list was written.
-fn finder() -> El {
-    let files = include_str!("files.txt").lines().map(String::from);
-    let finder = Finder {
-        files: Signal::stored(files.collect()),
-        listing: Signal::stored(false),
-        picked: Callback::new(|_| {}),
-        left: Callback::new(|()| {}),
-    };
-    el("div").class(styles::STAGE).child(finder.view())
-}
+use horizon_ui::El;
 
 fn item(id: u64, title: &str, rank: &str, parent: Option<u64>, status: &str) -> Item {
     Item {
@@ -79,7 +57,6 @@ fn view(name: &str) -> Option<El> {
         "parts" => Some(horizon::parts::gallery()),
         "board-list" => Some(board_list(tasks())),
         "board-list-empty" => Some(board_list(Vec::new())),
-        "finder" => Some(finder()),
         // Never comes back: what the shell's limit on a call is for
         // (`tests/preview.rs`). Not among the names.
         "stuck" => {
@@ -107,7 +84,7 @@ struct Previews;
 
 impl Guest for Previews {
     fn names() -> Vec<String> {
-        ["board-list", "board-list-empty", "finder", "parts"]
+        ["board-list", "board-list-empty", "parts"]
             .map(String::from)
             .to_vec()
     }

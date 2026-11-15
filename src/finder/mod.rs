@@ -1,12 +1,13 @@
 //! A file found by typing: a field, and under it the files of a list
-//! whose paths hold what was typed, the best first ([`matching`]). The
+//! whose paths hold what was typed, the best first ([`Source`]). The
 //! arrows and Tab move the choice, Enter takes it, Escape leaves.
 //!
 //! A row is the file's path as it is written, its directories muted. A
 //! path too long for the row loses its start, so the file's name stays.
 
+use std::rc::Rc;
+
 use horizon_ui::blitz_traits::events::DomEventData;
-use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With, WithUntracked};
 use horizon_ui::reactive_graph::wrappers::read::Signal;
@@ -18,13 +19,10 @@ use keyboard_types::{Key, NamedKey};
 
 use crate::parts::{Field, Prompt};
 
-#[cfg(not(target_family = "wasm"))]
 mod listing;
-mod matching;
+mod source;
 
-#[cfg(not(target_family = "wasm"))]
-pub use listing::{Listed, list};
-pub use matching::{Found, Results, find};
+pub use source::{Found, Results, Source};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -60,10 +58,8 @@ const LISTED: usize = 100;
 const ROW: f64 = 34.;
 
 pub struct Finder {
-    /// The files to find among, as paths from where they were listed.
-    pub files: Signal<Vec<String>>,
-    /// Whether more files are still being listed.
-    pub listing: Signal<bool>,
+    /// The files to find among.
+    pub source: Rc<Source>,
     /// Told the path of the file taken.
     pub picked: Callback<String>,
     /// Told when Escape leaves.
@@ -130,14 +126,32 @@ fn row(found: &Found) -> El {
 impl Component for Finder {
     fn view(self) -> El {
         let Finder {
-            files,
-            listing,
+            source,
             picked,
             left,
         } = self;
         let query = RwSignal::new(String::new());
         let chosen = RwSignal::new(0usize);
-        let results = Memo::new(move |_| files.with(|files| find(files, &query.get(), LISTED)));
+        let results = RwSignal::new(Results::default());
+        // What the source has found is taken in when the page's effects
+        // run, which the source wakes the page for; what was typed waits
+        // a moment for it, so that the list changes with the field.
+        let look = {
+            let source = source.clone();
+            move |wait: u64| {
+                if source.look(wait) {
+                    let now = source.results(LISTED);
+                    if results.with_untracked(|results| *results != now) {
+                        results.set(now);
+                    }
+                }
+            }
+        };
+        look(10);
+        horizon_ui::each_effects({
+            let look = look.clone();
+            move || look(0)
+        });
         let take = move |index: usize| {
             let path = results.with_untracked(|results| {
                 (results.found.get(index)).map(|found| found.path.clone())
@@ -152,6 +166,8 @@ impl Component for Finder {
                 if let DomEventData::Input(input) = &event.data {
                     query.set(input.value.clone());
                     chosen.set(0);
+                    source.type_in(&input.value);
+                    look(10);
                 }
             })
             .focus();
@@ -183,10 +199,10 @@ impl Component for Finder {
             });
         };
         let count = move || {
-            let matched = results.with(|results| results.matched);
-            let all = files.with(Vec::len);
-            let more = if listing.get() { "+" } else { "" };
-            format!("{matched}/{all}{more}")
+            results.with(|results| {
+                let more = if results.more { "+" } else { "" };
+                format!("{}/{}{more}", results.matched, results.all)
+            })
         };
         el("div")
             .class(styles::FINDER)

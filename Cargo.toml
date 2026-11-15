@@ -97,7 +97,6 @@ horizon-board = { path = "crates/horizon-board" }
 horizon-board-view = { path = "crates/horizon-board-view" }
 horizon-workspace = { path = "crates/horizon-workspace" }
 keyboard-types = "0.8"
-nucleo-matcher = "0.3"
 pulldown-cmark = "0.13"
 
 # What a view built into a preview plugin (`preview-plugin`, wasm) does
@@ -123,6 +122,7 @@ blitz-paint = { workspace = true }
 blitz-shell = { workspace = true, features = ["custom-widget"] }
 crossbeam-channel = "0.5"
 ignore = "0.4"
+nucleo = "0.5"
 futures = "0.3"
 kurbo = "0.13"
 # The parser `horizon-wiki` reads a page with: a wiki page is drawn from the
