@@ -48,7 +48,10 @@ impl From<Result<ToolUpdate, String>> for ApprovalOutcome {
 /// read routes through the approval gate (see `execution::execute_agent_tool`'s
 /// `call_escapes_root` check); `config_write` joins for the same reason -- all
 /// are "runs to completion synchronously" shape -- see
-/// [`resolve_synchronous_tool`].
+/// [`resolve_synchronous_tool`]. `request_sandbox_area` joins because its
+/// whole effect is the grant this approval applies
+/// (`docs/sandbox-area-grants-design.md`): a provider-owned handshake would
+/// let it be approved without the grant ever reaching the session.
 fn is_horizon_executed_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,
@@ -60,6 +63,7 @@ fn is_horizon_executed_tool(tool_id: &str) -> bool {
             | "bash"
             | "config_write"
             | "web_fetch"
+            | "request_sandbox_area"
     )
 }
 
@@ -208,6 +212,16 @@ fn dispatch_approval(
     let request = &prepared;
     match request.tool_id.as_str() {
         "bash" => resolve_bash(session_id, runtime, request, decision, kind, source),
+        "request_sandbox_area" => match kind {
+            ApprovalKind::SandboxAreaGrant { grants, reason } => {
+                resolve_sandbox_area_grant(runtime, request, decision, grants, reason)
+            }
+            _ => declined_result(
+                runtime,
+                &request.call_id,
+                error_output("A sandbox area request carries only an area grant."),
+            ),
+        },
         "web_fetch" => resolve_web_fetch(session_id, runtime, request, decision, kind),
         _ => resolve_synchronous_tool(runtime, request, decision),
     }
@@ -364,10 +378,61 @@ fn resolve_bash(
             &request.call_id,
             error_output("A host-side domain grant cannot authorize a bash command."),
         ),
+        ApprovalKind::SandboxAreaGrant { .. } => declined_result(
+            runtime,
+            &request.call_id,
+            error_output("A sandbox area grant cannot authorize a bash command."),
+        ),
         ApprovalKind::Standard => {
             resolve_standard_bash(session_id, runtime, request, decision, approval_source)
         }
     }
+}
+
+/// A session asked for a writable area before running anything
+/// (`docs/sandbox-area-grants-design.md`). An approve adds the grants to
+/// this session and settles the asking call; nothing is re-run, because
+/// there is no failed call to retry -- what changes is the authority the
+/// session's *later* calls run with. The grants were clamped when the
+/// candidate was built and are revalidated here, so a stale or over-broad
+/// area fails closed instead of being added.
+fn resolve_sandbox_area_grant(
+    runtime: &SessionRuntime,
+    request: &PreparedCall<'_>,
+    decision: &ApprovalDecision,
+    grants: Vec<horizon_sandbox::FilesystemGrant>,
+    reason: String,
+) -> ApprovalOutcome {
+    if matches!(decision, ApprovalDecision::Deny { .. }) {
+        return declined_result(runtime, &request.call_id, denied_output());
+    }
+    if grants.is_empty() {
+        return unstarted_error(
+            runtime,
+            &request.call_id,
+            "Sandbox area grant named no grantable area",
+        );
+    }
+    if let Err(error) = runtime.tool_state.approve_filesystem_grants(&grants) {
+        return unstarted_error(
+            runtime,
+            &request.call_id,
+            &format!("Sandbox area grant could not be applied: {error}"),
+        );
+    }
+    let granted = grants
+        .iter()
+        .map(|grant| grant.path.display().to_string())
+        .collect::<Vec<_>>();
+    // The asking tool has no execution of its own -- its whole effect is
+    // this grant -- so the call settles here rather than re-entering tool
+    // dispatch, which would only report that there is nothing to run.
+    let result = request
+        .identity()
+        .finish(crate::tools::output::Response::succeeded(
+            crate::tools::output::SandboxAreaGranted { granted, reason },
+        ));
+    ApprovalOutcome::from(ToolUpdate::finish(&runtime.live_state, result))
 }
 
 fn resolve_git_operation(

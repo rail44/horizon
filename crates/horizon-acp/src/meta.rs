@@ -140,6 +140,11 @@ pub enum ApprovalKind {
         services: Vec<String>,
         prior_result: ToolResult,
     },
+    /// Appended last: the wire's `oneOf` indices stay put.
+    SandboxAreaGrant {
+        grants: Vec<horizon_sandbox::FilesystemGrant>,
+        reason: String,
+    },
 }
 
 /// Mirrors `contract::ToolCallResult` (crates/horizon-agent/src/contract/tool_result.rs).
@@ -300,6 +305,15 @@ mod tests {
                     },
                     ..prior_result()
                 },
+            },
+            ApprovalKind::SandboxAreaGrant {
+                grants: vec![horizon_sandbox::FilesystemGrant {
+                    path: PathBuf::from("/work/main"),
+                    access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                    scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+                    excluded_subpaths: vec![PathBuf::from(".git")],
+                }],
+                reason: "finish the integration".into(),
             },
         ];
         for kind in kinds {

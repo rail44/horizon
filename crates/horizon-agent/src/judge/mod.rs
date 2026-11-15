@@ -362,6 +362,14 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
             host_execution_requested: false,
             git_metadata_operation: false,
         },
+        // Asked about exactly the area the session would gain, which is
+        // what approval buys -- nothing is re-run.
+        ApprovalKind::SandboxAreaGrant { grants, .. } => JudgeApprovalContext {
+            requested_filesystem_grants: grants.clone(),
+            requested_domains: Vec::new(),
+            host_execution_requested: false,
+            git_metadata_operation: false,
+        },
         ApprovalKind::Standard => JudgeApprovalContext {
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),

@@ -212,6 +212,7 @@ pub(crate) fn plan_prepared_call(
                 }
                 Classification::BoundaryCrossing | Classification::AlwaysAsk => {
                     let (reason, kind) = git_operation_approval(tool_state, request)
+                        .or_else(|| sandbox_area_approval(tool_state, request))
                         .unwrap_or_else(|| {
                             (standard_approval_reason(request), ApprovalKind::Standard)
                         });
@@ -287,6 +288,58 @@ fn git_operation_approval(
             ),
             ApprovalKind::GitOperation {
                 writable_roots: Vec::new(),
+            },
+        ),
+    })
+}
+
+/// A session asking for a writable area (`request_sandbox_area`,
+/// `docs/sandbox-area-grants-design.md`). The tool grants nothing itself:
+/// its whole effect is this candidate, so the approval boundary stays where
+/// every other one is.
+///
+/// The area is clamped exactly as a filesystem-denial retry's is -- the
+/// same `revalidate_grant` that refuses `$HOME`, `/`, and the system roots
+/// -- and carries the same Git metadata exclusion, so asking for a
+/// repository's directory never opens `hooks`/`config` (board #38).
+fn sandbox_area_approval(
+    tool_state: &ToolSessionState,
+    request: &PreparedCall<'_>,
+) -> Option<(String, ApprovalKind)> {
+    let ToolInput::RequestSandboxArea(input) = &request.input else {
+        return None;
+    };
+    let path = std::path::Path::new(&input.path);
+    let mut grants = vec![horizon_sandbox::FilesystemGrant {
+        path: path.to_path_buf(),
+        access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+        scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+        excluded_subpaths: Vec::new(),
+    }];
+    crate::tools::exclude_git_metadata(&mut grants, tool_state.workspace_root());
+    Some(match horizon_sandbox::revalidate_grant(&grants[0]) {
+        Ok(()) => (
+            format!(
+                "The session asked for write access to {}: {}. Grant it for the rest of this \
+                 session?",
+                path.display(),
+                input.reason
+            ),
+            ApprovalKind::SandboxAreaGrant {
+                grants,
+                reason: input.reason.clone(),
+            },
+        ),
+        Err(error) => (
+            format!(
+                "The session asked for write access to {} ({}), which cannot be granted: \
+                 {error}. Approval will fail closed.",
+                path.display(),
+                input.reason
+            ),
+            ApprovalKind::SandboxAreaGrant {
+                grants: Vec::new(),
+                reason: input.reason.clone(),
             },
         ),
     })
@@ -679,6 +732,74 @@ mod tests {
         assert!(approval
             .reason
             .contains("host process's ordinary authority"));
+    }
+
+    #[test]
+    fn a_sandbox_area_request_plans_an_approval_that_grants_nothing_itself() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let tool_state = ToolSessionState::new(root.path().to_path_buf());
+        let plan = plan_tool_call(
+            &tool_state,
+            &ToolCallRequest {
+                call_id: crate::contract::ToolCallId("call-area".into()),
+                tool_id: "request_sandbox_area".into(),
+                input: serde_json::json!({
+                    "path": outside.path().display().to_string(),
+                    "reason": "finish the integration in the shared checkout",
+                })
+                .into(),
+                occurrence_id: crate::contract::OccurrenceId("call-area".into()),
+            },
+        );
+        let ToolPlan::Approval(approval) = plan else {
+            panic!("an area request must ask, got {plan:?}");
+        };
+        let ApprovalKind::SandboxAreaGrant { grants, reason } = &approval.kind else {
+            panic!("expected an area grant, got {:?}", approval.kind);
+        };
+        assert_eq!(grants.len(), 1);
+        assert_eq!(
+            grants[0].path,
+            outside.path().canonicalize().unwrap(),
+            "the area is the one asked for, canonicalized"
+        );
+        assert_eq!(
+            grants[0].access,
+            horizon_sandbox::FilesystemGrantAccess::ReadWrite
+        );
+        assert!(reason.contains("shared checkout"), "the reason is carried");
+        assert!(
+            approval.reason.contains("for the rest of this session"),
+            "the prompt says what approval buys: {}",
+            approval.reason
+        );
+    }
+
+    #[test]
+    fn an_area_too_broad_to_grant_asks_but_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let tool_state = ToolSessionState::new(root.path().to_path_buf());
+        let plan = plan_tool_call(
+            &tool_state,
+            &ToolCallRequest {
+                call_id: crate::contract::ToolCallId("call-home".into()),
+                tool_id: "request_sandbox_area".into(),
+                input: serde_json::json!({"path": "/", "reason": "everything"}).into(),
+                occurrence_id: crate::contract::OccurrenceId("call-home".into()),
+            },
+        );
+        let ToolPlan::Approval(approval) = plan else {
+            panic!("an unclampable area still asks, and then fails closed");
+        };
+        let ApprovalKind::SandboxAreaGrant { grants, .. } = &approval.kind else {
+            panic!("expected an area grant, got {:?}", approval.kind);
+        };
+        assert!(
+            grants.is_empty(),
+            "an over-broad area buys nothing: {grants:?}"
+        );
+        assert!(approval.reason.contains("cannot be granted"));
     }
 
     #[test]

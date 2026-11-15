@@ -577,6 +577,12 @@ pub(super) fn approval_kind(kind: &contract::ApprovalKind) -> acp::ApprovalKind 
             services: services.clone(),
             prior_result: tool_result(prior_result),
         },
+        contract::ApprovalKind::SandboxAreaGrant { grants, reason } => {
+            acp::ApprovalKind::SandboxAreaGrant {
+                grants: grants.clone(),
+                reason: reason.clone(),
+            }
+        }
     }
 }
 
@@ -589,6 +595,7 @@ pub(super) fn approval_title(kind: &contract::ApprovalKind) -> &'static str {
         contract::ApprovalKind::DomainGrant { .. } => "Allow network access",
         contract::ApprovalKind::GitOperation { .. } => "Allow Git metadata writes",
         contract::ApprovalKind::MachServiceGrant { .. } => "Allow system services and retry",
+        contract::ApprovalKind::SandboxAreaGrant { .. } => "Allow write access to this area",
     }
 }
 

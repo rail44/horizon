@@ -1,11 +1,13 @@
 //! Deserialize model or replayed input once at the execution/approval boundary.
 //! Handlers receive typed arguments; the original JSON remains in the audit log.
 
+mod area;
 mod bounded;
 mod context;
 mod filesystem;
 mod memory;
 
+pub(crate) use area::RequestSandboxArea;
 pub(crate) use context::*;
 pub(crate) use filesystem::*;
 pub(crate) use memory::MemoryUpdate;
@@ -65,6 +67,7 @@ inputs! {
     WebSearch(WebSearch) => "web_search",
     WebFetch(WebFetch) => "web_fetch",
     EnterWorktree(Empty) => "worktree_enter",
+    RequestSandboxArea(RequestSandboxArea) => "request_sandbox_area",
 }
 
 fn schema_for<T: JsonSchema>() -> Value {

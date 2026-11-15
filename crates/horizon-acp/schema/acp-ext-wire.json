@@ -129,6 +129,30 @@
             "prior_result"
           ],
           "type": "object"
+        },
+        {
+          "description": "Appended last: the wire's `oneOf` indices stay put.",
+          "properties": {
+            "grants": {
+              "items": {
+                "$ref": "#/$defs/FilesystemGrant"
+              },
+              "type": "array"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "type": {
+              "const": "sandbox_area_grant",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grants",
+            "reason"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1176,5 +1200,5 @@
     "_horizon/doom_loop"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 3
+  "x-session-protocol-version": 4
 }

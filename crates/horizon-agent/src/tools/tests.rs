@@ -3992,6 +3992,92 @@ fn resolve_approval_starts_bash_on_approve_and_delivers_its_result() {
 }
 
 #[test]
+fn approving_an_area_grant_adds_the_area_and_denying_leaves_the_session_as_it_was() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let tool_state = crate::tools::ToolSessionBuilder::new(workspace.path().to_path_buf()).build();
+    let session_id = SessionId::new();
+    let grant = horizon_sandbox::FilesystemGrant {
+        path: outside.path().canonicalize().unwrap(),
+        access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+        scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+        excluded_subpaths: Vec::new(),
+    };
+    let reason = "the integration needs the shared checkout";
+
+    // Shows the request with the area grant's own kind, then resolves it.
+    // (`show_approval` substitutes a `Standard` kind, so it cannot be used
+    // for a kind-specific path.)
+    let asked = |decision: ApprovalDecision| {
+        let live_state = LiveState::new();
+        let (bash_results_tx, _rx) = crossbeam_channel::unbounded();
+        register_session_runtime(
+            session_id,
+            tool_state.clone(),
+            live_state.clone(),
+            bash_results_tx,
+        );
+        let call_id = ToolCallId("request-area".to_string());
+        let request = ToolCallRequest {
+            call_id: call_id.clone(),
+            tool_id: "request_sandbox_area".to_string(),
+            input: json!({
+                "path": outside.path().display().to_string(),
+                "reason": reason,
+            })
+            .into(),
+            occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
+        };
+        live_state.extend_events([Event::ToolCallRequested(request.clone())]);
+        live_state.extend_events([Event::ApprovalRequested(ApprovalRequest {
+            call_id: call_id.clone(),
+            occurrence_id: request.occurrence_id.clone(),
+            kind: ApprovalKind::SandboxAreaGrant {
+                grants: vec![grant.clone()],
+                reason: reason.to_string(),
+            },
+            reason: reason.to_string(),
+        })]);
+        let frame = live_state.frame();
+        let identity = frame.tool_call_request(&call_id).unwrap().identity();
+        resolve_approval(&frame, session_id, identity, decision)
+    };
+
+    // Denying leaves the session with exactly the authority it had.
+    let denied = asked(ApprovalDecision::Deny {
+        reason: Some("no".to_string()),
+    });
+    assert!(
+        matches!(denied, ApprovalOutcome::Applied(_)),
+        "a denial settles the asking call, got {denied:?}"
+    );
+    assert!(
+        !tool_state
+            .filesystem_grants_snapshot()
+            .iter()
+            .any(|held| held.path == grant.path),
+        "a denied area request must not widen the session"
+    );
+
+    // Approving adds it, and the asking call settles without re-running.
+    let outcome = asked(ApprovalDecision::Approve);
+    let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
+        panic!("an approved area request finishes without re-running anything");
+    };
+    assert_eq!(
+        result.output["granted"][0],
+        json!(grant.path.display().to_string())
+    );
+    assert!(
+        tool_state
+            .filesystem_grants_snapshot()
+            .iter()
+            .any(|held| held.path == grant.path),
+        "an approved area becomes the session's authority"
+    );
+}
+
+#[test]
 fn resolve_approval_denies_bash_without_running_it() {
     let tool_state = dummy_tool_state();
     let session_id = SessionId::new();

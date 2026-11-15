@@ -25,6 +25,7 @@ bodies! {
     Memory(MemoryUpdated),
     Bash(BashOutput), Task(TaskOutput), Fetch(WebFetch), Search(WebSearch),
     Worktree(WorktreeRequested),
+    Area(SandboxAreaGranted),
 }
 
 #[derive(Clone, Debug, PartialEq)]

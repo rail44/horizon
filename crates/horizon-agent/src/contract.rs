@@ -1088,6 +1088,18 @@ pub enum ApprovalKind {
         services: Vec<String>,
         prior_result: ToolCallResult,
     },
+    /// A session asked for a writable area it does not have, before
+    /// anything failed (`docs/sandbox-area-grants-design.md`). Approval
+    /// adds `grants` to this session and nothing is re-run: the point of
+    /// asking first is that there is no failed call to retry. The grants
+    /// are clamped and revalidated exactly as a filesystem-denial retry's
+    /// are, so an over-broad area stays ungrantable. Appended last
+    /// (2026-11-15) for the same append-only reason as
+    /// [`ApprovalKind::MachServiceGrant`].
+    SandboxAreaGrant {
+        grants: Vec<horizon_sandbox::FilesystemGrant>,
+        reason: String,
+    },
 }
 
 /// Payload for [`Event::ProviderRequestSent`]: the model id the provider was

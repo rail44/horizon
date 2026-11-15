@@ -51,9 +51,12 @@ pub(super) fn settle(
                         | ApprovalKind::MachServiceGrant { prior_result, .. } => prior_result,
                         // Named rather than `_`, so that a new kind does not
                         // compile until it says whether it holds a prior result.
+                        // Nothing ran before an area request was offered,
+                        // so there is no prior result to preserve.
                         ApprovalKind::Standard
                         | ApprovalKind::DomainGrant { .. }
-                        | ApprovalKind::GitOperation { .. } => return None,
+                        | ApprovalKind::GitOperation { .. }
+                        | ApprovalKind::SandboxAreaGrant { .. } => return None,
                     };
                     (result.call_id == identity.call_id
                         && result.occurrence_id == identity.occurrence_id)
