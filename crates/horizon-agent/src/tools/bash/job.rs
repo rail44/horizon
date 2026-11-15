@@ -162,16 +162,23 @@ fn run_sandboxed_job(
 
 impl SandboxedApprovalOrigin {
     fn annotate(&self, output: &mut Response) {
+        // Every approved run names who approved it, here rather than in each
+        // arm: git, domain, mach-service and filesystem approvals share the
+        // one question "who allowed this", and leaving it to each arm is
+        // how it came to be unanswered for three of the four.
+        if let Some(source) = self.approval_source() {
+            crate::tools::output::annotate_approval_source(output, source.label());
+        }
         match self {
             SandboxedApprovalOrigin::Tier1Auto => annotate_auto_approval(
                 output,
                 "contained",
                 "engaged sandbox confined to the workspace root",
             ),
-            SandboxedApprovalOrigin::ManualDomainRetry { domains } => {
+            SandboxedApprovalOrigin::ManualDomainRetry { domains, .. } => {
                 annotate_domain_approval(output, domains)
             }
-            SandboxedApprovalOrigin::ManualGitOperation => {}
+            SandboxedApprovalOrigin::ManualGitOperation { .. } => {}
             SandboxedApprovalOrigin::FilesystemGrant {
                 source,
                 grants,
@@ -187,7 +194,7 @@ impl SandboxedApprovalOrigin {
                     );
                 }
             }
-            SandboxedApprovalOrigin::MachServiceGrant { services } => {
+            SandboxedApprovalOrigin::MachServiceGrant { services, .. } => {
                 crate::tools::output::annotate_mach_service_grant_approval(output, services);
             }
         }
@@ -474,5 +481,53 @@ mod tests {
         }
         assert!(completed.try_recv().is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The source reaches the result the model and the log see, not only the
+    /// enum that carries it: `annotate` is what a finished sandboxed call
+    /// runs, so this is the path a real approval result takes.
+    ///
+    /// Three of the four approved origins used to write nothing here, so a
+    /// result could not say who allowed it.
+    #[test]
+    fn every_approved_origin_records_who_approved_it() {
+        for (origin, label) in [
+            (
+                SandboxedApprovalOrigin::ManualGitOperation {
+                    source: ApprovalSource::Judge,
+                },
+                "judge",
+            ),
+            (
+                SandboxedApprovalOrigin::ManualDomainRetry {
+                    source: ApprovalSource::Human,
+                    domains: vec!["example.com".into()],
+                },
+                "human",
+            ),
+            (
+                SandboxedApprovalOrigin::MachServiceGrant {
+                    source: ApprovalSource::Judge,
+                    services: vec!["com.apple.example".into()],
+                },
+                "judge",
+            ),
+        ] {
+            let mut output = error_output("ran");
+            origin.annotate(&mut output);
+            assert_eq!(
+                output.evidence_for_test().approval_source.as_deref(),
+                Some(label),
+                "{origin:?} must record who approved it"
+            );
+        }
+    }
+
+    /// The tier-1 path had no approval, so it claims none.
+    #[test]
+    fn a_contained_call_names_no_approver() {
+        let mut output = error_output("ran");
+        SandboxedApprovalOrigin::Tier1Auto.annotate(&mut output);
+        assert_eq!(output.evidence_for_test().approval_source, None);
     }
 }

@@ -51,12 +51,15 @@ pub(crate) use recent::{find_reusable_output, guidance_output};
 pub(crate) enum SandboxedApprovalOrigin {
     /// `tools::execution::execute_automatic`'s auto-approval path.
     Tier1Auto,
-    /// `tools::approval`'s domain-denial-retry approve path -- a human
-    /// decision, carrying the domain(s) they just approved for this
-    /// session.
-    ManualDomainRetry { domains: Vec<String> },
-    /// A human approved the validated Git metadata roots for this call.
-    ManualGitOperation,
+    /// `tools::approval`'s domain-denial-retry approve path -- a decision
+    /// about which domains this session may reach, carrying the domain(s)
+    /// just approved for it.
+    ManualDomainRetry {
+        source: ApprovalSource,
+        domains: Vec<String>,
+    },
+    /// Write access to the validated Git metadata roots for this call.
+    ManualGitOperation { source: ApprovalSource },
     /// A filesystem-denial retry (`docs/containment-denial-narrow-grants-
     /// design.md`'s 2026-07-26 decision): `grants` is the scoped authority
     /// this rerun actually received, and `trigger_paths` the mediated
@@ -72,7 +75,24 @@ pub(crate) enum SandboxedApprovalOrigin {
     /// service set on this session's state, and this call is the sandboxed
     /// retry that runs with the enforcement grants assembled from it
     /// (`docs/macos-containment-denial-reporting-design.md`).
-    MachServiceGrant { services: Vec<String> },
+    MachServiceGrant {
+        source: ApprovalSource,
+        services: Vec<String>,
+    },
+}
+
+impl SandboxedApprovalOrigin {
+    /// Who decided the approval behind this call, when one decided it. The
+    /// tier-1 path had no approval to decide, so it names none.
+    pub(crate) fn approval_source(&self) -> Option<ApprovalSource> {
+        match self {
+            Self::Tier1Auto => None,
+            Self::ManualDomainRetry { source, .. }
+            | Self::ManualGitOperation { source }
+            | Self::FilesystemGrant { source, .. }
+            | Self::MachServiceGrant { source, .. } => Some(*source),
+        }
+    }
 }
 
 /// Who decided an approval -- the enforcing judge or a human. Both produce

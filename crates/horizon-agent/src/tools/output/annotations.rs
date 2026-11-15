@@ -135,3 +135,9 @@ pub(crate) fn annotate_git_operation_approval(output: &mut Response, writable_ro
             .collect(),
     );
 }
+/// Who decided the approval this result ran under. One place, because the
+/// question is the same for every kind: an approval whose result cannot
+/// say who gave it is not auditable after the fact.
+pub(crate) fn annotate_approval_source(output: &mut Response, source: &str) {
+    output.evidence_mut().approval_source = Some(source.into());
+}

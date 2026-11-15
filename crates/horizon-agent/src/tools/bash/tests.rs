@@ -8,7 +8,7 @@ use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::{AgentFrame, AgentFrameItem};
 
-use super::BashCompletion;
+use super::{ApprovalSource, BashCompletion, SandboxedApprovalOrigin};
 
 fn cwd_handle(path: PathBuf) -> Arc<Mutex<PathBuf>> {
     Arc::new(Mutex::new(path))
@@ -1137,4 +1137,44 @@ fn cancellation_prevents_a_queued_bash_call_from_starting() {
     std::fs::remove_dir_all(directory).unwrap();
     assert!(!started);
     assert!(crate::tools::session_tool_work_settled(session_id));
+}
+
+/// Every origin a call can run under, so the audit invariant below covers a
+/// new one by construction rather than by someone remembering to add it.
+fn every_origin() -> Vec<SandboxedApprovalOrigin> {
+    vec![
+        SandboxedApprovalOrigin::Tier1Auto,
+        SandboxedApprovalOrigin::ManualDomainRetry {
+            source: ApprovalSource::Human,
+            domains: vec!["example.com".into()],
+        },
+        SandboxedApprovalOrigin::ManualGitOperation {
+            source: ApprovalSource::Judge,
+        },
+        SandboxedApprovalOrigin::FilesystemGrant {
+            source: ApprovalSource::Human,
+            grants: Vec::new(),
+            trigger_paths: Vec::new(),
+        },
+        SandboxedApprovalOrigin::MachServiceGrant {
+            source: ApprovalSource::Judge,
+            services: vec!["com.apple.example".into()],
+        },
+    ]
+}
+
+/// An approval whose result cannot say who gave it is not auditable after
+/// the fact. The question is the same for every approved origin, so it is
+/// answered in one place and asserted for all of them here; three of these
+/// four used to answer nothing.
+#[test]
+fn every_approved_origin_names_who_approved_it() {
+    for origin in every_origin() {
+        let named = origin.approval_source().is_some();
+        let is_approval = !matches!(origin, SandboxedApprovalOrigin::Tier1Auto);
+        assert_eq!(
+            named, is_approval,
+            "{origin:?} answered the wrong thing about its approval source"
+        );
+    }
 }

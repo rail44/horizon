@@ -323,6 +323,7 @@ fn resolve_bash(
             decision,
             domains,
             prior_result,
+            approval_source,
         ),
         ApprovalKind::FilesystemDenialRetry {
             denials,
@@ -348,10 +349,16 @@ fn resolve_bash(
             decision,
             services,
             prior_result,
+            approval_source,
         ),
-        ApprovalKind::GitOperation { writable_roots } => {
-            resolve_git_operation(session_id, runtime, request, decision, writable_roots)
-        }
+        ApprovalKind::GitOperation { writable_roots } => resolve_git_operation(
+            session_id,
+            runtime,
+            request,
+            decision,
+            writable_roots,
+            approval_source,
+        ),
         ApprovalKind::DomainGrant { .. } => declined_result(
             runtime,
             &request.call_id,
@@ -369,6 +376,7 @@ fn resolve_git_operation(
     request: &PreparedCall<'_>,
     decision: &ApprovalDecision,
     writable_roots: Vec<std::path::PathBuf>,
+    approval_source: ApprovalSource,
 ) -> ApprovalOutcome {
     if matches!(decision, ApprovalDecision::Deny { .. }) {
         return declined_result(runtime, &request.call_id, denied_output());
@@ -411,7 +419,9 @@ fn resolve_git_operation(
         request,
         None,
         workspace_root,
-        || SandboxedApprovalOrigin::ManualGitOperation,
+        || SandboxedApprovalOrigin::ManualGitOperation {
+            source: approval_source,
+        },
         Some(writable_roots),
     )
 }
@@ -626,6 +636,7 @@ fn resolve_domain_denial_retry(
     decision: &ApprovalDecision,
     domains: Vec<String>,
     prior_result: ToolCallResult,
+    approval_source: ApprovalSource,
 ) -> ApprovalOutcome {
     let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
     match decision {
@@ -652,7 +663,10 @@ fn resolve_domain_denial_retry(
                     for domain in &domains {
                         network.allow_domain(domain.clone());
                     }
-                    SandboxedApprovalOrigin::ManualDomainRetry { domains }
+                    SandboxedApprovalOrigin::ManualDomainRetry {
+                        source: approval_source,
+                        domains,
+                    }
                 },
                 git_metadata_roots,
             )
@@ -676,6 +690,7 @@ fn resolve_mach_service_grant(
     decision: &ApprovalDecision,
     services: Vec<String>,
     prior_result: ToolCallResult,
+    approval_source: ApprovalSource,
 ) -> ApprovalOutcome {
     let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
     match decision {
@@ -697,7 +712,10 @@ fn resolve_mach_service_grant(
                 workspace_root,
                 || {
                     runtime.tool_state.approve_mach_services(&services);
-                    SandboxedApprovalOrigin::MachServiceGrant { services }
+                    SandboxedApprovalOrigin::MachServiceGrant {
+                        source: approval_source,
+                        services,
+                    }
                 },
                 git_metadata_roots,
             )

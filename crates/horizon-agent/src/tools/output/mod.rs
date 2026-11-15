@@ -52,6 +52,12 @@ impl Response {
     fn evidence_mut(&mut self) -> &mut Evidence {
         &mut self.0.evidence
     }
+    /// What an annotation wrote, for a test that checks an approval's
+    /// record without going through a finished call.
+    #[cfg(test)]
+    pub(crate) fn evidence_for_test(&self) -> &Evidence {
+        &self.0.evidence
+    }
     pub(crate) fn mark_failed(&mut self) {
         self.0.failed = true;
     }
