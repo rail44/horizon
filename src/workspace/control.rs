@@ -2,8 +2,6 @@
 //! shell carries out so far (terminals, agents, sessions), and the two
 //! queries.
 
-use std::rc::Rc;
-
 use horizon_control::contract::{EnvelopeBody, Query, SessionEntry, Sessions, State};
 use horizon_control::host::executor::{ControlRequest, error_body};
 use horizon_shell_runtime::AgentCommand;
@@ -13,7 +11,7 @@ use horizon_workspace::commands::{CommandId, core_commands};
 use horizon_workspace::{PaneId, PluginPane, SessionId, SessionKind, Workspace};
 
 use super::{Shell, Start, plugins};
-use crate::extension::{Creates, Extension};
+use crate::extension::Creates;
 use crate::preview::Target;
 
 /// The answer to a command this shell has no view or runtime for yet.
@@ -191,11 +189,6 @@ impl Shell {
     /// A new pane of the plugin `name`, made from `arguments` as the
     /// plugin says its pane is made (a file is a path from `directory`).
     /// A pane that shows the same already is made again in its place.
-    ///
-    /// `name` may be an extension's package instead, as a directory (from
-    /// `directory`): the package is loaded now, in place of the extension
-    /// of its name loaded before, so one being written is shown as it was
-    /// last built.
     fn new_pane(
         &self,
         name: &str,
@@ -204,22 +197,12 @@ impl Shell {
         split: Option<(SessionId, horizon_workspace::SplitAxis)>,
         activate: bool,
     ) -> Result<EnvelopeBody, String> {
-        let package = directory.join(name);
-        let extension = if package.join("plugin.toml").is_file() {
-            let loaded = Extension::load(&package)
-                .map_err(|error| format!("{}: {error}", package.display()))?;
-            let loaded = Rc::new(loaded);
-            plugins::put(loaded.clone());
-            loaded
-        } else {
-            plugins::extension(name).ok_or_else(|| {
-                let known: Vec<&str> = (plugins::extensions().iter())
-                    .map(|extension| extension.name)
-                    .collect();
-                format!("unknown plugin `{name}` (there are: {})", known.join(", "))
-            })?
-        };
-        let name = extension.name;
+        let extension = plugins::extension(name).ok_or_else(|| {
+            let known: Vec<&str> = (plugins::extensions().iter())
+                .map(|extension| extension.name)
+                .collect();
+            format!("unknown plugin `{name}` (there are: {})", known.join(", "))
+        })?;
         let state = match (&extension.creates, arguments) {
             (None, []) => serde_json::Value::Null,
             (None, _) => return Err(format!("`{name}` takes no arguments")),
