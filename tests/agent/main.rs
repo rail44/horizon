@@ -588,3 +588,36 @@ fn enter_goes_into_the_field_and_escape_comes_out() {
     );
     assert_eq!(opened.focused(), Some(opened.agent.field.0));
 }
+
+impl Opened {
+    /// A character key with no modifier, as a keyboard sends it.
+    fn type_key(&self, character: &str) {
+        self.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+            key: keyboard_types::Key::Character(character.into()),
+            code: keyboard_types::Code::Unidentified,
+            modifiers: keyboard_types::Modifiers::default(),
+            location: keyboard_types::Location::Standard,
+            is_auto_repeating: false,
+            is_composing: false,
+            state: KeyState::Pressed,
+            text: Some(character.into()),
+        }));
+        self.app.resolve();
+    }
+}
+
+#[test]
+fn a_character_key_on_the_view_moves_into_the_field() {
+    let session = Session::long(1);
+    let opened = open(&session);
+    opened.click(opened.all("user")[0]);
+    assert_eq!(opened.focused(), Some(opened.all("agent")[0]));
+
+    // The key moves the keys into the field; the typing follows there.
+    opened.type_key("a");
+    assert_eq!(opened.focused(), Some(opened.agent.field.0));
+    assert_eq!(opened.agent.typed.get_untracked(), "");
+    opened.commit("続けて");
+    opened.enter();
+    assert_eq!(*opened.asked.borrow(), [Asked::Send("続けて".into())]);
+}
