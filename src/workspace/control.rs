@@ -314,11 +314,8 @@ impl Shell {
         split: Option<(SessionId, horizon_workspace::SplitAxis)>,
         activate: bool,
     ) -> Result<EnvelopeBody, String> {
-        if !target.path.is_file() && !target.path.join("plugin.toml").is_file() {
-            return Err(format!(
-                "not a plugin's file or an extension's package: {}",
-                target.path.display()
-            ));
+        if !target.path.is_file() {
+            return Err(format!("not a file: {}", target.path.display()));
         }
         let previews: Vec<(PaneId, Option<Target>)> = self.model.with_untracked(|model| {
             (model.all_pane_ids().into_iter())

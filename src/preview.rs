@@ -12,10 +12,10 @@
 //! when it changes or when asked to. The file is compiled off the UI
 //! thread; what the pane showed stays until the new one is ready.
 //!
-//! A pane shows an extension being written the same way: given its
-//! package's directory in place of a plugin's file, it shows the
-//! extension's view, made on what the pane was given for it, and reads
-//! the package again when its component is built again. The extension is
+//! A pane shows an extension being written the same way: given the
+//! extension's component in place of a preview plugin's file, it shows
+//! the extension's view, made on what the pane was given for it, and
+//! reads the component again when it is built again. The extension is
 //! this pane's alone: the one of its name the shell has loaded stays.
 //!
 //! A plugin that traps is let go of, and the pane says what it said. It
@@ -76,8 +76,8 @@ mod styles {
 }
 
 /// What a preview pane shows: a plugin's file, and which of its previews
-/// (its first, with no name); or an extension's package, as its
-/// directory, and what its pane is made from.
+/// (its first, with no name); or an extension's component, and what its
+/// pane is made from.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub struct Target {
     pub path: PathBuf,
@@ -97,19 +97,14 @@ enum Built {
     Package(Arc<Extension>),
 }
 
-/// Reads what is at `path`: a package where there is a manifest, a
-/// preview plugin's file otherwise.
+/// Reads what is at `path`: an extension where the component has a
+/// manifest in it, a preview plugin's file otherwise.
 fn build(path: &std::path::Path) -> Result<Built, String> {
-    if path.join("plugin.toml").is_file() {
+    if crate::extension::is_extension(path) {
         Extension::load(path).map(|extension| Built::Package(Arc::new(extension)))
     } else {
         compile(path).map(Built::Plugin)
     }
-}
-
-/// The file whose change means `path` was built again.
-fn built_file(path: PathBuf) -> PathBuf {
-    crate::extension::component_file(&path).unwrap_or(path)
 }
 
 /// A target as last read, or why it could not be.
@@ -318,7 +313,7 @@ pub fn view(
     let changed = watch::Changed::default();
     let noted = changed.clone();
     Effect::new(move |_| {
-        let path = state.target.get().map(|target| built_file(target.path));
+        let path = state.target.get().map(|target| target.path);
         path.and_then(|path| watch::on(path, noted.clone(), wake.clone()))
     });
     each_layout(move |page| {

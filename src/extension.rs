@@ -1,5 +1,6 @@
-//! An extension: a view built as a wasm component, in a package of its
-//! own with a manifest (`plugin.toml`) beside it.
+//! An extension: a view built as a wasm component. The component's file
+//! is the whole of it: its manifest is a custom section of the wasm
+//! ([`MANIFEST`]).
 //!
 //! The component declares what is its own: the state a pane keeps of it
 //! (the type `mount` takes and `state` gives), and its commands (the
@@ -7,7 +8,9 @@
 //! comes from `horizon-ui`'s SDK. The manifest says what the component's
 //! types cannot: the extension's name and title, its commands' titles
 //! and descriptions, and what it may read. The two are matched when the
-//! package is loaded, and a package whose commands differ is refused.
+//! component is loaded, and one whose commands differ is refused. An
+//! extension written in Rust has both made from one description
+//! (`horizon_ui::plugin`), so they cannot differ.
 //!
 //! A pane's state is kept as the value's text in WAVE, the WIT values'
 //! text format, and given back to `mount` when the pane is made again.
@@ -27,7 +30,26 @@ use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 use crate::plugin_host::{Asks, Compiled, Loaded, Plugin, State, compile, instantiate};
 use crate::wake::Wake;
 
-/// What a package's manifest says.
+/// The custom section of a component that holds its manifest, as TOML.
+pub const MANIFEST: &str = "horizon:manifest";
+
+/// The manifest in the component `bytes`, if it has one.
+fn manifest_in(bytes: &[u8]) -> Option<String> {
+    (wasmparser::Parser::new(0).parse_all(bytes)).find_map(|part| match part.ok()? {
+        wasmparser::Payload::CustomSection(section) if section.name() == MANIFEST => {
+            String::from_utf8(section.data().to_vec()).ok()
+        }
+        _ => None,
+    })
+}
+
+/// Whether the file at `path` is an extension: a component with a
+/// manifest in it.
+pub fn is_extension(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|bytes| manifest_in(&bytes).is_some())
+}
+
+/// What an extension's manifest says.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
@@ -55,8 +77,6 @@ struct ManifestParameter {
 struct ManifestPlugin {
     name: String,
     title: String,
-    /// The component's file, in the package.
-    component: String,
 }
 
 #[derive(Deserialize)]
@@ -92,9 +112,8 @@ pub struct Extension {
     pub commands: Vec<ExtensionCommand>,
     /// What a new pane of it is made from, if it says (`create`).
     pub creates: Option<Creates>,
-    /// The package's directory, and its component's file in it.
-    pub directory: PathBuf,
-    pub component: PathBuf,
+    /// The component's file.
+    pub file: PathBuf,
     compiled: Compiled,
     read: Vec<PathBuf>,
     /// What a pane keeps of it: the type `state` gives.
@@ -113,14 +132,6 @@ pub enum Creates {
 /// are named by `&'static str` wherever commands are.
 fn kept(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
-}
-
-/// The file of the component the package in `directory` names, if its
-/// manifest can be read: what a build of the extension replaces.
-pub fn component_file(directory: &Path) -> Option<PathBuf> {
-    let manifest = std::fs::read_to_string(directory.join("plugin.toml")).ok()?;
-    let manifest: Manifest = toml::from_str(&manifest).ok()?;
-    Some(directory.join(manifest.plugin.component))
 }
 
 /// What a component declares of itself, read from its type.
@@ -235,14 +246,14 @@ fn match_commands(
 }
 
 impl Extension {
-    /// The package in `directory`.
-    pub fn load(directory: &Path) -> Result<Self, String> {
-        let at = directory.join("plugin.toml");
-        let manifest =
-            std::fs::read_to_string(&at).map_err(|error| format!("{}: {error}", at.display()))?;
+    /// The extension whose component is at `file`.
+    pub fn load(file: &Path) -> Result<Self, String> {
+        let bytes = std::fs::read(file).map_err(|error| error.to_string())?;
+        let manifest = manifest_in(&bytes)
+            .ok_or_else(|| format!("the component has no manifest (`{MANIFEST}`)"))?;
         let mut manifest: Manifest =
-            toml::from_str(&manifest).map_err(|error| format!("{}: {error}", at.display()))?;
-        let compiled = compile(&directory.join(&manifest.plugin.component))?;
+            toml::from_str(&manifest).map_err(|error| format!("the manifest: {error}"))?;
+        let compiled = compile(file)?;
         let Shape {
             state,
             commands,
@@ -271,8 +282,7 @@ impl Extension {
             title: manifest.plugin.title,
             commands,
             creates,
-            directory: directory.to_path_buf(),
-            component: directory.join(&manifest.plugin.component),
+            file: file.to_path_buf(),
             compiled,
             read: manifest
                 .access
@@ -438,20 +448,20 @@ fn function(
     })
 }
 
-/// The packages in `directories`, those that load; what kept one from
-/// loading is said on stderr.
-pub fn load_all(directories: &[String]) -> Vec<Arc<Extension>> {
+/// The extensions whose components are at `files`, those that load;
+/// what kept one from loading is said on stderr.
+pub fn load_all(files: &[String]) -> Vec<Arc<Extension>> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    (directories.iter())
-        .filter_map(|directory| {
-            let directory = match (directory.strip_prefix("~/"), &home) {
+    (files.iter())
+        .filter_map(|file| {
+            let file = match (file.strip_prefix("~/"), &home) {
                 (Some(rest), Some(home)) => home.join(rest),
-                _ => PathBuf::from(directory),
+                _ => PathBuf::from(file),
             };
-            match Extension::load(&directory) {
+            match Extension::load(&file) {
                 Ok(extension) => Some(Arc::new(extension)),
                 Err(error) => {
-                    eprintln!("horizon extension {}: {error}", directory.display());
+                    eprintln!("horizon extension {}: {error}", file.display());
                     None
                 }
             }

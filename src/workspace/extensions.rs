@@ -1,4 +1,4 @@
-//! The extensions the configuration names, kept to what their packages
+//! The extensions the configuration names, kept to what their components
 //! are: read again when the configuration is, and one whose component is
 //! built again is read again by itself. The panes that show an extension
 //! read again are made again, on the state they keep.
@@ -15,18 +15,18 @@ use crate::markdown::watch::{self, Changed};
 
 /// An extension whose component is watched.
 pub(super) struct Watched {
-    /// The package's directory.
-    directory: PathBuf,
+    /// The component's file.
+    file: PathBuf,
     changed: Changed,
     _watcher: RecommendedWatcher,
 }
 
 impl Shell {
-    /// Reads the packages in `directories` again, off the UI thread, and
+    /// Reads the components at `files` again, off the UI thread, and
     /// takes them in place of the extensions loaded.
-    pub(super) fn reload_extensions(&self, directories: Vec<String>) {
+    pub(super) fn reload_extensions(&self, files: Vec<String>) {
         self.in_background(
-            move || load_all(&directories),
+            move || load_all(&files),
             |shell, loaded| {
                 let mut names: Vec<&str> = (plugins::extensions().iter())
                     .map(|extension| extension.name)
@@ -45,13 +45,10 @@ impl Shell {
         let watched = (plugins::extensions().iter())
             .filter_map(|extension| {
                 let changed = Changed::default();
-                let watcher = watch::on(
-                    extension.component.clone(),
-                    changed.clone(),
-                    kept.wake.clone(),
-                )?;
+                let watcher =
+                    watch::on(extension.file.clone(), changed.clone(), kept.wake.clone())?;
                 Some(Watched {
-                    directory: extension.directory.clone(),
+                    file: extension.file.clone(),
                     changed,
                     _watcher: watcher,
                 })
@@ -60,17 +57,17 @@ impl Shell {
         *kept.watched.borrow_mut() = watched;
     }
 
-    /// Reads again the packages whose components were built again since
+    /// Reads again the extensions whose components were built again since
     /// this was last asked. One that does not load leaves the extension
     /// as it was.
     pub(super) fn follow_extensions(&self) {
         let built: Vec<PathBuf> = (self.kept().watched.borrow().iter())
             .filter(|watched| watched.changed.settled())
-            .map(|watched| watched.directory.clone())
+            .map(|watched| watched.file.clone())
             .collect();
-        for directory in built {
+        for file in built {
             self.in_background(
-                move || Extension::load(&directory).map_err(|error| (directory, error)),
+                move || Extension::load(&file).map_err(|error| (file, error)),
                 |shell, loaded| match loaded {
                     Ok(extension) => {
                         let name = extension.name;

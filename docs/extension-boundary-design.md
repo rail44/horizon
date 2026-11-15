@@ -230,7 +230,7 @@ comes back at once and leaves a task behind that starts the tasks a view
 asks for, so they outlive the export's task.
 
 `tests/extension.rs` holds a pane of an extension, and a preview pane of
-its package, to having nothing to draw once nothing happens, as the
+its component, to having nothing to draw once nothing happens, as the
 window would ask it.
 
 Not tried: `stream`; a trap inside a task rather than a call.
@@ -292,11 +292,11 @@ The decisions and who made them are on board #76. What they come to:
 - **The first extension is the Markdown view**, taking the built-in one's
   place once it passes the same tests. It reads files through WASI, with
   `/` lent read-only. Extensions are named in `config.toml`, which is
-  read for them at startup and by `Reload Config`; a package whose
+  read for them at startup and by `Reload Config`; an extension whose
   component is built again is read again by itself, and the panes that
   show an extension read again are made again on the state they keep
   (`src/workspace/extensions.rs`). One being written on a branch is
-  looked at in a preview pane, from its package's directory, beside the
+  looked at in a preview pane, from its component's file, beside the
   one in use (`docs/preview-pane-design.md`).
 - **A view that paints itself comes later**, through a subset of Canvas
   2D if at all.
@@ -360,19 +360,37 @@ The decisions and who made them are on board #76. What they come to:
   (wRPC between a wasm view and a native backend, and why it blocks) is
   in `docs/research/plugin-backend-packaging-2026-11-14.md`.
 
-- **An extension is a package**: a wasm component and a manifest
-  (`plugin.toml`). The component's world includes `horizon-ui`'s
-  `imports` world and declares only what is its own: its state's type,
-  `mount` and `state` over it, and a `commands` interface. What every
-  plugin exports (`horizon:ui/events`) the SDK implements and exports;
-  the preview plugin is built the same way. The manifest gives the name,
-  the title, the commands' titles and descriptions (WIT has no values, and
-  doc comments do not reach a component), and the directories it may
-  read; it is matched with the component's commands when the package is
-  loaded (`src/extension.rs`). A pane keeps the state as WAVE text. The
-  Markdown view is the first (`plugins/markdown`), beside the built-in one
-  until it does all the built-in one does.
+- **An extension is one file**: a wasm component with its manifest in
+  it, as a custom section (`horizon:manifest`, TOML). The component's
+  world includes `horizon-ui`'s `imports` world and declares only what
+  is its own: its state's type, `mount` and `state` over it, `create`,
+  and a `commands` interface. What every plugin exports
+  (`horizon:ui/events`) the SDK implements and exports; the preview
+  plugin is built the same way. The manifest gives the name, the title,
+  the commands' titles and descriptions (WIT has no values, and doc
+  comments do not reach a component), how `create`'s parameters are
+  asked for, and the directories the extension may read; it is matched
+  with the component's commands when the component is loaded
+  (`src/extension.rs`). A pane keeps the state as WAVE text. The
+  component's file is what is named wherever an extension is: the
+  configuration's `extensions`, and `horizon preview`. One file is also
+  what the Wasm registries carry (OCI, `wkg`), should extensions be
+  handed out that way.
+- **An extension written in Rust says its shape once**
+  (`horizon_ui::plugin`, `crates/horizon-ui-macros`): a module with
+  `struct State`, `fn mount`, `fn state`, a function marked
+  `#[create(..)]` and functions marked `#[command(..)]`. The macro
+  writes the WIT world those amount to, hands it to `wit-bindgen`,
+  exports the functions through the bindings beside what every plugin
+  exports, and puts the manifest in the wasm. A world, a manifest and
+  the Rust behind them, written apart, had to be held to each other
+  when the extension was loaded; made from one description they cannot
+  differ. What crosses to the host is unchanged (the component's type
+  and the manifest's section), so an extension in another language is
+  one whose WIT and section are written by hand. The Markdown view is
+  the first (`plugins/markdown`), beside the built-in one until it does
+  all the built-in one does.
 
 Open: keeping a plugin's CSS to its own tree; how the boundary is versioned;
-where extensions live and how a package is put together; the preview
-pane as one of them; a command's parameters; the built-in views made by the same command.
+where extensions that are not this repository's live; the preview pane
+as one of them; a command's parameters; the built-in views made by the same command.
