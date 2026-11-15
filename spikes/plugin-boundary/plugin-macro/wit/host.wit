@@ -1,0 +1,14 @@
+package spike:host;
+
+/// What stands for the host's side of the boundary: a file the person
+/// chose, as a plugin holds it.
+interface files {
+    resource file {
+        path: func() -> string;
+    }
+}
+
+/// What every plugin's world includes.
+world imports {
+    import files;
+}

@@ -1,0 +1,14 @@
+[package]
+name = "plugin-macro"
+description = "One description of a plugin, in Rust, from which its WIT world, its exports and its manifest are made."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

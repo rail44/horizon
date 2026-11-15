@@ -1,0 +1,12 @@
+[package]
+name = "host-macro"
+description = "Reads a plugin described in Rust as a host would: its type, its manifest, and calls into it."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+toml = "1"
+wasmparser = "0.263"
+wasmtime = "50"
+wasmtime-wasi = "50"

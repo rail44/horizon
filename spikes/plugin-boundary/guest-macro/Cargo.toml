@@ -1,0 +1,13 @@
+[package]
+name = "guest-macro"
+description = "A plugin described once, in Rust: no WIT file and no manifest file of its own."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+plugin-macro = { path = "../plugin-macro" }
+wit-bindgen = "0.63"
