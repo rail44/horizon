@@ -97,6 +97,8 @@ extension says: `new markdown-extension README.md`),
 `reload-agent-runtime`, `reload-terminal-runtime`, `reload-config`,
 `preview <path-to-wasm> [--name <preview>]` (a view still being written,
 shown from a wasm plugin: `docs/preview-pane-design.md`),
+`preview <package-directory> [<argument>...]` (an extension still being
+written, shown from its package),
 `sessions`, `state` (each takes
 `--split`/`--active` where placement/focus applies). See
 `docs/cli-control-plane-design.md` for the full contract.

@@ -67,6 +67,11 @@ pub enum Subcommand {
     Preview {
         path: PathBuf,
         name: Option<String>,
+        /// For an extension's package: what its pane is made from, as
+        /// typed, a file among them a path from `directory` (the caller's
+        /// working directory, filled in by [`crate::run`]).
+        arguments: Vec<String>,
+        directory: PathBuf,
         split: Option<SplitFlag>,
         activate: bool,
     },
@@ -194,6 +199,7 @@ Subcommands:\n  \
   new-terminal [--split [<session-id>]] [--active]\n  \
   new-agent [--prompt <text>] [--role <id>] [--split [<session-id>]] [--active]\n  \
   preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]\n  \
+  preview <extension-package-directory> [<argument>...] [--split [<session-id>]] [--active]\n  \
   markdown <path> [--split [<session-id>]] [--active]\n  \
   wiki [<page>] [--split [<session-id>]] [--active]\n  \
   new <plugin> [<argument>...] [--split [<session-id>]] [--active]\n  \
@@ -258,10 +264,11 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
         }
         "preview" => {
             let path = next_required(&mut positionals, "preview", "path-to-wasm")?;
-            reject_extra(&mut positionals, "preview")?;
             Subcommand::Preview {
                 path: PathBuf::from(path),
                 name: options.preview_name.take(),
+                arguments: positionals.by_ref().collect(),
+                directory: PathBuf::new(),
                 split: options.split.take(),
                 activate: std::mem::take(&mut options.active),
             }
@@ -588,10 +595,30 @@ mod tests {
             Subcommand::Preview {
                 path: PathBuf::from("target/p.wasm"),
                 name: None,
+                arguments: Vec::new(),
+                directory: PathBuf::new(),
                 split: None,
                 activate: false,
             }
         );
+    }
+
+    #[test]
+    fn preview_takes_what_an_extension_s_pane_is_made_from() {
+        let parsed = parse(&args(&[
+            "preview",
+            "target/extensions/markdown",
+            "README.md",
+        ]))
+        .unwrap();
+        let Subcommand::Preview {
+            path, arguments, ..
+        } = parsed.subcommand
+        else {
+            panic!("expected preview");
+        };
+        assert_eq!(path, PathBuf::from("target/extensions/markdown"));
+        assert_eq!(arguments, ["README.md"]);
     }
 
     #[test]
@@ -611,6 +638,8 @@ mod tests {
             Subcommand::Preview {
                 path: PathBuf::from("/tmp/p.wasm"),
                 name: Some("sample".to_string()),
+                arguments: Vec::new(),
+                directory: PathBuf::new(),
                 split: Some(SplitFlag::Explicit("abc".to_string())),
                 activate: true,
             }

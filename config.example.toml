@@ -412,8 +412,10 @@ cyan = "#56b6c2"
 # A top-level array of directories, each an extension package: a `plugin.toml`
 # (its name, title, component file, its commands' titles and descriptions,
 # and what it may read) beside the component it names. A pane can then show
-# the extension by its name. Read at startup; a package that does not load is
-# reported on stderr and left out. A leading "~/" is expanded against $HOME.
+# the extension by its name. Read at startup and by `Reload Config`; a
+# package whose component is built again is read again by itself, and the
+# panes that show it are made again. A package that does not load is reported
+# on stderr and left out. A leading "~/" is expanded against $HOME.
 # extensions = ["/home/you/src/github.com/you/horizon/plugins/markdown"]
 
 # ---------------------------------------------------------------------------

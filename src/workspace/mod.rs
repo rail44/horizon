@@ -56,6 +56,7 @@ mod board_sessions;
 mod chooser;
 mod commands;
 mod control;
+mod extensions;
 mod finder;
 pub(crate) mod held;
 mod keymap;
@@ -366,6 +367,8 @@ struct Kept {
     /// The sessions a board named that this workspace did not have, and
     /// whether the agent runtime has answered about each.
     looked_for: RefCell<HashMap<SessionId, bool>>,
+    /// The extensions whose components are watched.
+    watched: RefCell<Vec<extensions::Watched>>,
     /// What the sessions the board views name are doing: every board view
     /// is given it.
     board_activity:
@@ -1006,6 +1009,7 @@ impl Shell {
         }
         *kept.summarizer.borrow_mut() = summarizer;
         self.theme.set(theme);
+        self.reload_extensions(config.extensions.clone());
     }
 
     /// The font size, `steps` away from what it is: every view's text and
@@ -1109,6 +1113,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             reload_terminals: opening.reload_terminals,
             reloading: Cell::new(None),
             looked_for: RefCell::default(),
+            watched: RefCell::default(),
             board_activity: RwSignal::new(HashMap::new()),
             refocus: Cell::new(false),
             board: opening.board,
@@ -1178,5 +1183,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             },
         );
     shell.focus_active();
+    shell.watch_extensions();
+    horizon_ui::each_effects(move || shell.follow_extensions());
     (themed(move || shell.theme.get(), root), shell)
 }

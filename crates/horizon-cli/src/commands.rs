@@ -103,12 +103,19 @@ pub fn to_request(
         Subcommand::Preview {
             path,
             name,
+            arguments,
+            directory,
             activate,
             ..
-        } => invoke(
-            command_name,
-            file_view_args(path, name.as_deref(), resolved_split, *activate),
-        ),
+        } => {
+            let mut args = file_view_args(path, name.as_deref(), resolved_split, *activate);
+            // (Only an extension's package is given arguments.)
+            if !arguments.is_empty() {
+                args["arguments"] = serde_json::json!(arguments);
+                args["directory"] = serde_json::Value::String(directory.display().to_string());
+            }
+            invoke(command_name, args)
+        }
         Subcommand::Wiki { path, activate, .. } => invoke(
             command_name,
             file_view_args(path, None, resolved_split, *activate),
@@ -319,9 +326,35 @@ mod tests {
         Subcommand::Preview {
             path: std::path::PathBuf::from("/tmp/p.wasm"),
             name: name.map(str::to_string),
+            arguments: Vec::new(),
+            directory: std::path::PathBuf::new(),
             split,
             activate,
         }
+    }
+
+    #[test]
+    fn preview_sends_an_extension_s_arguments_and_where_the_caller_is() {
+        let package = Subcommand::Preview {
+            path: std::path::PathBuf::from("/work/target/extensions/markdown"),
+            name: None,
+            arguments: vec!["README.md".to_string()],
+            directory: std::path::PathBuf::from("/work"),
+            split: None,
+            activate: false,
+        };
+        let Request::Invoke(invoke) = to_request(&package, None, None) else {
+            panic!("expected an invoke");
+        };
+        assert_eq!(
+            invoke.args,
+            serde_json::json!({
+                "path": "/work/target/extensions/markdown",
+                "arguments": ["README.md"],
+                "directory": "/work",
+                "activate": false
+            })
+        );
     }
 
     #[test]

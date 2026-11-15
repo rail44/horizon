@@ -2,6 +2,7 @@
 //! pane's view of one made on the state the model keeps for the pane.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::reactive_graph::effect::Effect;
@@ -67,21 +68,32 @@ fn listed<P: Plugin>() -> Vec<Listed> {
 
 thread_local! {
     /// The extensions this shell loaded (`config.toml`'s `extensions`).
-    static EXTENSIONS: std::cell::RefCell<Vec<Rc<Extension>>> = const { std::cell::RefCell::new(Vec::new()) };
+    static EXTENSIONS: std::cell::RefCell<Vec<Arc<Extension>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Takes in the extensions a pane can show.
-pub(super) fn take_in(extensions: Vec<Rc<Extension>>) {
+pub(super) fn take_in(extensions: Vec<Arc<Extension>>) {
     EXTENSIONS.with(|kept| *kept.borrow_mut() = extensions);
 }
 
 /// The extensions loaded.
-pub(super) fn extensions() -> Vec<Rc<Extension>> {
+pub(super) fn extensions() -> Vec<Arc<Extension>> {
     EXTENSIONS.with(|kept| kept.borrow().clone())
 }
 
+/// Takes `extension` in, in place of the one of its name.
+pub(super) fn put(extension: Arc<Extension>) {
+    EXTENSIONS.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        match kept.iter_mut().find(|loaded| loaded.name == extension.name) {
+            Some(loaded) => *loaded = extension,
+            None => kept.push(extension),
+        }
+    });
+}
+
 /// The extension named `name`, if one was loaded.
-pub(super) fn extension(name: &str) -> Option<Rc<Extension>> {
+pub(super) fn extension(name: &str) -> Option<Arc<Extension>> {
     EXTENSIONS.with(|kept| {
         kept.borrow()
             .iter()
@@ -346,7 +358,7 @@ impl Shell {
     fn mount_extension(
         &self,
         pane: PaneId,
-        extension: Rc<Extension>,
+        extension: Arc<Extension>,
         shown: &PluginPane,
     ) -> (El, Shown) {
         let shell = *self;

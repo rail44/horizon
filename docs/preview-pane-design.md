@@ -74,11 +74,29 @@ last changed (a build unlinks and links it again).
 A pane given the keys before its plugin was read has them on itself; when
 the plugin's view is put in, they go on to it.
 
+### An extension's package
+
+A preview pane also shows an extension being written
+(`docs/extension-boundary-design.md`): given the directory of its
+package (a `plugin.toml` and the component it names) in place of a
+plugin's file, with what the extension's pane is made from. The package
+is read off the UI thread, the extension's view is made on what the pane
+was given, and the pane reads the package again when its component is
+built again. The extension is the pane's alone: one of the same name
+that the shell has loaded from the configuration stays as it is, and so
+do its panes. So a build from any checkout is looked at beside what is
+in use. The extension's commands are not carried out in a preview pane.
+
 ## Commands
 
 ```
 horizon preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]
+horizon preview <package-directory> [<argument>...] [--split [<session-id>]] [--active]
 ```
+
+The arguments are what the extension's pane is made from, as
+`horizon new` takes them: a file among them is a path from where the
+command is run.
 
 Without `--active` the pane does not take the focus. A file that a pane
 shows already is read again by that pane, with the preview asked for;

@@ -12,6 +12,12 @@
 //! when it changes or when asked to. The file is compiled off the UI
 //! thread; what the pane showed stays until the new one is ready.
 //!
+//! A pane shows an extension being written the same way: given its
+//! package's directory in place of a plugin's file, it shows the
+//! extension's view, made on what the pane was given for it, and reads
+//! the package again when its component is built again. The extension is
+//! this pane's alone: the one of its name the shell has loaded stays.
+//!
 //! A plugin that traps is let go of, and the pane says what it said. It
 //! traps when it takes more memory than [`MEMORY_LIMIT`], or a call into
 //! it goes on for longer than [`CALL_LIMIT`].
@@ -19,6 +25,7 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use horizon_ui::blitz_dom::NodeId;
 use horizon_ui::reactive_graph::effect::Effect;
@@ -44,6 +51,7 @@ mod own {
 }
 
 use crate::background::Background;
+use crate::extension::{Creates, Extension};
 use crate::markdown::watch;
 use crate::plugin::{Command, Mounted, Plugin as PanePlugin};
 use crate::plugin_host::{Asks, Compiled, compile, instantiate, no_grants};
@@ -68,15 +76,44 @@ mod styles {
 }
 
 /// What a preview pane shows: a plugin's file, and which of its previews
-/// (its first, with no name).
+/// (its first, with no name); or an extension's package, as its
+/// directory, and what its pane is made from.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub struct Target {
     pub path: PathBuf,
     pub name: Option<String>,
+    /// What an extension's pane is made from, as it was typed.
+    #[serde(default)]
+    pub arguments: Vec<String>,
+    /// Where a file among the arguments is a path from.
+    #[serde(default)]
+    pub directory: PathBuf,
 }
 
-/// The file of a target as last compiled, or why it could not be.
-type Read = (Target, u32, Result<Compiled, String>);
+/// What a target's path was read as.
+#[derive(Clone)]
+enum Built {
+    Plugin(Compiled),
+    Package(Arc<Extension>),
+}
+
+/// Reads what is at `path`: a package where there is a manifest, a
+/// preview plugin's file otherwise.
+fn build(path: &std::path::Path) -> Result<Built, String> {
+    if path.join("plugin.toml").is_file() {
+        Extension::load(path).map(|extension| Built::Package(Arc::new(extension)))
+    } else {
+        compile(path).map(Built::Plugin)
+    }
+}
+
+/// The file whose change means `path` was built again.
+fn built_file(path: PathBuf) -> PathBuf {
+    crate::extension::component_file(&path).unwrap_or(path)
+}
+
+/// A target as last read, or why it could not be.
+type Read = (Target, u32, Result<Built, String>);
 
 /// A preview pane's state, for whoever placed it to drive.
 #[derive(Clone, Copy)]
@@ -95,8 +132,8 @@ impl Preview {
     }
 }
 
-/// One preview of a compiled plugin, or what was said in place of it.
-fn shown(compiled: Result<Compiled, String>, name: Option<&str>, wake: Wake) -> El {
+/// Where what was read is shown, and what it said if it could not be.
+fn stage() -> (El, RwSignal<Option<String>>) {
     let failed = RwSignal::new(None::<String>);
     let root = el("div").class(styles::SHOWN).when(
         move || failed.get().is_some(),
@@ -106,6 +143,46 @@ fn shown(compiled: Result<Compiled, String>, name: Option<&str>, wake: Wake) -> 
                 .text_dyn(move || failed.get().unwrap_or_default())
         },
     );
+    (root, failed)
+}
+
+/// What was read for `target`, shown, or what was said in place of it.
+fn shown(built: Result<Built, String>, target: &Target, wake: Wake) -> El {
+    match built {
+        Ok(Built::Package(extension)) => shown_package(&extension, target, wake),
+        Ok(Built::Plugin(compiled)) => shown_plugin(Ok(compiled), target.name.as_deref(), wake),
+        Err(error) => shown_plugin(Err(error), None, wake),
+    }
+}
+
+/// An extension's view, made on what `target` gives for it.
+fn shown_package(extension: &Arc<Extension>, target: &Target, wake: Wake) -> El {
+    let (root, failed) = stage();
+    let name = extension.name;
+    let mounted = (|| {
+        let state = match (&extension.creates, target.arguments.as_slice()) {
+            (None, []) => None,
+            (None, _) => return Err(format!("`{name}` takes no arguments")),
+            (Some(Creates::File { .. }), [path]) => {
+                Some(extension.create(&target.directory.join(path))?)
+            }
+            (Some(Creates::File { .. }), _) => return Err(format!("`{name}` takes one file")),
+        };
+        let running = extension.instantiate(Asks::default(), wake, failed)?;
+        let node = running.mount(state.as_deref())?;
+        running.follow();
+        Ok(node)
+    })();
+    match mounted {
+        Ok(node) => _ = root.child(El(NodeId::from_u64(node))),
+        Err(error) => failed.update(|failed| _ = failed.get_or_insert(error)),
+    }
+    root
+}
+
+/// One preview of a compiled plugin, or what was said in place of it.
+fn shown_plugin(compiled: Result<Compiled, String>, name: Option<&str>, wake: Wake) -> El {
+    let (root, failed) = stage();
     let loaded = compiled.and_then(|compiled| {
         let loaded = instantiate(&compiled, no_grants(), Asks::default(), wake, failed);
         let loaded = loaded.map_err(|error| format!("{error:#}"))?;
@@ -172,10 +249,10 @@ pub fn view(
         };
         let path = target.path.clone();
         compiling.run(
-            move || compile(&path),
-            move |compiled| {
+            move || build(&path),
+            move |built| {
                 // (The pane may be gone by now.)
-                state.read.try_set(Some((target, reads, compiled)));
+                state.read.try_set(Some((target, reads, built)));
             },
         );
     });
@@ -219,11 +296,11 @@ pub fn view(
             },
             Clone::clone,
             move |(target, _)| {
-                let compiled = (state.read)
-                    .with_untracked(|read| read.as_ref().map(|(_, _, compiled)| compiled.clone()));
+                let built = (state.read)
+                    .with_untracked(|read| read.as_ref().map(|(_, _, built)| built.clone()));
                 let shown = shown(
-                    compiled.unwrap_or_else(|| Err("nothing was read".to_string())),
-                    target.name.as_deref(),
+                    built.unwrap_or_else(|| Err("nothing was read".to_string())),
+                    target,
                     shown_wake.clone(),
                 );
                 arrived.set(Some(shown));
@@ -234,7 +311,7 @@ pub fn view(
     let changed = watch::Changed::default();
     let noted = changed.clone();
     Effect::new(move |_| {
-        let path = state.target.get().map(|target| target.path);
+        let path = state.target.get().map(|target| built_file(target.path));
         path.and_then(|path| watch::on(path, noted.clone(), wake.clone()))
     });
     each_layout(move |page| {

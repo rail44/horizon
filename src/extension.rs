@@ -15,6 +15,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Dispose, GetUntracked};
@@ -91,6 +92,9 @@ pub struct Extension {
     pub commands: Vec<ExtensionCommand>,
     /// What a new pane of it is made from, if it says (`create`).
     pub creates: Option<Creates>,
+    /// The package's directory, and its component's file in it.
+    pub directory: PathBuf,
+    pub component: PathBuf,
     compiled: Compiled,
     read: Vec<PathBuf>,
     /// What a pane keeps of it: the type `state` gives.
@@ -109,6 +113,14 @@ pub enum Creates {
 /// are named by `&'static str` wherever commands are.
 fn kept(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
+}
+
+/// The file of the component the package in `directory` names, if its
+/// manifest can be read: what a build of the extension replaces.
+pub fn component_file(directory: &Path) -> Option<PathBuf> {
+    let manifest = std::fs::read_to_string(directory.join("plugin.toml")).ok()?;
+    let manifest: Manifest = toml::from_str(&manifest).ok()?;
+    Some(directory.join(manifest.plugin.component))
 }
 
 /// What a component declares of itself, read from its type.
@@ -259,6 +271,8 @@ impl Extension {
             title: manifest.plugin.title,
             commands,
             creates,
+            directory: directory.to_path_buf(),
+            component: directory.join(&manifest.plugin.component),
             compiled,
             read: manifest
                 .access
@@ -273,7 +287,7 @@ impl Extension {
     /// The extension in a store of its own, for one pane: given what it may
     /// read and `asks`; `failed` is told what it said if it traps.
     pub fn instantiate(
-        self: &Rc<Self>,
+        self: &Arc<Self>,
         asks: Asks,
         wake: Wake,
         failed: RwSignal<Option<String>>,
@@ -297,7 +311,7 @@ impl Extension {
     /// The state of a new pane on the file at `path`, as text: what the
     /// extension's `create` makes of it, asked of an instance made for the
     /// question.
-    pub fn create(self: &Rc<Self>, path: &Path) -> Result<String, String> {
+    pub fn create(self: &Arc<Self>, path: &Path) -> Result<String, String> {
         let failed = RwSignal::new(None::<String>);
         let state =
             (self.instantiate(Asks::default(), Wake::default(), failed)).and_then(|running| {
@@ -326,7 +340,7 @@ impl Extension {
 
 /// An extension running for a pane.
 pub struct Running {
-    extension: Rc<Extension>,
+    extension: Arc<Extension>,
     loaded: Rc<Loaded>,
 }
 
@@ -416,7 +430,7 @@ fn function(
 
 /// The packages in `directories`, those that load; what kept one from
 /// loading is said on stderr.
-pub fn load_all(directories: &[String]) -> Vec<Rc<Extension>> {
+pub fn load_all(directories: &[String]) -> Vec<Arc<Extension>> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     (directories.iter())
         .filter_map(|directory| {
@@ -425,7 +439,7 @@ pub fn load_all(directories: &[String]) -> Vec<Rc<Extension>> {
                 _ => PathBuf::from(directory),
             };
             match Extension::load(&directory) {
-                Ok(extension) => Some(Rc::new(extension)),
+                Ok(extension) => Some(Arc::new(extension)),
                 Err(error) => {
                     eprintln!("horizon extension {}: {error}", directory.display());
                     None

@@ -11,7 +11,7 @@ use horizon_workspace::{PluginPane, SessionKind};
 use super::picker::{self, Picked, Row};
 use super::{Modal, Placement, Shell, plugins, styles};
 use crate::extension::Extension;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// What a new pane shows.
 enum Choice {
@@ -19,7 +19,7 @@ enum Choice {
     Plugin(PluginPane),
     /// The wiki of the project the shell was started in.
     Wiki,
-    Extension(Rc<Extension>),
+    Extension(Arc<Extension>),
 }
 
 /// The views to choose from whose titles hold `query`.

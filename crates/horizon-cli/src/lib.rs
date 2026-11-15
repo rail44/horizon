@@ -108,8 +108,11 @@ pub fn run(
         *path = cli::absolute_path(path, &cwd);
     }
 
-    // `new`: a file among the arguments is a path from where the caller is.
-    if let cli::Subcommand::New { directory, .. } = &mut parsed.subcommand {
+    // `new` and `preview`: a file among the arguments is a path from where
+    // the caller is.
+    if let cli::Subcommand::New { directory, .. } | cli::Subcommand::Preview { directory, .. } =
+        &mut parsed.subcommand
+    {
         *directory = std::env::current_dir().unwrap_or_default();
     }
 

@@ -273,6 +273,37 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
                 .contains("third.md")
         })
     });
+    // An extension being written, shown in a preview pane from its
+    // package's directory: the pane's alone, made on what the pane was
+    // given, and read again when its component is built again.
+    let preview = serde_json::json!({
+        "path": package.to_string_lossy(),
+        "arguments": ["third.md"],
+        "directory": directory.to_string_lossy(),
+        "activate": true,
+    });
+    let answer = ask("preview", preview);
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    let previewing = opened
+        .model(|model| model.cursor_pane_id())
+        .expect("the preview pane");
+    assert_ne!(previewing, third);
+    // (What the preview pane itself says, whatever the other panes do.)
+    let shows = |text: &str| {
+        let panes = opened.all("preview");
+        let document = opened.app.document();
+        let document = document.borrow();
+        (panes.iter())
+            .filter_map(|pane| document.get_node(*pane))
+            .any(|pane| pane.text_content().contains(text))
+    };
+    opened.until("the package shown", || shows("Three"));
+    let (x, y) = opened.middle(*opened.all("link").last().expect("the link"));
+    click_at(&opened.app, x, y);
+    opened.until("the link followed in the preview", || shows("Two"));
+    std::fs::copy(component(), package.join("markdown.wasm")).unwrap();
+    opened.until("the package read again", || shows("Three"));
+
     // What is not there is said.
     let refused = [
         ask("new", new(serde_json::json!(["missing.md"]))),
@@ -291,5 +322,90 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
     let saved = opened.model(|model| model.to_persisted_json().unwrap());
     assert!(saved.contains("markdown-extension"), "{saved}");
     assert!(saved.contains("first.md"), "{saved}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+#[ignore = "needs the extension built for wasm32-wasip2: scripts/check-extension.sh"]
+fn a_package_the_configuration_names_is_read_on_reload_and_again_when_built() {
+    let directory = std::env::temp_dir().join(format!("hzb-ext-reload-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("first.md");
+    std::fs::write(&file, "# One\n").unwrap();
+    let package = package(&directory);
+
+    // The shell starts with no extension; the configuration read again
+    // names the package.
+    let named = package.to_string_lossy().into_owned();
+    let mut shell = None;
+    let app = App::new(1200, 800, "Test", css(), || {
+        let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
+        let reload = Box::new(move || {
+            Ok(horizon_config::RawConfig {
+                extensions: vec![named.clone()],
+                ..horizon_config::RawConfig::default()
+            })
+        });
+        let (root, built) = view(
+            spawn,
+            Opening {
+                reload: Some(reload),
+                ..Opening::default()
+            },
+        );
+        shell = Some(built);
+        root
+    });
+    app.resolve();
+    let opened = Opened {
+        app,
+        shell: shell.unwrap(),
+    };
+    let new = || {
+        let answer = opened.shell.control(&ControlRequest::Invoke(Invoke {
+            command: "new".to_string(),
+            args: serde_json::json!({
+                "plugin": "markdown-extension",
+                "arguments": ["first.md"],
+                "directory": directory.to_string_lossy(),
+                "activate": true,
+            }),
+        }));
+        opened.app.run_effects();
+        opened.app.resolve();
+        answer
+    };
+    assert!(matches!(new(), EnvelopeBody::Error { .. }));
+    opened.shell.execute(CommandId::ReloadConfig);
+    opened.until("the extension loaded", || {
+        matches!(new(), EnvelopeBody::Ok { .. })
+    });
+    opened.until("the file", || opened.text().contains("One"));
+    let pane = opened
+        .model(|model| model.cursor_pane_id())
+        .expect("the pane");
+    let title = |opened: &Opened| {
+        opened.model(|model| model.pane_plugin(pane).expect("the plugin").title.clone())
+    };
+    opened.until("the title", || title(&opened) == "first.md");
+
+    // The package built again: the extension is read again by itself, and
+    // the pane that shows it is made again on the file it showed. (What
+    // tells the new one from the old here is its manifest: the title the
+    // view chooser lists it under.)
+    let manifest = std::fs::read_to_string(package.join("plugin.toml")).unwrap();
+    let renamed = manifest.replace("title = \"Markdown\"", "title = \"Notes\"");
+    assert_ne!(manifest, renamed);
+    std::fs::write(package.join("plugin.toml"), renamed).unwrap();
+    std::fs::copy(component(), package.join("markdown.wasm")).unwrap();
+    opened.until("the extension read again", || {
+        // (The chooser lists what is loaded when it is opened.)
+        opened.shell.execute(CommandId::NewTab);
+        opened.app.resolve();
+        let listed = opened.text().contains("Notes");
+        opened.key(Key::Named(NamedKey::Escape));
+        listed
+    });
+    opened.until("the pane made again", || opened.text().contains("One"));
     let _ = std::fs::remove_dir_all(&directory);
 }

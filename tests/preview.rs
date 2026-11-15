@@ -58,6 +58,8 @@ fn open_at(path: &std::path::Path, name: &str) -> Opened {
     // shell does: they go on to what the plugin shows.
     root.focus();
     target.set(Some(Target {
+        arguments: Vec::new(),
+        directory: PathBuf::new(),
         path: path.to_path_buf(),
         name: Some(name.to_string()),
     }));

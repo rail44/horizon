@@ -240,7 +240,13 @@ The decisions and who made them are on board #76. What they come to:
 - **wasmtime 50.** Done.
 - **The first extension is the Markdown view**, taking the built-in one's
   place once it passes the same tests. It reads files through WASI, with
-  `/` lent read-only. Extensions are named in `config.toml`.
+  `/` lent read-only. Extensions are named in `config.toml`, which is
+  read for them at startup and by `Reload Config`; a package whose
+  component is built again is read again by itself, and the panes that
+  show an extension read again are made again on the state they keep
+  (`src/workspace/extensions.rs`). One being written on a branch is
+  looked at in a preview pane, from its package's directory, beside the
+  one in use (`docs/preview-pane-design.md`).
 - **A view that paints itself comes later**, through a subset of Canvas
   2D if at all.
 
@@ -317,5 +323,5 @@ The decisions and who made them are on board #76. What they come to:
   until it does all the built-in one does.
 
 Open: keeping a plugin's CSS to its own tree; how the boundary is versioned;
-where extensions live and how they are built; the preview pane as one of
-them; a command's parameters; the built-in views made by the same command.
+where extensions live and how a package is put together; the preview
+pane as one of them; a command's parameters; the built-in views made by the same command.

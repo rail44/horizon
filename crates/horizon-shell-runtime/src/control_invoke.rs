@@ -21,6 +21,10 @@ pub enum Command {
     Preview {
         path: PathBuf,
         name: Option<String>,
+        /// For an extension's package: what its pane is made from, a file
+        /// among them a path from `directory`.
+        arguments: Vec<String>,
+        directory: PathBuf,
         split: Option<(SessionId, SplitAxis)>,
         activate: bool,
     },
@@ -82,6 +86,10 @@ pub fn parse(invoke: &Invoke) -> Result<Command, String> {
         "preview" => Command::Preview {
             path: required_string_arg(args, "path")?.into(),
             name: optional_string_arg(args, "name")?,
+            arguments: string_list_arg(args, "arguments")?,
+            directory: (optional_string_arg(args, "directory")?)
+                .unwrap_or_default()
+                .into(),
             split: optional_session_id_arg(args, "split")?,
             activate: activate_arg(args)?,
         },
