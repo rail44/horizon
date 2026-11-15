@@ -1,5 +1,5 @@
-//! The extensions the configuration names, kept to what their components
-//! are: read again when the configuration is, and one whose component is
+//! The extensions the shell comes with and the ones the configuration
+//! names, kept to what their components are: read again when the configuration is, and one whose component is
 //! built again is read again by itself. The panes that show an extension
 //! read again are made again, on the state they keep.
 
@@ -22,11 +22,12 @@ pub(super) struct Watched {
 }
 
 impl Shell {
-    /// Reads the components at `files` again, off the UI thread, and
-    /// takes them in place of the extensions loaded.
+    /// Reads the components at `files` and the shell's own again, off the
+    /// UI thread, and takes them in place of the extensions loaded.
     pub(super) fn reload_extensions(&self, files: Vec<String>) {
+        let own = self.kept().own_extensions.clone();
         self.in_background(
-            move || load_all(&files),
+            move || load_all(&files, &own),
             |shell, loaded| {
                 let mut names: Vec<&str> = (plugins::extensions().iter())
                     .map(|extension| extension.name)

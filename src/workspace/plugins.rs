@@ -33,7 +33,7 @@ use crate::board::plugin::{
 };
 use crate::board::{list, thread};
 use crate::extension::Extension;
-use crate::markdown::{DocumentState, MarkdownPlugin};
+use crate::markdown::DocumentState;
 use crate::plugin::{Given, Mounted, Plugin};
 use crate::plugin_host::Asks;
 use crate::preview::{PreviewPlugin, Target};
@@ -67,7 +67,8 @@ fn listed<P: Plugin>() -> Vec<Listed> {
 }
 
 thread_local! {
-    /// The extensions this shell loaded (`config.toml`'s `extensions`).
+    /// The extensions this shell loaded: its own, and `config.toml`'s
+    /// `extensions`.
     static EXTENSIONS: std::cell::RefCell<Vec<Arc<Extension>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -108,7 +109,6 @@ pub(super) fn commands() -> Vec<Listed> {
     commands.extend(listed::<BoardThreadPlugin>());
     commands.extend(listed::<PreviewPlugin>());
     commands.extend(listed::<ThemeSettingsPlugin>());
-    commands.extend(listed::<MarkdownPlugin>());
     commands.extend(listed::<WikiPlugin>());
     commands.extend(listed::<TerminalPlugin>());
     commands.extend(listed::<AgentPlugin>());
@@ -262,13 +262,6 @@ impl Shell {
                 };
                 self.mount(pane, plugin, state, |never| match never {})
             }
-            MarkdownPlugin::NAME => {
-                let plugin = MarkdownPlugin {
-                    open_url: kept.open_url.clone(),
-                    wake: kept.wake.clone(),
-                };
-                self.mount(pane, plugin, state, |never| match never {})
-            }
             WikiPlugin::NAME => {
                 let plugin = WikiPlugin {
                     open_url: kept.open_url.clone(),
@@ -415,12 +408,11 @@ impl Shell {
 }
 
 /// The names of the plugins this shell has of its own.
-pub(super) const NAMES: [&str; 8] = [
+pub(super) const NAMES: [&str; 7] = [
     TerminalPlugin::NAME,
     AgentPlugin::NAME,
     BoardListPlugin::NAME,
     BoardThreadPlugin::NAME,
-    MarkdownPlugin::NAME,
     WikiPlugin::NAME,
     PreviewPlugin::NAME,
     ThemeSettingsPlugin::NAME,
@@ -436,7 +428,6 @@ pub(super) fn created(name: &str, given: Given) -> Option<Result<PluginPane, Str
     Some(match name {
         BoardListPlugin::NAME => made::<BoardListPlugin>(given),
         BoardThreadPlugin::NAME => made::<BoardThreadPlugin>(given),
-        MarkdownPlugin::NAME => made::<MarkdownPlugin>(given),
         WikiPlugin::NAME => made::<WikiPlugin>(given),
         PreviewPlugin::NAME => made::<PreviewPlugin>(given),
         ThemeSettingsPlugin::NAME => made::<ThemeSettingsPlugin>(given),
@@ -459,18 +450,9 @@ pub(super) fn theme_settings() -> PluginPane {
     pane::<ThemeSettingsPlugin>(())
 }
 
-/// The two document views, by name.
-pub(super) const MARKDOWN: &str = MarkdownPlugin::NAME;
-pub(super) const WIKI: &str = WikiPlugin::NAME;
-
-/// A pane of the document view `name` on `path`.
-pub(super) fn document(name: &str, path: Option<PathBuf>) -> Option<PluginPane> {
-    let state = DocumentState { path };
-    match name {
-        MARKDOWN => Some(pane::<MarkdownPlugin>(state)),
-        WIKI => Some(pane::<WikiPlugin>(state)),
-        _ => None,
-    }
+/// A wiki pane on the page at `path`.
+pub(super) fn wiki(path: Option<PathBuf>) -> PluginPane {
+    pane::<WikiPlugin>(DocumentState { path })
 }
 
 /// A list pane.

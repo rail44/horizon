@@ -289,10 +289,18 @@ The decisions and who made them are on board #76. What they come to:
   watches one with `horizon_ui::guest::watch`, which reruns the plugin's
   effects after each change.
 - **wasmtime 50.** Done.
-- **The first extension is the Markdown view**, taking the built-in one's
-  place once it passes the same tests. It reads files through WASI, with
-  `/` lent read-only. Extensions are named in `config.toml`, which is
-  read for them at startup and by `Reload Config`; an extension whose
+- **The first extension is the Markdown view**, which has taken the
+  built-in one's place: `markdown` is the extension, and the shell has no
+  plugin of its own for it. It is held to what the view is held to
+  (`tests/markdown.rs`) through a pane (`tests/extension.rs`), in the
+  gate. It reads files through WASI, with `/` lent read-only.
+- **Where an extension's component is.** The ones Horizon comes with are
+  beside its executable, as its daemons are, or where cargo builds them
+  for the executable's profile (`target/wasm32-wasip2/<profile>`);
+  `cargo build --workspace` does not build them, and one that is not
+  there is said at startup and left out. The others are named in
+  `config.toml`, and one of those with the name of one Horizon comes with
+  takes its place. Both are read at startup and by `Reload Config`; an extension whose
   component is built again is read again by itself, and the panes that
   show an extension read again are made again on the state they keep
   (`src/workspace/extensions.rs`). One being written on a branch is

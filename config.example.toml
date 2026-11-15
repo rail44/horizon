@@ -409,6 +409,10 @@ cyan = "#56b6c2"
 # ---------------------------------------------------------------------------
 # extensions — views built as wasm components (docs/extension-boundary-design.md).
 #
+# Horizon comes with the Markdown view as one, read from beside its
+# executable; these are the ones beside it, and one here with the name of
+# one Horizon comes with takes its place.
+#
 # A top-level array of files, each an extension's component: a wasm
 # component with its manifest in it (its name, title, its commands' titles
 # and descriptions, and what it may read). A pane can then show the
@@ -416,7 +420,7 @@ cyan = "#56b6c2"
 # that is built again is read again by itself, and the panes that show it
 # are made again. One that does not load is reported on stderr and left out.
 # A leading "~/" is expanded against $HOME.
-# extensions = ["/home/you/src/github.com/you/horizon/target/wasm32-wasip2/release/horizon_markdown_plugin.wasm"]
+# extensions = ["~/src/your-extension/target/wasm32-wasip2/release/your_extension.wasm"]
 
 # ---------------------------------------------------------------------------
 # Environment-only overrides — no [agent] file key exists for any of these

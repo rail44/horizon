@@ -6,7 +6,7 @@
 //! (`horizon_ui::plugin`).
 #![cfg(target_family = "wasm")]
 
-#[horizon_ui::plugin(name = "markdown-extension", title = "Markdown", read = ["/"])]
+#[horizon_ui::plugin(name = "markdown", title = "Markdown", read = ["/"])]
 mod markdown {
     use std::cell::{Cell, RefCell};
     use std::path::PathBuf;

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The local quality gate (AGENTS.md, "Commands"): the five checks, in
-# order, stopping at the first that fails. Nothing runs this by itself.
+# The local quality gate (AGENTS.md, "Commands"): its steps, in order,
+# stopping at the first that fails. Nothing runs this by itself.
 #
 #   scripts/gate.sh
 #
@@ -17,6 +17,10 @@ step() {
 
 step cargo fmt --all -- --check
 step cargo clippy --workspace --all-targets --locked -- -D warnings
+
+# The Markdown view is an extension (`plugins/markdown`): the tests that
+# show it load its component from where this builds it.
+step cargo build -p horizon-markdown-plugin --target wasm32-wasip2 --locked
 
 # Inside a Horizon sandboxed agent session the default nextest profile
 # cannot pass (AGENTS.md): the tests that probe the host boundary are

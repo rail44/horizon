@@ -251,7 +251,8 @@ lands:
   views on the session-less pane plumbing the theme settings view
   introduced (`PaneKind::View`, `docs/theme-settings-view-design.md`).
   Markdown implemented 2026-11-08 (`src/markdown/`, opened with
-  `horizon new markdown <path>`): a generic viewer of any Markdown file —
+  `horizon new markdown <path>`; since 2026-11-16 shown from the extension
+  built of it, `plugins/markdown`, `docs/extension-boundary-design.md`): a generic viewer of any Markdown file —
   front matter as a heading plus chips, relative `.md` links followed in
   the pane with a back history, live reload on change, and the file
   persisted on the model's pane (`Pane::document`) so a restart restores

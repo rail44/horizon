@@ -17,6 +17,7 @@ pointed-to document instead.
 ```sh
 cargo check
 cargo build --workspace
+cargo build -p horizon-markdown-plugin --target wasm32-wasip2
 cargo test
 cargo run
 ```
@@ -49,9 +50,17 @@ replaces the daemon side. The terminal hub runs the same lockstep over
 its `hello` (`MIN_SUPPORTED == current`). Rebuild, then restart the app
 itself.
 
+The Markdown view is an extension (`plugins/markdown`), a wasm component
+`cargo build --workspace` does not build: the second command above does,
+and Horizon reads the component from beside its executable or from where
+that command leaves it (`target/wasm32-wasip2/<profile>`, for the
+executable in `target/<profile>`; `src/extension.rs`'s `own`). Without it
+Horizon starts and has no Markdown view. A component built again is read
+again by the running Horizon, with no reload.
+
 There is no CI. The local quality gate below is mandatory before finishing
 any work that changes something the gate reads — run it yourself and make
-sure all five are clean (`scripts/gate.sh` runs the five in order and stops
+sure every step is clean (`scripts/gate.sh` runs them in order and stops
 at the first that fails). A change that touches only `AGENTS.md`,
 `CLAUDE.md`, `README.md`, or files under `docs/` is exempt: no step reads
 those.
@@ -59,6 +68,7 @@ those.
 ```sh
 cargo fmt
 cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo build -p horizon-markdown-plugin --target wasm32-wasip2 --locked
 cargo nextest run --workspace --locked
 ./scripts/check-wire-schema.sh
 ./scripts/check-preview-wasm.sh
@@ -66,7 +76,7 @@ cargo nextest run --workspace --locked
 
 **Inside a sandboxed agent session, run the `sandboxed` nextest profile
 instead of the default one** (`cargo nextest run --profile sandboxed
---workspace --locked`; the other four steps are unchanged). Some tests
+--workspace --locked`; the other steps are unchanged). Some tests
 verify the host boundary the sandbox enforces — they bind real sockets,
 write to literal `/tmp`, need directories outside any repository, or
 spawn a real `horizon-agentd` — so they cannot pass from inside
@@ -85,7 +95,11 @@ filter string. When a run dumps many failures, parse `cargo nextest run
 --format json` with `jq` rather than grepping the prose log — it is more
 reliable and cheaper.
 
-The fourth step is the wire skew checker (`docs/remoc-adoption-design.md`
+The build before the tests is of the Markdown extension, which the tests
+that show it in a pane load (`tests/extension.rs`); it needs the
+`wasm32-wasip2` target installed (see Build setup).
+
+`check-wire-schema.sh` is the wire skew checker (`docs/remoc-adoption-design.md`
 §4). There is one committed wire-schema artifact per wire —
 `crates/horizon-acp/schema/acp-ext-wire.json` (the `_horizon/*` and
 `_meta.horizon` vocabulary on the ACP line to `horizon-agentd`),
@@ -101,7 +115,7 @@ the artifacts first:
 -p horizon-terminal-core -p horizon-board wire_schema` (a stale artifact
 is itself a red nextest test).
 
-The fifth step checks that the root package's library still builds for
+The last step checks that the root package's library still builds for
 `wasm32-wasip2`, the target a preview's plugin is compiled for
 (`preview-plugin/`, `src/preview.rs`). It needs that target installed (see
 Build setup). When it fails, a module
@@ -125,7 +139,7 @@ points:
 - where a branch lands on `main`, by whoever integrates it: with the
   default profile, outside any sandbox, on the commits as they will be on
   `main` (after a rebase, on the rebased branch). `main` is not moved until
-  all five are clean.
+  every step is clean.
 
 The second is what the `sandboxed` profile's skipped tests rely on: nothing
 else runs them.
@@ -298,10 +312,10 @@ at a view. `scripts/check-preview-plugin.sh` builds the plugin and runs
 the windowless tests that draw and drive a view through it (not part of
 the gate). An extension -- a view built as a wasm component with its
 manifest in it, written as one module under `horizon_ui::plugin`
-(`plugins/markdown`), and named by its file in `config.toml`'s
-`extensions` (`src/extension.rs`) -- is checked the same way by
-`scripts/check-extension.sh`, and one still being written is shown to a
-person the same way: `horizon new preview <extension.wasm> <arguments>`,
+(`plugins/markdown`), and either one Horizon comes with or one named by
+its file in `config.toml`'s `extensions` (`src/extension.rs`) -- is
+checked through a pane of the shell (`tests/extension.rs`, in the gate),
+and one still being written is shown to a person the same way: `horizon new preview <extension.wasm> <arguments>`,
 which reads the file again whenever it is built again.
 
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
@@ -354,7 +368,8 @@ their wiring:
   `crates/horizon-board-view`. See `docs/board-redesign-design.md`.
 - `finder/` — a file found by typing: the list, the matching, and the
   listing of a directory's files off the UI thread.
-- `markdown/` — the Markdown view (`horizon new markdown <path>`), and the
+- `markdown/` — the Markdown view (`horizon new markdown <path>`), which
+  a pane shows from the extension built of it (`plugins/markdown`), and the
   single-file watch other views share.
 - `wiki/` — a page of the project wiki (`crates/horizon-wiki`) with the
   owner's comment threads anchored in it. See

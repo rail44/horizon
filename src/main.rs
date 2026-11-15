@@ -84,6 +84,7 @@ fn run_window() {
         })),
         config: horizon_config::load().clone(),
         reload: Some(Box::new(horizon_config::reload)),
+        extensions: horizon::extension::own(),
         agents: Some(agentd.spawn()),
         open_url: Some(std::rc::Rc::new(open_url)),
         models: Some(std::sync::Arc::new(RuntimeModels(agentd.clone()))),

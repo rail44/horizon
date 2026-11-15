@@ -69,6 +69,15 @@ for binary in "${BINARIES[@]}"; do
   cp "$BIN_DIR/$binary" "$APP/Contents/MacOS/"
 done
 
+# The extensions Horizon comes with are read from beside the executable
+# too (`src/extension.rs`'s `own`); one not built is left out, as it is
+# for a bare executable.
+for extension in horizon_markdown_plugin.wasm; do
+  if [[ -f "target/wasm32-wasip2/$PROFILE/$extension" ]]; then
+    cp "target/wasm32-wasip2/$PROFILE/$extension" "$APP/Contents/MacOS/"
+  fi
+done
+
 codesign --force --deep --sign - "$APP"
 
 exec "$APP/Contents/MacOS/horizon" "$@"

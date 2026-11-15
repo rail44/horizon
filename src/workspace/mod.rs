@@ -259,6 +259,9 @@ pub struct Opening {
     /// Told the model whenever it has changed, to keep it for the next
     /// run.
     pub save: Option<Save>,
+    /// The components of the extensions that come with the shell
+    /// (`extension::own`), beside the ones the configuration names.
+    pub extensions: Vec<PathBuf>,
 }
 
 impl Default for Opening {
@@ -279,6 +282,7 @@ impl Default for Opening {
             board: None,
             save_theme: None,
             save: None,
+            extensions: Vec::new(),
         }
     }
 }
@@ -367,6 +371,8 @@ struct Kept {
     /// The sessions a board named that this workspace did not have, and
     /// whether the agent runtime has answered about each.
     looked_for: RefCell<HashMap<SessionId, bool>>,
+    /// The components of the extensions that come with the shell.
+    own_extensions: Vec<PathBuf>,
     /// The extensions whose components are watched.
     watched: RefCell<Vec<extensions::Watched>>,
     /// What the sessions the board views name are doing: every board view
@@ -977,9 +983,7 @@ impl Shell {
         let page = (std::env::current_dir().ok())
             .and_then(|directory| horizon_wiki::Store::for_dir(&directory))
             .and_then(|store| store.page_path("index").ok());
-        if let Some(wiki) = plugins::document(plugins::WIKI, page) {
-            self.create_plugin(wiki, placement);
-        }
+        self.create_plugin(plugins::wiki(page), placement);
     }
 
     /// The agent view a pane shows.
@@ -1073,7 +1077,10 @@ fn strip(shell: Shell) -> El {
 /// Builds the shell over `opening`, in its configuration's theme; `spawn`
 /// starts the session of each terminal pane that has none running.
 pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
-    plugins::take_in(crate::extension::load_all(&opening.config.extensions));
+    plugins::take_in(crate::extension::load_all(
+        &opening.config.extensions,
+        &opening.extensions,
+    ));
     let model = RwSignal::new(opening.model);
     let theme = Theme::from_config(&opening.config);
     let configured_size = Cell::new(theme.font_size);
@@ -1113,6 +1120,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             reload_terminals: opening.reload_terminals,
             reloading: Cell::new(None),
             looked_for: RefCell::default(),
+            own_extensions: opening.extensions,
             watched: RefCell::default(),
             board_activity: RwSignal::new(HashMap::new()),
             refocus: Cell::new(false),

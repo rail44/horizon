@@ -448,25 +448,70 @@ fn function(
     })
 }
 
-/// The extensions whose components are at `files`, those that load;
-/// what kept one from loading is said on stderr.
-pub fn load_all(files: &[String]) -> Vec<Arc<Extension>> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    (files.iter())
-        .filter_map(|file| {
-            let file = match (file.strip_prefix("~/"), &home) {
-                (Some(rest), Some(home)) => home.join(rest),
-                _ => PathBuf::from(file),
-            };
-            match Extension::load(&file) {
-                Ok(extension) => Some(Arc::new(extension)),
-                Err(error) => {
-                    eprintln!("horizon extension {}: {error}", file.display());
-                    None
-                }
+/// The components of the extensions that come with the shell, by their
+/// files' names and the packages they are built from.
+const OWN: [(&str, &str); 1] = [("horizon_markdown_plugin.wasm", "horizon-markdown-plugin")];
+
+/// The files of the extensions that come with the shell: each beside the
+/// executable, or where cargo builds it for the executable's profile
+/// (`target/wasm32-wasip2/<profile>` beside `target/<profile>`). One that
+/// is in neither place is said on stderr, with how it is built, and left
+/// out: the views it has are then not there.
+pub fn own() -> Vec<PathBuf> {
+    let Some(beside) = (std::env::current_exe().ok())
+        .and_then(|executable| executable.parent().map(Path::to_path_buf))
+    else {
+        return Vec::new();
+    };
+    own_in(&beside)
+}
+
+/// [`own`], for an executable in `beside`.
+pub fn own_in(beside: &Path) -> Vec<PathBuf> {
+    let built = (beside.parent().zip(beside.file_name()))
+        .map(|(target, profile)| target.join("wasm32-wasip2").join(profile));
+    (OWN.iter())
+        .filter_map(|(file, package)| {
+            let found = [Some(beside.to_path_buf()), built.clone()]
+                .into_iter()
+                .flatten()
+                .map(|directory| directory.join(file))
+                .find(|file| file.is_file());
+            if found.is_none() {
+                eprintln!(
+                    "horizon: no {file} beside the executable; build it with \
+                     `cargo build -p {package} --target wasm32-wasip2`"
+                );
             }
+            found
         })
         .collect()
+}
+
+/// The extensions whose components are at `files` (the configuration's)
+/// and at `own` (the shell's), those that load; what kept one from
+/// loading is said on stderr. One the configuration names takes the
+/// place of the shell's own of the same name.
+pub fn load_all(files: &[String], own: &[PathBuf]) -> Vec<Arc<Extension>> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let configured = files
+        .iter()
+        .map(|file| match (file.strip_prefix("~/"), &home) {
+            (Some(rest), Some(home)) => home.join(rest),
+            _ => PathBuf::from(file),
+        });
+    let mut loaded: Vec<Arc<Extension>> = Vec::new();
+    for file in configured.chain(own.iter().cloned()) {
+        match Extension::load(&file) {
+            Ok(extension) => {
+                if loaded.iter().all(|other| other.name != extension.name) {
+                    loaded.push(Arc::new(extension));
+                }
+            }
+            Err(error) => eprintln!("horizon extension {}: {error}", file.display()),
+        }
+    }
+    loaded
 }
 
 #[cfg(test)]

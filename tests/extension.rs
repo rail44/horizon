@@ -2,6 +2,9 @@
 //! wasm component (`plugins/markdown`), loaded from its file, its state
 //! kept in the model as it changes, its command carried out from the
 //! palette, and a new pane of it made on a file found by typing.
+//!
+//! The component is built before these run (`scripts/gate.sh`):
+//! `cargo build -p horizon-markdown-plugin --target wasm32-wasip2`.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -21,10 +24,36 @@ use keyboard_types::{Key, Modifiers, NamedKey};
 
 mod support;
 
-/// The extension's component, as `scripts/check-extension.sh` builds it.
+/// The extension's component, where cargo builds it.
 fn component() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("target/wasm32-wasip2/debug/horizon_markdown_plugin.wasm")
+}
+
+/// A shell with the extensions it comes with, found as an executable in
+/// `target/debug` finds them.
+fn open() -> Opened {
+    let extensions =
+        horizon::extension::own_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug"));
+    assert_eq!(extensions, [component()]);
+    let mut shell = None;
+    let app = App::new(1200, 800, "Test", css(), || {
+        let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
+        let (root, built) = view(
+            spawn,
+            Opening {
+                extensions,
+                ..Opening::default()
+            },
+        );
+        shell = Some(built);
+        root
+    });
+    app.resolve();
+    Opened {
+        app,
+        shell: shell.unwrap(),
+    }
 }
 
 /// A copy of the extension in `directory`, for a test to change: its
@@ -126,6 +155,44 @@ impl Opened {
         self.app.resolve();
     }
 
+    /// Asks the shell as the command line does, and lets what that
+    /// changed take effect.
+    fn ask(&self, command: &str, args: serde_json::Value) -> EnvelopeBody {
+        let answer = self.shell.control(&ControlRequest::Invoke(Invoke {
+            command: command.to_string(),
+            args,
+        }));
+        self.app.run_effects();
+        self.app.resolve();
+        answer
+    }
+
+    /// `horizon new markdown <file>`, from `directory`.
+    fn new_markdown(&self, directory: &Path, file: &str) -> EnvelopeBody {
+        self.ask(
+            "new",
+            serde_json::json!({
+                "plugin": "markdown",
+                "arguments": [file],
+                "directory": directory.to_string_lossy(),
+                "activate": true,
+            }),
+        )
+    }
+
+    /// What the cursor's pane keeps: its title and its state.
+    fn kept(&self) -> (String, String) {
+        self.model(|model| {
+            let plugin = (model.cursor_pane_id())
+                .and_then(|pane| model.pane_plugin(pane))
+                .expect("the pane's plugin");
+            (
+                plugin.title.clone(),
+                plugin.state.as_str().unwrap_or_default().to_string(),
+            )
+        })
+    }
+
     fn type_text(&self, text: &str) {
         for character in text.chars() {
             self.key(Key::Character(character.to_string()));
@@ -134,7 +201,6 @@ impl Opened {
 }
 
 #[test]
-#[ignore = "needs the extension built for wasm32-wasip2: scripts/check-extension.sh"]
 fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_command() {
     let directory = std::env::temp_dir().join(format!("hzb-ext-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -171,7 +237,7 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
     let state = format!("{{path: some({:?})}}", first.to_string_lossy());
     opened.shell.create_plugin(
         PluginPane {
-            name: "markdown-extension".to_string(),
+            name: "markdown".to_string(),
             title: "Markdown".to_string(),
             state: serde_json::Value::String(state),
         },
@@ -250,7 +316,7 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
     std::fs::write(directory.join("third.md"), "# Three\n\n[on](second.md)\n").unwrap();
     let new = |arguments: serde_json::Value| {
         serde_json::json!({
-            "plugin": "markdown-extension",
+            "plugin": "markdown",
             "arguments": arguments,
             "directory": directory.to_string_lossy(),
             "activate": true,
@@ -336,13 +402,12 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
 
     // What is saved of the pane: the extension's name and its state.
     let saved = opened.model(|model| model.to_persisted_json().unwrap());
-    assert!(saved.contains("markdown-extension"), "{saved}");
+    assert!(saved.contains("markdown"), "{saved}");
     assert!(saved.contains("first.md"), "{saved}");
     let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[test]
-#[ignore = "needs the extension built for wasm32-wasip2: scripts/check-extension.sh"]
 fn a_package_the_configuration_names_is_read_on_reload_and_again_when_built() {
     let directory = std::env::temp_dir().join(format!("hzb-ext-reload-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -381,7 +446,7 @@ fn a_package_the_configuration_names_is_read_on_reload_and_again_when_built() {
         let answer = opened.shell.control(&ControlRequest::Invoke(Invoke {
             command: "new".to_string(),
             args: serde_json::json!({
-                "plugin": "markdown-extension",
+                "plugin": "markdown",
                 "arguments": ["first.md"],
                 "directory": directory.to_string_lossy(),
                 "activate": true,
@@ -423,7 +488,6 @@ fn a_package_the_configuration_names_is_read_on_reload_and_again_when_built() {
 }
 
 #[test]
-#[ignore = "needs the extension built for wasm32-wasip2: scripts/check-extension.sh"]
 fn an_extension_with_nothing_happening_has_nothing_to_draw() {
     use std::task::{Context, Waker};
 
@@ -459,7 +523,7 @@ fn an_extension_with_nothing_happening_has_nothing_to_draw() {
     let state = format!("{{path: some({:?})}}", file.to_string_lossy());
     shell.create_plugin(
         PluginPane {
-            name: "markdown-extension".to_string(),
+            name: "markdown".to_string(),
             title: "Markdown".to_string(),
             state: serde_json::Value::String(state),
         },
@@ -515,5 +579,75 @@ fn an_extension_with_nothing_happening_has_nothing_to_draw() {
         std::thread::sleep(Duration::from_millis(5));
     }
     still(&mut live, "never still again");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The Markdown view the shell comes with is this extension: what
+/// `tests/markdown.rs` holds the view to, through a pane.
+#[test]
+fn the_shell_s_own_markdown_view_is_the_extension() {
+    let directory = std::env::temp_dir().join(format!("hzb-ext-own-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("index.md"),
+        "---\ntitle: Index\nwritten: 2026-11-08\n---\n\nSee [a](a.md), [code](src/lib.rs).\n",
+    )
+    .unwrap();
+    std::fs::write(directory.join("a.md"), "---\ntitle: Page A\n---\nbody\n").unwrap();
+    let opened = open();
+    let tabs = |opened: &Opened| opened.model(Workspace::tab_count);
+
+    // A file there is not is refused; one there is, shown in a new tab
+    // named for it.
+    let missing = opened.new_markdown(&directory, "later.md");
+    assert!(matches!(missing, EnvelopeBody::Error(_)), "{missing:?}");
+    let answer = opened.new_markdown(&directory, "index.md");
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    opened.until("the file", || opened.text().contains("written 2026-11-08"));
+    opened.until("the title", || opened.kept().0 == "index.md");
+    assert_eq!(tabs(&opened), 2);
+
+    // A link that is not to a Markdown file stays put, with a notice.
+    let (x, y) = opened.middle(opened.all("link")[1]);
+    click_at(&opened.app, x, y);
+    opened.until("the notice", || {
+        opened.text().contains("Not a Markdown file: src/lib.rs")
+    });
+    assert!(opened.kept().1.contains("index.md"));
+
+    // A link to one opens in place: the pane's file moves with it, and
+    // the back key returns.
+    let (x, y) = opened.middle(opened.all("link")[0]);
+    click_at(&opened.app, x, y);
+    opened.until("the page", || opened.text().contains("Page A"));
+    opened.until("the state", || opened.kept().1.contains("a.md"));
+    assert_eq!(opened.kept().0, "a.md");
+    opened.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+        key: Key::Named(NamedKey::Backspace),
+        code: keyboard_types::Code::Backspace,
+        modifiers: Modifiers::default(),
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+        text: None,
+    }));
+    opened.until("the index again", || {
+        opened.text().contains("written 2026-11-08")
+    });
+    opened.until("the state again", || opened.kept().1.contains("index.md"));
+
+    // Asked for a file a pane shows already, that pane is the one.
+    let answer = opened.new_markdown(&directory, "index.md");
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    assert_eq!(tabs(&opened), 2);
+
+    // A file that went away is said in the pane, and one written in its
+    // place is shown.
+    std::fs::remove_file(directory.join("index.md")).unwrap();
+    opened.until("the file gone", || opened.text().contains("index.md: "));
+    std::fs::write(directory.join("index.md"), "---\ntitle: Now\n---\n").unwrap();
+    opened.until("the file back", || opened.text().contains("Now"));
+    assert_eq!(tabs(&opened), 2);
     let _ = std::fs::remove_dir_all(&directory);
 }
