@@ -133,6 +133,24 @@ Four amendments settled after v1 shipped and was exercised end-to-end:
    external pane reference) and sent as an explicit target, keeping
    the explicit-targets rule intact.
 
+## Plugins on the command line
+
+A new pane is one command, and the plugin it shows is that command's
+argument: `horizon new <plugin> [<argument>...] [--split] [--active]`.
+The arguments are what the plugin says its pane is made from
+(`docs/extension-boundary-design.md`): the client sends them as they
+were typed, with its working directory, and the shell, which knows
+their types, takes a file among them as a path from that directory. A
+pane that shows the same already is made again in its place. Built so
+far for extensions; the built-in views still have subcommands of their
+own (`new-terminal`, `new-agent`, `markdown`, `preview`, `wiki`), which
+this takes the place of.
+
+A subcommand that is not one of the client's own is a command of the
+plugin the cursor's pane shows, by the name the palette lists it under
+(`horizon back`): the same commands, delivered the same way, as inside
+Horizon. The client's own subcommands come first.
+
 ## Deferred
 
 - **Subscription streams** — v2, additive (see above).

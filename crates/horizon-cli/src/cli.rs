@@ -88,6 +88,23 @@ pub enum Subcommand {
         split: Option<SplitFlag>,
         activate: bool,
     },
+    /// A new pane of a plugin: `arguments` are what the plugin's pane is
+    /// made from, as the plugin declares them (a file is a path, taken
+    /// from `directory`, the caller's working directory, which
+    /// [`crate::run`] fills in; `parse` leaves it empty).
+    New {
+        plugin: String,
+        arguments: Vec<String>,
+        directory: PathBuf,
+        split: Option<SplitFlag>,
+        activate: bool,
+    },
+    /// A command of the plugin the cursor's pane shows, by the name the
+    /// palette lists it under: any subcommand that is not one of this
+    /// program's own.
+    PluginCommand {
+        name: String,
+    },
     Attach {
         session_id: String,
         activate: bool,
@@ -179,6 +196,7 @@ Subcommands:\n  \
   preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]\n  \
   markdown <path> [--split [<session-id>]] [--active]\n  \
   wiki [<page>] [--split [<session-id>]] [--active]\n  \
+  new <plugin> [<argument>...] [--split [<session-id>]] [--active]\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \
   terminate-all-detached\n  \
@@ -193,7 +211,8 @@ Subcommands:\n  \
   reload-config\n  \
   open-terminal-in-session-directory\n  \
   sessions\n  \
-  state";
+  state\n  \
+  <command>    a command of the plugin the cursor's pane shows";
 
 /// Parses `argv` (already stripped of `argv[0]`). Global flags
 /// (`--socket`/`--json`/`--yes`/`--prompt`/`--role`/`--split`/`--active`)
@@ -262,6 +281,16 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             Subcommand::Wiki {
                 page,
                 path: PathBuf::new(),
+                split: options.split.take(),
+                activate: std::mem::take(&mut options.active),
+            }
+        }
+        "new" => {
+            let plugin = next_required(&mut positionals, "new", "plugin")?;
+            Subcommand::New {
+                plugin,
+                arguments: positionals.by_ref().collect(),
+                directory: PathBuf::new(),
                 split: options.split.take(),
                 activate: std::mem::take(&mut options.active),
             }
@@ -357,6 +386,14 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             reject_extra(&mut positionals, "state")?;
             Subcommand::State
         }
+        // Not one of this program's own: a plugin's command, which the
+        // running Horizon knows.
+        other if !other.starts_with('-') => {
+            reject_extra(&mut positionals, other)?;
+            Subcommand::PluginCommand {
+                name: other.to_string(),
+            }
+        }
         other => return Err(UsageError(format!("unknown subcommand: {other}"))),
     };
 
@@ -436,7 +473,8 @@ pub fn resolved_split_for(
         | Subcommand::NewAgent { split, .. }
         | Subcommand::Preview { split, .. }
         | Subcommand::Markdown { split, .. }
-        | Subcommand::Wiki { split, .. } => resolve_split(split.clone(), env_session_id),
+        | Subcommand::Wiki { split, .. }
+        | Subcommand::New { split, .. } => resolve_split(split.clone(), env_session_id),
         _ => Ok(None),
     }
 }
@@ -969,8 +1007,36 @@ mod tests {
     }
 
     #[test]
-    fn unknown_subcommand_is_a_usage_error() {
-        assert!(parse(&args(&["frobnicate"])).is_err());
+    fn a_subcommand_that_is_not_this_program_s_is_a_plugin_s_command() {
+        assert_eq!(
+            parse(&args(&["back"])).unwrap().subcommand,
+            Subcommand::PluginCommand {
+                name: "back".to_string()
+            }
+        );
+        // (A plugin's command takes nothing yet.)
+        assert!(parse(&args(&["back", "now"])).is_err());
+    }
+
+    #[test]
+    fn new_takes_a_plugin_its_arguments_a_split_and_active() {
+        let parsed = parse(&args(&["new", "markdown", "notes/index.md", "--active"])).unwrap();
+        assert_eq!(
+            parsed.subcommand,
+            Subcommand::New {
+                plugin: "markdown".to_string(),
+                arguments: vec!["notes/index.md".to_string()],
+                directory: PathBuf::new(),
+                split: None,
+                activate: true,
+            }
+        );
+        let split = parse(&args(&["new", "board", "--split"])).unwrap();
+        assert_eq!(
+            resolved_split_for(&split.subcommand, Some("pane-session".to_string())),
+            Ok(Some("pane-session".to_string()))
+        );
+        assert!(parse(&args(&["new"])).is_err());
     }
 
     #[test]

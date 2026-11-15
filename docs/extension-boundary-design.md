@@ -261,8 +261,13 @@ The decisions and who made them are on board #76. What they come to:
   where the CLI runs. The CLI asks the running Horizon for the commands
   and their types over the control socket.
 - **A new pane's state is made by a function the extension exports**
-  (`create`), whose parameters the host asks for the same way. Built so
-  far: one `file` parameter, asked for from the view chooser. The
+  (`create`), whose parameters the host asks for the same way. Making a
+  pane is the host's one command, the plugin its argument: the view
+  chooser inside Horizon, `horizon new <plugin> <arguments>` on the
+  command line (`docs/cli-control-plane-design.md`). An extension's own
+  commands are only what is its own, and reach the command line by
+  their names. Built so far: one `file` parameter, asked for with the
+  file finder or taken as a path. The
   extension is instantiated for the question, `create` is called with the
   file, and the state it gives is what the new pane is mounted on
   (`Extension::create`). The manifest's `[create.<parameter>]` says how a
@@ -313,4 +318,4 @@ The decisions and who made them are on board #76. What they come to:
 
 Open: keeping a plugin's CSS to its own tree; how the boundary is versioned;
 where extensions live and how they are built; the preview pane as one of
-them; a command's parameters and a pane made from the command line.
+them; a command's parameters; the built-in views made by the same command.

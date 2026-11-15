@@ -34,6 +34,17 @@ pub enum Command {
         split: Option<(SessionId, SplitAxis)>,
         activate: bool,
     },
+    /// A new pane of the plugin named: `arguments` are what its pane is
+    /// made from, a file among them a path from `directory`.
+    New {
+        plugin: String,
+        arguments: Vec<String>,
+        directory: PathBuf,
+        split: Option<(SessionId, SplitAxis)>,
+        activate: bool,
+    },
+    /// The command named, of the plugin the cursor's pane shows.
+    PluginCommand(String),
     Attach {
         session_id: SessionId,
         activate: bool,
@@ -84,6 +95,14 @@ pub fn parse(invoke: &Invoke) -> Result<Command, String> {
             split: optional_session_id_arg(args, "split")?,
             activate: activate_arg(args)?,
         },
+        "new" => Command::New {
+            plugin: required_string_arg(args, "plugin")?,
+            arguments: string_list_arg(args, "arguments")?,
+            directory: required_string_arg(args, "directory")?.into(),
+            split: optional_session_id_arg(args, "split")?,
+            activate: activate_arg(args)?,
+        },
+        "plugin-command" => Command::PluginCommand(required_string_arg(args, "name")?),
         "attach" => Command::Attach {
             session_id: session_id_arg(args, "session_id")?,
             activate: activate_arg(args)?,
@@ -234,6 +253,18 @@ fn approval_identity_arg(args: &serde_json::Value) -> Result<ToolCallIdentity, S
 /// rather than a typed wrapper. The `send` arm enforces non-emptiness
 /// separately (empty input is rejected at the CLI layer already; this is
 /// defensive).
+/// Parses a list of strings; none when the key is left out.
+fn string_list_arg(args: &serde_json::Value, key: &str) -> Result<Vec<String>, String> {
+    let said = || format!("`{key}` must be a list of strings");
+    match args.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+        Some(serde_json::Value::Array(items)) => (items.iter())
+            .map(|item| item.as_str().map(str::to_string).ok_or_else(said))
+            .collect(),
+        Some(_) => Err(said()),
+    }
+}
+
 fn required_string_arg(args: &serde_json::Value, key: &str) -> Result<String, String> {
     match args.get(key) {
         Some(serde_json::Value::String(raw)) => Ok(raw.clone()),

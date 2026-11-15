@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use horizon::workspace::{Opening, Placement, Shell, Spawn, css, view};
+use horizon_control::contract::{EnvelopeBody, Invoke};
+use horizon_control::host::executor::ControlRequest;
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
@@ -216,6 +218,74 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
         plugin.state.as_str().unwrap_or_default().to_string()
     });
     assert!(state.contains("second.md"), "{state}");
+
+    // The same from the command line: a pane of the extension made on a
+    // file named from where the caller is, and the extension's command
+    // by its name.
+    let ask = |command: &str, args: serde_json::Value| {
+        let answer = opened.shell.control(&ControlRequest::Invoke(Invoke {
+            command: command.to_string(),
+            args,
+        }));
+        opened.app.run_effects();
+        opened.app.resolve();
+        answer
+    };
+    std::fs::write(directory.join("third.md"), "# Three\n\n[on](second.md)\n").unwrap();
+    let new = |arguments: serde_json::Value| {
+        serde_json::json!({
+            "plugin": "markdown-extension",
+            "arguments": arguments,
+            "directory": directory.to_string_lossy(),
+            "activate": true,
+        })
+    };
+    let answer = ask("new", new(serde_json::json!(["third.md"])));
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    opened.until("the pane on the third file", || {
+        opened.text().contains("Three")
+    });
+    let third = opened
+        .model(|model| model.cursor_pane_id())
+        .expect("the pane made");
+    assert_ne!(third, made);
+    let (x, y) = opened.middle(*opened.all("link").last().expect("the link"));
+    click_at(&opened.app, x, y);
+    opened.until("the link followed", || {
+        opened.model(|model| {
+            let plugin = model.pane_plugin(third).expect("the pane's plugin");
+            plugin
+                .state
+                .as_str()
+                .unwrap_or_default()
+                .contains("second.md")
+        })
+    });
+    let answer = ask("plugin-command", serde_json::json!({ "name": "back" }));
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    opened.until("back on the third file", || {
+        opened.model(|model| {
+            let plugin = model.pane_plugin(third).expect("the pane's plugin");
+            plugin
+                .state
+                .as_str()
+                .unwrap_or_default()
+                .contains("third.md")
+        })
+    });
+    // What is not there is said.
+    let refused = [
+        ask("new", new(serde_json::json!(["missing.md"]))),
+        ask("new", new(serde_json::json!([]))),
+        ask("plugin-command", serde_json::json!({ "name": "no-such" })),
+        ask(
+            "new",
+            serde_json::json!({ "plugin": "no-such", "directory": "/", "activate": false }),
+        ),
+    ];
+    for answer in refused {
+        assert!(matches!(answer, EnvelopeBody::Error { .. }), "{answer:?}");
+    }
 
     // What is saved of the pane: the extension's name and its state.
     let saved = opened.model(|model| model.to_persisted_json().unwrap());

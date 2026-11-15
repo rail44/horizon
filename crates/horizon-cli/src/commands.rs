@@ -28,6 +28,8 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::Preview { .. } => "preview",
         Subcommand::Markdown { .. } => "markdown",
         Subcommand::Wiki { .. } => "wiki",
+        Subcommand::New { .. } => "new",
+        Subcommand::PluginCommand { .. } => "plugin-command",
         Subcommand::Attach { .. } => "attach",
         Subcommand::TerminateSession { .. } => "terminate-session",
         Subcommand::TerminateAllDetached => "terminate-all-detached",
@@ -115,6 +117,27 @@ pub fn to_request(
             command_name,
             file_view_args(path, None, resolved_split, *activate),
         ),
+        Subcommand::New {
+            plugin,
+            arguments,
+            directory,
+            activate,
+            ..
+        } => {
+            let mut args = serde_json::json!({
+                "plugin": plugin,
+                "arguments": arguments,
+                "directory": directory.display().to_string(),
+                "activate": activate,
+            });
+            if let Some(split) = resolved_split {
+                args["split"] = serde_json::Value::String(split.to_string());
+            }
+            invoke(command_name, args)
+        }
+        Subcommand::PluginCommand { name } => {
+            invoke(command_name, serde_json::json!({ "name": name }))
+        }
         Subcommand::Attach {
             session_id,
             activate,
@@ -360,6 +383,43 @@ mod tests {
                 "activate": true
             })
         );
+    }
+
+    #[test]
+    fn new_sends_the_plugin_its_arguments_and_where_the_caller_is() {
+        let new = Subcommand::New {
+            plugin: "markdown".to_string(),
+            arguments: vec!["index.md".to_string()],
+            directory: std::path::PathBuf::from("/notes"),
+            split: Some(SplitFlag::Here),
+            activate: false,
+        };
+        let Request::Invoke(invoke) = to_request(&new, Some("resolved-session"), None) else {
+            panic!("expected an invoke");
+        };
+        assert_eq!(invoke.command, "new");
+        assert_eq!(
+            invoke.args,
+            serde_json::json!({
+                "plugin": "markdown",
+                "arguments": ["index.md"],
+                "directory": "/notes",
+                "split": "resolved-session",
+                "activate": false
+            })
+        );
+    }
+
+    #[test]
+    fn a_plugin_s_command_is_sent_by_its_name() {
+        let back = Subcommand::PluginCommand {
+            name: "back".to_string(),
+        };
+        let Request::Invoke(invoke) = to_request(&back, None, None) else {
+            panic!("expected an invoke");
+        };
+        assert_eq!(invoke.command, "plugin-command");
+        assert_eq!(invoke.args, serde_json::json!({ "name": "back" }));
     }
 
     fn new_agent(prompt: Option<&str>, split: Option<SplitFlag>, activate: bool) -> Subcommand {

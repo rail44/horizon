@@ -8,9 +8,10 @@ use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::control_invoke::{self, Command};
 use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_workspace::commands::{CommandId, core_commands};
-use horizon_workspace::{PaneId, SessionId, SessionKind, Workspace};
+use horizon_workspace::{PaneId, PluginPane, SessionId, SessionKind, Workspace};
 
 use super::{Shell, Start, plugins};
+use crate::extension::Creates;
 use crate::preview::Target;
 
 /// The answer to a command this shell has no view or runtime for yet.
@@ -136,6 +137,19 @@ impl Shell {
                 self.execute(command);
                 done
             }
+            Command::New {
+                plugin,
+                arguments,
+                directory,
+                split,
+                activate,
+            } => self.new_pane(&plugin, &arguments, &directory, split, activate),
+            Command::PluginCommand(name) => match self.execute_plugin(&name) {
+                true => done,
+                false => Err(format!(
+                    "unknown command `{name}`: not one of the plugin the cursor's pane shows"
+                )),
+            },
             Command::Markdown {
                 path,
                 split,
@@ -172,6 +186,72 @@ impl Shell {
 
     /// A pane on the file at `path`, shown as the document view `name`
     /// shows one: the pane that shows it already, or a new one.
+    /// A new pane of the plugin `name`, made from `arguments` as the
+    /// plugin says its pane is made (a file is a path from `directory`).
+    /// A pane that shows the same already is made again in its place.
+    fn new_pane(
+        &self,
+        name: &str,
+        arguments: &[String],
+        directory: &std::path::Path,
+        split: Option<(SessionId, horizon_workspace::SplitAxis)>,
+        activate: bool,
+    ) -> Result<EnvelopeBody, String> {
+        let extension = plugins::extension(name).ok_or_else(|| {
+            let known: Vec<&str> = (plugins::extensions().iter())
+                .map(|extension| extension.name)
+                .collect();
+            format!("unknown plugin `{name}` (there are: {})", known.join(", "))
+        })?;
+        let state = match (&extension.creates, arguments) {
+            (None, []) => serde_json::Value::Null,
+            (None, _) => return Err(format!("`{name}` takes no arguments")),
+            (Some(Creates::File { .. }), [path]) => {
+                let path = directory.join(path);
+                if !path.is_file() {
+                    return Err(format!("not a file: {}", path.display()));
+                }
+                serde_json::Value::String(extension.create(&path)?)
+            }
+            (Some(Creates::File { .. }), _) => return Err(format!("`{name}` takes one file")),
+        };
+        let made = PluginPane {
+            name: extension.name.to_string(),
+            title: extension.title.clone(),
+            state,
+        };
+        let shown = self.model.with_untracked(|model| {
+            (model.all_pane_ids().into_iter()).find(|pane| {
+                (model.pane_plugin(*pane))
+                    .is_some_and(|plugin| plugin.name == made.name && plugin.state == made.state)
+            })
+        });
+        if let Some(pane) = shown {
+            self.remake_pane(pane);
+            if activate {
+                self.change(|model| {
+                    if let Some((tab, pane)) = model.pane_position(pane) {
+                        model.activate_pane_index(tab, pane);
+                    }
+                });
+            }
+            return Ok(EnvelopeBody::Ok { session_id: None });
+        }
+        let mut opened = None;
+        self.model_changed(|model| {
+            opened = match split {
+                Some((target, axis)) => model.split_session_with_view(target, made, axis, activate),
+                None => Some(model.open_tab_with_view_activated(made, activate)),
+            };
+        });
+        self.reconcile();
+        opened.ok_or("unknown split target session")?;
+        if activate {
+            self.focus_active();
+        }
+        Ok(EnvelopeBody::Ok { session_id: None })
+    }
+
     fn open_document(
         &self,
         name: &str,

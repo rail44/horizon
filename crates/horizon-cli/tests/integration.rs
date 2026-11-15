@@ -590,7 +590,7 @@ fn new_agent_carries_the_issuer_session_id_in_the_wire_args() {
 
 #[test]
 fn usage_error_exits_with_code_two() {
-    let args: Vec<String> = vec!["not-a-real-subcommand".to_string()];
+    let args: Vec<String> = vec!["new".to_string()];
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut stdin = std::io::empty();

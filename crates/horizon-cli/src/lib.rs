@@ -108,6 +108,11 @@ pub fn run(
         *path = cli::absolute_path(path, &cwd);
     }
 
+    // `new`: a file among the arguments is a path from where the caller is.
+    if let cli::Subcommand::New { directory, .. } = &mut parsed.subcommand {
+        *directory = std::env::current_dir().unwrap_or_default();
+    }
+
     // `wiki`: the caller's project, not the shell's, names the wiki.
     if let cli::Subcommand::Wiki { page, path, .. } = &mut parsed.subcommand {
         let cwd = std::env::current_dir().unwrap_or_default();
