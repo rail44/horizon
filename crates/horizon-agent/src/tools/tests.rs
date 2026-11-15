@@ -3060,10 +3060,10 @@ fn an_area_grant_over_a_linked_worktree_commits_and_stays_sandboxed() {
     fs::remove_dir_all(fixture_root).unwrap();
 }
 
-/// Board #38: the GitOperation extended grant
+/// Board #38: an area grant over a gitdir
 /// excludes `hooks` and `config` from writing. This end-to-end test verifies
 /// that a compound command containing writes to both `.git/config` and
-/// `.git/hooks/` — which reaches the judge like any other GitOperation —
+/// `.git/hooks/` — under an area the session was approved for —
 /// is denied those writes under the extended grant, while the same approved
 /// execution's normal `git commit` (objects/refs writes) succeeds. The
 /// exclusion is based on the resolved gitdir, not a literal `.git` path name.

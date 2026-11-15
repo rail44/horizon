@@ -151,8 +151,8 @@ const NESTED_REPOSITORY_SCAN_LIMIT: usize = 1024;
 
 /// Adds the Git metadata a suggested writable tree contains to that grant's
 /// `excluded_subpaths`, so a filesystem retry never opens Git metadata
-/// (board #71); Git metadata is written only through a `GitOperation`
-/// approval. Covered paths are the session repository's metadata as
+/// (board #71); Git metadata is written only through an area the session
+/// was approved for (`docs/sandbox-area-grants-design.md`). Covered paths are the session repository's metadata as
 /// `git_metadata_paths` resolves it from `workspace_root` (a plain
 /// checkout's `.git`, or a linked worktree's `.git` pointer, its gitdir, and
 /// the common gitdir), plus a `.git` entry at the tree itself or at one of

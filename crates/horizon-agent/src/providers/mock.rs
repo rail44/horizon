@@ -358,11 +358,10 @@ fn respond_to_user_message(
     }
     if lower_text.contains("git operation") {
         // Test hook for a `bash` call that still needs approval in every
-        // session: a Git subcommand outside the read-only list is a
-        // metadata write (`GitOperation` with an engaged sandbox, the
-        // host-execution approval without one). Creating a tag is a real
-        // ref write, so it keeps needing approval as the read-only forms
-        // grow; its only effect is one lightweight tag in the session's
+        // session: creating a tag is a real ref write, which an engaged
+        // sandbox refuses until the session holds the repository's area,
+        // and which takes the host-execution approval without a sandbox.
+        // Its only effect is one lightweight tag in the session's
         // repository (the e2e fixtures are throwaway repositories).
         let call_id = ToolCallId("mock-bash-1".to_string());
         let occurrence_id = OccurrenceId::new();

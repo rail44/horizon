@@ -119,7 +119,7 @@ pub(crate) fn metadata_writable_roots(workspace_root: &Path) -> Result<Vec<PathB
     Ok(vec![git_dir, common_dir])
 }
 
-/// Subpaths within a resolved gitdir that a GitOperation extended grant
+/// Subpaths within a resolved gitdir that an area grant over that tree
 /// excludes from writing, even though the parent tree is ReadWrite. These are
 /// the host-escalation vectors: `hooks/` executes arbitrary code on the next
 /// host-side git invocation, and `config` can set `core.fsmonitor`,
@@ -145,10 +145,10 @@ pub(crate) fn validated_metadata_grants(
     Ok(metadata_grants(&current))
 }
 
-/// The grant a GitOperation approval applies to each metadata root: the
-/// whole tree read-write except [`GIT_METADATA_EXCLUDED_SUBPATHS`]. Both the
-/// sandbox spawn and the approval judge's input are built from this, so the
-/// judge is asked about exactly the grant the sandbox enforces.
+/// The grant an approved area over a metadata root carries: the whole tree
+/// read-write except [`GIT_METADATA_EXCLUDED_SUBPATHS`]. The approval path
+/// and the sandbox spawn are both built from this, so what the judge is
+/// asked about is exactly the grant the sandbox enforces.
 pub(crate) fn metadata_grants(roots: &[PathBuf]) -> Vec<FilesystemGrant> {
     let excluded: Vec<PathBuf> = GIT_METADATA_EXCLUDED_SUBPATHS
         .iter()
@@ -202,8 +202,8 @@ mod tests {
 
     #[test]
     fn validated_metadata_grants_exclude_hooks_and_config() {
-        // Board #38: the GitOperation extended
-        // grant excludes hooks/ and config from writing — the
+        // Board #38: the area grant over a gitdir
+        // excludes hooks/ and config from writing — the
         // host-escalation vectors. The exclusion is based on the resolved
         // gitdir, not a literal `.git` path name.
         let fixture = linked_worktree_fixture("exclusion");

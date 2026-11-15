@@ -47,16 +47,16 @@ research doc).
    does not enter the classification; see
    `docs/sandbox-perimeter-design.md`.
 2. **Judge at the boundary.** Actions that cross the containment
-   boundary — Git metadata writes (`GitOperation`), `fs` reads outside
-   the root, `fs` writes inside its `.git`, network egress beyond the
-   allowlist, future MCP/external tools — go to a two-stage model
-   classifier that either auto-approves or escalates to the human. The
-   judge narrows what reaches the human; it never widens what the
-   rules and sandbox would deny (the field-consensus asymmetry).
-   *Proposed 2026-11-15:* the session gains a way to **ask** for a
-   writable area instead of reacting to a denial or having its command
-   syntax guessed, and `GitOperation` becomes a special case that goes
-   away; see `docs/sandbox-area-grants-design.md`.
+   boundary — a writable **area** a session asks for
+   (`SandboxAreaGrant`, which is also what a refused command's retry
+   offers), `fs` reads outside the root, `fs` writes inside its `.git`,
+   network egress beyond the allowlist, future MCP/external tools — go to
+   a two-stage model classifier that either auto-approves or escalates to
+   the human. The judge narrows what reaches the human; it never widens
+   what the rules and sandbox would deny (the field-consensus asymmetry).
+   Since 2026-11-15 a session asks for an area before running, rather than
+   having its command's shell syntax guessed at; `GitOperation` was
+   removed with that change (`docs/sandbox-area-grants-design.md`).
 3. **Always human.** Irreversible/destructive operations and anything
    the judge flags. (The originally-planned denial-counting backstop —
    3 consecutive / 20 total escalations per turn — is dropped as of the

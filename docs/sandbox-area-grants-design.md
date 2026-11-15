@@ -185,13 +185,16 @@ written by two annotators only (`tools/output/annotations.rs:102,111`);
 `MachServiceGrant` record nothing. That is a gap against invariant 7
 ("Audit") of `docs/containment-denial-narrow-grants-design.md`.
 
-The fix is not per-kind: `dispatch_approval`
-(`tools/approval.rs:196-214`) receives `approval_source` for every kind
-already (`:91` human, `:139` judge) and each arm decides whether to use
-it. The record moves to one place — the approval's exit — so every kind,
-including the new one, carries `approval_source` and `approval_scope=area_grant`.
-A single test iterates all `ApprovalKind` variants and asserts the field
-is set.
+The fix is not per-kind, but it is also not a single point: a sandboxed
+approval's result is finished later by a detached thread, while a
+synchronous tool's is finished inside `ToolUpdate::execute`, so no one
+place sees both. What shipped (2026-11-15) is the closest honest
+equivalent: every `SandboxedApprovalOrigin` that came from an approval
+carries its `ApprovalSource`, and `SandboxedApprovalOrigin::annotate`
+stamps it before the per-origin fields, so the kinds that write Git,
+domain, mach-service and filesystem grants all record one. `Tier1Auto`
+names none, because no approval decided it. Two tests hold it: one over
+every origin, and one that each approved origin reaches the result.
 
 ## Open questions
 

@@ -48,11 +48,11 @@ gets a worktree only by entering one.
 - **The gitdir boundary**: a linked worktree's gitdir lives under the
   main checkout's `.git/worktrees/<id>`, outside the worktree's writable
   root; a plain checkout's `.git/` is inside its root and excluded through
-  `writable_root_exclusions`. Either way `git commit` and friends need the
-  `GitOperation` approval
-  (`docs/containment-denial-narrow-grants-design.md`), whose grant on the
-  gitdir lifts the exclusion for that run and keeps `hooks/` and `config`
-  excluded.
+  `writable_root_exclusions`. Either way `git commit` and friends need
+  write access to the metadata as a **writable area** the session holds
+  (`ApprovalKind::SandboxAreaGrant`, `docs/sandbox-area-grants-design.md`),
+  whose grant on the gitdir lifts the exclusion and keeps `hooks/` and
+  `config` excluded.
 - **Enforcement of the exclusion** is the same as for a grant's
   `excluded_subpaths`: on Linux the seccomp supervisor denies write opens
   (`openat`/`openat2`, legacy `open`/`creat`) beneath the excluded path.
@@ -78,8 +78,7 @@ gets a worktree only by entering one.
 
 | tool | sandbox available | classification |
 |---|---|---|
-| `bash`, no git metadata write | yes | `Contained` → `SandboxedBash` |
-| `bash`, git metadata write | yes | `AlwaysAsk` → `GitOperation` approval (unchanged path) |
+| `bash`, including a git metadata write | yes | `Contained` → `SandboxedBash` (what it may not write is the sandbox's answer) |
 | `bash` | no | `AlwaysAsk` → `Standard` host-execution approval (fallback only) |
 | `fs_write`, `fs_edit` | either | `Contained` |
 
@@ -88,7 +87,8 @@ gets a worktree only by entering one.
 their classification does not depend on sandbox availability. The
 host-execution approval survives only where `horizon_sandbox::is_available()`
 is false; on a host with a working sandbox the approval kinds that can
-reach a human are `GitOperation`, outside-root filesystem paths,
+reach a human are `SandboxAreaGrant` (a session asking for an area, or a
+refused command's retry offering one), outside-root filesystem paths,
 `DomainGrant`/web, and `FilesystemGrant` denial retries.
 
 ### Writable range: the working tree, never the gitdir
@@ -112,11 +112,12 @@ tree or one of its direct children) carries those paths in its
 `excluded_subpaths` (board #71), so approving a retry never opens Git
 metadata.
 
-Git metadata writes keep the existing `GitOperation` path.
-`tools/bash/git.rs::metadata_writable_roots` already handles a plain
-checkout (a `.git` directory yields that directory as the metadata root),
-and the approved call runs sandboxed with that grant and the existing
-`hooks/`/`config` exclusions.
+Git metadata writes go through the area grant above.
+`tools/bash/git.rs::metadata_writable_roots` still owns discovering which
+paths are a repository's metadata (a plain checkout's `.git` directory
+yields that directory as the metadata root), so an area covering it gets
+the `hooks/`/`config` exclusions and the approved call runs sandboxed with
+that grant.
 
 ### `worktree_enter`
 

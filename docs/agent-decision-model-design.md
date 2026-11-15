@@ -90,7 +90,7 @@ candidate instead of a two-stage chat cascade.
 - **State.** A JSON object: `user_messages` (prior user messages, oldest
   first), `tool_call` (`tool`, the built-in tool's static description,
   and the raw `args`), `requested_filesystem_grants`, `requested_domains`,
-  `host_execution_requested`, `git_metadata_operation`. This is the same
+  `host_execution_requested`. This is the same
   input the chat prompt carried, and the same restriction holds: no tool
   results, no assistant prose. Because the arguments are a JSON value
   inside `state` and the instructions are a separate field, the
