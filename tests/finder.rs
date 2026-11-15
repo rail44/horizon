@@ -21,7 +21,7 @@ struct Opened {
 fn open(files: Vec<String>, theme: fn() -> Theme, size: (u32, u32)) -> Opened {
     let picked = Rc::new(RefCell::new(Vec::new()));
     let told = picked.clone();
-    let app = App::new(size.0, size.1, horizon_theme_css::CSS, move || {
+    let app = App::new(size.0, size.1, "Test", horizon_theme_css::CSS, move || {
         let finder = Finder {
             source: Source::of(files, Wake::default()),
             picked: Callback::new(move |path| told.borrow_mut().push(path)),

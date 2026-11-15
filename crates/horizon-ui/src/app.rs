@@ -36,7 +36,11 @@ impl Drop for App {
 impl App {
     /// Builds `view` once into a new document of `width` by `height`,
     /// styled by `css`.
-    pub fn new(width: u32, height: u32, css: &str, view: impl FnOnce() -> El) -> Self {
+    ///
+    /// The document's `title` is the window's name: the shell takes it from
+    /// the document when it creates the window, in place of whatever the
+    /// window's toolkit calls the window on its own.
+    pub fn new(width: u32, height: u32, title: &str, css: &str, view: impl FnOnce() -> El) -> Self {
         // One executor a thread; a second `App` on it finds it set.
         let _ = Executor::init_futures_executor();
         // A root of its own: not a child of whatever owner the thread had
@@ -58,7 +62,9 @@ impl App {
         enter(&shared);
         // The sheets of the views' CSS modules go in the head (`sheet.rs`).
         let body = el("body");
-        let html = el("html").child(el("head")).child(body);
+        let html = el("html")
+            .child(el("head").child(el("title").text(title)))
+            .child(body);
         with_document(|document| {
             let root = document.root_node().id;
             document.mutate().append_children(root, &[html.0]);

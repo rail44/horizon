@@ -72,7 +72,7 @@ fn open(items: Vec<Item>) -> Opened {
     let mut list = None;
     let mut told = None;
     let css = horizon_theme_css::CSS;
-    let app = App::new(600, 500, css, || {
+    let app = App::new(600, 500, "Test", css, || {
         // What the view is told of sessions, and what it says of them.
         let (activity, bound) = (RwSignal::new(HashMap::new()), RwSignal::new(Vec::new()));
         told = Some((activity, bound));

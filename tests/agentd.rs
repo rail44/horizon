@@ -189,7 +189,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
         &directory.join("control.sock"),
     );
     let mut shell = None;
-    let app = App::new(1200, 800, workspace::css(), || {
+    let app = App::new(1200, 800, "Test", workspace::css(), || {
         let spawn: workspace::Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let opening = Opening {
             agents: Some(agentd.spawn()),

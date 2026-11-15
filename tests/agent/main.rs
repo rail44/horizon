@@ -34,7 +34,7 @@ fn open(session: &Session) -> Opened {
     let mut given = None;
     // The theme with no config file, at its 13 px: the measurements below
     // are the type scale's at that size.
-    let app = App::new(900, 700, horizon_theme_css::CSS, || {
+    let app = App::new(900, 700, "Test", horizon_theme_css::CSS, || {
         let shown = sample::Given::new_local(None);
         given = Some(shown);
         let (root, state) = view(shown.into(), move |asked| log.borrow_mut().push(asked));

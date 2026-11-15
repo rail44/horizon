@@ -130,7 +130,7 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
         ..horizon_config::RawConfig::default()
     };
     let mut shell = None;
-    let app = App::new(1200, 800, css(), || {
+    let app = App::new(1200, 800, "Test", css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let (root, built) = view(
             spawn,

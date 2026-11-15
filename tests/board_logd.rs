@@ -144,7 +144,7 @@ fn a_task_added_in_the_list_is_written_and_one_written_elsewhere_arrives() {
 
     let mut list: Option<BoardList> = None;
     let css = horizon_theme_css::CSS;
-    let app = App::new(600, 500, css, || {
+    let app = App::new(600, 500, "Test", css, || {
         let source = Source::Root(project.clone());
         let (root, state) = view(
             source,

@@ -46,7 +46,7 @@ fn open_at(style: &str) -> Opened {
     let opened_urls = Rc::new(RefCell::new(Vec::new()));
     let (given, log) = (session.clone(), opened_urls.clone());
     let mut terminal = None;
-    let app = App::new(900, 540, "", || {
+    let app = App::new(900, 540, "Test", "", || {
         let look = RwSignal::new(Theme::built_in().terminal());
         followed = Some(look);
         let (root, state) = build(TerminalView {

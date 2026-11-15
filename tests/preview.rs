@@ -47,7 +47,7 @@ struct Opened {
 /// theme and the pane's own rules and none of the view's.
 fn open_at(path: &std::path::Path, name: &str) -> Opened {
     let mut made = None;
-    let app = App::new(600, 500, horizon_theme_css::CSS, || {
+    let app = App::new(600, 500, "Test", horizon_theme_css::CSS, || {
         let target = RwSignal::new(None);
         let (root, preview) = view(target.into(), Background::default(), Wake::default());
         made = Some((root, preview, target));
@@ -378,7 +378,7 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
     use horizon_workspace::Workspace;
 
     let mut shell: Option<Shell> = None;
-    let app = App::new(1200, 800, css(), || {
+    let app = App::new(1200, 800, "Test", css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
         let (root, built) = shell_view(spawn, Opening::default());
         shell = Some(built);

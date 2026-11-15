@@ -54,7 +54,7 @@ fn open_at(name: &str, width: u32) -> Opened {
         .unwrap();
     let path = store.page_path("sandbox").unwrap();
     let mut wiki = None;
-    let app = App::new(width, 700, horizon_theme_css::CSS, || {
+    let app = App::new(width, 700, "Test", horizon_theme_css::CSS, || {
         let (root, state) = build(Wiki {
             path: Some(path),
             open_url: Rc::new(|_| {}),

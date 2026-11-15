@@ -83,9 +83,23 @@ pub fn text(app: &App) -> String {
     let document = app.document();
     let document = document.borrow();
     let top = document.root_element();
-    (top.children.iter())
-        .filter_map(|child| document.get_node(*child))
-        .filter(|node| (node.element_data()).is_some_and(|element| &*element.name.local == "body"))
-        .map(|body| body.text_content())
-        .collect()
+    // A view drawn straight into the page (not in a body of its own):
+    // everything outside the head, whose title is not words to show.
+    let (in_body, elsewhere): (Vec<&blitz_dom::Node>, Vec<&blitz_dom::Node>) = (top
+        .children
+        .iter())
+    .filter_map(|child| document.get_node(*child))
+    .partition(|node| (node.element_data()).is_some_and(|element| &*element.name.local == "body"));
+    let words = |nodes: &[&blitz_dom::Node]| -> String {
+        nodes
+            .iter()
+            .map(|node| node.text_content())
+            .collect::<Vec<_>>()
+            .concat()
+    };
+    if in_body.is_empty() {
+        words(&elsewhere)
+    } else {
+        words(&in_body)
+    }
 }

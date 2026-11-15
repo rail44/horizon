@@ -30,7 +30,7 @@ fn a_change_of_theme_reaches_a_view_through_its_variables() {
     let look = RwSignal::new(Theme::built_in());
     let mut line = None;
     let css = [CSS, ".line { height: var(--body-line); }"].concat();
-    let app = App::new(400, 300, &css, || {
+    let app = App::new(400, 300, "Test", &css, || {
         let element = el("div").class("line");
         line = Some(element);
         themed(move || look.get(), element)

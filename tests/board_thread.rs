@@ -88,7 +88,7 @@ fn open_at(items: Vec<Item>, task: u64, width: u32) -> Opened {
     let mut thread = None;
     // (Made on the page: a signal is its page's.)
     let mut given = None;
-    let app = App::new(width, 600, horizon_theme_css::CSS, || {
+    let app = App::new(width, 600, "Test", horizon_theme_css::CSS, || {
         let shown = RwSignal::new(task);
         given = Some(shown);
         let (root, state) = view(

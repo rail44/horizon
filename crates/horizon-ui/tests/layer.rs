@@ -15,11 +15,20 @@ const CSS: &str = "
     .row { display: flex; gap: 8px; }
 ";
 
-/// The text of every text node, in document order.
+/// The text of every text node, in document order. The head's title is
+/// the window's name, not words on the page.
 fn text(app: &App) -> String {
     let document = app.document();
     let document = document.borrow();
-    document.root_element().text_content()
+    (document.root_element().children.iter())
+        .filter_map(|child| document.get_node(*child))
+        .filter(|node| {
+            !node
+                .element_data()
+                .is_some_and(|element| &*element.name.local == "head")
+        })
+        .map(|node| node.text_content())
+        .collect()
 }
 
 fn children(app: &App, parent: El) -> Vec<NodeId> {
@@ -31,7 +40,7 @@ fn children(app: &App, parent: El) -> Vec<NodeId> {
 #[test]
 fn a_click_writes_a_signal_and_one_text_node_follows() {
     let count = RwSignal::new(0);
-    let app = App::new(800, 600, CSS, || {
+    let app = App::new(800, 600, "Test", CSS, || {
         el("div").class("column").child(
             el("div")
                 .class("button")
@@ -57,7 +66,7 @@ fn a_click_writes_a_signal_and_one_text_node_follows() {
 fn a_keyed_list_keeps_the_nodes_of_the_items_that_stay() {
     let items = RwSignal::new(vec![1u32, 2, 3]);
     let mut list = None;
-    let app = App::new(800, 600, CSS, || {
+    let app = App::new(800, 600, "Test", CSS, || {
         let column = el("div")
             .class("column")
             .child(el("div").text("before"))
@@ -108,7 +117,7 @@ impl horizon_ui::blitz_traits::shell::ShellProvider for Areas {
 fn the_input_methods_area_follows_what_is_typed() {
     use horizon_ui::blitz_traits::events::{BlitzImeEvent, UiEvent};
 
-    let app = App::new(800, 600, CSS, || {
+    let app = App::new(800, 600, "Test", CSS, || {
         el("div")
             .class("column")
             .child(el("input").attr("type", "text"))
@@ -164,7 +173,7 @@ fn thin_borders_survive_a_fractional_display_scale() {
         .row { padding: 4px 8px; border: 1px solid #d0d0d0; }
     ";
     let mut rows = Vec::new();
-    let app = App::new(1800, 1350, BORDERED, || {
+    let app = App::new(1800, 1350, "Test", BORDERED, || {
         let mut column = el("div").class("column");
         for row in 0..12 {
             let element = el("div").class("row").text(&format!("row {row}"));
@@ -201,7 +210,7 @@ fn rows_scrolled_out_of_a_list_do_not_take_the_clicks_above_it() {
     ";
     let (bar, row) = (RwSignal::new(0u32), RwSignal::new(0u32));
     let mut list = None;
-    let app = App::new(400, 300, SCROLLING, || {
+    let app = App::new(400, 300, "Test", SCROLLING, || {
         let rows = el("div").class("list").each(
             || (0..100u32).collect::<Vec<_>>(),
             |index| *index,
@@ -240,7 +249,7 @@ fn an_element_taken_out_of_the_page_has_no_box_once_the_box_around_it_is_gone() 
     let asked = Rc::new(RefCell::new(Vec::new()));
     let log = asked.clone();
     let mut parts = None;
-    let app = App::new(400, 300, CSS, || {
+    let app = App::new(400, 300, "Test", CSS, || {
         let kept = el("div").class("button").text("kept");
         let around = el("div").class("row").child(kept);
         // What a view of a pane in a tab not shown goes on asking.
@@ -265,7 +274,7 @@ fn an_element_taken_out_of_the_page_has_no_box_once_the_box_around_it_is_gone() 
 fn what_is_added_to_an_element_while_it_is_out_of_the_page_is_laid_out_when_it_is_back() {
     let shown = RwSignal::new(false);
     let mut parts = None;
-    let app = App::new(400, 300, CSS, || {
+    let app = App::new(400, 300, "Test", CSS, || {
         let kept = el("div")
             .class("row")
             .child(el("div").class("button").text("first"));
@@ -313,7 +322,7 @@ fn only_the_rows_a_mark_leaves_and_reaches_are_told_of_it() {
     let runs = Rc::new(RefCell::new(vec![0usize; 5]));
     let counted = runs.clone();
     let mut rows = Vec::new();
-    let app = App::new(400, 300, CSS, || {
+    let app = App::new(400, 300, "Test", CSS, || {
         let one = OneOf::new(move || chosen.get());
         let column = el("div").class("column");
         for index in 0..5 {

@@ -52,7 +52,7 @@ fn holder(held: El) -> El {
 /// Builds `view` as the page, and resolves it.
 fn page<T>(sheet: &str, view: impl FnOnce() -> (El, T)) -> (App, T) {
     let mut made = None;
-    let app = App::new(600, 400, sheet, || {
+    let app = App::new(600, 400, "Test", sheet, || {
         let (root, kept) = view();
         made = Some(kept);
         root

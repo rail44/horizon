@@ -82,7 +82,7 @@ impl Stage {
             true => window::fit(width, height),
             false => (width, height),
         };
-        let app = App::new(width, height, css, view);
+        let app = App::new(width, height, "Horizon", css, view);
         let mut stage = Self {
             app,
             size: (width, height),

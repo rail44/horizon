@@ -25,7 +25,7 @@ const HOST: &str = "
 /// that takes the focus.
 fn open(build: impl FnOnce(&Drags) -> El) -> App {
     let sheet = [horizon_theme_css::CSS, HOST].concat();
-    let app = App::new(400, 400, &sheet, || {
+    let app = App::new(400, 400, "Test", &sheet, || {
         let drags = Drags::default();
         let host = el("div")
             .class("host")
@@ -392,7 +392,7 @@ fn paint_the_gallery() {
 
     let out = std::env::var_os("HORIZON_GALLERY_OUT").expect("HORIZON_GALLERY_OUT");
     let (width, height) = (900u32, 840u32);
-    let app = App::new(width, height, horizon_theme_css::CSS, || {
+    let app = App::new(width, height, "Test", horizon_theme_css::CSS, || {
         themed(Theme::of_this_machine, horizon::parts::gallery())
     });
     app.resolve();

@@ -19,7 +19,7 @@ fn a_dropped_rows_handlers_and_layout_work_go_with_it() {
     let rows = RwSignal::new(vec![1u32, 2, 3]);
     let layouts = Rc::new(Cell::new(0));
     let counted = layouts.clone();
-    let app = App::new(400, 300, CSS, move || {
+    let app = App::new(400, 300, "Test", CSS, move || {
         el("div").each(
             move || rows.get(),
             |row| *row,
@@ -61,7 +61,7 @@ fn a_dropped_rows_handlers_and_layout_work_go_with_it() {
 fn a_long_list_builds_the_rows_near_the_view_and_lays_out_again_within_a_frame() {
     let built = RwSignal::new((0, 0));
     let mut list = None;
-    let app = App::new(400, 300, CSS, || {
+    let app = App::new(400, 300, "Test", CSS, || {
         let scroller = el("div").class("list");
         windowed(
             scroller,
@@ -107,7 +107,7 @@ fn a_signal_made_after_a_page_has_gone_is_not_that_pages_to_take_along() {
 
     // A page that has gone, with something of it still holding its owner
     // (work kept for after a layout, as a list keeps its rows' owner).
-    let earlier = App::new(400, 300, "", || {
+    let earlier = App::new(400, 300, "Test", "", || {
         let held = horizon_ui::reactive_graph::owner::Owner::current();
         each_layout(move |_| {
             let _ = &held;
@@ -120,7 +120,7 @@ fn a_signal_made_after_a_page_has_gone_is_not_that_pages_to_take_along() {
     let given = RwSignal::new(0);
     let runs = Rc::new(Cell::new(0));
     let counted = runs.clone();
-    let app = App::new(400, 300, "", move || {
+    let app = App::new(400, 300, "Test", "", move || {
         Effect::new(move |_| {
             given.get();
             counted.set(counted.get() + 1);

@@ -49,7 +49,7 @@ fn open(path: &Path) -> Opened {
     let log = opened.clone();
     let went = Rc::new(RefCell::new(Vec::new()));
     let gone = went.clone();
-    let app = App::new(800, 600, horizon_theme_css::CSS, || {
+    let app = App::new(800, 600, "Test", horizon_theme_css::CSS, || {
         let root = Markdown {
             path: Some(path.to_path_buf()),
             open_url: Rc::new(move |url: &str| log.borrow_mut().push(url.to_owned())),
