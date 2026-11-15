@@ -303,8 +303,9 @@ pub fn view_with(shown: Shown, ask: impl Fn(Asked) + 'static, column: Column) ->
     );
 
     // The view itself takes the focus, so that a press on the conversation
-    // leaves the field and Ctrl+C copies what is selected there; Enter
-    // goes back into the field, and Escape in it comes out again.
+    // leaves the field and Ctrl+C copies what is selected there. A
+    // character key or Enter goes back into the field, and Escape in it
+    // comes out again.
     let root = el("div").attr("tabindex", "0");
     let rows = RwSignal::new(1usize);
     state
@@ -386,12 +387,19 @@ pub fn view_with(shown: Shown, ask: impl Fn(Asked) + 'static, column: Column) ->
             if event.target != root.0 || key.is_composing {
                 return;
             }
+            let chord = key.modifiers.ctrl() || key.modifiers.alt() || key.modifiers.meta();
             match &key.key {
                 Key::Named(NamedKey::Enter) if key.modifiers.is_empty() => {
                     prevent_default();
                     state.field.focus();
                 }
                 Key::Named(NamedKey::Escape) if state.deny_pending() => stop_propagation(),
+                // A character key moves into the field, for the typing
+                // that follows.
+                Key::Character(_) if !chord => {
+                    prevent_default();
+                    state.field.focus();
+                }
                 _ => {}
             }
         })
