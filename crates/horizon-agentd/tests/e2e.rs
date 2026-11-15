@@ -2433,7 +2433,8 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
         );
         client.drain().await;
         drop(client);
-        assert!(wait_for_exit(&mut daemon.child).await.success());
+        let status = wait_for_exit(&mut daemon.child).await;
+        assert!(status.success(), "the drained daemon ended with {status:?}");
         let records = horizon_agent::persistence::event_log::read(&log)
             .unwrap()
             .records;

@@ -13,7 +13,7 @@ set -euo pipefail
 # Nothing else fails when that gating slips: the native build stays green,
 # so this check is the only thing that notices.
 #
-# Not wired into hooks/pre-commit.
+# A step of the quality gate (scripts/gate.sh).
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 target="wasm32-wasip2"

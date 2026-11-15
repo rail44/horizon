@@ -144,9 +144,10 @@ Write entries with `knowledge_write`. The fields:
 - `id` -- lowercase alphanumeric, hyphen-separated.
 - `description` -- one line (aim for under ~200 characters), shown in
   the knowledge index that every session reads. Write it as **when it
-  applies, then what to do**, in the imperative: "Before shortening
-  `timeout_secs` on `git commit`: don't -- the pre-commit hook re-runs
-  the full gate", not "The pre-commit hook re-runs the full gate". A
+  applies, then what to do**, in the imperative: "Before running
+  `cargo nextest run` from the repo root: add `--workspace` -- without
+  it the daemon crates are skipped", not "A bare `cargo nextest run`
+  skips the daemon crates". A
   working session matches the index against the situation it is in,
   so lead with that situation (When / Before / If ...); a bare summary
   of facts leaves the session to work out when the fact matters. Most

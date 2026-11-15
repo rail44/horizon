@@ -11,7 +11,7 @@
 # the same change bumps that wire's version, which the artifact embeds as
 # x-session-protocol-version. Classification lives in
 # horizon_wire::schema_check; this wrapper only supplies git plumbing.
-# Runs from hooks/pre-commit.
+# A step of the quality gate (scripts/gate.sh).
 #
 # There is one artifact per wire: the ACP extension vocabulary between the
 # shell and horizon-agentd (acp-ext, versioned by HORIZON_ACP_EXT_VERSION),

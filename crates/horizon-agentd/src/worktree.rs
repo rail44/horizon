@@ -39,12 +39,12 @@ pub(crate) fn short_slug(session_id: Uuid) -> String {
 /// `GIT_COMMON_DIR`, ...) as overrides that take precedence over `-C`: an
 /// absolute `GIT_DIR` in particular silently redirects an entire invocation
 /// to a *different* repository, regardless of `-C`'s target directory.
-/// Backlog 53: this repo's own `hooks/pre-commit` runs the full test suite,
-/// and git exports exactly such an absolute `GIT_DIR` (pointing at
+/// Git exports exactly such an absolute `GIT_DIR` (pointing at
 /// `$GIT_COMMON_DIR/worktrees/<name>`) to hook processes invoked from a
-/// *linked* worktree -- which every session in this repo works from. That
-/// env var then propagates through cargo -> nextest -> the test binary -> a
-/// `git` subprocess spawned here, none of which sanitize it. Every git
+/// *linked* worktree -- which every session in this repo works from. When a
+/// hook runs the tests, that env var propagates through cargo -> nextest ->
+/// the test binary -> a `git` subprocess spawned here, none of which
+/// sanitize it. Every git
 /// invocation in this module (production and test) must scrub it so `-C
 /// <dir>` is the sole source of truth for which repository is targeted.
 fn scrub_git_env(cmd: &mut std::process::Command) {

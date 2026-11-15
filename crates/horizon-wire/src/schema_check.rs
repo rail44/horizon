@@ -13,7 +13,7 @@
 //!   change is visible, reviewable text in its PR diff. The generators share
 //!   [`sort_object_keys`] from this module so the artifacts stay
 //!   mechanically comparable.
-//! - `scripts/check-wire-schema.sh` (run by `hooks/pre-commit`) feeds this
+//! - `scripts/check-wire-schema.sh` (a step of the quality gate) feeds this
 //!   module (through this crate's `check_wire_schema` example) the
 //!   merge-base's copy of each artifact next to the current one;
 //!   [`classify_schema_change`] then classifies every difference as

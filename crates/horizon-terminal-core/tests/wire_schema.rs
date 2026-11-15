@@ -120,7 +120,7 @@ fn generate_wire_schema() -> Value {
 /// The committed artifact must match what the live wire types generate.
 /// Red here means a wire type changed without regenerating the artifact —
 /// run the bless command in the module doc, then review the artifact diff
-/// as part of the change (the pre-commit checker classifies it).
+/// as part of the change (`scripts/check-wire-schema.sh` classifies it).
 #[test]
 fn committed_wire_schema_artifact_is_current() {
     let mut generated = serde_json::to_string_pretty(&generate_wire_schema()).unwrap();

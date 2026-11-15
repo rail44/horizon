@@ -1,5 +1,5 @@
 //! CLI wrapper around [`horizon_wire::schema_check`] for the
-//! pre-commit quality gate. Two modes, both driven by
+//! quality gate. Two modes, both driven by
 //! `scripts/check-wire-schema.sh`:
 //!
 //! - `check_wire_schema <old.json> <new.json>` — the steady state:

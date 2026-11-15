@@ -26,8 +26,8 @@ pub(super) fn prepare(
     let script = wrapped_script(command);
     let mut cmd = std::process::Command::new("bash");
     cmd.arg("-c").arg(&script).current_dir(cwd);
-    // A parent Git process (notably this repository's pre-commit hook) can
-    // export repository-routing variables. They must not redirect the
+    // A parent Git process (a hook that runs this, for one) can export
+    // repository-routing variables. They must not redirect the
     // sandboxed command away from the workspace whose metadata roots Horizon
     // validated and displayed for approval.
     for key in [

@@ -51,8 +51,10 @@ itself.
 
 There is no CI. The local quality gate below is mandatory before finishing
 any work that changes something the gate reads — run it yourself and make
-sure all five are clean. A change that touches only `AGENTS.md`, `CLAUDE.md`,
-`README.md`, or files under `docs/` is exempt: no step reads those.
+sure all five are clean (`scripts/gate.sh` runs the five in order and stops
+at the first that fails). A change that touches only `AGENTS.md`,
+`CLAUDE.md`, `README.md`, or files under `docs/` is exempt: no step reads
+those.
 
 ```sh
 cargo fmt
@@ -115,13 +117,18 @@ each test in its own process (no cross-test env leakage) but does not run
 doctests; the workspace currently has none — add `cargo test --doc` here if
 that changes.
 
-The same gate runs as a pre-commit hook (`hooks/pre-commit`), which skips
-it for a commit that stages only the exempt files above. One-time setup per
-clone:
+Nothing runs the gate for you: there is no CI, and no hook runs it on a
+commit. A commit on a work branch need not pass it. It is run at two
+points:
 
-```sh
-git config core.hooksPath hooks
-```
+- before finishing work, by whoever did the work (above);
+- where a branch lands on `main`, by whoever integrates it: with the
+  default profile, outside any sandbox, on the commits as they will be on
+  `main` (after a rebase, on the rebased branch). `main` is not moved until
+  all five are clean.
+
+The second is what the `sandboxed` profile's skipped tests rely on: nothing
+else runs them.
 
 For refactoring discovery, see [the audit tool](scripts/refactor-audit/README.md)
 and [the review guide](docs/refactoring-review.md). They cover reproducible
@@ -214,7 +221,14 @@ handing the worktree main's binaries instead of its own. Do not skip it.
 `HORIZON_SKIP_TARGET_SEED=1` disables seeding (e.g. to measure cold
 builds). The hook degrades to a cold build on any failure. Plain
 `git worktree add` runs it directly (agentd session worktrees, review
-checkouts). Claude Code's own worktrees do not: Claude Code runs its git
+checkouts), once the clone's hooks are the tracked ones — one-time setup
+per clone:
+
+```sh
+git config core.hooksPath hooks
+```
+
+Claude Code's own worktrees do not: Claude Code runs its git
 with `core.hooksPath=/dev/null`, so the tracked `.claude/settings.json`
 runs the same seed through `hooks/claude-worktree-seed` on
 `PostToolUse(EnterWorktree)` and `SubagentStart` (an
