@@ -97,43 +97,10 @@ pub fn run(
         }
     }
 
-    // `preview`'s and `markdown`'s path resolution: the shell's working
-    // directory is not the caller's, so a relative path is made absolute
-    // here (the one `current_dir` read, kept next to `send`'s stdin
-    // fallback rather than inside the pure `cli::parse`).
-    if let cli::Subcommand::Preview { path, .. } | cli::Subcommand::Markdown { path, .. } =
-        &mut parsed.subcommand
-    {
-        let cwd = std::env::current_dir().unwrap_or_default();
-        *path = cli::absolute_path(path, &cwd);
-    }
-
-    // `new` and `preview`: a file among the arguments is a path from where
-    // the caller is.
-    if let cli::Subcommand::New { directory, .. } | cli::Subcommand::Preview { directory, .. } =
-        &mut parsed.subcommand
-    {
+    // `new`: a file among the arguments is a path from where the caller
+    // is, and so is the project a wiki's page is of.
+    if let cli::Subcommand::New { directory, .. } = &mut parsed.subcommand {
         *directory = std::env::current_dir().unwrap_or_default();
-    }
-
-    // `wiki`: the caller's project, not the shell's, names the wiki.
-    if let cli::Subcommand::Wiki { page, path, .. } = &mut parsed.subcommand {
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let Some(store) = horizon_wiki::Store::for_dir(&cwd) else {
-            let _ = writeln!(
-                stderr,
-                "error: {} is not in a repository with a wiki",
-                cwd.display()
-            );
-            return 1;
-        };
-        match store.page_path(page) {
-            Ok(file) => *path = file,
-            Err(error) => {
-                let _ = writeln!(stderr, "error: {error}");
-                return 2;
-            }
-        }
     }
 
     let resolved_split = match cli::resolved_split_for(&parsed.subcommand, env_session_id.clone()) {

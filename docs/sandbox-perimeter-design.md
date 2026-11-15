@@ -183,7 +183,7 @@ identity and are re-adopted from the persisted root
 
 There is no `isolate` knob: the ACP `_meta.horizon` session request
 (`SessionNewMeta`, `crates/horizon-acp/src/meta.rs`), the CLI
-(`new-agent`), the control-plane dispatcher (`src/control_plane.rs`),
+(`new agent`), the control-plane dispatcher (`src/control_plane.rs`),
 `PendingAgentSpawn` (`src/workspace/session_creation.rs`), and the view
 chooser (`src/view_chooser.rs`) carry none, and `horizon-agentd` creates
 no worktree at spawn. The remaining spawn-time knob is the directory to
@@ -196,7 +196,7 @@ runtime reload).
 Delegation: a parent spawns a child over the control plane (the parent
 is the issuer, so the spawn source), and the child starts in the
 parent's directory. A terminal issuer counts the same way: an agent
-spawned from a terminal (`horizon new-agent` run in it, or the palette
+spawned from a terminal (`horizon new agent` run in it, or the palette
 with the terminal focused) starts in that terminal's cwd as
 `horizon-terminald` last published it, else the Horizon process's cwd. A child that needs a disposable copy calls
 `worktree_enter` as its first step; the worktree branches from that

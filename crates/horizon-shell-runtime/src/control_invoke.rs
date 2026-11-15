@@ -2,49 +2,24 @@
 //! before any shell operation runs: what both shells dispatch on.
 
 use crate::agent_model::ToolCallIdentity;
-use horizon_agent::roles::RoleId;
 use horizon_control::contract::Invoke;
 use horizon_workspace::commands::CommandId;
-use horizon_workspace::{SessionId, SessionKind, SplitAxis};
+use horizon_workspace::{SessionId, SplitAxis};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum Command {
-    NewSession {
-        kind: SessionKind,
-        role_id: Option<RoleId>,
-        split: Option<(SessionId, SplitAxis)>,
-        issuer: Option<SessionId>,
-        activate: bool,
-        prompt: Option<String>,
-    },
-    Preview {
-        path: PathBuf,
-        name: Option<String>,
-        /// For an extension's package: what its pane is made from, a file
-        /// among them a path from `directory`.
-        arguments: Vec<String>,
-        directory: PathBuf,
-        split: Option<(SessionId, SplitAxis)>,
-        activate: bool,
-    },
-    Markdown {
-        path: PathBuf,
-        split: Option<(SessionId, SplitAxis)>,
-        activate: bool,
-    },
-    Wiki {
-        path: PathBuf,
-        split: Option<(SessionId, SplitAxis)>,
-        activate: bool,
-    },
-    /// A new pane of the plugin named: `arguments` are what its pane is
-    /// made from, a file among them a path from `directory`.
+    /// A new pane of the plugin named: `arguments`, and those `named`, are
+    /// what its pane is made from, a file among them a path from
+    /// `directory`. `issuer` is the session that asked.
     New {
         plugin: String,
         arguments: Vec<String>,
+        named: BTreeMap<String, String>,
         directory: PathBuf,
         split: Option<(SessionId, SplitAxis)>,
+        issuer: Option<SessionId>,
         activate: bool,
     },
     /// The command named, of the plugin the cursor's pane shows.
@@ -81,33 +56,15 @@ pub enum Command {
 pub fn parse(invoke: &Invoke) -> Result<Command, String> {
     let args = &invoke.args;
     Ok(match invoke.command.as_str() {
-        "new-terminal" => new_session(args, SessionKind::Terminal)?,
-        "new-agent" => new_session(args, SessionKind::Agent)?,
-        "preview" => Command::Preview {
-            path: required_string_arg(args, "path")?.into(),
-            name: optional_string_arg(args, "name")?,
+        "new" => Command::New {
+            plugin: required_string_arg(args, "plugin")?,
             arguments: string_list_arg(args, "arguments")?,
+            named: named_arg(args, "named")?,
             directory: (optional_string_arg(args, "directory")?)
                 .unwrap_or_default()
                 .into(),
             split: optional_session_id_arg(args, "split")?,
-            activate: activate_arg(args)?,
-        },
-        "markdown" => Command::Markdown {
-            path: required_string_arg(args, "path")?.into(),
-            split: optional_session_id_arg(args, "split")?,
-            activate: activate_arg(args)?,
-        },
-        "wiki" => Command::Wiki {
-            path: required_string_arg(args, "path")?.into(),
-            split: optional_session_id_arg(args, "split")?,
-            activate: activate_arg(args)?,
-        },
-        "new" => Command::New {
-            plugin: required_string_arg(args, "plugin")?,
-            arguments: string_list_arg(args, "arguments")?,
-            directory: required_string_arg(args, "directory")?.into(),
-            split: optional_session_id_arg(args, "split")?,
+            issuer: optional_plain_session_id_arg(args, "issuer")?,
             activate: activate_arg(args)?,
         },
         "plugin-command" => Command::PluginCommand(required_string_arg(args, "name")?),
@@ -144,40 +101,6 @@ pub fn parse(invoke: &Invoke) -> Result<Command, String> {
         "reload-agent-runtime" => Command::Execute(CommandId::ReloadAgentRuntime),
         "reload-terminal-runtime" => Command::Execute(CommandId::ReloadTerminalRuntime),
         other => return Err(format!("unknown external command `{other}`")),
-    })
-}
-
-fn new_session(args: &serde_json::Value, kind: SessionKind) -> Result<Command, String> {
-    let role_id = optional_string_arg(args, "role")?
-        .map(|role| {
-            let known = horizon_agent::roles::user_launchable();
-            if !known.iter().any(|r| r.id == role) {
-                let available = known.iter().map(|r| r.title).collect::<Vec<_>>().join(", ");
-                return Err(format!("unknown role: {role} (available: {available})"));
-            }
-            Ok(RoleId(role))
-        })
-        .transpose()?;
-    let split = optional_session_id_arg(args, "split")?;
-    let issuer = optional_plain_session_id_arg(args, "issuer")?;
-    let activate = activate_arg(args)?;
-    let prompt = match args.get("prompt") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(serde_json::Value::String(prompt)) if kind == SessionKind::Agent => {
-            Some(prompt.clone())
-        }
-        Some(serde_json::Value::String(_)) => {
-            return Err("`prompt` is only accepted for agent sessions".into())
-        }
-        Some(_) => return Err("`prompt` must be a string".into()),
-    };
-    Ok(Command::NewSession {
-        kind,
-        role_id,
-        split,
-        issuer,
-        activate,
-        prompt,
     })
 }
 
@@ -261,6 +184,18 @@ fn approval_identity_arg(args: &serde_json::Value) -> Result<ToolCallIdentity, S
 /// rather than a typed wrapper. The `send` arm enforces non-emptiness
 /// separately (empty input is rejected at the CLI layer already; this is
 /// defensive).
+/// Parses a table of strings by name; none when the key is left out.
+fn named_arg(args: &serde_json::Value, key: &str) -> Result<BTreeMap<String, String>, String> {
+    let said = || format!("`{key}` must be a table of strings");
+    match args.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(BTreeMap::new()),
+        Some(serde_json::Value::Object(named)) => (named.iter())
+            .map(|(name, value)| Ok((name.clone(), value.as_str().ok_or_else(said)?.to_string())))
+            .collect(),
+        Some(_) => Err(said()),
+    }
+}
+
 /// Parses a list of strings; none when the key is left out.
 fn string_list_arg(args: &serde_json::Value, key: &str) -> Result<Vec<String>, String> {
     let said = || format!("`{key}` must be a list of strings");
@@ -292,28 +227,60 @@ mod tests {
     use horizon_control::contract::Invoke;
 
     #[test]
-    fn session_defaults_and_optional_nulls_match_the_external_contract() {
+    fn a_new_pane_s_defaults_and_optional_nulls_match_the_external_contract() {
         for args in [
-            serde_json::json!({}),
-            serde_json::json!({"split": null, "issuer": null, "activate": null, "prompt": null}),
+            serde_json::json!({"plugin": "agent"}),
+            serde_json::json!({
+                "plugin": "agent", "arguments": null, "named": null, "directory": null,
+                "split": null, "issuer": null, "activate": null,
+            }),
         ] {
             let command = parse(&Invoke {
-                command: "new-agent".into(),
+                command: "new".into(),
                 args,
             })
             .unwrap();
-            assert!(matches!(
-                command,
-                Command::NewSession {
-                    kind: horizon_workspace::SessionKind::Agent,
-                    role_id: None,
-                    split: None,
-                    issuer: None,
-                    activate: false,
-                    prompt: None,
-                }
-            ));
+            let Command::New {
+                plugin,
+                arguments,
+                named,
+                split: None,
+                issuer: None,
+                activate: false,
+                ..
+            } = command
+            else {
+                panic!("a new pane with nothing given for it");
+            };
+            assert_eq!(plugin, "agent");
+            assert!(arguments.is_empty() && named.is_empty());
         }
+    }
+
+    #[test]
+    fn a_new_pane_takes_what_it_is_made_from_in_order_and_by_name() {
+        let command = parse(&Invoke {
+            command: "new".into(),
+            args: serde_json::json!({
+                "plugin": "preview",
+                "arguments": ["a.wasm", "README.md"],
+                "named": {"name": "board-list"},
+                "directory": "/work",
+            }),
+        })
+        .unwrap();
+        let Command::New {
+            arguments,
+            named,
+            directory,
+            ..
+        } = command
+        else {
+            panic!("a new pane");
+        };
+        assert_eq!(arguments, ["a.wasm", "README.md"]);
+        assert_eq!(named["name"], "board-list");
+        assert_eq!(directory, std::path::PathBuf::from("/work"));
     }
 
     #[test]
@@ -321,15 +288,16 @@ mod tests {
         let id = uuid::Uuid::nil().to_string();
         for (command, args, expected) in [
             (
-                "new-agent",
-                serde_json::json!({"split": 1, "activate": "yes"}),
+                "new",
+                serde_json::json!({"plugin": "agent", "split": 1, "activate": "yes"}),
                 "`split` must be a string",
             ),
             (
-                "new-terminal",
-                serde_json::json!({"prompt": "go"}),
-                "`prompt` is only accepted for agent sessions",
+                "new",
+                serde_json::json!({"plugin": "agent", "named": {"prompt": 1}}),
+                "`named` must be a table of strings",
             ),
+            ("new", serde_json::json!({}), "`plugin` is required"),
             (
                 "send",
                 serde_json::json!({"text": ""}),

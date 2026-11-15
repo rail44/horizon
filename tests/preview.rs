@@ -398,9 +398,19 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
         )
         .1,
     };
-    let ask = |args: serde_json::Value| {
+    // (`horizon new preview <path> [--name <preview>] [--active]`, as it
+    // reaches the shell.)
+    let ask = |asked: serde_json::Value| {
+        let mut args = serde_json::json!({
+            "plugin": "preview",
+            "arguments": [asked["path"]],
+            "activate": asked.get("activate").cloned().unwrap_or_default(),
+        });
+        if let Some(name) = asked.get("name") {
+            args["named"] = serde_json::json!({ "name": name });
+        }
         let answer = shell.control(&ControlRequest::Invoke(Invoke {
-            command: "preview".to_string(),
+            command: "new".to_string(),
             args,
         }));
         opened.app.run_effects();

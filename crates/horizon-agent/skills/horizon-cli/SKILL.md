@@ -39,14 +39,21 @@ human-readable summary.
 
 ## Creating panes
 
-- `horizon new-terminal [--split [<session-id>]] [--active]` — a new
-  terminal pane.
-- `horizon new-agent [--prompt <text>] [--split [<session-id>]] [--active]` —
-  a new generic agent session, optionally seeded with an initial prompt.
-- `horizon new-agent --role config [--prompt <text>] [--split [<session-id>]] [--active]` —
-  a new configuration-agent session (the `config` role: edits Horizon's
+A pane is made with one subcommand, `horizon new <plugin>`, whatever it
+shows; what follows the plugin's name is what that plugin's pane is made
+from. Each takes `[--split [<session-id>]] [--active]`.
+
+- `horizon new terminal` — a new terminal pane.
+- `horizon new agent [--prompt <text>]` — a new generic agent session,
+  optionally seeded with an initial prompt.
+- `horizon new agent --role config [--prompt <text>]` — a new
+  configuration-agent session (the `config` role: edits Horizon's
   theme/keybindings via its own `horizon-config` skill). Select `--role config`
   when the task is specifically about Horizon's own config file.
+- `horizon new markdown <path>` — a Markdown file in a pane.
+- `horizon new wiki [<page>]` — a page of the project's wiki (the overview
+  when no page is named).
+- `horizon new <extension's name> [<argument>...]` — a pane of an extension.
 
 `--split` placement:
 

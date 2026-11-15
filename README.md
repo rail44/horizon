@@ -86,19 +86,21 @@ The same command model is also reachable from outside the GUI: `horizon
 Unix-socket control plane, useful for scripting or driving Horizon from an
 agent. Panes get `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment,
 so a subcommand run from inside a pane targets the enclosing instance and
-`--split` (bare) resolves to "here" by default. Subcommands: `new-terminal`,
-`new-agent [--prompt <text>]`, `new-agent --role config [--prompt <text>]`,
-`new <plugin> [<argument>...]` (a pane of an extension, made from what the
-extension says: `new markdown-extension README.md`),
+`--split` (bare) resolves to "here" by default. Subcommands:
+`new <plugin> [<argument>...]` (a new pane of a plugin, made from what the
+plugin takes: `new terminal`, `new agent [--prompt <text>] [--role config]`,
+`new markdown <path>`, `new wiki [<page>]`,
+`new preview <plugin.wasm> [--name <preview>]` for a view still being
+written (`docs/preview-pane-design.md`),
+`new preview <extension.wasm> [<argument>...]` for an extension still being
+written, `new <extension's name> [<argument>...]`),
+`<command>` (a command of the plugin the cursor's pane shows, by the name
+the palette lists it under),
 `attach <session-id>`,
 `terminate-session <session-id>`, `terminate-all-detached`,
 `approve`/`deny <session-id> <call-id> <occurrence-id>`, `cancel-turn <session-id>`,
 `continue-turn <session-id>`,
 `reload-agent-runtime`, `reload-terminal-runtime`, `reload-config`,
-`preview <path-to-wasm> [--name <preview>]` (a view still being written,
-shown from a wasm plugin: `docs/preview-pane-design.md`),
-`preview <extension.wasm> [<argument>...]` (an extension still being
-written, shown from its component),
 `sessions`, `state` (each takes
 `--split`/`--active` where placement/focus applies). See
 `docs/cli-control-plane-design.md` for the full contract.

@@ -11,8 +11,11 @@ use horizon_workspace::commands::{CommandId, core_commands};
 use horizon_workspace::{PaneId, PluginPane, SessionId, SessionKind, Workspace};
 
 use super::{Shell, Start, plugins};
+use crate::agent::plugin::AgentPlugin;
 use crate::extension::Creates;
+use crate::plugin::{Begins, Given, Plugin as _, SessionPlugin as _};
 use crate::preview::Target;
+use crate::terminal::plugin::TerminalPlugin;
 
 /// The answer to a command this shell has no view or runtime for yet.
 const NOT_YET: &str = "this command is not carried out yet";
@@ -60,52 +63,6 @@ impl Shell {
     fn invoke(&self, command: Command) -> Result<EnvelopeBody, String> {
         let done = Ok(EnvelopeBody::Ok { session_id: None });
         match command {
-            Command::NewSession {
-                kind,
-                role_id,
-                split,
-                issuer,
-                activate,
-                prompt,
-            } => {
-                let kept = self.kept();
-                if kind == SessionKind::Agent && kept.spawn_agent.is_none() {
-                    return Err(NOT_YET.to_string());
-                }
-                let mut made = None;
-                self.model_changed(|model| {
-                    made = match split {
-                        Some((target, axis)) => {
-                            model.split_session_with_new_session(target, kind, axis, activate)
-                        }
-                        None => Some(model.open_tab_with_new_session_activated(kind, activate)),
-                    };
-                    // It starts where the session split, or else the one
-                    // that asked, is.
-                    if let Some(made) = made {
-                        let start = Start {
-                            from: split.map(|(target, _)| target).or(issuer),
-                            directory: None,
-                            role: role_id,
-                        };
-                        kept.starting.borrow_mut().insert(made, start);
-                    }
-                });
-                // (The pane, and the session with it, exist from here.)
-                self.reconcile();
-                let made = made.ok_or("unknown split target session")?;
-                if let Some(text) = prompt
-                    && let Some(session) = kept.agents.borrow().get(&made)
-                {
-                    session.send(AgentCommand::Prompt { text });
-                }
-                if activate {
-                    self.focus_active();
-                }
-                Ok(EnvelopeBody::Ok {
-                    session_id: Some(made.as_uuid().to_string()),
-                })
-            }
             Command::Attach {
                 session_id,
                 activate,
@@ -140,42 +97,25 @@ impl Shell {
             Command::New {
                 plugin,
                 arguments,
+                named,
                 directory,
                 split,
+                issuer,
                 activate,
-            } => self.new_pane(&plugin, &arguments, &directory, split, activate),
+            } => {
+                let given = Given {
+                    arguments,
+                    named,
+                    directory,
+                };
+                self.new_pane(&plugin, given, split, issuer, activate)
+            }
             Command::PluginCommand(name) => match self.execute_plugin(&name) {
                 true => done,
                 false => Err(format!(
                     "unknown command `{name}`: not one of the plugin the cursor's pane shows"
                 )),
             },
-            Command::Markdown {
-                path,
-                split,
-                activate,
-            } => self.open_document(plugins::MARKDOWN, path, split, activate),
-            Command::Wiki {
-                path,
-                split,
-                activate,
-            } => self.open_document(plugins::WIKI, path, split, activate),
-            Command::Preview {
-                path,
-                name,
-                arguments,
-                directory,
-                split,
-                activate,
-            } => {
-                let target = Target {
-                    path,
-                    name,
-                    arguments,
-                    directory,
-                };
-                self.open_preview(target, split, activate)
-            }
             Command::Approve {
                 session_id,
                 identity,
@@ -194,42 +134,34 @@ impl Shell {
         }
     }
 
-    /// A pane on the file at `path`, shown as the document view `name`
-    /// shows one: the pane that shows it already, or a new one.
-    /// A new pane of the plugin `name`, made from `arguments` as the
-    /// plugin says its pane is made (a file is a path from `directory`).
-    /// A pane that shows the same already is made again in its place.
+    /// A new pane of the plugin `name`, made from what was `given` for it
+    /// as the plugin says its pane is made. A terminal or an agent is a
+    /// new session, begun where the session split, or else the one that
+    /// asked (`issuer`), is. A view that shows the same already is made
+    /// again in its place.
     fn new_pane(
         &self,
         name: &str,
-        arguments: &[String],
-        directory: &std::path::Path,
+        given: Given,
         split: Option<(SessionId, horizon_workspace::SplitAxis)>,
+        issuer: Option<SessionId>,
         activate: bool,
     ) -> Result<EnvelopeBody, String> {
-        let extension = plugins::extension(name).ok_or_else(|| {
-            let known: Vec<&str> = (plugins::extensions().iter())
-                .map(|extension| extension.name)
-                .collect();
-            format!("unknown plugin `{name}` (there are: {})", known.join(", "))
-        })?;
-        let state = match (&extension.creates, arguments) {
-            (None, []) => serde_json::Value::Null,
-            (None, _) => return Err(format!("`{name}` takes no arguments")),
-            (Some(Creates::File { .. }), [path]) => {
-                let path = directory.join(path);
-                if !path.is_file() {
-                    return Err(format!("not a file: {}", path.display()));
-                }
-                serde_json::Value::String(extension.create(&path)?)
-            }
-            (Some(Creates::File { .. }), _) => return Err(format!("`{name}` takes one file")),
+        if name == TerminalPlugin::NAME {
+            let begins = TerminalPlugin::begin(given)?;
+            return self.new_session(SessionKind::Terminal, begins, split, issuer, activate);
+        }
+        if name == AgentPlugin::NAME {
+            let begins = AgentPlugin::begin(given)?;
+            return self.new_session(SessionKind::Agent, begins, split, issuer, activate);
+        }
+        let made = match plugins::created(name, given.clone()) {
+            Some(made) => made?,
+            None => self.created_by_extension(name, given)?,
         };
-        let made = PluginPane {
-            name: extension.name.to_string(),
-            title: extension.title.clone(),
-            state,
-        };
+        if let Some(Some(target)) = plugins::previewed(&made) {
+            return self.open_preview(target, split, activate);
+        }
         let shown = self.model.with_untracked(|model| {
             (model.all_pane_ids().into_iter()).find(|pane| {
                 (model.pane_plugin(*pane))
@@ -254,6 +186,7 @@ impl Shell {
                 None => Some(model.open_tab_with_view_activated(made, activate)),
             };
         });
+        // (The model has the pane's state before its view is made.)
         self.reconcile();
         opened.ok_or("unknown split target session")?;
         if activate {
@@ -262,47 +195,76 @@ impl Shell {
         Ok(EnvelopeBody::Ok { session_id: None })
     }
 
-    fn open_document(
+    /// The pane the extension `name` makes from what was `given`.
+    fn created_by_extension(&self, name: &str, mut given: Given) -> Result<PluginPane, String> {
+        let extension = plugins::extension(name).ok_or_else(|| {
+            let mut known = plugins::NAMES.to_vec();
+            let extensions = plugins::extensions();
+            known.extend(extensions.iter().map(|extension| extension.name));
+            format!("unknown plugin `{name}` (there are: {})", known.join(", "))
+        })?;
+        let state = match &extension.creates {
+            None => serde_json::Value::Null,
+            Some(Creates::File { .. }) => {
+                let file = given.file("a file")?;
+                serde_json::Value::String(extension.create(&file)?)
+            }
+        };
+        given.done()?;
+        Ok(PluginPane {
+            name: extension.name.to_string(),
+            title: extension.title.clone(),
+            state,
+        })
+    }
+
+    /// A new session of `kind` in a pane, as `begins` says it begins.
+    fn new_session(
         &self,
-        name: &str,
-        path: std::path::PathBuf,
+        kind: SessionKind,
+        begins: Begins,
         split: Option<(SessionId, horizon_workspace::SplitAxis)>,
+        issuer: Option<SessionId>,
         activate: bool,
     ) -> Result<EnvelopeBody, String> {
-        if !path.is_file() {
-            return Err(format!("not a file: {}", path.display()));
+        let kept = self.kept();
+        if kind == SessionKind::Agent && kept.spawn_agent.is_none() {
+            return Err(NOT_YET.to_string());
         }
-        // A pane that shows the file already reads it again.
-        let shown = (self.model).with_untracked(|model| plugins::document_pane(model, name, &path));
-        if let Some(pane) = shown {
-            // (A view opens on its file: the pane's is made again.)
-            self.remake_pane(pane);
-            if activate {
-                self.change(|model| {
-                    if let Some((tab, pane)) = model.pane_position(pane) {
-                        model.activate_pane_index(tab, pane);
-                    }
-                });
-            }
-            return Ok(EnvelopeBody::Ok { session_id: None });
-        }
-        let document = plugins::document(name, Some(path)).ok_or("not a document view")?;
-        let mut opened = None;
+        let Begins { role, prompt } = begins;
+        let mut made = None;
         self.model_changed(|model| {
-            opened = match split {
+            made = match split {
                 Some((target, axis)) => {
-                    model.split_session_with_view(target, document, axis, activate)
+                    model.split_session_with_new_session(target, kind, axis, activate)
                 }
-                None => Some(model.open_tab_with_view_activated(document, activate)),
+                None => Some(model.open_tab_with_new_session_activated(kind, activate)),
             };
+            // It starts where the session split, or else the one that
+            // asked, is.
+            if let Some(made) = made {
+                let start = Start {
+                    from: split.map(|(target, _)| target).or(issuer),
+                    directory: None,
+                    role,
+                };
+                kept.starting.borrow_mut().insert(made, start);
+            }
         });
-        // (The model has the pane's file before its view is made.)
+        // (The pane, and the session with it, exist from here.)
         self.reconcile();
-        opened.ok_or("unknown split target session")?;
+        let made = made.ok_or("unknown split target session")?;
+        if let Some(text) = prompt
+            && let Some(session) = kept.agents.borrow().get(&made)
+        {
+            session.send(AgentCommand::Prompt { text });
+        }
         if activate {
             self.focus_active();
         }
-        Ok(EnvelopeBody::Ok { session_id: None })
+        Ok(EnvelopeBody::Ok {
+            session_id: Some(made.as_uuid().to_string()),
+        })
     }
 
     /// A preview pane on `target`: the pane that shows its file already,

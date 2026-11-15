@@ -186,7 +186,7 @@ dirty.
 
 There is no spawn-time isolation (board #65,
 `docs/sandbox-perimeter-design.md`): `SessionNewMeta` has no isolation
-field (`HORIZON_ACP_EXT_VERSION` 2), `new-agent` has no `--share`, and the
+field (`HORIZON_ACP_EXT_VERSION` 2), `new agent` has no `--share`, and the
 view chooser offers one plain "Agent" choice.
 
 Worktree creation resolves after `session/new` has returned, so the

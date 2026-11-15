@@ -97,7 +97,7 @@ role deliberately has no filesystem access.
 
 The `config` role is the first role and the first skill consumer. It is
 launched as a named command — `New Configuration Agent` in the palette,
-`new-agent --role config` over the control plane / CLI (mirroring `new-agent`'s
+`new agent --role config` over the control plane / CLI (beside `new agent`'s
 `--prompt`/`--split`/`--active`). The CLI accepts `--role <id>` and the shell
 validates that id against its registry of user-launchable roles before
 creating a session. Unknown or internal role ids are rejected.
@@ -353,8 +353,8 @@ and `horizon-cli` — so it's exercised directly against a hand-built empty
 role-less session can discover on its own initiative (v1's
 `horizon-config` was role-gated). It teaches an agent to operate the
 Horizon workspace it's running inside via the `horizon` CLI: orientation
-(`sessions`/`state`), pane creation (`new-terminal`/`new-agent`/
-`new-agent --role config`, `--split`'s "here" vs. explicit vs. omitted placement,
+(`sessions`/`state`), pane creation (`new terminal`/`new agent`/
+`new agent --role config`, `--split`'s "here" vs. explicit vs. omitted placement,
 `--active`'s focus-stealing caution), attach/terminate/approve/deny/
 cancel-turn, and the `--yes`/destructive-command convention for running
 non-interactively from `bash`. Its description frontmatter names the

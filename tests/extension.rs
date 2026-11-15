@@ -293,12 +293,12 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
     // package's directory: the pane's alone, made on what the pane was
     // given, and read again when its component is built again.
     let preview = serde_json::json!({
-        "path": package.to_string_lossy(),
-        "arguments": ["third.md"],
+        "plugin": "preview",
+        "arguments": [package.to_string_lossy(), "third.md"],
         "directory": directory.to_string_lossy(),
         "activate": true,
     });
-    let answer = ask("preview", preview);
+    let answer = ask("new", preview);
     assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
     let previewing = opened
         .model(|model| model.cursor_pane_id())
@@ -466,10 +466,10 @@ fn an_extension_with_nothing_happening_has_nothing_to_draw() {
         Placement::NewTab,
     );
     shell.control(&ControlRequest::Invoke(Invoke {
-        command: "preview".to_string(),
+        command: "new".to_string(),
         args: serde_json::json!({
-            "path": package.to_string_lossy(),
-            "arguments": ["first.md"],
+            "plugin": "preview",
+            "arguments": [package.to_string_lossy(), "first.md"],
             "directory": directory.to_string_lossy(),
             "split": serde_json::Value::Null,
             "activate": false,

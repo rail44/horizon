@@ -11,7 +11,7 @@
 //! project wiki, the theme settings, or a plugin's view (the board's task
 //! list, or one task's thread). Creating one asks which,
 //! in a shell with an agent runtime; a Markdown file is opened by naming
-//! it (`horizon markdown <path>`), and a thread from the list.
+//! it (`horizon new markdown <path>`), and a thread from the list.
 //!
 //! Closing a pane lets go of its view and keeps its session, which the
 //! session manager lists and puts back in a pane; a session ends when it

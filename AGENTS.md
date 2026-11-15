@@ -278,7 +278,7 @@ home of its own (the agent's provider is the local mock
 workspace coming back after the shell is closed, a runtime reloaded.
 
 A view still being written can be shown from a wasm plugin in a pane of
-the running Horizon (`horizon preview <plugin.wasm>`,
+the running Horizon (`horizon new preview <plugin.wasm>`,
 `docs/preview-pane-design.md`): that is how an agent asks a person to look
 at a view. `scripts/check-preview-plugin.sh` builds the plugin and runs
 the windowless tests that draw and drive a view through it (not part of
@@ -287,7 +287,7 @@ manifest in it, written as one module under `horizon_ui::plugin`
 (`plugins/markdown`), and named by its file in `config.toml`'s
 `extensions` (`src/extension.rs`) -- is checked the same way by
 `scripts/check-extension.sh`, and one still being written is shown to a
-person the same way: `horizon preview <extension.wasm> <arguments>`,
+person the same way: `horizon new preview <extension.wasm> <arguments>`,
 which reads the file again whenever it is built again.
 
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
@@ -340,7 +340,7 @@ their wiring:
   `crates/horizon-board-view`. See `docs/board-redesign-design.md`.
 - `finder/` — a file found by typing: the list, the matching, and the
   listing of a directory's files off the UI thread.
-- `markdown/` — the Markdown view (`horizon markdown <path>`), and the
+- `markdown/` — the Markdown view (`horizon new markdown <path>`), and the
   single-file watch other views share.
 - `wiki/` — a page of the project wiki (`crates/horizon-wiki`) with the
   owner's comment threads anchored in it. See

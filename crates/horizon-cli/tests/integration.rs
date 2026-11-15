@@ -194,7 +194,7 @@ fn invoke_new_terminal_reports_ok() {
         vec![EnvelopeBody::Ok { session_id: None }],
     );
 
-    let (code, stdout, stderr) = run_ctl(&["new-terminal"], &socket_path, false);
+    let (code, stdout, stderr) = run_ctl(&["new", "terminal"], &socket_path, false);
     assert_eq!(code, 0, "stderr: {stderr}");
     assert_eq!(stdout, "OK\n");
 
@@ -228,7 +228,7 @@ fn new_agent_with_prompt_reaches_the_server_and_reports_ok() {
     });
 
     let (code, stdout, stderr) = run_ctl(
-        &["new-agent", "--prompt", "fix the bug"],
+        &["new", "agent", "--prompt", "fix the bug"],
         &socket_path,
         false,
     );
@@ -240,10 +240,19 @@ fn new_agent_with_prompt_reaches_the_server_and_reports_ok() {
         .unwrap()
         .clone()
         .expect("server saw a request");
-    assert_eq!(received.0, "new-agent");
+    assert_eq!(received.0, "new");
+    // (Where the caller is goes with it: a file among what is given is a
+    // path from there.)
+    let directory = std::env::current_dir().unwrap();
     assert_eq!(
         received.1,
-        serde_json::json!({ "activate": false, "prompt": "fix the bug" })
+        serde_json::json!({
+            "plugin": "agent",
+            "arguments": [],
+            "named": { "prompt": "fix the bug" },
+            "directory": directory.display().to_string(),
+            "activate": false
+        })
     );
 
     let _ = std::fs::remove_file(&socket_path);
@@ -260,7 +269,7 @@ fn new_agent_reports_created_session_id_in_json_output() {
         }],
     );
 
-    let (code, stdout, stderr) = run_ctl(&["--json", "new-agent"], &socket_path, false);
+    let (code, stdout, stderr) = run_ctl(&["--json", "new", "agent"], &socket_path, false);
     assert_eq!(code, 0, "stderr: {stderr}");
     assert!(stdout.contains("\"kind\": \"ok\""), "stdout: {stdout}");
     assert!(
@@ -563,7 +572,7 @@ fn new_agent_carries_the_issuer_session_id_in_the_wire_args() {
 
     let issuer_id = "00000000-0000-0000-0000-000000000abc";
     let (code, _stdout, stderr) = run_ctl_with_session(
-        &["new-agent", "--prompt", "fix the bug"],
+        &["new", "agent", "--prompt", "fix the bug"],
         &socket_path,
         false,
         Some(issuer_id),
@@ -575,15 +584,11 @@ fn new_agent_carries_the_issuer_session_id_in_the_wire_args() {
         .unwrap()
         .clone()
         .expect("server saw a request");
-    assert_eq!(received.0, "new-agent");
-    assert_eq!(
-        received.1,
-        serde_json::json!({
-            "activate": false,
-            "prompt": "fix the bug",
-            "issuer": issuer_id
-        })
-    );
+    assert_eq!(received.0, "new");
+    assert_eq!(received.1["plugin"], "agent");
+    assert_eq!(received.1["named"]["prompt"], "fix the bug");
+    assert_eq!(received.1["issuer"], issuer_id);
+    assert!(received.1.get("split").is_none());
 
     let _ = std::fs::remove_file(&socket_path);
 }

@@ -4,7 +4,10 @@
 //!
 //! What a built-in view implements here is what an extension's world
 //! exports (`docs/extension-boundary-design.md`): `mount` and the state,
-//! and a function per command.
+//! `create`, and a function per command.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use horizon_ui::El;
 use horizon_ui::reactive_graph::owner::LocalStorage;
@@ -13,6 +16,52 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 pub use horizon_ui::Callback;
+
+/// What a new pane is made from, as it was given: on the command line
+/// (`horizon new <plugin> ..`), or by whoever chose the plugin.
+#[derive(Clone, Debug, Default)]
+pub struct Given {
+    /// In the order they were given.
+    pub arguments: Vec<String>,
+    /// Those given by name (`--name value`).
+    pub named: BTreeMap<String, String>,
+    /// Where a file among them is a path from.
+    pub directory: PathBuf,
+}
+
+impl Given {
+    /// Takes the next argument.
+    pub fn argument(&mut self) -> Option<String> {
+        (!self.arguments.is_empty()).then(|| self.arguments.remove(0))
+    }
+
+    /// Takes the next argument as a file there is: `what` says what was
+    /// wanted where there is none.
+    pub fn file(&mut self, what: &str) -> Result<PathBuf, String> {
+        let path = self.argument().ok_or_else(|| format!("{what} is needed"))?;
+        let path = self.directory.join(path);
+        match path.is_file() {
+            true => Ok(path),
+            false => Err(format!("not a file: {}", path.display())),
+        }
+    }
+
+    /// Takes the argument given under `name`.
+    pub fn named(&mut self, name: &str) -> Option<String> {
+        self.named.remove(name)
+    }
+
+    /// What was given and not taken is refused.
+    pub fn done(self) -> Result<(), String> {
+        if let Some(argument) = self.arguments.first() {
+            return Err(format!("nothing takes `{argument}`"));
+        }
+        match self.named.keys().next() {
+            Some(name) => Err(format!("nothing takes `--{name}`")),
+            None => Ok(()),
+        }
+    }
+}
 
 pub trait Plugin {
     /// What the workspace saves a pane of it under.
@@ -29,6 +78,9 @@ pub trait Plugin {
 
     /// Its commands, in the order the palette lists them.
     fn commands() -> Vec<Command<Self::Command>>;
+
+    /// The state of a new pane, made from what was given for it.
+    fn create(given: Given) -> Result<Self::State, String>;
 
     /// A pane's title in the tab strip, on `state`.
     fn title(state: &Self::State) -> String {
@@ -78,11 +130,23 @@ pub trait SessionPlugin: Plugin {
     /// The runtime the sessions run in.
     type Runtime: ?Sized;
 
+    /// How a new session begins, from what was given for its pane.
+    fn begin(given: Given) -> Result<Begins, String>;
+
     /// The sessions the runtime runs.
     fn running(runtime: &Self::Runtime) -> Result<Vec<Running>, String>;
 
     /// Ends a session the shell holds.
     fn end(session: &Self::Session);
+}
+
+/// How a new session begins.
+#[derive(Clone, Debug, Default)]
+pub struct Begins {
+    /// The role an agent works in.
+    pub role: Option<horizon_agent::roles::RoleId>,
+    /// What it is told first.
+    pub prompt: Option<String>,
 }
 
 /// A session a runtime runs, and what the runtime says of it.

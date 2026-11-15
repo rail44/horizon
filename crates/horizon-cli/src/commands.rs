@@ -23,11 +23,6 @@ pub enum Request {
 /// subcommand string by construction (task spec: "外部名と1:1").
 pub fn external_name(subcommand: &Subcommand) -> &'static str {
     match subcommand {
-        Subcommand::NewTerminal { .. } => "new-terminal",
-        Subcommand::NewAgent { .. } => "new-agent",
-        Subcommand::Preview { .. } => "preview",
-        Subcommand::Markdown { .. } => "markdown",
-        Subcommand::Wiki { .. } => "wiki",
         Subcommand::New { .. } => "new",
         Subcommand::PluginCommand { .. } => "plugin-command",
         Subcommand::Attach { .. } => "attach",
@@ -81,52 +76,10 @@ pub fn to_request(
 ) -> Request {
     let command_name = external_name(subcommand);
     match subcommand {
-        Subcommand::NewTerminal { activate, .. } => invoke(
-            command_name,
-            create_session_args(resolved_split, *activate, None, None, issuer),
-        ),
-        Subcommand::NewAgent {
-            prompt,
-            role,
-            activate,
-            ..
-        } => invoke(
-            command_name,
-            create_session_args(
-                resolved_split,
-                *activate,
-                prompt.as_deref(),
-                role.as_deref(),
-                issuer,
-            ),
-        ),
-        Subcommand::Preview {
-            path,
-            name,
-            arguments,
-            directory,
-            activate,
-            ..
-        } => {
-            let mut args = file_view_args(path, name.as_deref(), resolved_split, *activate);
-            // (Only an extension's package is given arguments.)
-            if !arguments.is_empty() {
-                args["arguments"] = serde_json::json!(arguments);
-                args["directory"] = serde_json::Value::String(directory.display().to_string());
-            }
-            invoke(command_name, args)
-        }
-        Subcommand::Wiki { path, activate, .. } => invoke(
-            command_name,
-            file_view_args(path, None, resolved_split, *activate),
-        ),
-        Subcommand::Markdown { path, activate, .. } => invoke(
-            command_name,
-            file_view_args(path, None, resolved_split, *activate),
-        ),
         Subcommand::New {
             plugin,
             arguments,
+            named,
             directory,
             activate,
             ..
@@ -134,11 +87,16 @@ pub fn to_request(
             let mut args = serde_json::json!({
                 "plugin": plugin,
                 "arguments": arguments,
+                "named": named,
                 "directory": directory.display().to_string(),
                 "activate": activate,
             });
+            // (`split` and `issuer` ride only when there is one.)
             if let Some(split) = resolved_split {
                 args["split"] = serde_json::Value::String(split.to_string());
+            }
+            if let Some(issuer) = issuer {
+                args["issuer"] = serde_json::Value::String(issuer.to_string());
             }
             invoke(command_name, args)
         }
@@ -232,36 +190,6 @@ pub fn to_request(
     }
 }
 
-/// `preview`'s and `markdown`'s wire args. `split`/`name` ride only when
-/// given, so a bare `horizon preview <path>` sends just the path and
-/// `activate`; `markdown` never has a name.
-fn file_view_args(
-    path: &std::path::Path,
-    name: Option<&str>,
-    split: Option<&str>,
-    activate: bool,
-) -> serde_json::Value {
-    let mut args = serde_json::Map::new();
-    args.insert(
-        "path".to_string(),
-        serde_json::Value::String(path.display().to_string()),
-    );
-    if let Some(name) = name {
-        args.insert(
-            "name".to_string(),
-            serde_json::Value::String(name.to_string()),
-        );
-    }
-    if let Some(split) = split {
-        args.insert(
-            "split".to_string(),
-            serde_json::Value::String(split.to_string()),
-        );
-    }
-    args.insert("activate".to_string(), serde_json::Value::Bool(activate));
-    serde_json::Value::Object(args)
-}
-
 fn invoke(command: &str, args: serde_json::Value) -> Request {
     Request::Invoke(Invoke {
         command: command.to_string(),
@@ -269,178 +197,129 @@ fn invoke(command: &str, args: serde_json::Value) -> Request {
     })
 }
 
-/// `new-terminal`/`new-agent`'s wire args -- the mirror image of
-/// the server side's `dispatch_invoke` parsing. `split`/`prompt`/`role`/
-/// `issuer` are only included when
-/// present, so an unadorned `new-terminal`/`new-agent` sends the same
-/// `{\"activate\":false}` shape v1 already sent (plus the always-present
-/// `activate` field the Second revision adds). `issuer` is
-/// the dispatching pane's session id (issue 013), omitted when the CLI
-/// runs outside any pane.
-fn create_session_args(
-    split: Option<&str>,
-    activate: bool,
-    prompt: Option<&str>,
-    role: Option<&str>,
-    issuer: Option<&str>,
-) -> serde_json::Value {
-    let mut args = serde_json::Map::new();
-    if let Some(split) = split {
-        args.insert(
-            "split".to_string(),
-            serde_json::Value::String(split.to_string()),
-        );
-    }
-    args.insert("activate".to_string(), serde_json::Value::Bool(activate));
-    if let Some(prompt) = prompt {
-        args.insert(
-            "prompt".to_string(),
-            serde_json::Value::String(prompt.to_string()),
-        );
-    }
-    if let Some(role) = role {
-        args.insert(
-            "role".to_string(),
-            serde_json::Value::String(role.to_string()),
-        );
-    }
-    if let Some(issuer) = issuer {
-        args.insert(
-            "issuer".to_string(),
-            serde_json::Value::String(issuer.to_string()),
-        );
-    }
-    serde_json::Value::Object(args)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::SplitFlag;
 
-    fn new_terminal(split: Option<SplitFlag>, activate: bool) -> Subcommand {
-        Subcommand::NewTerminal { split, activate }
-    }
-
-    fn preview(name: Option<&str>, split: Option<SplitFlag>, activate: bool) -> Subcommand {
-        Subcommand::Preview {
-            path: std::path::PathBuf::from("/tmp/p.wasm"),
-            name: name.map(str::to_string),
-            arguments: Vec::new(),
-            directory: std::path::PathBuf::new(),
+    /// `new <plugin>` with `arguments` and those `named`, from `/work`.
+    fn new(
+        plugin: &str,
+        arguments: &[&str],
+        named: &[(&str, &str)],
+        split: Option<SplitFlag>,
+        activate: bool,
+    ) -> Subcommand {
+        Subcommand::New {
+            plugin: plugin.to_string(),
+            arguments: arguments.iter().map(|text| text.to_string()).collect(),
+            named: (named.iter())
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            directory: std::path::PathBuf::from("/work"),
             split,
             activate,
         }
     }
 
-    #[test]
-    fn preview_sends_an_extension_s_arguments_and_where_the_caller_is() {
-        let package = Subcommand::Preview {
-            path: std::path::PathBuf::from("/work/target/extensions/markdown"),
-            name: None,
-            arguments: vec!["README.md".to_string()],
-            directory: std::path::PathBuf::from("/work"),
-            split: None,
-            activate: false,
-        };
-        let Request::Invoke(invoke) = to_request(&package, None, None) else {
+    fn new_terminal(split: Option<SplitFlag>, activate: bool) -> Subcommand {
+        new("terminal", &[], &[], split, activate)
+    }
+
+    /// What `new` sends, the request made for `subcommand`.
+    fn sent(
+        subcommand: &Subcommand,
+        split: Option<&str>,
+        issuer: Option<&str>,
+    ) -> serde_json::Value {
+        let Request::Invoke(invoke) = to_request(subcommand, split, issuer) else {
             panic!("expected an invoke");
         };
+        assert_eq!(invoke.command, "new");
+        invoke.args
+    }
+
+    #[test]
+    fn new_sends_the_plugin_what_was_given_and_where_the_caller_is() {
         assert_eq!(
-            invoke.args,
+            sent(&new_terminal(None, false), None, None),
             serde_json::json!({
-                "path": "/work/target/extensions/markdown",
-                "arguments": ["README.md"],
+                "plugin": "terminal",
+                "arguments": [],
+                "named": {},
                 "directory": "/work",
                 "activate": false
             })
         );
-    }
-
-    #[test]
-    fn preview_sends_the_path_and_nothing_it_was_not_given() {
-        let Request::Invoke(invoke) = to_request(&preview(None, None, false), None, None) else {
-            panic!("expected an invoke");
-        };
-        assert_eq!(invoke.command, "preview");
         assert_eq!(
-            invoke.args,
-            serde_json::json!({ "path": "/tmp/p.wasm", "activate": false })
+            sent(
+                &new(
+                    "preview",
+                    &["x.wasm", "README.md"],
+                    &[("name", "sample")],
+                    None,
+                    true
+                ),
+                None,
+                None,
+            ),
+            serde_json::json!({
+                "plugin": "preview",
+                "arguments": ["x.wasm", "README.md"],
+                "named": {"name": "sample"},
+                "directory": "/work",
+                "activate": true
+            })
+        );
+        assert_eq!(
+            sent(
+                &new(
+                    "agent",
+                    &[],
+                    &[("prompt", "fix the bug"), ("role", "keeper")],
+                    None,
+                    false
+                ),
+                None,
+                None,
+            )["named"],
+            serde_json::json!({"prompt": "fix the bug", "role": "keeper"})
         );
     }
 
     #[test]
-    fn preview_sends_the_name_the_resolved_split_and_activate() {
-        let Request::Invoke(invoke) = to_request(
-            &preview(Some("sample"), Some(SplitFlag::Here), true),
+    fn new_carries_the_resolved_split_and_the_issuer_only_when_there_is_one() {
+        let bare = sent(&new_terminal(None, false), None, None);
+        assert!(bare.get("split").is_none() && bare.get("issuer").is_none());
+        let both = sent(
+            &new_terminal(Some(SplitFlag::Here), false),
             Some("resolved-session"),
-            None,
-        ) else {
-            panic!("expected an invoke");
-        };
+            Some("issuer-session"),
+        );
+        assert_eq!(both["split"], "resolved-session");
+        assert_eq!(both["issuer"], "issuer-session");
+        // (An explicit split is not the issuer's.)
+        let apart = sent(
+            &new(
+                "agent",
+                &[],
+                &[],
+                Some(SplitFlag::Explicit("s-1".to_string())),
+                false,
+            ),
+            Some("s-1"),
+            Some("s-2"),
+        );
         assert_eq!(
-            invoke.args,
-            serde_json::json!({
-                "path": "/tmp/p.wasm",
-                "name": "sample",
-                "split": "resolved-session",
-                "activate": true
-            })
+            (&apart["split"], &apart["issuer"]),
+            (&"s-1".into(), &"s-2".into())
         );
     }
 
     #[test]
-    fn preview_is_not_destructive_and_keeps_its_external_name() {
-        assert_eq!(external_name(&preview(None, None, false)), "preview");
-        assert!(!is_destructive(&preview(None, None, false)));
-    }
-
-    #[test]
-    fn markdown_sends_the_path_the_resolved_split_and_activate_and_no_name() {
-        let markdown = Subcommand::Markdown {
-            path: std::path::PathBuf::from("/notes/index.md"),
-            split: Some(SplitFlag::Here),
-            activate: true,
-        };
-        assert_eq!(external_name(&markdown), "markdown");
-        assert!(!is_destructive(&markdown));
-        let Request::Invoke(invoke) = to_request(&markdown, Some("resolved-session"), None) else {
-            panic!("expected an invoke");
-        };
-        assert_eq!(invoke.command, "markdown");
-        assert_eq!(
-            invoke.args,
-            serde_json::json!({
-                "path": "/notes/index.md",
-                "split": "resolved-session",
-                "activate": true
-            })
-        );
-    }
-
-    #[test]
-    fn new_sends_the_plugin_its_arguments_and_where_the_caller_is() {
-        let new = Subcommand::New {
-            plugin: "markdown".to_string(),
-            arguments: vec!["index.md".to_string()],
-            directory: std::path::PathBuf::from("/notes"),
-            split: Some(SplitFlag::Here),
-            activate: false,
-        };
-        let Request::Invoke(invoke) = to_request(&new, Some("resolved-session"), None) else {
-            panic!("expected an invoke");
-        };
-        assert_eq!(invoke.command, "new");
-        assert_eq!(
-            invoke.args,
-            serde_json::json!({
-                "plugin": "markdown",
-                "arguments": ["index.md"],
-                "directory": "/notes",
-                "split": "resolved-session",
-                "activate": false
-            })
-        );
+    fn new_is_not_destructive_and_keeps_its_external_name() {
+        assert_eq!(external_name(&new_terminal(None, false)), "new");
+        assert!(!is_destructive(&new_terminal(None, false)));
     }
 
     #[test]
@@ -455,19 +334,9 @@ mod tests {
         assert_eq!(invoke.args, serde_json::json!({ "name": "back" }));
     }
 
-    fn new_agent(prompt: Option<&str>, split: Option<SplitFlag>, activate: bool) -> Subcommand {
-        Subcommand::NewAgent {
-            prompt: prompt.map(str::to_string),
-            role: None,
-            split,
-            activate,
-        }
-    }
-
     #[test]
     fn external_name_matches_the_cli_subcommand_string() {
-        assert_eq!(external_name(&new_terminal(None, false)), "new-terminal");
-        assert_eq!(external_name(&new_agent(None, None, false)), "new-agent");
+        assert_eq!(external_name(&new_terminal(None, false)), "new");
         assert_eq!(
             external_name(&Subcommand::Attach {
                 session_id: "s-1".to_string(),
@@ -565,121 +434,6 @@ mod tests {
         };
         assert_eq!(cont.command, "continue-turn");
         assert_eq!(cont.args, serde_json::json!({ "session_id": "s-1" }));
-    }
-
-    #[test]
-    fn new_terminal_with_no_flags_sends_activate_false_and_no_split() {
-        let Request::Invoke(invoke) = to_request(&new_terminal(None, false), None, None) else {
-            panic!("expected an Invoke request");
-        };
-        assert_eq!(invoke.command, "new-terminal");
-        assert_eq!(invoke.args, serde_json::json!({ "activate": false }));
-    }
-
-    #[test]
-    fn new_terminal_with_active_sends_activate_true() {
-        let Request::Invoke(invoke) = to_request(&new_terminal(None, true), None, None) else {
-            panic!("expected an Invoke request");
-        };
-        assert_eq!(invoke.args, serde_json::json!({ "activate": true }));
-    }
-
-    #[test]
-    fn new_terminal_carries_the_resolved_split_target() {
-        let Request::Invoke(invoke) = to_request(
-            &new_terminal(Some(SplitFlag::Here), false),
-            Some("s-1"),
-            None,
-        ) else {
-            panic!("expected an Invoke request");
-        };
-        assert_eq!(
-            invoke.args,
-            serde_json::json!({ "split": "s-1", "activate": false })
-        );
-    }
-
-    #[test]
-    fn new_agent_without_prompt_sends_activate_false_and_no_prompt() {
-        let Request::Invoke(invoke) = to_request(&new_agent(None, None, false), None, None) else {
-            panic!("expected an Invoke request");
-        };
-        assert_eq!(invoke.command, "new-agent");
-        assert_eq!(invoke.args, serde_json::json!({ "activate": false }));
-    }
-
-    #[test]
-    fn new_agent_with_prompt_and_split_and_active_carries_all_three() {
-        let Request::Invoke(invoke) = to_request(
-            &new_agent(
-                Some("fix the bug"),
-                Some(SplitFlag::Explicit("s-1".to_string())),
-                true,
-            ),
-            Some("s-1"),
-            None,
-        ) else {
-            panic!("expected an Invoke request");
-        };
-        assert_eq!(
-            invoke.args,
-            serde_json::json!({ "split": "s-1", "activate": true, "prompt": "fix the bug" })
-        );
-    }
-
-    #[test]
-    fn new_terminal_with_issuer_carries_it_in_the_args() {
-        let Request::Invoke(invoke) = to_request(
-            &new_terminal(None, false),
-            None,
-            Some("00000000-0000-0000-0000-000000000001"),
-        ) else {
-            panic!("expected an Invoke request");
-        };
-        assert_eq!(invoke.command, "new-terminal");
-        assert_eq!(
-            invoke.args,
-            serde_json::json!({
-                "activate": false,
-                "issuer": "00000000-0000-0000-0000-000000000001"
-            })
-        );
-    }
-
-    #[test]
-    fn new_agent_with_issuer_and_split_carries_both() {
-        let Request::Invoke(invoke) = to_request(
-            &new_agent(
-                Some("fix the bug"),
-                Some(SplitFlag::Explicit("s-1".to_string())),
-                true,
-            ),
-            Some("s-1"),
-            Some("00000000-0000-0000-0000-000000000002"),
-        ) else {
-            panic!("expected an Invoke request");
-        };
-        assert_eq!(invoke.command, "new-agent");
-        assert_eq!(
-            invoke.args,
-            serde_json::json!({
-                "split": "s-1",
-                "activate": true,
-                "prompt": "fix the bug",
-                "issuer": "00000000-0000-0000-0000-000000000002"
-            })
-        );
-    }
-
-    #[test]
-    fn no_issuer_key_when_issuer_is_none() {
-        let Request::Invoke(invoke) = to_request(&new_agent(None, None, false), None, None) else {
-            panic!("expected an Invoke request");
-        };
-        assert!(
-            !invoke.args.as_object().unwrap().contains_key("issuer"),
-            "args should not contain an issuer key when issuer is None"
-        );
     }
 
     #[test]
@@ -852,26 +606,5 @@ mod tests {
             to_request(&Subcommand::State, None, None),
             Request::Query(q) if q.what == "state"
         ));
-    }
-
-    #[test]
-    fn new_agent_with_role_carries_it_in_the_args() {
-        let Request::Invoke(invoke) = to_request(
-            &Subcommand::NewAgent {
-                prompt: None,
-                role: Some("keeper".to_string()),
-                split: None,
-                activate: false,
-            },
-            None,
-            None,
-        ) else {
-            panic!("expected an Invoke request");
-        };
-        assert_eq!(invoke.command, "new-agent");
-        assert_eq!(
-            invoke.args,
-            serde_json::json!({ "activate": false, "role": "keeper" })
-        );
     }
 }

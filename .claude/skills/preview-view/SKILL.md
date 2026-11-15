@@ -44,7 +44,7 @@ still builds for the plugin's target.
 
 ```sh
 cargo build -p horizon-preview-plugin --target wasm32-wasip2
-horizon preview target/wasm32-wasip2/debug/horizon_preview_plugin.wasm --name <preview>
+horizon new preview target/wasm32-wasip2/debug/horizon_preview_plugin.wasm --name <preview>
 ```
 
 opens a preview pane in the Horizon the command reaches (the one whose

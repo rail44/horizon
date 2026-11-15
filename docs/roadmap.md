@@ -251,7 +251,7 @@ lands:
   views on the session-less pane plumbing the theme settings view
   introduced (`PaneKind::View`, `docs/theme-settings-view-design.md`).
   Markdown implemented 2026-11-08 (`src/markdown/`, opened with
-  `horizon markdown <path>`): a generic viewer of any Markdown file —
+  `horizon new markdown <path>`): a generic viewer of any Markdown file —
   front matter as a heading plus chips, relative `.md` links followed in
   the pane with a back history, live reload on change, and the file
   persisted on the model's pane (`Pane::document`) so a restart restores
@@ -739,7 +739,7 @@ decision; its design record was deleted with it and remains in git history.
 A view from an unmerged branch shown inside a pane of the running Horizon:
 compiled into a `wasm32-wasip2` plugin that has the view's signals and
 handlers, shown in the shell's own document, read again when the file
-changes, opened with `horizon preview`. The root package is a library plus
+changes, opened with `horizon new preview`. The root package is a library plus
 a thin binary so the plugin can link the views.
 `docs/preview-pane-design.md` describes the design and what does not cross
 to a plugin. The board's list is the one view carried this way

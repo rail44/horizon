@@ -373,7 +373,7 @@ The decisions and who made them are on board #76. What they come to:
   with the component's commands when the component is loaded
   (`src/extension.rs`). A pane keeps the state as WAVE text. The
   component's file is what is named wherever an extension is: the
-  configuration's `extensions`, and `horizon preview`. One file is also
+  configuration's `extensions`, and `horizon new preview`. One file is also
   what the Wasm registries carry (OCI, `wkg`), should extensions be
   handed out that way.
 - **An extension written in Rust says its shape once**

@@ -1371,6 +1371,24 @@ impl crate::plugin::Plugin for WikiPlugin {
         Vec::new()
     }
 
+    /// A page of the wiki of the project the pane was asked for in: the
+    /// overview, unless a page is named.
+    fn create(mut given: crate::plugin::Given) -> Result<crate::markdown::DocumentState, String> {
+        let page = given.argument().unwrap_or_else(|| "index".to_string());
+        let store = horizon_wiki::Store::for_dir(&given.directory).ok_or_else(|| {
+            format!(
+                "{} is not in a repository with a wiki",
+                given.directory.display()
+            )
+        })?;
+        let path = store.page_path(&page).map_err(|error| error.to_string())?;
+        if !path.is_file() {
+            return Err(format!("the wiki has no page `{page}`"));
+        }
+        given.done()?;
+        Ok(crate::markdown::DocumentState { path: Some(path) })
+    }
+
     fn title(state: &crate::markdown::DocumentState) -> String {
         state.file_name().unwrap_or_else(|| Self::TITLE.to_string())
     }

@@ -19,7 +19,7 @@ happens, and report friction/bugs with evidence.
 
 ## The loop
 
-**Spawn.** `horizon new-agent --prompt "<prompt>"` creates an agent
+**Spawn.** `horizon new agent --prompt "<prompt>"` creates an agent
 session and sends the prompt. The session starts in the issuing
 terminal's directory — its shell's cwd as `horizon-terminald` last
 published it, so a `cd` inside a program running in that shell (e.g. a
@@ -33,10 +33,10 @@ session's root moves there at the next turn boundary (the pane's
 directory follows live). `--split [<session-id>]`
 to place it in a split (bare `--split` splits off the pane you're
 running in; pass a session-id to split off a different pane) /
-`--active` to activate the new pane, `new-config-agent` for the
+`--active` to activate the new pane, `--role config` for the
 config role. Destructive verbs need `--yes`.
 
-**Identify.** Since `6b0c57a` (2026-07-25), `new-agent` echoes the created
+**Identify.** Since `6b0c57a` (2026-07-25), `new agent` echoes the created
 session id — `OK <session-id>` in human mode, `payload.session_id` under
 `--json`. Use that; do not diff `horizon sessions --json` before/after
 (racy when spawns interleave — the old workaround this replaced). Caveat:

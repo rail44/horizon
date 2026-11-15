@@ -132,6 +132,10 @@ impl Plugin for AgentPlugin {
         ]
     }
 
+    fn create(given: crate::plugin::Given) -> Result<(), String> {
+        Self::begin(given).map(|_| ())
+    }
+
     fn mount(self, _: (), ask: Callback<AgentAsked>) -> Mounted<(), AgentPaneCommand> {
         self.mount_keeping(ask).0
     }
@@ -141,6 +145,28 @@ impl SessionPlugin for AgentPlugin {
     const KIND: horizon_workspace::SessionKind = horizon_workspace::SessionKind::Agent;
     type Session = AgentSession;
     type Runtime = Agentd;
+
+    /// The role it works in (`--role`), one a person can start an agent
+    /// in, and what it is told first (`--prompt`).
+    fn begin(mut given: crate::plugin::Given) -> Result<crate::plugin::Begins, String> {
+        let role = given
+            .named("role")
+            .map(|role| {
+                let known = horizon_agent::roles::user_launchable();
+                if !known.iter().any(|known| known.id == role) {
+                    let available: Vec<&str> = known.iter().map(|known| known.title).collect();
+                    return Err(format!(
+                        "unknown role: {role} (available: {})",
+                        available.join(", ")
+                    ));
+                }
+                Ok(horizon_agent::roles::RoleId(role))
+            })
+            .transpose()?;
+        let prompt = given.named("prompt");
+        given.done()?;
+        Ok(crate::plugin::Begins { role, prompt })
+    }
 
     fn running(runtime: &Agentd) -> Result<Vec<Running>, String> {
         runtime.running()

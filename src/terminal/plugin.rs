@@ -77,6 +77,10 @@ impl Plugin for TerminalPlugin {
         ]
     }
 
+    fn create(given: crate::plugin::Given) -> Result<(), String> {
+        given.done()
+    }
+
     fn mount(
         self,
         _: (),
@@ -90,6 +94,11 @@ impl SessionPlugin for TerminalPlugin {
     const KIND: horizon_workspace::SessionKind = horizon_workspace::SessionKind::Terminal;
     type Session = Session;
     type Runtime = Terminald;
+
+    fn begin(given: crate::plugin::Given) -> Result<crate::plugin::Begins, String> {
+        given.done()?;
+        Ok(crate::plugin::Begins::default())
+    }
 
     fn running(runtime: &Terminald) -> Result<Vec<Running>, String> {
         let running = runtime.handle().terminal_list()?;

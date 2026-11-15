@@ -583,7 +583,10 @@ fn the_control_plane_makes_lists_attaches_and_ends_sessions() {
     let id = |session: SessionId| session.as_uuid().to_string();
 
     // A terminal beside the first, without taking the focus.
-    let made = invoke("new-terminal", serde_json::json!({ "split": id(session) }));
+    let made = invoke(
+        "new",
+        serde_json::json!({ "plugin": "terminal", "split": id(session) }),
+    );
     let EnvelopeBody::Ok {
         session_id: Some(made),
     } = made
@@ -632,7 +635,13 @@ fn the_control_plane_makes_lists_attaches_and_ends_sessions() {
     // What is not a command, and what this shell has no runtime for.
     for (command, args) in [
         ("no-such-command", serde_json::json!({})),
-        ("new-agent", serde_json::json!({})),
+        ("new", serde_json::json!({ "plugin": "agent" })),
+        ("new", serde_json::json!({ "plugin": "no-such-plugin" })),
+        // (What a plugin does not take is refused.)
+        (
+            "new",
+            serde_json::json!({ "plugin": "terminal", "arguments": ["extra"] }),
+        ),
         (
             "terminate-session",
             serde_json::json!({ "session_id": made }),
@@ -662,8 +671,12 @@ fn the_control_plane_opens_a_markdown_file_in_a_pane_that_follows_its_links() {
     // what it changed.
     let open_file = |path: &std::path::Path| {
         let answer = opened.shell.control(&ControlRequest::Invoke(Invoke {
-            command: "markdown".to_string(),
-            args: serde_json::json!({ "path": path, "activate": true }),
+            command: "new".to_string(),
+            args: serde_json::json!({
+                "plugin": "markdown",
+                "arguments": [path],
+                "activate": true,
+            }),
         }));
         opened.app.run_effects();
         opened.app.resolve();
@@ -851,18 +864,50 @@ fn the_control_plane_opens_a_wiki_page_in_a_pane() {
     use horizon_control::contract::{EnvelopeBody, Invoke};
     use horizon_control::host::executor::ControlRequest;
 
+    // A project (a repository), and a data home of the test's own for its
+    // wiki: the page is found from where the pane was asked for.
     let directory = std::env::temp_dir().join(format!("hzb-wiki-{}", std::process::id()));
-    let store = horizon_wiki::Store::at(directory.join("project"));
+    let project = directory.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    // (Git's own variables, set where the tests run from a hook of git's,
+    // would name another repository than the one made here.)
+    // SAFETY: nextest runs each test in a process of its own.
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            unsafe { std::env::remove_var(name) };
+        }
+    }
+    unsafe { std::env::set_var("XDG_DATA_HOME", directory.join("data")) };
+    let made = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&project)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let store = horizon_wiki::Store::for_dir(&project).expect("the project's wiki");
     store
         .write_page("index", "---\ntitle: Overview\n---\nWhat the project is.\n")
         .unwrap();
     let page = store.page_path("index").unwrap();
 
     let opened = open();
-    let answer = opened.shell.control(&ControlRequest::Invoke(Invoke {
-        command: "wiki".to_string(),
-        args: serde_json::json!({ "path": page, "activate": true }),
-    }));
+    let ask = |arguments: serde_json::Value| {
+        opened.shell.control(&ControlRequest::Invoke(Invoke {
+            command: "new".to_string(),
+            args: serde_json::json!({
+                "plugin": "wiki",
+                "arguments": arguments,
+                "directory": project,
+                "activate": true,
+            }),
+        }))
+    };
+    // A page there is not is refused, and so is a directory that is no
+    // project's.
+    let missing = ask(serde_json::json!(["no-such-page"]));
+    assert!(matches!(missing, EnvelopeBody::Error(_)), "{missing:?}");
+    // (With no page named, the overview.)
+    let answer = ask(serde_json::json!([]));
     assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
     opened.app.run_effects();
     opened.app.resolve();

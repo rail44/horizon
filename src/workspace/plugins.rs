@@ -21,9 +21,9 @@ mod styles {
                            white-space: pre-wrap; }
 "}
 }
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use horizon_workspace::{PaneId, PluginPane, SessionId, Workspace};
+use horizon_workspace::{PaneId, PluginPane, SessionId};
 
 use super::Shell;
 use crate::agent::plugin::AgentPlugin;
@@ -34,7 +34,7 @@ use crate::board::plugin::{
 use crate::board::{list, thread};
 use crate::extension::Extension;
 use crate::markdown::{DocumentState, MarkdownPlugin};
-use crate::plugin::{Mounted, Plugin};
+use crate::plugin::{Given, Mounted, Plugin};
 use crate::plugin_host::Asks;
 use crate::preview::{PreviewPlugin, Target};
 use crate::terminal::plugin::TerminalPlugin;
@@ -414,6 +414,36 @@ impl Shell {
     }
 }
 
+/// The names of the plugins this shell has of its own.
+pub(super) const NAMES: [&str; 8] = [
+    TerminalPlugin::NAME,
+    AgentPlugin::NAME,
+    BoardListPlugin::NAME,
+    BoardThreadPlugin::NAME,
+    MarkdownPlugin::NAME,
+    WikiPlugin::NAME,
+    PreviewPlugin::NAME,
+    ThemeSettingsPlugin::NAME,
+];
+
+/// The pane the view plugin `name` of this shell's own makes from what
+/// was `given` for it; `None` when no such plugin has the name (a
+/// terminal and an agent are sessions, made as those are).
+pub(super) fn created(name: &str, given: Given) -> Option<Result<PluginPane, String>> {
+    fn made<P: Plugin>(given: Given) -> Result<PluginPane, String> {
+        Ok(pane::<P>(P::create(given)?))
+    }
+    Some(match name {
+        BoardListPlugin::NAME => made::<BoardListPlugin>(given),
+        BoardThreadPlugin::NAME => made::<BoardThreadPlugin>(given),
+        MarkdownPlugin::NAME => made::<MarkdownPlugin>(given),
+        WikiPlugin::NAME => made::<WikiPlugin>(given),
+        PreviewPlugin::NAME => made::<PreviewPlugin>(given),
+        ThemeSettingsPlugin::NAME => made::<ThemeSettingsPlugin>(given),
+        _ => return None,
+    })
+}
+
 /// A preview pane on `target`.
 pub(super) fn preview_of(target: Option<Target>) -> PluginPane {
     pane::<PreviewPlugin>(target)
@@ -441,16 +471,6 @@ pub(super) fn document(name: &str, path: Option<PathBuf>) -> Option<PluginPane> 
         WIKI => Some(pane::<WikiPlugin>(state)),
         _ => None,
     }
-}
-
-/// The pane of the document view `name` that shows `path`, if any.
-pub(super) fn document_pane(model: &Workspace, name: &str, path: &Path) -> Option<PaneId> {
-    (model.all_pane_ids().into_iter()).find(|pane| {
-        model.pane_plugin(*pane).is_some_and(|plugin| {
-            let state = serde_json::from_value::<DocumentState>(plugin.state.clone());
-            plugin.name == name && state.is_ok_and(|state| state.path.as_deref() == Some(path))
-        })
-    })
 }
 
 /// A list pane.

@@ -379,6 +379,12 @@ impl crate::plugin::Plugin for MarkdownPlugin {
         Vec::new()
     }
 
+    fn create(mut given: crate::plugin::Given) -> Result<DocumentState, String> {
+        let path = given.file("a Markdown file")?;
+        given.done()?;
+        Ok(DocumentState { path: Some(path) })
+    }
+
     fn title(state: &DocumentState) -> String {
         state.file_name().unwrap_or_else(|| Self::TITLE.to_string())
     }

@@ -15,7 +15,7 @@ pub(super) struct Arguments {
 pub(super) struct CommandOptions {
     pub(super) prompt: Option<String>,
     pub(super) role: Option<String>,
-    pub(super) preview_name: Option<String>,
+    pub(super) name: Option<String>,
     pub(super) split: Option<SplitFlag>,
     pub(super) active: bool,
     pub(super) reason: Option<String>,
@@ -23,29 +23,19 @@ pub(super) struct CommandOptions {
 
 impl CommandOptions {
     pub(super) fn validate_unused(&self) -> Result<(), UsageError> {
-        if self.prompt.is_some() {
-            return Err(UsageError(
-                "--prompt is only valid with new-agent".to_string(),
-            ));
-        }
-        if self.role.is_some() {
-            return Err(UsageError(
-                "--role is only valid with new-agent".to_string(),
-            ));
-        }
-        if self.preview_name.is_some() {
-            return Err(UsageError("--name is only valid with preview".to_string()));
-        }
-        if self.split.is_some() {
-            return Err(UsageError(
-                "--split is only valid with new-terminal/new-agent/preview/markdown/wiki"
-                    .to_string(),
-            ));
+        for (flag, given) in [
+            ("--prompt", self.prompt.is_some()),
+            ("--role", self.role.is_some()),
+            ("--name", self.name.is_some()),
+            ("--split", self.split.is_some()),
+        ] {
+            if given {
+                return Err(UsageError(format!("{flag} is only valid with new")));
+            }
         }
         if self.active {
             return Err(UsageError(
-                "--active is only valid with new-terminal/new-agent/preview/markdown/wiki/attach"
-                    .to_string(),
+                "--active is only valid with new/attach".to_string(),
             ));
         }
 
@@ -77,9 +67,7 @@ pub(super) fn scan(args: &[String]) -> Result<Arguments, UsageError> {
             "--active" if inline.is_none() => parsed.options.active = true,
             "--reason" => parsed.options.reason = Some(required_value(flag, inline, &mut iter)?),
             "--prompt" => parsed.options.prompt = Some(required_value(flag, inline, &mut iter)?),
-            "--name" => {
-                parsed.options.preview_name = Some(required_value(flag, inline, &mut iter)?)
-            }
+            "--name" => parsed.options.name = Some(required_value(flag, inline, &mut iter)?),
             "--role" => parsed.options.role = Some(required_value(flag, inline, &mut iter)?),
             "--split" => {
                 parsed.options.split = Some(match inline {

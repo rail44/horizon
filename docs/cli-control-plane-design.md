@@ -136,15 +136,26 @@ Four amendments settled after v1 shipped and was exercised end-to-end:
 ## Plugins on the command line
 
 A new pane is one command, and the plugin it shows is that command's
-argument: `horizon new <plugin> [<argument>...] [--split] [--active]`.
-The arguments are what the plugin says its pane is made from
-(`docs/extension-boundary-design.md`): the client sends them as they
-were typed, with its working directory, and the shell, which knows
-their types, takes a file among them as a path from that directory. A
-pane that shows the same already is made again in its place. Built so
-far for extensions; the built-in views still have subcommands of their
-own (`new-terminal`, `new-agent`, `markdown`, `preview`, `wiki`), which
-this takes the place of.
+argument: `horizon new <plugin> [<argument>...] [--split] [--active]`,
+for a terminal, an agent, a view of the shell's own and an extension
+alike (`new terminal`, `new agent --prompt .. --role ..`,
+`new markdown <path>`, `new wiki [<page>]`, `new preview <wasm>
+[--name ..]`). The subcommands each of those had (`new-terminal`,
+`new-agent`, `markdown`, `preview`, `wiki`) are gone.
+
+What follows the plugin's name is what the plugin says its pane is made
+from (`docs/extension-boundary-design.md`): the client sends it as it
+was typed -- in order, and what was given by name (`--prompt`, `--role`,
+`--name`) -- with its working directory, and the shell, which knows the
+plugin, reads it. A file among them is a path from that directory, and
+the project a wiki's page is of is the one that directory is in. What a
+plugin does not take is refused. A view that shows the same already is
+made again in its place; a terminal or an agent is a new session each
+time, and its id is the answer.
+
+Inside the shell every plugin says what its pane is made from the same
+way: a built-in one in `Plugin::create` (`src/plugin.rs`; a session's in
+`SessionPlugin::begin`), an extension in the `create` it exports.
 
 A subcommand that is not one of the client's own is a command of the
 plugin the cursor's pane shows, by the name the palette lists it under

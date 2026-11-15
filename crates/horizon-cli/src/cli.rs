@@ -13,8 +13,9 @@
 
 mod options;
 
+use std::collections::BTreeMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Flags meaningful across every subcommand.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,68 +39,24 @@ pub enum SplitFlag {
     Explicit(String),
 }
 
-/// One parsed subcommand, external name and all, per the task's "外部名と
-/// 1:1" command list. [`crate::commands`] is the mapping table from this
-/// type to the wire request. `NewTerminal`/`NewAgent`/`Attach` carry
-/// `activate` (the CLI's `--active`, wired to `docs/cli-control-plane-
-/// design.md`'s "activate rides on creating/attaching operations" decision)
-/// and (for the first two) `split` (the CLI's `--split`, "Placement
-/// vocabulary"). `NewAgent` also carries `role` (`--role <id>`): the role id to spawn the agent session with
-/// (validated server-side by the shell's control-plane dispatch, which knows
-/// the set of user-launchable roles).
+/// One parsed subcommand, external name and all. [`crate::commands`] is
+/// the mapping table from this type to the wire request. `New` and
+/// `Attach` carry `activate` (the CLI's `--active`, wired to
+/// `docs/cli-control-plane-design.md`'s "activate rides on
+/// creating/attaching operations" decision), and `New` carries `split`
+/// (the CLI's `--split`, "Placement vocabulary").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subcommand {
-    NewTerminal {
-        split: Option<SplitFlag>,
-        activate: bool,
-    },
-    NewAgent {
-        prompt: Option<String>,
-        role: Option<String>,
-        split: Option<SplitFlag>,
-        activate: bool,
-    },
-    /// Shows a `wasm32-wasip2` preview plugin in a pane, or reloads the
-    /// pane that already shows that artifact. `name` selects one of the
-    /// previews inside the plugin; `None` leaves the choice to the server's
-    /// default. `path` is made absolute by [`crate::run`] before it goes on
-    /// the wire, since the shell's cwd is not the caller's.
-    Preview {
-        path: PathBuf,
-        name: Option<String>,
-        /// For an extension's component: what its pane is made from, as
-        /// typed, a file among them a path from `directory` (the caller's
-        /// working directory, filled in by [`crate::run`]).
-        arguments: Vec<String>,
-        directory: PathBuf,
-        split: Option<SplitFlag>,
-        activate: bool,
-    },
-    /// Shows a Markdown file in a pane, or re-reads it in the pane that
-    /// already shows it. `path` is made absolute by [`crate::run`], as
-    /// `Preview`'s is.
-    Markdown {
-        path: PathBuf,
-        split: Option<SplitFlag>,
-        activate: bool,
-    },
-    /// Shows a page of the caller's project wiki (`index` when `page` is
-    /// left out) in a wiki pane, or re-reads it in the pane already
-    /// showing it. `path` is the page's file, filled in by [`crate::run`]
-    /// from the caller's cwd; `parse` leaves it empty.
-    Wiki {
-        page: String,
-        path: PathBuf,
-        split: Option<SplitFlag>,
-        activate: bool,
-    },
-    /// A new pane of a plugin: `arguments` are what the plugin's pane is
-    /// made from, as the plugin declares them (a file is a path, taken
-    /// from `directory`, the caller's working directory, which
-    /// [`crate::run`] fills in; `parse` leaves it empty).
+    /// A new pane of a plugin: a terminal, an agent, a view, an extension.
+    /// `arguments`, and those `named` (`--prompt`, `--role`, `--name`),
+    /// are what the plugin's pane is made from, as the plugin says; the
+    /// shell, which knows the plugin, reads them. A file among them is a
+    /// path from `directory`, the caller's working directory, which
+    /// [`crate::run`] fills in; `parse` leaves it empty.
     New {
         plugin: String,
         arguments: Vec<String>,
+        named: BTreeMap<String, String>,
         directory: PathBuf,
         split: Option<SplitFlag>,
         activate: bool,
@@ -196,13 +153,16 @@ impl fmt::Display for UsageError {
 const USAGE: &str = "Usage: horizon [--socket <path>] [--json] [--yes] <subcommand> [args]\n\
 Running `horizon` with no subcommand launches the GUI application.\n\
 Subcommands:\n  \
-  new-terminal [--split [<session-id>]] [--active]\n  \
-  new-agent [--prompt <text>] [--role <id>] [--split [<session-id>]] [--active]\n  \
-  preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]\n  \
-  preview <extension.wasm> [<argument>...] [--split [<session-id>]] [--active]\n  \
-  markdown <path> [--split [<session-id>]] [--active]\n  \
-  wiki [<page>] [--split [<session-id>]] [--active]\n  \
   new <plugin> [<argument>...] [--split [<session-id>]] [--active]\n  \
+      a new pane of a plugin, made from what the plugin takes:\n  \
+      new terminal\n  \
+      new agent [--prompt <text>] [--role <id>]\n  \
+      new markdown <path>\n  \
+      new wiki [<page>]\n  \
+      new preview <plugin.wasm> [--name <preview>]\n  \
+      new preview <extension.wasm> [<argument>...]\n  \
+      new board-list | board-thread <task> | theme-settings\n  \
+      new <extension's name> [<argument>...]\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \
   terminate-all-detached\n  \
@@ -246,57 +206,19 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
         .ok_or_else(|| UsageError("missing subcommand".to_string()))?;
 
     let subcommand = match name.as_str() {
-        "new-terminal" => {
-            reject_extra(&mut positionals, "new-terminal")?;
-            Subcommand::NewTerminal {
-                split: options.split.take(),
-                activate: std::mem::take(&mut options.active),
-            }
-        }
-        "new-agent" => {
-            reject_extra(&mut positionals, "new-agent")?;
-            Subcommand::NewAgent {
-                prompt: options.prompt.take(),
-                role: options.role.take(),
-                split: options.split.take(),
-                activate: std::mem::take(&mut options.active),
-            }
-        }
-        "preview" => {
-            let path = next_required(&mut positionals, "preview", "path-to-wasm")?;
-            Subcommand::Preview {
-                path: PathBuf::from(path),
-                name: options.preview_name.take(),
-                arguments: positionals.by_ref().collect(),
-                directory: PathBuf::new(),
-                split: options.split.take(),
-                activate: std::mem::take(&mut options.active),
-            }
-        }
-        "markdown" => {
-            let path = next_required(&mut positionals, "markdown", "path")?;
-            reject_extra(&mut positionals, "markdown")?;
-            Subcommand::Markdown {
-                path: PathBuf::from(path),
-                split: options.split.take(),
-                activate: std::mem::take(&mut options.active),
-            }
-        }
-        "wiki" => {
-            let page = positionals.next().unwrap_or_else(|| "index".to_string());
-            reject_extra(&mut positionals, "wiki")?;
-            Subcommand::Wiki {
-                page,
-                path: PathBuf::new(),
-                split: options.split.take(),
-                activate: std::mem::take(&mut options.active),
-            }
-        }
         "new" => {
             let plugin = next_required(&mut positionals, "new", "plugin")?;
+            let named = [
+                ("prompt", options.prompt.take()),
+                ("role", options.role.take()),
+                ("name", options.name.take()),
+            ];
             Subcommand::New {
                 plugin,
                 arguments: positionals.by_ref().collect(),
+                named: (named.into_iter())
+                    .filter_map(|(name, value)| Some((name.to_string(), value?)))
+                    .collect(),
                 directory: PathBuf::new(),
                 split: options.split.take(),
                 activate: std::mem::take(&mut options.active),
@@ -430,19 +352,6 @@ fn reject_extra(
     }
 }
 
-/// Makes `path` absolute against `cwd`. The CLI runs in the caller's
-/// working directory and the shell in its own, so a relative
-/// `horizon preview target/.../x.wasm` has to be resolved before it goes on
-/// the wire. Purely lexical -- no filesystem access, so a path that does not
-/// exist yet still resolves and the pane reports the load failure.
-pub fn absolute_path(path: &Path, cwd: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        cwd.join(path)
-    }
-}
-
 /// Resolves the control socket path: `--socket` wins, then `HORIZON_SOCKET`,
 /// then this build's fixed default -- `docs/cli-control-plane-design.md`'s
 /// Second revision ("Fixed well-known socket path"): a client run from
@@ -476,12 +385,7 @@ pub fn resolved_split_for(
     env_session_id: Option<String>,
 ) -> Result<Option<String>, String> {
     match subcommand {
-        Subcommand::NewTerminal { split, .. }
-        | Subcommand::NewAgent { split, .. }
-        | Subcommand::Preview { split, .. }
-        | Subcommand::Markdown { split, .. }
-        | Subcommand::Wiki { split, .. }
-        | Subcommand::New { split, .. } => resolve_split(split.clone(), env_session_id),
+        Subcommand::New { split, .. } => resolve_split(split.clone(), env_session_id),
         _ => Ok(None),
     }
 }
@@ -516,6 +420,26 @@ pub fn resolve_split(
 mod tests {
     use super::*;
 
+    /// `new <plugin>` with `arguments` and those `named`, as parsed.
+    fn new(
+        plugin: &str,
+        arguments: &[&str],
+        named: &[(&str, &str)],
+        split: Option<SplitFlag>,
+        activate: bool,
+    ) -> Subcommand {
+        Subcommand::New {
+            plugin: plugin.to_string(),
+            arguments: arguments.iter().map(|text| text.to_string()).collect(),
+            named: (named.iter())
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            directory: PathBuf::new(),
+            split,
+            activate,
+        }
+    }
+
     fn args(words: &[&str]) -> Vec<String> {
         words.iter().map(|w| w.to_string()).collect()
     }
@@ -538,7 +462,8 @@ mod tests {
     fn option_values_preserve_equals_flag_like_text_and_last_value() {
         let parsed = parse(&args(&[
             "--socket=first",
-            "new-agent",
+            "new",
+            "agent",
             "--prompt",
             "old",
             "--prompt=a=b",
@@ -547,13 +472,15 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(parsed.global.socket, Some(PathBuf::from("last")));
-        assert!(
-            matches!(parsed.subcommand, Subcommand::NewAgent { prompt: Some(ref text), .. } if text == "a=b")
+        assert_eq!(
+            parsed.subcommand,
+            new("agent", &[], &[("prompt", "a=b")], None, false)
         );
-        let parsed = parse(&args(&["new-agent", "--prompt", "--json"])).unwrap();
+        let parsed = parse(&args(&["new", "agent", "--prompt", "--json"])).unwrap();
         assert!(!parsed.global.json);
-        assert!(
-            matches!(parsed.subcommand, Subcommand::NewAgent { prompt: Some(ref text), .. } if text == "--json")
+        assert_eq!(
+            parsed.subcommand,
+            new("agent", &[], &[("prompt", "--json")], None, false)
         );
         assert_eq!(
             parse(&args(&["state", "--json=true"])).unwrap_err().0,
@@ -573,11 +500,11 @@ mod tests {
             parse(&args(&["state", "--prompt=x", "--active"]))
                 .unwrap_err()
                 .0,
-            "--prompt is only valid with new-agent"
+            "--prompt is only valid with new"
         );
         assert_eq!(
             parse(&args(&["state", "--role=custom"])).unwrap_err().0,
-            "--role is only valid with new-agent"
+            "--role is only valid with new"
         );
     }
 
@@ -588,146 +515,96 @@ mod tests {
     }
 
     #[test]
-    fn parses_preview_with_only_a_path() {
-        let parsed = parse(&args(&["preview", "target/p.wasm"])).unwrap();
+    fn new_takes_a_plugin_and_what_its_pane_is_made_from_as_typed() {
+        // What follows the plugin is the plugin's, in order: the shell,
+        // which knows the plugin, reads it.
+        for (typed, plugin, arguments) in [
+            (&["new", "terminal"][..], "terminal", &[][..]),
+            (
+                &["new", "markdown", "notes/index.md"],
+                "markdown",
+                &["notes/index.md"],
+            ),
+            (&["new", "wiki"], "wiki", &[]),
+            (&["new", "wiki", "sandbox"], "wiki", &["sandbox"]),
+            (
+                &["new", "preview", "target/x.wasm", "README.md"],
+                "preview",
+                &["target/x.wasm", "README.md"],
+            ),
+            (&["new", "board-thread", "76"], "board-thread", &["76"]),
+        ] {
+            assert_eq!(
+                parse(&args(typed)).unwrap().subcommand,
+                new(plugin, arguments, &[], None, false),
+                "{typed:?}"
+            );
+        }
         assert_eq!(
-            parsed.subcommand,
-            Subcommand::Preview {
-                path: PathBuf::from("target/p.wasm"),
-                name: None,
-                arguments: Vec::new(),
-                directory: PathBuf::new(),
-                split: None,
-                activate: false,
-            }
+            parse(&args(&["new"])).unwrap_err().0,
+            "new requires a plugin"
         );
     }
 
     #[test]
-    fn preview_takes_what_an_extension_s_pane_is_made_from() {
-        let parsed = parse(&args(&[
-            "preview",
-            "target/extensions/markdown",
-            "README.md",
-        ]))
-        .unwrap();
-        let Subcommand::Preview {
-            path, arguments, ..
-        } = parsed.subcommand
-        else {
-            panic!("expected preview");
-        };
-        assert_eq!(path, PathBuf::from("target/extensions/markdown"));
-        assert_eq!(arguments, ["README.md"]);
-    }
-
-    #[test]
-    fn preview_takes_a_name_a_split_target_and_active() {
-        let parsed = parse(&args(&[
-            "preview",
-            "/tmp/p.wasm",
-            "--name",
-            "sample",
-            "--split",
-            "abc",
-            "--active",
-        ]))
-        .unwrap();
+    fn new_takes_what_is_given_by_name() {
         assert_eq!(
-            parsed.subcommand,
-            Subcommand::Preview {
-                path: PathBuf::from("/tmp/p.wasm"),
-                name: Some("sample".to_string()),
-                arguments: Vec::new(),
-                directory: PathBuf::new(),
-                split: Some(SplitFlag::Explicit("abc".to_string())),
-                activate: true,
-            }
-        );
-    }
-
-    #[test]
-    fn a_bare_split_on_preview_means_here() {
-        let parsed = parse(&args(&["preview", "/tmp/p.wasm", "--split"])).unwrap();
-        let Subcommand::Preview { split, .. } = parsed.subcommand else {
-            panic!("expected preview");
-        };
-        assert_eq!(split, Some(SplitFlag::Here));
-    }
-
-    #[test]
-    fn previews_split_resolves_against_the_pane_session_like_the_others() {
-        let parsed = parse(&args(&["preview", "/tmp/p.wasm", "--split"])).unwrap();
-        assert_eq!(
-            resolved_split_for(&parsed.subcommand, Some("pane-session".to_string())),
-            Ok(Some("pane-session".to_string()))
-        );
-    }
-
-    #[test]
-    fn wiki_defaults_to_the_overview_and_takes_a_split() {
-        let parsed = parse(&args(&["wiki"])).unwrap();
-        assert!(matches!(
-            parsed.subcommand,
-            Subcommand::Wiki { ref page, split: None, activate: false, .. } if page == "index"
-        ));
-        let parsed = parse(&args(&["wiki", "sandbox", "--active"])).unwrap();
-        assert!(matches!(
-            parsed.subcommand,
-            Subcommand::Wiki { ref page, activate: true, .. } if page == "sandbox"
-        ));
-        assert!(parse(&args(&["wiki", "a", "b"])).is_err());
-    }
-
-    #[test]
-    fn markdown_takes_a_path_a_split_and_active_but_no_name() {
-        let parsed = parse(&args(&[
-            "markdown",
-            "notes/index.md",
-            "--split",
-            "--active",
-        ]))
-        .unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::Markdown {
-                path: PathBuf::from("notes/index.md"),
-                split: Some(SplitFlag::Here),
-                activate: true,
-            }
+            parse(&args(&[
+                "new",
+                "preview",
+                "/tmp/p.wasm",
+                "--name",
+                "sample",
+                "--split",
+                "abc",
+                "--active",
+            ]))
+            .unwrap()
+            .subcommand,
+            new(
+                "preview",
+                &["/tmp/p.wasm"],
+                &[("name", "sample")],
+                Some(SplitFlag::Explicit("abc".to_string())),
+                true,
+            )
         );
         assert_eq!(
-            resolved_split_for(&parsed.subcommand, Some("pane-session".to_string())),
-            Ok(Some("pane-session".to_string()))
-        );
-        assert!(parse(&args(&["markdown"])).is_err());
-        assert!(parse(&args(&["markdown", "a.md", "--name", "x"])).is_err());
-    }
-
-    #[test]
-    fn preview_requires_a_path() {
-        assert!(parse(&args(&["preview"])).is_err());
-    }
-
-    #[test]
-    fn name_is_rejected_on_every_other_subcommand() {
-        let err = parse(&args(&["new-terminal", "--name", "sample"])).unwrap_err();
-        assert!(
-            err.0.contains("--name is only valid with preview"),
-            "{err:?}"
-        );
-    }
-
-    #[test]
-    fn a_relative_preview_path_is_resolved_against_the_callers_directory() {
-        assert_eq!(
-            absolute_path(Path::new("target/p.wasm"), Path::new("/work/repo")),
-            PathBuf::from("/work/repo/target/p.wasm")
+            parse(&args(&[
+                "new",
+                "agent",
+                "--role",
+                "config",
+                "--prompt",
+                "make it dark",
+                "--split",
+                "s-1",
+                "--active",
+            ]))
+            .unwrap()
+            .subcommand,
+            new(
+                "agent",
+                &[],
+                &[("prompt", "make it dark"), ("role", "config")],
+                Some(SplitFlag::Explicit("s-1".to_string())),
+                true,
+            )
         );
         assert_eq!(
-            absolute_path(Path::new("/tmp/p.wasm"), Path::new("/work/repo")),
-            PathBuf::from("/tmp/p.wasm")
+            parse(&args(&["new", "agent", "--role=keeper"]))
+                .unwrap()
+                .subcommand,
+            new("agent", &[], &[("role", "keeper")], None, false)
         );
+    }
+
+    #[test]
+    fn what_is_given_by_name_is_only_for_new() {
+        for flag in ["--prompt", "--role", "--name"] {
+            let said = parse(&args(&["sessions", flag, "x"])).unwrap_err().0;
+            assert_eq!(said, format!("{flag} is only valid with new"));
+        }
     }
 
     #[test]
@@ -752,131 +629,37 @@ mod tests {
     }
 
     #[test]
-    fn parses_new_agent_with_prompt() {
-        let parsed = parse(&args(&["new-agent", "--prompt", "fix the bug"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewAgent {
-                prompt: Some("fix the bug".to_string()),
-                role: None,
-                split: None,
-                activate: false,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_new_agent_with_prompt_equals_form() {
-        let parsed = parse(&args(&["new-agent", "--prompt=fix the bug"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewAgent {
-                prompt: Some("fix the bug".to_string()),
-                role: None,
-                split: None,
-                activate: false,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_config_role_with_prompt_and_placement() {
-        let parsed = parse(&args(&[
-            "new-agent",
-            "--role",
-            "config",
-            "--prompt",
-            "make it dark",
-            "--split",
-            "s-1",
-            "--active",
-        ]))
-        .unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewAgent {
-                prompt: Some("make it dark".to_string()),
-                role: Some("config".to_string()),
-                split: Some(SplitFlag::Explicit("s-1".to_string())),
-                activate: true,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_new_agent_without_prompt() {
-        let parsed = parse(&args(&["new-agent"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewAgent {
-                prompt: None,
-                role: None,
-                split: None,
-                activate: false,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_new_terminal_with_active() {
-        let parsed = parse(&args(&["new-terminal", "--active"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewTerminal {
-                split: None,
-                activate: true,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_bare_split_as_here() {
-        let parsed = parse(&args(&["new-terminal", "--split"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewTerminal {
-                split: Some(SplitFlag::Here),
-                activate: false,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_bare_split_as_here_when_followed_by_another_flag() {
-        let parsed = parse(&args(&["new-terminal", "--split", "--active"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewTerminal {
-                split: Some(SplitFlag::Here),
-                activate: true,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_split_with_an_explicit_value() {
-        let parsed = parse(&args(&["new-terminal", "--split", "s-1"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewTerminal {
-                split: Some(SplitFlag::Explicit("s-1".to_string())),
-                activate: false,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_the_split_equals_form() {
-        let parsed = parse(&args(&["new-agent", "--split=s-1"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewAgent {
-                prompt: None,
-                role: None,
-                split: Some(SplitFlag::Explicit("s-1".to_string())),
-                activate: false,
-            }
-        );
+    fn new_takes_a_split_and_active() {
+        for (typed, split, activate) in [
+            (&["new", "terminal", "--active"][..], None, true),
+            (
+                &["new", "terminal", "--split"],
+                Some(SplitFlag::Here),
+                false,
+            ),
+            // (Bare, when another flag follows it.)
+            (
+                &["new", "terminal", "--split", "--active"],
+                Some(SplitFlag::Here),
+                true,
+            ),
+            (
+                &["new", "terminal", "--split", "s-1"],
+                Some(SplitFlag::Explicit("s-1".to_string())),
+                false,
+            ),
+            (
+                &["new", "terminal", "--split=s-1"],
+                Some(SplitFlag::Explicit("s-1".to_string())),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                parse(&args(typed)).unwrap().subcommand,
+                new("terminal", &[], &[], split, activate),
+                "{typed:?}"
+            );
+        }
     }
 
     #[test]
@@ -1048,27 +831,6 @@ mod tests {
     }
 
     #[test]
-    fn new_takes_a_plugin_its_arguments_a_split_and_active() {
-        let parsed = parse(&args(&["new", "markdown", "notes/index.md", "--active"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::New {
-                plugin: "markdown".to_string(),
-                arguments: vec!["notes/index.md".to_string()],
-                directory: PathBuf::new(),
-                split: None,
-                activate: true,
-            }
-        );
-        let split = parse(&args(&["new", "board", "--split"])).unwrap();
-        assert_eq!(
-            resolved_split_for(&split.subcommand, Some("pane-session".to_string())),
-            Ok(Some("pane-session".to_string()))
-        );
-        assert!(parse(&args(&["new"])).is_err());
-    }
-
-    #[test]
     fn unrecognized_flag_is_a_usage_error() {
         assert!(parse(&args(&["sessions", "--bogus"])).is_err());
     }
@@ -1092,46 +854,8 @@ mod tests {
     #[test]
     fn dangling_flag_value_is_a_usage_error() {
         assert!(parse(&args(&["--socket"])).is_err());
-        assert!(parse(&args(&["new-agent", "--prompt"])).is_err());
-        assert!(parse(&args(&["new-agent", "--role"])).is_err());
-    }
-
-    #[test]
-    fn prompt_on_a_non_new_agent_subcommand_is_a_usage_error() {
-        assert!(parse(&args(&["sessions", "--prompt", "x"])).is_err());
-    }
-
-    #[test]
-    fn parses_new_agent_with_role() {
-        let parsed = parse(&args(&["new-agent", "--role", "keeper"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewAgent {
-                prompt: None,
-                role: Some("keeper".to_string()),
-                split: None,
-                activate: false,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_new_agent_with_role_equals_form() {
-        let parsed = parse(&args(&["new-agent", "--role=keeper"])).unwrap();
-        assert_eq!(
-            parsed.subcommand,
-            Subcommand::NewAgent {
-                prompt: None,
-                role: Some("keeper".to_string()),
-                split: None,
-                activate: false,
-            }
-        );
-    }
-
-    #[test]
-    fn role_on_a_non_new_agent_subcommand_is_a_usage_error() {
-        assert!(parse(&args(&["sessions", "--role", "x"])).is_err());
+        assert!(parse(&args(&["new", "agent", "--prompt"])).is_err());
+        assert!(parse(&args(&["new", "agent", "--role"])).is_err());
     }
 
     #[test]
@@ -1192,24 +916,21 @@ mod tests {
     }
 
     #[test]
-    fn resolved_split_for_resolves_new_terminal_and_new_agent() {
-        let new_terminal = Subcommand::NewTerminal {
-            split: Some(SplitFlag::Explicit("s-1".to_string())),
-            activate: false,
-        };
+    fn resolved_split_for_resolves_a_new_pane_s() {
+        let explicit = new(
+            "terminal",
+            &[],
+            &[],
+            Some(SplitFlag::Explicit("s-1".to_string())),
+            false,
+        );
         assert_eq!(
-            resolved_split_for(&new_terminal, None),
+            resolved_split_for(&explicit, None),
             Ok(Some("s-1".to_string()))
         );
-
-        let new_agent = Subcommand::NewAgent {
-            prompt: None,
-            role: None,
-            split: Some(SplitFlag::Here),
-            activate: false,
-        };
+        let here = new("agent", &[], &[], Some(SplitFlag::Here), false);
         assert_eq!(
-            resolved_split_for(&new_agent, Some("s-2".to_string())),
+            resolved_split_for(&here, Some("s-2".to_string())),
             Ok(Some("s-2".to_string()))
         );
     }

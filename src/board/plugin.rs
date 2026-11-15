@@ -124,6 +124,10 @@ impl Plugin for BoardListPlugin {
         ]
     }
 
+    fn create(given: crate::plugin::Given) -> Result<(), String> {
+        given.done()
+    }
+
     fn mount(self, _: (), ask: Callback<ListAsked>) -> Mounted<(), BoardListCommand> {
         let sessions = sessions(self.activity, ask, ListAsked::Bound);
         let (view, list) = list::view(self.source, self.background, sessions, move |asked| {
@@ -244,6 +248,14 @@ impl Plugin for BoardThreadPlugin {
                 OpenOrganizer,
             ),
         ]
+    }
+
+    fn create(mut given: crate::plugin::Given) -> Result<ThreadState, String> {
+        let task = (given.argument())
+            .and_then(|task| task.parse().ok())
+            .ok_or("a task's number is needed")?;
+        given.done()?;
+        Ok(ThreadState { task })
     }
 
     fn mount(

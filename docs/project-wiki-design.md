@@ -374,8 +374,9 @@ owner's call.
    Done 2026-11-09 on the same branch, as a first draft whose layout is
    not settled: `ViewKind::Wiki` carries the page's file on
    `Pane::document` as Markdown does (`ViewKind::carries_document`);
-   `horizon wiki [page]` resolves the caller's project and page file in
-   the CLI (`Store::for_dir`) and hands the shell a path; the view
+   `horizon new wiki [page]` hands the shell the page's name and where
+   the caller is, and the shell resolves the project and the page's file
+   (`Store::for_dir`, in `WikiPlugin::create`); the view
    chooser's "Wiki" opens the overview of the project Horizon started
    in. The view (`src/wiki/`) draws the page through a `TextViewState`
    it holds, highlights each anchored thread once that load's parse has

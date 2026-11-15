@@ -64,7 +64,7 @@ A preview pane is the `preview` plugin (`src/plugin.rs`,
 `preview::PreviewPlugin`). Its state is the file and which of its previews
 it shows, which the workspace saves, so after a restart the pane comes
 back on the same file. A pane with nothing to show yet is empty, and an
-empty preview pane under the cursor takes the next `horizon preview`.
+empty preview pane under the cursor takes the next `horizon new preview`.
 A pane given another file or preview is made again on it.
 
 The file is compiled off the UI thread. While it is, the pane says so,
@@ -91,8 +91,8 @@ in use. The extension's commands are not carried out in a preview pane.
 ## Commands
 
 ```
-horizon preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]
-horizon preview <extension.wasm> [<argument>...] [--split [<session-id>]] [--active]
+horizon new preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]
+horizon new preview <extension.wasm> [<argument>...] [--split [<session-id>]] [--active]
 ```
 
 The arguments are what the extension's pane is made from, as

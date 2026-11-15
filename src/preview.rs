@@ -59,7 +59,7 @@ use crate::plugin_host::{Asks, Compiled, compile, instantiate, no_grants};
 use crate::plugin_host::{CALL_LIMIT, MEMORY_LIMIT};
 use crate::wake::Wake;
 
-const NO_PREVIEW: &str = "No preview. `horizon preview <plugin.wasm>` shows one here.";
+const NO_PREVIEW: &str = "No preview. `horizon new preview <plugin.wasm>` shows one here.";
 
 mod styles {
     horizon_ui::css_module! {"
@@ -363,6 +363,22 @@ impl PanePlugin for PreviewPlugin {
             destructive: false,
             command: PreviewCommand::Reload,
         }]
+    }
+
+    /// A plugin's file or an extension's component, which of a plugin's
+    /// previews (`--name`), and what an extension's pane is made from.
+    fn create(mut given: crate::plugin::Given) -> Result<Option<Target>, String> {
+        let path = given.file("a plugin's file")?;
+        let name = given.named("name");
+        let arguments = std::mem::take(&mut given.arguments);
+        let directory = given.directory.clone();
+        given.done()?;
+        Ok(Some(Target {
+            path,
+            name,
+            arguments,
+            directory,
+        }))
     }
 
     fn mount(

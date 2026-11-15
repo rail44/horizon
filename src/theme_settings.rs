@@ -392,6 +392,10 @@ impl Plugin for ThemeSettingsPlugin {
         Vec::new()
     }
 
+    fn create(given: crate::plugin::Given) -> Result<(), String> {
+        given.done()
+    }
+
     fn mount(
         self,
         _: (),
