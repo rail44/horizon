@@ -356,13 +356,13 @@ fn respond_to_user_message(
         );
         return ControlFlow::Continue(());
     }
-    if lower_text.contains("git operation") {
-        // Test hook for a `bash` call that still needs approval in every
-        // session: creating a tag is a real ref write, which an engaged
-        // sandbox refuses until the session holds the repository's area,
-        // and which takes the host-execution approval without a sandbox.
-        // Its only effect is one lightweight tag in the session's
-        // repository (the e2e fixtures are throwaway repositories).
+    if lower_text.contains("beside the workspace") {
+        // Test hook for a `bash` call that needs approval in every session:
+        // a file written beside the workspace root. An engaged sandbox
+        // refuses the write, and the denial is offered as a retry with the
+        // file granted; without a sandbox the call takes the host-execution
+        // approval. Its only effect is that one file, which a test keeps
+        // inside a directory of its own.
         let call_id = ToolCallId("mock-bash-1".to_string());
         let occurrence_id = OccurrenceId::new();
         *pending_tool_call = Some(ToolCallIdentity {
@@ -374,7 +374,7 @@ fn respond_to_user_message(
                 call_id,
                 tool_id: "bash".to_string(),
                 input: serde_json::json!({
-                    "command": "git tag horizon-mock-probe && echo agentd-bash-ok"
+                    "command": "echo probe > ../horizon-mock-probe && echo agentd-bash-ok"
                 })
                 .into(),
                 occurrence_id,

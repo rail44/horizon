@@ -2830,6 +2830,52 @@ fn tier1_sandboxed_bash_cannot_write_the_plain_checkouts_gitdir() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Asks for `grants` the way a session does, through
+/// `request_sandbox_area`, and approves the request: the area becomes the
+/// session's authority for the calls that follow. An area grant is not an
+/// approval of a `bash` call (`resolve_bash` declines it there); it is its
+/// own call, settled by its approval
+/// (`docs/sandbox-area-grants-design.md`).
+#[cfg(target_os = "linux")]
+fn approve_area(
+    session_id: SessionId,
+    live_state: &LiveState,
+    grants: &[horizon_sandbox::FilesystemGrant],
+    reason: &str,
+) {
+    let call_id = ToolCallId(format!("request-area-{}", grants[0].path.display()));
+    let request = ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "request_sandbox_area".to_string(),
+        input: json!({
+            "path": grants[0].path.display().to_string(),
+            "reason": reason,
+        })
+        .into(),
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
+    };
+    live_state.extend_events([Event::ToolCallRequested(request.clone())]);
+    live_state.extend_events([Event::ApprovalRequested(ApprovalRequest {
+        call_id: call_id.clone(),
+        occurrence_id: request.occurrence_id.clone(),
+        kind: ApprovalKind::SandboxAreaGrant {
+            grants: grants.to_vec(),
+            reason: reason.to_string(),
+        },
+        reason: reason.to_string(),
+    })]);
+    let frame = live_state.frame();
+    let identity = frame.tool_call_request(&call_id).unwrap().identity();
+    let outcome = resolve_approval(&frame, session_id, identity, ApprovalDecision::Approve);
+    assert!(
+        matches!(
+            outcome,
+            ApprovalOutcome::Applied(ToolUpdate::Finished { .. })
+        ),
+        "an approved area request settles the asking call, got {outcome:?}"
+    );
+}
+
 /// `git commit` in a plain checkout of a non-isolated session asks for the
 /// A plain checkout's `.git` is outside the session's writable root, so a
 /// `git commit` is refused until the session holds that area. The area is
@@ -2888,6 +2934,20 @@ fn an_area_grant_over_a_plain_checkout_commits_without_opening_hooks_or_config()
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
         Execution::Applied(_)
     ));
+    let refused = match bash_results_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the contained run's completion")
+    {
+        BashCompletion::Finished(result) | BashCompletion::FilesystemDenied { result, .. } => {
+            result
+        }
+        other => panic!("expected Finished or FilesystemDenied, got {other:?}"),
+    };
+    assert_eq!(refused.output["sandboxed"], true);
+    assert!(
+        !git_dir.join("refs/heads/main").exists(),
+        "nothing is committed without the area"
+    );
 
     // What the session asks for instead is the area, and it is granted
     // exactly as the sandbox would apply it.
@@ -2899,25 +2959,7 @@ fn an_area_grant_over_a_plain_checkout_commits_without_opening_hooks_or_config()
         vec![PathBuf::from("hooks"), PathBuf::from("config")]
     );
 
-    let approval = ApprovalRequest {
-        call_id: call_id.clone(),
-        reason: "commit the change".to_string(),
-        kind: ApprovalKind::SandboxAreaGrant {
-            grants: grants.clone(),
-            reason: "commit the change".to_string(),
-        },
-        occurrence_id: request.occurrence_id.clone(),
-    };
-    live_state.extend_events([Event::ToolCallRequested(request.clone())]);
-    let outcome = resolve_auto_approval(
-        &live_state.frame(),
-        session_id,
-        &ApprovalCandidate {
-            request: request.clone(),
-            approval,
-        },
-    );
-    assert!(matches!(outcome, ApprovalOutcome::Applied(_)));
+    approve_area(session_id, &live_state, &grants, "commit the change");
 
     // The commit itself now runs with the area, still sandboxed.
     let started = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
@@ -2931,8 +2973,10 @@ fn an_area_grant_over_a_plain_checkout_commits_without_opening_hooks_or_config()
         }
         other => panic!("expected Finished or FilesystemDenied, got {other:?}"),
     };
-    assert!(
-        !result.is_error(),
+    // (The result is marked failed all the same: the command also tried
+    // `config` and a hook, which no area opens, and says so.)
+    assert_eq!(
+        result.output["exit_code"], 0,
         "the commit must run under the approved area: {:?}",
         result.output
     );
@@ -3010,25 +3054,7 @@ fn an_area_grant_over_a_linked_worktree_commits_and_stays_sandboxed() {
         crate::tools::bash::metadata_writable_roots(&worktree).expect("linked metadata roots");
     assert_eq!(metadata_roots.len(), 2, "worktree and common git dirs");
     let grants = crate::tools::metadata_grants(&metadata_roots);
-    let approval = ApprovalRequest {
-        call_id: call_id.clone(),
-        reason: "commit the change".to_string(),
-        kind: ApprovalKind::SandboxAreaGrant {
-            grants: grants.clone(),
-            reason: "commit the change".to_string(),
-        },
-        occurrence_id: request.occurrence_id.clone(),
-    };
-    live_state.extend_events([Event::ToolCallRequested(request.clone())]);
-    let outcome = resolve_auto_approval(
-        &live_state.frame(),
-        session_id,
-        &ApprovalCandidate {
-            request: request.clone(),
-            approval,
-        },
-    );
-    assert!(matches!(outcome, ApprovalOutcome::Applied(_)));
+    approve_area(session_id, &live_state, &grants, "commit the change");
 
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
@@ -3123,25 +3149,7 @@ fn an_area_grant_over_linked_metadata_denies_hooks_and_config_writes() {
     let metadata_roots =
         crate::tools::bash::metadata_writable_roots(&worktree).expect("linked metadata roots");
     let grants = crate::tools::metadata_grants(&metadata_roots);
-    let approval = ApprovalRequest {
-        call_id: call_id.clone(),
-        reason: "write the change".to_string(),
-        kind: ApprovalKind::SandboxAreaGrant {
-            grants: grants.clone(),
-            reason: "write the change".to_string(),
-        },
-        occurrence_id: request.occurrence_id.clone(),
-    };
-    live_state.extend_events([Event::ToolCallRequested(request.clone())]);
-    let outcome = resolve_auto_approval(
-        &live_state.frame(),
-        session_id,
-        &ApprovalCandidate {
-            request: request.clone(),
-            approval,
-        },
-    );
-    assert!(matches!(outcome, ApprovalOutcome::Applied(_)));
+    approve_area(session_id, &live_state, &grants, "write the change");
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
         Execution::Applied(_)

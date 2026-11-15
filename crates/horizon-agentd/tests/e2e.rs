@@ -473,11 +473,28 @@ fn run_fixture_git(dir: &Path, args: &[&str]) {
 
 fn isolated_session_fixture() -> tempfile::TempDir {
     let repo = tempfile::tempdir().expect("create isolated-session fixture repo");
-    run_fixture_git(repo.path(), &["init", "-q", "-b", "main"]);
-    std::fs::write(repo.path().join("README.md"), "fixture\n").unwrap();
-    run_fixture_git(repo.path(), &["add", "README.md"]);
+    fixture_repository(repo.path());
+    repo
+}
+
+/// A session's repository one level inside a directory of the test's own:
+/// what a call writes beside the repository is then the test's to throw
+/// away. The directory, and the repository in it.
+fn nested_session_fixture() -> (tempfile::TempDir, PathBuf) {
+    let outer = tempfile::tempdir().expect("create nested-session fixture");
+    let repo = outer.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    fixture_repository(&repo);
+    (outer, repo)
+}
+
+/// Makes `repo` a repository with one commit.
+fn fixture_repository(repo: &Path) {
+    run_fixture_git(repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("README.md"), "fixture\n").unwrap();
+    run_fixture_git(repo, &["add", "README.md"]);
     run_fixture_git(
-        repo.path(),
+        repo,
         &[
             "-c",
             "user.name=Test",
@@ -489,7 +506,6 @@ fn isolated_session_fixture() -> tempfile::TempDir {
             "fixture",
         ],
     );
-    repo
 }
 
 /// Writes a fixture event log directly at `path`, one session per
@@ -839,12 +855,16 @@ async fn approve_and_finish_in(
     let (request, responder) = take_permission(&mut collected);
     let approval = approval_meta(&request);
     assert_eq!(request.session_id, acp_id(session_id));
+    // (The call the approval is for: a retry's is not the first the
+    // session made, which ran contained and was refused.)
     let requested = collected
         .iter()
         .filter_map(tool_update)
-        .find(|call| has_status(call, v2::ToolCallStatus::Pending))
+        .find(|call| {
+            has_status(call, v2::ToolCallStatus::Pending)
+                && *call.tool_call_id.0 == *approval.occurrence_id
+        })
         .expect("tool request before approval");
-    assert_eq!(&*requested.tool_call_id.0, approval.occurrence_id);
     assert_eq!(tool_meta(requested).unwrap().call_id, approval.call_id);
     let Some(v2::RequestPermissionSubject::ToolCall(subject)) = &request.subject else {
         panic!("the permission names its tool call: {request:?}");
@@ -885,28 +905,28 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
     assert_eq!(replayed.call_id, approval.call_id);
 }
 
-/// A session started in a plain checkout, the shape whose
-/// `bash` calls run sandboxed without approval and whose Git metadata
-/// writes still ask.
+/// A session started in a plain checkout, the shape whose `bash` calls
+/// run sandboxed without approval, and ask once the sandbox has refused
+/// them something that can be granted.
 fn shared_session_in(session_id: SessionId, cwd: PathBuf) -> v2::NewSessionRequest {
     new_session_request(session_id, &mock_provider_id().0, None, cwd)
 }
 
-/// `bash` runs agentd-side: approving a real `bash` tool call (a Git
-/// metadata write, which asks in every session) spawns an actual
-/// subprocess in agentd, and the result arrives back as the call's final
-/// update.
+/// `bash` runs agentd-side: approving a real `bash` tool call (a write
+/// beside the workspace, which the sandbox refuses and then asks about in
+/// every session) spawns an actual subprocess in agentd, and the result
+/// arrives back as the call's final update.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     let agentd = spawn_agentd();
     let mut client = connect(&agentd.socket_path).await;
-    let repo = isolated_session_fixture();
+    let (_outer, repo) = nested_session_fixture();
     let session_id = SessionId::new();
     let (_, approval, collected) = approve_and_finish_in(
         &mut client,
         session_id,
-        shared_session_in(session_id, repo.path().to_path_buf()),
-        "please run a git operation",
+        shared_session_in(session_id, repo),
+        "please write beside the workspace",
     )
     .await;
     let (call, meta) = collected.iter().rev().find_map(finished_tool).unwrap();
@@ -927,14 +947,10 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     let agentd = spawn_agentd();
     let mut client = connect(&agentd.socket_path).await;
 
-    let repo = isolated_session_fixture();
+    let (_outer, repo) = nested_session_fixture();
     let session_id = SessionId::new();
-    open_session(
-        &client,
-        shared_session_in(session_id, repo.path().to_path_buf()),
-    )
-    .await;
-    prompt(&client, session_id, "please run a git operation").await;
+    open_session(&client, shared_session_in(session_id, repo)).await;
+    prompt(&client, session_id, "please write beside the workspace").await;
     let mut collected = collect_until(&mut client, |inbound| {
         matches!(inbound, Inbound::Permission(..))
     })

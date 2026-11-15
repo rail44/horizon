@@ -111,7 +111,8 @@ fn annotate_common(
 }
 
 const GIT_METADATA_GUIDANCE: &str = "inside the repository's Git metadata, which is not grantable \
-     as a filesystem retry; Git metadata is written only through a Git operation approval";
+     as a filesystem retry; ask for the area with `request_sandbox_area` (a repository's `hooks` \
+     and `config` stay unwritable under any area)";
 
 /// Moves filesystem denials under the workspace's Git metadata into the
 /// ungrantable set, so they never feed a `FilesystemDenialRetry` grant
