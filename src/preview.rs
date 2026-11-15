@@ -40,7 +40,7 @@ mod own {
         path: "crates/horizon-ui/wit",
         world: "preview",
         imports: { default: trappable },
-        exports: { default: async },
+        exports: { default: async | store },
         with: {
             "horizon:ui/document": crate::plugin_host::horizon::ui::document,
             "horizon:ui/desktop": crate::plugin_host::horizon::ui::desktop,
@@ -187,8 +187,11 @@ fn shown_plugin(compiled: Result<Compiled, String>, name: Option<&str>, wake: Wa
         let loaded = instantiate(&compiled, no_grants(), Asks::default(), wake, failed);
         let loaded = loaded.map_err(|error| format!("{error:#}"))?;
         // (The plugin's own exports, beside those every plugin has.)
-        let previews = loaded
-            .call(|instance, store| Box::pin(async move { own::Preview::new(store, instance) }));
+        let previews = loaded.call(|plugin, accessor| {
+            Box::pin(async move {
+                accessor.with(|mut access| own::Preview::new(&mut access, &plugin.instance))
+            })
+        });
         let previews = previews.ok_or_else(|| "the plugin is not a preview plugin".to_string())?;
         Ok((loaded, Rc::new(previews)))
     });
@@ -203,8 +206,10 @@ fn shown_plugin(compiled: Result<Compiled, String>, name: Option<&str>, wake: Wa
         Some(name) => Some(name.to_string()),
         None => {
             let previews = previews.clone();
-            (loaded.call(|_, store| Box::pin(async move { previews.call_names(store).await })))
-                .and_then(|names| names.into_iter().next())
+            (loaded.call(move |_, accessor| {
+                Box::pin(async move { previews.call_names(accessor).await })
+            }))
+            .and_then(|names| names.into_iter().next())
         }
     };
     let Some(name) = name else {
@@ -215,7 +220,9 @@ fn shown_plugin(compiled: Result<Compiled, String>, name: Option<&str>, wake: Wa
     };
     let mounted = {
         let name = name.clone();
-        loaded.call(|_, store| Box::pin(async move { previews.call_mount(store, &name).await }))
+        loaded.call(move |_, accessor| {
+            Box::pin(async move { previews.call_mount(accessor, name).await })
+        })
     };
     match mounted {
         Some(Some(mounted)) => {

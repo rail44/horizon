@@ -21,10 +21,10 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Dispose, GetUntracked};
 use serde::Deserialize;
 use wasmtime::component::types::{ComponentItem, Type};
-use wasmtime::component::{Instance, ResourceAny, Val};
+use wasmtime::component::{Accessor, ResourceAny, Val};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
-use crate::plugin_host::{Asks, Compiled, Loaded, compile, instantiate};
+use crate::plugin_host::{Asks, Compiled, Loaded, Plugin, State, compile, instantiate};
 use crate::wake::Wake;
 
 /// What a package's manifest says.
@@ -316,14 +316,16 @@ impl Extension {
         let state =
             (self.instantiate(Asks::default(), Wake::default(), failed)).and_then(|running| {
                 let path = path.to_path_buf();
-                let state = running.loaded.call(|instance, store| {
+                let state = running.loaded.call(|plugin, accessor| {
                     Box::pin(async move {
-                        let create = function(instance, store, None, "create")?;
-                        let file = store.data_mut().file(path)?;
-                        let file = ResourceAny::try_from_resource(file, &mut *store)?;
+                        let create = function(plugin, accessor, None, "create")?;
+                        let file = accessor.with(|mut access| {
+                            let file = access.data_mut().file(path)?;
+                            ResourceAny::try_from_resource(file, &mut access)
+                        })?;
                         let mut answer = [Val::Bool(false)];
                         create
-                            .call_async(&mut *store, &[Val::Resource(file)], &mut answer)
+                            .call_concurrent(accessor, &[Val::Resource(file)], &mut answer)
                             .await?;
                         Ok(answer[0].clone())
                     })
@@ -356,11 +358,11 @@ impl Running {
             }
             None => Val::Option(None),
         };
-        let root = self.loaded.call(|instance, store| {
+        let root = self.loaded.call(|plugin, accessor| {
             Box::pin(async move {
-                let mount = function(instance, store, None, "mount")?;
+                let mount = function(plugin, accessor, None, "mount")?;
                 let mut answer = [Val::U64(0)];
-                mount.call_async(&mut *store, &[given], &mut answer).await?;
+                (mount.call_concurrent(accessor, &[given], &mut answer)).await?;
                 Ok(answer[0].clone())
             })
         });
@@ -372,11 +374,11 @@ impl Running {
 
     /// What the pane keeps of it now, as text.
     pub fn state(&self) -> Option<String> {
-        let value = self.loaded.call(|instance, store| {
+        let value = self.loaded.call(|plugin, accessor| {
             Box::pin(async move {
-                let state = function(instance, store, None, "state")?;
+                let state = function(plugin, accessor, None, "state")?;
                 let mut answer = [Val::Bool(false)];
-                state.call_async(&mut *store, &[], &mut answer).await?;
+                state.call_concurrent(accessor, &[], &mut answer).await?;
                 Ok(answer[0].clone())
             })
         })?;
@@ -394,13 +396,10 @@ impl Running {
             return false;
         }
         let name = name.to_string();
-        let ran = self.loaded.call(|instance, store| {
+        let ran = self.loaded.call(|plugin, accessor| {
             Box::pin(async move {
-                let commands = instance
-                    .get_export_index(&mut *store, None, "commands")
-                    .ok_or_else(|| wasmtime::Error::msg("no commands"))?;
-                let command = function(instance, store, Some(&commands), &name)?;
-                command.call_async(&mut *store, &[], &mut []).await
+                let command = function(plugin, accessor, Some("commands"), &name)?;
+                command.call_concurrent(accessor, &[], &mut []).await
             })
         });
         ran.is_some()
@@ -413,19 +412,30 @@ impl Running {
     }
 }
 
-/// The function `name` the instance exports, inside `within` if given.
+/// The function `name` the plugin exports, inside the interface `within`
+/// if one is given.
 fn function(
-    instance: &Instance,
-    store: &mut wasmtime::Store<crate::plugin_host::State>,
-    within: Option<&wasmtime::component::ComponentExportIndex>,
+    plugin: &Plugin,
+    accessor: &Accessor<State>,
+    within: Option<&str>,
     name: &str,
 ) -> wasmtime::Result<wasmtime::component::Func> {
-    let index = instance
-        .get_export_index(&mut *store, within, name)
-        .ok_or_else(|| wasmtime::Error::msg(format!("no `{name}`")))?;
-    instance
-        .get_func(&mut *store, index)
-        .ok_or_else(|| wasmtime::Error::msg(format!("`{name}` is not a function")))
+    let instance = &plugin.instance;
+    let none = |name: &str| wasmtime::Error::msg(format!("no `{name}`"));
+    accessor.with(|mut access| {
+        let within = match within {
+            Some(within) => Some(
+                (instance.get_export_index(&mut access, None, within))
+                    .ok_or_else(|| none(within))?,
+            ),
+            None => None,
+        };
+        let index = (instance.get_export_index(&mut access, within.as_ref(), name))
+            .ok_or_else(|| none(name))?;
+        instance
+            .get_func(&mut access, index)
+            .ok_or_else(|| wasmtime::Error::msg(format!("`{name}` is not a function")))
+    })
 }
 
 /// The packages in `directories`, those that load; what kept one from

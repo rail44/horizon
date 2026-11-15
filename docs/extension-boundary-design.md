@@ -175,18 +175,68 @@ between turns it calls the guest plainly.
   two short strings (the copies and the allocation are about 90 ns of
   that), 191 ns with a list of eight coming back.
 
-The limit on a call's time (the engine's epoch) holds with tasks: the
-preview test of a call that does not come back passes on the async store,
-and a store's epoch callback ends a call only once that store's own call
-or turn has run past the limit, since one engine serves every pane.
-`events.tasks` comes back at once and leaves a task behind that starts
-the tasks a view asks for, so they outlive the export's task.
+That shape did not hold in Horizon. A plain call into the guest is a
+future polled to its end, and the runtime wakes the waker it is polled
+with to be polled on. The turns were a second future polled with the
+same waker, so a wake meant either "poll this call on" or "a task wants
+a turn", and nothing told the two apart: taken for a task's, a call's
+wakes woke the page, whose effects call the plugin again. A window with
+an extension in it was asked to draw without end and stopped answering
+(2026-11-15). The spike had met it and stepped around it, clearing the
+note of a wake after a plain call.
 
-Not tried: `stream`; what wasmtime's documentation says of `run_concurrent`,
-that a future inside it can be kept from being polled while wasm runs
-(bytecodealliance/wasmtime#11869, #11870). `wit-bindgen`'s `spawn_local`
-needs the crate that spawns and the crate that exports to be one version,
-and a spawned task lives as long as the export's task that spawned it.
+Tried instead (`spikes/plugin-boundary/host-driver`, the same versions):
+one future per guest that goes on for as long as the guest does. It is
+the store's `run_concurrent`, around a loop that takes the host's calls
+from a queue and makes them through the accessor; it owns the store. The
+guest's tasks go on whenever it is polled. A wake means one thing, "poll
+it". A call's answer is waited for where the call is made, by polling
+the future, and by parking the thread when the answer waits on another
+thread.
+
+- A task goes on when the future is polled, and once it has ended, or
+  while it only waits, nothing asks for a poll.
+- A call is answered there and then while a task waits: a hundred calls,
+  none of which waited.
+- A call makes its plain calls out to the host as before.
+- A task that a plain call asks for is started and goes on, and so does
+  a task woken by another task: neither needs a turn handed to it.
+- A call that reads a file through WASI is answered. WASI's own
+  functions hold the store while they wait (bytecodealliance/wasmtime
+  #11869, #11870, both open), so the guest's tasks do not go on during
+  that call; the thread is parked until the read wakes it.
+- A call that does not come back is ended by the engine's epoch, the
+  future ends with what the guest said, and what is asked of it
+  afterwards is refused at once.
+- A call into the guest costs 1.7 µs through the future, where the plain
+  call cost 0.9 µs; a plain call out of the guest costs the same as
+  before (86 ns with a number, 137 ns with two short strings, 241 ns
+  with a list of eight coming back).
+
+`src/plugin_host.rs` is that shape. Two things it adds:
+
+- The thread that is polling a plugin polls it again before it leaves,
+  so a wake that comes meanwhile does not wake the page; from another
+  thread (a file changed), it does, and the page's effects poll.
+- A task that waited on the host goes on in whatever poll comes next,
+  which may be a call made with the page lent (after a layout), where
+  the document cannot be changed. The host's `wait-for-change` comes
+  back only once the document is free: the page is woken, and its
+  effects let the task go on.
+
+One engine serves every pane, so a store's epoch callback ends its wasm
+only once that store's own poll has run past the limit. `events.tasks`
+comes back at once and leaves a task behind that starts the tasks a view
+asks for, so they outlive the export's task.
+
+`tests/extension.rs` holds a pane of an extension, and a preview pane of
+its package, to having nothing to draw once nothing happens, as the
+window would ask it.
+
+Not tried: `stream`; a trap inside a task rather than a call.
+`wit-bindgen`'s `spawn_local` needs the crate that spawns and the crate
+that exports to be one version, and a spawned task lives as long as the
+export's task that spawned it.
 
 ## Not yet known
 
@@ -224,9 +274,10 @@ The decisions and who made them are on board #76. What they come to:
   Operations on the document and questions about the layout are plain
   calls. Waiting on the world outside is a component-model `async`
   function, and a guest's tasks are run from the UI thread's loop ("Who
-  drives"): the store is an async one, every call into it is finished
-  on the UI thread, and a woken task wakes the page, whose effects give
-  the plugin's tasks one turn (`src/plugin_host.rs`). The guest's tasks
+  drives"): a plugin is one future that goes on for as long as it does,
+  which makes this shell's calls into it and lets its tasks go on; a
+  wake wakes the page, whose effects poll it (`src/plugin_host.rs`). The
+  guest's tasks
   are started by `events.tasks`, which the SDK implements; a view starts
   one with `horizon_ui::guest::spawn`.
 - **What the host offers beside the document is grouped by what it is
