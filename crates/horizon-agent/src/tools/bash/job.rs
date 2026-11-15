@@ -178,7 +178,6 @@ impl SandboxedApprovalOrigin {
             SandboxedApprovalOrigin::ManualDomainRetry { domains, .. } => {
                 annotate_domain_approval(output, domains)
             }
-            SandboxedApprovalOrigin::ManualGitOperation { .. } => {}
             SandboxedApprovalOrigin::FilesystemGrant {
                 source,
                 grants,
@@ -492,12 +491,6 @@ mod tests {
     #[test]
     fn every_approved_origin_records_who_approved_it() {
         for (origin, label) in [
-            (
-                SandboxedApprovalOrigin::ManualGitOperation {
-                    source: ApprovalSource::Judge,
-                },
-                "judge",
-            ),
             (
                 SandboxedApprovalOrigin::ManualDomainRetry {
                     source: ApprovalSource::Human,

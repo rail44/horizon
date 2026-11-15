@@ -198,9 +198,12 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # The decision client's loopback tests (`decision::client::tests::loopback_`)
 # bind a `127.0.0.1:0` System One mock to inspect the real POST; the sandbox
 # denies loopback binds.
-# `approved_git_commit_in_a_plain_checkout` spawns a real sandboxed helper
-# for an approved Git metadata write, like `approved_git_commit_writes_linked_
-# metadata`; a sandbox cannot nest another one under itself.
+# `an_area_grant_over_a_plain_checkout` spawns a real sandboxed helper for
+# an approved area grant that lets a git commit write metadata, like
+# `an_area_grant_over_a_linked_worktree`; a sandbox cannot nest another one
+# under itself. (These were the `approved_git_commit_*` tests before area
+# grants replaced the GitOperation kind -- renaming them without renaming
+# these filters silently moves them back into the profile.)
 # The shell's view tests that show a terminal (`horizon::terminal`,
 # `horizon::workspace`, `horizon::preview`, `horizon::extension`) open a real PTY
 # through `tests/support`'s `openpty`, which the sandbox denies before the test's
@@ -231,8 +234,9 @@ default-filter = '''
         + test(/^tools::tests::bash_auto_executes_sandboxed/)
         + test(/^tools::tests::tier1_sandboxed_bash/)
         + test(/^tools::tests::a_configured_grant_makes_an_out_of_workspace_write/)
-        + test(/^tools::tests::approved_git_commit_writes_linked_metadata/)
-        + test(/^tools::tests::approved_git_commit_in_a_plain_checkout/)
+        + test(/^tools::tests::an_area_grant_over_a_linked_worktree/)
+        + test(/^tools::tests::an_area_grant_over_linked_metadata/)
+        + test(/^tools::tests::an_area_grant_over_a_plain_checkout/)
         + test(/^tools::tests::judge_approved_filesystem_retry_reruns_sandboxed/)
         + test(/^tools::tests::an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded/)
         + test(/^session::setup::tests::isolation_announcement::/)

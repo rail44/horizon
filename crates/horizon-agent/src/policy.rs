@@ -59,12 +59,13 @@ pub(crate) enum BoundaryDisposition {
 ///
 /// `config_write` always asks -- it edits Horizon's own config file, not
 /// anything inside a session's workspace.
-fn classify_input(tool_id: &str, input: &ToolInput, sandbox_available: bool) -> Classification {
+fn classify_input(tool_id: &str, sandbox_available: bool) -> Classification {
     match tool_id {
         "fs_write" | "fs_edit" => Classification::Contained,
-        "bash" if sandbox_available && !input.requires_metadata_write() => {
-            Classification::Contained
-        }
+        // A Git metadata write is no longer classified ahead of the run:
+        // the sandbox refuses the metadata and the ordinary denial path
+        // offers the area (`docs/sandbox-area-grants-design.md`).
+        "bash" if sandbox_available => Classification::Contained,
         "bash" => Classification::AlwaysAsk,
         // Test-only fixture -- see `Classification::BoundaryCrossing`'s doc
         // comment. Not sensitive to `sandbox_available`: a boundary crossing
@@ -172,11 +173,7 @@ pub(crate) fn plan_prepared_call(
                     ApprovalKind::Standard,
                 );
             }
-            match classify_input(
-                &request.tool_id,
-                &request.input,
-                horizon_sandbox::sandbox_ready(),
-            ) {
+            match classify_input(&request.tool_id, horizon_sandbox::sandbox_ready()) {
                 Classification::Contained => ToolPlan::Automatic(if request.tool_id == "bash" {
                     AutomaticTool::SandboxedBash
                 } else {
@@ -211,9 +208,8 @@ pub(crate) fn plan_prepared_call(
                     )
                 }
                 Classification::BoundaryCrossing | Classification::AlwaysAsk => {
-                    let (reason, kind) = git_operation_approval(tool_state, request)
-                        .or_else(|| sandbox_area_approval(tool_state, request))
-                        .unwrap_or_else(|| {
+                    let (reason, kind) =
+                        sandbox_area_approval(tool_state, request).unwrap_or_else(|| {
                             (standard_approval_reason(request), ApprovalKind::Standard)
                         });
                     approval(reason, kind)
@@ -251,48 +247,6 @@ fn standard_approval_reason(request: &ToolCallRequest) -> String {
         )
     }
 }
-
-fn git_operation_approval(
-    tool_state: &ToolSessionState,
-    request: &PreparedCall<'_>,
-) -> Option<(String, ApprovalKind)> {
-    if request.tool_id != "bash"
-        || !horizon_sandbox::is_available()
-        || !request.input.requires_metadata_write()
-    {
-        return None;
-    }
-    let roots = tool_state
-        .workspace_root()
-        .ok_or_else(|| "the session has no workspace root".to_string())
-        .and_then(crate::tools::metadata_writable_roots);
-    Some(match roots {
-        Ok(writable_roots) => {
-            let displayed = writable_roots
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            (
-                format!(
-                    "`bash` requested a Git operation that may update shared repository metadata. \
-                     Allow write access to {displayed} for this call and run it inside the sandbox?"
-                ),
-                ApprovalKind::GitOperation { writable_roots },
-            )
-        }
-        Err(error) => (
-            format!(
-                "`bash` requested a Git operation, but Horizon could not derive a safe metadata \
-                 grant ({error}). Approval will fail closed."
-            ),
-            ApprovalKind::GitOperation {
-                writable_roots: Vec::new(),
-            },
-        ),
-    })
-}
-
 /// A session asking for a writable area (`request_sandbox_area`,
 /// `docs/sandbox-area-grants-design.md`). The tool grants nothing itself:
 /// its whole effect is this candidate, so the approval boundary stays where
@@ -354,12 +308,8 @@ pub(crate) fn plan_tool_call(state: &ToolSessionState, request: &ToolCallRequest
 }
 
 #[cfg(test)]
-fn classify_call(id: &str, input: &Value, sandbox: bool) -> Classification {
-    classify_input(
-        id,
-        &ToolInput::parse(id, input).unwrap_or(ToolInput::External),
-        sandbox,
-    )
+fn classify_call(id: &str, _input: &Value, sandbox: bool) -> Classification {
+    classify_input(id, sandbox)
 }
 
 #[cfg(test)]
@@ -426,22 +376,30 @@ mod tests {
     }
 
     #[test]
-    fn metadata_writing_git_asks_up_front_while_read_only_git_stays_contained() {
+    fn a_git_command_is_no_longer_classified_by_what_it_writes() {
+        // Before area grants, a command that would write Git metadata was
+        // guessed up front and asked about. It is now contained like any
+        // other: what it may not write is the sandbox's answer, and the
+        // session asks for the area it needs
+        // (`docs/sandbox-area-grants-design.md`).
+        for command in [
+            "git add src/lib.rs && git commit -m change",
+            "git status --short && git diff --stat",
+        ] {
+            assert_eq!(
+                classify_call("bash", &serde_json::json!({ "command": command }), true),
+                Classification::Contained,
+                "{command}"
+            );
+        }
+        // Without an engaged sandbox there is nothing to contain it.
         assert_eq!(
             classify_call(
                 "bash",
-                &serde_json::json!({ "command": "git add src/lib.rs && git commit -m change" }),
-                true,
+                &serde_json::json!({ "command": "git commit -m change" }),
+                false,
             ),
             Classification::AlwaysAsk
-        );
-        assert_eq!(
-            classify_call(
-                "bash",
-                &serde_json::json!({ "command": "git status --short && git diff --stat" }),
-                true,
-            ),
-            Classification::Contained
         );
     }
 

@@ -227,17 +227,12 @@ pub(crate) struct JudgeInput {
     /// Approval reruns this one call with the host process's ordinary
     /// authority rather than adding only the displayed narrow grants.
     pub(crate) host_execution_requested: bool,
-    /// This call is a Git metadata operation (commit, rebase, etc.). The
-    /// decision question's instructions, and the cascade's prompt, gain
-    /// git-specific guidance when set.
-    pub(crate) git_metadata_operation: bool,
 }
 
 pub(crate) struct JudgeApprovalContext {
     requested_filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
     requested_domains: Vec<String>,
     host_execution_requested: bool,
-    git_metadata_operation: bool,
 }
 
 /// One judgment on the session's backend.
@@ -335,20 +330,12 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
             requested_filesystem_grants: grants.clone(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
-            git_metadata_operation: false,
-        },
-        ApprovalKind::GitOperation { writable_roots } => JudgeApprovalContext {
-            requested_filesystem_grants: crate::tools::metadata_grants(writable_roots),
-            requested_domains: Vec::new(),
-            host_execution_requested: false,
-            git_metadata_operation: true,
         },
         ApprovalKind::DomainGrant { domains } | ApprovalKind::DomainDenialRetry { domains, .. } => {
             JudgeApprovalContext {
                 requested_filesystem_grants: Vec::new(),
                 requested_domains: domains.clone(),
                 host_execution_requested: false,
-                git_metadata_operation: false,
             }
         }
         ApprovalKind::MachServiceGrant { .. } => JudgeApprovalContext {
@@ -360,7 +347,6 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
-            git_metadata_operation: false,
         },
         // Asked about exactly the area the session would gain, which is
         // what approval buys -- nothing is re-run.
@@ -368,13 +354,11 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
             requested_filesystem_grants: grants.clone(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
-            git_metadata_operation: false,
         },
         ApprovalKind::Standard => JudgeApprovalContext {
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
             host_execution_requested: tool_id == "bash",
-            git_metadata_operation: false,
         },
     }
 }
@@ -489,7 +473,6 @@ mod tests {
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
-            git_metadata_operation: false,
         }
     }
 
@@ -661,11 +644,15 @@ mod tests {
     }
 
     #[test]
-    fn trusted_context_covers_git_filesystem_and_domain_candidates() {
-        let root = std::env::temp_dir().join("judge-git-root");
+    fn trusted_context_covers_area_filesystem_and_domain_candidates() {
+        let root = std::env::temp_dir().join("judge-area-root");
+        // An area grant is asked about exactly as it would be applied: the
+        // repository's directory minus the Git metadata a grant may not
+        // open (board #38).
         let context = trusted_approval_context(
-            &ApprovalKind::GitOperation {
-                writable_roots: vec![root.clone()],
+            &ApprovalKind::SandboxAreaGrant {
+                grants: crate::tools::metadata_grants(std::slice::from_ref(&root)),
+                reason: "the integration needs it".to_string(),
             },
             "bash",
         );
@@ -686,7 +673,6 @@ mod tests {
                 std::path::PathBuf::from("config")
             ]
         );
-        assert!(context.git_metadata_operation);
 
         let denial = horizon_sandbox::FilesystemDenial {
             attempted_path: std::env::temp_dir().join("attempted"),
@@ -730,7 +716,6 @@ mod tests {
         );
         assert!(context.requested_domains.is_empty());
         assert!(!context.host_execution_requested);
-        assert!(!context.git_metadata_operation);
 
         let expected_domains = vec!["example.com".to_string()];
         let context = trusted_approval_context(
@@ -751,7 +736,6 @@ mod tests {
         assert!(context.requested_filesystem_grants.is_empty());
         assert_eq!(context.requested_domains, expected_domains);
         assert!(!context.host_execution_requested);
-        assert!(!context.git_metadata_operation);
 
         let context = trusted_approval_context(&ApprovalKind::Standard, "bash");
         assert!(context.host_execution_requested);
@@ -1035,9 +1019,10 @@ mod tests {
         ApprovalCandidate {
             approval: ApprovalRequest {
                 call_id: request.call_id.clone(),
-                reason: "test git approval".to_string(),
-                kind: ApprovalKind::GitOperation {
-                    writable_roots: vec![std::env::temp_dir()],
+                reason: "test area approval".to_string(),
+                kind: ApprovalKind::SandboxAreaGrant {
+                    grants: crate::tools::metadata_grants(&[std::env::temp_dir()]),
+                    reason: "the integration needs it".to_string(),
                 },
                 occurrence_id: crate::contract::OccurrenceId(request.call_id.0.clone()),
             },
@@ -1046,7 +1031,7 @@ mod tests {
     }
 
     #[test]
-    fn git_operation_with_judge_goes_to_the_judge() {
+    fn area_grant_with_judge_goes_to_the_judge() {
         let path = temp_event_log("git-plain");
         let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
         let client: Arc<dyn DecisionClient> = Arc::new(ScriptedClient::new(vec![ask(0.05)]));
@@ -1071,7 +1056,7 @@ mod tests {
     }
 
     #[test]
-    fn git_operation_without_judge_falls_back_to_human() {
+    fn area_grant_without_judge_falls_back_to_human() {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
         let candidate = git_candidate("git commit -m test");
         let (tx, _rx) = crossbeam_channel::unbounded();

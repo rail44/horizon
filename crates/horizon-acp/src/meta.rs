@@ -133,9 +133,6 @@ pub enum ApprovalKind {
     DomainGrant {
         domains: Vec<String>,
     },
-    GitOperation {
-        writable_roots: Vec<PathBuf>,
-    },
     MachServiceGrant {
         services: Vec<String>,
         prior_result: ToolResult,
@@ -293,9 +290,6 @@ mod tests {
             },
             ApprovalKind::DomainGrant {
                 domains: vec!["docs.example.com".into()],
-            },
-            ApprovalKind::GitOperation {
-                writable_roots: vec![PathBuf::from("/work/project/.git")],
             },
             ApprovalKind::MachServiceGrant {
                 services: vec!["com.apple.SecurityServer".into()],

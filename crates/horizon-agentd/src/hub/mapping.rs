@@ -565,11 +565,6 @@ pub(super) fn approval_kind(kind: &contract::ApprovalKind) -> acp::ApprovalKind 
         contract::ApprovalKind::DomainGrant { domains } => acp::ApprovalKind::DomainGrant {
             domains: domains.clone(),
         },
-        contract::ApprovalKind::GitOperation { writable_roots } => {
-            acp::ApprovalKind::GitOperation {
-                writable_roots: writable_roots.clone(),
-            }
-        }
         contract::ApprovalKind::MachServiceGrant {
             services,
             prior_result,
@@ -593,7 +588,6 @@ pub(super) fn approval_title(kind: &contract::ApprovalKind) -> &'static str {
         contract::ApprovalKind::DomainDenialRetry { .. } => "Allow network access and retry",
         contract::ApprovalKind::FilesystemDenialRetry { .. } => "Allow filesystem access and retry",
         contract::ApprovalKind::DomainGrant { .. } => "Allow network access",
-        contract::ApprovalKind::GitOperation { .. } => "Allow Git metadata writes",
         contract::ApprovalKind::MachServiceGrant { .. } => "Allow system services and retry",
         contract::ApprovalKind::SandboxAreaGrant { .. } => "Allow write access to this area",
     }

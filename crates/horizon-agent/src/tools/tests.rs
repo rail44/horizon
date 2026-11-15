@@ -2831,16 +2831,20 @@ fn tier1_sandboxed_bash_cannot_write_the_plain_checkouts_gitdir() {
 }
 
 /// `git commit` in a plain checkout of a non-isolated session asks for the
-/// `GitOperation` grant on `.git/`, and the approved run writes objects and
-/// refs while `hooks/` and `config` stay excluded (board #38).
+/// A plain checkout's `.git` is outside the session's writable root, so a
+/// `git commit` is refused until the session holds that area. The area is
+/// the repository's directory minus the Git metadata a grant may not open
+/// (board #38), and the approved run writes objects and refs while
+/// `hooks/` and `config` stay excluded
+/// (`docs/sandbox-area-grants-design.md`).
 #[cfg(target_os = "linux")]
 #[test]
-fn approved_git_commit_in_a_plain_checkout_grants_the_gitdir_without_hooks_or_config() {
+fn an_area_grant_over_a_plain_checkout_commits_without_opening_hooks_or_config() {
     assert!(
         horizon_sandbox::is_available(),
         "the Linux Git containment test requires an engaged sandbox"
     );
-    let root = temp_workspace("git-operation-plain-checkout");
+    let root = temp_workspace("area-grant-plain-checkout");
     run_fixture_git(&root, &["init", "--initial-branch=main", "."]);
     run_fixture_git(&root, &["config", "user.name", "Horizon Test"]);
     run_fixture_git(
@@ -2878,36 +2882,16 @@ fn approved_git_commit_in_a_plain_checkout_grants_the_gitdir_without_hooks_or_co
         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     };
 
+    // A git metadata write is no longer classified before the run: the
+    // call is contained, and what it may not write is the sandbox's answer.
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
-        Execution::AwaitApproval(_)
+        Execution::Applied(_)
     ));
-    let events = crate::tools::test_support::policy_events(
-        &Event::ToolCallRequested(request.clone()),
-        &tool_state,
-        session_id,
-    );
-    let approval = events
-        .iter()
-        .find_map(|event| match event {
-            Event::ApprovalRequested(approval) => Some(approval.clone()),
-            _ => None,
-        })
-        .expect("metadata-writing Git must request its command-scoped grant");
-    let ApprovalKind::GitOperation { writable_roots } = &approval.kind else {
-        panic!(
-            "a plain checkout's git commit must derive a GitOperation candidate, got {:?}",
-            approval.kind
-        );
-    };
-    assert_eq!(writable_roots, &vec![git_dir.clone()]);
-    assert!(
-        approval.reason.contains(&git_dir.display().to_string()),
-        "{}",
-        approval.reason
-    );
-    let grants = crate::tools::bash::validated_metadata_grants(&root, writable_roots)
-        .expect("the displayed roots revalidate");
+
+    // What the session asks for instead is the area, and it is granted
+    // exactly as the sandbox would apply it.
+    let grants = crate::tools::bash::metadata_grants(std::slice::from_ref(&git_dir));
     assert_eq!(grants.len(), 1);
     assert_eq!(grants[0].path, git_dir);
     assert_eq!(
@@ -2915,13 +2899,29 @@ fn approved_git_commit_in_a_plain_checkout_grants_the_gitdir_without_hooks_or_co
         vec![PathBuf::from("hooks"), PathBuf::from("config")]
     );
 
-    let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
-    let outcome =
-        resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
-    assert!(matches!(
-        outcome,
-        ApprovalOutcome::Applied(ToolUpdate::Started { .. })
-    ));
+    let approval = ApprovalRequest {
+        call_id: call_id.clone(),
+        reason: "commit the change".to_string(),
+        kind: ApprovalKind::SandboxAreaGrant {
+            grants: grants.clone(),
+            reason: "commit the change".to_string(),
+        },
+        occurrence_id: request.occurrence_id.clone(),
+    };
+    live_state.extend_events([Event::ToolCallRequested(request.clone())]);
+    let outcome = resolve_auto_approval(
+        &live_state.frame(),
+        session_id,
+        &ApprovalCandidate {
+            request: request.clone(),
+            approval,
+        },
+    );
+    assert!(matches!(outcome, ApprovalOutcome::Applied(_)));
+
+    // The commit itself now runs with the area, still sandboxed.
+    let started = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
+    assert!(matches!(started, Execution::Applied(_)), "got {started:?}");
     let result = match bash_results_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("sandboxed Git completion")
@@ -2931,7 +2931,12 @@ fn approved_git_commit_in_a_plain_checkout_grants_the_gitdir_without_hooks_or_co
         }
         other => panic!("expected Finished or FilesystemDenied, got {other:?}"),
     };
-    assert_eq!(result.output["sandboxed"], true, "{:?}", result.output);
+    assert!(
+        !result.is_error(),
+        "the commit must run under the approved area: {:?}",
+        result.output
+    );
+    assert_eq!(result.output["sandboxed"], true);
     assert_eq!(fs::read_to_string(&config_path).unwrap(), original_config);
     assert!(!hook_path.exists());
     let log = run_fixture_git(&root, &["log", "-1", "--format=%s"]);
@@ -2946,7 +2951,7 @@ fn approved_git_commit_in_a_plain_checkout_grants_the_gitdir_without_hooks_or_co
 
 #[cfg(target_os = "linux")]
 #[test]
-fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
+fn an_area_grant_over_a_linked_worktree_commits_and_stays_sandboxed() {
     assert!(
         horizon_sandbox::is_available(),
         "the Linux Git containment test requires an engaged sandbox"
@@ -2998,33 +3003,36 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     };
 
+    // The metadata is outside the worktree's writable root, so the commit
+    // is contained and the refusal is the sandbox's: the session asks for
+    // the area rather than having its command classified.
+    let metadata_roots =
+        crate::tools::bash::metadata_writable_roots(&worktree).expect("linked metadata roots");
+    assert_eq!(metadata_roots.len(), 2, "worktree and common git dirs");
+    let grants = crate::tools::metadata_grants(&metadata_roots);
+    let approval = ApprovalRequest {
+        call_id: call_id.clone(),
+        reason: "commit the change".to_string(),
+        kind: ApprovalKind::SandboxAreaGrant {
+            grants: grants.clone(),
+            reason: "commit the change".to_string(),
+        },
+        occurrence_id: request.occurrence_id.clone(),
+    };
+    live_state.extend_events([Event::ToolCallRequested(request.clone())]);
+    let outcome = resolve_auto_approval(
+        &live_state.frame(),
+        session_id,
+        &ApprovalCandidate {
+            request: request.clone(),
+            approval,
+        },
+    );
+    assert!(matches!(outcome, ApprovalOutcome::Applied(_)));
+
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
-        Execution::AwaitApproval(_)
-    ));
-    let events = crate::tools::test_support::policy_events(
-        &Event::ToolCallRequested(request.clone()),
-        &tool_state,
-        session_id,
-    );
-    let approval = events
-        .iter()
-        .find_map(|event| match event {
-            Event::ApprovalRequested(approval) => Some(approval.clone()),
-            _ => None,
-        })
-        .expect("metadata-writing Git must request its command-scoped grant");
-    let displayed_roots = match &approval.kind {
-        ApprovalKind::GitOperation { writable_roots } => writable_roots.clone(),
-        _ => panic!("metadata-writing Git must derive a GitOperation candidate"),
-    };
-    assert_eq!(displayed_roots.len(), 2, "worktree and common git dirs");
-    let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
-    let outcome =
-        resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
-    assert!(matches!(
-        outcome,
-        ApprovalOutcome::Applied(ToolUpdate::Started { .. })
+        Execution::Applied(_)
     ));
     let result = expect_finished(
         bash_results_rx
@@ -3033,14 +3041,14 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
     );
     assert!(!result.is_error(), "Git failed: {:?}", result.output);
     assert_eq!(result.output["sandboxed"], true);
-    assert_eq!(result.output["git_operation_approved"], true);
+    assert_eq!(result.output["sandboxed"], true);
+    // Unlike a per-call metadata grant, an area is the session's authority
+    // from here on -- that is the point of asking first
+    // (`docs/sandbox-area-grants-design.md`).
     assert_eq!(
-        result.output["approved_git_metadata_roots"],
-        json!(displayed_roots)
-    );
-    assert!(
-        tool_state.filesystem_grants_snapshot().is_empty(),
-        "Git metadata grants must not persist in the session grant store"
+        tool_state.filesystem_grants_snapshot().len(),
+        2,
+        "the approved area is the session's to keep"
     );
 
     let log = run_fixture_git(&worktree, &["log", "-1", "--format=%s"]);
@@ -3061,7 +3069,7 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
 /// exclusion is based on the resolved gitdir, not a literal `.git` path name.
 #[cfg(target_os = "linux")]
 #[test]
-fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
+fn an_area_grant_over_linked_metadata_denies_hooks_and_config_writes() {
     assert!(
         horizon_sandbox::is_available(),
         "the Linux Git containment test requires an engaged sandbox"
@@ -3109,34 +3117,34 @@ fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     };
 
-    // The compound command includes `git commit` → requires_metadata_write
-    // is true → GitOperation candidate, which reaches the approval path.
+    // The area is what the session holds; the command inside it is not
+    // classified. Board #38's guarantee moves to the grant shape: the
+    // metadata exclusion that `metadata_grants` builds.
+    let metadata_roots =
+        crate::tools::bash::metadata_writable_roots(&worktree).expect("linked metadata roots");
+    let grants = crate::tools::metadata_grants(&metadata_roots);
+    let approval = ApprovalRequest {
+        call_id: call_id.clone(),
+        reason: "write the change".to_string(),
+        kind: ApprovalKind::SandboxAreaGrant {
+            grants: grants.clone(),
+            reason: "write the change".to_string(),
+        },
+        occurrence_id: request.occurrence_id.clone(),
+    };
+    live_state.extend_events([Event::ToolCallRequested(request.clone())]);
+    let outcome = resolve_auto_approval(
+        &live_state.frame(),
+        session_id,
+        &ApprovalCandidate {
+            request: request.clone(),
+            approval,
+        },
+    );
+    assert!(matches!(outcome, ApprovalOutcome::Applied(_)));
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
-        Execution::AwaitApproval(_)
-    ));
-    let events = crate::tools::test_support::policy_events(
-        &Event::ToolCallRequested(request.clone()),
-        &tool_state,
-        session_id,
-    );
-    let approval = events
-        .iter()
-        .find_map(|event| match event {
-            Event::ApprovalRequested(approval) => Some(approval.clone()),
-            _ => None,
-        })
-        .expect("metadata-writing Git must request its command-scoped grant");
-    assert!(
-        matches!(&approval.kind, ApprovalKind::GitOperation { .. }),
-        "must derive a GitOperation candidate"
-    );
-    let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
-    let outcome =
-        resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
-    assert!(matches!(
-        outcome,
-        ApprovalOutcome::Applied(ToolUpdate::Started { .. })
+        Execution::Applied(_)
     ));
 
     let completion = bash_results_rx

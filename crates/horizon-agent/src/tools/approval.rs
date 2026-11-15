@@ -313,8 +313,8 @@ fn resolve_synchronous_tool(
 }
 
 /// `bash`: a deny short-circuits synchronously exactly like the fs tools,
-/// but an approve only *starts* the command — see `ToolUpdate::Started`. Domain-denial retries, filesystem-denial retries, and
-/// pre-execution [`ApprovalKind::GitOperation`] grants all keep the rerun
+/// but an approve only *starts* the command — see `ToolUpdate::Started`.
+/// Domain-denial retries and filesystem-denial retries keep the rerun
 /// sandboxed — an approval buys scoped, contained access, never an
 /// unconfined execution. Only [`ApprovalKind::Standard`] still runs on the
 /// host, which is what that kind has always meant.
@@ -363,14 +363,6 @@ fn resolve_bash(
             decision,
             services,
             prior_result,
-            approval_source,
-        ),
-        ApprovalKind::GitOperation { writable_roots } => resolve_git_operation(
-            session_id,
-            runtime,
-            request,
-            decision,
-            writable_roots,
             approval_source,
         ),
         ApprovalKind::DomainGrant { .. } => declined_result(
@@ -434,63 +426,6 @@ fn resolve_sandbox_area_grant(
         ));
     ApprovalOutcome::from(ToolUpdate::finish(&runtime.live_state, result))
 }
-
-fn resolve_git_operation(
-    session_id: SessionId,
-    runtime: &SessionRuntime,
-    request: &PreparedCall<'_>,
-    decision: &ApprovalDecision,
-    writable_roots: Vec<std::path::PathBuf>,
-    approval_source: ApprovalSource,
-) -> ApprovalOutcome {
-    if matches!(decision, ApprovalDecision::Deny { .. }) {
-        return declined_result(runtime, &request.call_id, denied_output());
-    }
-    if !request.input.requires_metadata_write() {
-        return unstarted_error(
-            runtime,
-            &request.call_id,
-            "Git operation approval no longer matches a metadata-writing Git command",
-        );
-    }
-    let Some(workspace_root) = runtime.tool_state.workspace_root() else {
-        return unstarted_error(
-            runtime,
-            &request.call_id,
-            "Git operation approval has no workspace root",
-        );
-    };
-    match bash::metadata_writable_roots(workspace_root) {
-        Ok(current) if !writable_roots.is_empty() && current == writable_roots => {}
-        Ok(_) => {
-            return unstarted_error(
-                runtime,
-                &request.call_id,
-                "Git metadata roots changed after the approval was displayed",
-            )
-        }
-        Err(error) => {
-            return unstarted_error(
-                runtime,
-                &request.call_id,
-                &format!("Git metadata roots could not be revalidated: {error}"),
-            )
-        }
-    }
-
-    begin_sandboxed_run(
-        session_id,
-        runtime,
-        request,
-        None,
-        workspace_root,
-        || SandboxedApprovalOrigin::ManualGitOperation {
-            source: approval_source,
-        },
-        Some(writable_roots),
-    )
-}
-
 fn resolve_standard_bash(
     session_id: SessionId,
     runtime: &SessionRuntime,

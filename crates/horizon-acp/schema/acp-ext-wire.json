@@ -90,25 +90,6 @@
         },
         {
           "properties": {
-            "type": {
-              "const": "git_operation",
-              "type": "string"
-            },
-            "writable_roots": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "type",
-            "writable_roots"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
             "prior_result": {
               "$ref": "#/$defs/ToolResult"
             },
@@ -1200,5 +1181,5 @@
     "_horizon/doom_loop"
   ],
   "title": "horizon-acp-ext-wire",
-  "x-session-protocol-version": 4
+  "x-session-protocol-version": 5
 }

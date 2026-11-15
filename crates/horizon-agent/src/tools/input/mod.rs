@@ -81,10 +81,6 @@ fn schema_for<T: JsonSchema>() -> Value {
 }
 
 impl ToolInput {
-    pub(crate) fn requires_metadata_write(&self) -> bool {
-        matches!(self, Self::Bash(input) if crate::tools::command_requires_metadata_write(&input.command))
-    }
-
     pub(crate) fn bash(&self) -> &Bash {
         match self {
             Self::Bash(input) => input,

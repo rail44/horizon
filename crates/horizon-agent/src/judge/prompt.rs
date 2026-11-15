@@ -138,13 +138,6 @@ pub(super) fn user_content(input: &JudgeInput) -> String {
         content.push('\n');
     }
 
-    if input.git_metadata_operation {
-        content
-            .push_str("[APPROVAL CONTEXT — Git metadata operation — trusted Horizon mediation]\n");
-        content.push_str(super::request::GIT_INSTRUCTIONS);
-        content.push_str("\n\n");
-    }
-
     if input.host_execution_requested {
         content.push_str("[APPROVAL EFFECT — trusted Horizon mediation]\n");
         content.push_str(
@@ -188,7 +181,6 @@ mod tests {
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
-            git_metadata_operation: false,
         }
     }
 
@@ -340,47 +332,6 @@ mod tests {
         assert!(STAGE2_SYSTEM_PROMPT.contains("VERDICT: AUTO_APPROVE"));
         assert!(STAGE2_SYSTEM_PROMPT.contains("VERDICT: ESCALATE"));
         assert!(STAGE2_SYSTEM_PROMPT.contains("JSON object"));
-    }
-
-    #[test]
-    fn git_metadata_operation_adds_a_git_guidance_region() {
-        let mut input = input(
-            "call-git",
-            serde_json::json!({ "command": "git commit -m test" }),
-        );
-        input.git_metadata_operation = true;
-        let content = user_content(&input);
-
-        let context = content
-            .find("[APPROVAL CONTEXT — Git metadata operation — trusted Horizon mediation]")
-            .unwrap();
-        let guidance = content.find("Judge the effect").unwrap();
-        let fetch = content.find("fetch").unwrap();
-        let pull = content.find("pull").unwrap();
-        let untrusted = content.find("<<<UNTRUSTED_ARGS_call-git>>>").unwrap();
-        assert!(
-            context < guidance && guidance < fetch && fetch < pull && pull < untrusted,
-            "git guidance must sit in the trusted region before the untrusted args, \
-             naming fetch and pull as routine metadata operations"
-        );
-
-        let region = &content[context..untrusted];
-        assert!(region.contains("excluded_subpaths"));
-        for must_approve in ["`git config`", "`--config-env`", "`ssh://`"] {
-            assert!(region.contains(must_approve), "{must_approve}");
-        }
-        for shape in [
-            "non-git command segment",
-            "echo",
-            "make",
-            "pipes",
-            "redirects",
-        ] {
-            assert!(
-                !region.contains(shape),
-                "the git region must not enumerate shell shapes: {shape}"
-            );
-        }
     }
 
     #[test]

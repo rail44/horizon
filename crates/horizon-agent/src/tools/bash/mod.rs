@@ -32,12 +32,11 @@ pub(crate) use job::{spawn_approved_host, spawn_sandboxed_call, BashJob};
 #[cfg(test)]
 pub(crate) use registry::cancel_call;
 
-#[cfg(all(test, target_os = "linux"))]
-pub(crate) use git::validated_metadata_grants;
-pub(crate) use git::{
-    approved_metadata_roots, command_requires_metadata_write, metadata_grants,
-    metadata_writable_roots,
-};
+pub(crate) use git::{approved_metadata_roots, metadata_writable_roots};
+// Only the tests build grants directly now; the approval path hands the
+// judge the same shape through `sandbox_area_approval`.
+#[cfg(test)]
+pub(crate) use git::metadata_grants;
 pub(crate) use recent::{find_reusable_output, guidance_output};
 
 /// What a [`spawn_sandboxed_call`] run's eventual `Finished` completion should be
@@ -58,8 +57,6 @@ pub(crate) enum SandboxedApprovalOrigin {
         source: ApprovalSource,
         domains: Vec<String>,
     },
-    /// Write access to the validated Git metadata roots for this call.
-    ManualGitOperation { source: ApprovalSource },
     /// A filesystem-denial retry (`docs/containment-denial-narrow-grants-
     /// design.md`'s 2026-07-26 decision): `grants` is the scoped authority
     /// this rerun actually received, and `trigger_paths` the mediated
@@ -88,7 +85,6 @@ impl SandboxedApprovalOrigin {
         match self {
             Self::Tier1Auto => None,
             Self::ManualDomainRetry { source, .. }
-            | Self::ManualGitOperation { source }
             | Self::FilesystemGrant { source, .. }
             | Self::MachServiceGrant { source, .. } => Some(*source),
         }

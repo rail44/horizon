@@ -1148,9 +1148,6 @@ fn every_origin() -> Vec<SandboxedApprovalOrigin> {
             source: ApprovalSource::Human,
             domains: vec!["example.com".into()],
         },
-        SandboxedApprovalOrigin::ManualGitOperation {
-            source: ApprovalSource::Judge,
-        },
         SandboxedApprovalOrigin::FilesystemGrant {
             source: ApprovalSource::Human,
             grants: Vec::new(),

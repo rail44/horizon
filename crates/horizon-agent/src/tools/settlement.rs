@@ -55,7 +55,6 @@ pub(super) fn settle(
                         // so there is no prior result to preserve.
                         ApprovalKind::Standard
                         | ApprovalKind::DomainGrant { .. }
-                        | ApprovalKind::GitOperation { .. }
                         | ApprovalKind::SandboxAreaGrant { .. } => return None,
                     };
                     (result.call_id == identity.call_id

@@ -1,0 +1,24 @@
+Add a way to ask for a writable area
+
+A session could only widen its sandbox by reacting: wait for a denial, or
+let Horizon guess from the command's shell syntax that it will write Git
+metadata. The guess is the largest non-Standard approval category in the
+owner's log (137 of 364), and 28 of those commands needed a writable
+working tree that a git-metadata grant cannot give -- one such merge was
+approved and then refused every file.
+
+request_sandbox_area asks instead. The tool grants nothing itself: it
+plans an ApprovalKind::SandboxAreaGrant, and approval adds the area to the
+session through the same approve_filesystem_grants a denial retry uses, so
+the approval boundary stays in one place. Areas are clamped by the same
+revalidate_grant (so $HOME and / stay ungrantable) and carry the same Git
+metadata exclusion, so asking for a repository still never opens
+hooks/config.
+
+Nothing is re-run when an area is approved -- there is no failed call to
+retry; what changes is the authority later calls run under.
+
+GitOperation is left in place here; replacing it is the next step
+(docs/sandbox-area-grants-design.md). The ACP extension version bumps to 4
+for the new wire variant, appended last so existing oneOf indices stay
+put.
