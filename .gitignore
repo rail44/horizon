@@ -19,3 +19,6 @@
 # A spike is its own workspace, with its own target/.
 /spikes/*/target/
 /shell-blitz/target/
+# An extension's component is built beside its manifest
+# (`scripts/build-extension.sh`).
+/plugins/*/*.wasm

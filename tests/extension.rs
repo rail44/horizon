@@ -21,19 +21,23 @@ use keyboard_types::{Key, Modifiers, NamedKey};
 
 mod support;
 
-/// The extension's component, as `scripts/check-extension.sh` builds it.
-fn component() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target/wasm32-wasip2/debug/horizon_markdown_plugin.wasm")
+/// The extension's package: its own directory, with its component beside
+/// its manifest as `scripts/build-extension.sh` leaves it.
+fn built() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/markdown")
 }
 
-/// A package of the extension in `directory`: its manifest and its
-/// component.
+/// The extension's component.
+fn component() -> PathBuf {
+    built().join("markdown.wasm")
+}
+
+/// A copy of the extension's package in `directory`, for a test to
+/// change: its manifest and its component.
 fn package(directory: &Path) -> PathBuf {
     let package = directory.join("package");
     std::fs::create_dir_all(&package).unwrap();
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/markdown/plugin.toml");
-    std::fs::copy(manifest, package.join("plugin.toml")).unwrap();
+    std::fs::copy(built().join("plugin.toml"), package.join("plugin.toml")).unwrap();
     std::fs::copy(component(), package.join("markdown.wasm")).unwrap();
     package
 }
