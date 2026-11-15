@@ -1,108 +1,132 @@
 # Horizon
 
-Horizon is a desktop shell for tabbed and split-pane applications, drawn
-with Blitz: a keyboard-first command workspace where terminals, AI agent
-sessions, and (future) plugin views run as sessions attached to panes.
+**A native, keyboard-first workspace where terminals and AI agents are
+equal first-class sessions.**
 
-## MVP Shape
+Horizon is a desktop shell of tabs and split panes. What a pane shows is a
+session — a terminal, an agent, or a view such as the task board — and
+sessions live in daemons of their own, so closing a pane, or the window,
+does not end the work in it. Everything a person can do to the workspace
+is a command, and the same commands are open to agents through the
+`horizon` CLI.
 
-- Blitz (an HTML and CSS engine: Stylo, Taffy, Parley, Vello) draws the
-  window; Horizon's own N-ary layout tree drives tabs and split panes. Every
-  operation runs through one command model, surfaced today by workspace mode's
-  `:` palette (`docs/workspace-mode-design.md`) and by the `horizon` CLI
-  control plane (`docs/cli-control-plane-design.md`).
-- Built-in sessions provide the first two MVP surfaces:
-  - Terminal: PTY-backed terminal core using `portable-pty`,
-    `alacritty_terminal`, and `termwiz`.
-  - AI Agent: provider-backed agent sessions using Horizon-owned
-    command/event/frame contracts.
-- Plugin views remain the future path for hot-reloadable pane development,
-  including eventually developing Horizon from inside Horizon (the Floem-era
-  WASM groundwork retired with that shell; see tag `floem-shell-final`).
+## Status
 
-## Commands
+Horizon is a personal project, used daily by its author to develop Horizon
+itself. There are no releases and no packages: it is built from source,
+and anything — config keys, on-disk formats, the protocols between the
+shell and its daemons — may change without notice.
+
+- **Linux** is where it runs every day.
+- **macOS** was supported by the previous shell; the current one (Blitz)
+  has not been run there yet.
+
+## What is in it
+
+- **Sessions outlive what shows them.** `horizon-terminald` owns every PTY
+  and `horizon-agentd` hosts every agent session. Closing a pane detaches
+  its session; terminating one is a separate, explicit command. The
+  workspace — tabs, splits, focus, attachments — comes back after a
+  restart.
+- **One stolen key.** `ctrl+'` enters workspace mode, where every key
+  belongs to Horizon; outside it, every key but that one goes to the pane.
+- **One command model.** The palette, the key bindings and the `horizon`
+  CLI are bindings to the same commands, so an agent in a pane can split,
+  spawn, attach and approve the way a person does.
+- **An agent runtime of its own.** Agent sessions talk to any
+  OpenAI-compatible endpoint you configure, with roles, skills, sandboxed
+  shell execution, approvals, and recall over a DuckDB projection of the
+  session log. The runtime speaks ACP to the shell and does not need
+  Horizon as its frontend.
+- **A terminal that speaks the Kitty keyboard protocol**: the common
+  paths are implemented, and the conformance matrix kept in the code
+  names the gaps.
+- **Views beside the sessions**: a task board shared by the owner and the
+  agents, a project wiki with comment threads, a Markdown view, a file
+  finder, and live theme settings.
+- **Views from wasm.** An extension is a view built as a wasm component;
+  a view still being written can be shown in a pane of the running
+  Horizon with `horizon preview`.
+
+## Build and run
+
+Requirements: a recent stable Rust toolchain, and DuckDB 2.0 as a shared
+library — `scripts/install-duckdb-prefix.sh` installs it under
+`~/opt/duckdb` without root, and `AGENTS.md` ("Build setup") has the
+`~/.cargo/config.toml` entries that point the build at it.
 
 ```sh
-cargo check
-cargo build --workspace
-cargo test
-cargo run
+cargo build --workspace     # the shell and both daemons
+./target/debug/horizon
 ```
 
-`cargo run` alone only rebuilds the root `horizon` binary; terminal and agent
-sessions run in `horizon-agentd` (`crates/horizon-agentd`), a separate
-workspace member Horizon spawns on demand. Run `cargo build --workspace` at least once (and
-again after touching the runtime crates) or panes will fail to find a runtime
-to spawn. `just dev` builds the whole
-workspace and launches the freshly built binary directly (bypassing `cargo
-run`'s environment leakage into Horizon and agentd); pass CLI subcommand
-arguments after it, e.g. `just dev sessions`.
+`cargo run` alone rebuilds only the shell, not the daemons it spawns;
+`just dev` does both steps above, and `just dev-release` the same
+optimized.
 
-Agent provider access reads `OPENAI_API_KEY` from the environment. The
-Horizon-owned `web_search` tool additionally needs environment-only
-`EXA_API_KEY`; neither secret belongs in `config.toml`. `web_fetch` has no
-vendor key and asks before contacting each exact destination host.
+Agent sessions need a provider: set `OPENAI_API_KEY` in the environment
+and choose models in the config file (below). The `web_search` tool also
+reads `EXA_API_KEY`. Secrets are read from the environment only.
 
-After `cargo run`, press `ctrl+'` to enter workspace mode, then `:` to open
-the control surface (see `docs/workspace-mode-design.md`) — a Commands-only
-palette now that session management has its own modal (see below). With
-zero tabs open (e.g. after `terminate active session` closes the last one),
-`:` opens the palette directly with no `ctrl+'` first — an empty workspace
-is an implicit command surface, since there is no pane input left to
-protect; `ctrl+'` is a harmless no-op in that state. It supports these
-manual smoke checks:
+## First steps
 
-- `new tab`: opens the view chooser (`Enter` on `Terminal` opens another
-  terminal tab; `Enter` on `Agent` or a role like `Configuration Agent`
-  opens an agent tab).
-- `split right`: opens the same view chooser, but the chosen view splits the
-  active pane horizontally instead of opening a new tab.
-- `split down`: same as `split right`, but splits vertically.
-- `close active pane`: closes the active pane and leaves its session detached
-  when another pane remains.
-- `detached`: shows detached sessions such as `Terminal #2` and attaches the
-  selected session back into the active tab as a split.
-- `tab 1`, `tab 2`, ...: switches to the matching tab.
-- `terminate active session`: terminates the active session.
-- `manage sessions`: opens the session manager modal (see below).
-- `reload session runtime`: restarts `horizon-agentd`, closes terminal
-  sessions, and reconnects persisted agent sessions — use after rebuilding
-  the session runtime crates, or to recover from a lost connection.
+| Key | In workspace mode |
+| --- | --- |
+| `ctrl+'` | enter or leave workspace mode |
+| `h` `j` `k` `l`, arrows | move the cursor between panes |
+| `tab`, `shift+tab` | next, previous tab |
+| `t` | new tab (asks which view) |
+| `s` | split right (asks which view) |
+| `x` | close the pane; its session is detached |
+| `:` | the command palette |
+| `enter` | leave the mode; the focus goes to the cursor's pane |
+| `esc` | leave the mode; the focus stays where it was |
 
-Running the `manage sessions` command opens a separate modal listing every
-session the workspace knows about, as a derivation tree rather than a flat
-list (a session's recorded derivation parent is its parent; children
-are indented under it, roots first): arrows move the selection, `Enter`
-attaches a detached session as a split (or jumps to an attached session's
-pane), `cmd+Enter` terminates the selected session (the modal stays open),
-`cmd+o` opens a terminal in the selected session's directory (when known --
-rows with one show `dir`), `cmd+shift+t` terminates the selected session
-and every descendant (only on a row with children, shown with `subtree`;
-more destructive than the plain `cmd+Enter` terminate, which leaves
-children untouched), and `Esc` closes the modal.
+With no tab open, `:` opens the palette directly. The palette lists every
+command, among them `Manage Sessions` (attach or terminate what is
+detached), `Open Board`, and the two runtime reloads.
+See [the workspace mode design](docs/workspace-mode-design.md).
 
-The same command model is also reachable from outside the GUI: `horizon
-<subcommand>` (no arguments launches the GUI itself) is a thin client over a
-Unix-socket control plane, useful for scripting or driving Horizon from an
-agent. Panes get `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment,
-so a subcommand run from inside a pane targets the enclosing instance and
-`--split` (bare) resolves to "here" by default. Subcommands: `new-terminal`,
-`new-agent [--prompt <text>]`, `new-agent --role config [--prompt <text>]`,
-`attach <session-id>`,
-`terminate-session <session-id>`, `terminate-all-detached`,
-`approve`/`deny <session-id> <call-id> <occurrence-id>`, `cancel-turn <session-id>`,
-`continue-turn <session-id>`,
-`reload-agent-runtime`, `reload-terminal-runtime`, `reload-config`,
-`preview <path-to-wasm> [--name <preview>]` (a view still being written,
-shown from a wasm plugin: `docs/preview-pane-design.md`),
-`sessions`, `state` (each takes
-`--split`/`--active` where placement/focus applies). See
-`docs/cli-control-plane-design.md` for the full contract.
+## The CLI
 
-The views are checked without a window, in tests (`cargo nextest run
---workspace`); see "GUI Verification" in `AGENTS.md`.
+`horizon` with no arguments opens the window; with a subcommand it is a
+client of the running instance. A pane's environment names that instance
+and its own session, so a command run inside a pane acts where it is.
 
-## Next Integration Points
+```sh
+horizon new-terminal --split
+horizon new-agent --prompt "Review the last commit"
+horizon sessions
+horizon send <session-id> "…"
+horizon approve <session-id> <call-id> <occurrence-id>
+horizon board add "…"
+horizon markdown notes.md
+```
 
-`docs/roadmap.md` is the source of truth for the current phase plan; this
-section does not duplicate it.
+See [the control plane design](docs/cli-control-plane-design.md) for the
+whole contract.
+
+## Configuration
+
+One optional file, `~/.config/horizon/config.toml`: models and providers,
+font, key bindings, the theme's seed colors, the grants agents work
+within, and extensions. [`config.example.toml`](config.example.toml)
+documents every key; [provider configuration](docs/provider-configuration.md)
+covers the provider entries. `Reload Config` applies most of it live.
+
+## How it is built
+
+The window is drawn with [Blitz](https://github.com/DioxusLabs/blitz): a
+view is a function that builds a CSS document once and follows signals
+afterwards. The shell holds no session itself — it is a client of the two
+daemons, and either can be reloaded without disturbing the other.
+
+- [`docs/ux-principles.md`](docs/ux-principles.md) — what Horizon is and
+  is not
+- [`docs/roadmap.md`](docs/roadmap.md) — where it stands and what is
+  open, as an index into the design docs under `docs/`
+- [`docs/trust-boundaries.md`](docs/trust-boundaries.md) — what runs
+  where, and why
+- [`AGENTS.md`](AGENTS.md) — the module map, conventions, and the quality
+  gate to run before finishing a change. If you are an AI agent working
+  on this repository, read it first.
