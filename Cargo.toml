@@ -123,6 +123,9 @@ blitz-shell = { workspace = true, features = ["custom-widget"] }
 crossbeam-channel = "0.5"
 ignore = "0.4"
 nucleo = "0.5"
+# Reads an extension's manifest out of its component: the version
+# wasmtime itself is built on.
+wasmparser = "0.261"
 futures = "0.3"
 kurbo = "0.13"
 # The parser `horizon-wiki` reads a page with: a wiki page is drawn from the

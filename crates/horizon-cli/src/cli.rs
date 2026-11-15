@@ -67,7 +67,7 @@ pub enum Subcommand {
     Preview {
         path: PathBuf,
         name: Option<String>,
-        /// For an extension's package: what its pane is made from, as
+        /// For an extension's component: what its pane is made from, as
         /// typed, a file among them a path from `directory` (the caller's
         /// working directory, filled in by [`crate::run`]).
         arguments: Vec<String>,
@@ -199,7 +199,7 @@ Subcommands:\n  \
   new-terminal [--split [<session-id>]] [--active]\n  \
   new-agent [--prompt <text>] [--role <id>] [--split [<session-id>]] [--active]\n  \
   preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]\n  \
-  preview <extension-package-directory> [<argument>...] [--split [<session-id>]] [--active]\n  \
+  preview <extension.wasm> [<argument>...] [--split [<session-id>]] [--active]\n  \
   markdown <path> [--split [<session-id>]] [--active]\n  \
   wiki [<page>] [--split [<session-id>]] [--active]\n  \
   new <plugin> [<argument>...] [--split [<session-id>]] [--active]\n  \

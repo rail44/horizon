@@ -1,5 +1,5 @@
 //! An extension shown in a pane of the shell: the Markdown view built as a
-//! wasm component (`plugins/markdown`), loaded from its package, its state
+//! wasm component (`plugins/markdown`), loaded from its file, its state
 //! kept in the model as it changes, its command carried out from the
 //! palette, and a new pane of it made on a file found by typing.
 
@@ -27,15 +27,31 @@ fn component() -> PathBuf {
         .join("target/wasm32-wasip2/debug/horizon_markdown_plugin.wasm")
 }
 
-/// A package of the extension in `directory`: its manifest and its
-/// component.
+/// A copy of the extension in `directory`, for a test to change: its
+/// component, which is the whole of it.
 fn package(directory: &Path) -> PathBuf {
-    let package = directory.join("package");
-    std::fs::create_dir_all(&package).unwrap();
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/markdown/plugin.toml");
-    std::fs::copy(manifest, package.join("plugin.toml")).unwrap();
-    std::fs::copy(component(), package.join("markdown.wasm")).unwrap();
+    let package = directory.join("markdown.wasm");
+    std::fs::copy(component(), &package).unwrap();
     package
+}
+
+/// `component` with its manifest's title changed: a build of an
+/// extension that is not the last one, with only its own file to tell
+/// them apart by. The title is of the same length, so the component is
+/// the same but for those bytes.
+fn retitled(component: &Path) -> Vec<u8> {
+    let (from, to) = (&b"title = \"Markdown\""[..], &b"title = \"Notebook\""[..]);
+    let mut bytes = std::fs::read(component).unwrap();
+    // (Wherever the bytes are: the build keeps them in more than one
+    // place.)
+    let found: Vec<usize> = (bytes.windows(from.len()).enumerate())
+        .filter_map(|(at, window)| (window == from).then_some(at))
+        .collect();
+    assert!(!found.is_empty(), "the manifest's title");
+    for at in found {
+        bytes[at..at + to.len()].copy_from_slice(to);
+    }
+    bytes
 }
 
 struct Opened {
@@ -301,7 +317,7 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
     let (x, y) = opened.middle(*opened.all("link").last().expect("the link"));
     click_at(&opened.app, x, y);
     opened.until("the link followed in the preview", || shows("Two"));
-    std::fs::copy(component(), package.join("markdown.wasm")).unwrap();
+    std::fs::copy(component(), &package).unwrap();
     opened.until("the package read again", || shows("Three"));
 
     // What is not there is said.
@@ -393,16 +409,12 @@ fn a_package_the_configuration_names_is_read_on_reload_and_again_when_built() {
     // the pane that shows it is made again on the file it showed. (What
     // tells the new one from the old here is its manifest: the title the
     // view chooser lists it under.)
-    let manifest = std::fs::read_to_string(package.join("plugin.toml")).unwrap();
-    let renamed = manifest.replace("title = \"Markdown\"", "title = \"Notes\"");
-    assert_ne!(manifest, renamed);
-    std::fs::write(package.join("plugin.toml"), renamed).unwrap();
-    std::fs::copy(component(), package.join("markdown.wasm")).unwrap();
+    std::fs::write(&package, retitled(&component())).unwrap();
     opened.until("the extension read again", || {
         // (The chooser lists what is loaded when it is opened.)
         opened.shell.execute(CommandId::NewTab);
         opened.app.resolve();
-        let listed = opened.text().contains("Notes");
+        let listed = opened.text().contains("Notebook");
         opened.key(Key::Named(NamedKey::Escape));
         listed
     });

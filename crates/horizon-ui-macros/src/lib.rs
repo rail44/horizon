@@ -31,6 +31,7 @@
 //! ```
 
 mod checks;
+mod plugin;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -152,6 +153,12 @@ fn module(css: &str, written_colors: bool) -> Result<proc_macro2::TokenStream, S
         pub const __SHEET: ::horizon_ui::Sheet = ::horizon_ui::Sheet::new(#id, #code);
         #(#constants)*
     })
+}
+
+/// A plugin described once, in Rust: see the `plugin` module.
+#[proc_macro_attribute]
+pub fn plugin(arguments: TokenStream, input: TokenStream) -> TokenStream {
+    plugin::plugin(arguments, input)
 }
 
 #[cfg(test)]

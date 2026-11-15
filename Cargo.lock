@@ -2996,6 +2996,7 @@ dependencies = [
  "toml",
  "unicode-width",
  "uuid",
+ "wasmparser 0.261.0",
  "wasmtime",
  "wasmtime-wasi",
  "winit",

@@ -282,11 +282,13 @@ the running Horizon (`horizon preview <plugin.wasm>`,
 `docs/preview-pane-design.md`): that is how an agent asks a person to look
 at a view. `scripts/check-preview-plugin.sh` builds the plugin and runs
 the windowless tests that draw and drive a view through it (not part of
-the gate). An extension -- a view built as a wasm component in a package
-with a `plugin.toml`, named in `config.toml`'s `extensions`
-(`src/extension.rs`, `plugins/markdown`) -- is checked the same way by
+the gate). An extension -- a view built as a wasm component with its
+manifest in it, written as one module under `horizon_ui::plugin`
+(`plugins/markdown`), and named by its file in `config.toml`'s
+`extensions` (`src/extension.rs`) -- is checked the same way by
 `scripts/check-extension.sh`, and one still being written is shown to a
-person the same way: `horizon preview <package directory> <arguments>`.
+person the same way: `horizon preview <extension.wasm> <arguments>`,
+which reads the file again whenever it is built again.
 
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
 (`docs/workspace-mode-design.md`), then `:` to open the control surface —

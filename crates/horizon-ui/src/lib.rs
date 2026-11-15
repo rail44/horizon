@@ -63,7 +63,7 @@ pub use page::{Bounds, Page, dispatched, each_layout};
 
 pub use class::{Class, Classes, Sheet};
 pub use component::{Callable, Callback, Component};
-pub use horizon_ui_macros::css_module;
+pub use horizon_ui_macros::{css_module, plugin};
 pub use one_of::OneOf;
 
 #[cfg(not(target_family = "wasm"))]

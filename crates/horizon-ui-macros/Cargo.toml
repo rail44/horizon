@@ -1,6 +1,6 @@
 [package]
 name = "horizon-ui-macros"
-description = "The macros horizon-ui gives a view: a CSS module read at compile time."
+description = "The macros horizon-ui gives a view: a CSS module read at compile time, and a plugin described once in Rust."
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -12,7 +12,7 @@ proc-macro = true
 lightningcss = { version = "1.0.0-alpha.72", default-features = false, features = ["visitor"] }
 proc-macro2 = "1"
 quote = "1"
-syn = "2"
+syn = { version = "2", features = ["full"] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
