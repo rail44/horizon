@@ -361,7 +361,12 @@ The decisions and who made them are on board #76. What they come to:
   in `docs/research/plugin-backend-packaging-2026-11-14.md`.
 
 - **An extension is a package**: a wasm component and a manifest
-  (`plugin.toml`). The component's world includes `horizon-ui`'s
+  (`plugin.toml`). An extension's own directory is its package: the
+  component is built and put beside the manifest
+  (`scripts/build-extension.sh`), where the manifest names it, and is
+  not kept in git. The manifest is then the one a package is handed out
+  with, and the directory is what is named wherever a package is, from
+  any checkout. The component's world includes `horizon-ui`'s
   `imports` world and declares only what is its own: its state's type,
   `mount` and `state` over it, and a `commands` interface. What every
   plugin exports (`horizon:ui/events`) the SDK implements and exports;
@@ -374,5 +379,5 @@ The decisions and who made them are on board #76. What they come to:
   until it does all the built-in one does.
 
 Open: keeping a plugin's CSS to its own tree; how the boundary is versioned;
-where extensions live and how a package is put together; the preview
-pane as one of them; a command's parameters; the built-in views made by the same command.
+where extensions that are not this repository's live; the preview pane
+as one of them; a command's parameters; the built-in views made by the same command.
