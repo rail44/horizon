@@ -312,6 +312,20 @@ The decisions and who made them are on board #76. What they come to:
   one in use (`docs/preview-pane-design.md`).
 - **A view that paints itself comes later**, through a subset of Canvas
   2D if at all.
+- **The boundary has no version: an extension is held to it by type,
+  when it is loaded.** What a component imports is held to what the
+  host offers (`plugin_host::offered`, from `Extension::load`), and what
+  it exports to what an extension must (`shape_of`), at startup and at
+  `Reload Config`; one that does not fit is said on stderr with what did
+  not, and left out, before any pane is made of it. A component asks
+  only for what it uses, so the host offering more -- a function, an
+  interface -- breaks nothing; a function taken away or given another
+  type is what is refused (`instance export `open-url` has the wrong
+  type: .. expected `string` found `u32``). A change of what a function
+  means with its type kept is not seen. A version on the WIT package
+  (`horizon:ui@0.1.0`) is the component model's own way to say that, and
+  to offer two versions side by side; it is left until there is an
+  extension that is not rebuilt with the shell.
 - **A plugin's CSS is kept to its own elements by how it is written.**
   A sheet goes into the host's document as it is (`adopt-sheet`), beside
   the shell's own views', which are written the same way: with
@@ -419,6 +433,5 @@ The decisions and who made them are on board #76. What they come to:
   one whose WIT and section are written by hand. The Markdown view is
   the first (`plugins/markdown`).
 
-Open: a sheet from a guest not written with the SDK (above); how the
-boundary is versioned; where extensions that are not this repository's
+Open: a sheet from a guest not written with the SDK (above); where extensions that are not this repository's
 live; a command's parameters beyond the one file a pane is made on.

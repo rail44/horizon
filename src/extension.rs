@@ -27,7 +27,7 @@ use wasmtime::component::types::{ComponentItem, Type};
 use wasmtime::component::{Accessor, ResourceAny, Val};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
-use crate::plugin_host::{Asks, Compiled, Loaded, Plugin, State, compile, instantiate};
+use crate::plugin_host::{Asks, Compiled, Loaded, Plugin, State, compile, instantiate, offered};
 use crate::wake::Wake;
 
 /// The custom section of a component that holds its manifest, as TOML.
@@ -254,6 +254,11 @@ impl Extension {
         let mut manifest: Manifest =
             toml::from_str(&manifest).map_err(|error| format!("the manifest: {error}"))?;
         let compiled = compile(file)?;
+        // (Before a pane is made of it: an extension built for a host
+        // that offered something else is not one a pane can show.)
+        offered(&compiled).map_err(|error| {
+            format!("it asks of the host what this Horizon does not offer: {error}")
+        })?;
         let Shape {
             state,
             commands,

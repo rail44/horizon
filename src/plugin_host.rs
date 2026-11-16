@@ -789,6 +789,26 @@ pub fn compile(path: &Path) -> Result<Compiled, String> {
     Ok(Compiled { engine, component })
 }
 
+/// What the host offers a plugin: WASI, and the interfaces of
+/// `horizon:ui`.
+fn linker(engine: &Engine) -> wasmtime::Result<Linker<State>> {
+    let mut linker = Linker::<State>::new(engine);
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+    View::add_to_linker::<_, HasSelf<State>>(&mut linker, |state| state)?;
+    Ok(linker)
+}
+
+/// Holds what `compiled` imports to what the host offers: an import the
+/// host does not have, or has with another type, is said. A component
+/// that asks for less than is offered is taken.
+pub fn offered(compiled: &Compiled) -> Result<(), String> {
+    let said = |error: wasmtime::Error| format!("{error:#}");
+    let linker = linker(&compiled.engine).map_err(said)?;
+    (linker.instantiate_pre(&compiled.component))
+        .map(drop)
+        .map_err(said)
+}
+
 /// The plugin `compiled` in a store of its own, given `wasi` and `asks`,
 /// its tasks started; `wake` wakes the page when its future is to be
 /// polled, and `failed` is told what it said if it traps.
@@ -799,9 +819,7 @@ pub fn instantiate(
     wake: Wake,
     failed: RwSignal<Option<String>>,
 ) -> wasmtime::Result<Rc<Loaded>> {
-    let mut linker = Linker::<State>::new(&compiled.engine);
-    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
-    View::add_to_linker::<_, HasSelf<State>>(&mut linker, |state| state)?;
+    let linker = linker(&compiled.engine)?;
     let left = Arc::new(Mutex::new(Left::default()));
     let mut store = Store::new(
         &compiled.engine,
@@ -872,5 +890,51 @@ pub fn instantiate(
                 "the plugin could not be made".to_string()
             })))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What the host says of a component written as text.
+    fn offered_to(name: &str, component: &str) -> Result<(), String> {
+        let file = std::env::temp_dir().join(format!(
+            "horizon-offered-{name}-{}.wasm",
+            std::process::id()
+        ));
+        std::fs::write(&file, wat::parse_str(component).unwrap()).unwrap();
+        let compiled = compile(&file);
+        let _ = std::fs::remove_file(&file);
+        offered(&compiled.unwrap_or_else(|error| panic!("{error}")))
+    }
+
+    #[test]
+    fn what_a_component_imports_is_held_to_what_the_host_offers() {
+        // Less than is offered: one function of one interface.
+        let fewer = r#"(component
+            (import "horizon:ui/desktop" (instance
+                (export "open-url" (func (param "url" string))))))"#;
+        assert_eq!(offered_to("fewer", fewer), Ok(()));
+
+        // A function the host has with another type.
+        let retyped = r#"(component
+            (import "horizon:ui/desktop" (instance
+                (export "open-url" (func (param "url" u32))))))"#;
+        let said = offered_to("retyped", retyped).unwrap_err();
+        assert!(said.contains("`open-url` has the wrong type"), "{said}");
+        assert!(said.contains("expected `string` found `u32`"), "{said}");
+
+        // A function the host does not have, and an interface it does not.
+        let missing = r#"(component
+            (import "horizon:ui/desktop" (instance
+                (export "open-elsewhere" (func (param "url" string))))))"#;
+        let said = offered_to("missing", missing).unwrap_err();
+        assert!(said.contains("open-elsewhere"), "{said}");
+        let unknown = r#"(component
+            (import "horizon:ui/no-such" (instance
+                (export "anything" (func)))))"#;
+        let said = offered_to("unknown", unknown).unwrap_err();
+        assert!(said.contains("horizon:ui/no-such"), "{said}");
     }
 }
