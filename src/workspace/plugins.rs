@@ -319,14 +319,15 @@ impl Shell {
                     hues: std::array::from_fn(|slot| scheme.ansi[slot + 1]),
                     accent: scheme.accent,
                 };
-                let seed = Seed::from_current_config(&config, fallback);
+                let written = horizon_theme_css::written(&config.theme);
+                let seed = Seed::from_written(&written, fallback);
                 (seed, horizon_config::resolved_path())
             }),
             // The seed's theme, at the font size in use.
             apply: Rc::new(move |seed| {
                 let kept = shell.kept();
                 let mut config = kept.config.borrow().clone();
-                config.theme = seed.to_raw_config().theme;
+                config.theme = horizon_theme_css::theme_of(seed.to_written());
                 let size = shell.theme.with_untracked(|theme| theme.font_size);
                 let mut theme = Theme::from_config(&config);
                 theme.font_size = size;
@@ -335,7 +336,7 @@ impl Shell {
             }),
             save: Rc::new(move |seed| match &save {
                 Some(save) => save(seed),
-                None => horizon_theme::save::save(seed).map_err(|error| error.to_string()),
+                None => crate::theme_save::save(seed).map_err(|error| error.to_string()),
             }),
         }
     }

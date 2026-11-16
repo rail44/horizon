@@ -16,6 +16,7 @@ pub mod primary;
 pub mod restore;
 pub mod terminal;
 pub mod terminald;
+pub mod theme_save;
 pub mod wake;
 mod watch;
 pub mod window;

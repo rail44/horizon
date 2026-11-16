@@ -2991,6 +2991,7 @@ dependencies = [
  "serde_json",
  "termwiz",
  "tokio",
+ "toml_edit",
  "unicode-width",
  "uuid",
  "wasmparser 0.261.0",
@@ -3285,10 +3286,6 @@ dependencies = [
 [[package]]
 name = "horizon-theme"
 version = "0.1.0"
-dependencies = [
- "horizon-config",
- "toml_edit",
-]
 
 [[package]]
 name = "horizon-theme-css"

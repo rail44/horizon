@@ -1,14 +1,10 @@
 //! [`Scheme`] resolution: the `[theme]`/`[theme.ansi]` seed derivation
-//! (`docs/theme-design.md`), the live [`scheme_store`]/[`scheme`]/
-//! [`reload_from`] triple, and the accent/seed-presence helpers
+//! (`docs/theme-design.md`), and the accent/seed-presence helpers
 //! ([`SeedHues`], [`resolve_accent`], [`seed_is_configured`]).
-
-use std::sync::{OnceLock, RwLock};
-
-use horizon_config::{RawConfig, RawThemeConfig};
 
 use super::palette::{blend, contrast_snap, parse_hex};
 use super::warnings::{warn_invalid_theme_ansi, warn_invalid_theme_colors};
+use super::written::Written;
 
 pub const BACKGROUND_DEFAULT: u32 = 0x16181d; // SURFACE_BASE_DEFAULT
 pub const FOREGROUND_DEFAULT: u32 = 0xe9ecf2; // TEXT_PRIMARY_DEFAULT
@@ -88,7 +84,7 @@ pub const LIST_ACTIVE_BLEND_RATIO: f32 = 0.1;
 // `[theme.ansi]` hues, `text_contrast`) are unset. The moment any seed key
 // is set (`seed_configured` below), these formulas replace the legacy
 // constants/blend-ratios above for every role this design doc names;
-// `RawConfig::default()` (nothing set at all) keeps resolving through the
+// `Written::default()` (nothing set at all) keeps resolving through the
 // untouched legacy path instead, so today's built-in scheme stays the
 // literal zero-config answer -- see `scheme_from`'s `seed_configured` gate
 // and this module's `derivation_reproduces_the_builtin_scheme_within_tolerance`
@@ -299,7 +295,7 @@ fn resolve_accent(colors_accent: Option<&String>, hues: &SeedHues, default: u32)
 /// whether the resolved values happen to differ from Horizon's built-ins:
 /// a config that spells out the built-in seed explicitly (e.g. to tweak
 /// just `text_contrast`) must still route through the new derivation,
-/// while `RawConfig::default()` (nothing set at all) must still resolve
+/// while `Written::default()` (nothing set at all) must still resolve
 /// through the untouched legacy path -- see this module's
 /// `derivation_reproduces_the_builtin_scheme_within_tolerance` test for the
 /// former and `default_scheme_matches_agent_views_pre_existing_hex_values`
@@ -307,8 +303,8 @@ fn resolve_accent(colors_accent: Option<&String>, hues: &SeedHues, default: u32)
 /// anything else) since the 2026-07-16 config-narrowing decision retired
 /// it as a key -- `surface_base` is the seed anchor for both the UI and
 /// the terminal now.
-fn seed_is_configured(theme: &RawThemeConfig) -> bool {
-    theme.colors.contains_key("surface_base")
+fn seed_is_configured(theme: &Written) -> bool {
+    theme.surface_base.is_some()
         || theme.ansi.red.is_some()
         || theme.ansi.green.is_some()
         || theme.ansi.yellow.is_some()
@@ -321,7 +317,7 @@ fn seed_is_configured(theme: &RawThemeConfig) -> bool {
 /// Clamps a raw `text_contrast` value to `[TEXT_CONTRAST_FLOOR,
 /// TEXT_CONTRAST_CEIL]`, falling back to `TEXT_CONTRAST_DEFAULT` when
 /// unset or non-finite (`nan`/`inf` are valid TOML float literals, so
-/// this still needs a check even though `RawThemeConfig::text_contrast`'s
+/// this still needs a check even though the configuration file's's
 /// own lenient deserializer already screens out the wrong TOML *type*).
 pub fn resolve_text_contrast(raw: Option<f64>) -> f64 {
     match raw {
@@ -330,13 +326,13 @@ pub fn resolve_text_contrast(raw: Option<f64>) -> f64 {
     }
 }
 
-pub fn scheme_from(raw: &RawConfig) -> Scheme {
-    warn_invalid_theme_colors(&raw.theme.colors);
-    warn_invalid_theme_ansi(&raw.theme.ansi);
+pub fn scheme_from(raw: &Written) -> Scheme {
+    warn_invalid_theme_colors(raw);
+    warn_invalid_theme_ansi(&raw.ansi);
     let ansi_slot = |value: &Option<String>, default: u32| {
         value.as_deref().and_then(parse_hex).unwrap_or(default)
     };
-    let ansi_raw = &raw.theme.ansi;
+    let ansi_raw = &raw.ansi;
 
     // The seed: the six hue slots (doubling as `[theme.ansi]`'s normal
     // colors), the `surface_base` anchor, `text_contrast`, and whether
@@ -358,14 +354,11 @@ pub fn scheme_from(raw: &RawConfig) -> Scheme {
     // both the UI's and the terminal's background (`terminal_background`
     // was retired as a key alongside every other role override, so there
     // is no longer a separate "terminal diverges from chrome" case).
-    let background = raw
-        .theme
-        .colors
-        .get("surface_base")
-        .and_then(|value| parse_hex(value))
+    let background = (raw.surface_base.as_deref())
+        .and_then(parse_hex)
         .unwrap_or(BACKGROUND_DEFAULT);
-    let text_contrast = resolve_text_contrast(raw.theme.text_contrast);
-    let seed_configured = seed_is_configured(&raw.theme);
+    let text_contrast = resolve_text_contrast(raw.text_contrast);
+    let seed_configured = seed_is_configured(raw);
     // Polarity, from the seed anchor's own OKLab lightness -- generalizes
     // `is_light`'s BT.601-luma polarity check to the perceptually-uniform
     // space the rest of this derivation solves in.
@@ -381,7 +374,7 @@ pub fn scheme_from(raw: &RawConfig) -> Scheme {
     } else {
         TEXT_SUBTLE_DEFAULT
     };
-    let accent = resolve_accent(raw.theme.colors.get("accent"), &hues, CURSOR_DEFAULT);
+    let accent = resolve_accent(raw.accent.as_ref(), &hues, CURSOR_DEFAULT);
     let danger = contrast_snap(hues.red, background);
     let warning = contrast_snap(hues.yellow, background);
     let success = contrast_snap(hues.green, background);
@@ -565,22 +558,6 @@ pub fn scheme_from(raw: &RawConfig) -> Scheme {
     }
 }
 
-pub fn scheme_store() -> &'static RwLock<Scheme> {
-    static STORE: OnceLock<RwLock<Scheme>> = OnceLock::new();
-    STORE.get_or_init(|| RwLock::new(scheme_from(horizon_config::load())))
-}
-
-pub fn scheme() -> Scheme {
-    *scheme_store().read().unwrap()
-}
-
-/// Applies a re-read config's `[theme]` live -- the GPUI half of the
-/// `Reload Config` command (the caller refreshes the window after, and
-/// separately re-applies [`apply_gpui_component_theme`]).
-pub fn reload_from(raw: &RawConfig) {
-    *scheme_store().write().unwrap() = scheme_from(raw);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,7 +567,7 @@ mod tests {
 
     #[test]
     fn default_scheme_matches_agent_views_pre_existing_hex_values() {
-        let scheme = scheme_from(&RawConfig::default());
+        let scheme = scheme_from(&Written::default());
         assert_eq!(scheme.accent, 0x84dcc6);
         assert_eq!(scheme.danger, 0xe06c75);
         assert_eq!(scheme.warning, 0xe5c07b);
@@ -602,19 +579,11 @@ mod tests {
     }
 
     #[test]
-    fn reload_from_swaps_the_live_scheme_role_accessors_read_from() {
-        reload_from(&config_with(&[("accent", "#123456")]));
-        assert_eq!(scheme().accent, 0x123456);
-        // An unrelated role still resolves to its built-in default.
-        assert_eq!(scheme().background, BACKGROUND_DEFAULT);
-    }
-
-    #[test]
     fn surface_panel_defaults_to_a_lift_above_the_base_background_on_a_dark_scheme_with_no_seed() {
         // `surface_panel` was retired as an override key (2026-07-16,
         // `docs/theme-design.md`) -- only the zero-config derived default
         // is checkable here now.
-        let default_scheme = scheme_from(&RawConfig::default());
+        let default_scheme = scheme_from(&Written::default());
         assert_eq!(
             default_scheme.surface_panel,
             blend(BACKGROUND_DEFAULT, FOREGROUND_DEFAULT, SURFACE_LIFT_RATIO)
@@ -626,7 +595,7 @@ mod tests {
     fn border_default_derives_when_unset_on_a_dark_scheme_with_no_seed() {
         // Nothing seed-related set at all: the legacy blend-toward-
         // text_subtle formula still applies (back-compat invariant (b)).
-        let scheme = scheme_from(&RawConfig::default());
+        let scheme = scheme_from(&Written::default());
         assert_eq!(
             scheme.border,
             blend(BACKGROUND_DEFAULT, TEXT_SUBTLE_DEFAULT, BORDER_BLEND_RATIO)
@@ -656,7 +625,7 @@ mod tests {
         // `surface_chrome` was retired as an override key (2026-07-16,
         // `docs/theme-design.md`) -- only the zero-config derived default
         // is checkable here now.
-        let default_scheme = scheme_from(&RawConfig::default());
+        let default_scheme = scheme_from(&Written::default());
         assert_eq!(default_scheme.surface_chrome, default_scheme.background);
     }
 
@@ -683,7 +652,7 @@ mod tests {
         // `surface_selected` was retired as an override key (2026-07-16,
         // `docs/theme-design.md`) -- only the zero-config derived default
         // is checkable here now.
-        let default_scheme = scheme_from(&RawConfig::default());
+        let default_scheme = scheme_from(&Written::default());
         assert_eq!(
             default_scheme.surface_selected,
             blend(BACKGROUND_DEFAULT, CURSOR_DEFAULT, LIST_ACTIVE_BLEND_RATIO)
@@ -714,12 +683,12 @@ mod tests {
         // Invariant (b), first half: nothing seed-related set at all
         // keeps resolving through the pre-derivation code path, byte-
         // identical to the historical defaults -- `seed_is_configured`
-        // gates the new formulas off entirely for `RawConfig::default()`.
+        // gates the new formulas off entirely for `Written::default()`.
         // Covers the roles this task actually changed (foreground, the
         // neutral ladder, ansi black/white/brights) that
         // `default_scheme_matches_agent_views_pre_existing_hex_values`
         // doesn't.
-        let scheme = scheme_from(&RawConfig::default());
+        let scheme = scheme_from(&Written::default());
         assert_eq!(scheme.foreground, FOREGROUND_DEFAULT);
         assert_eq!(scheme.text_muted, TEXT_MUTED_DEFAULT);
         assert_eq!(scheme.text_subtle, TEXT_SUBTLE_DEFAULT);
@@ -747,7 +716,7 @@ mod tests {
         // (`surface_base` -- the six hue slots and the contrast knob stay
         // unset, which resolves to those exact same built-in values
         // anyway) activates the real OKLCH derivation (unlike
-        // `RawConfig::default()` above, which never touches it) and must
+        // `Written::default()` above, which never touches it) and must
         // land *close to*, though not bit-identical to, the historical
         // WCAG-contrast-based roles -- OKLCH contrast-solving and the old
         // RGB-linear `blend()`/fixed-constant formulas are different
@@ -1074,7 +1043,7 @@ mod tests {
         // them -- matches `diff_surface_and_text_roles_are_independently_
         // overridable`'s existing byte-value expectations, made explicit
         // here as a floor check rather than an equality assumption.
-        let scheme = scheme_from(&RawConfig::default());
+        let scheme = scheme_from(&Written::default());
         assert_eq!(scheme.diff_added_text, SUCCESS_DEFAULT);
         assert_eq!(scheme.diff_removed_text, DANGER_DEFAULT);
         assert!(

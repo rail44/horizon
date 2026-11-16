@@ -358,7 +358,7 @@ pub fn view() -> El {
         .class(styles::SECTION)
         .child(el("div").class(styles::SECTION_TITLE).text("Preview"))
         .each(
-            move || swatches(&scheme_from(&seed.get().to_raw_config())),
+            move || swatches(&scheme_from(&seed.get().to_written())),
             |(title, rows)| (*title, rows.clone()),
             |(title, rows)| {
                 let chip = |(name, color): &(&str, u32)| {

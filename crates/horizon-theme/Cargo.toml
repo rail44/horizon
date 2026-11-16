@@ -3,12 +3,10 @@ name = "horizon-theme"
 version = "0.1.0"
 edition = "2021"
 
-# The theme's derivation, apart from any UI framework: a config's seed to a
-# scheme of packed colors (`docs/theme-design.md`). The shell reads the
-# scheme and turns it into its own framework's colors.
+# The theme's derivation, apart from any UI framework and any
+# configuration file: a seed to a scheme of packed colors
+# (`docs/theme-design.md`). No dependencies.
 [dependencies]
-horizon-config = { path = "../horizon-config" }
-toml_edit = "0.25"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

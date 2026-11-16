@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, TableLike};
 
-use crate::palette::hex;
-use crate::seed::{HueSlot, Seed};
+use horizon_theme::palette::hex;
+use horizon_theme::seed::{HueSlot, Seed};
 
 /// Everything that can go wrong writing the seed back to disk.
 #[derive(Debug)]
@@ -124,17 +124,17 @@ fn set_value(table: &mut dyn TableLike, key: &str, item: Item) {
         .and_then(Item::as_value)
         .map(|value| value.decor().clone());
     table.insert(key, item);
-    if let Some(decor) = decor {
-        if let Some(value) = table.get_mut(key).and_then(Item::as_value_mut) {
-            *value.decor_mut() = decor;
-        }
+    if let Some(decor) = decor
+        && let Some(value) = table.get_mut(key).and_then(Item::as_value_mut)
+    {
+        *value.decor_mut() = decor;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::seed::AccentValue;
+    use horizon_theme::seed::AccentValue;
 
     fn sample_seed() -> Seed {
         Seed {
@@ -240,8 +240,10 @@ black = \"#000000\"
         assert!(contents.contains("iteration_cap = 25 # inline comment"));
         assert!(contents.contains("[keybindings]"));
         assert!(contents.contains("\"ctrl+t\" = \"new-terminal\""));
-        assert!(contents
-            .contains("# a stale, no-longer-configurable slot -- must be preserved untouched"));
+        assert!(
+            contents
+                .contains("# a stale, no-longer-configurable slot -- must be preserved untouched")
+        );
         assert!(contents.contains("black = \"#000000\""));
         assert!(contents.contains("# will be overwritten"));
 

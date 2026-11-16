@@ -6,12 +6,71 @@
 //! change of theme or of font size is a new set of them on the element the
 //! views are under.
 
-use horizon_config::RawConfig;
+use horizon_config::{RawConfig, RawThemeAnsiConfig, RawThemeConfig};
 use horizon_theme::spec::{
     self, BAND_TINT, CHIP_TINT, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, SELECTION_TINT,
 };
+use horizon_theme::written::{Written, WrittenAnsi};
 use horizon_theme::{palette, scheme};
 use horizon_ui::{El, el};
+
+/// The keys of `[theme]` a seed has. (`text_contrast` and `[theme.ansi]`
+/// are fields of the configuration's own.)
+const SEED_KEYS: [&str; 2] = ["surface_base", "accent"];
+
+/// The seed a configuration file's `[theme]` has written. A key the seed
+/// does not have is said so on stderr and left out.
+pub fn written(theme: &RawThemeConfig) -> Written {
+    for key in unrecognized(theme) {
+        eprintln!(
+            "[theme]: unrecognized key {key:?}, ignoring (see config.example.toml for the recognized names)"
+        );
+    }
+    Written {
+        surface_base: theme.colors.get("surface_base").cloned(),
+        accent: theme.colors.get("accent").cloned(),
+        text_contrast: theme.text_contrast,
+        ansi: WrittenAnsi {
+            red: theme.ansi.red.clone(),
+            green: theme.ansi.green.clone(),
+            yellow: theme.ansi.yellow.clone(),
+            blue: theme.ansi.blue.clone(),
+            magenta: theme.ansi.magenta.clone(),
+            cyan: theme.ansi.cyan.clone(),
+        },
+    }
+}
+
+/// The keys of `[theme]` that no seed has, in order.
+fn unrecognized(theme: &RawThemeConfig) -> Vec<&String> {
+    let mut unrecognized: Vec<&String> = (theme.colors.keys())
+        .filter(|key| !SEED_KEYS.contains(&key.as_str()))
+        .collect();
+    unrecognized.sort();
+    unrecognized
+}
+
+/// A configuration file's `[theme]` with `written` in it.
+pub fn theme_of(written: Written) -> RawThemeConfig {
+    let colors = [
+        ("surface_base", written.surface_base),
+        ("accent", written.accent),
+    ];
+    RawThemeConfig {
+        ansi: RawThemeAnsiConfig {
+            red: written.ansi.red,
+            green: written.ansi.green,
+            yellow: written.ansi.yellow,
+            blue: written.ansi.blue,
+            magenta: written.ansi.magenta,
+            cyan: written.ansi.cyan,
+        },
+        text_contrast: written.text_contrast,
+        colors: (colors.into_iter())
+            .filter_map(|(key, value)| Some((key.to_string(), value?)))
+            .collect(),
+    }
+}
 
 /// A terminal's colors, font and row height.
 #[derive(Clone, Debug)]
@@ -37,7 +96,7 @@ pub struct Theme {
 impl Theme {
     pub fn from_config(raw: &RawConfig) -> Self {
         Self {
-            scheme: scheme::scheme_from(raw),
+            scheme: scheme::scheme_from(&written(&raw.theme)),
             font_size: raw.terminal.font_size.unwrap_or(DEFAULT_FONT_SIZE),
             font_family: (raw.ui.font_family.clone())
                 .unwrap_or_else(|| DEFAULT_FONT_FAMILY.to_string()),
@@ -205,7 +264,44 @@ pub fn themed(theme: impl Fn() -> Theme + 'static, view: El) -> El {
 
 #[cfg(test)]
 mod tests {
-    use super::Theme;
+    use super::{RawThemeConfig, Theme, theme_of, unrecognized, written};
+
+    fn theme(colors: &[(&str, &str)]) -> RawThemeConfig {
+        RawThemeConfig {
+            colors: (colors.iter())
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_key_no_seed_has_is_told_of_and_left_out() {
+        let theme = theme(&[("not_a_real_role", "#ffffff"), ("accent", "#887700")]);
+        assert_eq!(unrecognized(&theme), ["not_a_real_role"]);
+        let written = written(&theme);
+        assert_eq!(written.accent.as_deref(), Some("#887700"));
+        assert_eq!(written.surface_base, None);
+    }
+
+    #[test]
+    fn the_seed_keys_are_recognized() {
+        let theme = theme(&[("surface_base", "#a1b2c3"), ("accent", "blue")]);
+        assert!(unrecognized(&theme).is_empty());
+    }
+
+    /// What is written comes back from a `[theme]` made of it, and what is
+    /// not written stays so.
+    #[test]
+    fn a_theme_made_of_a_seed_as_written_reads_as_it() {
+        let mut theme = theme(&[("surface_base", "#f6f6f6")]);
+        theme.text_contrast = Some(5.3);
+        theme.ansi.blue = Some("#0048b3".to_string());
+        let read = written(&theme);
+        assert_eq!(theme_of(read.clone()), theme);
+        assert_eq!(written(&theme_of(read.clone())), read);
+        assert_eq!(read.accent, None);
+    }
 
     /// `variables.txt` is what a view's CSS is checked against
     /// (`horizon-ui-macros`).
