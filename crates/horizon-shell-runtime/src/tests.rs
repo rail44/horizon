@@ -132,10 +132,11 @@ impl FakeTerminalHub {
     fn terminal_attachment(&self, seed: TerminalFrame) -> (TerminalAttachment, TerminalPeer) {
         let (frame_tx, frame_rx) = rch::watch::channel::<TerminalFrame, WireCodec>(seed)
             .with_max_item_size::<{ horizon_wire::FRAME_MAX_ITEM_BYTES }>();
-        let (event_tx, event_rx) = rch::mpsc::channel::<TerminalUpdate, WireCodec>(16);
+        let (event_tx, event_rx) = rch::mpsc::with_local_buffer::<TerminalUpdate, WireCodec>(16);
         let event_rx =
             event_rx.set_max_item_size::<{ horizon_wire::TERMINAL_EVENT_MAX_ITEM_BYTES }>();
-        let (command_tx, command_rx) = rch::mpsc::channel::<TerminalCommand, WireCodec>(16);
+        let (command_tx, command_rx) =
+            rch::mpsc::with_local_buffer::<TerminalCommand, WireCodec>(16);
         (
             TerminalAttachment {
                 frames: frame_rx,
@@ -273,17 +274,17 @@ where
         calls: calls_tx,
     };
     let (server, mut client) =
-        TerminalHubServerShared::<_, WireCodec>::new(std::sync::Arc::new(hub), 8);
+        TerminalHubServerShared::<_, WireCodec>::with_request_buffer(std::sync::Arc::new(hub), 8);
     // Mirror the real daemon's pre-transport rtc caps (main.rs) so the
     // boundary tests exercise the same enforcement.
     client.set_max_request_size(horizon_wire::RTC_MAX_REQUEST_BYTES);
-    client.set_max_reply_size(horizon_wire::RTC_MAX_REPLY_BYTES);
+    client.set_max_response_size(horizon_wire::RTC_MAX_REPLY_BYTES);
     base_tx
         .send(client)
         .await
         .expect("hand the hub client to the runtime");
     let serve_task = tokio::spawn(async move {
-        let _ = server.serve(true).await;
+        let _ = server.serve().await;
     });
     (calls_rx, conn_task, serve_task)
 }

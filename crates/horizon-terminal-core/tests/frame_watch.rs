@@ -19,14 +19,13 @@ use tokio::net::UnixStream;
 
 // The `Connect::io` (conn, base-sender, base-receiver) triples, named to
 // keep clippy's `type_complexity` lint quiet.
-type Conn = remoc::Connect<'static, std::io::Error, std::io::Error>;
 type Frames = CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>;
-type ReaderSide = (
+type ReaderSide<Conn> = (
     Conn,
     rch::base::Sender<(), WireCodec>,
     rch::base::Receiver<Frames, WireCodec>,
 );
-type WriterSide = (
+type WriterSide<Conn> = (
     Conn,
     rch::base::Sender<Frames, WireCodec>,
     rch::base::Receiver<(), WireCodec>,
@@ -49,9 +48,10 @@ async fn a_slow_watch_reader_skips_intermediates_and_converges_on_the_final_fram
     // Reader side: reads deliberately slowly, so the writer's blast of
     // frames outpaces it and the watch collapses the backlog to its latest.
     let reader = tokio::spawn(async move {
-        let (conn, _tx, mut rx): ReaderSide = remoc::Connect::io(remoc::Cfg::default(), b_r, b_w)
-            .await
-            .unwrap();
+        let (conn, _tx, mut rx): ReaderSide<_> =
+            remoc::Connect::io(remoc::Cfg::default(), b_r, b_w)
+                .await
+                .unwrap();
         tokio::spawn(conn);
 
         let mut frames = rx.recv().await.unwrap().unwrap();
@@ -73,7 +73,7 @@ async fn a_slow_watch_reader_skips_intermediates_and_converges_on_the_final_fram
     });
 
     // Writer side.
-    let (conn, mut tx, _rx): WriterSide = remoc::Connect::io(remoc::Cfg::default(), a_r, a_w)
+    let (conn, mut tx, _rx): WriterSide<_> = remoc::Connect::io(remoc::Cfg::default(), a_r, a_w)
         .await
         .unwrap();
     tokio::spawn(conn);
@@ -104,7 +104,7 @@ async fn a_slow_watch_reader_skips_intermediates_and_converges_on_the_final_fram
 //
 // A skewed peer publishes a value the reader cannot decode: remoc's watch
 // `recv_impl` surfaces that as a *non-final* `RecvError` (base
-// `Deserialize`/`MaxItemSizeExceeded` are `is_final() == false`), published
+// `Deserialize`/`MaxItemSizeExceeded` are `is_disconnected() == false`), published
 // as the receiver's current value while the channel stays open. The client's
 // steady-state loop (`src/runtime/agent.rs`) must therefore treat a
 // non-final `borrow` error as "skip and wait for the next frame", not as a
@@ -132,12 +132,12 @@ enum ReaderMsg {
     Skewed { a: u16, b: u16 },
 }
 
-type SkewReaderSide = (
+type SkewReaderSide<Conn> = (
     Conn,
     rch::base::Sender<(), WireCodec>,
     rch::base::Receiver<rch::watch::Receiver<ReaderMsg, WireCodec>, WireCodec>,
 );
-type SkewWriterSide = (
+type SkewWriterSide<Conn> = (
     Conn,
     rch::base::Sender<rch::watch::Receiver<SenderMsg, WireCodec>, WireCodec>,
     rch::base::Receiver<(), WireCodec>,
@@ -150,7 +150,7 @@ async fn a_non_final_watch_error_is_skipped_and_the_next_frame_recovers() {
     let (b_r, b_w) = b.into_split();
 
     let reader = tokio::spawn(async move {
-        let (conn, _tx, mut rx): SkewReaderSide =
+        let (conn, _tx, mut rx): SkewReaderSide<_> =
             remoc::Connect::io(remoc::Cfg::default(), b_r, b_w)
                 .await
                 .unwrap();
@@ -172,7 +172,7 @@ async fn a_non_final_watch_error_is_skipped_and_the_next_frame_recovers() {
         match frames.borrow_and_update() {
             Ok(_) => panic!("the skewed value must fail to decode"),
             Err(err) => assert!(
-                !err.is_final(),
+                !err.is_disconnected(),
                 "a decode error must be non-final (skippable), got a final error: {err}"
             ),
         }
@@ -190,9 +190,10 @@ async fn a_non_final_watch_error_is_skipped_and_the_next_frame_recovers() {
         true
     });
 
-    let (conn, mut tx, _rx): SkewWriterSide = remoc::Connect::io(remoc::Cfg::default(), a_r, a_w)
-        .await
-        .unwrap();
+    let (conn, mut tx, _rx): SkewWriterSide<_> =
+        remoc::Connect::io(remoc::Cfg::default(), a_r, a_w)
+            .await
+            .unwrap();
     tokio::spawn(conn);
 
     let (sender, receiver) = rch::watch::channel::<SenderMsg, WireCodec>(SenderMsg::Value(1));

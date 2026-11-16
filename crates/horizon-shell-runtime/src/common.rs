@@ -320,7 +320,7 @@ where
     // below only re-documents the intended bound (a transported sender's
     // local cap is not re-checked).
     hub.set_max_request_size(RTC_MAX_REQUEST_BYTES);
-    hub.set_max_reply_size(RTC_MAX_REPLY_BYTES);
+    hub.set_max_response_size(RTC_MAX_REPLY_BYTES);
 
     Ok(Connected {
         hub,

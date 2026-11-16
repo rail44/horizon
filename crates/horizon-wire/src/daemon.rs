@@ -214,7 +214,7 @@ where
     // serve loop below.
     let mut conn_task = tokio::spawn(conn);
 
-    let (server, mut client) = Server::new(target, REQUEST_BUFFER);
+    let (server, mut client) = Server::with_request_buffer(target, REQUEST_BUFFER);
     // Effective placement of the rtc size caps (see the `RTC_MAX_*`
     // constants): the request cap must be set on the client *before* it is
     // transported -- a transported mpsc sender carries its creator's cap as
@@ -223,7 +223,7 @@ where
     // closes. The reply cap travels per-request from the client's own
     // setting; this one seeds the default.
     client.set_max_request_size(RTC_MAX_REQUEST_BYTES);
-    client.set_max_reply_size(RTC_MAX_REPLY_BYTES);
+    client.set_max_response_size(RTC_MAX_REPLY_BYTES);
     if base_tx.send(client).await.is_err() {
         conn_task.abort();
         return Ok(());
@@ -234,7 +234,7 @@ where
     // task covers the pathological case where the mux dies without the
     // serve loop noticing.
     tokio::select! {
-        served = server.serve(true) => {
+        served = server.serve() => {
             if let Err(error) = served {
                 eprintln!("{daemon_name}: hub serve error: {error}");
             }

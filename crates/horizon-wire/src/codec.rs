@@ -6,10 +6,8 @@
 /// (adoption condition 1): Postbag in its Full configuration — the exact
 /// configuration the spike's perf/skew experiments validated
 /// (`docs/research/remoc-spike-2026-07-20.md` §§1–2). Never
-/// `remoc::codec::Default`: the workspace builds remoc with default
-/// features off, so the default-codec alias deliberately does not resolve
-/// to a usable codec and a remoc upgrade that changes its default cannot
-/// silently fork the wire.
+/// `remoc::codec::Default`: what that alias names is remoc's to change
+/// (0.18.0 did), and a wire that names its codec does not move with it.
 ///
 /// Postbag is **not self-describing** (`deserialize_any` is rejected), so
 /// a vocabulary's free-form JSON payloads must travel as their JSON text in

@@ -216,6 +216,88 @@ mod tests {
         assert_eq!(MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION, 20);
     }
 
+    /// The fields the request enum reads for `method`: what serde is asked
+    /// for when it reads that variant. (Read so, not by reading a request
+    /// written out: the reply channel's own shape is remoc's.)
+    fn fields_of(method: &'static str) -> Vec<&'static str> {
+        use serde::de::{self, IntoDeserializer};
+
+        #[derive(Debug)]
+        struct Stop(Option<&'static [&'static str]>, String);
+        impl std::fmt::Display for Stop {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(&self.1)
+            }
+        }
+        impl std::error::Error for Stop {}
+        impl de::Error for Stop {
+            fn custom<T: std::fmt::Display>(message: T) -> Self {
+                Stop(None, message.to_string())
+            }
+        }
+
+        struct Probe(&'static str);
+        impl<'de> de::Deserializer<'de> for Probe {
+            type Error = Stop;
+            fn deserialize_any<V: de::Visitor<'de>>(self, _: V) -> Result<V::Value, Stop> {
+                Err(de::Error::custom("not an enum"))
+            }
+            fn deserialize_enum<V: de::Visitor<'de>>(
+                self,
+                _: &'static str,
+                _: &'static [&'static str],
+                visitor: V,
+            ) -> Result<V::Value, Stop> {
+                visitor.visit_enum(self)
+            }
+            serde::forward_to_deserialize_any! {
+                bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+                bytes byte_buf option unit unit_struct newtype_struct seq tuple
+                tuple_struct map struct identifier ignored_any
+            }
+        }
+        impl<'de> de::EnumAccess<'de> for Probe {
+            type Error = Stop;
+            type Variant = Self;
+            fn variant_seed<V: de::DeserializeSeed<'de>>(
+                self,
+                seed: V,
+            ) -> Result<(V::Value, Self), Stop> {
+                let name: de::value::StrDeserializer<Stop> = self.0.into_deserializer();
+                Ok((seed.deserialize(name)?, self))
+            }
+        }
+        impl<'de> de::VariantAccess<'de> for Probe {
+            type Error = Stop;
+            fn unit_variant(self) -> Result<(), Stop> {
+                Err(de::Error::custom("a unit variant"))
+            }
+            fn newtype_variant_seed<T: de::DeserializeSeed<'de>>(
+                self,
+                _: T,
+            ) -> Result<T::Value, Stop> {
+                Err(de::Error::custom("a newtype variant"))
+            }
+            fn tuple_variant<V: de::Visitor<'de>>(self, _: usize, _: V) -> Result<V::Value, Stop> {
+                Err(de::Error::custom("a tuple variant"))
+            }
+            fn struct_variant<V: de::Visitor<'de>>(
+                self,
+                fields: &'static [&'static str],
+                _: V,
+            ) -> Result<V::Value, Stop> {
+                Err(Stop(Some(fields), String::new()))
+            }
+        }
+
+        use serde::Deserialize;
+        match TerminalHubReqRef::<WireCodec>::deserialize(Probe(method)) {
+            Err(Stop(Some(fields), _)) => fields.to_vec(),
+            Err(Stop(None, message)) => panic!("{method}: {message}"),
+            Ok(_) => panic!("{method}: read from nothing"),
+        }
+    }
+
     /// [`TerminalHub`]'s mechanical method-surface snapshot — the guard
     /// behind the v17 split's central claim that the terminal methods moved
     /// *verbatim*: the same names, the same argument names, on the daemon
@@ -235,41 +317,15 @@ mod tests {
              `CreateTerminal`, `AttachTerminal`, `Drain` at line 1 column 10",
         );
 
-        let probe = |method: &str| {
-            let json = format!(
-                "{{\"{method}\": {{\"__reply_tx\": {{\"port\": null, \"data\": null, \
-                 \"codec\": null}}}}}}"
-            );
-            match serde_json::from_str::<TerminalHubReqRef<WireCodec>>(&json) {
-                Ok(_) => format!("{method}: no further required fields"),
-                Err(error) => error.to_string(),
-            }
-        };
-        assert!(
-            probe("Hello").starts_with("missing field `client`"),
-            "{}",
-            probe("Hello")
+        // Each method's arguments, by name and in order, after the reply
+        // channel the macro puts first.
+        assert_eq!(fields_of("Hello"), ["__reply_tx", "client"]);
+        assert_eq!(fields_of("ListTerminals"), ["__reply_tx"]);
+        assert_eq!(
+            fields_of("CreateTerminal"),
+            ["__reply_tx", "session_id", "spec"]
         );
-        assert!(
-            probe("CreateTerminal").starts_with("missing field `session_id`"),
-            "{}",
-            probe("CreateTerminal")
-        );
-        assert!(
-            probe("AttachTerminal").starts_with("missing field `session_id`"),
-            "{}",
-            probe("AttachTerminal")
-        );
-        // `create_terminal`'s second argument, past the first.
-        let spec_probe = "{\"CreateTerminal\": {\"__reply_tx\": {\"port\": null, \
-             \"data\": null, \"codec\": null}, \"session_id\": \
-             \"00000000-0000-0000-0000-000000000000\"}}";
-        match serde_json::from_str::<TerminalHubReqRef<WireCodec>>(spec_probe) {
-            Ok(_) => panic!("spec must still be required"),
-            Err(error) => assert!(
-                error.to_string().starts_with("missing field `spec`"),
-                "{error}"
-            ),
-        }
+        assert_eq!(fields_of("AttachTerminal"), ["__reply_tx", "session_id"]);
+        assert_eq!(fields_of("Drain"), ["__reply_tx"]);
     }
 }

@@ -161,7 +161,7 @@ async fn wait_for_session_end(
             Ok(Ok(Some(other))) => seen.push(format!("{other:?}")),
             // The attachment is gone -- the session ended with it.
             Ok(Ok(None)) => return,
-            Ok(Err(error)) if error.is_final() => return,
+            Ok(Err(error)) if error.is_disconnected() => return,
             Ok(Err(error)) => seen.push(format!("skipped an undecodable item: {error}")),
             Err(_elapsed) => panic!(
                 "the session never reported an exit within {TERMINAL_UPDATE_TIMEOUT:?} after \

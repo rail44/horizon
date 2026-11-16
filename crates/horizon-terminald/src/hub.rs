@@ -90,7 +90,8 @@ impl Hub {
         });
 
         // Events: the non-frame updates on an mpsc.
-        let (event_tx, event_rx) = rch::mpsc::channel::<TerminalUpdate, WireCodec>(CHANNEL_BUFFER);
+        let (event_tx, event_rx) =
+            rch::mpsc::with_local_buffer::<TerminalUpdate, WireCodec>(CHANNEL_BUFFER);
         let event_rx = event_rx.set_max_item_size::<TERMINAL_EVENT_MAX_ITEM_BYTES>();
         tokio::spawn(async move {
             while let Some(event) = local_events.recv().await {
@@ -109,7 +110,7 @@ impl Hub {
         });
 
         let (mut command_tx, command_rx) =
-            rch::mpsc::channel::<TerminalCommand, WireCodec>(CHANNEL_BUFFER);
+            rch::mpsc::with_local_buffer::<TerminalCommand, WireCodec>(CHANNEL_BUFFER);
         // A transported sender carries the cap its creator set: this is
         // the daemon-side receive limit for the UI's commands.
         command_tx.set_max_item_size(COMMAND_MAX_ITEM_BYTES);

@@ -533,11 +533,11 @@ async fn run_terminal_attachment(
     // is read with `borrow`, not `changed` — `changed` only fires for
     // genuinely newer values, so without this an idle reattach would show a
     // blank grid forever. A non-final error (a skewed/undecodable seed value,
-    // `is_final() == false`) is skipped, self-healing on the next frame; a
+    // `is_disconnected() == false`) is skipped, self-healing on the next frame; a
     // final error means the frame port is gone, so stop polling it.
     match frames.borrow_and_update() {
         Ok(seed) => routes.route_terminal_frame(route, seed.clone()),
-        Err(err) if err.is_final() => frames_open = false,
+        Err(err) if err.is_disconnected() => frames_open = false,
         Err(err) => frame_skips.note(&err),
     }
 
@@ -570,7 +570,7 @@ async fn run_terminal_attachment(
                     // the watch publishes but keeps the channel for): skip
                     // it and wait for the next frame, exactly like the events
                     // and seed paths (adoption condition 2, self-heal §5).
-                    Err(err) if !err.is_final() => frame_skips.note(&err),
+                    Err(err) if !err.is_disconnected() => frame_skips.note(&err),
                     // Final: the frame port is gone. Stop polling frames but
                     // keep servicing events for a still-pending `Exited`.
                     Err(_) => frames_open = false,
@@ -588,7 +588,7 @@ async fn run_terminal_attachment(
                     }
                 }
                 Ok(None) => break,
-                Err(err) if err.is_final() => break,
+                Err(err) if err.is_disconnected() => break,
                 // Adoption condition 2: one undecodable event is skipped;
                 // the channel survives.
                 Err(err) => event_skips.note(&err),

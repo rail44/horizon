@@ -38,18 +38,17 @@ exclude = ["duckdb-ext"]
 
 # The one workspace-wide remoc pin (docs/remoc-adoption-design.md §1,
 # "remoc version policy"): exact version (`=`), reviewed against the remoc
-# CHANGELOG for chmux/codec changes before any bump, and default features
-# OFF so no `default-codec-*` feature is ever enabled -- naming
-# `codec::Default` then fails to compile, which is the adoption decision's
-# countermeasure to the 0.18.0 silent default-codec change (JSON ->
-# Postbag). Every use names `codec::Postbag` explicitly (via
-# `horizon_wire::WireCodec`). `rtc` pulls in `rch` + the
-# derive macro; `codec-postbag` is the only codec compiled in. (The
-# vocabularies' JSON payloads travel as `contract::JsonValue` -- JSON text
-# on this binary wire -- precisely so no second, self-describing codec is
-# ever needed.)
+# changes for chmux/codec before any bump, and default features OFF so no
+# `default-codec-*` feature is ever enabled. Every use names
+# `codec::Postbag` explicitly (via `horizon_wire::WireCodec`), never
+# `codec::Default`: the countermeasure to 0.18.0's silent change of the
+# default (JSON -> Postbag). `rtc` pulls in `rch` + the derive macro;
+# Postbag is the one codec compiled in (from 0.20 it is part of `serde`,
+# with no feature of its own). (The vocabularies' JSON payloads travel as
+# `contract::JsonValue` -- JSON text on this binary wire -- precisely so
+# no second, self-describing codec is ever needed.)
 [workspace.dependencies]
-remoc = { version = "=0.18.3", default-features = false, features = ["rtc", "codec-postbag"] }
+remoc = { version = "=0.20.6", default-features = false, features = ["rtc"] }
 # The ACP SDK and its schema crate: exact pins, upgraded together
 # (docs/acp-agentd-implementation-plan.md).
 agent-client-protocol = { version = "=2.2.0", features = ["unstable_protocol_v2"] }

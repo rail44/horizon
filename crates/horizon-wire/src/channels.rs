@@ -21,7 +21,7 @@
 //!   condition 2), and the channel survives.
 //! - **`rch::watch`** (the v11 frame path): the *receive* side is equally
 //!   forgiving — a `Deserialize`/`MaxItemSizeExceeded` value is
-//!   non-final (`is_final() == false`), published as an error value the
+//!   non-final (`is_disconnected() == false`), published as an error value the
 //!   reader skips, and the channel self-heals on the next frame. But the
 //!   *send* (forwarding) side is not: an item the daemon fails to serialize
 //!   within the cap is item-specific and breaks that watch, closing it. That
@@ -154,7 +154,7 @@ pub async fn receive_pump<T, const BUFFER: usize, const MAX_ITEM_SIZE: usize>(
         match channel.recv().await {
             Ok(Some(item)) => route(item),
             Ok(None) => break,
-            Err(err) if err.is_final() => break,
+            Err(err) if err.is_disconnected() => break,
             Err(err) => skips.note(&err),
         }
     }

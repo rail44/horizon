@@ -64,10 +64,11 @@ spike finding:
 
 1. **The codec is explicitly pinned, never defaulted.** Server and client
    construction name the codec type (`codec::Postbag`, not
-   `codec::Default`), and default-codec cargo features are disabled so a
-   remoc upgrade that changes the default fails to compile instead of
-   silently forking the wire. This is the direct countermeasure to the
-   0.18.0 default-codec fault. v10 pins **Postbag (Full)** — the
+   `codec::Default`), and default-codec cargo features are disabled, so a
+   remoc upgrade that changes the default does not move the wire. This is
+   the direct countermeasure to the 0.18.0 default-codec fault. (Up to
+   0.18 the alias did not resolve at all with those features off; from
+   0.20 it always resolves, to Postbag, and nothing here names it.) v10 pins **Postbag (Full)** — the
    configuration the skew experiments validated; §5 records the cheaper
    codecs as frame-path fallbacks, not defaults.
 2. **Every wire enum carries a `#[serde(other)]` `Unknown` variant**, and
@@ -88,6 +89,41 @@ by construction a both-ends-at-once event — the same operational shape as
 today's wire-version bump, minus the negotiation (§3) that now absorbs
 it. A 0.x bump is reviewed against the remoc CHANGELOG for chmux/codec
 changes before landing.
+
+#### 0.18.3 to 0.20.6 (2026-11)
+
+The published crate carries no changelog, so the two releases' sources
+were read against each other and the two were run against each other.
+
+- **chmux's protocol version is unchanged (3).** A 0.20 endpoint and a
+  0.18 one complete the handshake.
+- **The codec's format is agreed per connection.** Postbag's data format
+  has versions from 0.20, and each end offers the newest it has; the
+  connection uses the older of the two. `codec::Postbag` is still the
+  configuration with identifiers. A codec is therefore usable only on a
+  connection (`remoc codec can only be used inside remoc`); the one test
+  that sizes a payload off a connection asks for this end's own format
+  (`codec::allow_outside`).
+- **Measured across the versions**: `horizon-terminald`'s end-to-end
+  tests built against 0.20.6, run against a daemon binary built against
+  0.18.3, pass for hello, the version-mismatch refusal with its drain,
+  creating a terminal, its frames, re-attaching, listing and resizing (6
+  of 7; the seventh needs an agent daemon beside the binary, which the
+  copy used did not have). The other direction, an 0.18 client on a 0.20
+  daemon, was not run. The wire versions were not moved for this bump.
+- **Renames, with the same meaning**: `RecvError::is_final` is
+  `is_disconnected` (the same errors are per-item: `Deserialize`,
+  `MissingPorts`, `MaxItemSizeExceeded`); `set_max_reply_size` is
+  `set_max_response_size`; `Server::new(target, buffer)` is
+  `with_request_buffer`; `mpsc::channel(buffer)` is `with_local_buffer`.
+- **A server's concurrency is bounded.** `serve(true)` spawned a task for
+  every call; `serve()` runs up to `parallelism()` at once, 32 by default.
+  The hubs' calls are all short (hello, list, create, attach, ingest,
+  drain), and the default is kept.
+- **The macro's request types are remoc's own shape.** The reply channel
+  inside a request is serialized under compact names, so the method
+  surface test reads the fields serde is asked for instead of reading a
+  request written out as JSON.
 
 The bus-factor risk is accepted with eyes open: remoc has a small
 maintainer set and no large ecosystem behind it. Mitigations: chmux has

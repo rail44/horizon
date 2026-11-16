@@ -29,16 +29,15 @@ use tokio::net::UnixStream;
 /// production constants differ only in magnitude.
 const TEST_CAP: usize = 16 * 1024;
 
-type Conn = remoc::Connect<'static, std::io::Error, std::io::Error>;
 type CappedTestReceiver =
     rch::mpsc::Receiver<Vec<u8>, WireCodec, { rch::DEFAULT_BUFFER }, TEST_CAP>;
 
-type ReceiverGiverSide = (
+type ReceiverGiverSide<Conn> = (
     Conn,
     rch::base::Sender<CappedTestReceiver, WireCodec>,
     rch::base::Receiver<(), WireCodec>,
 );
-type ReceiverTakerSide = (
+type ReceiverTakerSide<Conn> = (
     Conn,
     rch::base::Sender<(), WireCodec>,
     rch::base::Receiver<CappedTestReceiver, WireCodec>,
@@ -57,7 +56,7 @@ async fn a_transported_receivers_type_cap_fails_oversized_items_and_latches() {
     let (b_r, b_w) = b.into_split();
 
     let taker = tokio::spawn(async move {
-        let (conn, _tx, mut rx): ReceiverTakerSide =
+        let (conn, _tx, mut rx): ReceiverTakerSide<_> =
             remoc::Connect::io(remoc::Cfg::default(), b_r, b_w)
                 .await
                 .unwrap();
@@ -69,20 +68,20 @@ async fn a_transported_receivers_type_cap_fails_oversized_items_and_latches() {
             match items.recv().await {
                 Ok(Some(item)) => delivered.push(item.len()),
                 Ok(None) => break,
-                Err(err) if err.is_final() => break,
+                Err(err) if err.is_disconnected() => break,
                 Err(_skip) => skipped += 1,
             }
         }
         (delivered, skipped)
     });
 
-    let (conn, mut tx, _rx): ReceiverGiverSide =
+    let (conn, mut tx, _rx): ReceiverGiverSide<_> =
         remoc::Connect::io(remoc::Cfg::default(), a_r, a_w)
             .await
             .unwrap();
     tokio::spawn(conn);
 
-    let (item_tx, item_rx) = rch::mpsc::channel::<Vec<u8>, WireCodec>(8);
+    let (item_tx, item_rx) = rch::mpsc::with_local_buffer::<Vec<u8>, WireCodec>(8);
     let item_rx = item_rx.set_max_item_size::<TEST_CAP>();
     tx.send(item_rx).await.unwrap();
 
@@ -137,12 +136,12 @@ async fn a_transported_receivers_type_cap_fails_oversized_items_and_latches() {
     );
 }
 
-type SenderGiverSide = (
+type SenderGiverSide<Conn> = (
     Conn,
     rch::base::Sender<rch::mpsc::Sender<Vec<u8>, WireCodec>, WireCodec>,
     rch::base::Receiver<(), WireCodec>,
 );
-type SenderTakerSide = (
+type SenderTakerSide<Conn> = (
     Conn,
     rch::base::Sender<(), WireCodec>,
     rch::base::Receiver<rch::mpsc::Sender<Vec<u8>, WireCodec>, WireCodec>,
@@ -161,7 +160,7 @@ async fn a_transported_senders_runtime_cap_fails_oversized_items_alone() {
     // The remote peer: receives the pre-capped sender and pushes under,
     // over, under.
     let peer = tokio::spawn(async move {
-        let (conn, _tx, mut rx): SenderTakerSide =
+        let (conn, _tx, mut rx): SenderTakerSide<_> =
             remoc::Connect::io(remoc::Cfg::default(), b_r, b_w)
                 .await
                 .unwrap();
@@ -174,12 +173,13 @@ async fn a_transported_senders_runtime_cap_fails_oversized_items_alone() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     });
 
-    let (conn, mut tx, _rx): SenderGiverSide = remoc::Connect::io(remoc::Cfg::default(), a_r, a_w)
-        .await
-        .unwrap();
+    let (conn, mut tx, _rx): SenderGiverSide<_> =
+        remoc::Connect::io(remoc::Cfg::default(), a_r, a_w)
+            .await
+            .unwrap();
     tokio::spawn(conn);
 
-    let (mut item_tx, mut item_rx) = rch::mpsc::channel::<Vec<u8>, WireCodec>(8);
+    let (mut item_tx, mut item_rx) = rch::mpsc::with_local_buffer::<Vec<u8>, WireCodec>(8);
     item_tx.set_max_item_size(TEST_CAP);
     tx.send(item_tx).await.unwrap();
 
@@ -188,7 +188,7 @@ async fn a_transported_senders_runtime_cap_fails_oversized_items_alone() {
         match item_rx.recv().await {
             Ok(Some(item)) => delivered.push(item.len()),
             Ok(None) => break,
-            Err(err) if err.is_final() => break,
+            Err(err) if err.is_disconnected() => break,
             // Measured: the oversized item does not even surface here as a
             // per-item error — the creator-side pump discards it before
             // recv (the error is reported towards the remote sender). The
@@ -260,7 +260,12 @@ fn a_worst_case_scroll_window_stays_under_the_events_cap() {
         };
 
         let mut bytes = Vec::new();
-        <WireCodec as Codec>::serialize(&mut bytes, &window).unwrap();
+        {
+            // The codec is otherwise a connection's: its format is what the
+            // two ends agree on. Here it is this end's own.
+            let _outside = remoc::codec::allow_outside();
+            <WireCodec as Codec>::serialize(&mut bytes, &window).unwrap();
+        }
         assert!(
             bytes.len() < TERMINAL_EVENT_MAX_ITEM_BYTES,
             "worst-case {columns}-col window ({max_rows} rows) serialized to {} bytes, \
