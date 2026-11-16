@@ -3,18 +3,11 @@ name = "horizon-board"
 version = "0.1.0"
 edition = "2021"
 
-# The queries, the event vocabulary, and the in-memory store source build for
-# `wasm32-wasip2` too, so a preview-pane plugin can show a board from sample
-# events. Only these dependencies are available there.
 [dependencies]
 schemars = { version = "1", features = ["uuid1"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-
-# Native-only: reaching the event file, the git root, and the daemon socket.
-# The modules that need them are gated `#[cfg(not(target_family = "wasm"))]`
-# at their declaration.
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# Reaching the event file, the git root, and the daemon socket.
 horizon-wire = { path = "../horizon-wire" }
 libc = "0.2"
 remoc = { workspace = true }

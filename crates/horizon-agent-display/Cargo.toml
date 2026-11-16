@@ -1,6 +1,5 @@
 # The agent pane's display model: what a pane draws, as plain data, and
-# its fixed labels. No dependencies, so that it builds for every target a
-# view of it does (both shells, and the preview plugin's wasm).
+# its fixed labels. No dependencies.
 [package]
 name = "horizon-agent-display"
 version = "0.1.0"

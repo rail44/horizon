@@ -28,10 +28,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::store::Position;
 
-#[cfg(not(target_family = "wasm"))]
 mod hub;
 
-#[cfg(not(target_family = "wasm"))]
 pub use hub::*;
 
 /// The log-daemon protocol version this build speaks.

@@ -56,21 +56,10 @@ pub const TERMINATED: &str = "Terminated";
 
 pub const READ_ONLY_REFUSAL: &str = "This board is read-only; the write was not recorded.";
 pub const TASK_NOT_FOUND: &str = "Task not found";
-/// What the guest build paints in place of attaching a task's session.
-#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
-pub const SESSION_IS_THE_SHELLS: &str = "Opening a session is the shell's job.";
 
 // ---------------------------------------------------------------------------
 // Formatted labels
 // ---------------------------------------------------------------------------
-
-/// What the list reports when a task is opened, in a build with no shell
-/// above it to open anything. The guest build paints it; the native one
-/// emits the request as an event instead.
-#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
-pub fn open_notice(title: &str) -> String {
-    format!("Open thread: {title}")
-}
 
 /// The list view's one header line: how much there is, and how much of it
 /// is unread.
@@ -130,7 +119,7 @@ fn count(n: usize, one: &str, many: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{done_band, list_header_text, more_lines, open_notice, relative_time, row_meta};
+    use super::{done_band, list_header_text, more_lines, relative_time, row_meta};
 
     #[test]
     fn the_list_header_names_the_unread_only_when_there_is_some() {
@@ -159,14 +148,6 @@ mod tests {
         assert_eq!(more_lines(1), "1 more line");
         assert_eq!(more_lines(12), "12 more lines");
         assert_eq!(done_band(14), "Done (14)");
-    }
-
-    #[test]
-    fn opening_a_task_is_reported_with_its_title() {
-        assert_eq!(
-            open_notice("貼り付け時に末尾の改行が落ちる"),
-            "Open thread: 貼り付け時に末尾の改行が落ちる"
-        );
     }
 
     /// No label or format string above the tests holds a CJK character, so

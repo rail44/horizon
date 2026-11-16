@@ -11,11 +11,8 @@ mod query;
 mod source;
 mod types;
 
-#[cfg(not(target_family = "wasm"))]
 mod file;
-#[cfg(not(target_family = "wasm"))]
 mod logd;
-#[cfg(not(target_family = "wasm"))]
 mod open;
 
 #[cfg(test)]
@@ -29,9 +26,7 @@ use source::Source;
 pub use memory::sample_envelopes;
 pub use types::{ListResult, Position, StoreError};
 
-#[cfg(not(target_family = "wasm"))]
 pub use file::read as read_events;
-#[cfg(not(target_family = "wasm"))]
 pub use logd::SubscribeStream;
 
 /// The board store. Every read folds the source's current envelopes; every
