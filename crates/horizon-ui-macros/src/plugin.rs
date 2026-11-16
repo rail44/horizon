@@ -312,31 +312,30 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
     }
     text.push_str("}\n");
 
-    // The manifest: what the component's type does not carry.
-    let list = |items: &[String]| {
-        let quoted: Vec<String> = items.iter().map(|item| format!("{item:?}")).collect();
-        format!("[{}]", quoted.join(", "))
-    };
-    let mut manifest = format!("[plugin]\nname = {name:?}\ntitle = {title:?}\n");
-    for command in &commands {
-        manifest.push_str(&format!(
-            "\n[commands.{}]\ntitle = {:?}\ndescription = {:?}\n",
-            kebab(&command.function.to_string()),
-            command.title,
-            command.description
-        ));
-        if command.destructive {
-            manifest.push_str("destructive = true\n");
-        }
-    }
-    for asked in &asked {
-        manifest.push_str(&format!(
-            "\n[create.{}]\nextensions = {}\n",
-            asked.parameter,
-            list(&asked.extensions)
-        ));
-    }
-    manifest.push_str(&format!("\n[access]\nread = {}\n", list(&about.read)));
+    // The manifest: what the component's type does not carry, as JSON.
+    let described: serde_json::Map<String, serde_json::Value> = (commands.iter())
+        .map(|command| {
+            let said = serde_json::json!({
+                "title": command.title,
+                "description": command.description,
+                "destructive": command.destructive,
+            });
+            (kebab(&command.function.to_string()), said)
+        })
+        .collect();
+    let created: serde_json::Map<String, serde_json::Value> = (asked.iter())
+        .map(|asked| {
+            let said = serde_json::json!({ "extensions": asked.extensions });
+            (asked.parameter.to_string(), said)
+        })
+        .collect();
+    let manifest = serde_json::json!({
+        "plugin": { "name": name, "title": title },
+        "commands": described,
+        "create": created,
+        "access": { "read": about.read },
+    })
+    .to_string();
     let length = manifest.len();
     let manifest = LitByteStr::new(manifest.as_bytes(), Span::call_site());
 

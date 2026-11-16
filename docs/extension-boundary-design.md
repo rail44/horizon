@@ -370,7 +370,7 @@ The decisions and who made them are on board #76. What they come to:
   file finder or taken as a path. The
   extension is instantiated for the question, `create` is called with the
   file, and the state it gives is what the new pane is mounted on
-  (`Extension::create`). The manifest's `[create.<parameter>]` says how a
+  (`Extension::create`). The manifest's `create.<parameter>` says how a
   parameter is asked for: for a file, the `extensions` to choose among.
   An extension without `create` gets a pane with no state. The export
   cannot be named `open`: a Rust guest's standard library defines that
@@ -404,7 +404,8 @@ The decisions and who made them are on board #76. What they come to:
   in `docs/research/plugin-backend-packaging-2026-11-14.md`.
 
 - **An extension is one file**: a wasm component with its manifest in
-  it, as a custom section (`horizon:manifest`, TOML). The component's
+  it, as a custom section (`horizon:manifest`, JSON: nobody writes it,
+  the SDK's macro does). The component's
   world includes `horizon-ui`'s `imports` world and declares only what
   is its own: its state's type, `mount` and `state` over it, `create`,
   and a `commands` interface. What every plugin exports

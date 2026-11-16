@@ -69,7 +69,10 @@ fn package(directory: &Path) -> PathBuf {
 /// them apart by. The title is of the same length, so the component is
 /// the same but for those bytes.
 fn retitled(component: &Path) -> Vec<u8> {
-    let (from, to) = (&b"title = \"Markdown\""[..], &b"title = \"Notebook\""[..]);
+    let (from, to) = (
+        &b"\"title\":\"Markdown\""[..],
+        &b"\"title\":\"Notebook\""[..],
+    );
     let mut bytes = std::fs::read(component).unwrap();
     // (Wherever the bytes are: the build keeps them in more than one
     // place.)

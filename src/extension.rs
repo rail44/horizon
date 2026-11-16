@@ -30,7 +30,7 @@ use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 use crate::plugin_host::{Asks, Compiled, Loaded, Plugin, State, compile, instantiate, offered};
 use crate::wake::Wake;
 
-/// The custom section of a component that holds its manifest, as TOML.
+/// The custom section of a component that holds its manifest, as JSON.
 pub const MANIFEST: &str = "horizon:manifest";
 
 /// The manifest in the component `bytes`, if it has one.
@@ -252,7 +252,7 @@ impl Extension {
         let manifest = manifest_in(&bytes)
             .ok_or_else(|| format!("the component has no manifest (`{MANIFEST}`)"))?;
         let mut manifest: Manifest =
-            toml::from_str(&manifest).map_err(|error| format!("the manifest: {error}"))?;
+            serde_json::from_str(&manifest).map_err(|error| format!("the manifest: {error}"))?;
         let compiled = compile(file)?;
         // (Before a pane is made of it: an extension built for a host
         // that offered something else is not one a pane can show.)
