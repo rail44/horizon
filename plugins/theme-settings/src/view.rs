@@ -315,8 +315,6 @@ pub fn view() -> El {
                                                 status.set(Some(format!("Save failed: {error}")))
                                             }
                                         }
-                                        horizon_ui::guest::run_effects();
-                                        horizon_ui::guest::relayout();
                                     });
                                 },
                             )),

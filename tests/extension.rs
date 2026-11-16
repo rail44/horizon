@@ -139,7 +139,11 @@ impl Opened {
     fn until(&self, what: &str, met: impl Fn() -> bool) {
         let started = Instant::now();
         while !met() {
-            assert!(started.elapsed() < Duration::from_secs(20), "no {what}");
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "no {what} in:\n{}",
+                self.text()
+            );
             std::thread::sleep(Duration::from_millis(5));
             self.app.run_effects();
             self.app.resolve();

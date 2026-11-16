@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::effect::Effect;
+use horizon_ui::reactive_graph::graph::untrack;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
 use horizon_ui::{Callable, Callback, Component, El, dispatched, el};
@@ -246,7 +247,14 @@ fn build(given: Markdown) -> (El, Controls) {
     Effect::new(move |_| {
         let path = state.path.get();
         scroll.scroll_to(0., 0.);
-        path.map(|path| horizon_ui::guest::watch(&path.to_string_lossy(), move || state.reload()))
+        let watch = path
+            .map(|path| horizon_ui::guest::watch(&path.to_string_lossy(), move || state.reload()));
+        // Read again now that it is watched: it was read before it was,
+        // and a change between the two would not be seen.
+        if watch.is_some() {
+            untrack(|| state.reload());
+        }
+        watch
     });
 
     let root = el("div").class(styles::MARKDOWN).attr("tabindex", "0");

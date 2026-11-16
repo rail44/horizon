@@ -79,6 +79,26 @@ For 1, the 55,049 calls took 16–21 ms on wasmtime 36 and 20–27 ms on 50:
 about 0.4 µs a call with the document's work. A step of a selection is 5
 calls and about 25 µs, against 7 µs natively.
 
+Measured again 2026-11-16, release builds, a thousand rows of fifty-five
+writes built three ways: natively through `El`, 13–15 ms, of which
+12–14 ms is inside Blitz's document; in an extension, 25–29 ms, 14–17 ms
+of it in the document; on Blitz's document directly, 12–20 ms, the same
+whether one mutator is kept or one is made for each write. So the
+document's own work is most of it either way, and what an extension adds
+is 11–13 ms: the crossing (6.7 ms, below) and the guest's and the host's
+code around it. (The "about 2 ms natively" above is not what building
+these rows through `El` costs now.)
+
+What handing the writes over together would save
+(`spikes/plugin-boundary/guest-bulk`, `host-bulk`, with a document of
+the host's own in place of Blitz's so that only the crossing is
+compared): a call for each write, 6.7 ms; together as values of a WIT
+type, the guest numbering the nodes, 4.6 ms; together as bytes, 2.1 ms.
+At most 4.5 ms of an extension's 25–29, and tens of microseconds for an
+ordinary update: the boundary stays one write, one call. A call into a
+guest that does nothing is 0.3 µs as a plain export and 2.1 µs through
+the long-lived future the shell calls an extension through.
+
 **Size and start.** The preview plugin (model 1) is 0.8 MB. A guest with
 `blitz-dom`, Stylo, Taffy and Parley in it is 13.6 MB, and wasmtime
 compiles it in 1.1 s; a compiled component can be kept between runs. A
@@ -218,11 +238,26 @@ thread.
 - The thread that is polling a plugin polls it again before it leaves,
   so a wake that comes meanwhile does not wake the page; from another
   thread (a file changed), it does, and the page's effects poll.
-- A task that waited on the host goes on in whatever poll comes next,
-  which may be a call made with the page lent (after a layout), where
-  the document cannot be changed. The host's `wait-for-change` comes
-  back only once the document is free: the page is woken, and its
-  effects let the task go on.
+- A plugin's effects run when the host calls for them
+  (`events.run-effects`), which it does where the document may be
+  changed, and nowhere else. The SDK runs the signals' effects on an
+  executor of its own (`guest::Effects`): an effect whose signal was
+  written waits, the host is told that some wait
+  (`document.effects-wait`, once until it has run them), and the host
+  runs them with the page's own. So whoever writes a signal, and
+  wherever -- a handler, work after a layout, a task that waited on a
+  file -- what it leads to is drawn at the same place, and a view never
+  runs effects itself. (A task did: the watch reran the effects from
+  the task, which goes on from wherever the host is. Reading a file is
+  a WASI call the host goes on to something else during, and when the
+  task went on in the host's call for the work after a layout, the
+  document was not to be changed and the plugin trapped. Measured
+  2026-11-16 under load, the extensions' three test files run together:
+  a trap in two runs of twenty-five before, in none of forty after.)
+- The host calls a plugin only for what it has: for its effects when it
+  said some wait, and for its work after a layout while it has any
+  (`document.layout-work`). A pane with nothing happening is not
+  called.
 
 One engine serves every pane, so a store's epoch callback ends its wasm
 only once that store's own poll has run past the limit. `events.tasks`
@@ -287,12 +322,17 @@ The decisions and who made them are on board #76. What they come to:
   one with `horizon_ui::guest::spawn`.
 - **What the host offers beside the document is grouped by what it is
   about**, one interface each in `horizon:ui`: `desktop` (`open-url`),
-  `pane` (`set-title`), `files` (the `file` resource, and
-  `wait-for-change`), `theme` (the seed the shell's theme is derived
+  `pane` (`set-title`), `files` (the `file` and `working-directory`
+  resources, and `watch`), `theme` (the seed the shell's theme is derived
   from: `current`, `apply`, which draws the theme of a seed and writes
   nothing, `save`, which writes one and is `async`, and `path`). A file's changes are watched by the host:
   `wasi:filesystem` 0.3 has no way to wait for one, and the host already
-  watches files for its own views (`src/watch.rs`). A view
+  watches files for its own views (`src/watch.rs`). A watch
+  is a resource the plugin holds (`files.watch`): the file is watched
+  for as long as it is held, and `changed` comes back for a change that
+  came while it was waited in or since it last came back. (It was a
+  function that watched for the length of one wait, and a change
+  between two waits was lost.) A view
   watches one with `horizon_ui::guest::watch`, which reruns the plugin's
   effects after each change.
 - **A view reads what is selected of its own text.** The selection is the
@@ -307,7 +347,7 @@ The decisions and who made them are on board #76. What they come to:
   plugin of its own for it. The view's code is the extension's too
   (`plugins/markdown`): it is built for a guest only, over `horizon-ui`,
   `horizon-components` (what views are made of: the chips, the controls,
-  Markdown as elements) and `horizon-workspace` (the front matter, the
+  Markdown as elements) and `horizon-markdown` (the front matter, the
   links), and nothing of the shell's. It is tested through a pane
   (`tests/extension.rs`), in the gate. It reads files through WASI, with
   `/` lent read-only.
