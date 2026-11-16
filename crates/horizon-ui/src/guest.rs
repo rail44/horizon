@@ -439,6 +439,8 @@ pub fn each_layout(work: impl FnMut(&Page) + 'static) {
             });
         }
     });
+    // (Said each time some is added: the host calls for it from then.)
+    host::layout_work(true);
 }
 
 /// Asks `work`'s questions of the page as soon as the event being handled
@@ -535,7 +537,7 @@ fn event(name: &str, target: NodeId, data: &EventData) -> Option<DomEvent> {
 /// Builds the view `view` makes, under an owner that is the plugin's for
 /// as long as it is loaded.
 pub fn mount(view: impl FnOnce() -> Option<El>) -> Option<u64> {
-    let _ = Executor::init_futures_executor();
+    let _ = Executor::init_local_custom_executor(Effects);
     let owner = Owner::new();
     owner.set();
     let root = view();
@@ -596,9 +598,101 @@ pub fn after_layout() {
     });
 }
 
-/// Runs the effects of the signals written since the last call.
+/// Runs the effects of the signals written since the last call: what the
+/// host calls (`events.run-effects`), when the document may be changed.
+/// A view does not; it writes signals.
 pub fn run_effects() {
     Executor::poll_local();
+}
+
+/// One of the futures the signals' library runs its effects as.
+struct Running {
+    future: RefCell<Option<Task>>,
+    /// It was woken (or has not run yet) and has not been polled since.
+    ready: std::sync::atomic::AtomicBool,
+}
+
+// SAFETY: a plugin has one thread; the library asks for a waker that could
+// be sent to another, and none is.
+unsafe impl Send for Running {}
+unsafe impl Sync for Running {}
+
+impl std::task::Wake for Running {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+        use std::sync::atomic::Ordering;
+        if !self.ready.swap(true, Ordering::Relaxed) {
+            READY.with(|ready| ready.borrow_mut().push(self.clone()));
+            effects_wait();
+        }
+    }
+}
+
+thread_local! {
+    /// The effects that wait to be run.
+    static READY: RefCell<Vec<std::sync::Arc<Running>>> = const { RefCell::new(Vec::new()) };
+    /// The host has been told some wait, and has not run them since.
+    static TOLD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Tells the host effects wait, once for all that do until it runs them.
+fn effects_wait() {
+    if !TOLD.replace(true) {
+        host::effects_wait();
+    }
+}
+
+/// What the signals' library runs effects on: they wait until the host
+/// asks for them ([`run_effects`]), and the host is told when the first
+/// one waits. So an effect runs only where the document may be changed,
+/// whoever wrote the signal it read and wherever.
+struct Effects;
+
+impl Effects {
+    fn waits(future: Task) {
+        let running = std::sync::Arc::new(Running {
+            future: RefCell::new(Some(future)),
+            ready: std::sync::atomic::AtomicBool::new(false),
+        });
+        std::task::Wake::wake(running);
+    }
+}
+
+impl any_spawner::CustomExecutor for Effects {
+    fn spawn(&self, future: any_spawner::PinnedFuture<()>) {
+        Self::waits(future);
+    }
+
+    fn spawn_local(&self, future: any_spawner::PinnedLocalFuture<()>) {
+        Self::waits(future);
+    }
+
+    fn poll_local(&self) {
+        use std::sync::atomic::Ordering;
+        // Until none waits: an effect may write what another reads.
+        loop {
+            let ready = READY.with(|ready| std::mem::take(&mut *ready.borrow_mut()));
+            if ready.is_empty() {
+                break;
+            }
+            for running in ready {
+                running.ready.store(false, Ordering::Relaxed);
+                // (Taken out while it is polled: polling it may wake it.)
+                let Some(mut future) = running.future.borrow_mut().take() else {
+                    continue;
+                };
+                let waker = std::task::Waker::from(running.clone());
+                let mut context = std::task::Context::from_waker(&waker);
+                if future.as_mut().poll(&mut context).is_pending() {
+                    *running.future.borrow_mut() = Some(future);
+                }
+            }
+        }
+        TOLD.set(false);
+    }
 }
 
 /// Hands a URL to the desktop.
@@ -644,7 +738,9 @@ pub fn start_tasks() {
 }
 
 /// A file watched: until it is dropped, `changed` is called whenever the
-/// file changed and has sat still, and the plugin's effects run after.
+/// file changed and has sat still. `changed` reads the file and writes
+/// signals, whose effects draw it; it does not change the document
+/// itself, which may not be changed when it is called.
 pub struct Watch(Rc<Cell<bool>>);
 
 impl Drop for Watch {
@@ -657,16 +753,19 @@ impl Drop for Watch {
 pub fn watch(path: &str, changed: impl Fn() + 'static) -> Watch {
     let dropped = Rc::new(Cell::new(false));
     let stops = dropped.clone();
-    let path = path.to_string();
+    // Watched from here on, not from when the task first runs: a change
+    // before that would not be seen. (Held for as long as the task runs:
+    // a change between two waits is told at the second.)
+    let watching = bindings::horizon::ui::files::Watch::new(path);
     spawn(async move {
         while !stops.get() {
-            let waited = bindings::horizon::ui::files::wait_for_change(path.clone()).await;
+            let waited = watching.changed().await;
             if stops.get() || waited.is_err() {
                 break;
             }
+            // (What it writes to signals is drawn when the host next runs
+            // the plugin's effects: a task does not change the document.)
             changed();
-            run_effects();
-            relayout();
         }
     });
     Watch(dropped)

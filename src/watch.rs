@@ -75,16 +75,22 @@ pub(crate) fn on(file: PathBuf, changed: Changed, wake: Wake) -> Option<Recommen
     Some(watcher)
 }
 
-/// What [`next_change`] shares with the watch's thread: whether the change
-/// has come, and who waits for it.
+/// What a [`Kept`] watch shares with its thread: whether a change has
+/// come that nobody was told of yet, and who waits for one.
 type Waiting = Arc<Mutex<(bool, Option<std::task::Waker>)>>;
 
-/// Comes back once the file it watches changed and has sat still: for a
-/// plugin waiting on a file (`files.wait-for-change`).
-pub(crate) struct NextChange {
+/// A file watched for as long as this is kept, for a plugin that holds a
+/// watch on it (`files.watch`): each change that has sat still is told
+/// once, at the next wait. It is kept between one wait and the next, so a
+/// change that comes while the plugin does not wait -- it is reading the
+/// file, or has not asked again yet -- is told then and not lost.
+pub(crate) struct Kept {
     waiting: Waiting,
     _watcher: RecommendedWatcher,
 }
+
+/// Comes back once the file a [`Kept`] watches changed and has sat still.
+pub(crate) struct NextChange(Arc<Kept>);
 
 impl std::future::Future for NextChange {
     type Output = ();
@@ -93,8 +99,8 @@ impl std::future::Future for NextChange {
         self: std::pin::Pin<&mut Self>,
         context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<()> {
-        let mut waiting = self.waiting.lock().unwrap();
-        if waiting.0 {
+        let mut waiting = self.0.waiting.lock().unwrap();
+        if std::mem::take(&mut waiting.0) {
             return std::task::Poll::Ready(());
         }
         waiting.1 = Some(context.waker().clone());
@@ -102,9 +108,16 @@ impl std::future::Future for NextChange {
     }
 }
 
-/// The next change of `file`, as [`on`] watches it. `None` when there is
-/// no directory to watch it in.
-pub(crate) fn next_change(file: PathBuf) -> Option<NextChange> {
+impl Kept {
+    /// The next change of the file that nobody was told of.
+    pub(crate) fn next(self: &Arc<Self>) -> NextChange {
+        NextChange(self.clone())
+    }
+}
+
+/// A watch on `file`, as [`on`] watches it, kept for a plugin's waits.
+/// `None` when there is no directory to watch it in.
+pub(crate) fn kept(file: PathBuf) -> Option<Arc<Kept>> {
     let directory = (file
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty()))?
@@ -136,8 +149,8 @@ pub(crate) fn next_change(file: PathBuf) -> Option<NextChange> {
     watcher
         .watch(&directory, RecursiveMode::NonRecursive)
         .ok()?;
-    Some(NextChange {
+    Some(Arc::new(Kept {
         waiting,
         _watcher: watcher,
-    })
+    }))
 }

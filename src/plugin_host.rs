@@ -51,7 +51,7 @@ wasmtime::component::bindgen!({
     path: "crates/horizon-ui/wit",
     world: "view",
     imports: {
-        "horizon:ui/files.wait-for-change": async | store | trappable,
+        "horizon:ui/files.[method]watch.changed": async | store | trappable,
         "horizon:ui/theme.save": async | store | trappable,
         default: trappable,
     },
@@ -60,6 +60,7 @@ wasmtime::component::bindgen!({
     with: {
         "horizon:ui/files.file": File,
         "horizon:ui/files.working-directory": WorkingDirectory,
+        "horizon:ui/files.watch": Watching,
     },
 });
 
@@ -72,6 +73,10 @@ pub struct File(pub PathBuf);
 
 /// Where a pane was asked for, as a plugin holds it.
 pub struct WorkingDirectory(pub PathBuf);
+
+/// A file a plugin watches, for as long as the plugin holds this; nothing
+/// where the file cannot be watched.
+pub struct Watching(Option<Arc<crate::watch::Kept>>);
 
 /// What the host does for a plugin beyond the document, as whoever shows
 /// the plugin does it.
@@ -158,6 +163,10 @@ struct Left {
     asked: Vec<Asked>,
     /// Where the plugin asked to hear an event.
     listens: Vec<(NodeId, &'static str, bool)>,
+    /// Effects of the plugin's wait to be run.
+    effects_wait: bool,
+    /// Whether the plugin has work for after a layout, if it said.
+    layout_work: Option<bool>,
 }
 
 const BUSY: &str = "the document cannot be changed from work after a layout or an event";
@@ -302,6 +311,16 @@ impl Host for State {
 
     fn relayout(&mut self) -> wasmtime::Result<()> {
         relayout();
+        Ok(())
+    }
+
+    fn effects_wait(&mut self) -> wasmtime::Result<()> {
+        self.left.lock().unwrap().effects_wait = true;
+        Ok(())
+    }
+
+    fn layout_work(&mut self, any: bool) -> wasmtime::Result<()> {
+        self.left.lock().unwrap().layout_work = Some(any);
         Ok(())
     }
 
@@ -455,52 +474,40 @@ impl<T: Send> self::horizon::ui::theme::HostWithStore<T> for HasSelf<State> {
         });
         // (Whoever shows the plugin answers once the poll this was asked
         // in is over.)
-        let saved = answered
+        Ok(answered
             .await
-            .unwrap_or_else(|_| Err("the theme is not given to this plugin".to_string()));
-        Free.await;
-        Ok(saved)
+            .unwrap_or_else(|_| Err("the theme is not given to this plugin".to_string())))
     }
 }
 
 impl self::horizon::ui::files::Host for State {}
 
-impl<T: Send> self::horizon::ui::files::HostWithStore<T> for HasSelf<State> {
-    async fn wait_for_change(
-        _: &Accessor<T, Self>,
-        path: String,
-    ) -> wasmtime::Result<Result<(), String>> {
-        let Some(change) = crate::watch::next_change(PathBuf::from(&path)) else {
-            return Ok(Err(format!("{path} cannot be watched")));
-        };
-        change.await;
-        // The task goes on to change the document: not before it may.
-        Free.await;
-        Ok(Ok(()))
+impl self::horizon::ui::files::HostWatch for State {
+    fn new(&mut self, path: String) -> wasmtime::Result<Resource<Watching>> {
+        Ok(self
+            .table
+            .push(Watching(crate::watch::kept(PathBuf::from(path))))?)
+    }
+
+    fn drop(&mut self, watch: Resource<Watching>) -> wasmtime::Result<()> {
+        self.table.delete(watch)?;
+        Ok(())
     }
 }
 
-thread_local! {
-    /// Who waits for the document to be free ([`Free`]).
-    static WAITING_FREE: RefCell<Vec<Waker>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Comes back once the document is free to change. A task of a plugin's
-/// that was waiting is woken in whatever poll comes next, which may be a
-/// call made with the page lent (after a layout); what the task does next
-/// would be refused there. It waits for the page's effects instead, which
-/// run with the document free and let it go on ([`Loaded::drive`]).
-struct Free;
-
-impl Future for Free {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
-        if host::free() {
-            return Poll::Ready(());
-        }
-        WAITING_FREE.with(|waiting| waiting.borrow_mut().push(context.waker().clone()));
-        Poll::Pending
+impl<T: Send> self::horizon::ui::files::HostWatchWithStore<T> for HasSelf<State> {
+    async fn changed(
+        accessor: &Accessor<T, Self>,
+        watch: Resource<Watching>,
+    ) -> wasmtime::Result<Result<(), String>> {
+        let watch = accessor.with(|mut access| -> wasmtime::Result<_> {
+            Ok(access.get().table.get(&watch)?.0.clone())
+        })?;
+        let Some(watch) = watch else {
+            return Ok(Err("the file cannot be watched".to_string()));
+        };
+        watch.next().await;
+        Ok(Ok(()))
     }
 }
 
@@ -698,6 +705,10 @@ pub struct Loaded {
     /// Whether the future is being polled: it is not polled, and the
     /// plugin not called, from inside that.
     polling: Cell<bool>,
+    /// Effects of the plugin's wait to be run, at the page's next.
+    effects_wait: Cell<bool>,
+    /// Whether the plugin has work for after a layout.
+    layout_work: Cell<bool>,
 }
 
 impl Loaded {
@@ -719,11 +730,6 @@ impl Loaded {
         let polled = future.as_mut().poll(&mut Context::from_waker(&waker));
         let _ = self.watchdog.polls.send(false);
         *self.began.lock().unwrap() = None;
-        // (A task that waits for the document to be free is let go on by
-        // the page's effects: the page is woken for them.)
-        if WAITING_FREE.with(|waiting| !waiting.borrow().is_empty()) {
-            self.woken.page.wake();
-        }
         if let Poll::Ready(ended) = polled {
             *driving = None;
             let said = match ended {
@@ -743,7 +749,20 @@ impl Loaded {
 
     /// Does what the plugin left for this shell to do.
     fn take_left(self: &Rc<Self>) {
-        let Left { asked, listens } = std::mem::take(&mut *self.left.lock().unwrap());
+        let Left {
+            asked,
+            listens,
+            effects_wait,
+            layout_work,
+        } = std::mem::take(&mut *self.left.lock().unwrap());
+        // Its effects are run when the page's are: the page is woken for
+        // them.
+        if effects_wait && !self.effects_wait.replace(true) {
+            self.woken.page.wake();
+        }
+        if let Some(any) = layout_work {
+            self.layout_work.set(any);
+        }
         for asked in asked {
             match asked {
                 Asked::OpenUrl(url) => {
@@ -852,12 +871,8 @@ impl Loaded {
     }
 
     /// Polls the future if something asked for it: the plugin's tasks go
-    /// on. Called with the document free, so the tasks that waited for
-    /// that are let go on first.
+    /// on.
     fn drive(self: &Rc<Self>) {
-        for waiting in WAITING_FREE.with(|waiting| std::mem::take(&mut *waiting.borrow_mut())) {
-            waiting.wake();
-        }
         if self.woken.asked.load(Ordering::Acquire) && !self.gone() {
             self.polled(|| self.settle());
         }
@@ -913,11 +928,17 @@ impl Loaded {
     pub fn follow(self: &Rc<Self>) {
         let (laid_out, effects) = (self.clone(), self.clone());
         horizon_ui::each_layout(move |page| {
-            host::lend(page, || laid_out.after_layout());
+            if laid_out.layout_work.get() {
+                host::lend(page, || laid_out.after_layout());
+            }
         });
+        // (Its effects are run when it said some wait, and while running
+        // them leaves more waiting.)
         horizon_ui::each_effects(move || {
             effects.drive();
-            effects.run_effects();
+            while effects.effects_wait.replace(false) && !effects.gone() {
+                effects.run_effects();
+            }
         });
     }
 }
@@ -1033,6 +1054,8 @@ pub fn instantiate(
         began,
         failed,
         polling: Cell::new(false),
+        effects_wait: Cell::new(false),
+        layout_work: Cell::new(false),
     });
     // The plugin is made by the future's first polls: a call that asks
     // nothing of it is answered once it is there.

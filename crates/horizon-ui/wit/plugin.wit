@@ -35,6 +35,15 @@ interface document {
     listen: func(node: u64, event: string, capture: bool);
     /// From work after a layout: lay out again before painting.
     relayout: func();
+    /// Effects of the plugin's wait to be run: the host runs them
+    /// (`events.run-effects`) when the document may next be changed. The
+    /// SDK says it when a signal an effect read is written; a view does
+    /// not.
+    effects-wait: func();
+    /// Whether the plugin has work for after a layout
+    /// (`events.after-layout`): the host calls for it only while it has.
+    /// The SDK says it as that work comes and goes.
+    layout-work: func(any: bool);
 
     /// The layout, as it is while the plugin's work after a layout or
     /// after an event runs.
@@ -153,9 +162,14 @@ interface files {
         path: func() -> string;
     }
 
-    /// Comes back once the file at `path` changed and has sat still; an
-    /// error when it cannot be watched.
-    wait-for-change: async func(path: string) -> result<_, string>;
+    /// A file watched for as long as this is held.
+    resource watch {
+        constructor(path: string);
+        /// Comes back once the file has changed and sat still: while this
+        /// was waited in, or since it last came back. An error when the
+        /// file cannot be watched.
+        changed: async func() -> result<_, string>;
+    }
 }
 
 /// The shell's theme, by the seed it is derived from. A color is packed,
