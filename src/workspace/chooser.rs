@@ -1,6 +1,6 @@
 //! The view chooser: which view a new pane shows. A terminal, an agent,
 //! an agent in one of the roles a person can start one in, the board,
-//! the wiki, or an extension (the Markdown view and the theme settings
+//! or an extension (the Markdown view, the wiki and the theme settings
 //! are extensions the shell comes with); an extension that
 //! makes its pane on a file has the file found next.
 
@@ -18,8 +18,6 @@ use std::sync::Arc;
 enum Choice {
     Session(SessionKind, Option<RoleId>),
     Plugin(PluginPane),
-    /// The wiki of the project the shell was started in.
-    Wiki,
     Extension(Arc<Extension>),
 }
 
@@ -41,7 +39,6 @@ fn matching(query: &str) -> Vec<(String, Choice)> {
         choices.push((role.title.to_string(), choice));
     }
     choices.push(("Board".to_string(), Choice::Plugin(plugins::list())));
-    choices.push(("Wiki".to_string(), Choice::Wiki));
     for extension in plugins::extensions() {
         choices.push((extension.title.clone(), Choice::Extension(extension)));
     }
@@ -71,7 +68,6 @@ pub(super) fn view(shell: Shell, placement: Placement) -> El {
             shell.modal.set(None);
             match choice {
                 Choice::Session(kind, role) => shell.create(kind, role, placement),
-                Choice::Wiki => shell.create_wiki(placement),
                 Choice::Plugin(plugin) => shell.create_plugin(plugin, placement),
                 Choice::Extension(extension) if extension.file_asked_for().is_some() => {
                     shell.open(Modal::Finder(extension.name, placement));

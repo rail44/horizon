@@ -1,0 +1,26 @@
+[package]
+name = "horizon-wiki-plugin"
+description = "A page of the project wiki with its comment threads, an extension: a wasm component a pane loads."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Built for `wasm32-wasip2` (`scripts/extensions.sh`); for any other
+# target the crate is empty.
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+horizon-ui = { path = "../../crates/horizon-ui" }
+horizon-components = { path = "../../crates/horizon-components" }
+# The pages, their comment threads, and where a project's are.
+horizon-wiki = { path = "../../crates/horizon-wiki" }
+horizon-workspace = { path = "../../crates/horizon-workspace" }
+keyboard-types = "0.8"
+# The page's blocks, as `horizon-wiki` reads them.
+markdown = "=1.0.0"
+uuid = { version = "1.18", features = ["v4"] }
+wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

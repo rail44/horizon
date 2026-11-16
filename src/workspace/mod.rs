@@ -977,15 +977,6 @@ impl Shell {
         });
     }
 
-    /// A new pane at `placement` on the overview of the wiki of the
-    /// project this shell was started in.
-    fn create_wiki(&self, placement: Placement) {
-        let page = (std::env::current_dir().ok())
-            .and_then(|directory| horizon_wiki::Store::for_dir(&directory))
-            .and_then(|store| store.page_path("index").ok());
-        self.create_plugin(plugins::wiki(page), placement);
-    }
-
     /// The agent view a pane shows.
     pub fn agent(&self, pane: PaneId) -> Option<Agent> {
         self.kept().panes.borrow().get(&pane)?.agent

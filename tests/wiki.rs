@@ -1,21 +1,28 @@
-//! The wiki view over a store on disk: a page drawn, a passage selected
-//! and commented on, the thread it starts read and replied in, and what
-//! the answering side writes arriving by the files.
+//! The wiki view, an extension (`plugins/wiki`), in a pane of the shell
+//! over a project's wiki on disk: a page drawn, a passage selected and
+//! commented on, the thread it starts read and replied in, and what the
+//! answering side writes arriving by the files.
+//!
+//! The component is built before these run (`scripts/gate.sh`):
+//! `scripts/extensions.sh build`.
 
-use std::path::PathBuf;
-use std::rc::Rc;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use horizon::wake::Wake;
-use horizon::wiki::{CommentLayout, State, Target, Wiki, build};
-use horizon_theme_css::{Theme, themed};
+use horizon::workspace::{Opening, Shell, Spawn, css, view};
+use horizon_control::contract::{EnvelopeBody, Invoke};
+use horizon_control::host::executor::ControlRequest;
+use horizon_terminal_core::TerminalSize;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
-use horizon_ui::reactive_graph::traits::GetUntracked;
+use horizon_ui::reactive_graph::traits::WithUntracked;
 use horizon_ui::testing::{click_at, select};
 use horizon_ui::{App, El};
 use horizon_wiki::Store;
+use horizon_workspace::Workspace;
 use keyboard_types::{Key, Modifiers, NamedKey};
+
+mod support;
 
 struct Scratch(PathBuf);
 
@@ -27,9 +34,10 @@ impl Drop for Scratch {
 
 struct Opened {
     _scratch: Scratch,
+    project: PathBuf,
     store: Store,
     app: App,
-    wiki: State,
+    shell: Shell,
 }
 
 const PAGE: &str = "---\ntitle: Sandbox\nstatus: draft\n---\n\
@@ -38,39 +46,68 @@ Then the agent, see [the other page](other.md).\n\n\
 - one item\n- another item\n";
 
 fn open(name: &str) -> Opened {
-    open_at(name, 700)
+    open_at(name, 900)
 }
 
-/// A view `width` wide: 700 has room for a margin, 500 has not.
+/// A shell `width` wide with the extensions it comes with, over a project
+/// (a repository) with a wiki of two pages, and a wiki pane on the page
+/// `sandbox`: 900 has room for a margin beside the text, 500 has not.
 fn open_at(name: &str, width: u32) -> Opened {
-    // `<wiki root>/<project>/`: the owner's id is kept beside the stores.
-    let scratch = Scratch(
-        std::env::temp_dir().join(format!("horizon-wiki-view-{name}-{}", std::process::id())),
-    );
-    let store = Store::at(scratch.0.join("project"));
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("hzb-wiki-{name}-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    // (Git's own variables, set where the tests run from a hook of git's,
+    // would name another repository than the one made here.)
+    // SAFETY: nextest runs each test in a process of its own.
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            unsafe { std::env::remove_var(name) };
+        }
+    }
+    // A data home of the test's own: the shell lends the extension the
+    // wiki in it, and tells it where that is.
+    unsafe { std::env::set_var("HORIZON_DATA_HOME", scratch.0.join("data")) };
+    let made = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&project)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let store = Store::for_dir(&project).expect("the project's wiki");
     store.write_page("sandbox", PAGE).unwrap();
     store
         .write_page("other", "---\ntitle: Other\n---\nAnother page.\n")
         .unwrap();
-    let path = store.page_path("sandbox").unwrap();
-    let mut wiki = None;
-    let app = App::new(width, 700, "Test", horizon_theme_css::CSS, || {
-        let (root, state) = build(Wiki {
-            path: Some(path),
-            open_url: Rc::new(|_| {}),
-            on_navigate: None,
-            wake: Wake::default(),
-        });
-        wiki = Some(state);
-        themed(Theme::built_in, root.focus())
+    store
+        .write_page("index", "---\ntitle: Overview\n---\nWhat the project is.\n")
+        .unwrap();
+
+    let extensions =
+        horizon::extension::own_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug"));
+    let mut shell = None;
+    let app = App::new(width, 700, "Test", css(), || {
+        let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
+        let (root, built) = view(
+            spawn,
+            Opening {
+                extensions,
+                ..Opening::default()
+            },
+        );
+        shell = Some(built);
+        root
     });
+    app.resolve();
     let opened = Opened {
         _scratch: scratch,
+        project,
         store,
         app,
-        wiki: wiki.unwrap(),
+        shell: shell.unwrap(),
     };
-    // The page is read off the UI thread.
+    let answer = opened.new_wiki(&["sandbox"]);
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
     opened.until("the page", || opened.text().contains("runs"));
     opened
 }
@@ -88,28 +125,55 @@ fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<Nod
 }
 
 impl Opened {
-    /// Lays out (which takes in what was read, and a change of the files)
-    /// until `met`.
+    /// `horizon new wiki <arguments>`, from the project.
+    fn new_wiki(&self, arguments: &[&str]) -> EnvelopeBody {
+        let answer = self.shell.control(&ControlRequest::Invoke(Invoke {
+            command: "new".to_string(),
+            args: serde_json::json!({
+                "plugin": "wiki",
+                "arguments": arguments,
+                "directory": self.project,
+                "activate": true,
+            }),
+        }));
+        self.app.run_effects();
+        self.app.resolve();
+        answer
+    }
+
+    fn model<R>(&self, read: impl FnOnce(&Workspace) -> R) -> R {
+        self.shell.model.with_untracked(read)
+    }
+
+    /// What the cursor's pane keeps: its title and its state.
+    fn kept(&self) -> (String, String) {
+        self.model(|model| {
+            let plugin = (model.cursor_pane_id())
+                .and_then(|pane| model.pane_plugin(pane))
+                .expect("the pane's plugin");
+            (
+                plugin.title.clone(),
+                plugin.state.as_str().unwrap_or_default().to_string(),
+            )
+        })
+    }
+
     fn until(&self, what: &str, met: impl Fn() -> bool) {
         let started = Instant::now();
-        loop {
-            self.app.resolve();
-            if met() {
-                return;
-            }
+        while !met() {
             assert!(
-                started.elapsed() < Duration::from_secs(10),
+                started.elapsed() < Duration::from_secs(20),
                 "no {what} in:\n{}",
                 self.text()
             );
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(5));
+            self.app.run_effects();
+            self.app.resolve();
         }
     }
 
     fn text(&self) -> String {
-        let document = self.app.document();
-        let document = document.borrow();
-        document.root_element().text_content()
+        horizon_ui::testing::text(&self.app)
     }
 
     fn all(&self, class: &str) -> Vec<NodeId> {
@@ -148,26 +212,21 @@ impl Opened {
         let root = self.text_root(0);
         let at = (self.text_of(self.all("block")[0]).find(passage)).expect("the passage");
         select(&self.app, (root, at), (root, at + passage.len()));
-        self.until("the selection", || {
-            self.wiki.selection.get_untracked().is_some()
-        });
+        self.until("the offer", || !self.all("offer").is_empty());
         self.key(Key::Character("c".into()));
+        // (Beside the text, or in the dialog.)
+        self.until("the field", || {
+            !self.all("new").is_empty() || !self.all("dialog").is_empty()
+        });
         self.commit(comment);
         self.key(Key::Named(NamedKey::Enter));
         self.until("the thread", || self.all("thread").len() > threads);
     }
 
     fn click(&self, node: NodeId) {
-        let (x, y) = {
-            let document = self.app.document();
-            let document = document.borrow();
-            let bounds = document.get_client_bounding_rect(node).expect("a box");
-            (
-                (bounds.x + bounds.width / 2.) as f32,
-                (bounds.y + bounds.height / 2.) as f32,
-            )
-        };
-        click_at(&self.app, x, y);
+        let (x, y, width, height) = self.bounds(node);
+        click_at(&self.app, (x + width / 2.) as f32, (y + height / 2.) as f32);
+        self.app.run_effects();
         self.app.resolve();
     }
 
@@ -182,6 +241,7 @@ impl Opened {
             state: KeyState::Pressed,
             text: None,
         }));
+        self.app.run_effects();
         self.app.resolve();
     }
 
@@ -189,8 +249,58 @@ impl Opened {
     fn commit(&self, text: &str) {
         self.app
             .dispatch(UiEvent::Ime(BlitzImeEvent::Commit(text.to_string())));
+        self.app.run_effects();
         self.app.resolve();
     }
+
+    /// The dialog's `Close`. (A tab's button to close it has the class
+    /// too.)
+    fn close_of_the_dialog(&self) -> NodeId {
+        let document = self.app.document();
+        let document = document.borrow();
+        let mut found = Vec::new();
+        collect(&document, self.all("dialog")[0], "close", &mut found);
+        found[0]
+    }
+
+    /// The threads on the page `sandbox`, as the log on disk has them.
+    fn threads(&self) -> Vec<horizon_wiki::thread::Thread> {
+        let page = horizon_wiki::page::page_id(&self.store.read_page("sandbox").unwrap()).unwrap();
+        self.store.threads(page).unwrap()
+    }
+}
+
+#[test]
+fn a_page_is_asked_for_by_its_name_from_its_project() {
+    let opened = open("asked");
+    let tabs = |opened: &Opened| opened.model(Workspace::tab_count);
+    assert_eq!(tabs(&opened), 2);
+    // The tab is named for the page's file, which is what the pane keeps.
+    opened.until("the title", || opened.kept().0 == "sandbox.md");
+    let page = opened.store.page_path("sandbox").unwrap();
+    assert!(
+        opened.kept().1.contains(&*page.to_string_lossy()),
+        "{:?}",
+        opened.kept()
+    );
+
+    // A page there is not is refused, with the extension's own words.
+    let missing = opened.new_wiki(&["no-such-page"]);
+    let EnvelopeBody::Error(error) = &missing else {
+        panic!("{missing:?}");
+    };
+    assert!(format!("{error:?}").contains("no page"), "{error:?}");
+    // With no page named, the overview, in a pane of its own.
+    let answer = opened.new_wiki(&[]);
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    opened.until("the overview", || {
+        opened.text().contains("What the project is.")
+    });
+    assert_eq!(tabs(&opened), 3);
+    // Asked for a page a pane shows already, that pane is the one.
+    let answer = opened.new_wiki(&["sandbox"]);
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    assert_eq!(tabs(&opened), 3);
 }
 
 #[test]
@@ -213,39 +323,37 @@ fn a_page_is_its_header_and_its_blocks() {
         ]
     );
 
-    // A link to another page of the wiki is followed in place, and gone
-    // back from.
+    // A link to another page of the wiki is followed in place: the pane
+    // keeps the page it went to, and goes back from it.
     opened.click(opened.all("link")[0]);
     opened.until("the other page", || opened.text().contains("Another page."));
-    assert_eq!(opened.wiki.history.get_untracked().len(), 1);
+    opened.until("the page kept", || opened.kept().1.contains("other.md"));
     opened.key(Key::Character("h".into()));
     opened.until("the first page", || opened.text().contains("runs"));
+    opened.until("the page kept again", || {
+        opened.kept().1.contains("sandbox.md")
+    });
 }
 
 #[test]
 fn a_selected_passage_is_commented_on_and_its_thread_replied_in() {
     let opened = open("thread");
-    // "helper", selected in the first block's text.
+    // "helper", selected in the first block's text: the offer to comment
+    // is set after the block, and `c` takes it.
     let root = opened.text_root(0);
     select(&opened.app, (root, 4), (root, 10));
-    opened.until("the selection", || {
-        opened.wiki.selection.get_untracked().is_some()
-    });
-    // The offer to comment is set after the block; `c` takes it.
-    assert_eq!(opened.all("offer").len(), 1);
+    opened.until("the offer", || opened.all("offer").len() == 1);
     opened.key(Key::Character("c".into()));
-    let target = opened.wiki.target.get_untracked();
-    assert!(matches!(target, Some(Target::Selection(_))), "{target:?}");
-    let card = opened.all("new");
-    assert_eq!(card.len(), 1);
-    assert!(opened.text_of(card[0]).contains("“helper”"));
+    opened.until("the field", || opened.all("new").len() == 1);
+    assert!(opened.text_of(opened.all("new")[0]).contains("“helper”"));
 
-    // What is typed and sent starts a thread on the passage: marked in
-    // the page, and open after its block.
+    // What is typed and sent starts a thread on the passage: written to
+    // the page's log, marked in the page, and open beside its block.
     opened.commit("Which helper?");
     opened.key(Key::Named(NamedKey::Enter));
     opened.until("the thread", || !opened.all("thread").is_empty());
     assert!(opened.all("new").is_empty());
+    assert_eq!(opened.threads().len(), 1);
     assert_eq!(opened.text_of(opened.all("mark")[0]), "helper");
     let thread = opened.all("thread")[0];
     assert!(opened.text_of(thread).contains("1 comment"));
@@ -258,20 +366,20 @@ fn a_selected_passage_is_commented_on_and_its_thread_replied_in() {
 
     // The pane has room for a margin: the thread is beside the text, level
     // with the block its passage is in.
-    assert!(opened.wiki.margin.get_untracked().is_some());
-    let (block, card) = (
-        opened.bounds(opened.all("block")[0]),
-        opened.bounds(opened.all("thread")[0]),
-    );
-    assert!(card.0 >= block.0 + block.2, "{block:?} {card:?}");
-    assert!((card.1 - block.1).abs() < 1., "{block:?} {card:?}");
+    opened.until("the thread beside its block", || {
+        let (block, card) = (
+            opened.bounds(opened.all("block")[0]),
+            opened.bounds(opened.all("thread")[0]),
+        );
+        card.0 >= block.0 + block.2 && (card.1 - block.1).abs() < 1.
+    });
 
     // The head shuts the thread and opens it; opened, it has the field,
     // and what is sent from it is a reply.
     opened.click(opened.all("head")[0]);
-    assert!(opened.all("post").is_empty());
+    opened.until("the thread shut", || opened.all("post").is_empty());
     opened.click(opened.all("head")[0]);
-    assert_eq!(opened.all("composer").len(), 1);
+    opened.until("the thread open", || opened.all("composer").len() == 1);
     opened.commit("The supervised one.");
     opened.key(Key::Named(NamedKey::Enter));
     opened.until("the reply", || opened.all("post").len() == 2);
@@ -280,23 +388,19 @@ fn a_selected_passage_is_commented_on_and_its_thread_replied_in() {
             .text_of(opened.all("thread")[0])
             .contains("2 comments")
     );
+    let threads = opened.threads();
+    assert_eq!(threads[0].replies[0].body.value, "The supervised one.");
 
     // The answering side lists the comment it is answering beside the
     // log, which the view sees by the file.
-    let id = opened
-        .store
-        .threads(horizon_wiki::page::page_id(&opened.store.read_page("sandbox").unwrap()).unwrap())
-        .unwrap()[0]
-        .root
-        .id
-        .clone();
+    let id = threads[0].root.id.clone();
     opened.store.write_replying(&[id].into()).unwrap();
     opened.until("the answer on its way", || {
         !opened.all("replying").is_empty()
     });
     // Escape leaves the field.
     opened.key(Key::Named(NamedKey::Escape));
-    assert_eq!(opened.wiki.target.get_untracked(), None);
+    opened.until("the field left", || opened.all("composer").is_empty());
 }
 
 #[test]
@@ -324,7 +428,7 @@ fn threads_in_the_margin_do_not_cover_each_other() {
 fn a_narrow_pane_has_its_threads_in_the_text() {
     let opened = open_at("narrow", 500);
     opened.comment_on("helper", "Which helper?");
-    assert_eq!(opened.wiki.margin.get_untracked(), None);
+    assert!(opened.all("aside").is_empty());
     let (block, card) = (
         opened.bounds(opened.all("block")[0]),
         opened.bounds(opened.all("thread")[0]),
@@ -342,24 +446,18 @@ fn the_dialog_keeps_a_new_thread_open_and_closes() {
         "Comments in a dialog"
     );
     opened.click(opened.all("layout")[0]);
-    assert_eq!(opened.wiki.layout.get_untracked(), CommentLayout::Dialog);
-    assert_eq!(
-        opened.text_of(opened.all("layout")[0]),
-        "Comments in the margin"
-    );
+    opened.until("the other layout", || {
+        opened.text_of(opened.all("layout")[0]) == "Comments in the margin"
+    });
 
     // A new comment is written in the dialog, which stays open on the
     // thread it starts; in the page the thread is its head line alone, in
     // the text and not beside it.
     opened.comment_on("helper", "Which helper?");
+    opened.until("the dialog", || opened.all("dialog").len() == 1);
     let dialog = opened.all("dialog");
-    assert_eq!(dialog.len(), 1);
     assert!(opened.text_of(dialog[0]).contains("“helper”"));
     assert!(opened.text_of(dialog[0]).contains("Which helper?"));
-    let root = match opened.wiki.target.get_untracked() {
-        Some(Target::Thread(root)) => root,
-        other => panic!("{other:?}"),
-    };
     let thread = opened.all("thread")[0];
     assert!(!opened.text_of(thread).contains("Which helper?"));
     let (block, card) = (opened.bounds(opened.all("block")[0]), opened.bounds(thread));
@@ -369,31 +467,34 @@ fn the_dialog_keeps_a_new_thread_open_and_closes() {
     opened.commit("And why?");
     opened.key(Key::Named(NamedKey::Enter));
     opened.until("the reply", || opened.all("post").len() == 2);
-    let page = horizon_wiki::page::page_id(&opened.store.read_page("sandbox").unwrap()).unwrap();
-    let threads = opened.store.threads(page).unwrap();
-    assert_eq!(threads[0].root.id, root);
-    assert_eq!(threads[0].replies[0].body.value, "And why?");
+    assert_eq!(opened.threads()[0].replies[0].body.value, "And why?");
 
-    // `Close` leaves nothing open; the thread's head opens it again, and
-    // a press outside the dialog closes it.
-    opened.click(opened.all("close")[0]);
-    assert_eq!(opened.wiki.target.get_untracked(), None);
+    // `Close` leaves nothing open, and the thread's head opens it again.
+    opened.click(opened.close_of_the_dialog());
+    opened.until("the dialog closed", || opened.all("dialog").is_empty());
+    opened.click(opened.all("head")[0]);
+    opened.until("the dialog again", || opened.all("dialog").len() == 1);
+    opened.click(opened.close_of_the_dialog());
+    opened.until("the dialog closed again", || {
+        opened.all("dialog").is_empty()
+    });
+
+    // Back in the margin, the thread is open there as it was left, and
+    // its head shuts it and opens it on its field.
+    opened.click(opened.all("layout")[0]);
+    opened.until("the first layout", || {
+        opened.text_of(opened.all("layout")[0]) == "Comments in a dialog"
+    });
+    opened.until("the thread open in the margin", || {
+        opened.all("aside").len() == 1 && opened.all("post").len() == 2
+    });
     assert!(opened.all("dialog").is_empty());
     opened.click(opened.all("head")[0]);
-    assert_eq!(opened.all("dialog").len(), 1);
-    click_at(&opened.app, 5., 690.);
-    opened.app.resolve();
-    assert!(opened.all("dialog").is_empty());
-
-    // Back in the margin, a thread being worked on is open there. (The
-    // dialog is over the header's button while it is open.)
+    opened.until("the thread shut", || opened.all("post").is_empty());
     opened.click(opened.all("head")[0]);
-    opened.wiki.switch_layout();
-    opened.app.run_effects();
-    opened.app.resolve();
-    assert!(opened.all("dialog").is_empty());
-    assert_eq!(opened.all("post").len(), 2);
-    assert_eq!(opened.all("composer").len(), 1);
+    opened.until("the thread open on its field", || {
+        opened.all("post").len() == 2 && opened.all("composer").len() == 1
+    });
 }
 
 #[test]
@@ -411,15 +512,11 @@ fn threads_move_between_the_margin_and_the_text_as_the_pane_is_resized() {
     // is none, and its threads are made again each time it is.
     for _ in 0..3 {
         resize(500);
-        opened.until("no margin", || opened.wiki.margin.get_untracked().is_none());
-        opened.app.resolve();
+        opened.until("no margin", || opened.all("aside").is_empty());
         assert_eq!(opened.all("thread").len(), 2);
-        assert!(opened.all("aside").is_empty());
-        resize(700);
-        opened.until("a margin", || opened.wiki.margin.get_untracked().is_some());
-        opened.app.resolve();
+        resize(900);
+        opened.until("a margin", || opened.all("aside").len() == 2);
         assert_eq!(opened.all("thread").len(), 2);
-        assert_eq!(opened.all("aside").len(), 2);
     }
     // A thread opened and shut in the margin after that.
     opened.click(opened.all("head")[0]);

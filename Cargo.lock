@@ -2982,7 +2982,6 @@ dependencies = [
  "ignore",
  "keyboard-types",
  "kurbo",
- "markdown",
  "notify",
  "notify-rust",
  "nucleo",
@@ -3353,6 +3352,20 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
+]
+
+[[package]]
+name = "horizon-wiki-plugin"
+version = "0.1.0"
+dependencies = [
+ "horizon-components",
+ "horizon-ui",
+ "horizon-wiki",
+ "horizon-workspace",
+ "keyboard-types",
+ "markdown",
+ "uuid",
+ "wit-bindgen 0.63.0",
 ]
 
 [[package]]

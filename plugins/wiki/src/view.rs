@@ -13,7 +13,8 @@
 //! Comments are written straight to the page's thread log; the daemon's
 //! wiki flow notices them and answers through the thread's session, and
 //! lists the comments it is answering beside the log. The page file, the
-//! log and that list are watched, so an answer or an edit is drawn.
+//! log and that list are watched (by the host, for a guest), so an answer
+//! or an edit is drawn.
 //!
 //! The page as a view reads it is `horizon-wiki`'s `view_model`.
 //!
@@ -47,10 +48,6 @@ use horizon_wiki::annotation::{Agent, AgentType, Annotation, markdown_body};
 use horizon_wiki::view_model::{PlacedThread, WikiPage};
 use horizon_workspace::markdown::{LinkTarget, resolve_link};
 use keyboard_types::{Key, NamedKey};
-
-use crate::background::Background;
-use crate::wake::Wake;
-use crate::watch::{self, Changed};
 
 mod render;
 
@@ -214,13 +211,11 @@ pub enum CommentLayout {
 
 /// What the view keeps that is not a signal.
 struct Held {
-    background: Background,
-    wake: Wake,
     open_url: OpenUrl,
     on_navigate: Option<Callback<PathBuf>>,
-    /// A change of the files drawn from, noted by the watches on them.
-    changed: Changed,
-    watches: RefCell<Vec<notify::RecommendedWatcher>>,
+    /// The watches on the files drawn from: a change of one reads the
+    /// page again.
+    watches: RefCell<Vec<horizon_ui::guest::Watch>>,
     /// Each block's runs of text, and its element.
     pieces: RefCell<HashMap<usize, Vec<Piece>>>,
     blocks: RefCell<HashMap<usize, El>>,
@@ -246,8 +241,6 @@ pub struct Wiki {
     pub open_url: OpenUrl,
     /// Told of the page a link, or the way back, took the view to.
     pub on_navigate: Option<Callback<PathBuf>>,
-    /// Makes the page take in a change of the files.
-    pub wake: Wake,
 }
 
 impl Component for Wiki {
@@ -325,7 +318,6 @@ impl State {
         let Wiki {
             open_url,
             on_navigate,
-            wake,
             ..
         } = given;
         Self {
@@ -345,10 +337,7 @@ impl State {
             reach: RwSignal::new(0.),
             held: StoredValue::new_local(Rc::new(Held {
                 on_navigate,
-                background: Background::new(wake.clone()),
-                wake,
                 open_url,
-                changed: Changed::default(),
                 watches: RefCell::default(),
                 pieces: RefCell::default(),
                 blocks: RefCell::default(),
@@ -415,12 +404,13 @@ impl State {
             files.push(store.thread_log_path(id));
             files.push(store.replying_path());
         }
+        let this = *self;
         *held.watches.borrow_mut() = (files.into_iter())
-            .filter_map(|file| watch::on(file, held.changed.clone(), held.wake.clone()))
+            .map(|file| horizon_ui::guest::watch(&file.to_string_lossy(), move || this.reload()))
             .collect();
     }
 
-    /// Reads the page and its threads again, off the UI thread.
+    /// Reads the page and its threads again.
     pub fn reload(&self) {
         let (Some(path), Some(store)) = (self.path.get_untracked(), self.store()) else {
             return;
@@ -428,20 +418,10 @@ impl State {
         let Some(name) = Self::page_name(&path) else {
             return;
         };
-        let this = *self;
-        self.held().background.run(
-            move || WikiPage::load(&store, &name),
-            move |loaded| {
-                // (A page shown since the read began is not this one.)
-                if this.path.get_untracked().as_ref() != Some(&path) {
-                    return;
-                }
-                match loaded {
-                    Ok(page) => this.loaded(page),
-                    Err(error) => this.error.set(Some(error)),
-                }
-            },
-        );
+        match WikiPage::load(&store, &name) {
+            Ok(page) => self.loaded(page),
+            Err(error) => self.error.set(Some(error)),
+        }
     }
 
     fn loaded(&self, page: WikiPage) {
@@ -1168,17 +1148,10 @@ pub fn build(given: Wiki) -> (El, State) {
         move |line| draw(line),
     );
 
-    // After each layout: what was read off the UI thread, a change of the
-    // files, the selection as it is now, and the passage to bring into
-    // view.
+    // After each layout: the selection as it is now, and the passage to
+    // bring into view.
     let laid = held.clone();
     each_layout(move |page| {
-        if laid.background.take_in() {
-            relayout();
-        }
-        if laid.changed.settled() {
-            state.reload();
-        }
         if state.page.get_untracked().is_none() {
             return;
         }
@@ -1355,84 +1328,4 @@ pub fn build(given: Wiki) -> (El, State) {
     )
     .child(scroll);
     (root, state)
-}
-
-/// The page as a plugin: a pane keeps the page's file, which a link
-/// followed moves.
-pub struct WikiPlugin {
-    pub open_url: OpenUrl,
-    pub wake: Wake,
-}
-
-impl crate::plugin::Plugin for WikiPlugin {
-    const NAME: &'static str = "wiki";
-    const TITLE: &'static str = "Wiki";
-    type State = DocumentState;
-    type Command = std::convert::Infallible;
-    type Asked = std::convert::Infallible;
-
-    fn commands() -> Vec<crate::plugin::Command<std::convert::Infallible>> {
-        Vec::new()
-    }
-
-    /// A page of the wiki of the project the pane was asked for in: the
-    /// overview, unless a page is named.
-    fn create(mut given: crate::plugin::Given) -> Result<DocumentState, String> {
-        let page = given.argument().unwrap_or_else(|| "index".to_string());
-        let store = horizon_wiki::Store::for_dir(&given.directory).ok_or_else(|| {
-            format!(
-                "{} is not in a repository with a wiki",
-                given.directory.display()
-            )
-        })?;
-        let path = store.page_path(&page).map_err(|error| error.to_string())?;
-        if !path.is_file() {
-            return Err(format!("the wiki has no page `{page}`"));
-        }
-        given.done()?;
-        Ok(DocumentState { path: Some(path) })
-    }
-
-    fn title(state: &DocumentState) -> String {
-        state.file_name().unwrap_or_else(|| Self::TITLE.to_string())
-    }
-
-    fn mount(
-        self,
-        state: DocumentState,
-        _: Callback<std::convert::Infallible>,
-    ) -> crate::plugin::Mounted<DocumentState, std::convert::Infallible> {
-        let shown = RwSignal::new(state.clone());
-        let view = Wiki {
-            path: state.path,
-            open_url: self.open_url,
-            wake: self.wake,
-            on_navigate: Some(Callback::new(move |path| {
-                shown.set(DocumentState { path: Some(path) })
-            })),
-        }
-        .view();
-        crate::plugin::Mounted {
-            view,
-            run: Callback::new(|never| match never {}),
-            enabled: None,
-            state: horizon_ui::reactive_graph::wrappers::read::Signal::derive_local(move || {
-                horizon_ui::reactive_graph::traits::Get::get(&shown)
-            }),
-        }
-    }
-}
-
-/// What a wiki pane keeps: the file of the page it shows.
-#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct DocumentState {
-    pub path: Option<PathBuf>,
-}
-
-impl DocumentState {
-    /// The file's name, as a pane's title.
-    pub fn file_name(&self) -> Option<String> {
-        let name = self.path.as_deref()?.file_name()?;
-        Some(name.to_string_lossy().into_owned())
-    }
 }

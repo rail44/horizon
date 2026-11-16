@@ -38,8 +38,6 @@ pub mod wake;
 #[cfg(not(target_family = "wasm"))]
 mod watch;
 #[cfg(not(target_family = "wasm"))]
-pub mod wiki;
-#[cfg(not(target_family = "wasm"))]
 pub mod window;
 #[cfg(not(target_family = "wasm"))]
 pub mod workspace;

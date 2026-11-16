@@ -365,6 +365,19 @@ The decisions and who made them are on board #76. What they come to:
   `struct State` exports no `state`, and its `mount` takes nothing. It
   derives the colors it shows from the seed itself (`horizon-theme`, which
   builds for a guest), the same derivation the shell draws from.
+- **The wiki is the third extension** (`plugins/wiki`), and the first
+  that writes: `access(write = ["{data}/wiki"])` lends it the wiki's
+  directory of Horizon's own data, `{data}` being wherever the
+  environment puts that, with `HORIZON_DATA_HOME` in its environment so
+  that `horizon-wiki` finds the directory as it does in the shell's own
+  processes. The host has nothing of the wiki's: the extension reads the
+  pages and the comment logs, appends a comment to a log, and finds the
+  project a page is of from the repository's files (a guest cannot run
+  git). WASI has no file lock (one was taken out of `wasi:filesystem`
+  before 0.2 and is in neither 0.2 nor 0.3), so its line is appended
+  without the lock the daemon's writers take: a log is only appended to,
+  a line at a time. `create` may refuse, in words (`result<state,
+  string>`), which is what the command line answers with.
 - **A pane's state is the extension's type.** The extension declares it
   in WIT, says when it changed (`state-changed`), and gives it when asked
   (`state()`). The workspace saves it under the extension's name and

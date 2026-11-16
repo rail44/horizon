@@ -266,7 +266,14 @@ Diagrams are deferred; gpui-component (7591a35) has no mermaid rendering.
   confined to its store by the library. `horizon-agentd` is the
   composition root that registers the wiki's tools, role, skill, trigger
   source and reply sink (`docs/board-keeper-design.md` §3).
-- **The shell's view is `ViewKind::Wiki`, with the view in `src/wiki/`**,
+- **Since 2026-11-16 the view is an extension** (`plugins/wiki`,
+  `docs/extension-boundary-design.md`): what this document says of the
+  view's place in the shell is of before that. The extension reads the
+  pages and the logs itself and appends a comment to the page's log
+  itself, in the wiki's directory of Horizon's data, which it is lent to
+  write in; a guest has no file lock to take, so its line goes in
+  without one (`crates/horizon-wiki/src/thread.rs`).
+- **The shell's view was `ViewKind::Wiki`, with the view in `src/wiki/`**,
   the board's shape. This and the trusted declaration above are interim,
   until plugin infrastructure exists ("Aでよいですが、プラグインの整備まで
   一旦という印象ではあります"; "これも同上でその形でよいです"). The

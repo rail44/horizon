@@ -20,4 +20,5 @@ shift
 exec cargo "$command" \
   -p horizon-markdown-plugin \
   -p horizon-theme-settings-plugin \
+  -p horizon-wiki-plugin \
   --target wasm32-wasip2 "$@"

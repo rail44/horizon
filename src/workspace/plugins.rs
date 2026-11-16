@@ -21,7 +21,6 @@ mod styles {
                            white-space: pre-wrap; }
 "}
 }
-use std::path::PathBuf;
 
 use horizon_workspace::{PaneId, PluginPane, SessionId};
 
@@ -37,8 +36,6 @@ use crate::plugin::{Given, Mounted, Plugin};
 use crate::plugin_host::{Asks, ThemeAsks};
 use crate::preview::{PreviewPlugin, Target};
 use crate::terminal::plugin::TerminalPlugin;
-use crate::wiki::DocumentState;
-use crate::wiki::WikiPlugin;
 use horizon_theme::seed::{ResolvedFallback, Seed};
 use horizon_theme_css::Theme;
 
@@ -107,7 +104,6 @@ pub(super) fn commands() -> Vec<Listed> {
     let mut commands = listed::<BoardListPlugin>();
     commands.extend(listed::<BoardThreadPlugin>());
     commands.extend(listed::<PreviewPlugin>());
-    commands.extend(listed::<WikiPlugin>());
     commands.extend(listed::<TerminalPlugin>());
     commands.extend(listed::<AgentPlugin>());
     EXTENSIONS.with(|kept| {
@@ -225,13 +221,6 @@ impl Shell {
             PreviewPlugin::NAME => {
                 let plugin = PreviewPlugin {
                     background: background(),
-                    wake: kept.wake.clone(),
-                };
-                self.mount(pane, plugin, state, |never| match never {})
-            }
-            WikiPlugin::NAME => {
-                let plugin = WikiPlugin {
-                    open_url: kept.open_url.clone(),
                     wake: kept.wake.clone(),
                 };
                 self.mount(pane, plugin, state, |never| match never {})
@@ -414,12 +403,11 @@ impl Shell {
 }
 
 /// The names of the plugins this shell has of its own.
-pub(super) const NAMES: [&str; 6] = [
+pub(super) const NAMES: [&str; 5] = [
     TerminalPlugin::NAME,
     AgentPlugin::NAME,
     BoardListPlugin::NAME,
     BoardThreadPlugin::NAME,
-    WikiPlugin::NAME,
     PreviewPlugin::NAME,
 ];
 
@@ -433,7 +421,6 @@ pub(super) fn created(name: &str, given: Given) -> Option<Result<PluginPane, Str
     Some(match name {
         BoardListPlugin::NAME => made::<BoardListPlugin>(given),
         BoardThreadPlugin::NAME => made::<BoardThreadPlugin>(given),
-        WikiPlugin::NAME => made::<WikiPlugin>(given),
         PreviewPlugin::NAME => made::<PreviewPlugin>(given),
         _ => return None,
     })
@@ -447,11 +434,6 @@ pub(super) fn preview_of(target: Option<Target>) -> PluginPane {
 /// What a preview pane shows, as the model keeps it.
 pub(super) fn previewed(plugin: &PluginPane) -> Option<Option<Target>> {
     (plugin.name == PREVIEW).then(|| serde_json::from_value(plugin.state.clone()).ok().flatten())
-}
-
-/// A wiki pane on the page at `path`.
-pub(super) fn wiki(path: Option<PathBuf>) -> PluginPane {
-    pane::<WikiPlugin>(DocumentState { path })
 }
 
 /// A list pane.

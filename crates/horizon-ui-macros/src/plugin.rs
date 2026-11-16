@@ -119,6 +119,8 @@ fn wit(ty: &Type) -> syn::Result<String> {
         "File" => "file".to_string(),
         "WorkingDirectory" => "working-directory".to_string(),
         "Option" => format!("option<{}>", inner()?),
+        // (What a function gives or refuses, the refusal in words.)
+        "Result" => format!("result<{}, string>", inner()?),
         "Vec" => format!("list<{}>", inner()?),
         number @ ("u8" | "u16" | "u32" | "u64" | "s8" | "s16" | "s32" | "s64" | "f32" | "f64") => {
             number.to_string()

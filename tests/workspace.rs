@@ -748,74 +748,6 @@ fn the_board_opens_in_a_tab_and_a_task_s_thread_beside_its_list() {
 }
 
 #[test]
-fn the_control_plane_opens_a_wiki_page_in_a_pane() {
-    use horizon_control::contract::{EnvelopeBody, Invoke};
-    use horizon_control::host::executor::ControlRequest;
-
-    // A project (a repository), and a data home of the test's own for its
-    // wiki: the page is found from where the pane was asked for.
-    let directory = std::env::temp_dir().join(format!("hzb-wiki-{}", std::process::id()));
-    let project = directory.join("project");
-    std::fs::create_dir_all(&project).unwrap();
-    // (Git's own variables, set where the tests run from a hook of git's,
-    // would name another repository than the one made here.)
-    // SAFETY: nextest runs each test in a process of its own.
-    for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("GIT_") {
-            unsafe { std::env::remove_var(name) };
-        }
-    }
-    unsafe { std::env::set_var("XDG_DATA_HOME", directory.join("data")) };
-    let made = std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&project)
-        .status()
-        .unwrap();
-    assert!(made.success());
-    let store = horizon_wiki::Store::for_dir(&project).expect("the project's wiki");
-    store
-        .write_page("index", "---\ntitle: Overview\n---\nWhat the project is.\n")
-        .unwrap();
-    let page = store.page_path("index").unwrap();
-
-    let opened = open();
-    let ask = |arguments: serde_json::Value| {
-        opened.shell.control(&ControlRequest::Invoke(Invoke {
-            command: "new".to_string(),
-            args: serde_json::json!({
-                "plugin": "wiki",
-                "arguments": arguments,
-                "directory": project,
-                "activate": true,
-            }),
-        }))
-    };
-    // A page there is not is refused, and so is a directory that is no
-    // project's.
-    let missing = ask(serde_json::json!(["no-such-page"]));
-    assert!(matches!(missing, EnvelopeBody::Error(_)), "{missing:?}");
-    // (With no page named, the overview.)
-    let answer = ask(serde_json::json!([]));
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
-    opened.app.run_effects();
-    opened.app.resolve();
-    let pane = opened.panes()[0];
-    assert_eq!(opened.shell.plugin(pane), Some("wiki"));
-    assert_eq!(
-        opened.model(|model| shown_file(model, pane)),
-        Some(page.clone())
-    );
-    opened.until("the page", || opened.all("heading").len() == 1);
-    // The tab is named for the page's file, and the pane comes back on it.
-    assert_eq!(
-        opened.model(|model| model.tab_summaries()[1].title.clone()),
-        "index.md"
-    );
-    assert_eq!(opened.model(|model| shown_file(model, pane)), Some(page));
-    let _ = std::fs::remove_dir_all(&directory);
-}
-
-#[test]
 fn the_control_plane_switches_a_sessions_model_through_the_runtime() {
     use std::sync::{Arc, Mutex, mpsc};
 
@@ -1222,12 +1154,6 @@ fn a_shell_with_nothing_happening_has_nothing_to_draw() {
         "{}",
         terminal.text()
     );
-}
-
-/// The file the document view in `pane` shows, as the model keeps it.
-fn shown_file(model: &Workspace, pane: horizon_workspace::PaneId) -> Option<std::path::PathBuf> {
-    let state = &model.pane_plugin(pane)?.state;
-    serde_json::from_value(state["path"].clone()).ok()
 }
 
 #[test]

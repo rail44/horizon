@@ -50,7 +50,7 @@ replaces the daemon side. The terminal hub runs the same lockstep over
 its `hello` (`MIN_SUPPORTED == current`). Rebuild, then restart the app
 itself.
 
-The Markdown view and the theme settings are extensions (`plugins/*`),
+The Markdown view, the wiki and the theme settings are extensions (`plugins/*`),
 wasm components `cargo build --workspace` does not build: the second
 command above does (`--release` for a release Horizon), and Horizon reads
 each component from beside its executable or from where that command
@@ -377,15 +377,15 @@ their wiring:
   `crates/horizon-board-view`. See `docs/board-redesign-design.md`.
 - `finder/` — a file found by typing: the list, the matching, and the
   listing of a directory's files off the UI thread.
-- `watch.rs` — the watch on the one file a view shows, which the wiki
-  view, a preview and the extensions' loading share. The Markdown view
-  (`horizon new markdown <path>`) and the theme settings
+- `watch.rs` — the watch on the one file a view shows, which a preview,
+  the extensions' loading and what the host watches for an extension
+  share. The Markdown view (`horizon new markdown <path>`), the wiki
+  (`horizon new wiki [<page>]`; a page of the project wiki,
+  `crates/horizon-wiki`, with the owner's comment threads anchored in
+  it, `docs/project-wiki-design.md`) and the theme settings
   (`horizon new theme-settings`) are not here: they are extensions, whole
-  in `plugins/markdown` and `plugins/theme-settings`, over `horizon-ui`
-  and `horizon-components`.
-- `wiki/` — a page of the project wiki (`crates/horizon-wiki`) with the
-  owner's comment threads anchored in it. See
-  `docs/project-wiki-design.md`.
+  in `plugins/markdown`, `plugins/wiki` and `plugins/theme-settings`,
+  over `horizon-ui` and `horizon-components`.
 - `preview.rs` — the preview pane: a view shown from a wasm plugin
   (`preview-plugin/`). The plugin has the view's signals and handlers, the
   document is the shell's. See `docs/preview-pane-design.md`.

@@ -34,9 +34,9 @@ cargo run
 sessions run in `horizon-agentd` (`crates/horizon-agentd`), a separate
 workspace member Horizon spawns on demand. Run `cargo build --workspace` at least once (and
 again after touching the runtime crates) or panes will fail to find a runtime
-to spawn. The Markdown view and the theme settings are extensions, wasm components the
-second build command above makes (`rustup target add wasm32-wasip2` once);
-without them Horizon starts and has neither. `just dev` builds the whole
+to spawn. The Markdown view, the wiki and the theme settings are extensions, wasm
+components the second build command above makes (`rustup target add
+wasm32-wasip2` once); without them Horizon starts and has none of the three. `just dev` builds the whole
 workspace and launches the freshly built binary directly (bypassing `cargo
 run`'s environment leakage into Horizon and agentd); pass CLI subcommand
 arguments after it, e.g. `just dev sessions`.

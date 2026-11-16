@@ -1,14 +1,20 @@
 //! Comment threads: one append-only JSONL log per page,
 //! `threads/<page uuid>.jsonl`, one [`Annotation`] per line, appended under
-//! an exclusive `flock(2)` by whichever process writes (the shell's view, an
-//! agent's tool) and read under a shared one. A thread is a range-targeted
+//! an exclusive `flock(2)` by whichever process writes (an agent's tool,
+//! the daemon) and read under a shared one. A thread is a range-targeted
 //! annotation (its root) and every reply that leads back to it.
+//!
+//! A wasm guest (the wiki view, an extension) has no lock to take: WASI
+//! has none. It appends its line in one write, which the log's readers
+//! take whole or skip torn; what it gives up is that the log cannot
+//! change between its look at it and its line.
 //!
 //! Snapshots (`snapshots/<uuid>.md`) keep the page as it was when a comment
 //! was made; an annotation's `TimeState.cached` names one.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
@@ -84,7 +90,7 @@ impl Store {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error.into()),
         };
-        lock(&file, libc::LOCK_SH)?;
+        lock(&file, Lock::Shared)?;
         let mut raw = Vec::new();
         (&file).read_to_end(&mut raw)?;
         Ok(parse_log(&raw))
@@ -101,14 +107,13 @@ impl Store {
         let line = serde_json::to_string(annotation)
             .map_err(|error| WikiError::Invalid(error.to_string()))?;
         std::fs::create_dir_all(self.threads_dir())?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .append(true)
-            .open(self.thread_log_path(page))?;
-        lock(&file, libc::LOCK_EX)?;
-        let mut raw = Vec::new();
-        (&file).read_to_end(&mut raw)?;
+        let path = self.thread_log_path(page);
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        lock(&file, Lock::Exclusive)?;
+        // (Read by the path, not by the handle that appends: where a file
+        // opened to append is read from is not the same everywhere, and a
+        // guest's starts at its end.)
+        let raw = std::fs::read(&path)?;
         let existing = parse_log(&raw);
         if existing.iter().any(|known| known.id == annotation.id) {
             return Err(WikiError::Invalid(format!(
@@ -281,7 +286,18 @@ fn parse_owner(text: &str) -> Option<Uuid> {
     Uuid::parse_str(value.strip_prefix("urn:uuid:").unwrap_or(value)).ok()
 }
 
-fn lock(file: &File, operation: libc::c_int) -> std::io::Result<()> {
+/// How a log is held while it is read, or read and appended to.
+enum Lock {
+    Shared,
+    Exclusive,
+}
+
+#[cfg(unix)]
+fn lock(file: &File, lock: Lock) -> std::io::Result<()> {
+    let operation = match lock {
+        Lock::Shared => libc::LOCK_SH,
+        Lock::Exclusive => libc::LOCK_EX,
+    };
     // SAFETY: flock on a descriptor this File owns; released on close.
     let ret = unsafe { libc::flock(file.as_raw_fd(), operation) };
     if ret == 0 {
@@ -289,6 +305,12 @@ fn lock(file: &File, operation: libc::c_int) -> std::io::Result<()> {
     } else {
         Err(std::io::Error::last_os_error())
     }
+}
+
+/// A guest has no lock to take (the module's note).
+#[cfg(not(unix))]
+fn lock(_: &File, _: Lock) -> std::io::Result<()> {
+    Ok(())
 }
 
 fn parse_log(raw: &[u8]) -> Vec<Annotation> {

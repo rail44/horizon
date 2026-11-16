@@ -29,6 +29,7 @@ members = [
     "preview-plugin",
     "plugins/markdown",
     "plugins/theme-settings",
+    "plugins/wiki",
 ]
 resolver = "3"
 # The DuckDB extensions are a sub-workspace (pinned to DuckDB's unstable C
@@ -116,7 +117,6 @@ horizon-wire = { path = "crates/horizon-wire" }
 horizon-theme = { path = "crates/horizon-theme" }
 horizon-shell-runtime = { path = "crates/horizon-shell-runtime" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
-horizon-wiki = { path = "crates/horizon-wiki" }
 anyrender = "0.14"
 anyrender_vello = "0.15"
 # The terminal's screen is a widget that paints itself: both crates draw
@@ -131,9 +131,6 @@ nucleo = "0.5"
 wasmparser = "0.261"
 futures = "0.3"
 kurbo = "0.13"
-# The parser `horizon-wiki` reads a page with: a wiki page is drawn from the
-# same syntax tree its comments are anchored in.
-markdown = "=1.0.0"
 notify = "8"
 # `complex-scripts`: the word breaker with its dictionary for Chinese and
 # Japanese. Without it a debug build writes a warning to stderr for each
@@ -165,6 +162,8 @@ wasmtime-wasi = "50"
 portable-pty = "0.9.0"
 # The view painted into pixels, with no window and no GPU.
 anyrender_vello_cpu = "0.18"
+# The wiki a test of the wiki's extension is shown over.
+horizon-wiki = { path = "crates/horizon-wiki" }
 # A component written as text, for what the host says of one it cannot
 # take (`src/plugin_host.rs`).
 wat = "1"

@@ -522,6 +522,17 @@ impl Extension {
                         Ok(answer[0].clone())
                     })
                 });
+                // (A `create` that may refuse says why in words.)
+                let state = match state {
+                    Some(Val::Result(Ok(made))) => made.map(|made| *made),
+                    Some(Val::Result(Err(refused))) => {
+                        return Err(match refused.as_deref() {
+                            Some(Val::String(why)) => why.clone(),
+                            _ => "`create` refused".to_string(),
+                        });
+                    }
+                    other => other,
+                };
                 let said = failed.get_untracked();
                 state
                     .and_then(|state| state.to_wave().ok())
@@ -635,12 +646,13 @@ fn function(
 
 /// The components of the extensions that come with the shell, by their
 /// files' names and the packages they are built from.
-const OWN: [(&str, &str); 2] = [
+const OWN: [(&str, &str); 3] = [
     ("horizon_markdown_plugin.wasm", "horizon-markdown-plugin"),
     (
         "horizon_theme_settings_plugin.wasm",
         "horizon-theme-settings-plugin",
     ),
+    ("horizon_wiki_plugin.wasm", "horizon-wiki-plugin"),
 ];
 
 /// The files of the extensions that come with the shell: each beside the
