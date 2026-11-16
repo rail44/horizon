@@ -20,7 +20,9 @@
 //! WIT and manifest are written by hand.
 //!
 //! `access(..)` holds what the plugin is let have that takes saying what
-//! of: the directories it may read. Which of the host's interfaces it
+//! of: the directories it may read (`read = [..]`), and those it may
+//! write in too (`write = [..]`), one of which may begin with `{data}`,
+//! Horizon's own data (`{data}/wiki`). Which of the host's interfaces it
 //! uses is not said here: the component imports what its code calls, and
 //! the host reads that.
 //!
@@ -57,6 +59,7 @@ struct About {
     name: Option<String>,
     title: Option<String>,
     read: Vec<String>,
+    write: Vec<String>,
 }
 
 /// A command, as its attribute says it.
@@ -351,7 +354,7 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
         "plugin": { "name": name, "title": title },
         "commands": described,
         "create": created,
-        "access": { "read": about.read },
+        "access": { "read": about.read, "write": about.write },
     })
     .to_string();
     let length = manifest.len();
@@ -421,8 +424,11 @@ pub(crate) fn plugin(arguments: TokenStream, input: TokenStream) -> TokenStream 
                 if meta.path.is_ident("read") {
                     about.read = strings(&meta.value()?.parse::<ExprArray>()?)?;
                     Ok(())
+                } else if meta.path.is_ident("write") {
+                    about.write = strings(&meta.value()?.parse::<ExprArray>()?)?;
+                    Ok(())
                 } else {
-                    Err(meta.error("`read`"))
+                    Err(meta.error("`read` or `write`"))
                 }
             })?;
         } else {

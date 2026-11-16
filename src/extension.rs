@@ -89,13 +89,45 @@ struct ManifestCommand {
     destructive: bool,
 }
 
-/// What the extension may read.
+/// What the extension is lent of the files.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Access {
     /// Directories, lent to it read-only at the same paths.
     #[serde(default)]
     read: Vec<String>,
+    /// Directories it may write in too, made if they are not there. One
+    /// may begin with [`DATA`].
+    #[serde(default)]
+    write: Vec<String>,
+}
+
+/// Where a lent directory begins when it is in Horizon's own data:
+/// `{data}/wiki` is the `horizon/wiki` of the data home, wherever the
+/// environment puts that.
+const DATA: &str = "{data}";
+
+/// `$HORIZON_DATA_HOME`, else `$XDG_DATA_HOME`, else `~/.local/share`: as
+/// the board, the agent and the wiki resolve theirs.
+fn data_home() -> Option<PathBuf> {
+    let named = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    match named("HORIZON_DATA_HOME").or_else(|| named("XDG_DATA_HOME")) {
+        Some(value) => Some(PathBuf::from(value)),
+        None => named("HOME").map(|home| PathBuf::from(home).join(".local").join("share")),
+    }
+}
+
+/// A directory the manifest names, as it is on this machine, and whether
+/// it is in Horizon's data.
+fn lent(named: &str) -> Result<(PathBuf, bool), String> {
+    match named.strip_prefix(DATA) {
+        Some(rest) => {
+            let home = data_home().ok_or("no data home to lend from")?;
+            let rest = rest.trim_start_matches('/');
+            Ok((home.join("horizon").join(rest), true))
+        }
+        None => Ok((PathBuf::from(named), false)),
+    }
 }
 
 /// A command of an extension, as the palette lists it.
@@ -117,7 +149,10 @@ pub struct Extension {
     /// The component's file.
     pub file: PathBuf,
     compiled: Compiled,
-    read: Vec<PathBuf>,
+    /// The directories lent to it, as the manifest names them: to read,
+    /// and to write in too.
+    read: Vec<String>,
+    write: Vec<String>,
     /// What a pane keeps of it: the type `state` gives. None when its
     /// panes keep nothing (it exports no `state`, and its `mount` takes
     /// nothing).
@@ -339,12 +374,8 @@ impl Extension {
             creates,
             file: file.to_path_buf(),
             compiled,
-            read: manifest
-                .access
-                .read
-                .into_iter()
-                .map(PathBuf::from)
-                .collect(),
+            read: manifest.access.read,
+            write: manifest.access.write,
             state,
         })
     }
@@ -358,10 +389,24 @@ impl Extension {
         failed: RwSignal<Option<String>>,
     ) -> Result<Running, String> {
         let mut wasi = WasiCtxBuilder::new();
-        for directory in &self.read {
+        let mut in_data = false;
+        let named = (self.read.iter().map(|named| (named, FsPerms::ReadOnly)))
+            .chain(self.write.iter().map(|named| (named, FsPerms::ReadWrite)));
+        for (named, perms) in named {
+            let (directory, data) = lent(named)?;
+            in_data |= data;
+            let said = |error: &dyn std::fmt::Display| format!("{}: {error}", directory.display());
+            if matches!(perms, FsPerms::ReadWrite) {
+                std::fs::create_dir_all(&directory).map_err(|error| said(&error))?;
+            }
             let path = directory.to_string_lossy();
-            wasi.preopened_dir(directory, &*path, FsPerms::ReadOnly)
-                .map_err(|error| format!("{}: {error}", directory.display()))?;
+            wasi.preopened_dir(&directory, &*path, perms)
+                .map_err(|error| said(&error))?;
+        }
+        // What is lent of Horizon's data is where the extension would
+        // look for it: it reads the data home as Horizon's own code does.
+        if let Some(home) = data_home().filter(|_| in_data) {
+            wasi.env("HORIZON_DATA_HOME", home.to_string_lossy());
         }
         let loaded = instantiate(&self.compiled, wasi.build(), asks, wake, failed)
             .map_err(|error| format!("{error:#}"))?;
