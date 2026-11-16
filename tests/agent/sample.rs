@@ -8,7 +8,7 @@ use horizon_ui::reactive_graph::owner::LocalStorage;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::Set;
 
-use horizon_agent_display::{
+use horizon_shell_runtime::agent_display::{
     Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Label, Message,
     Receipt, Status, Transcript, Turn, TurnPart, TurnState, Unit,
 };

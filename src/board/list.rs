@@ -7,13 +7,13 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use horizon_board::{Item, Position};
-use horizon_board_view::chrome;
-use horizon_board_view::model::{
+use crate::board::chrome;
+use crate::board::model::{
     self, DropHalf, ListCommand, Row, drop_position_from_half, finished_summary,
     list_command_for_key, parse_new_task, sibling_move, status_text, step_selection, tree_rows,
     visible_rows,
 };
+use horizon_board::{Item, Position};
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, DomEventData};
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue};

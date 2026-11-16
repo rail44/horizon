@@ -3,7 +3,7 @@
 //! changed. A session outlives a pane of it: the model is kept for the
 //! next pane to draw.
 
-use horizon_board_view::activity::BoardSessionActivity;
+use crate::board::activity::BoardSessionActivity;
 use horizon_shell_runtime::agent_model::SessionStatus;
 use std::sync::{Arc, Mutex};
 use std::task::Waker;

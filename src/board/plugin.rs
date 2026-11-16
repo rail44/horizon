@@ -1,7 +1,7 @@
 //! The board's two views as plugins: the commands each carries out for
 //! the pane it is in, and the state a pane of each keeps.
 
-use horizon_board_view::model::{ListCommand, ThreadCommand};
+use crate::board::model::{ListCommand, ThreadCommand};
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked};

@@ -379,8 +379,7 @@ struct Kept {
     watched: RefCell<Vec<extensions::Watched>>,
     /// What the sessions the board views name are doing: every board view
     /// is given it.
-    board_activity:
-        RwSignal<HashMap<SessionId, horizon_board_view::activity::BoardSessionActivity>>,
+    board_activity: RwSignal<HashMap<SessionId, crate::board::activity::BoardSessionActivity>>,
     /// The next arranging gives the active pane the keys.
     refocus: Cell<bool>,
     board: Option<board::Source>,

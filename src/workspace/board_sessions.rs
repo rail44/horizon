@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use horizon_board_view::activity::BoardSessionActivity;
+use crate::board::activity::BoardSessionActivity;
 
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Update, WithUntracked};
 use horizon_ui::{Callable, Callback, relayout};

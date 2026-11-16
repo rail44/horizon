@@ -7,10 +7,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use horizon::background::Background;
+use horizon::board::activity::BoardSessionActivity;
 use horizon::board::list::{Asked, view};
 use horizon::board::{BoardList, Sessions, Source};
 use horizon_board::{BoardEvent, Comment, Item, Store, sample_envelopes};
-use horizon_board_view::activity::BoardSessionActivity;
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
@@ -288,7 +288,7 @@ fn a_dragged_row_shows_where_it_would_land_among_its_siblings() {
 
 #[test]
 fn a_task_bound_to_a_session_says_what_the_session_is_doing() {
-    use horizon_board_view::activity::BoardSessionActivity;
+    use horizon::board::activity::BoardSessionActivity;
     use horizon_ui::reactive_graph::traits::Set;
     use horizon_workspace::SessionId;
 

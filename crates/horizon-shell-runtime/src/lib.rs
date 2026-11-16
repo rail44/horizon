@@ -27,6 +27,7 @@
 //! pane folds it: the events, and the frame they fold into.
 
 mod agent;
+pub mod agent_display;
 pub mod agent_model;
 pub mod agent_view;
 mod attachment;

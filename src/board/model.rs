@@ -7,10 +7,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use horizon_board::{tree_order, Item, Position};
+use horizon_board::{Item, Position, tree_order};
 
-use crate::chrome;
-pub use crate::measure::{display_width, rendered_lines};
+use super::chrome;
+pub use super::measure::{display_width, rendered_lines};
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -63,7 +63,7 @@ pub enum ListCommand {
     Reorder,
 }
 
-/// The thread view's key map. `key` is a GPUI keystroke key name; a chord
+/// The thread view's key map. `key` is the key's name; a chord
 /// carrying any modifier other than shift never reaches this.
 pub fn command_for_key(key: &str) -> Option<ThreadCommand> {
     Some(match key {

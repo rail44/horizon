@@ -1,10 +1,6 @@
-//! The display model the pane draws: plain data, already worded. The
-//! adapter from a live session (`adapter`) does the wording; the
-//! view only lays it out.
-//!
-//! In the preview plugin's build the sample is the only producer and does
-//! not reach every state, so the enums with states only a live session
-//! produces allow dead code.
+//! The display model the agent pane draws: plain data, already worded.
+//! The adapter from a live session (`agent_view::adapter`) does the
+//! wording; the view only lays it out.
 
 pub mod chrome;
 
@@ -40,7 +36,6 @@ pub struct Message {
     pub text: String,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Label {
     You,
@@ -56,7 +51,6 @@ pub struct Turn {
     pub elapsed: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TurnState {
     Running,
@@ -102,7 +96,6 @@ impl Call {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CallStatus {
     Running,
@@ -146,7 +139,6 @@ pub struct Notice {
     pub text: String,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tone {
     Muted,
@@ -154,7 +146,6 @@ pub enum Tone {
     Danger,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Status {
     Idle,
@@ -184,7 +175,6 @@ pub struct Task {
 }
 
 /// What Enter and Escape in an empty composer mean.
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum ComposerMode {
     Idle,

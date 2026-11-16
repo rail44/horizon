@@ -21,14 +21,14 @@ use super::turns::{
     build_tool_call_views, group_into_turns, humanize_duration, pluralize, receipt_summary,
     segment_bursts, str_field, tool_call_body, DiffLineKind, ToolCallBody, ToolCallView,
 };
+use crate::agent_display::chrome;
+use crate::agent_display::{
+    Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Label, Message, Notice,
+    Receipt, Status, Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
+};
 use crate::agent_model::{
     actionable_pending_approval_identities_in, state_indicates_turn_in_flight, AgentFrameItem,
     AgentModel, MessageRole, SessionState, ToolCallIdentity, TurnEndReason, TurnSpan,
-};
-use horizon_agent_display::chrome;
-use horizon_agent_display::{
-    Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, DiffLine, Label, Message, Notice,
-    Receipt, Status, Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };
 
 /// The display model, and the identity behind each approval id it carries.

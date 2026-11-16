@@ -6,12 +6,12 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use horizon_board::{Comment, Item, read_position_advances};
-use horizon_board_view::chrome;
-use horizon_board_view::model::{
+use crate::board::chrome;
+use crate::board::model::{
     self, ThreadCommand, Voice, command_for_key, fold_preview, read_through, status_text,
     step_post, task_session_id, unread_count, voice,
 };
+use horizon_board::{Comment, Item, read_position_advances};
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::owner::{LocalStorage, StoredValue, on_cleanup};
@@ -572,7 +572,7 @@ pub fn view(
     Effect::new(move |_| {
         (sessions.bound).set(state.item.with(|item| {
             (item.as_ref()).map_or_else(Vec::new, |item| {
-                horizon_board_view::model::bound_sessions(std::slice::from_ref(item))
+                crate::board::model::bound_sessions(std::slice::from_ref(item))
             })
         }));
     });

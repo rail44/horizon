@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use horizon_board::Item;
 use horizon_workspace::SessionId;
 
-use crate::chrome;
+use super::chrome;
 
 /// The activity of one session a board item is bound to.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -96,7 +96,7 @@ pub fn task_session_state(
 
 #[cfg(test)]
 mod tests {
-    use super::{task_session_state, BoardSessionActivity};
+    use super::{BoardSessionActivity, task_session_state};
     use horizon_board::Item;
     use horizon_workspace::SessionId;
     use std::collections::HashMap;

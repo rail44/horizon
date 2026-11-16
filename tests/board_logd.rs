@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 use horizon::background::Background;
 use horizon::board::list::view;
+use horizon::board::model::ListCommand;
 use horizon::board::{BoardList, Source};
 use horizon_board::{Position, Store};
-use horizon_board_view::model::ListCommand;
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};

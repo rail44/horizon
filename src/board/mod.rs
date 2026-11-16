@@ -2,9 +2,9 @@
 //! `horizon-board`'s store. Neither holds the other: a pane split puts
 //! them side by side.
 //!
-//! What the views are built on is `horizon-board-view`'s: the tree order,
-//! folding, the selection, where a dragged row lands, the key maps and
-//! the fixed labels. A view reads and writes the store off the UI thread
+//! What the views decide from has no UI in it (`model`, `activity`,
+//! `chrome`, `measure`): the tree order, folding, the selection, where a
+//! dragged row lands, the key maps and the fixed labels. A view reads and writes the store off the UI thread
 //! and takes the answers in at the page's next poll, and reads again when
 //! the store's log says something was written.
 
@@ -12,9 +12,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
+use activity::{BoardSessionActivity, task_session_state};
 use horizon_board::{Item, Store, StoreError};
-use horizon_board_view::activity::{BoardSessionActivity, task_session_state};
-use horizon_board_view::chrome;
 use horizon_ui::reactive_graph::signal::{RwSignal, WriteSignal};
 use horizon_ui::reactive_graph::traits::With;
 use horizon_ui::reactive_graph::wrappers::read::Signal;
@@ -24,7 +23,11 @@ use horizon_workspace::SessionId;
 use crate::background::Background;
 use horizon_components::{Chip, Tone};
 
+pub mod activity;
+pub mod chrome;
 pub mod list;
+pub mod measure;
+pub mod model;
 pub mod plugin;
 pub mod thread;
 

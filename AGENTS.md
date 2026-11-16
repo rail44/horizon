@@ -361,12 +361,13 @@ their wiring:
   `cargo test -p horizon-terminal-core print_compliance_matrix -- --nocapture`.
 - `agent/` — the agent view and its live session. The fold from ACP
   session updates to what the pane shows is `horizon-shell-runtime`'s
-  `agent_model` and `agent_view`. Contract/providers/tools/persistence
+  `agent_model`, `agent_view` and `agent_display`. Contract/providers/tools/persistence
   live in `crates/horizon-agent`, hosted by `crates/horizon-agentd` — see
   `docs/acp-agentd-design.md`.
 - `board/` — the task board as two session-less views, the list and the
-  thread, over `crates/horizon-board`; what they decide from is
-  `crates/horizon-board-view`. See `docs/board-redesign-design.md`.
+  thread, over `crates/horizon-board`; what they decide from, with no
+  UI in it, is beside them (`model.rs`, `activity.rs`, `chrome.rs`,
+  `measure.rs`). See `docs/board-redesign-design.md`.
 - `finder/` — a file found by typing: the list, the matching, and the
   listing of a directory's files off the UI thread.
 - `watch.rs` — the watch on the one file a view shows, which a preview,

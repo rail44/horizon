@@ -1,8 +1,8 @@
 //! The agent pane: a scrolling column of the conversation's units above
 //! a composer.
 //!
-//! What it draws is the display model both shells share
-//! (`horizon-agent-display`) and its fixed labels. The column holds the
+//! What it draws is the display model
+//! (`horizon_shell_runtime::agent_display`) and its fixed labels. The column holds the
 //! units near what is in view as elements of the document
 //! ([`horizon_ui::windowed`]), or, asked to, all of them. A unit that is the same allocation as before keeps its
 //! elements; the turn in progress is a new allocation on every update and
@@ -23,8 +23,8 @@ use horizon_ui::{Callback, Component, El, dispatched, el, prevent_default, stop_
 use horizon_components::{self as components, Button, ButtonKind, ButtonSize, Chip, Field, Prompt};
 use keyboard_types::{Key, NamedKey};
 
-use horizon_agent_display::chrome;
-use horizon_agent_display::{
+use horizon_shell_runtime::agent_display::chrome;
+use horizon_shell_runtime::agent_display::{
     Approval, Call, CallBody, CallStatus, ComposerMode, DiffKind, Label, Notice, Receipt, Status,
     Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };

@@ -2964,9 +2964,7 @@ dependencies = [
  "futures",
  "horizon-acp",
  "horizon-agent",
- "horizon-agent-display",
  "horizon-board",
- "horizon-board-view",
  "horizon-cli",
  "horizon-components",
  "horizon-config",
@@ -3048,10 +3046,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "horizon-agent-display"
-version = "0.1.0"
-
-[[package]]
 name = "horizon-agentd"
 version = "0.1.0"
 dependencies = [
@@ -3088,15 +3082,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
-]
-
-[[package]]
-name = "horizon-board-view"
-version = "0.1.0"
-dependencies = [
- "horizon-board",
- "horizon-workspace",
- "uuid",
 ]
 
 [[package]]
@@ -3247,7 +3232,6 @@ dependencies = [
  "futures",
  "horizon-acp",
  "horizon-agent",
- "horizon-agent-display",
  "horizon-control",
  "horizon-terminal-core",
  "horizon-wire",

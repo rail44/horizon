@@ -1,7 +1,7 @@
 //! Every fixed label the pane draws. The conversation's own text is data and
 //! is never looked up here.
 
-use crate::Task;
+use super::Task;
 
 /// The running session's state chip.
 pub const RUNNING: &str = "Running";

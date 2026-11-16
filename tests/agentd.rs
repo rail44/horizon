@@ -392,7 +392,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     // The board says what the sessions its tasks are bound to are doing:
     // one this workspace has, one only the daemon has (which is taken
     // in), and one nobody runs.
-    use horizon_board_view::activity::BoardSessionActivity;
+    use horizon::board::activity::BoardSessionActivity;
     let only_the_daemon_s = horizon_workspace::SessionId::new();
     let _running = (agentd.spawn())(workspace::Starting {
         session: only_the_daemon_s,
