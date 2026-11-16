@@ -388,6 +388,13 @@ The decisions and who made them are on board #76. What they come to:
   without the lock the daemon's writers take: a log is only appended to,
   a line at a time. `create` may refuse, in words (`result<state,
   string>`), which is what the command line answers with.
+- **A preview pane shows extensions only.** The preview plugins it also
+  showed (views of the shell's own, built into wasm over sample data)
+  went on 2026-11-16, and with them the root library's build for a guest
+  and the world they exported (`docs/preview-pane-design.md`). The
+  components' gallery is an extension the shell does not come with
+  (`plugins/gallery`), and what the host does for a guest is tested with
+  a fixture extension (`plugins/fixture`).
 - **A pane's state is the extension's type.** The extension declares it
   in WIT, says when it changed (`state-changed`), and gives it when asked
   (`state()`). The workspace saves it under the extension's name and
@@ -461,8 +468,7 @@ The decisions and who made them are on board #76. What they come to:
   world includes `horizon-ui`'s `imports` world and declares only what
   is its own: its state's type, `mount` and `state` over it, `create`,
   and a `commands` interface. What every plugin exports
-  (`horizon:ui/events`) the SDK implements and exports; the preview
-  plugin is built the same way. The manifest gives the name, the title,
+  (`horizon:ui/events`) the SDK implements and exports. The manifest gives the name, the title,
   the commands' titles and descriptions (WIT has no values, and doc
   comments do not reach a component), how `create`'s parameters are
   asked for, and the directories the extension may read; it is matched

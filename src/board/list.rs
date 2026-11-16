@@ -28,7 +28,6 @@ use horizon_ui::{
 };
 use keyboard_types::{Key, NamedKey};
 
-#[cfg(not(target_family = "wasm"))]
 use super::follow;
 use super::{Activity, Job, Sessions, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
@@ -541,13 +540,10 @@ pub fn view(
     let (root, scroll, field) = (state.element, state.scroll, state.field);
     let held = state.held();
     state.load();
-    #[cfg(not(target_family = "wasm"))]
     if let Source::Root(root) = source {
         let stop = follow(root, background.clone(), move || state.load());
         horizon_ui::reactive_graph::owner::on_cleanup(move || drop(stop));
     }
-    #[cfg(target_family = "wasm")]
-    let _ = (source, background);
 
     // The row pressed and where, until the button comes up.
     let pressed = RwSignal::new(None::<(u64, f32, f32)>);

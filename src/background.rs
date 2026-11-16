@@ -26,7 +26,6 @@ impl Background {
 
     /// Runs `work` on a thread of its own, and `then` on the UI thread
     /// with what it came back with.
-    #[cfg(not(target_family = "wasm"))]
     pub fn run<T: Send + 'static>(
         &self,
         work: impl FnOnce() -> T + Send + 'static,
@@ -37,18 +36,6 @@ impl Background {
             let came = work();
             this.tell(move || then(came));
         });
-    }
-
-    /// In a plugin there is one thread: `work` runs where it is asked
-    /// for, and `then` at the next taking in, as it does elsewhere.
-    #[cfg(target_family = "wasm")]
-    pub fn run<T: Send + 'static>(
-        &self,
-        work: impl FnOnce() -> T + Send + 'static,
-        then: impl FnOnce(T) + Send + 'static,
-    ) {
-        let came = work();
-        self.tell(move || then(came));
     }
 
     /// From any thread: `then` runs on the UI thread at its next taking

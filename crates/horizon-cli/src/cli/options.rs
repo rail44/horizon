@@ -15,7 +15,6 @@ pub(super) struct Arguments {
 pub(super) struct CommandOptions {
     pub(super) prompt: Option<String>,
     pub(super) role: Option<String>,
-    pub(super) name: Option<String>,
     pub(super) split: Option<SplitFlag>,
     pub(super) active: bool,
     pub(super) reason: Option<String>,
@@ -26,7 +25,6 @@ impl CommandOptions {
         for (flag, given) in [
             ("--prompt", self.prompt.is_some()),
             ("--role", self.role.is_some()),
-            ("--name", self.name.is_some()),
             ("--split", self.split.is_some()),
         ] {
             if given {
@@ -67,7 +65,6 @@ pub(super) fn scan(args: &[String]) -> Result<Arguments, UsageError> {
             "--active" if inline.is_none() => parsed.options.active = true,
             "--reason" => parsed.options.reason = Some(required_value(flag, inline, &mut iter)?),
             "--prompt" => parsed.options.prompt = Some(required_value(flag, inline, &mut iter)?),
-            "--name" => parsed.options.name = Some(required_value(flag, inline, &mut iter)?),
             "--role" => parsed.options.role = Some(required_value(flag, inline, &mut iter)?),
             "--split" => {
                 parsed.options.split = Some(match inline {

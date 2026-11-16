@@ -1,26 +1,17 @@
-//! A preview: a view of this shell that is still being written, built
-//! into a wasm plugin (`../preview-plugin`) and shown from it.
+//! A preview: an extension still being written, shown from its
+//! component's file in a pane of this shell
+//! (`docs/preview-pane-design.md`).
 //!
-//! The plugin has the view's signals, effects and handlers; the document
-//! is this shell's. What the plugin's `El` and `Page` do arrives here as
-//! calls (`horizon-ui`'s `plugin.wit`) and is done in this document, on
-//! nodes the plugin made and no others. An event that reaches one of
-//! those nodes is told to the plugin, and the plugin's effects run when
-//! this shell's do.
+//! The pane shows the extension's view, made on what the pane was given
+//! for it, and reads the component again when it is built again or when
+//! asked to. The component is compiled off the UI thread; what the pane
+//! showed stays until the new one is ready. The extension is this pane's
+//! alone: one of its name the shell has loaded stays as it is, and the
+//! extension's commands are not carried out here.
 //!
-//! A pane shows one preview of one plugin file, and reads the file again
-//! when it changes or when asked to. The file is compiled off the UI
-//! thread; what the pane showed stays until the new one is ready.
-//!
-//! A pane shows an extension being written the same way: given the
-//! extension's component in place of a preview plugin's file, it shows
-//! the extension's view, made on what the pane was given for it, and
-//! reads the component again when it is built again. The extension is
-//! this pane's alone: the one of its name the shell has loaded stays.
-//!
-//! A plugin that traps is let go of, and the pane says what it said. It
-//! traps when it takes more memory than [`MEMORY_LIMIT`], or a call into
-//! it goes on for longer than [`CALL_LIMIT`].
+//! An extension that traps is let go of, and the pane says what it said.
+//! It traps when it takes more memory than [`MEMORY_LIMIT`], or a call
+//! into it goes on for longer than [`CALL_LIMIT`].
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -34,32 +25,16 @@ use horizon_ui::reactive_graph::traits::{Get, Set, Update, With, WithUntracked};
 use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{El, each_layout, el, relayout};
 
-/// The bindings of a preview plugin's own exports.
-mod own {
-    wasmtime::component::bindgen!({
-        path: "crates/horizon-ui/wit",
-        world: "preview",
-        imports: { default: trappable },
-        exports: { default: async | store },
-        with: {
-            "horizon:ui/document": crate::plugin_host::horizon::ui::document,
-            "horizon:ui/desktop": crate::plugin_host::horizon::ui::desktop,
-            "horizon:ui/pane": crate::plugin_host::horizon::ui::pane,
-            "horizon:ui/files": crate::plugin_host::horizon::ui::files,
-        },
-    });
-}
-
 use crate::background::Background;
 use crate::extension::Extension;
 use crate::plugin::{Command, Mounted, Plugin as PanePlugin};
-use crate::plugin_host::{Asks, Compiled, compile, instantiate, no_grants};
+use crate::plugin_host::Asks;
 #[cfg(doc)]
 use crate::plugin_host::{CALL_LIMIT, MEMORY_LIMIT};
 use crate::wake::Wake;
 use crate::watch;
 
-const NO_PREVIEW: &str = "No preview. `horizon new preview <plugin.wasm>` shows one here.";
+const NO_PREVIEW: &str = "No preview. `horizon new preview <extension.wasm>` shows one here.";
 
 mod styles {
     horizon_ui::css_module! {"
@@ -75,14 +50,12 @@ mod styles {
 "}
 }
 
-/// What a preview pane shows: a plugin's file, and which of its previews
-/// (its first, with no name); or an extension's component, and what its
+/// What a preview pane shows: an extension's component, and what its
 /// pane is made from.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub struct Target {
     pub path: PathBuf,
-    pub name: Option<String>,
-    /// What an extension's pane is made from, as it was typed.
+    /// What the extension's pane is made from, as it was typed.
     #[serde(default)]
     pub arguments: Vec<String>,
     /// Where a file among the arguments is a path from.
@@ -91,20 +64,11 @@ pub struct Target {
 }
 
 /// What a target's path was read as.
-#[derive(Clone)]
-enum Built {
-    Plugin(Compiled),
-    Package(Arc<Extension>),
-}
+type Built = Arc<Extension>;
 
-/// Reads what is at `path`: an extension where the component has a
-/// manifest in it, a preview plugin's file otherwise.
+/// Reads the extension whose component is at `path`.
 fn build(path: &std::path::Path) -> Result<Built, String> {
-    if crate::extension::is_extension(path) {
-        Extension::load(path).map(|extension| Built::Package(Arc::new(extension)))
-    } else {
-        compile(path).map(Built::Plugin)
-    }
+    Extension::load(path).map(Arc::new)
 }
 
 /// A target as last read, or why it could not be.
@@ -141,20 +105,12 @@ fn stage() -> (El, RwSignal<Option<String>>) {
     (root, failed)
 }
 
-/// What was read for `target`, shown, or what was said in place of it.
+/// The view of the extension read for `target`, made on what the target
+/// gives for it, or what was said in place of it.
 fn shown(built: Result<Built, String>, target: &Target, wake: Wake) -> El {
-    match built {
-        Ok(Built::Package(extension)) => shown_package(&extension, target, wake),
-        Ok(Built::Plugin(compiled)) => shown_plugin(Ok(compiled), target.name.as_deref(), wake),
-        Err(error) => shown_plugin(Err(error), None, wake),
-    }
-}
-
-/// An extension's view, made on what `target` gives for it.
-fn shown_package(extension: &Arc<Extension>, target: &Target, wake: Wake) -> El {
     let (root, failed) = stage();
-    let name = extension.name;
-    let mounted = (|| {
+    let mounted = built.and_then(|extension| {
+        let name = extension.name;
         let mut given = crate::plugin::Given {
             arguments: target.arguments.clone(),
             named: Default::default(),
@@ -166,66 +122,11 @@ fn shown_package(extension: &Arc<Extension>, target: &Target, wake: Wake) -> El 
         let node = running.mount(state.as_deref())?;
         running.follow();
         Ok(node)
-    })();
+    });
     match mounted {
         Ok(node) => _ = root.child(El(NodeId::from_u64(node))),
         Err(error) => failed.update(|failed| _ = failed.get_or_insert(error)),
     }
-    root
-}
-
-/// One preview of a compiled plugin, or what was said in place of it.
-fn shown_plugin(compiled: Result<Compiled, String>, name: Option<&str>, wake: Wake) -> El {
-    let (root, failed) = stage();
-    let loaded = compiled.and_then(|compiled| {
-        let loaded = instantiate(&compiled, no_grants(), Asks::default(), wake, failed);
-        let loaded = loaded.map_err(|error| format!("{error:#}"))?;
-        // (The plugin's own exports, beside those every plugin has.)
-        let previews = loaded.call(|plugin, accessor| {
-            Box::pin(async move {
-                accessor.with(|mut access| own::Preview::new(&mut access, &plugin.instance))
-            })
-        });
-        let previews = previews.ok_or_else(|| "the plugin is not a preview plugin".to_string())?;
-        Ok((loaded, Rc::new(previews)))
-    });
-    let (loaded, previews) = match loaded {
-        Ok(loaded) => loaded,
-        Err(error) => {
-            failed.set(Some(error));
-            return root;
-        }
-    };
-    let name = match name {
-        Some(name) => Some(name.to_string()),
-        None => {
-            let previews = previews.clone();
-            (loaded.call(move |_, accessor| {
-                Box::pin(async move { previews.call_names(accessor).await })
-            }))
-            .and_then(|names| names.into_iter().next())
-        }
-    };
-    let Some(name) = name else {
-        failed.update(|failed| {
-            failed.get_or_insert_with(|| "the plugin has no previews".to_string());
-        });
-        return root;
-    };
-    let mounted = {
-        let name = name.clone();
-        loaded.call(move |_, accessor| {
-            Box::pin(async move { previews.call_mount(accessor, name).await })
-        })
-    };
-    match mounted {
-        Some(Some(mounted)) => {
-            root.child(El(NodeId::from_u64(mounted)));
-        }
-        Some(None) => failed.set(Some(format!("the plugin has no preview named `{name}`"))),
-        None => {}
-    }
-    loaded.follow();
     root
 }
 
@@ -358,23 +259,21 @@ impl PanePlugin for PreviewPlugin {
         vec![Command {
             name: "reload-preview",
             title: "Reload Preview",
-            description: "Reload the active preview pane's plugin from disk.",
+            description: "Read the active preview pane's extension from disk again.",
             destructive: false,
             command: PreviewCommand::Reload,
         }]
     }
 
-    /// A plugin's file or an extension's component, which of a plugin's
-    /// previews (`--name`), and what an extension's pane is made from.
+    /// An extension's component, and what the extension's pane is made
+    /// from.
     fn create(mut given: crate::plugin::Given) -> Result<Option<Target>, String> {
-        let path = given.file("a plugin's file")?;
-        let name = given.named("name");
+        let path = given.file("an extension's component")?;
         let arguments = std::mem::take(&mut given.arguments);
         let directory = given.directory.clone();
         given.done()?;
         Ok(Some(Target {
             path,
-            name,
             arguments,
             directory,
         }))

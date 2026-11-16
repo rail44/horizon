@@ -25,13 +25,10 @@ use crate::background::Background;
 use horizon_components::{Chip, Tone};
 
 pub mod list;
-#[cfg(not(target_family = "wasm"))]
 pub mod plugin;
-#[cfg(not(target_family = "wasm"))]
 pub mod thread;
 
 pub use list::BoardList;
-#[cfg(not(target_family = "wasm"))]
 pub use thread::BoardThread;
 
 /// Where a view's store is: a project's, by a directory in it, or one
@@ -53,11 +50,7 @@ impl Source {
 
     fn open(&self) -> Result<Store, StoreError> {
         match self {
-            #[cfg(not(target_family = "wasm"))]
             Self::Root(root) => Store::from_dir(root),
-            // (A plugin reaches no project: its stores are handed in.)
-            #[cfg(target_family = "wasm")]
-            Self::Root(_) => Err(StoreError::ReadOnly),
             Self::Ready(store) => Ok(store.clone()),
         }
     }
@@ -76,25 +69,11 @@ fn run<T: Send + 'static>(
 ) {
     background.run(
         move || {
-            #[cfg(not(target_family = "wasm"))]
-            {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(StoreError::Io)?;
-                runtime.block_on(job(source.open()?))
-            }
-            // A store handed in whole answers without waiting on anything.
-            #[cfg(target_family = "wasm")]
-            {
-                let mut job = job(source.open()?);
-                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-                loop {
-                    if let std::task::Poll::Ready(answer) = job.as_mut().poll(&mut context) {
-                        break answer;
-                    }
-                }
-            }
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(StoreError::Io)?;
+            runtime.block_on(job(source.open()?))
         },
         then,
     );
@@ -103,7 +82,6 @@ fn run<T: Send + 'static>(
 /// Calls `written` on the UI thread whenever the log of the store at
 /// `root` takes a write, from this process or another, until what is
 /// returned is dropped.
-#[cfg(not(target_family = "wasm"))]
 fn follow(
     root: PathBuf,
     background: Background,

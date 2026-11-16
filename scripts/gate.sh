@@ -18,8 +18,7 @@ step() {
 step cargo fmt --all -- --check
 step cargo clippy --workspace --all-targets --locked -- -D warnings
 
-# The extensions Horizon comes with (`plugins/*`) are built for a guest
-# only: the clippy above sees empty crates, so they are linted for their
+# The extensions (`plugins/*`) are built for a guest only: the clippy above sees empty crates, so they are linted for their
 # own target, and the tests that show them load their components from
 # where this builds them.
 step ./scripts/extensions.sh clippy --locked -- -D warnings
@@ -41,5 +40,4 @@ case "${TMPDIR:-}" in
 esac
 
 step ./scripts/check-wire-schema.sh
-step ./scripts/check-preview-wasm.sh
 echo "gate: clean"

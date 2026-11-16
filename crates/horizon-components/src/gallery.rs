@@ -124,9 +124,7 @@ fn fields() -> El {
     )
 }
 
-/// Rendered Markdown, with each way its headings are drawn. (Not in a
-/// plugin: the renderer is not built for one.)
-#[cfg(not(target_family = "wasm"))]
+/// Rendered Markdown, with each way its headings are drawn.
 fn markdown() -> El {
     use std::rc::Rc;
 
@@ -216,7 +214,6 @@ pub fn gallery() -> El {
         ))
         .child(buttons())
         .child(fields());
-    #[cfg(not(target_family = "wasm"))]
     gallery.child(markdown());
     gallery
 }

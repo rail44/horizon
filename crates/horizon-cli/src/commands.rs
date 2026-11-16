@@ -253,20 +253,14 @@ mod tests {
         );
         assert_eq!(
             sent(
-                &new(
-                    "preview",
-                    &["x.wasm", "README.md"],
-                    &[("name", "sample")],
-                    None,
-                    true
-                ),
+                &new("preview", &["x.wasm", "README.md"], &[], None, true),
                 None,
                 None,
             ),
             serde_json::json!({
                 "plugin": "preview",
                 "arguments": ["x.wasm", "README.md"],
-                "named": {"name": "sample"},
+                "named": {},
                 "directory": "/work",
                 "activate": true
             })

@@ -44,12 +44,6 @@ fn manifest_in(bytes: &[u8]) -> Option<String> {
     })
 }
 
-/// Whether the file at `path` is an extension: a component with a
-/// manifest in it.
-pub fn is_extension(path: &Path) -> bool {
-    std::fs::read(path).is_ok_and(|bytes| manifest_in(&bytes).is_some())
-}
-
 /// What an extension's manifest says.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

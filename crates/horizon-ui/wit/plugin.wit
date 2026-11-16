@@ -207,14 +207,3 @@ world view {
     include imports;
     export events;
 }
-
-/// A preview plugin's own exports (`preview-plugin`), beside the shared
-/// ones.
-world preview {
-    include imports;
-
-    /// The previews the plugin has, by name.
-    export names: func() -> list<string>;
-    /// Builds a preview: its root node.
-    export mount: func(name: string) -> option<u64>;
-}

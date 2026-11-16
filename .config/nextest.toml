@@ -33,8 +33,8 @@ test-group = 'daemon-e2e'
 [test-groups.daemon-e2e]
 max-threads = 1
 
-# The preview's windowless checks (`tests/preview.rs`, `#[ignore]`d and run
-# by `scripts/check-preview-plugin.sh`) run a real wasm guest. A guest that
+# The preview's windowless checks (`tests/preview.rs`) run a real wasm
+# guest, one of whose views never comes back on purpose. A guest that
 # never comes back keeps the call into it from returning, so no in-test
 # budget can catch it. A wall-clock kill is what turns that into a red test
 # instead of a run that never finishes.

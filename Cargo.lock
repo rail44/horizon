@@ -3158,6 +3158,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-fixture-plugin"
+version = "0.1.0"
+dependencies = [
+ "horizon-ui",
+ "keyboard-types",
+ "wit-bindgen 0.63.0",
+]
+
+[[package]]
+name = "horizon-gallery-plugin"
+version = "0.1.0"
+dependencies = [
+ "horizon-components",
+ "horizon-ui",
+ "wit-bindgen 0.63.0",
+]
+
+[[package]]
 name = "horizon-logd"
 version = "0.1.0"
 dependencies = [
@@ -3179,17 +3197,6 @@ dependencies = [
  "horizon-ui",
  "horizon-workspace",
  "keyboard-types",
- "wit-bindgen 0.63.0",
-]
-
-[[package]]
-name = "horizon-preview-plugin"
-version = "0.1.0"
-dependencies = [
- "horizon",
- "horizon-board",
- "horizon-components",
- "horizon-ui",
  "wit-bindgen 0.63.0",
 ]
 

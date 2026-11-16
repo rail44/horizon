@@ -1,11 +1,14 @@
-//! A view shown from a wasm plugin: the board's task list, built in the
-//! plugin over sample data, drawn in this document and driven here the
-//! way `tests/board.rs` drives the same view built natively.
+//! An extension shown in a preview pane from its component's file: its
+//! view drawn in this document and driven here, what it asks of the page
+//! answered, the file read again when it is replaced, and a call that
+//! does not come back ended.
 //!
-//! The plugin is `../preview-plugin` built for `wasm32-wasip2`, which
-//! `scripts/check-preview-plugin.sh` does before it runs these.
+//! The extensions shown are the fixture (`plugins/fixture`), whose views
+//! are each there for one thing the host does for a guest, and the
+//! components' gallery (`plugins/gallery`). Both are built before these
+//! run (`scripts/gate.sh`): `scripts/extensions.sh build`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use horizon::background::Background;
@@ -14,26 +17,28 @@ use horizon::wake::Wake;
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::App;
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
-use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
+use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::Set;
 use horizon_ui::testing::{Pointer, click_at, pointer};
-use keyboard_types::{Key, Modifiers, NamedKey};
+use keyboard_types::{Key, Modifiers};
 
-fn plugin() -> PathBuf {
-    let built = std::env::var_os("HORIZON_PREVIEW_PLUGIN").map_or_else(
-        || {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target/wasm32-wasip2/debug/horizon_preview_plugin.wasm")
-        },
-        PathBuf::from,
-    );
+/// The component of the extension in `plugins/<name>`, where cargo builds
+/// it.
+fn component(name: &str) -> PathBuf {
+    let built = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "target/wasm32-wasip2/debug/horizon_{name}_plugin.wasm"
+    ));
     assert!(
         built.is_file(),
-        "no {}: run scripts/check-preview-plugin.sh",
+        "no {}: run scripts/extensions.sh build",
         built.display()
     );
     built
+}
+
+fn fixture() -> PathBuf {
+    component("fixture")
 }
 
 mod support;
@@ -43,9 +48,10 @@ struct Opened {
     preview: Preview,
 }
 
-/// The preview `name` of the plugin at `path`, on a page that has the
-/// theme and the pane's own rules and none of the view's.
-fn open_at(path: &std::path::Path, name: &str) -> Opened {
+/// A preview pane on the extension whose component is at `path`, made on
+/// `arguments`, on a page that has the theme and the pane's own rules and
+/// none of the view's.
+fn open_at(path: &Path, arguments: &[&str]) -> Opened {
     let mut made = None;
     let app = App::new(600, 500, "Test", horizon_theme_css::CSS, || {
         let target = RwSignal::new(None);
@@ -54,25 +60,28 @@ fn open_at(path: &std::path::Path, name: &str) -> Opened {
         themed(Theme::built_in, root)
     });
     let (root, preview, target) = made.unwrap();
-    // The pane has the keys before its plugin is read, as a pane of the
-    // shell does: they go on to what the plugin shows.
+    // The pane has the keys before its extension is read, as a pane of
+    // the shell does: they go on to what the extension shows.
     root.focus();
     target.set(Some(Target {
-        arguments: Vec::new(),
+        arguments: arguments
+            .iter()
+            .map(|argument| argument.to_string())
+            .collect(),
         directory: PathBuf::new(),
         path: path.to_path_buf(),
-        name: Some(name.to_string()),
     }));
     let opened = Opened { app, preview };
-    // The file is compiled off this thread.
+    // The component is compiled off this thread.
     opened.app.run_effects();
-    opened.until("the plugin", || !opened.all("shown").is_empty());
+    opened.until("the extension", || !opened.all("shown").is_empty());
     opened.app.resolve();
     opened
 }
 
+/// The fixture's view `name`.
 fn open(name: &str) -> Opened {
-    open_at(&plugin(), name)
+    open_at(&fixture(), &[name])
 }
 
 fn collect(document: &BaseDocument, id: NodeId, class: &str, found: &mut Vec<NodeId>) {
@@ -158,9 +167,9 @@ impl Opened {
         ((x + width / 2.) as f32, (y + height / 2.) as f32)
     }
 
-    fn key(&self, key: Key) {
+    fn character(&self, character: &str) {
         self.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
-            key,
+            key: Key::Character(character.into()),
             code: keyboard_types::Code::Unidentified,
             modifiers: Modifiers::default(),
             location: keyboard_types::Location::Standard,
@@ -171,30 +180,17 @@ impl Opened {
         }));
         self.app.resolve();
     }
-
-    fn character(&self, character: &str) {
-        self.key(Key::Character(character.into()));
-    }
 }
 
 #[test]
-#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
-fn a_view_in_a_plugin_is_drawn_in_this_document_and_takes_its_keys() {
-    let opened = open("board-list");
-    // The store is read in the plugin, and taken in after a layout here.
-    opened.until("the tasks", || !opened.titles().is_empty());
-    assert_eq!(
-        opened.titles(),
-        ["first", "child one", "child two", "second"]
-    );
+fn a_view_in_an_extension_is_drawn_in_this_document_and_takes_its_keys() {
+    let opened = open("rows");
+    opened.until("the rows", || opened.titles().len() == 3);
+    assert_eq!(opened.titles(), ["first", "second", "third"]);
     assert_eq!(opened.selected(), Some(0));
-    let chips: Vec<String> = (opened.all("chip").into_iter())
-        .map(|chip| opened.text_of(chip))
-        .collect();
-    assert_eq!(chips, ["doing", "review"]);
 
-    // The plugin's style sheet came with it: a row is one line, its
-    // status at the far end of it from its title.
+    // The extension's style sheet came with it: a row is one line, its
+    // tail at the far end of it from its title.
     let row = opened.all("row")[0];
     let (title, tail) = (opened.all("title")[0], opened.all("tail")[0]);
     let (row, title, tail) = (
@@ -206,58 +202,23 @@ fn a_view_in_a_plugin_is_drawn_in_this_document_and_takes_its_keys() {
     assert!(tail.1 < row.1 + row.3 && title.1 < row.1 + row.3);
     assert!(tail.0 + tail.2 > row.0 + row.2 - 40., "{row:?} {tail:?}");
 
-    // Keys reach the plugin's handlers, and its effects change the page.
+    // Keys reach the extension's handlers, and its effects change the
+    // page.
     opened.character("j");
     assert_eq!(opened.selected(), Some(1));
-    opened.key(Key::Named(NamedKey::ArrowDown));
+    opened.character("j");
     assert_eq!(opened.selected(), Some(2));
     opened.character("k");
     assert_eq!(opened.selected(), Some(1));
-    // `h` on a leaf selects its parent; again, it folds the parent, and
-    // the children's rows go.
-    opened.character("h");
+    // A click selects.
+    let (x, y) = opened.middle(opened.all("row")[0]);
+    click_at(&opened.app, x, y);
+    opened.app.resolve();
     assert_eq!(opened.selected(), Some(0));
-    opened.character("h");
-    assert_eq!(opened.titles(), ["first", "second"]);
-    opened.character("l");
-    assert_eq!(opened.titles().len(), 4);
-    // The finished task is behind the band, which `o` opens and shuts.
-    opened.character("o");
-    assert_eq!(opened.titles().last().map(String::as_str), Some("finished"));
-    opened.character("o");
-    assert_eq!(opened.titles().len(), 4);
-
-    // A click selects, and the fold's own triangle folds.
-    let (x, y) = opened.middle(opened.all("row")[3]);
-    click_at(&opened.app, x, y);
-    opened.app.resolve();
-    assert_eq!(opened.selected(), Some(3));
-    let (x, y) = opened.middle(opened.all("disclosure")[0]);
-    click_at(&opened.app, x, y);
-    opened.app.resolve();
-    assert_eq!(opened.titles(), ["first", "second"]);
-
-    // What is typed into the field is the plugin's to send: the store of
-    // a preview refuses the write, and the view says so.
-    let (x, y) = opened.middle(opened.all("add")[0]);
-    click_at(&opened.app, x, y);
-    opened.app.resolve();
-    opened.app.dispatch(UiEvent::Ime(BlitzImeEvent::Commit(
-        "a new task".to_string(),
-    )));
-    opened.app.resolve();
-    opened.key(Key::Named(NamedKey::Enter));
-    opened.until("the refusal", || !opened.all("notice").is_empty());
-    assert!(
-        opened
-            .text_of(opened.all("notice")[0])
-            .contains("read-only")
-    );
 }
 
 #[test]
-#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
-fn a_plugin_hears_what_is_selected_of_its_own_text() {
+fn an_extension_hears_what_is_selected_of_its_own_text() {
     let opened = open("selection");
     opened.until("the words", || opened.all("words").len() == 1);
     assert_eq!(opened.text_of(opened.all("said")[0]), "");
@@ -270,62 +231,56 @@ fn a_plugin_hears_what_is_selected_of_its_own_text() {
 }
 
 #[test]
-#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
-fn the_components_are_drawn_from_a_plugin_with_their_sheets() {
-    let opened = open("components");
-    let chips = opened.all("chip");
-    assert!(chips.len() >= 6, "{} chips", chips.len());
+fn the_components_are_drawn_from_an_extension_with_their_sheets() {
+    let opened = open_at(&component("gallery"), &[]);
+    opened.until("the chips", || opened.all("chip").len() >= 6);
     // A chip's sheet came with it: it has its padding.
     let document = opened.app.document();
     let document = document.borrow();
-    let chip = document.get_node(chips[0]).unwrap();
+    let chip = document.get_node(opened.all("chip")[0]).unwrap();
     assert!(chip.final_layout().padding.left > 0.);
 }
 
 #[test]
-#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
-fn a_drag_in_a_plugin_s_view_asks_this_page_where_it_is() {
-    let opened = open("board-list");
-    opened.until("the tasks", || !opened.titles().is_empty());
+fn a_drag_in_an_extension_s_view_asks_this_page_where_it_is() {
+    let opened = open("rows");
+    opened.until("the rows", || opened.titles().len() == 3);
     let rows = opened.all("row");
-    // The second top-level task, carried over the top half of the first:
-    // what is under the pointer, and where its row is, the plugin asks.
-    let (from_x, from_y) = opened.middle(rows[3]);
+    // The third row, carried over the first: what is under the pointer
+    // the extension asks this page.
+    let (from_x, from_y) = opened.middle(rows[2]);
     let (to_x, to_y) = opened.middle(rows[0]);
     pointer(&opened.app, from_x, from_y, Pointer::Move);
     pointer(&opened.app, from_x, from_y, Pointer::Down);
     pointer(&opened.app, from_x, from_y - 10., Pointer::Drag);
-    pointer(&opened.app, to_x, to_y - 8., Pointer::Drag);
-    opened.app.resolve();
-    assert_eq!(opened.all("carried"), vec![rows[3]]);
-    assert_eq!(opened.all("ghost").len(), 1);
-    assert_eq!(opened.all("above").len(), 1);
-    // Over a row that is not its sibling there is nowhere to land.
+    pointer(&opened.app, to_x, to_y, Pointer::Drag);
+    opened.until("the row under the pointer", || {
+        opened.all("under") == vec![rows[0]]
+    });
+    assert_eq!(opened.all("carried"), vec![rows[2]]);
+    // Over another row, that one.
     let (x, y) = opened.middle(rows[1]);
     pointer(&opened.app, x, y, Pointer::Drag);
-    opened.app.resolve();
-    assert!(opened.all("line").is_empty());
-    pointer(&opened.app, to_x, to_y - 8., Pointer::Drag);
-    pointer(&opened.app, to_x, to_y - 8., Pointer::Up);
-    opened.until("the refusal", || !opened.all("notice").is_empty());
-    assert!(opened.all("carried").is_empty());
+    opened.until("the other row", || opened.all("under") == vec![rows[1]]);
+    pointer(&opened.app, x, y, Pointer::Up);
+    opened.until("the row put down", || opened.all("carried").is_empty());
+    assert!(opened.all("under").is_empty());
 }
 
 #[test]
-#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
 fn what_cannot_be_shown_is_said_in_the_pane() {
-    // A preview the plugin does not have.
-    let opened = open("no-such-preview");
+    // A view the extension refuses to make a pane on, in its own words.
+    let opened = open("no-such-view");
     opened.app.run_effects();
     opened.app.resolve();
     let said = opened.all("failed");
     assert_eq!(said.len(), 1);
-    assert!(opened.text_of(said[0]).contains("no-such-preview"));
+    assert!(opened.text_of(said[0]).contains("no-such-view"));
 
-    // A file that is not a plugin.
+    // A file that is not an extension.
     let broken = std::env::temp_dir().join(format!("hzb-broken-{}.wasm", std::process::id()));
     std::fs::write(&broken, b"not a component").unwrap();
-    let opened = open_at(&broken, "board-list");
+    let opened = open_at(&broken, &["rows"]);
     opened.app.run_effects();
     opened.app.resolve();
     assert_eq!(opened.all("failed").len(), 1);
@@ -334,20 +289,19 @@ fn what_cannot_be_shown_is_said_in_the_pane() {
 }
 
 #[test]
-#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
-fn a_plugin_s_file_replaced_is_read_and_shown_again() {
+fn an_extension_s_file_replaced_is_read_and_shown_again() {
     // A copy, to replace without touching the build's.
     let copy = std::env::temp_dir().join(format!("hzb-preview-{}", std::process::id()));
     std::fs::create_dir_all(&copy).unwrap();
-    let file = copy.join("plugin.wasm");
-    std::fs::copy(plugin(), &file).unwrap();
-    let opened = open_at(&file, "board-list");
-    opened.until("the tasks", || !opened.titles().is_empty());
+    let file = copy.join("extension.wasm");
+    std::fs::copy(fixture(), &file).unwrap();
+    let opened = open_at(&file, &["rows"]);
+    opened.until("the rows", || !opened.titles().is_empty());
     let first = opened.all("shown")[0];
 
     // A build writes the file anew: what was shown stays until the new
     // one is read.
-    std::fs::copy(plugin(), copy.join("next.wasm")).unwrap();
+    std::fs::copy(fixture(), copy.join("next.wasm")).unwrap();
     std::fs::rename(copy.join("next.wasm"), &file).unwrap();
     opened.until("the file read again", || {
         opened
@@ -355,7 +309,7 @@ fn a_plugin_s_file_replaced_is_read_and_shown_again() {
             .first()
             .is_some_and(|shown| *shown != first)
     });
-    opened.until("the tasks again", || !opened.titles().is_empty());
+    opened.until("the rows again", || !opened.titles().is_empty());
     assert_eq!(opened.all("shown").len(), 1);
 
     // And when asked to.
@@ -372,8 +326,7 @@ fn a_plugin_s_file_replaced_is_read_and_shown_again() {
 }
 
 #[test]
-#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
-fn a_call_into_a_plugin_that_does_not_come_back_is_ended() {
+fn a_call_into_an_extension_that_does_not_come_back_is_ended() {
     let started = Instant::now();
     let opened = open("stuck");
     let said = opened.all("failed");
@@ -384,7 +337,6 @@ fn a_call_into_a_plugin_that_does_not_come_back_is_ended() {
 }
 
 #[test]
-#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
 fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
     use horizon::workspace::{Opening, Shell, Spawn, css, view as shell_view};
     use horizon_control::contract::{EnvelopeBody, Invoke};
@@ -412,20 +364,18 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
         )
         .1,
     };
-    // (`horizon new preview <path> [--name <preview>] [--active]`, as it
-    // reaches the shell.)
-    let ask = |asked: serde_json::Value| {
-        let mut args = serde_json::json!({
-            "plugin": "preview",
-            "arguments": [asked["path"]],
-            "activate": asked.get("activate").cloned().unwrap_or_default(),
-        });
-        if let Some(name) = asked.get("name") {
-            args["named"] = serde_json::json!({ "name": name });
-        }
+    // (`horizon new preview <extension.wasm> [<argument>...] [--active]`,
+    // as it reaches the shell.)
+    let ask = |path: &Path, arguments: &[&str], activate: bool| {
+        let mut given = vec![path.to_string_lossy().into_owned()];
+        given.extend(arguments.iter().map(|argument| argument.to_string()));
         let answer = shell.control(&ControlRequest::Invoke(Invoke {
             command: "new".to_string(),
-            args,
+            args: serde_json::json!({
+                "plugin": "preview",
+                "arguments": given,
+                "activate": activate,
+            }),
         }));
         opened.app.run_effects();
         opened.app.resolve();
@@ -443,25 +393,20 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
         })
     };
 
-    let answer =
-        ask(serde_json::json!({ "path": plugin(), "name": "board-list", "activate": true }));
+    let answer = ask(&fixture(), &["rows"], true);
     assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
     assert_eq!(previews().len(), 1);
-    opened.until("the tasks", || !opened.titles().is_empty());
-    assert_eq!(
-        opened.titles(),
-        ["first", "child one", "child two", "second"]
-    );
-    // The pane has the keys: the list's own move its selection.
+    opened.until("the rows", || opened.titles().len() == 3);
+    // The pane has the keys: the rows' own move their selection.
     opened.character("j");
     assert_eq!(opened.selected(), Some(1));
 
-    // The same file again is the same pane's, with the preview asked for.
-    let answer = ask(serde_json::json!({ "path": plugin(), "name": "board-list-empty" }));
+    // The same file again is the same pane's, made on what was asked for.
+    let answer = ask(&fixture(), &["selection"], false);
     assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
     assert_eq!(previews().len(), 1);
-    opened.until("the empty list", || {
-        !opened.all("shown").is_empty() && opened.titles().is_empty()
+    opened.until("the other view", || {
+        opened.all("words").len() == 1 && opened.titles().is_empty()
     });
 
     // The command reads the file again.
@@ -473,7 +418,7 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
     });
 
     // What is not a file is refused, and opens nothing.
-    let answer = ask(serde_json::json!({ "path": "/no/such/plugin.wasm" }));
+    let answer = ask(Path::new("/no/such/extension.wasm"), &[], false);
     assert!(matches!(answer, EnvelopeBody::Error { .. }), "{answer:?}");
     assert_eq!(previews().len(), 1);
 }

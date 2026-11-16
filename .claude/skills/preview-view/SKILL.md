@@ -1,55 +1,62 @@
 ---
 name: preview-view
-description: Use when implementing or changing a view in Horizon and you want it shown from the preview plugin - registering a named preview with sample data, building the plugin, checking it windowlessly, and showing it to the owner in a pane of the running Horizon. Trigger words: preview a view, preview pane, show the view to the owner, view feedback, horizon preview, make a view previewable.
+description: Use when writing or changing an extension's view in Horizon and you want it shown to the owner from the branch you are on - building the extension, checking it windowlessly, and showing it in a preview pane of the running Horizon. Trigger words: preview a view, preview pane, show the view to the owner, view feedback, horizon preview, extension being written.
 ---
 
-# Previewing a view under development
+# Showing an extension that is being written
 
-A view can be built into a WebAssembly plugin (`preview-plugin/`) and shown
-from it in a pane of the running Horizon (`src/preview.rs`,
-`docs/preview-pane-design.md`): the plugin has the view's signals, effects
-and handlers, and the document is the shell's.
+A view that is an extension (`plugins/*`: the Markdown view, the wiki,
+the theme settings, the components' gallery) can be shown from its
+component's file in a pane of the running Horizon, beside the one in use,
+without merging and without a restart (`src/preview.rs`,
+`docs/preview-pane-design.md`). The extension has the view's signals,
+effects and handlers, and the document is the shell's.
 
-## Making a view previewable
+A view of the shell's own (the board, the terminal, the agent) cannot be
+shown this way: it is checked by its windowless tests, and looked at in a
+Horizon built from the branch.
 
-1. The view's module has to build for `wasm32-wasip2`. In `src/lib.rs`,
-   leave it out of the `#[cfg(not(target_family = "wasm"))]` gate, and keep
-   what it needs of the host (a thread, a socket, a file, the daemon
-   clients) behind that gate inside it. `src/board/` is the example: the
-   store is handed in whole (`Source::Ready`), and following the log is
-   native-only. `Background::run` runs its work in place in a plugin.
-2. A view in a plugin uses `horizon_ui` as it does natively. What does not
-   cross: a paint widget, `takes_text`, `on_paste`, the clipboard,
-   `windowed`. The events that cross are keys, pointer events and `input`,
-   and a view reads what is selected of its own text
+## Writing a view as an extension
+
+1. The extension is one crate under `plugins/`, built for `wasm32-wasip2`
+   only, with one module under `#[horizon_ui::plugin(..)]`
+   (`plugins/markdown/src/lib.rs` is the smallest that keeps a state;
+   `plugins/gallery/src/lib.rs` the smallest of all). It depends on
+   `horizon-ui`, on `horizon-components` for what views are made of, and
+   on no crate of the shell's.
+2. A view in an extension uses `horizon_ui` as a view of the shell does.
+   What does not cross: a paint widget, `takes_text`, `on_paste`, the
+   clipboard, `windowed`. The events that cross are keys, pointer events
+   and `input`, and a view reads what is selected of its own text
    (`crates/horizon-ui/wit/plugin.wit`).
-3. Add the preview to `preview-plugin/src/lib.rs`: a name in `names` and an
-   arm in `view` that builds the view over sample data. The view's CSS
-   comes with it (`horizon_ui::css_module!`).
+3. Add the crate to `scripts/extensions.sh`, and, if Horizon is to come
+   with it, to `OWN` in `src/extension.rs`.
 
 ## Checking it
 
 ```sh
-scripts/check-preview-plugin.sh
+scripts/extensions.sh build
+cargo nextest run -p horizon --test extension --test wiki --test preview
 ```
 
-builds the plugin and runs `tests/preview.rs` (`#[ignore]`d otherwise),
-which draws the preview through the plugin and drives it. Add a test there
-for a new preview, the way `tests/board.rs` drives the same view built
-natively. Needs `rustup target add wasm32-wasip2`. Not part of the gate.
-
-`scripts/check-preview-wasm.sh` (in the gate) only checks that the library
-still builds for the plugin's target.
+The tests show an extension in a pane of the shell with no window and
+drive it through the document (`tests/extension.rs`, `tests/wiki.rs`).
+Add a test there for a new extension. They are in the gate
+(`scripts/gate.sh`), which builds the extensions first. Needs
+`rustup target add wasm32-wasip2`.
 
 ## Showing it to the owner
 
 ```sh
-cargo build -p horizon-preview-plugin --target wasm32-wasip2
-horizon new preview target/wasm32-wasip2/debug/horizon_preview_plugin.wasm --name <preview>
+scripts/extensions.sh build
+horizon new preview target/wasm32-wasip2/debug/horizon_<name>_plugin.wasm <arguments>
 ```
 
 opens a preview pane in the Horizon the command reaches (the one whose
 pane it is run in), without taking the focus unless `--active` is given.
-The pane reads the file again whenever a build replaces it, so the loop
-after that is edit and build. This shows something on a person's screen:
-do it when they have asked to see the view, not as a check of your own.
+The arguments are what the extension's pane is made from (a file for the
+Markdown view, a page's name for the wiki). The pane reads the file again
+whenever a build replaces it, so the loop after that is edit and build.
+The extension's commands are not carried out in a preview pane, and the
+theme is not given to it. This shows something on a person's screen: do
+it when they have asked to see the view, not as a check of your own.

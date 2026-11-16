@@ -1,0 +1,19 @@
+[package]
+name = "horizon-fixture-plugin"
+description = "Views the shell's tests drive the host of extensions with: not an extension the shell comes with."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Built for `wasm32-wasip2` (`scripts/extensions.sh`); for any other
+# target the crate is empty.
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+horizon-ui = { path = "../../crates/horizon-ui" }
+keyboard-types = "0.8"
+wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

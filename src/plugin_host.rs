@@ -47,11 +47,6 @@ use crate::wake::Wake;
 use horizon_theme::seed::{AccentValue, HueSlot, Seed};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
-/// No grants: no files, no sockets, no environment.
-pub fn no_grants() -> WasiCtx {
-    wasmtime_wasi::WasiCtxBuilder::new().build()
-}
-
 wasmtime::component::bindgen!({
     path: "crates/horizon-ui/wit",
     world: "view",

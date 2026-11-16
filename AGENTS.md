@@ -73,7 +73,6 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ./scripts/extensions.sh build --locked
 cargo nextest run --workspace --locked
 ./scripts/check-wire-schema.sh
-./scripts/check-preview-wasm.sh
 ```
 
 **Inside a sandboxed agent session, run the `sandboxed` nextest profile
@@ -119,15 +118,6 @@ the artifacts first:
 `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp
 -p horizon-terminal-core -p horizon-board wire_schema` (a stale artifact
 is itself a red nextest test).
-
-The last step checks that the root package's library still builds for
-`wasm32-wasip2`, the target a preview's plugin is compiled for
-(`preview-plugin/`, `src/preview.rs`). It needs that target installed (see
-Build setup). When it fails, a module
-reachable from the plugin started using something a wasm guest does not
-have: mark the module `#[cfg(not(target_family = "wasm"))]` at its
-declaration in `src/lib.rs`, or move the dependency under the root
-`Cargo.toml`'s `cfg(not(target_family = "wasm"))` table.
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
 from the repo root silently skip the
@@ -214,10 +204,10 @@ Storage compatibility, measured rather than assumed (2026-10-23): DuckDB
 upgrade is not one-way, and the projection is rebuildable from the JSONL log
 regardless.
 
-The quality gate's last step and the preview plugin build for
-`wasm32-wasip2`: install the target once with `rustup target add
-wasm32-wasip2`. No WASI C toolchain is needed. `preview-plugin/` is a
-workspace member whose crate is empty for any other target.
+The extensions (`plugins/*`) build for `wasm32-wasip2`: install the
+target once with `rustup target add wasm32-wasip2`. No WASI C toolchain is
+needed. Each is a workspace member whose crate is empty for any other
+target; the root package builds for the host alone.
 
 Blitz is a beta, pinned to one release and patched past it in the root
 `Cargo.toml` (`[patch.crates-io]`); `vendor/blitz-shell` is Horizon's own
@@ -311,18 +301,20 @@ home of its own (the agent's provider is the local mock
 `scripts/mock-openai-provider.py`): a session created and typed into, the
 workspace coming back after the shell is closed, a runtime reloaded.
 
-A view still being written can be shown from a wasm plugin in a pane of
-the running Horizon (`horizon new preview <plugin.wasm>`,
-`docs/preview-pane-design.md`): that is how an agent asks a person to look
-at a view. `scripts/check-preview-plugin.sh` builds the plugin and runs
-the windowless tests that draw and drive a view through it (not part of
-the gate). An extension -- a view built as a wasm component with its
-manifest in it, written as one module under `horizon_ui::plugin`
-(`plugins/markdown`), and either one Horizon comes with or one named by
-its file in `config.toml`'s `extensions` (`src/extension.rs`) -- is
-checked through a pane of the shell (`tests/extension.rs`, in the gate),
-and one still being written is shown to a person the same way: `horizon new preview <extension.wasm> <arguments>`,
-which reads the file again whenever it is built again.
+An extension -- a view built as a wasm component with its manifest in
+it, written as one module under `horizon_ui::plugin` (`plugins/markdown`),
+and either one Horizon comes with or one named by its file in
+`config.toml`'s `extensions` (`src/extension.rs`) -- is checked through a
+pane of the shell (`tests/extension.rs`, `tests/wiki.rs`, in the gate).
+One still being written is shown to a person in a preview pane of the
+running Horizon, from its component's file: `horizon new preview
+<extension.wasm> <arguments>` (`docs/preview-pane-design.md`), which reads
+the file again whenever it is built again. That is how an agent asks a
+person to look at a view; the components' gallery (`plugins/gallery`) is
+looked at the same way. What the host does for a guest is tested through
+the preview pane with the fixture extension (`plugins/fixture`,
+`tests/preview.rs`). A view of the shell's own (the board, the terminal,
+the agent) is not shown this way.
 
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
 (`docs/workspace-mode-design.md`), then `:` to open the control surface —
@@ -386,9 +378,8 @@ their wiring:
   (`horizon new theme-settings`) are not here: they are extensions, whole
   in `plugins/markdown`, `plugins/wiki` and `plugins/theme-settings`,
   over `horizon-ui` and `horizon-components`.
-- `preview.rs` — the preview pane: a view shown from a wasm plugin
-  (`preview-plugin/`). The plugin has the view's signals and handlers, the
-  document is the shell's. See `docs/preview-pane-design.md`.
+- `preview.rs` — the preview pane: an extension still being written,
+  shown from its component's file. See `docs/preview-pane-design.md`.
 - `control.rs` — the bridge from the CLI control plane's listener to the
   UI thread; the transport is `horizon-control::host`, the client is
   `horizon <subcommand>` itself (`crates/horizon-cli`). Panes get
@@ -402,9 +393,7 @@ their wiring:
 - `background.rs` / `wake.rs` — work done off the UI thread, and what
   wakes the page to take its answer in.
 - `lib.rs` / `main.rs` — the root package is a library plus a thin binary:
-  `lib.rs` declares the modules and marks the ones a preview plugin cannot
-  build (`#[cfg(not(target_family = "wasm"))]`); `main.rs` is the
-  CLI-vs-window entry.
+  `lib.rs` declares the modules; `main.rs` is the CLI-vs-window entry.
 
 ## Conventions
 
@@ -440,7 +429,9 @@ their wiring:
   the controls), and its `gallery` shows them all:
   `HORIZON_GALLERY_OUT=<file.ppm> cargo nextest run -p horizon-components
   --test components --run-ignored only paint_the_gallery` paints it in
-  this machine's theme.
+  this machine's theme, and `horizon new preview
+  target/wasm32-wasip2/debug/horizon_gallery_plugin.wasm` shows it in a
+  pane.
 - **Tests are colocated** next to the code in the crates (an external
   `tests.rs` declared via `#[cfg(test)] mod tests;`, or an inline
   `#[cfg(test)] mod tests { ... }` block). The root package's views are

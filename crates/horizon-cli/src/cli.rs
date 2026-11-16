@@ -48,7 +48,7 @@ pub enum SplitFlag {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subcommand {
     /// A new pane of a plugin: a terminal, an agent, a view, an extension.
-    /// `arguments`, and those `named` (`--prompt`, `--role`, `--name`),
+    /// `arguments`, and those `named` (`--prompt`, `--role`),
     /// are what the plugin's pane is made from, as the plugin says; the
     /// shell, which knows the plugin, reads them. A file among them is a
     /// path from `directory`, the caller's working directory, which
@@ -159,7 +159,6 @@ Subcommands:\n  \
       new agent [--prompt <text>] [--role <id>]\n  \
       new markdown <path>\n  \
       new wiki [<page>]\n  \
-      new preview <plugin.wasm> [--name <preview>]\n  \
       new preview <extension.wasm> [<argument>...]\n  \
       new board-list | board-thread <task> | theme-settings\n  \
       new <extension's name> [<argument>...]\n  \
@@ -211,7 +210,6 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             let named = [
                 ("prompt", options.prompt.take()),
                 ("role", options.role.take()),
-                ("name", options.name.take()),
             ];
             Subcommand::New {
                 plugin,
@@ -550,21 +548,14 @@ mod tests {
     fn new_takes_what_is_given_by_name() {
         assert_eq!(
             parse(&args(&[
-                "new",
-                "preview",
-                "/tmp/p.wasm",
-                "--name",
-                "sample",
-                "--split",
-                "abc",
-                "--active",
+                "new", "agent", "--role", "config", "--split", "abc", "--active",
             ]))
             .unwrap()
             .subcommand,
             new(
-                "preview",
-                &["/tmp/p.wasm"],
-                &[("name", "sample")],
+                "agent",
+                &[],
+                &[("role", "config")],
                 Some(SplitFlag::Explicit("abc".to_string())),
                 true,
             )
@@ -601,7 +592,7 @@ mod tests {
 
     #[test]
     fn what_is_given_by_name_is_only_for_new() {
-        for flag in ["--prompt", "--role", "--name"] {
+        for flag in ["--prompt", "--role"] {
             let said = parse(&args(&["sessions", flag, "x"])).unwrap_err().0;
             assert_eq!(said, format!("{flag} is only valid with new"));
         }

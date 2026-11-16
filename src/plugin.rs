@@ -23,7 +23,7 @@ pub use horizon_ui::Callback;
 pub struct Given {
     /// In the order they were given.
     pub arguments: Vec<String>,
-    /// Those given by name (`--name value`).
+    /// Those given by name (`--prompt value`).
     pub named: BTreeMap<String, String>,
     /// Where a file among them is a path from.
     pub directory: PathBuf,

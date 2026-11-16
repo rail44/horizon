@@ -93,10 +93,8 @@ so a subcommand run from inside a pane targets the enclosing instance and
 `new <plugin> [<argument>...]` (a new pane of a plugin, made from what the
 plugin takes: `new terminal`, `new agent [--prompt <text>] [--role config]`,
 `new markdown <path>`, `new wiki [<page>]`,
-`new preview <plugin.wasm> [--name <preview>]` for a view still being
-written (`docs/preview-pane-design.md`),
 `new preview <extension.wasm> [<argument>...]` for an extension still being
-written, `new <extension's name> [<argument>...]`),
+written (`docs/preview-pane-design.md`), `new <extension's name> [<argument>...]`),
 `<command>` (a command of the plugin the cursor's pane shows, by the name
 the palette lists it under),
 `attach <session-id>`,
