@@ -245,7 +245,12 @@ export's task that spawned it.
   types take them as parameters; nothing converts them yet); the input
   method across the boundary.
 - For 2: what handing changes over together saves, measured.
-- For all: keeping a compiled component between runs.
+- For all: keeping a compiled component between runs. Reading an
+  extension is compiling it: measured 2026-11-16 for the three the shell
+  comes with, 0.95 s for the components of a debug build (35 to 57 MB
+  each) and 0.47 s for those of a release build (0.7 to 1.8 MB). The
+  shell reads them once it is drawn, off the UI thread, so the window
+  does not wait for it; a pane of one waits for it.
 
 ## Decided
 
@@ -306,6 +311,11 @@ The decisions and who made them are on board #76. What they come to:
   links), and nothing of the shell's. It is tested through a pane
   (`tests/extension.rs`), in the gate. It reads files through WASI, with
   `/` lent read-only.
+- **The extensions are read once the shell is drawn.** At startup as at
+  `Reload Config`: off the UI thread, and the panes that show one are
+  made again when they have been read. Until then a pane of one kept
+  from the last run says it is being read, and one asked for by name
+  (`horizon new <extension>`) is refused with that said.
 - **Where an extension's component is.** The ones Horizon comes with are
   beside its executable, as its daemons are, or where cargo builds them
   for the executable's profile (`target/wasm32-wasip2/<profile>`);

@@ -197,6 +197,11 @@ impl Shell {
     /// The pane the extension `name` makes from what was `given`.
     fn created_by_extension(&self, name: &str, mut given: Given) -> Result<PluginPane, String> {
         let extension = plugins::extension(name).ok_or_else(|| {
+            if !self.extensions_read() {
+                return format!(
+                    "the extensions are still being read; `{name}` may be one of them: ask again"
+                );
+            }
             let mut known = plugins::NAMES.to_vec();
             let extensions = plugins::extensions();
             known.extend(extensions.iter().map(|extension| extension.name));

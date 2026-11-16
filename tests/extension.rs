@@ -57,10 +57,13 @@ fn open_with(opening: Opening) -> Opened {
         root
     });
     app.resolve();
-    Opened {
+    let opened = Opened {
         app,
         shell: shell.unwrap(),
-    }
+    };
+    // (They are read once the shell is drawn.)
+    opened.until("the extensions", || opened.shell.extensions_read());
+    opened
 }
 
 /// A copy of the extension in `directory`, for a test to change: its
@@ -735,4 +738,68 @@ fn the_theme_settings_apply_a_seed_as_it_changes_and_save_it_when_asked() {
     );
     assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
     assert_eq!(opened.model(Workspace::tab_count), tabs);
+}
+
+/// The extensions are read once the shell is drawn, not before: a pane of
+/// one that is there already (kept from the last run) says so until they
+/// have been, and is made then.
+#[test]
+fn a_pane_of_an_extension_waits_for_the_extensions_to_be_read() {
+    let directory = std::env::temp_dir().join(format!("hzb-ext-later-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("first.md");
+    std::fs::write(&file, "# One\n").unwrap();
+    let extensions =
+        horizon::extension::own_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug"));
+    let mut shell = None;
+    let app = App::new(1200, 800, "Test", css(), || {
+        let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
+        let (root, built) = view(
+            spawn,
+            Opening {
+                extensions,
+                ..Opening::default()
+            },
+        );
+        shell = Some(built);
+        root
+    });
+    app.resolve();
+    let opened = Opened {
+        app,
+        shell: shell.unwrap(),
+    };
+    // Drawn, with nothing read yet: a pane of the extension says it is
+    // being read, and one asked for by name is not there to make.
+    assert!(!opened.shell.extensions_read());
+    let state = format!("{{path: some({:?})}}", file.to_string_lossy());
+    opened.shell.create_plugin(
+        PluginPane {
+            name: "markdown".to_string(),
+            title: "Markdown".to_string(),
+            state: serde_json::Value::String(state),
+        },
+        Placement::NewTab,
+    );
+    opened.app.run_effects();
+    opened.app.resolve();
+    assert!(
+        opened.text().contains("Reading this view's plugin."),
+        "{}",
+        opened.text()
+    );
+    let early = opened.new_markdown(&directory, "first.md");
+    let EnvelopeBody::Error(error) = &early else {
+        panic!("{early:?}");
+    };
+    assert!(
+        format!("{error:?}").contains("still being read"),
+        "{error:?}"
+    );
+
+    // Read: the pane is made on what it kept.
+    opened.until("the extensions", || opened.shell.extensions_read());
+    opened.until("the file", || opened.text().contains("One"));
+    assert!(!opened.text().contains("Reading this view's plugin."));
+    let _ = std::fs::remove_dir_all(&directory);
 }

@@ -106,6 +106,8 @@ fn open_at(name: &str, width: u32) -> Opened {
         app,
         shell: shell.unwrap(),
     };
+    // (The extensions are read once the shell is drawn.)
+    opened.until("the extensions", || opened.shell.extensions_read());
     let answer = opened.new_wiki(&["sandbox"]);
     assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
     opened.until("the page", || opened.text().contains("runs"));

@@ -373,6 +373,8 @@ struct Kept {
     looked_for: RefCell<HashMap<SessionId, bool>>,
     /// The components of the extensions that come with the shell.
     own_extensions: Vec<PathBuf>,
+    /// The extensions have been read, since the shell was started.
+    extensions_read: Cell<bool>,
     /// The extensions whose components are watched.
     watched: RefCell<Vec<extensions::Watched>>,
     /// What the sessions the board views name are doing: every board view
@@ -583,10 +585,14 @@ impl Shell {
                             shown_plugin = Some(plugin);
                             root
                         }
-                        None => el("div")
-                            .class(styles::EMPTY)
-                            .attr("tabindex", "0")
-                            .text("This view's plugin is not here."),
+                        // (An extension's pane kept from the last run is
+                        // made again when the extensions have been read.)
+                        None => el("div").class(styles::EMPTY).attr("tabindex", "0").text(
+                            match self.extensions_read() {
+                                true => "This view's plugin is not here.",
+                                false => "Reading this view's plugin.",
+                            },
+                        ),
                     }
                 }
                 _ => el("div")
@@ -844,6 +850,13 @@ impl Shell {
         }
     }
 
+    /// Whether the extensions have been read since the shell was
+    /// started: they are read once it is drawn, and a pane of one is
+    /// there to make from then.
+    pub fn extensions_read(&self) -> bool {
+        self.kept().extensions_read.get()
+    }
+
     /// The name of the plugin a pane shows.
     pub fn plugin(&self, pane: PaneId) -> Option<&'static str> {
         Some(
@@ -1068,10 +1081,10 @@ fn strip(shell: Shell) -> El {
 /// Builds the shell over `opening`, in its configuration's theme; `spawn`
 /// starts the session of each terminal pane that has none running.
 pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
-    plugins::take_in(crate::extension::load_all(
-        &opening.config.extensions,
-        &opening.extensions,
-    ));
+    // (The extensions are read once the shell is drawn, off the UI
+    // thread: reading one is compiling it.)
+    plugins::take_in(Vec::new());
+    let configured = opening.config.extensions.clone();
     let model = RwSignal::new(opening.model);
     let theme = Theme::from_config(&opening.config);
     let configured_size = Cell::new(theme.font_size);
@@ -1112,6 +1125,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             reloading: Cell::new(None),
             looked_for: RefCell::default(),
             own_extensions: opening.extensions,
+            extensions_read: Cell::new(false),
             watched: RefCell::default(),
             board_activity: RwSignal::new(HashMap::new()),
             refocus: Cell::new(false),
@@ -1182,7 +1196,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             },
         );
     shell.focus_active();
-    shell.watch_extensions();
+    shell.reload_extensions(configured);
     horizon_ui::each_effects(move || shell.follow_extensions());
     (themed(move || shell.theme.get(), root), shell)
 }

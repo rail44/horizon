@@ -34,6 +34,7 @@ impl Shell {
                     .collect();
                 names.extend(loaded.iter().map(|extension| extension.name));
                 plugins::take_in(loaded);
+                shell.kept().extensions_read.set(true);
                 shell.watch_extensions();
                 shell.remake_panes_of(&names);
             },
