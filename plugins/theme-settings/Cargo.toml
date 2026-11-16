@@ -1,0 +1,21 @@
+[package]
+name = "horizon-theme-settings-plugin"
+description = "The theme settings, an extension: a wasm component a pane loads."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Built for `wasm32-wasip2` (`scripts/gate.sh`); for any other
+# target the crate is empty.
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+horizon-ui = { path = "../../crates/horizon-ui" }
+horizon-components = { path = "../../crates/horizon-components" }
+# The seed, and the colors derived from one.
+horizon-theme = { path = "../../crates/horizon-theme" }
+wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

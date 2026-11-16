@@ -1,6 +1,7 @@
 //! The view chooser: which view a new pane shows. A terminal, an agent,
-//! an agent in one of the roles a person can start one in, the theme
-//! settings, the board, the wiki, or an extension; an extension that
+//! an agent in one of the roles a person can start one in, the board,
+//! the wiki, or an extension (the Markdown view and the theme settings
+//! are extensions the shell comes with); an extension that
 //! makes its pane on a file has the file found next.
 
 use horizon_agent::roles::{RoleId, user_launchable};
@@ -39,10 +40,6 @@ fn matching(query: &str) -> Vec<(String, Choice)> {
         let choice = Choice::Session(SessionKind::Agent, Some(id));
         choices.push((role.title.to_string(), choice));
     }
-    choices.push((
-        "Theme Settings".to_string(),
-        Choice::Plugin(plugins::theme_settings()),
-    ));
     choices.push(("Board".to_string(), Choice::Plugin(plugins::list())));
     choices.push(("Wiki".to_string(), Choice::Wiki));
     for extension in plugins::extensions() {

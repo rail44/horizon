@@ -17,7 +17,7 @@ pointed-to document instead.
 ```sh
 cargo check
 cargo build --workspace
-cargo build -p horizon-markdown-plugin --target wasm32-wasip2
+./scripts/extensions.sh build
 cargo test
 cargo run
 ```
@@ -50,13 +50,14 @@ replaces the daemon side. The terminal hub runs the same lockstep over
 its `hello` (`MIN_SUPPORTED == current`). Rebuild, then restart the app
 itself.
 
-The Markdown view is an extension (`plugins/markdown`), a wasm component
-`cargo build --workspace` does not build: the second command above does,
-and Horizon reads the component from beside its executable or from where
-that command leaves it (`target/wasm32-wasip2/<profile>`, for the
-executable in `target/<profile>`; `src/extension.rs`'s `own`). Without it
-Horizon starts and has no Markdown view. A component built again is read
-again by the running Horizon, with no reload.
+The Markdown view and the theme settings are extensions (`plugins/*`),
+wasm components `cargo build --workspace` does not build: the second
+command above does (`--release` for a release Horizon), and Horizon reads
+each component from beside its executable or from where that command
+leaves it (`target/wasm32-wasip2/<profile>`, for the executable in
+`target/<profile>`; `src/extension.rs`'s `own`). Without one Horizon
+starts and does not have that view. A component built again is read again
+by the running Horizon, with no reload.
 
 There is no CI. The local quality gate below is mandatory before finishing
 any work that changes something the gate reads — run it yourself and make
@@ -68,8 +69,8 @@ those.
 ```sh
 cargo fmt
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo clippy -p horizon-markdown-plugin --target wasm32-wasip2 --locked -- -D warnings
-cargo build -p horizon-markdown-plugin --target wasm32-wasip2 --locked
+./scripts/extensions.sh clippy --locked -- -D warnings
+./scripts/extensions.sh build --locked
 cargo nextest run --workspace --locked
 ./scripts/check-wire-schema.sh
 ./scripts/check-preview-wasm.sh
@@ -96,11 +97,11 @@ filter string. When a run dumps many failures, parse `cargo nextest run
 --format json` with `jq` rather than grepping the prose log — it is more
 reliable and cheaper.
 
-The two steps before the tests are the Markdown extension's
-(`plugins/markdown`): its code is built for a guest only, so the
-workspace's clippy sees an empty crate and it is linted for its own
-target, and the tests that show it in a pane load the component the
-build leaves (`tests/extension.rs`). Both need the `wasm32-wasip2`
+The two steps before the tests are the extensions' (`plugins/*`): their
+code is built for a guest only, so the workspace's clippy sees empty
+crates and they are linted for their own target, and the tests that show
+them in a pane load the components the build leaves
+(`tests/extension.rs`). Both need the `wasm32-wasip2`
 target installed (see Build setup).
 
 `check-wire-schema.sh` is the wire skew checker (`docs/remoc-adoption-design.md`
@@ -378,14 +379,13 @@ their wiring:
   listing of a directory's files off the UI thread.
 - `watch.rs` — the watch on the one file a view shows, which the wiki
   view, a preview and the extensions' loading share. The Markdown view
-  (`horizon new markdown <path>`) is not here: it is an extension, whole
-  in `plugins/markdown`, over `horizon-ui`, `horizon-components` and
-  `horizon-workspace`.
+  (`horizon new markdown <path>`) and the theme settings
+  (`horizon new theme-settings`) are not here: they are extensions, whole
+  in `plugins/markdown` and `plugins/theme-settings`, over `horizon-ui`
+  and `horizon-components`.
 - `wiki/` — a page of the project wiki (`crates/horizon-wiki`) with the
   owner's comment threads anchored in it. See
   `docs/project-wiki-design.md`.
-- `theme_settings.rs` — the theme settings view, made of the components
-  (slider, select, color picker) of `crates/horizon-components`.
 - `preview.rs` — the preview pane: a view shown from a wasm plugin
   (`preview-plugin/`). The plugin has the view's signals and handlers, the
   document is the shell's. See `docs/preview-pane-design.md`.

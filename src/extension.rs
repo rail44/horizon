@@ -116,8 +116,10 @@ pub struct Extension {
     pub file: PathBuf,
     compiled: Compiled,
     read: Vec<PathBuf>,
-    /// What a pane keeps of it: the type `state` gives.
-    state: Type,
+    /// What a pane keeps of it: the type `state` gives. None when its
+    /// panes keep nothing (it exports no `state`, and its `mount` takes
+    /// nothing).
+    state: Option<Type>,
 }
 
 /// What an extension's `create` takes to make a new pane's state.
@@ -136,8 +138,9 @@ fn kept(text: String) -> &'static str {
 
 /// What a component declares of itself, read from its type.
 struct Shape {
-    /// The type `state` gives: what a pane keeps of the extension.
-    state: Type,
+    /// The type `state` gives: what a pane keeps of the extension, if
+    /// its panes keep anything.
+    state: Option<Type>,
     /// The commands its `commands` interface exports, in the order they
     /// were read.
     commands: Vec<String>,
@@ -210,7 +213,6 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
             _ => {}
         }
     }
-    let state = state.ok_or("the component exports no `state`")?;
     if !mount {
         return Err("the component exports no `mount`".to_string());
     }
@@ -365,19 +367,21 @@ impl Running {
     /// Builds the view on `state`, the text a pane kept (none for a new
     /// pane): its root node.
     pub fn mount(&self, state: Option<&str>) -> Result<u64, String> {
-        let given = match state {
-            Some(text) => {
-                let value = Val::from_wave(&self.extension.state, text)
+        let given = match (&self.extension.state, state) {
+            // (Its panes keep nothing: `mount` takes nothing.)
+            (None, _) => Vec::new(),
+            (Some(kept), Some(text)) => {
+                let value = Val::from_wave(kept, text)
                     .map_err(|error| format!("the state kept, {text:?}: {error}"))?;
-                Val::Option(Some(Box::new(value)))
+                vec![Val::Option(Some(Box::new(value)))]
             }
-            None => Val::Option(None),
+            (Some(_), None) => vec![Val::Option(None)],
         };
         let root = self.loaded.call(|plugin, accessor| {
             Box::pin(async move {
                 let mount = function(plugin, accessor, None, "mount")?;
                 let mut answer = [Val::U64(0)];
-                (mount.call_concurrent(accessor, &[given], &mut answer)).await?;
+                (mount.call_concurrent(accessor, &given, &mut answer)).await?;
                 Ok(answer[0].clone())
             })
         });
@@ -389,6 +393,7 @@ impl Running {
 
     /// What the pane keeps of it now, as text.
     pub fn state(&self) -> Option<String> {
+        self.extension.state.as_ref()?;
         let value = self.loaded.call(|plugin, accessor| {
             Box::pin(async move {
                 let state = function(plugin, accessor, None, "state")?;
@@ -455,7 +460,13 @@ fn function(
 
 /// The components of the extensions that come with the shell, by their
 /// files' names and the packages they are built from.
-const OWN: [(&str, &str); 1] = [("horizon_markdown_plugin.wasm", "horizon-markdown-plugin")];
+const OWN: [(&str, &str); 2] = [
+    ("horizon_markdown_plugin.wasm", "horizon-markdown-plugin"),
+    (
+        "horizon_theme_settings_plugin.wasm",
+        "horizon-theme-settings-plugin",
+    ),
+];
 
 /// The files of the extensions that come with the shell: each beside the
 /// executable, or where cargo builds it for the executable's profile

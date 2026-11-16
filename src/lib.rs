@@ -34,8 +34,6 @@ pub mod restore;
 pub mod terminal;
 #[cfg(not(target_family = "wasm"))]
 pub mod terminald;
-#[cfg(not(target_family = "wasm"))]
-pub mod theme_settings;
 pub mod wake;
 #[cfg(not(target_family = "wasm"))]
 mod watch;

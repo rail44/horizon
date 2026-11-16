@@ -34,13 +34,12 @@ use crate::board::plugin::{
 use crate::board::{list, thread};
 use crate::extension::Extension;
 use crate::plugin::{Given, Mounted, Plugin};
-use crate::plugin_host::Asks;
+use crate::plugin_host::{Asks, ThemeAsks};
 use crate::preview::{PreviewPlugin, Target};
 use crate::terminal::plugin::TerminalPlugin;
-use crate::theme_settings::{self, ThemeSettingsPlugin};
 use crate::wiki::DocumentState;
 use crate::wiki::WikiPlugin;
-use horizon_theme::seed::Seed;
+use horizon_theme::seed::{ResolvedFallback, Seed};
 use horizon_theme_css::Theme;
 
 /// A plugin's command, as the palette lists it and a key binding names
@@ -108,7 +107,6 @@ pub(super) fn commands() -> Vec<Listed> {
     let mut commands = listed::<BoardListPlugin>();
     commands.extend(listed::<BoardThreadPlugin>());
     commands.extend(listed::<PreviewPlugin>());
-    commands.extend(listed::<ThemeSettingsPlugin>());
     commands.extend(listed::<WikiPlugin>());
     commands.extend(listed::<TerminalPlugin>());
     commands.extend(listed::<AgentPlugin>());
@@ -231,37 +229,6 @@ impl Shell {
                 };
                 self.mount(pane, plugin, state, |never| match never {})
             }
-            ThemeSettingsPlugin::NAME => {
-                let config = kept.config.borrow().clone();
-                let scheme = self.theme.with_untracked(|theme| *theme.scheme());
-                let fallback = theme_settings::fallback(&scheme);
-                let seed = Seed::from_current_config(&config, fallback);
-                let save = kept.save_theme.clone();
-                let host = theme_settings::Host {
-                    // The seed's theme, at the font size in use.
-                    apply: Box::new(move |seed| {
-                        let kept = shell.kept();
-                        let mut config = kept.config.borrow().clone();
-                        config.theme = seed.to_raw_config().theme;
-                        let size = shell.theme.with_untracked(|theme| theme.font_size);
-                        let mut theme = Theme::from_config(&config);
-                        theme.font_size = size;
-                        *kept.config.borrow_mut() = config;
-                        shell.theme.set(theme);
-                    }),
-                    save: Box::new(move |seed| match &save {
-                        Some(save) => save(seed),
-                        None => horizon_theme::save::save(seed).map_err(|error| error.to_string()),
-                    }),
-                    path: horizon_config::resolved_path(),
-                };
-                let plugin = ThemeSettingsPlugin {
-                    seed,
-                    theme: self.theme,
-                    host,
-                };
-                self.mount(pane, plugin, state, |never| match never {})
-            }
             WikiPlugin::NAME => {
                 let plugin = WikiPlugin {
                     open_url: kept.open_url.clone(),
@@ -346,6 +313,44 @@ impl Shell {
 }
 
 impl Shell {
+    /// What this shell does with its theme for a plugin: the seed the
+    /// theme has, drawing the theme of another, and saving one.
+    fn theme_asks(&self) -> ThemeAsks {
+        let shell = *self;
+        let save = self.kept().save_theme.clone();
+        ThemeAsks {
+            now: Rc::new(move || {
+                let config = shell.kept().config.borrow().clone();
+                let scheme = shell.theme.with_untracked(|theme| *theme.scheme());
+                // The seed a theme that came from no seed would have had:
+                // what the keys the configuration leaves out are read as.
+                let fallback = ResolvedFallback {
+                    surface_base: scheme.background,
+                    // Red, green, yellow, blue, magenta, cyan.
+                    hues: std::array::from_fn(|slot| scheme.ansi[slot + 1]),
+                    accent: scheme.accent,
+                };
+                let seed = Seed::from_current_config(&config, fallback);
+                (seed, horizon_config::resolved_path())
+            }),
+            // The seed's theme, at the font size in use.
+            apply: Rc::new(move |seed| {
+                let kept = shell.kept();
+                let mut config = kept.config.borrow().clone();
+                config.theme = seed.to_raw_config().theme;
+                let size = shell.theme.with_untracked(|theme| theme.font_size);
+                let mut theme = Theme::from_config(&config);
+                theme.font_size = size;
+                *kept.config.borrow_mut() = config;
+                shell.theme.set(theme);
+            }),
+            save: Rc::new(move |seed| match &save {
+                Some(save) => save(seed),
+                None => horizon_theme::save::save(seed).map_err(|error| error.to_string()),
+            }),
+        }
+    }
+
     /// A pane of `extension` on the state the model keeps for it, which
     /// goes back to the model as it changes, with the pane's title.
     fn mount_extension(
@@ -369,6 +374,7 @@ impl Shell {
         let asks = Asks {
             open_url: Some(kept.open_url.clone()),
             set_title: Some(Rc::new(move |text| title.set(text))),
+            theme: Some(self.theme_asks()),
         };
         let name = extension.name;
         let running = match extension.instantiate(asks, kept.wake.clone(), failed) {
@@ -408,14 +414,13 @@ impl Shell {
 }
 
 /// The names of the plugins this shell has of its own.
-pub(super) const NAMES: [&str; 7] = [
+pub(super) const NAMES: [&str; 6] = [
     TerminalPlugin::NAME,
     AgentPlugin::NAME,
     BoardListPlugin::NAME,
     BoardThreadPlugin::NAME,
     WikiPlugin::NAME,
     PreviewPlugin::NAME,
-    ThemeSettingsPlugin::NAME,
 ];
 
 /// The pane the view plugin `name` of this shell's own makes from what
@@ -430,7 +435,6 @@ pub(super) fn created(name: &str, given: Given) -> Option<Result<PluginPane, Str
         BoardThreadPlugin::NAME => made::<BoardThreadPlugin>(given),
         WikiPlugin::NAME => made::<WikiPlugin>(given),
         PreviewPlugin::NAME => made::<PreviewPlugin>(given),
-        ThemeSettingsPlugin::NAME => made::<ThemeSettingsPlugin>(given),
         _ => return None,
     })
 }
@@ -443,11 +447,6 @@ pub(super) fn preview_of(target: Option<Target>) -> PluginPane {
 /// What a preview pane shows, as the model keeps it.
 pub(super) fn previewed(plugin: &PluginPane) -> Option<Option<Target>> {
     (plugin.name == PREVIEW).then(|| serde_json::from_value(plugin.state.clone()).ok().flatten())
-}
-
-/// A theme settings pane.
-pub(super) fn theme_settings() -> PluginPane {
-    pane::<ThemeSettingsPlugin>(())
 }
 
 /// A wiki pane on the page at `path`.

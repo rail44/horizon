@@ -283,7 +283,9 @@ The decisions and who made them are on board #76. What they come to:
 - **What the host offers beside the document is grouped by what it is
   about**, one interface each in `horizon:ui`: `desktop` (`open-url`),
   `pane` (`set-title`), `files` (the `file` resource, and
-  `wait-for-change`). A file's changes are watched by the host:
+  `wait-for-change`), `theme` (the seed the shell's theme is derived
+  from: `current`, `apply`, which draws the theme of a seed and writes
+  nothing, `save`, which writes one and is `async`, and `path`). A file's changes are watched by the host:
   `wasi:filesystem` 0.3 has no way to wait for one, and the host already
   watches files for its own views (`src/watch.rs`). A view
   watches one with `horizon_ui::guest::watch`, which reruns the plugin's
@@ -344,6 +346,19 @@ The decisions and who made them are on board #76. What they come to:
   debug assertion in Stylo's rule tree. A sheet cannot reach the
   network: the shell resolves only `data:` URLs.
 
+- **Which of the host's interfaces an extension uses is read from its
+  component, not said by it.** A component imports the functions its
+  code calls and no others (the Markdown extension names eleven of
+  `document`'s), so that it uses `theme` is its importing it, which the
+  host reads when it loads it. What takes saying what of is said, in the
+  manifest's `access` (`#[horizon_ui::plugin(.., access(read = ["/"]))]`):
+  the directories lent to it. Nothing gates either yet: an extension has
+  what it says and uses.
+- **The theme settings are the second extension** (`plugins/theme-settings`),
+  and the first whose panes keep nothing: an extension without a
+  `struct State` exports no `state`, and its `mount` takes nothing. It
+  derives the colors it shows from the seed itself (`horizon-theme`, which
+  builds for a guest), the same derivation the shell draws from.
 - **A pane's state is the extension's type.** The extension declares it
   in WIT, says when it changed (`state-changed`), and gives it when asked
   (`state()`). The workspace saves it under the extension's name and

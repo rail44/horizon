@@ -3,7 +3,9 @@
 //! On a module, it reads what the module declares:
 //!
 //! - `struct State`: what a pane keeps of the plugin, a WIT record;
-//! - `fn mount` and `fn state`: the view on a state, and the state now;
+//! - `fn mount` and `fn state`: the view on a state, and the state now
+//!   (a plugin whose panes keep nothing has no `State` and no `state`,
+//!   and its `mount` takes nothing);
 //! - a function marked `#[create(..)]`: what a new pane's state is made
 //!   from, its parameters being what the host asks for;
 //! - functions marked `#[command(..)]`: the plugin's commands.
@@ -16,8 +18,13 @@
 //! is the component's type and that section, as it is for a plugin whose
 //! WIT and manifest are written by hand.
 //!
+//! `access(..)` holds what the plugin is let have that takes saying what
+//! of: the directories it may read. Which of the host's interfaces it
+//! uses is not said here: the component imports what its code calls, and
+//! the host reads that.
+//!
 //! ```ignore
-//! #[horizon_ui::plugin(name = "notes", title = "Notes", read = ["/"])]
+//! #[horizon_ui::plugin(name = "notes", title = "Notes", access(read = ["/"]))]
 //! mod notes {
 //!     pub struct State {
 //!         pub path: Option<String>,
@@ -269,12 +276,10 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
             other => kept.push(other),
         }
     }
-    let record =
-        record.ok_or_else(|| error(module.ident.span(), "a `struct State`: what a pane keeps"))?;
     // (The record is the bindings' own: what is derived for `State` is
     // derived for that.)
     let mut derives = Vec::<syn::Path>::new();
-    for attribute in &record.attrs {
+    for attribute in record.iter().flat_map(|record| &record.attrs) {
         if attribute.path().is_ident("derive") {
             attribute.parse_nested_meta(|meta| {
                 derives.push(meta.path);
@@ -282,26 +287,37 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
             })?;
         }
     }
-    if !mounts || !states {
-        return Err(error(module.ident.span(), "`fn mount` and `fn state`"));
+    // A plugin keeps a state and says it, or keeps none.
+    match (&record, mounts, states) {
+        (Some(_), true, true) | (None, true, false) => {}
+        (Some(_), ..) => return Err(error(module.ident.span(), "`fn mount` and `fn state`")),
+        (None, ..) => {
+            return Err(error(
+                module.ident.span(),
+                "`fn mount`, and with a `struct State` a `fn state`",
+            ));
+        }
     }
 
     // The world, as a plugin's own WIT would say it.
-    let mut fields = Vec::new();
-    for field in &record.fields {
-        let name =
-            (field.ident.as_ref()).ok_or_else(|| error(field.span(), "a field with a name"))?;
-        fields.push(format!(
-            "        {}: {},",
-            kebab(&name.to_string()),
-            wit(&field.ty)?
-        ));
+    let mut declared = String::new();
+    if let Some(record) = &record {
+        let mut fields = Vec::new();
+        for field in &record.fields {
+            let name =
+                (field.ident.as_ref()).ok_or_else(|| error(field.span(), "a field with a name"))?;
+            fields.push(format!(
+                "        {}: {},",
+                kebab(&name.to_string()),
+                wit(&field.ty)?
+            ));
+        }
+        declared = format!("    record state {{\n{}\n    }}\n\n", fields.join("\n"));
     }
     let package = kebab(&name);
     let mut text = format!(
         "package horizon-ext:{package};\n\nworld plugin {{\n    include horizon:ui/imports;\n    \
-         use horizon:ui/files.{{file}};\n\n    record state {{\n{}\n    }}\n\n{}\n",
-        fields.join("\n"),
+         use horizon:ui/files.{{file}};\n\n{declared}{}\n",
         world.join("\n")
     );
     if !command_lines.is_empty() {
@@ -363,6 +379,7 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
                     "horizon:ui/desktop": ::horizon_ui::guest::bindings::horizon::ui::desktop,
                     "horizon:ui/pane": ::horizon_ui::guest::bindings::horizon::ui::pane,
                     "horizon:ui/files": ::horizon_ui::guest::bindings::horizon::ui::files,
+                    "horizon:ui/theme": ::horizon_ui::guest::bindings::horizon::ui::theme,
                 },
                 additional_derives: [#(#derives),*],
             });
@@ -397,10 +414,17 @@ pub(crate) fn plugin(arguments: TokenStream, input: TokenStream) -> TokenStream 
             about.name = Some(meta.value()?.parse::<LitStr>()?.value());
         } else if meta.path.is_ident("title") {
             about.title = Some(meta.value()?.parse::<LitStr>()?.value());
-        } else if meta.path.is_ident("read") {
-            about.read = strings(&meta.value()?.parse::<ExprArray>()?)?;
+        } else if meta.path.is_ident("access") {
+            meta.parse_nested_meta(|meta| {
+                if meta.path.is_ident("read") {
+                    about.read = strings(&meta.value()?.parse::<ExprArray>()?)?;
+                    Ok(())
+                } else {
+                    Err(meta.error("`read`"))
+                }
+            })?;
         } else {
-            return Err(meta.error("`name`, `title` or `read`"));
+            return Err(meta.error("`name`, `title` or `access(..)`"));
         }
         Ok(())
     });

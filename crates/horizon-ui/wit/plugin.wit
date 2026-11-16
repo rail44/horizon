@@ -135,6 +135,39 @@ interface files {
     wait-for-change: async func(path: string) -> result<_, string>;
 }
 
+/// The shell's theme, by the seed it is derived from. A color is packed,
+/// `0xRRGGBB`.
+interface theme {
+    /// The accent: one of the seed's hues, by its place among them, or a
+    /// color of its own.
+    variant accent {
+        hue(u8),
+        color(u32),
+    }
+
+    record seed {
+        /// What the surfaces are derived from.
+        surface-base: u32,
+        /// Red, green, yellow, blue, magenta, cyan.
+        hues: list<u32>,
+        accent: accent,
+        /// The contrast of the text with the surface it is on.
+        text-contrast: f64,
+    }
+
+    /// The seed of the theme as it was when the plugin was started.
+    current: func() -> seed;
+
+    /// The file a seed is saved to, if there is one.
+    path: func() -> option<string>;
+
+    /// Draws everything in the theme `seed` makes. Nothing is written.
+    apply: func(seed: seed);
+
+    /// Writes `seed` to the configuration, and says where.
+    save: async func(seed: seed) -> result<string, string>;
+}
+
 /// What a plugin imports: a plugin's world includes it, and declares
 /// only what is its own.
 world imports {
@@ -142,6 +175,7 @@ world imports {
     import desktop;
     import pane;
     import files;
+    import theme;
 }
 
 /// The shared exports with the imports: what the SDK's bindings are made

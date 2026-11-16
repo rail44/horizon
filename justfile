@@ -1,10 +1,10 @@
-# Build everything (both daemons and the Markdown extension included) and launch the freshly built binary
+# Build everything (both daemons and the extensions included) and launch the freshly built binary
 # directly. Bypassing `cargo run` keeps cargo's environment (CARGO_*,
 # RUSTUP_*, LD_LIBRARY_PATH into target/debug) out of Horizon and the daemons —
 # see docs/tasks/backlog.md item 12.
 dev *ARGS:
     cargo build --workspace
-    cargo build -p horizon-markdown-plugin --target wasm32-wasip2
+    ./scripts/extensions.sh build
     ./target/debug/horizon {{ARGS}}
 
 # Same as `dev`, but release-optimized — halves redraw-processing cost
@@ -12,7 +12,7 @@ dev *ARGS:
 # at the cost of a slower build.
 dev-release *ARGS:
     cargo build --workspace --release
-    cargo build -p horizon-markdown-plugin --target wasm32-wasip2 --release
+    ./scripts/extensions.sh build --release
     ./target/release/horizon {{ARGS}}
 
 # Build everything and launch Horizon from a minimal ad-hoc-signed .app
@@ -22,5 +22,5 @@ dev-release *ARGS:
 # macOS 26). See scripts/dev-bundle.sh.
 dev-bundle *ARGS:
     cargo build --workspace
-    cargo build -p horizon-markdown-plugin --target wasm32-wasip2
+    ./scripts/extensions.sh build
     ./scripts/dev-bundle.sh {{ARGS}}

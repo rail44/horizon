@@ -2,22 +2,20 @@
 //! it on a control, applied as it is changed and written to the config
 //! file only by Save. Below, the colors derived from it.
 //!
-//! The seed and the writing of it are `horizon-theme`'s, as the GPUI
-//! shell's view uses them (`src/theme_settings/`).
+//! The seed is the shell's: read from it when the view is made, handed
+//! to it to draw as it changes, and handed to it to save
+//! (`horizon:ui/theme`). What a seed is, and the colors one comes to, are
+//! `horizon-theme`'s.
 
-use std::path::PathBuf;
 use std::rc::Rc;
 
-use horizon_theme::scheme::{Scheme, TEXT_CONTRAST_FLOOR};
-use horizon_theme::seed::{AccentValue, HueSlot, ResolvedFallback, Seed};
-use horizon_theme_css::Theme;
+use horizon_components::{ColorPicker, Drags, Range, Select, Slider};
+use horizon_theme::scheme::{Scheme, TEXT_CONTRAST_FLOOR, scheme_from};
+use horizon_theme::seed::{AccentValue, HueSlot, Seed};
+use horizon_ui::guest::bindings::horizon::ui::theme as host;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
-use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Callback, Component, El, el};
-
-use crate::plugin::{Command, Mounted, Plugin};
-use horizon_components::{ColorPicker, Drags, Range, Select, Slider};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -60,20 +58,43 @@ const ACCENT_OPTIONS: [&str; 7] = [
 /// The slider's top: past it the text hardly changes.
 const CONTRAST_MAX: f64 = 15.;
 
-/// Writes a seed to the config file, and says where.
-pub type Save = Box<dyn Fn(&Seed) -> Result<PathBuf, String>>;
-
 /// A group of the derived colors: its title, and rows of named colors.
 type Swatches = (&'static str, Vec<Vec<(&'static str, u32)>>);
 
-/// What is outside the view.
-pub struct Host {
-    /// Draws everything in the theme this seed makes.
-    pub apply: Box<dyn Fn(&Seed)>,
-    /// Writes the seed to the config file, and says where.
-    pub save: Save,
-    /// The config file's path, as the header shows it.
-    pub path: Option<PathBuf>,
+/// A seed as the boundary carries it.
+fn carried(seed: &Seed) -> host::Seed {
+    host::Seed {
+        surface_base: seed.surface_base,
+        hues: seed.hues.to_vec(),
+        accent: match seed.accent {
+            AccentValue::Slot(slot) => {
+                let place = HueSlot::ALL.iter().position(|other| *other == slot);
+                host::Accent::Hue(place.unwrap_or(0) as u8)
+            }
+            AccentValue::Hex(color) => host::Accent::Color(color),
+        },
+        text_contrast: seed.text_contrast,
+    }
+}
+
+/// The seed the shell's theme has now.
+fn current() -> Seed {
+    let carried = host::current();
+    let mut hues = [0; 6];
+    for (hue, carried) in hues.iter_mut().zip(&carried.hues) {
+        *hue = *carried;
+    }
+    Seed {
+        surface_base: carried.surface_base,
+        hues,
+        accent: match carried.accent {
+            host::Accent::Hue(place) => {
+                AccentValue::Slot(HueSlot::ALL[(place as usize).min(HueSlot::ALL.len() - 1)])
+            }
+            host::Accent::Color(color) => AccentValue::Hex(color),
+        },
+        text_contrast: Seed::clamp_contrast(carried.text_contrast),
+    }
 }
 
 fn rgb(packed: u32) -> [u8; 3] {
@@ -82,17 +103,6 @@ fn rgb(packed: u32) -> [u8; 3] {
 
 fn packed([r, g, b]: [u8; 3]) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | b as u32
-}
-
-/// The seed a theme that came from no seed would have had: what the
-/// controls start on for the keys the configuration leaves out.
-pub fn fallback(scheme: &Scheme) -> ResolvedFallback {
-    ResolvedFallback {
-        surface_base: scheme.background,
-        // Red, green, yellow, blue, magenta, cyan.
-        hues: std::array::from_fn(|slot| scheme.ansi[slot + 1]),
-        accent: scheme.accent,
-    }
 }
 
 /// The derived colors, in groups of rows of named swatches.
@@ -163,22 +173,19 @@ fn labeled(label: &str, control: El) -> El {
         .child(control)
 }
 
-/// Builds the view over `seed`, the theme's seed as it is now; `theme` is
-/// the theme drawn, which the swatches follow.
-pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
-    let host = Rc::new(host);
-    let seed = RwSignal::new(seed);
+/// Builds the view over the theme's seed as it is now.
+pub fn view() -> El {
+    let seed = RwSignal::new(current());
     let dirty = RwSignal::new(false);
     let status = RwSignal::new(None::<String>);
     let drags = Drags::default();
     // A change of any control: the seed changed, and the theme of it
     // applied.
-    let changing = host.clone();
     let change = move |change: &dyn Fn(&mut Seed)| {
         seed.update(|seed| change(seed));
         dirty.set(true);
         status.set(None);
-        (changing.apply)(&seed.get_untracked());
+        host::apply(&carried(&seed.get_untracked()));
     };
     let change = Rc::new(change);
 
@@ -272,9 +279,7 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
         }),
     };
 
-    let saving = host.clone();
-    let path = (host.path.as_ref())
-        .map(|path| path.display().to_string())
+    let path = host::path()
         .unwrap_or_else(|| "no config path resolved (HOME/XDG_CONFIG_HOME unset)".to_string());
     let header =
         el("div")
@@ -296,12 +301,23 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
                             )
                             .child(el("div").class(styles::SAVE).text("Save").on(
                                 "click",
-                                move |_| match (saving.save)(&seed.get_untracked()) {
-                                    Ok(path) => {
-                                        dirty.set(false);
-                                        status.set(Some(format!("Saved to {}", path.display())));
-                                    }
-                                    Err(error) => status.set(Some(format!("Save failed: {error}"))),
+                                move |_| {
+                                    // The shell writes it, and says how
+                                    // that went when it has.
+                                    let saving = carried(&seed.get_untracked());
+                                    horizon_ui::guest::spawn(async move {
+                                        match host::save(saving).await {
+                                            Ok(path) => {
+                                                dirty.set(false);
+                                                status.set(Some(format!("Saved to {path}")));
+                                            }
+                                            Err(error) => {
+                                                status.set(Some(format!("Save failed: {error}")))
+                                            }
+                                        }
+                                        horizon_ui::guest::run_effects();
+                                        horizon_ui::guest::relayout();
+                                    });
                                 },
                             )),
                     ),
@@ -338,12 +354,13 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
                 ),
         ));
 
-    // The derived colors follow the theme as it is drawn.
+    // The derived colors follow the seed: what it comes to is what the
+    // shell draws of it.
     let preview = el("div")
         .class(styles::SECTION)
         .child(el("div").class(styles::SECTION_TITLE).text("Preview"))
         .each(
-            move || swatches(theme.get().scheme()),
+            move || swatches(&scheme_from(&seed.get().to_raw_config())),
             |(title, rows)| (*title, rows.clone()),
             |(title, rows)| {
                 let chip = |(name, color): &(&str, u32)| {
@@ -371,41 +388,4 @@ pub fn view(seed: Seed, theme: RwSignal<Theme>, host: Host) -> El {
         .child(seed_section)
         .child(preview);
     drags.wire(root)
-}
-
-/// The theme settings as a plugin. They keep nothing of their own: the
-/// seed is the configuration's.
-pub struct ThemeSettingsPlugin {
-    pub seed: Seed,
-    pub theme: RwSignal<Theme>,
-    pub host: Host,
-}
-
-impl Plugin for ThemeSettingsPlugin {
-    const NAME: &'static str = "theme-settings";
-    const TITLE: &'static str = "Theme Settings";
-    type State = ();
-    type Command = std::convert::Infallible;
-    type Asked = std::convert::Infallible;
-
-    fn commands() -> Vec<Command<std::convert::Infallible>> {
-        Vec::new()
-    }
-
-    fn create(given: crate::plugin::Given) -> Result<(), String> {
-        given.done()
-    }
-
-    fn mount(
-        self,
-        _: (),
-        _: Callback<std::convert::Infallible>,
-    ) -> Mounted<(), std::convert::Infallible> {
-        Mounted {
-            view: view(self.seed, self.theme, self.host),
-            run: Callback::new(|never| match never {}),
-            enabled: None,
-            state: Signal::stored_local(()),
-        }
-    }
 }

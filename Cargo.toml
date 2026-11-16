@@ -28,6 +28,7 @@ members = [
     "crates/horizon-theme-css",
     "preview-plugin",
     "plugins/markdown",
+    "plugins/theme-settings",
 ]
 resolver = "3"
 # The DuckDB extensions are a sub-workspace (pinned to DuckDB's unstable C

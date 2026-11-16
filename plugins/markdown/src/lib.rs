@@ -9,7 +9,7 @@
 
 mod view;
 
-#[horizon_ui::plugin(name = "markdown", title = "Markdown", read = ["/"])]
+#[horizon_ui::plugin(name = "markdown", title = "Markdown", access(read = ["/"]))]
 mod markdown {
     use std::cell::{Cell, RefCell};
     use std::path::PathBuf;

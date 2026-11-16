@@ -44,6 +44,7 @@ use wasmtime::component::{
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
 
 use crate::wake::Wake;
+use horizon_theme::seed::{AccentValue, HueSlot, Seed};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 /// No grants: no files, no sockets, no environment.
@@ -56,6 +57,7 @@ wasmtime::component::bindgen!({
     world: "view",
     imports: {
         "horizon:ui/files.wait-for-change": async | store | trappable,
+        "horizon:ui/theme.save": async | store | trappable,
         default: trappable,
     },
     // Every call is made through the accessor, beside the plugin's tasks.
@@ -78,7 +80,23 @@ pub struct Asks {
     pub open_url: Option<OpenUrl>,
     /// The title of the plugin's pane.
     pub set_title: Option<SetTitle>,
+    /// The shell's theme.
+    pub theme: Option<ThemeAsks>,
 }
+
+/// What the host does with the shell's theme for a plugin.
+#[derive(Clone)]
+pub struct ThemeAsks {
+    /// The seed of the theme as it is, and the file one is saved to.
+    pub now: Rc<dyn Fn() -> (Seed, Option<PathBuf>)>,
+    /// Draws everything in the theme a seed makes.
+    pub apply: Rc<dyn Fn(&Seed)>,
+    /// Writes a seed to the configuration, and says where.
+    pub save: SaveSeed,
+}
+
+/// Writes a seed to the configuration, and says where.
+pub type SaveSeed = Rc<dyn Fn(&Seed) -> Result<PathBuf, String>>;
 
 /// Hands a URL to the desktop.
 pub type OpenUrl = Rc<dyn Fn(&str)>;
@@ -89,6 +107,9 @@ pub type SetTitle = Rc<dyn Fn(String)>;
 enum Asked {
     OpenUrl(String),
     SetTitle(String),
+    ApplyTheme(Seed),
+    /// The answer goes back to the plugin's task that waits for it.
+    SaveTheme(Seed, tokio::sync::oneshot::Sender<Result<String, String>>),
 }
 
 /// The most memory a plugin may take.
@@ -123,6 +144,9 @@ pub struct State {
     left: Arc<Mutex<Left>>,
     /// The nodes the plugin made: the only ones it may name.
     owned: HashSet<NodeId>,
+    /// The theme's seed and the file one is saved to, as they were when
+    /// the plugin was started, if whoever shows it gives it the theme.
+    theme: Option<(Seed, Option<PathBuf>)>,
 }
 
 /// What a plugin leaves for this shell to do once the poll it was left in
@@ -339,6 +363,81 @@ impl self::horizon::ui::pane::Host for State {
     fn set_title(&mut self, title: String) -> wasmtime::Result<()> {
         (self.left.lock().unwrap().asked).push(Asked::SetTitle(title));
         Ok(())
+    }
+}
+
+/// A seed as the boundary carries it.
+fn carried(seed: &Seed) -> self::horizon::ui::theme::Seed {
+    use self::horizon::ui::theme::Accent;
+    self::horizon::ui::theme::Seed {
+        surface_base: seed.surface_base,
+        hues: seed.hues.to_vec(),
+        accent: match seed.accent {
+            AccentValue::Slot(slot) => {
+                let place = HueSlot::ALL.iter().position(|other| *other == slot);
+                Accent::Hue(place.unwrap_or(0) as u8)
+            }
+            AccentValue::Hex(color) => Accent::Color(color),
+        },
+        text_contrast: seed.text_contrast,
+    }
+}
+
+/// The seed a plugin handed over; what is not one is the plugin's fault.
+fn seed_of(carried: self::horizon::ui::theme::Seed) -> wasmtime::Result<Seed> {
+    use self::horizon::ui::theme::Accent;
+    let none = |what: &str| wasmtime::Error::msg(format!("a seed with {what}"));
+    let hues: [u32; 6] = (carried.hues.try_into()).map_err(|_| none("other than six hues"))?;
+    let accent = match carried.accent {
+        Accent::Hue(place) => AccentValue::Slot(
+            *(HueSlot::ALL.get(place as usize)).ok_or_else(|| none("an accent that is no hue"))?,
+        ),
+        Accent::Color(color) => AccentValue::Hex(color),
+    };
+    Ok(Seed {
+        surface_base: carried.surface_base,
+        hues,
+        accent,
+        text_contrast: Seed::clamp_contrast(carried.text_contrast),
+    })
+}
+
+impl self::horizon::ui::theme::Host for State {
+    fn current(&mut self) -> wasmtime::Result<self::horizon::ui::theme::Seed> {
+        let (seed, _) = (self.theme.as_ref())
+            .ok_or_else(|| wasmtime::Error::msg("the theme is not given to this plugin"))?;
+        Ok(carried(seed))
+    }
+
+    fn path(&mut self) -> wasmtime::Result<Option<String>> {
+        let path = (self.theme.as_ref()).and_then(|(_, path)| path.as_ref());
+        Ok(path.map(|path| path.to_string_lossy().into_owned()))
+    }
+
+    fn apply(&mut self, seed: self::horizon::ui::theme::Seed) -> wasmtime::Result<()> {
+        let seed = seed_of(seed)?;
+        (self.left.lock().unwrap().asked).push(Asked::ApplyTheme(seed));
+        Ok(())
+    }
+}
+
+impl<T: Send> self::horizon::ui::theme::HostWithStore<T> for HasSelf<State> {
+    async fn save(
+        accessor: &Accessor<T, Self>,
+        seed: self::horizon::ui::theme::Seed,
+    ) -> wasmtime::Result<Result<String, String>> {
+        let seed = seed_of(seed)?;
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        accessor.with(|mut access| {
+            (access.get().left.lock().unwrap().asked).push(Asked::SaveTheme(seed, answer));
+        });
+        // (Whoever shows the plugin answers once the poll this was asked
+        // in is over.)
+        let saved = answered
+            .await
+            .unwrap_or_else(|_| Err("the theme is not given to this plugin".to_string()));
+        Free.await;
+        Ok(saved)
     }
 }
 
@@ -616,6 +715,19 @@ impl Loaded {
                         set_title(title);
                     }
                 }
+                Asked::ApplyTheme(seed) => {
+                    if let Some(theme) = &self.asks.theme {
+                        (theme.apply)(&seed);
+                    }
+                }
+                // (With no theme given, the answer is dropped, which the
+                // plugin's task hears.)
+                Asked::SaveTheme(seed, answer) => {
+                    if let Some(theme) = &self.asks.theme {
+                        let saved = (theme.save)(&seed);
+                        let _ = answer.send(saved.map(|path| path.to_string_lossy().into_owned()));
+                    }
+                }
             }
         }
         // A handler holds the plugin loosely: the nodes may outlast it.
@@ -829,6 +941,7 @@ pub fn instantiate(
             left: left.clone(),
             limits: StoreLimitsBuilder::new().memory_size(MEMORY_LIMIT).build(),
             owned: HashSet::new(),
+            theme: asks.theme.as_ref().map(|theme| (theme.now)()),
         },
     );
     store.limiter(|state| &mut state.limits);

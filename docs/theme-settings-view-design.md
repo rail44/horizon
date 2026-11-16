@@ -6,6 +6,12 @@ record; `docs/roadmap.md` only indexes it. Builds on
 to exactly the seed on 2026-07-16, which is what makes this view's
 scope small).
 
+Since 2026-11-16 the view is an extension (`plugins/theme-settings`,
+`docs/extension-boundary-design.md`): what is said below of where the
+view's code is and of how a pane of it is made is of before that. A pane
+is made with `horizon new theme-settings` or from the view chooser, and
+the seed reaches the view and goes back through `horizon:ui/theme`.
+
 ## Purpose
 
 An interactive view for re-examining the whole color scheme. This is

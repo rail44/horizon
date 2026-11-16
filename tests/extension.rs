@@ -3,8 +3,9 @@
 //! kept in the model as it changes, its command carried out from the
 //! palette, and a new pane of it made on a file found by typing.
 //!
-//! The component is built before these run (`scripts/gate.sh`):
-//! `cargo build -p horizon-markdown-plugin --target wasm32-wasip2`.
+//! The components are built before these run (`scripts/gate.sh`):
+//! `cargo build -p horizon-markdown-plugin -p horizon-theme-settings-plugin
+//! --target wasm32-wasip2`.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -33,9 +34,15 @@ fn component() -> PathBuf {
 /// A shell with the extensions it comes with, found as an executable in
 /// `target/debug` finds them.
 fn open() -> Opened {
+    open_with(Opening::default())
+}
+
+/// The same, over what else `opening` says.
+fn open_with(opening: Opening) -> Opened {
     let extensions =
         horizon::extension::own_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug"));
-    assert_eq!(extensions, [component()]);
+    assert_eq!(extensions.first(), Some(&component()));
+    assert_eq!(extensions.len(), 2, "{extensions:?}");
     let mut shell = None;
     let app = App::new(1200, 800, "Test", css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
@@ -43,7 +50,7 @@ fn open() -> Opened {
             spawn,
             Opening {
                 extensions,
-                ..Opening::default()
+                ..opening
             },
         );
         shell = Some(built);
@@ -654,4 +661,78 @@ fn the_shell_s_own_markdown_view_is_the_extension() {
     opened.until("the file back", || opened.text().contains("Now"));
     assert_eq!(tabs(&opened), 2);
     let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The theme settings are an extension too: the seed is the shell's,
+/// which draws the theme of it as it changes and writes it when asked
+/// (`horizon:ui/theme`), and a pane of it keeps nothing.
+#[test]
+fn the_theme_settings_apply_a_seed_as_it_changes_and_save_it_when_asked() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let saved = Rc::new(RefCell::new(Vec::new()));
+    let log = saved.clone();
+    let opened = open_with(Opening {
+        save_theme: Some(Rc::new(move |seed: &horizon_theme::seed::Seed| {
+            log.borrow_mut().push(seed.accent_config_value());
+            Ok(PathBuf::from("/somewhere/config.toml"))
+        })),
+        ..Opening::default()
+    });
+    let scheme = |opened: &Opened| opened.shell.theme.with_untracked(|theme| *theme.scheme());
+    let before = scheme(&opened);
+    let answer = opened.ask(
+        "new",
+        serde_json::json!({ "plugin": "theme-settings", "directory": "/", "activate": true }),
+    );
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    // The derived colors, as swatches: sixteen, three, five, four, four.
+    opened.until("the swatches", || opened.all("chip").len() == 32);
+    assert!(opened.all("unsaved").is_empty());
+    // (Nothing is kept of the pane but which plugin it shows.)
+    assert_eq!(opened.kept().1, "");
+
+    // The accent, chosen by name: the theme is drawn with that hue at
+    // once, and nothing is written.
+    let click = |class: &str, index: usize| {
+        let (x, y) = opened.middle(opened.all(class)[index]);
+        click_at(&opened.app, x, y);
+        opened.app.run_effects();
+        opened.app.resolve();
+    };
+    click("trigger", 0);
+    opened.until("the choices", || !opened.all("option").is_empty());
+    click("option", 0);
+    opened.until("the accent drawn", || {
+        scheme(&opened).accent != before.accent
+    });
+    opened.until("unsaved", || opened.all("unsaved").len() == 1);
+    assert!(saved.borrow().is_empty());
+
+    // The text contrast, from the keys of its slider.
+    click("track", 0);
+    opened.key(Key::Named(NamedKey::Home));
+    opened.app.run_effects();
+    let low = scheme(&opened).foreground;
+    opened.key(Key::Named(NamedKey::End));
+    opened.until("the contrast drawn", || scheme(&opened).foreground != low);
+
+    // Save: the shell writes the seed, and the view says where once it
+    // has.
+    click("save", 0);
+    opened.until("saved", || *saved.borrow() == ["red"]);
+    opened.until("no longer unsaved", || opened.all("unsaved").is_empty());
+    opened.until("where it was saved", || {
+        opened.text().contains("Saved to /somewhere/config.toml")
+    });
+
+    // Asked for again, the pane there is is the one.
+    let tabs = opened.model(Workspace::tab_count);
+    let answer = opened.ask(
+        "new",
+        serde_json::json!({ "plugin": "theme-settings", "directory": "/", "activate": true }),
+    );
+    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    assert_eq!(opened.model(Workspace::tab_count), tabs);
 }

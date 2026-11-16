@@ -18,12 +18,12 @@ step() {
 step cargo fmt --all -- --check
 step cargo clippy --workspace --all-targets --locked -- -D warnings
 
-# The Markdown view is an extension (`plugins/markdown`), built for a
-# guest only: the clippy above sees an empty crate, so it is linted for
-# its own target, and the tests that show it load its component from
-# where this builds it.
-step cargo clippy -p horizon-markdown-plugin --target wasm32-wasip2 --locked -- -D warnings
-step cargo build -p horizon-markdown-plugin --target wasm32-wasip2 --locked
+# The extensions Horizon comes with (`plugins/*`) are built for a guest
+# only: the clippy above sees empty crates, so they are linted for their
+# own target, and the tests that show them load their components from
+# where this builds them.
+step ./scripts/extensions.sh clippy --locked -- -D warnings
+step ./scripts/extensions.sh build --locked
 
 # Inside a Horizon sandboxed agent session the default nextest profile
 # cannot pass (AGENTS.md): the tests that probe the host boundary are

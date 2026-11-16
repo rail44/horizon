@@ -3306,6 +3306,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-theme-settings-plugin"
+version = "0.1.0"
+dependencies = [
+ "horizon-components",
+ "horizon-theme",
+ "horizon-ui",
+ "wit-bindgen 0.63.0",
+]
+
+[[package]]
 name = "horizon-ui"
 version = "0.1.0"
 dependencies = [
