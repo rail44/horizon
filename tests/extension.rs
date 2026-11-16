@@ -582,8 +582,9 @@ fn an_extension_with_nothing_happening_has_nothing_to_draw() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
-/// The Markdown view the shell comes with is this extension: what
-/// `tests/markdown.rs` holds the view to, through a pane.
+/// The Markdown view the shell comes with is this extension: what the
+/// view does with links, the way back and a file that changes, through a
+/// pane.
 #[test]
 fn the_shell_s_own_markdown_view_is_the_extension() {
     let directory = std::env::temp_dir().join(format!("hzb-ext-own-{}", std::process::id()));

@@ -349,7 +349,7 @@ impl<T: Send> self::horizon::ui::files::HostWithStore<T> for HasSelf<State> {
         _: &Accessor<T, Self>,
         path: String,
     ) -> wasmtime::Result<Result<(), String>> {
-        let Some(change) = crate::markdown::watch::next_change(PathBuf::from(&path)) else {
+        let Some(change) = crate::watch::next_change(PathBuf::from(&path)) else {
             return Ok(Err(format!("{path} cannot be watched")));
         };
         change.await;

@@ -27,8 +27,8 @@ own input events, and assert on the document.
   `text_content()` and `get_client_bounding_rect`.
 
 Each view has a file to start from: `tests/terminal.rs`, `tests/agent/`,
-`tests/board.rs`, `tests/board_thread.rs`, `tests/markdown.rs`,
-`tests/wiki.rs`, `crates/horizon-components/tests/components.rs`, and `tests/workspace.rs` for the whole
+`tests/board.rs`, `tests/board_thread.rs`, `tests/extension.rs` (the
+Markdown view, an extension), `tests/wiki.rs`, `crates/horizon-components/tests/components.rs`, and `tests/workspace.rs` for the whole
 shell.
 
 ## What is drawn

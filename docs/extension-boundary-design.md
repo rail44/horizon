@@ -285,15 +285,19 @@ The decisions and who made them are on board #76. What they come to:
   `pane` (`set-title`), `files` (the `file` resource, and
   `wait-for-change`). A file's changes are watched by the host:
   `wasi:filesystem` 0.3 has no way to wait for one, and the host already
-  watches files for its own views (`src/markdown/watch.rs`). A view
+  watches files for its own views (`src/watch.rs`). A view
   watches one with `horizon_ui::guest::watch`, which reruns the plugin's
   effects after each change.
 - **wasmtime 50.** Done.
 - **The first extension is the Markdown view**, which has taken the
   built-in one's place: `markdown` is the extension, and the shell has no
-  plugin of its own for it. It is held to what the view is held to
-  (`tests/markdown.rs`) through a pane (`tests/extension.rs`), in the
-  gate. It reads files through WASI, with `/` lent read-only.
+  plugin of its own for it. The view's code is the extension's too
+  (`plugins/markdown`): it is built for a guest only, over `horizon-ui`,
+  `horizon-components` (what views are made of: the chips, the controls,
+  Markdown as elements) and `horizon-workspace` (the front matter, the
+  links), and nothing of the shell's. It is tested through a pane
+  (`tests/extension.rs`), in the gate. It reads files through WASI, with
+  `/` lent read-only.
 - **Where an extension's component is.** The ones Horizon comes with are
   beside its executable, as its daemons are, or where cargo builds them
   for the executable's profile (`target/wasm32-wasip2/<profile>`);

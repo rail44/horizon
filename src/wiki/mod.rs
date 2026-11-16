@@ -49,8 +49,8 @@ use horizon_workspace::markdown::{LinkTarget, resolve_link};
 use keyboard_types::{Key, NamedKey};
 
 use crate::background::Background;
-use crate::markdown::watch::{self, Changed};
 use crate::wake::Wake;
+use crate::watch::{self, Changed};
 
 mod render;
 
@@ -1367,7 +1367,7 @@ pub struct WikiPlugin {
 impl crate::plugin::Plugin for WikiPlugin {
     const NAME: &'static str = "wiki";
     const TITLE: &'static str = "Wiki";
-    type State = crate::markdown::DocumentState;
+    type State = DocumentState;
     type Command = std::convert::Infallible;
     type Asked = std::convert::Infallible;
 
@@ -1377,7 +1377,7 @@ impl crate::plugin::Plugin for WikiPlugin {
 
     /// A page of the wiki of the project the pane was asked for in: the
     /// overview, unless a page is named.
-    fn create(mut given: crate::plugin::Given) -> Result<crate::markdown::DocumentState, String> {
+    fn create(mut given: crate::plugin::Given) -> Result<DocumentState, String> {
         let page = given.argument().unwrap_or_else(|| "index".to_string());
         let store = horizon_wiki::Store::for_dir(&given.directory).ok_or_else(|| {
             format!(
@@ -1390,25 +1390,25 @@ impl crate::plugin::Plugin for WikiPlugin {
             return Err(format!("the wiki has no page `{page}`"));
         }
         given.done()?;
-        Ok(crate::markdown::DocumentState { path: Some(path) })
+        Ok(DocumentState { path: Some(path) })
     }
 
-    fn title(state: &crate::markdown::DocumentState) -> String {
+    fn title(state: &DocumentState) -> String {
         state.file_name().unwrap_or_else(|| Self::TITLE.to_string())
     }
 
     fn mount(
         self,
-        state: crate::markdown::DocumentState,
+        state: DocumentState,
         _: Callback<std::convert::Infallible>,
-    ) -> crate::plugin::Mounted<crate::markdown::DocumentState, std::convert::Infallible> {
+    ) -> crate::plugin::Mounted<DocumentState, std::convert::Infallible> {
         let shown = RwSignal::new(state.clone());
         let view = Wiki {
             path: state.path,
             open_url: self.open_url,
             wake: self.wake,
             on_navigate: Some(Callback::new(move |path| {
-                shown.set(crate::markdown::DocumentState { path: Some(path) })
+                shown.set(DocumentState { path: Some(path) })
             })),
         }
         .view();
@@ -1420,5 +1420,19 @@ impl crate::plugin::Plugin for WikiPlugin {
                 horizon_ui::reactive_graph::traits::Get::get(&shown)
             }),
         }
+    }
+}
+
+/// What a wiki pane keeps: the file of the page it shows.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct DocumentState {
+    pub path: Option<PathBuf>,
+}
+
+impl DocumentState {
+    /// The file's name, as a pane's title.
+    pub fn file_name(&self) -> Option<String> {
+        let name = self.path.as_deref()?.file_name()?;
+        Some(name.to_string_lossy().into_owned())
     }
 }

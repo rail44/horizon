@@ -3176,8 +3176,10 @@ dependencies = [
 name = "horizon-markdown-plugin"
 version = "0.1.0"
 dependencies = [
- "horizon",
+ "horizon-components",
  "horizon-ui",
+ "horizon-workspace",
+ "keyboard-types",
  "wit-bindgen 0.63.0",
 ]
 

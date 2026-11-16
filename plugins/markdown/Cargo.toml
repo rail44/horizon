@@ -1,6 +1,6 @@
 [package]
 name = "horizon-markdown-plugin"
-description = "The Markdown view as an extension: a wasm component a pane loads."
+description = "The Markdown view, an extension: a wasm component a pane loads."
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -12,7 +12,9 @@ crate-type = ["cdylib"]
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 horizon-ui = { path = "../../crates/horizon-ui" }
-horizon = { path = "../.." }
+horizon-components = { path = "../../crates/horizon-components" }
+horizon-workspace = { path = "../../crates/horizon-workspace" }
+keyboard-types = "0.8"
 wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }
 
 [lints.clippy]

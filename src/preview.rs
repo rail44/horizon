@@ -52,12 +52,12 @@ mod own {
 
 use crate::background::Background;
 use crate::extension::{Creates, Extension};
-use crate::markdown::watch;
 use crate::plugin::{Command, Mounted, Plugin as PanePlugin};
 use crate::plugin_host::{Asks, Compiled, compile, instantiate, no_grants};
 #[cfg(doc)]
 use crate::plugin_host::{CALL_LIMIT, MEMORY_LIMIT};
 use crate::wake::Wake;
+use crate::watch;
 
 const NO_PREVIEW: &str = "No preview. `horizon new preview <plugin.wasm>` shows one here.";
 

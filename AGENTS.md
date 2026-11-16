@@ -68,6 +68,7 @@ those.
 ```sh
 cargo fmt
 cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy -p horizon-markdown-plugin --target wasm32-wasip2 --locked -- -D warnings
 cargo build -p horizon-markdown-plugin --target wasm32-wasip2 --locked
 cargo nextest run --workspace --locked
 ./scripts/check-wire-schema.sh
@@ -95,9 +96,12 @@ filter string. When a run dumps many failures, parse `cargo nextest run
 --format json` with `jq` rather than grepping the prose log — it is more
 reliable and cheaper.
 
-The build before the tests is of the Markdown extension, which the tests
-that show it in a pane load (`tests/extension.rs`); it needs the
-`wasm32-wasip2` target installed (see Build setup).
+The two steps before the tests are the Markdown extension's
+(`plugins/markdown`): its code is built for a guest only, so the
+workspace's clippy sees an empty crate and it is linted for its own
+target, and the tests that show it in a pane load the component the
+build leaves (`tests/extension.rs`). Both need the `wasm32-wasip2`
+target installed (see Build setup).
 
 `check-wire-schema.sh` is the wire skew checker (`docs/remoc-adoption-design.md`
 §4). There is one committed wire-schema artifact per wire —
@@ -372,9 +376,11 @@ their wiring:
   `crates/horizon-board-view`. See `docs/board-redesign-design.md`.
 - `finder/` — a file found by typing: the list, the matching, and the
   listing of a directory's files off the UI thread.
-- `markdown/` — the Markdown view (`horizon new markdown <path>`), which
-  a pane shows from the extension built of it (`plugins/markdown`), and the
-  single-file watch other views share.
+- `watch.rs` — the watch on the one file a view shows, which the wiki
+  view, a preview and the extensions' loading share. The Markdown view
+  (`horizon new markdown <path>`) is not here: it is an extension, whole
+  in `plugins/markdown`, over `horizon-ui`, `horizon-components` and
+  `horizon-workspace`.
 - `wiki/` — a page of the project wiki (`crates/horizon-wiki`) with the
   owner's comment threads anchored in it. See
   `docs/project-wiki-design.md`.

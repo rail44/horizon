@@ -115,7 +115,7 @@ Diagrams are deferred; gpui-component (7591a35) has no mermaid rendering.
 ## Comments and the wiki view (decided 2026-11-08)
 
 - **A view of its own.** A wiki view built from the Markdown view
-  (`src/markdown/`), with comments as what makes it specific to reading
+  (then `src/markdown/`; an extension since, `plugins/markdown`), with comments as what makes it specific to reading
   the wiki ("明らかに、コメント機能だと思うんですが").
 - **A comment targets a selected text range**, and answers come back as a
   thread. Whoever answers — the thread's session or an ordinary one — can

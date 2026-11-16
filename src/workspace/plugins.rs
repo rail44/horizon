@@ -33,12 +33,12 @@ use crate::board::plugin::{
 };
 use crate::board::{list, thread};
 use crate::extension::Extension;
-use crate::markdown::DocumentState;
 use crate::plugin::{Given, Mounted, Plugin};
 use crate::plugin_host::Asks;
 use crate::preview::{PreviewPlugin, Target};
 use crate::terminal::plugin::TerminalPlugin;
 use crate::theme_settings::{self, ThemeSettingsPlugin};
+use crate::wiki::DocumentState;
 use crate::wiki::WikiPlugin;
 use horizon_theme::seed::Seed;
 use horizon_theme_css::Theme;

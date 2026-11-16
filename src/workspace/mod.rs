@@ -45,7 +45,7 @@ use horizon_workspace::{PaneId, SessionId, SessionKind, SplitAxis, Workspace};
 use crate::agent::plugin::{AgentAsked, AgentPlugin};
 use crate::agent::{Agent, AgentSession};
 use crate::board;
-use crate::markdown;
+use crate::plugin_host::OpenUrl;
 use crate::terminal::plugin::TerminalPlugin;
 use crate::terminal::{Session, Terminal};
 use crate::wake::Wake;
@@ -241,7 +241,7 @@ pub struct Opening {
     pub agents: Option<SpawnAgent>,
     /// Hands a URL to the desktop: a link in a document that is not a
     /// file.
-    pub open_url: Option<markdown::OpenUrl>,
+    pub open_url: Option<OpenUrl>,
     /// Posts a desktop notification: without it none is posted.
     pub notify: Option<Notify>,
     /// What the model picker lists and switches with.
@@ -362,7 +362,7 @@ struct Kept {
     waker: RefCell<Option<Waker>>,
     /// The same, for what wakes the page from another thread.
     wake: Wake,
-    open_url: markdown::OpenUrl,
+    open_url: OpenUrl,
     notify: Option<Notify>,
     models: Option<Arc<dyn Models>>,
     agent_runtime: Option<AgentRuntime>,

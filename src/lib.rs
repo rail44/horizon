@@ -20,7 +20,6 @@ pub mod desktop_notify;
 pub mod extension;
 #[cfg(not(target_family = "wasm"))]
 pub mod finder;
-pub mod markdown;
 #[cfg(not(target_family = "wasm"))]
 pub mod plugin;
 #[cfg(not(target_family = "wasm"))]
@@ -38,6 +37,8 @@ pub mod terminald;
 #[cfg(not(target_family = "wasm"))]
 pub mod theme_settings;
 pub mod wake;
+#[cfg(not(target_family = "wasm"))]
+mod watch;
 #[cfg(not(target_family = "wasm"))]
 pub mod wiki;
 #[cfg(not(target_family = "wasm"))]

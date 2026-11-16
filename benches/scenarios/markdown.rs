@@ -1,11 +1,12 @@
-//! The Markdown view over files of several lengths.
+//! Markdown of several lengths, drawn as the views draw it
+//! (`horizon_components::markdown`) and scrolled. The Markdown view
+//! itself is an extension's (`plugins/markdown`), and is not timed here.
 
 use std::rc::Rc;
 
-use horizon::markdown::Markdown;
-use horizon::wake::Wake;
+use horizon_components::markdown::{Headings, render};
 use horizon_theme_css::{Theme, themed};
-use horizon_ui::Component;
+use horizon_ui::el;
 
 use crate::{Frame, Scenario, Stage, wheel};
 
@@ -34,25 +35,16 @@ fn document(sections: usize) -> String {
 }
 
 fn scroll(sections: usize) -> Vec<Frame> {
-    let directory = std::env::temp_dir().join(format!("horizon-scenarios-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).expect("a directory");
-    let path = directory.join(format!("{sections}.md"));
-    std::fs::write(&path, document(sections)).expect("the document written");
-    let shown = path.clone();
+    let text = document(sections);
     let mut stage = Stage::new(800, 800, horizon_theme_css::CSS, || {
-        let root = Markdown {
-            path: Some(shown),
-            open_url: Rc::new(|_: &str| {}),
-            on_navigate: None,
-            wake: Wake::default(),
-        }
-        .view();
-        themed(Theme::built_in, root.focus())
+        let root = el("div")
+            .attr("style", "height: 100%; overflow-y: scroll;")
+            .child(render(&text, Headings::Scaled, Rc::new(|_: &str| {})));
+        themed(Theme::built_in, root)
     });
     stage.until_text("the document", "0 番目の節");
     for _ in 0..100 {
         stage.frame(|app| wheel(app, (400., 400.), -120.));
     }
-    let _ = std::fs::remove_dir_all(&directory);
     stage.frames
 }

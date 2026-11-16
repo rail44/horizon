@@ -1,10 +1,13 @@
-//! The Markdown view as an extension: a pane keeps the file it shows,
+//! The Markdown view, an extension: a pane keeps the file it shows,
 //! which a link followed moves, and `back` goes back along the links.
+//! The view itself is `view`.
 //!
 //! The module below is all there is of the extension's shape: its WIT
 //! world, its exports and its manifest are made from it
 //! (`horizon_ui::plugin`).
 #![cfg(target_family = "wasm")]
+
+mod view;
 
 #[horizon_ui::plugin(name = "markdown", title = "Markdown", read = ["/"])]
 mod markdown {
@@ -12,9 +15,9 @@ mod markdown {
     use std::path::PathBuf;
     use std::rc::Rc;
 
-    use horizon::markdown::{Controls, Markdown};
-    use horizon::wake::Wake;
     use horizon_ui::Callback;
+
+    use crate::view::{Controls, Markdown};
 
     /// What a pane keeps: the file it shows.
     pub struct State {
@@ -43,7 +46,6 @@ mod markdown {
                 path,
                 open_url: Rc::new(horizon_ui::guest::open_url),
                 on_navigate: Some(Callback::new(|path: PathBuf| shows(Some(path)))),
-                wake: Wake::default(),
             }
             .view_with_controls();
             CONTROLS.with(|kept| kept.set(Some(controls)));

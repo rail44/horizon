@@ -11,7 +11,7 @@ use notify::RecommendedWatcher;
 
 use super::{Shell, plugins};
 use crate::extension::{Extension, load_all};
-use crate::markdown::watch::{self, Changed};
+use crate::watch::{self, Changed};
 
 /// An extension whose component is watched.
 pub(super) struct Watched {

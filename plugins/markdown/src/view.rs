@@ -15,19 +15,11 @@ use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
 use horizon_ui::{Callable, Callback, Component, El, dispatched, el};
-#[cfg(not(target_family = "wasm"))]
-use horizon_ui::{each_layout, relayout};
 
+use horizon_components::markdown::{Headings, render};
 use horizon_components::{Chip, Tone};
 use horizon_workspace::markdown::{LinkTarget, parse, resolve_link};
 use keyboard_types::{Key, NamedKey};
-
-use crate::wake::Wake;
-
-#[cfg(not(target_family = "wasm"))]
-pub(crate) mod watch;
-
-use horizon_components::markdown::{Headings, render};
 
 const BACK: &str = "Back";
 const NO_DOCUMENT: &str = "No document";
@@ -73,8 +65,6 @@ pub struct Markdown {
     pub open_url: OpenUrl,
     /// Told of the file a link, or the way back, took the view to.
     pub on_navigate: Option<Callback<PathBuf>>,
-    /// Makes the page take in a change of the file.
-    pub wake: Wake,
 }
 
 /// What the view keeps.
@@ -157,12 +147,6 @@ impl State {
     }
 }
 
-impl Component for Markdown {
-    fn view(self) -> El {
-        build(self).0
-    }
-}
-
 /// What a plugin showing the view carries its commands out on.
 #[derive(Clone, Copy)]
 pub struct Controls {
@@ -183,14 +167,13 @@ impl Markdown {
     }
 }
 
-/// A change of the file the view shows is read in once the file has sat
-/// still, `wake` making the page take it in.
+/// A change of the file the view shows is read in when the host, which
+/// watches it, says it changed (`files.wait-for-change`).
 fn build(given: Markdown) -> (El, Controls) {
     let Markdown {
         path,
         open_url,
         on_navigate,
-        wake,
     } = given;
     let state = State {
         on_navigate,
@@ -258,36 +241,13 @@ fn build(given: Markdown) -> (El, Controls) {
         },
     );
     // A new file starts at its top, and is the one watched from then on.
-    #[cfg(not(target_family = "wasm"))]
-    {
-        let changed = watch::Changed::default();
-        let noted = changed.clone();
-        // (The watch is what the effect keeps: the one before it ends when
-        // the next takes its place.)
-        Effect::new(move |_| {
-            let path = state.path.get();
-            scroll.scroll_to(0., 0.);
-            path.and_then(|path| watch::on(path, noted.clone(), wake.clone()))
-        });
-        each_layout(move |_| {
-            if changed.settled() {
-                state.reload();
-                relayout();
-            }
-        });
-    }
-    // A plugin's watch is the host's (`files.wait-for-change`).
-    #[cfg(target_family = "wasm")]
-    {
-        let _ = wake;
-        Effect::new(move |_| {
-            let path = state.path.get();
-            scroll.scroll_to(0., 0.);
-            path.map(|path| {
-                horizon_ui::guest::watch(&path.to_string_lossy(), move || state.reload())
-            })
-        });
-    }
+    // (The watch is what the effect keeps: the one before it ends when
+    // the next takes its place.)
+    Effect::new(move |_| {
+        let path = state.path.get();
+        scroll.scroll_to(0., 0.);
+        path.map(|path| horizon_ui::guest::watch(&path.to_string_lossy(), move || state.reload()))
+    });
 
     let root = el("div").class(styles::MARKDOWN).attr("tabindex", "0");
     root.on("keydown", move |event| {
@@ -340,20 +300,4 @@ fn build(given: Markdown) -> (El, Controls) {
     )
     .child(scroll);
     (root, Controls { state })
-}
-
-/// What a pane of a document view keeps: the file it shows.
-#[cfg(not(target_family = "wasm"))]
-#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct DocumentState {
-    pub path: Option<PathBuf>,
-}
-
-#[cfg(not(target_family = "wasm"))]
-impl DocumentState {
-    /// The file's name, as a pane's title.
-    pub fn file_name(&self) -> Option<String> {
-        let name = self.path.as_deref()?.file_name()?;
-        Some(name.to_string_lossy().into_owned())
-    }
 }
