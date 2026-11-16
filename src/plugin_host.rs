@@ -62,7 +62,10 @@ wasmtime::component::bindgen!({
     },
     // Every call is made through the accessor, beside the plugin's tasks.
     exports: { default: async | store },
-    with: { "horizon:ui/files.file": File },
+    with: {
+        "horizon:ui/files.file": File,
+        "horizon:ui/files.working-directory": WorkingDirectory,
+    },
 });
 
 use self::exports::horizon::ui::events::{EventData, KeyEvent, PointerEvent};
@@ -71,6 +74,9 @@ use self::horizon::ui::document::{Bounds, Host};
 /// A file the person chose, or the command line named, as a plugin holds
 /// it.
 pub struct File(pub PathBuf);
+
+/// Where a pane was asked for, as a plugin holds it.
+pub struct WorkingDirectory(pub PathBuf);
 
 /// What the host does for a plugin beyond the document, as whoever shows
 /// the plugin does it.
@@ -514,10 +520,29 @@ impl self::horizon::ui::files::HostFile for State {
     }
 }
 
+impl self::horizon::ui::files::HostWorkingDirectory for State {
+    fn path(&mut self, directory: Resource<WorkingDirectory>) -> wasmtime::Result<String> {
+        Ok(self.table.get(&directory)?.0.to_string_lossy().into_owned())
+    }
+
+    fn drop(&mut self, directory: Resource<WorkingDirectory>) -> wasmtime::Result<()> {
+        self.table.delete(directory)?;
+        Ok(())
+    }
+}
+
 impl State {
     /// `path`, as a file the plugin may be given.
     pub fn file(&mut self, path: PathBuf) -> wasmtime::Result<Resource<File>> {
         Ok(self.table.push(File(path))?)
+    }
+
+    /// `path`, as where a pane was asked for.
+    pub fn working_directory(
+        &mut self,
+        path: PathBuf,
+    ) -> wasmtime::Result<Resource<WorkingDirectory>> {
+        Ok(self.table.push(WorkingDirectory(path))?)
     }
 }
 

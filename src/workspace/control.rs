@@ -12,7 +12,6 @@ use horizon_workspace::{PaneId, PluginPane, SessionId, SessionKind, Workspace};
 
 use super::{Shell, Start, plugins};
 use crate::agent::plugin::AgentPlugin;
-use crate::extension::Creates;
 use crate::plugin::{Begins, Given, Plugin as _, SessionPlugin as _};
 use crate::preview::Target;
 use crate::terminal::plugin::TerminalPlugin;
@@ -203,12 +202,9 @@ impl Shell {
             known.extend(extensions.iter().map(|extension| extension.name));
             format!("unknown plugin `{name}` (there are: {})", known.join(", "))
         })?;
-        let state = match &extension.creates {
+        let state = match extension.created_from(&mut given)? {
+            Some(state) => serde_json::Value::String(state),
             None => serde_json::Value::Null,
-            Some(Creates::File { .. }) => {
-                let file = given.file("a file")?;
-                serde_json::Value::String(extension.create(&file)?)
-            }
         };
         given.done()?;
         Ok(PluginPane {

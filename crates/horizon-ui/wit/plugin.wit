@@ -146,6 +146,13 @@ interface files {
         path: func() -> string;
     }
 
+    /// Where a pane was asked for: the directory the command line was run
+    /// in, or the one the session under the cursor works in. Nobody is
+    /// asked for it.
+    resource working-directory {
+        path: func() -> string;
+    }
+
     /// Comes back once the file at `path` changed and has sat still; an
     /// error when it cannot be watched.
     wait-for-change: async func(path: string) -> result<_, string>;

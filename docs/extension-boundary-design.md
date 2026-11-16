@@ -387,10 +387,18 @@ The decisions and who made them are on board #76. What they come to:
   chooser inside Horizon, `horizon new <plugin> <arguments>` on the
   command line (`docs/cli-control-plane-design.md`). An extension's own
   commands are only what is its own, and reach the command line by
-  their names. Built so far: one `file` parameter, asked for with the
-  file finder or taken as a path. The
-  extension is instantiated for the question, `create` is called with the
-  file, and the state it gives is what the new pane is mounted on
+  their names. What `create` can take, each read from its type: a
+  `file` (at most one), asked for with the file finder or taken as a
+  path; a text (`string`, or `option<string>` for one that may be left
+  out), the next argument of the command line; and a
+  `working-directory`, a resource of the host's as `file` is, which
+  nobody is asked for: where the pane was asked for (the directory the
+  command line was run in, or the one the session under the cursor
+  works in). Where nobody types -- the view chooser -- a text that may
+  be left out is, and an extension with one that may not is made from
+  the command line only. The
+  extension is instantiated for the question, `create` is called with
+  what it takes, and the state it gives is what the new pane is mounted on
   (`Extension::create`). The manifest's `create.<parameter>` says how a
   parameter is asked for: for a file, the `extensions` to choose among.
   An extension without `create` gets a pane with no state. The export

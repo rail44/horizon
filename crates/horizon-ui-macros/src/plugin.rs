@@ -7,7 +7,8 @@
 //!   (a plugin whose panes keep nothing has no `State` and no `state`,
 //!   and its `mount` takes nothing);
 //! - a function marked `#[create(..)]`: what a new pane's state is made
-//!   from, its parameters being what the host asks for;
+//!   from, its parameters being what the host asks for or gives (a
+//!   `File`, a `String` or an `Option<String>`, a `WorkingDirectory`);
 //! - functions marked `#[command(..)]`: the plugin's commands.
 //!
 //! From those it writes the plugin's WIT world, hands it to `wit-bindgen`
@@ -113,6 +114,7 @@ fn wit(ty: &Type) -> syn::Result<String> {
         "bool" => "bool".to_string(),
         "State" => "state".to_string(),
         "File" => "file".to_string(),
+        "WorkingDirectory" => "working-directory".to_string(),
         "Option" => format!("option<{}>", inner()?),
         "Vec" => format!("list<{}>", inner()?),
         number @ ("u8" | "u16" | "u32" | "u64" | "s8" | "s16" | "s32" | "s64" | "f32" | "f64") => {
@@ -317,7 +319,7 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
     let package = kebab(&name);
     let mut text = format!(
         "package horizon-ext:{package};\n\nworld plugin {{\n    include horizon:ui/imports;\n    \
-         use horizon:ui/files.{{file}};\n\n{declared}{}\n",
+         use horizon:ui/files.{{file, working-directory}};\n\n{declared}{}\n",
         world.join("\n")
     );
     if !command_lines.is_empty() {

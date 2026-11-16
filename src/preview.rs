@@ -51,7 +51,7 @@ mod own {
 }
 
 use crate::background::Background;
-use crate::extension::{Creates, Extension};
+use crate::extension::Extension;
 use crate::plugin::{Command, Mounted, Plugin as PanePlugin};
 use crate::plugin_host::{Asks, Compiled, compile, instantiate, no_grants};
 #[cfg(doc)]
@@ -155,14 +155,13 @@ fn shown_package(extension: &Arc<Extension>, target: &Target, wake: Wake) -> El 
     let (root, failed) = stage();
     let name = extension.name;
     let mounted = (|| {
-        let state = match (&extension.creates, target.arguments.as_slice()) {
-            (None, []) => None,
-            (None, _) => return Err(format!("`{name}` takes no arguments")),
-            (Some(Creates::File { .. }), [path]) => {
-                Some(extension.create(&target.directory.join(path))?)
-            }
-            (Some(Creates::File { .. }), _) => return Err(format!("`{name}` takes one file")),
+        let mut given = crate::plugin::Given {
+            arguments: target.arguments.clone(),
+            named: Default::default(),
+            directory: target.directory.clone(),
         };
+        let state = extension.created_from(&mut given)?;
+        given.done().map_err(|error| format!("`{name}`: {error}"))?;
         let running = extension.instantiate(Asks::default(), wake, failed)?;
         let node = running.mount(state.as_deref())?;
         running.follow();

@@ -27,6 +27,7 @@ use wasmtime::component::types::{ComponentItem, Type};
 use wasmtime::component::{Accessor, ResourceAny, Val};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
+use crate::plugin::Given;
 use crate::plugin_host::{Asks, Compiled, Loaded, Plugin, State, compile, instantiate, offered};
 use crate::wake::Wake;
 
@@ -110,8 +111,9 @@ pub struct Extension {
     pub name: &'static str,
     pub title: String,
     pub commands: Vec<ExtensionCommand>,
-    /// What a new pane of it is made from, if it says (`create`).
-    pub creates: Option<Creates>,
+    /// What a new pane of it is made from, if it says (`create`): what
+    /// `create` takes, in order.
+    pub creates: Option<Vec<Parameter>>,
     /// The component's file.
     pub file: PathBuf,
     compiled: Compiled,
@@ -122,12 +124,29 @@ pub struct Extension {
     state: Option<Type>,
 }
 
-/// What an extension's `create` takes to make a new pane's state.
+/// One thing an extension's `create` takes to make a new pane's state.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Creates {
+pub enum Parameter {
     /// A file, chosen among those with one of `extensions` (any file when
     /// there are none).
-    File { extensions: Vec<String> },
+    File {
+        name: String,
+        extensions: Vec<String>,
+    },
+    /// Words: the next argument of the command line. One that is
+    /// `optional` may be left out.
+    Text { name: String, optional: bool },
+    /// Where the pane was asked for. Nobody is asked for it.
+    WorkingDirectory,
+}
+
+/// What `create` is called with for one parameter.
+enum Handed {
+    File(PathBuf),
+    Text(String),
+    /// A text that may be left out, and whether it was.
+    OptionalText(Option<String>),
+    WorkingDirectory(PathBuf),
 }
 
 /// `text`, kept for as long as the shell runs: a command's name and texts
@@ -144,8 +163,9 @@ struct Shape {
     /// The commands its `commands` interface exports, in the order they
     /// were read.
     commands: Vec<String>,
-    /// The name of the file parameter `create` takes, if it exports one.
-    created_on: Option<String>,
+    /// What `create` takes, in order, if it exports one. (A file's
+    /// `extensions` are the manifest's to say.)
+    creates: Option<Vec<Parameter>>,
 }
 
 /// Reads what the component exports, and holds it to what an extension
@@ -153,20 +173,23 @@ struct Shape {
 fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
     let engine = &compiled.engine;
     let exported = compiled.component.component_type();
-    // The host's file resource, as the component names it.
-    let file = (exported.imports(engine))
-        .filter(|(name, _)| name.starts_with("horizon:ui/files"))
-        .find_map(|(_, item)| match item.ty {
-            ComponentItem::ComponentInstance(instance) => {
-                (instance.exports(engine)).find_map(|(name, item)| match item.ty {
-                    ComponentItem::Resource(file) if name == "file" => Some(file),
-                    _ => None,
-                })
-            }
-            _ => None,
-        });
+    // The host's resources, as the component names them.
+    let resource = |wanted: &str| {
+        (exported.imports(engine))
+            .filter(|(name, _)| name.starts_with("horizon:ui/files"))
+            .find_map(|(_, item)| match item.ty {
+                ComponentItem::ComponentInstance(instance) => {
+                    (instance.exports(engine)).find_map(|(name, item)| match item.ty {
+                        ComponentItem::Resource(resource) if name == wanted => Some(resource),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+    };
+    let (file, working_directory) = (resource("file"), resource("working-directory"));
     let mut state = None;
-    let mut created_on = None;
+    let mut creates = None;
     let mut commands = Vec::new();
     let mut mount = false;
     let mut events = false;
@@ -177,19 +200,42 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
                 state = function.results().next();
             }
             ("create", ComponentItem::ComponentFunc(function)) => {
-                let parameters: Vec<_> = function.params().collect();
-                let [(name, Type::Own(resource))] = parameters.as_slice() else {
-                    return Err(
-                        "`create` takes what the host cannot ask for yet: it can ask for one file"
-                            .to_string(),
-                    );
-                };
-                if Some(resource) != file.as_ref() {
-                    return Err(format!(
-                        "`create` takes `{name}`, which is not the host's `file`"
-                    ));
+                let mut taken = Vec::new();
+                for (name, ty) in function.params() {
+                    let name = name.to_string();
+                    taken.push(match ty {
+                        Type::Own(resource) if Some(&resource) == file.as_ref() => {
+                            Parameter::File {
+                                name,
+                                extensions: Vec::new(),
+                            }
+                        }
+                        Type::Own(resource) if Some(&resource) == working_directory.as_ref() => {
+                            Parameter::WorkingDirectory
+                        }
+                        Type::String => Parameter::Text {
+                            name,
+                            optional: false,
+                        },
+                        Type::Option(inner) if inner.ty() == Type::String => Parameter::Text {
+                            name,
+                            optional: true,
+                        },
+                        _ => {
+                            return Err(format!(
+                                "`create` takes `{name}`, which the host has no way to ask for: \
+                                 a file, a text or where the pane was asked for"
+                            ));
+                        }
+                    });
                 }
-                created_on = Some(name.to_string());
+                let files = (taken.iter())
+                    .filter(|parameter| matches!(parameter, Parameter::File { .. }))
+                    .count();
+                if files > 1 {
+                    return Err("`create` takes more than one file".to_string());
+                }
+                creates = Some(taken);
             }
             ("commands", ComponentItem::ComponentInstance(instance)) => {
                 for (command, item) in instance.exports(engine) {
@@ -222,7 +268,7 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
     Ok(Shape {
         state,
         commands,
-        created_on,
+        creates,
     })
 }
 
@@ -264,17 +310,19 @@ impl Extension {
         let Shape {
             state,
             commands,
-            created_on,
+            mut creates,
         } = shape_of(&compiled)?;
         match_commands(&commands, &manifest.commands)?;
         // (What the manifest says of how `create`'s file is asked for.)
-        let creates = created_on.map(|parameter| Creates::File {
-            extensions: (manifest.create.remove(&parameter))
-                .unwrap_or_default()
-                .extensions,
-        });
+        for parameter in creates.iter_mut().flatten() {
+            if let Parameter::File { name, extensions } = parameter {
+                *extensions = (manifest.create.remove(name.as_str()))
+                    .unwrap_or_default()
+                    .extensions;
+            }
+        }
         if let Some(name) = manifest.create.keys().next() {
-            return Err(format!("`create` has no parameter `{name}`"));
+            return Err(format!("`create` has no file parameter `{name}`"));
         }
         let commands = (manifest.commands.into_iter())
             .map(|(name, command)| ExtensionCommand {
@@ -325,24 +373,106 @@ impl Extension {
 }
 
 impl Extension {
-    /// The state of a new pane on the file at `path`, as text: what the
-    /// extension's `create` makes of it, asked of an instance made for the
-    /// question.
-    pub fn create(self: &Arc<Self>, path: &Path) -> Result<String, String> {
+    /// The extensions of the files `create`'s file is chosen among, if it
+    /// takes a file.
+    pub fn file_asked_for(&self) -> Option<&[String]> {
+        (self.creates.iter().flatten()).find_map(|parameter| match parameter {
+            Parameter::File { extensions, .. } => Some(extensions.as_slice()),
+            _ => None,
+        })
+    }
+
+    /// The state of a new pane, as text, made from what was `given` on
+    /// the command line: a file is a path from where it was run, a text
+    /// the next argument. `None` for an extension whose panes are made
+    /// from nothing.
+    pub fn created_from(self: &Arc<Self>, given: &mut Given) -> Result<Option<String>, String> {
+        let Some(parameters) = &self.creates else {
+            return Ok(None);
+        };
+        let mut handed = Vec::new();
+        for parameter in parameters {
+            handed.push(match parameter {
+                Parameter::File { name, .. } => Handed::File(given.file(&format!("`{name}`"))?),
+                Parameter::Text {
+                    name,
+                    optional: false,
+                } => {
+                    let text = given.argument();
+                    Handed::Text(text.ok_or_else(|| format!("`{name}` is needed"))?)
+                }
+                Parameter::Text { optional: true, .. } => Handed::OptionalText(given.argument()),
+                Parameter::WorkingDirectory => Handed::WorkingDirectory(given.directory.clone()),
+            });
+        }
+        self.create(handed).map(Some)
+    }
+
+    /// The state of a new pane, as text, made where nobody types: on
+    /// `file`, if `create` takes one, a person having chosen it, with
+    /// `directory` as where the pane was asked for. A text that may be
+    /// left out is; one that may not cannot be asked for here.
+    pub fn created_on(
+        self: &Arc<Self>,
+        file: Option<PathBuf>,
+        directory: &Path,
+    ) -> Result<Option<String>, String> {
+        let Some(parameters) = &self.creates else {
+            return Ok(None);
+        };
+        let mut handed = Vec::new();
+        for parameter in parameters {
+            handed.push(match parameter {
+                Parameter::File { name, .. } => {
+                    Handed::File(file.clone().ok_or_else(|| format!("`{name}` is needed"))?)
+                }
+                Parameter::Text {
+                    name,
+                    optional: false,
+                } => {
+                    return Err(format!(
+                        "`{name}` is asked for on the command line: `horizon new {} <{name}>`",
+                        self.name
+                    ));
+                }
+                Parameter::Text { optional: true, .. } => Handed::OptionalText(None),
+                Parameter::WorkingDirectory => Handed::WorkingDirectory(directory.to_path_buf()),
+            });
+        }
+        self.create(handed).map(Some)
+    }
+
+    /// What the extension's `create` makes of what it is `handed`, asked
+    /// of an instance made for the question.
+    fn create(self: &Arc<Self>, handed: Vec<Handed>) -> Result<String, String> {
         let failed = RwSignal::new(None::<String>);
         let state =
             (self.instantiate(Asks::default(), Wake::default(), failed)).and_then(|running| {
-                let path = path.to_path_buf();
                 let state = running.loaded.call(|plugin, accessor| {
                     Box::pin(async move {
                         let create = function(plugin, accessor, None, "create")?;
-                        let file = accessor.with(|mut access| {
-                            let file = access.data_mut().file(path)?;
-                            ResourceAny::try_from_resource(file, &mut access)
-                        })?;
+                        let mut values = Vec::new();
+                        for handed in handed {
+                            values.push(match handed {
+                                Handed::Text(text) => Val::String(text),
+                                Handed::OptionalText(text) => {
+                                    Val::Option(text.map(|text| Box::new(Val::String(text))))
+                                }
+                                Handed::File(path) => accessor.with(|mut access| {
+                                    let file = access.data_mut().file(path)?;
+                                    ResourceAny::try_from_resource(file, &mut access)
+                                        .map(Val::Resource)
+                                })?,
+                                Handed::WorkingDirectory(path) => accessor.with(|mut access| {
+                                    let directory = access.data_mut().working_directory(path)?;
+                                    ResourceAny::try_from_resource(directory, &mut access)
+                                        .map(Val::Resource)
+                                })?,
+                            });
+                        }
                         let mut answer = [Val::Bool(false)];
                         create
-                            .call_concurrent(accessor, &[Val::Resource(file)], &mut answer)
+                            .call_concurrent(accessor, &values, &mut answer)
                             .await?;
                         Ok(answer[0].clone())
                     })

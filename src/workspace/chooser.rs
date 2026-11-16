@@ -73,17 +73,28 @@ pub(super) fn view(shell: Shell, placement: Placement) -> El {
                 Choice::Session(kind, role) => shell.create(kind, role, placement),
                 Choice::Wiki => shell.create_wiki(placement),
                 Choice::Plugin(plugin) => shell.create_plugin(plugin, placement),
-                Choice::Extension(extension) if extension.creates.is_some() => {
+                Choice::Extension(extension) if extension.file_asked_for().is_some() => {
                     shell.open(Modal::Finder(extension.name, placement));
                 }
-                Choice::Extension(extension) => shell.create_plugin(
-                    PluginPane {
-                        name: extension.name.to_string(),
-                        title: extension.title.clone(),
-                        state: serde_json::Value::Null,
-                    },
-                    placement,
-                ),
+                // (Made from nothing a person is asked for: where the
+                // pane was asked for, and what may be left out.)
+                Choice::Extension(extension) => {
+                    match extension.created_on(None, &shell.working_directory()) {
+                        Ok(state) => shell.create_plugin(
+                            PluginPane {
+                                name: extension.name.to_string(),
+                                title: extension.title.clone(),
+                                state: state
+                                    .map_or(serde_json::Value::Null, serde_json::Value::String),
+                            },
+                            placement,
+                        ),
+                        Err(error) => {
+                            eprintln!("horizon: {}: {error}", extension.name);
+                            shell.focus_active();
+                        }
+                    }
+                }
             }
         }
     };
