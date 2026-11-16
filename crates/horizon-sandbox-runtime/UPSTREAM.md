@@ -6,7 +6,7 @@ from [nolabs-ai/nono](https://github.com/nolabs-ai/nono):
 - derivation base: release `v0.68.0`, commit `00692e8c7846c6ee00ad6239d1be3b9e9b8d5dea`
 - upstream reviewed against: `v0.76.0` (commit `c706d38b7d69bbcc1b2d9fcf7285e15c6e24fb5d`),
   see "Adoption review" below; the linked `nono` crate alone was reviewed for
-  `0.81.0`, see "Dependency review" below
+  `0.81.0` and `0.82.0`, see the "Dependency review" sections below
 - license: Apache License 2.0
 - source files:
   - `crates/nono-cli/src/exec_strategy.rs`
@@ -210,3 +210,35 @@ unchanged.
 
 The verbatim upstream Apache-2.0 license is stored at
 `THIRD_PARTY_LICENSES/nono-Apache-2.0.txt`.
+
+## Dependency review (`nono` 0.81.0 -> 0.82.0, 2026-11)
+
+The exact pin moved to `=0.82.0` on the basis below, and `horizon-sandbox`'s
+compatible-line requirement moved with it (`"0.81"` -> `"0.82"`). As before,
+this pass covers only the published `nono` crate's own 0.81.0 -> 0.82.0 diff,
+and the derivation base above is unchanged.
+
+- The library plumbing this crate consumes (the functions the 0.81.0 review
+  lists) is unchanged in signature, and the crate compiles against the new
+  release unchanged. The crate's own dependencies do not move: its manifest
+  differs only in the version.
+- `sandbox/linux.rs` changes only by a test
+  (`test_read_access_includes_execute_write_does_not`): no Landlock or seccomp
+  behavior moves on Linux.
+- `sandbox/macos.rs` scopes `process-exec*` to the read set (and to the
+  dynamic read and read-write extensions) where the profile allowed executing
+  anything. Stricter. It reaches Horizon's macOS backend, which builds its
+  profile through nono; it is not run here (the gate runs on Linux).
+- `supervisor::ApprovalRequest` gains a `UnixSocket` variant, and its
+  `Endpoint` variant two optional fields (`credential_route`, `operation`);
+  `UnixSocketOp` gains `Hash` and serde. This crate constructs only
+  `ApprovalRequest::Capability` and matches no other, so nothing moves.
+- `broker_path.rs` adds `path_writable_by()` and counts symlink hops across
+  the whole walk instead of per path. Not used here.
+- `audit.rs` (an extension-event record, sequence numbers) and `undo/`
+  (snapshots hash every tracked file; two optional fields for AWS routes) are
+  nono's audit log and rollback, neither of which this crate or
+  `horizon-sandbox` uses.
+- The two upstream improvements listed as not yet ported above stay unported.
+- `horizon-sandbox` and `horizon-sandbox-runtime` pass (121 passed, 0 skipped), including the
+  Landlock/seccomp boundary tests, outside any sandbox.
