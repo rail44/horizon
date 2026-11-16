@@ -220,9 +220,18 @@ thread.
   thread (a file changed), it does, and the page's effects poll.
 - A task that waited on the host goes on in whatever poll comes next,
   which may be a call made with the page lent (after a layout), where
-  the document cannot be changed. The host's `wait-for-change` comes
-  back only once the document is free: the page is woken, and its
-  effects let the task go on.
+  the document cannot be changed. So does a task that read a file: a
+  WASI call lets the host go on to something else, and the task goes on
+  from wherever the host is by then. A task therefore asks before it
+  changes the document, and waits if it may not
+  (`document.changeable`, `document.until-changeable`;
+  `horizon_ui::guest::changeable`), after whatever it reads and with
+  nothing that waits between the asking and the change. Measured
+  2026-11-16 under load (the three test files of the extensions, run
+  together thirty times): with the asking before the read, a pane's
+  extension trapped in two runs in twenty-five, each time from the
+  host's call for the work after a layout; with it after, in none in
+  thirty.
 
 One engine serves every pane, so a store's epoch callback ends its wasm
 only once that store's own poll has run past the limit. `events.tasks`
@@ -287,12 +296,17 @@ The decisions and who made them are on board #76. What they come to:
   one with `horizon_ui::guest::spawn`.
 - **What the host offers beside the document is grouped by what it is
   about**, one interface each in `horizon:ui`: `desktop` (`open-url`),
-  `pane` (`set-title`), `files` (the `file` resource, and
-  `wait-for-change`), `theme` (the seed the shell's theme is derived
+  `pane` (`set-title`), `files` (the `file` and `working-directory`
+  resources, and `watch`), `theme` (the seed the shell's theme is derived
   from: `current`, `apply`, which draws the theme of a seed and writes
   nothing, `save`, which writes one and is `async`, and `path`). A file's changes are watched by the host:
   `wasi:filesystem` 0.3 has no way to wait for one, and the host already
-  watches files for its own views (`src/watch.rs`). A view
+  watches files for its own views (`src/watch.rs`). A watch
+  is a resource the plugin holds (`files.watch`): the file is watched
+  for as long as it is held, and `changed` comes back for a change that
+  came while it was waited in or since it last came back. (It was a
+  function that watched for the length of one wait, and a change
+  between two waits was lost.) A view
   watches one with `horizon_ui::guest::watch`, which reruns the plugin's
   effects after each change.
 - **A view reads what is selected of its own text.** The selection is the
@@ -307,7 +321,7 @@ The decisions and who made them are on board #76. What they come to:
   plugin of its own for it. The view's code is the extension's too
   (`plugins/markdown`): it is built for a guest only, over `horizon-ui`,
   `horizon-components` (what views are made of: the chips, the controls,
-  Markdown as elements) and `horizon-workspace` (the front matter, the
+  Markdown as elements) and `horizon-markdown` (the front matter, the
   links), and nothing of the shell's. It is tested through a pane
   (`tests/extension.rs`), in the gate. It reads files through WASI, with
   `/` lent read-only.

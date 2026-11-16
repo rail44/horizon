@@ -51,7 +51,8 @@ wasmtime::component::bindgen!({
     path: "crates/horizon-ui/wit",
     world: "view",
     imports: {
-        "horizon:ui/files.wait-for-change": async | store | trappable,
+        "horizon:ui/document.until-changeable": async | store | trappable,
+        "horizon:ui/files.[method]watch.changed": async | store | trappable,
         "horizon:ui/theme.save": async | store | trappable,
         default: trappable,
     },
@@ -60,6 +61,7 @@ wasmtime::component::bindgen!({
     with: {
         "horizon:ui/files.file": File,
         "horizon:ui/files.working-directory": WorkingDirectory,
+        "horizon:ui/files.watch": Watching,
     },
 });
 
@@ -72,6 +74,10 @@ pub struct File(pub PathBuf);
 
 /// Where a pane was asked for, as a plugin holds it.
 pub struct WorkingDirectory(pub PathBuf);
+
+/// A file a plugin watches, for as long as the plugin holds this; nothing
+/// where the file cannot be watched.
+pub struct Watching(Option<Arc<crate::watch::Kept>>);
 
 /// What the host does for a plugin beyond the document, as whoever shows
 /// the plugin does it.
@@ -305,6 +311,10 @@ impl Host for State {
         Ok(())
     }
 
+    fn changeable(&mut self) -> wasmtime::Result<bool> {
+        Ok(host::free())
+    }
+
     fn bounds_of(&mut self, node: u64) -> wasmtime::Result<Option<Bounds>> {
         let element = El(self.own(node)?);
         Ok(host::lent(|page| page.bounds(element))
@@ -371,6 +381,13 @@ impl Host for State {
     fn inline_text(&mut self, node: u64) -> wasmtime::Result<Option<String>> {
         let element = El(self.own(node)?);
         Ok(host::lent(|page| page.inline_text(element)).flatten())
+    }
+}
+
+impl<T: Send> self::horizon::ui::document::HostWithStore<T> for HasSelf<State> {
+    async fn until_changeable(_: &Accessor<T, Self>) -> wasmtime::Result<()> {
+        Free.await;
+        Ok(())
     }
 }
 
@@ -465,17 +482,31 @@ impl<T: Send> self::horizon::ui::theme::HostWithStore<T> for HasSelf<State> {
 
 impl self::horizon::ui::files::Host for State {}
 
-impl<T: Send> self::horizon::ui::files::HostWithStore<T> for HasSelf<State> {
-    async fn wait_for_change(
-        _: &Accessor<T, Self>,
-        path: String,
+impl self::horizon::ui::files::HostWatch for State {
+    fn new(&mut self, path: String) -> wasmtime::Result<Resource<Watching>> {
+        Ok(self
+            .table
+            .push(Watching(crate::watch::kept(PathBuf::from(path))))?)
+    }
+
+    fn drop(&mut self, watch: Resource<Watching>) -> wasmtime::Result<()> {
+        self.table.delete(watch)?;
+        Ok(())
+    }
+}
+
+impl<T: Send> self::horizon::ui::files::HostWatchWithStore<T> for HasSelf<State> {
+    async fn changed(
+        accessor: &Accessor<T, Self>,
+        watch: Resource<Watching>,
     ) -> wasmtime::Result<Result<(), String>> {
-        let Some(change) = crate::watch::next_change(PathBuf::from(&path)) else {
-            return Ok(Err(format!("{path} cannot be watched")));
+        let watch = accessor.with(|mut access| -> wasmtime::Result<_> {
+            Ok(access.get().table.get(&watch)?.0.clone())
+        })?;
+        let Some(watch) = watch else {
+            return Ok(Err("the file cannot be watched".to_string()));
         };
-        change.await;
-        // The task goes on to change the document: not before it may.
-        Free.await;
+        watch.next().await;
         Ok(Ok(()))
     }
 }

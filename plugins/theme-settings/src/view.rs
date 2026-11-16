@@ -306,7 +306,9 @@ pub fn view() -> El {
                                     // that went when it has.
                                     let saving = carried(&seed.get_untracked());
                                     horizon_ui::guest::spawn(async move {
-                                        match host::save(saving).await {
+                                        let saved = host::save(saving).await;
+                                        horizon_ui::guest::changeable().await;
+                                        match saved {
                                             Ok(path) => {
                                                 dirty.set(false);
                                                 status.set(Some(format!("Saved to {path}")));

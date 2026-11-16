@@ -645,11 +645,25 @@ pub fn start_tasks() {
 
 /// A file watched: until it is dropped, `changed` is called whenever the
 /// file changed and has sat still, and the plugin's effects run after.
+/// `changed` reads the file and writes signals; it does not change the
+/// document itself, which may not be changed when it is called.
 pub struct Watch(Rc<Cell<bool>>);
 
 impl Drop for Watch {
     fn drop(&mut self) {
         self.0.set(true);
+    }
+}
+
+/// Comes back when the document may be changed. A task that waited on
+/// the world outside changes the document only after this: it may be
+/// let go on while the host is at work after a layout or an event, when
+/// the document is not to be changed.
+pub async fn changeable() {
+    // (Asked again after each wait: the task goes on a turn after the
+    // host says so, and the host may be elsewhere by then.)
+    while !host::changeable() {
+        host::until_changeable().await;
     }
 }
 
@@ -659,12 +673,22 @@ pub fn watch(path: &str, changed: impl Fn() + 'static) -> Watch {
     let stops = dropped.clone();
     let path = path.to_string();
     spawn(async move {
+        // (Held for as long as the task runs: a change between two waits
+        // is told at the second.)
+        let watching = bindings::horizon::ui::files::Watch::new(&path);
         while !stops.get() {
-            let waited = bindings::horizon::ui::files::wait_for_change(path.clone()).await;
+            let waited = watching.changed().await;
             if stops.get() || waited.is_err() {
                 break;
             }
+            // What it does of the change first: reading a file lets the
+            // host go on to something else, and the document is asked
+            // about after that.
             changed();
+            changeable().await;
+            if stops.get() {
+                break;
+            }
             run_effects();
             relayout();
         }

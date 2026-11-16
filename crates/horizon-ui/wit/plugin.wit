@@ -35,6 +35,14 @@ interface document {
     listen: func(node: u64, event: string, capture: bool);
     /// From work after a layout: lay out again before painting.
     relayout: func();
+    /// Whether the document may be changed now. It may not from work
+    /// after a layout or after an event, nor from one of the plugin's
+    /// tasks that goes on while the host is at either.
+    changeable: func() -> bool;
+    /// Comes back when the document may be changed. A task asks
+    /// `changeable` again once it has: it goes on a turn later, which may
+    /// be while the host is at work after a layout.
+    until-changeable: async func();
 
     /// The layout, as it is while the plugin's work after a layout or
     /// after an event runs.
@@ -153,9 +161,14 @@ interface files {
         path: func() -> string;
     }
 
-    /// Comes back once the file at `path` changed and has sat still; an
-    /// error when it cannot be watched.
-    wait-for-change: async func(path: string) -> result<_, string>;
+    /// A file watched for as long as this is held.
+    resource watch {
+        constructor(path: string);
+        /// Comes back once the file has changed and sat still: while this
+        /// was waited in, or since it last came back. An error when the
+        /// file cannot be watched.
+        changed: async func() -> result<_, string>;
+    }
 }
 
 /// The shell's theme, by the seed it is derived from. A color is packed,
