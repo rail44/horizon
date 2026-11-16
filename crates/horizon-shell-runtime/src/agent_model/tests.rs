@@ -1,4 +1,5 @@
-use agent_client_protocol::schema::{v2, MaybeUndefined};
+use agent_client_protocol::schema::MaybeUndefined;
+use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
     write_horizon_meta, ApprovalKind, ApprovalMeta, MessageMeta, ModelOptionMeta,
     SessionEventNotification, SessionId, TaskProgressNotification, TaskProgressState, ToolCallMeta,
@@ -342,11 +343,11 @@ fn status_follows_state_updates_and_retains_the_stop_result() {
         (v2::StopReason::Cancelled, SessionStatus::Cancelled),
         (v2::StopReason::MaxTurnRequests, SessionStatus::Paused),
         (
-            v2::StopReason::Other(STOP_REASON_DOOM_LOOP.into()),
+            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_DOOM_LOOP)),
             SessionStatus::Paused,
         ),
         (
-            v2::StopReason::Other(STOP_REASON_FAILED.into()),
+            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_FAILED)),
             SessionStatus::Failed,
         ),
     ] {
@@ -421,10 +422,16 @@ fn halted_detection_is_idle_on_a_guard_stop() {
     let mut model = AgentModel::default();
     for (reason, halted) in [
         (v2::StopReason::MaxTurnRequests, true),
-        (v2::StopReason::Other(STOP_REASON_DOOM_LOOP.into()), true),
+        (
+            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_DOOM_LOOP)),
+            true,
+        ),
         (v2::StopReason::EndTurn, false),
         (v2::StopReason::Cancelled, false),
-        (v2::StopReason::Other(STOP_REASON_FAILED.into()), false),
+        (
+            v2::StopReason::Other(horizon_acp::other_stop_reason(STOP_REASON_FAILED)),
+            false,
+        ),
     ] {
         apply(&mut model, running());
         assert!(!model.frame.halted_awaiting_continue());

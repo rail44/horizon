@@ -3,10 +3,11 @@
 
 use std::time::Duration;
 
-use agent_client_protocol::schema::{v2, ProtocolVersion};
-use agent_client_protocol::{
-    Agent, ByteStreams, Client, Error, JsonRpcRequest, Responder, V2ConnectionTo,
-};
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
+use agent_client_protocol::v2::Responder;
+use agent_client_protocol::{Agent, ByteStreams, Client, Error, JsonRpcRequest};
 use horizon_acp as acp;
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};

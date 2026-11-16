@@ -12,9 +12,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol::schema::{v2, ProtocolVersion};
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::{
-    is_incoming_transport_closed, Agent, ByteStreams, Client, JsonRpcRequest, V2ConnectionTo,
+    is_incoming_transport_closed, Agent, ByteStreams, Client, JsonRpcRequest,
 };
 use horizon_acp::{
     read_horizon_meta, write_horizon_meta, DrainRequest, EnsureBoardOrganizerRequest,
@@ -321,7 +323,7 @@ pub(super) fn spawn_test_stream<S>(
 /// Builds the client with every inbound handler routing into `routes`.
 fn client(
     routes: &Arc<AgentRoutes>,
-) -> agent_client_protocol::V2Builder<
+) -> agent_client_protocol::v2::Builder<
     Client,
     impl agent_client_protocol::HandleDispatchFrom<Agent>,
     agent_client_protocol::NullRun,
@@ -386,7 +388,7 @@ fn client(
         )
         .on_receive_request(
             async move |request: v2::RequestPermissionRequest,
-                        responder: agent_client_protocol::Responder<
+                        responder: agent_client_protocol::v2::Responder<
                 v2::RequestPermissionResponse,
             >,
                         _connection: V2ConnectionTo<Agent>| {
@@ -396,7 +398,7 @@ fn client(
         )
         .on_receive_request(
             async move |request: HostToolRequest,
-                        responder: agent_client_protocol::Responder<
+                        responder: agent_client_protocol::v2::Responder<
                 horizon_acp::HostToolResponse,
             >,
                         _connection: V2ConnectionTo<Agent>| {
@@ -553,7 +555,7 @@ async fn call<T>(
     routes: &AgentRoutes,
     deadline: Duration,
     what: &str,
-    request: agent_client_protocol::SentRequest<T>,
+    request: agent_client_protocol::v2::SentRequest<T>,
 ) -> Result<T, String> {
     match tokio::time::timeout(deadline, request.block_task()).await {
         Ok(Ok(value)) => Ok(value),
@@ -568,7 +570,7 @@ async fn call<T>(
 fn send<R: JsonRpcRequest>(
     connection: &V2ConnectionTo<Agent>,
     request: R,
-) -> agent_client_protocol::SentRequest<R::Response> {
+) -> agent_client_protocol::v2::SentRequest<R::Response> {
     connection.send_request(request)
 }
 
@@ -602,7 +604,7 @@ fn handle_op(op: Op, connection: &V2ConnectionTo<Agent>, routes: &Arc<AgentRoute
                     .on_receiving_result(async move |result| {
                         match result {
                             Ok(opened) => {
-                                let response = opened.response();
+                                let response = &opened.response;
                                 let session_id = route.session_id();
                                 if let Some(Ok(meta)) =
                                     read_horizon_meta::<SessionInfoMeta>(response.meta.as_ref())

@@ -185,4 +185,5 @@ ACP に居場所が無い。線を越える必要があるかどうかの選別�
   で、外部エージェントを収容するときの前提として残る。
 - 仕様: agentclientprotocol.com の `/protocol/v1/*` と `/protocol/v2/*`、
   `schema/v1|v2/schema(.unstable).json`。crate: `agent-client-protocol`
-  2.2.0 / `agent-client-protocol-schema` 1.9.1（2026-09-27 時点）。
+  5.3.0 / `agent-client-protocol-schema` 1.18.0（2026-11-17 時点。設計時は
+  2.2.0 / 1.9.1）。

@@ -4,8 +4,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v2;
-use agent_client_protocol::{Client, Responder, V2ConnectionTo};
+use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
+use agent_client_protocol::v2::Responder;
+use agent_client_protocol::Client;
 use horizon_acp as acp;
 use horizon_agent::contract::{ApprovalRequest, Command, SessionId};
 use horizon_agent::hosting::{AgentWireEvent, AttachmentEnd};
@@ -60,7 +62,7 @@ impl Sink {
         match outgoing {
             Outgoing::Update(update) => self.notify(v2::UpdateSessionNotification::new(
                 self.acp_id.clone(),
-                update,
+                *update,
             )),
             Outgoing::TaskProgress(notification) => self.notify(notification),
             Outgoing::ToolCallProgress(notification) => self.notify(notification),

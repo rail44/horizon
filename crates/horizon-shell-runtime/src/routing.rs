@@ -14,8 +14,8 @@ use std::sync::Mutex;
 
 use super::attachment::{AgentUpdate, AttachmentState, Inbound};
 use crate::agent_model::AgentEvent;
-use agent_client_protocol::schema::v2;
-use agent_client_protocol::Responder;
+use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::v2::Responder;
 use crossbeam_channel::Sender;
 use horizon_acp::{
     read_horizon_meta, HostToolRequest, HostToolResponse, SessionEventNotification, SessionId,
@@ -430,7 +430,9 @@ impl AgentRoutes {
 }
 
 pub(super) fn cancelled_permission() -> v2::RequestPermissionResponse {
-    v2::RequestPermissionResponse::new(v2::RequestPermissionOutcome::Cancelled)
+    v2::RequestPermissionResponse::new(v2::RequestPermissionOutcome::Cancelled(
+        v2::CancelledPermissionOutcome::new(),
+    ))
 }
 
 impl TerminalRoutes {

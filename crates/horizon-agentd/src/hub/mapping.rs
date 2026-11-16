@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::v2;
+use agent_client_protocol::v2::schema as v2;
 use horizon_acp as acp;
 use horizon_agent::contract::{
     self, ApprovalRequest, Event, MessageRole, SessionId, SessionState, TurnEndReason,
@@ -30,7 +30,8 @@ use horizon_agent::hosting::{AgentWireEvent, ModelSelection};
 /// Everything one mapped event can put on the connection.
 #[derive(Debug)]
 pub(super) enum Outgoing {
-    Update(v2::SessionUpdate),
+    /// (Boxed: an update is several times the size of anything else here.)
+    Update(Box<v2::SessionUpdate>),
     TaskProgress(acp::TaskProgressNotification),
     ToolCallProgress(acp::ToolCallProgressNotification),
     Memory(acp::MemoryNotification),
@@ -40,6 +41,12 @@ pub(super) enum Outgoing {
     AskPermission(ApprovalRequest),
     /// The approval for this occurrence no longer waits on the client.
     ApprovalSettled(String),
+}
+
+impl Outgoing {
+    fn update(update: v2::SessionUpdate) -> Self {
+        Outgoing::Update(Box::new(update))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -159,14 +166,14 @@ impl Mapper {
     pub(super) fn config_option_update(&self) -> Option<Outgoing> {
         let options = self.config_options();
         (!options.is_empty()).then(|| {
-            Outgoing::Update(v2::SessionUpdate::ConfigOptionUpdate(
+            Outgoing::update(v2::SessionUpdate::ConfigOptionUpdate(
                 v2::ConfigOptionUpdate::new(options),
             ))
         })
     }
 
     pub(super) fn session_info_update(&self) -> Outgoing {
-        Outgoing::Update(v2::SessionUpdate::SessionInfoUpdate(
+        Outgoing::update(v2::SessionUpdate::SessionInfoUpdate(
             v2::SessionInfoUpdate::new().meta(horizon_meta(&self.session_info_meta())),
         ))
     }
@@ -290,19 +297,19 @@ impl Mapper {
                         )
                     }
                 };
-                vec![Outgoing::Update(update)]
+                vec![Outgoing::update(update)]
             }
             Event::AssistantTextDelta(delta) => {
                 let id = self
                     .open_stream
                     .get_or_insert_with(|| v2::MessageId::new(format!("msg-{}", self.message_seq)))
                     .clone();
-                vec![Outgoing::Update(v2::SessionUpdate::AgentMessageChunk(
+                vec![Outgoing::update(v2::SessionUpdate::AgentMessageChunk(
                     v2::ContentChunk::new(delta.text.clone().into(), id),
                 ))]
             }
             Event::ReasoningDelta(delta) => {
-                vec![Outgoing::Update(v2::SessionUpdate::AgentThoughtChunk(
+                vec![Outgoing::update(v2::SessionUpdate::AgentThoughtChunk(
                     v2::ContentChunk::new(
                         delta.text.clone().into(),
                         v2::MessageId::new(format!("thought-{}", self.message_seq)),
@@ -326,10 +333,10 @@ impl Mapper {
                         auto_approved: None,
                         policy_tier: None,
                     }));
-                vec![Outgoing::Update(v2::SessionUpdate::ToolCallUpdate(update))]
+                vec![Outgoing::update(v2::SessionUpdate::ToolCallUpdate(update))]
             }
             Event::ToolCallStarted(identity) => {
-                vec![Outgoing::Update(v2::SessionUpdate::ToolCallUpdate(
+                vec![Outgoing::update(v2::SessionUpdate::ToolCallUpdate(
                     v2::ToolCallUpdate::new(identity.occurrence_id.0.clone())
                         .status(v2::ToolCallStatus::InProgress),
                 ))]
@@ -360,7 +367,7 @@ impl Mapper {
                     .status(status)
                     .raw_output(output.clone())
                     .meta(horizon_meta(&meta));
-                let mut out = vec![Outgoing::Update(v2::SessionUpdate::ToolCallUpdate(update))];
+                let mut out = vec![Outgoing::update(v2::SessionUpdate::ToolCallUpdate(update))];
                 out.extend(self.settle_approval(&occurrence));
                 out
             }
@@ -493,7 +500,7 @@ impl Mapper {
         if kind == StateKind::Idle {
             self.stop_reason = None;
         }
-        vec![Outgoing::Update(v2::SessionUpdate::StateUpdate(update))]
+        vec![Outgoing::update(v2::SessionUpdate::StateUpdate(update))]
     }
 }
 
@@ -513,9 +520,11 @@ fn stop_reason(reason: TurnEndReason) -> v2::StopReason {
         TurnEndReason::Completed => v2::StopReason::EndTurn,
         TurnEndReason::Cancelled => v2::StopReason::Cancelled,
         TurnEndReason::HaltedByIterationCap => v2::StopReason::MaxTurnRequests,
-        TurnEndReason::Failed => v2::StopReason::Other(acp::STOP_REASON_FAILED.to_string()),
+        TurnEndReason::Failed => {
+            v2::StopReason::Other(acp::other_stop_reason(acp::STOP_REASON_FAILED))
+        }
         TurnEndReason::HaltedByDoomLoop => {
-            v2::StopReason::Other(acp::STOP_REASON_DOOM_LOOP.to_string())
+            v2::StopReason::Other(acp::other_stop_reason(acp::STOP_REASON_DOOM_LOOP))
         }
     }
 }

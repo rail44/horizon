@@ -8,8 +8,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use agent_client_protocol::schema::{v2, ProtocolVersion};
-use agent_client_protocol::{Agent, ByteStreams, Client, Responder, V2ConnectionTo};
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
+use agent_client_protocol::v2::Responder;
+use agent_client_protocol::{Agent, ByteStreams, Client};
 use horizon_acp::{
     read_horizon_meta, write_horizon_meta, AttachmentEnd, ContinueTurnRequest, DrainRequest,
     EmptyResponse, EnsureBoardOrganizerRequest, EnsureBoardOrganizerResponse, HostToolRequest,
@@ -361,7 +364,7 @@ impl FakeAgentd {
         &self,
         session_id: SessionId,
         identity: &ToolCallIdentity,
-    ) -> agent_client_protocol::SentRequest<v2::RequestPermissionResponse> {
+    ) -> agent_client_protocol::v2::SentRequest<v2::RequestPermissionResponse> {
         let mut request = v2::RequestPermissionRequest::new(
             acp_session_id(session_id),
             "Run bash",
@@ -1179,7 +1182,7 @@ async fn permission_requests_are_answered_from_the_panes_decisions() {
     handle.sender().send(AgentCommand::Cancel).unwrap();
     assert!(matches!(
         answer.block_task().await.unwrap().outcome,
-        v2::RequestPermissionOutcome::Cancelled
+        v2::RequestPermissionOutcome::Cancelled(_)
     ));
     assert!(matches!(fake.next_call().await, AgentCall::Cancel));
     assert_eq!(
@@ -1190,7 +1193,7 @@ async fn permission_requests_are_answered_from_the_panes_decisions() {
     let orphan = fake.permission(SessionId::new(), &identity("occ-4"));
     assert!(matches!(
         orphan.block_task().await.unwrap().outcome,
-        v2::RequestPermissionOutcome::Cancelled
+        v2::RequestPermissionOutcome::Cancelled(_)
     ));
 }
 

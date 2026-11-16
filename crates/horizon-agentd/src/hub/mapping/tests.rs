@@ -25,7 +25,7 @@ fn updates(mapper: &mut Mapper, events: &[Event]) -> Vec<v2::SessionUpdate> {
         .iter()
         .flat_map(|event| mapper.map(&AgentWireEvent::Event(event.clone())))
         .filter_map(|outgoing| match outgoing {
-            Outgoing::Update(update) => Some(update),
+            Outgoing::Update(update) => Some(*update),
             _ => None,
         })
         .collect()
@@ -154,7 +154,7 @@ fn a_turn_end_is_one_idle_with_its_stop_reason() {
             v2::SessionUpdate::StateUpdate(v2::StateUpdate::Running(v2::RunningStateUpdate::new())),
             v2::SessionUpdate::StateUpdate(v2::StateUpdate::Idle(
                 v2::IdleStateUpdate::new().stop_reason(v2::StopReason::Other(
-                    acp::STOP_REASON_DOOM_LOOP.to_string()
+                    acp::other_stop_reason(acp::STOP_REASON_DOOM_LOOP,)
                 ))
             )),
         ]
@@ -274,8 +274,11 @@ fn model_announcements_become_one_select_option() {
         provider: "openai".into(),
         model: "gpt-4o".into(),
     }));
-    let [Outgoing::Update(v2::SessionUpdate::ConfigOptionUpdate(update))] = &outgoing[..] else {
-        panic!("expected one config option update, got {outgoing:?}");
+    let [Outgoing::Update(update)] = &outgoing[..] else {
+        panic!("expected one update, got {outgoing:?}");
+    };
+    let v2::SessionUpdate::ConfigOptionUpdate(update) = &**update else {
+        panic!("expected a config option update, got {outgoing:?}");
     };
     assert_eq!(
         update.config_options,

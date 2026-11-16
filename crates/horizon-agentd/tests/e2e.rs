@@ -24,7 +24,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use agent_client_protocol::schema::{v2, MaybeUndefined};
+use agent_client_protocol::schema::MaybeUndefined;
+use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::Error;
 use horizon_acp as acp;
 use horizon_agent::contract::{
@@ -417,7 +418,7 @@ fn take_permission(
     collected: &mut Vec<Inbound>,
 ) -> (
     v2::RequestPermissionRequest,
-    agent_client_protocol::Responder<v2::RequestPermissionResponse>,
+    agent_client_protocol::v2::Responder<v2::RequestPermissionResponse>,
 ) {
     let index = collected
         .iter()

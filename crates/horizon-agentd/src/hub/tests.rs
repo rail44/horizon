@@ -12,7 +12,7 @@ async fn connect(state: Arc<AgentdState>) -> ConnectionTo<Agent> {
     tokio::spawn(serve(daemon_read, daemon_write, state, "test-agentd"));
     let (client_read, client_write) = tokio::io::split(client_side);
     let (cx_tx, cx_rx) = tokio::sync::oneshot::channel();
-    tokio::spawn(Client.builder().without_acp_version_guard().connect_with(
+    tokio::spawn(agent_client_protocol::Builder::new(Client).connect_with(
         ByteStreams::new(client_write.compat_write(), client_read.compat()),
         async move |cx| {
             let _ = cx_tx.send(cx.clone());

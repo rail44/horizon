@@ -2,7 +2,8 @@
 
 use std::time::{Duration, Instant};
 
-use agent_client_protocol::schema::{v2, MaybeUndefined};
+use agent_client_protocol::schema::MaybeUndefined;
+use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
     decode_model_option_id, read_horizon_meta, MemoryEvent, MessageMeta, ModelOptionMeta,
     SessionEventNotification, TaskProgressNotification, TaskProgressState, ToolCallMeta,
@@ -443,10 +444,12 @@ fn turn_end_reason(reason: &v2::StopReason) -> TurnEndReason {
         v2::StopReason::EndTurn => TurnEndReason::Completed,
         v2::StopReason::Cancelled => TurnEndReason::Cancelled,
         v2::StopReason::MaxTurnRequests => TurnEndReason::HaltedByIterationCap,
-        v2::StopReason::Other(other) if other == STOP_REASON_DOOM_LOOP => {
+        v2::StopReason::Other(other) if other.stop_reason == STOP_REASON_DOOM_LOOP => {
             TurnEndReason::HaltedByDoomLoop
         }
-        v2::StopReason::Other(other) if other == STOP_REASON_FAILED => TurnEndReason::Failed,
+        v2::StopReason::Other(other) if other.stop_reason == STOP_REASON_FAILED => {
+            TurnEndReason::Failed
+        }
         _ => TurnEndReason::Failed,
     }
 }

@@ -101,7 +101,7 @@ fn dropping_an_old_agent_registration_keeps_the_replacement() {
 
 #[tokio::test]
 async fn stale_agent_events_and_workspace_roots_do_not_reach_a_new_attachment() {
-    use agent_client_protocol::schema::v2;
+    use agent_client_protocol::v2::schema as v2;
     let (host, _host_rx) = crossbeam_channel::unbounded();
     let (roots, roots_rx) = crossbeam_channel::unbounded();
     let routes = AgentRoutes::new(host, roots);

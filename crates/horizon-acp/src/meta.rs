@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::v2::Meta;
+use agent_client_protocol::v2::schema::Meta;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,12 @@ pub const HORIZON_META_KEY: &str = "horizon";
 pub const STOP_REASON_FAILED: &str = "_horizon/failed";
 /// `stopReason` value for `contract::TurnEndReason::HaltedByDoomLoop`.
 pub const STOP_REASON_DOOM_LOOP: &str = "_horizon/doom_loop";
+
+/// A stop reason of Horizon's own, as the protocol carries one it does not
+/// name: the reason and no other field.
+pub fn other_stop_reason(reason: &str) -> agent_client_protocol::v2::schema::OtherStopReason {
+    agent_client_protocol::v2::schema::OtherStopReason::new(reason, Default::default())
+}
 
 /// `configId` of the session config option that selects the provider and
 /// model (`category: model`, `select`).

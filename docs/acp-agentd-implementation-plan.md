@@ -15,6 +15,22 @@ crate は `agent-client-protocol` 2.2.0 と `agent-client-protocol-schema`
 exact pin し、同時に上げる。** 手元の rustc 1.96 で v2 feature 付きの型検査は
 通っている（2026-09-27）。
 
+2026-11-17 に 5.3.0 / 1.18.0（SDK が `=1.18.0` で固定）へ上げた。
+
+- SDK の 5.0 で入口の形が変わった。プロトコルの版ごとの型は `v1` / `v2`
+  モジュールの下にあり（`v2::schema`、`v2::ConnectionTo`、`v2::Responder`、
+  `v2::Builder`）、版の guard を掛けない builder は `Builder::new(role)`。
+- schema の側は v2 の型の形が変わっている。Horizon が使う範囲では、
+  `StopReason::Other` が文字列から `OtherStopReason`（理由と、それ以外の
+  フィールド）に、`RequestPermissionOutcome::Cancelled` が `_meta` を持つ
+  型になった。
+- 版をまたいだ実測: 5.3.0 でビルドした `horizon-agentd` の e2e テストを、
+  2.2.0 でビルドした agentd の実行ファイルに対して走らせると、30 件中 28 件
+  が通り、承認の往復を含む 2 件が「daemon からのメッセージを待って時間切れ」
+  で落ちる（`initialize`・版不一致の拒否・drain は通る）。SDK の版が混ざると
+  承認が届かないので、この更新と一緒に `HORIZON_ACP_EXT_VERSION` を 5 から
+  6 に上げた。語彙（`_horizon/*` と `_meta.horizon`）は変えていない。
+
 crate の実行モデルで守ること。
 
 - tokio 依存なし。`ByteStreams::new(write, read)` は `futures::io` の trait を

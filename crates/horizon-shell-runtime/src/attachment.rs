@@ -7,8 +7,10 @@
 
 use std::{sync::Arc, time::Duration};
 
-use agent_client_protocol::schema::v2;
-use agent_client_protocol::{Agent, Responder, V2ConnectionTo};
+use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
+use agent_client_protocol::v2::Responder;
+use agent_client_protocol::Agent;
 use horizon_acp::{
     write_horizon_meta, AttachmentEnd, ContinueTurnRequest, PermissionResponseMeta,
     SessionEventNotification, SessionId, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY,
@@ -329,7 +331,7 @@ impl Session {
     fn report_failure<T: agent_client_protocol::JsonRpcResponse + Send + 'static>(
         &self,
         what: &'static str,
-        request: agent_client_protocol::SentRequest<T>,
+        request: agent_client_protocol::v2::SentRequest<T>,
     ) {
         let routes = self.routes.clone();
         let route = self.route;

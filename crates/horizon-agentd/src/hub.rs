@@ -21,8 +21,11 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::{v2, ProtocolVersion};
-use agent_client_protocol::{Agent, ByteStreams, Client, Error, Responder, V2ConnectionTo};
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
+use agent_client_protocol::v2::Responder;
+use agent_client_protocol::{Agent, ByteStreams, Client, Error};
 use horizon_acp as acp;
 use horizon_agent::contract::{Command, ProviderId, SessionId};
 use horizon_agent::hosting::{HostToolRequest, HostToolResponse, SessionNew};
@@ -46,7 +49,7 @@ pub(crate) fn call_error(message: impl Into<String>) -> Error {
 
 fn not_initialized() -> Error {
     Error::new(
-        i32::from(agent_client_protocol::ErrorCode::InvalidRequest),
+        agent_client_protocol::ErrorCode::INVALID_REQUEST,
         "initialize must succeed before this method can be used",
     )
 }
@@ -91,7 +94,7 @@ impl Shared {
             .as_ref()
         {
             Some(message) => Err(Error::new(
-                i32::from(agent_client_protocol::ErrorCode::InvalidRequest),
+                agent_client_protocol::ErrorCode::INVALID_REQUEST,
                 message.clone(),
             )),
             None => Ok(()),
@@ -208,13 +211,13 @@ impl Shared {
     ) -> Result<(), Error> {
         if self.initialized.load(Ordering::Acquire) {
             return responder.respond_with_error(Error::new(
-                i32::from(agent_client_protocol::ErrorCode::InvalidRequest),
+                agent_client_protocol::ErrorCode::INVALID_REQUEST,
                 "ACP connections may only be initialized once",
             ));
         }
         if request.protocol_version != ProtocolVersion::V2 {
             return responder.respond_with_error(Error::new(
-                i32::from(agent_client_protocol::ErrorCode::InvalidRequest),
+                agent_client_protocol::ErrorCode::INVALID_REQUEST,
                 format!(
                     "unsupported ACP protocol version {}; {DAEMON_NAME} speaks 2",
                     request.protocol_version
