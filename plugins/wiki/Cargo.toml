@@ -15,7 +15,7 @@ horizon-ui = { path = "../../crates/horizon-ui" }
 horizon-components = { path = "../../crates/horizon-components" }
 # The pages, their comment threads, and where a project's are.
 horizon-wiki = { path = "../../crates/horizon-wiki" }
-horizon-workspace = { path = "../../crates/horizon-workspace" }
+horizon-markdown = { path = "../../crates/horizon-markdown" }
 keyboard-types = "0.8"
 # The page's blocks, as `horizon-wiki` reads them.
 markdown = "=1.0.0"

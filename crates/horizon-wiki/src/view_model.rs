@@ -16,7 +16,7 @@ use crate::logical::LogicalText;
 use crate::{Store, Thread};
 use uuid::Uuid;
 
-use horizon_workspace::markdown::{self as document, Document};
+use horizon_markdown::{self as document, Document};
 
 /// One thread and where it is in the page as it reads now.
 #[derive(Debug, Clone)]

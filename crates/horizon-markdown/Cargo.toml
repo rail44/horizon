@@ -1,0 +1,11 @@
+# What is read out of a Markdown file before it is drawn: the front
+# matter split from the body, and where a link in the body points. No
+# dependencies: the Markdown view, the wiki's view and the wiki's own
+# reading of a page all start from it.
+[package]
+name = "horizon-markdown"
+version = "0.1.0"
+edition = "2021"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -5,7 +5,7 @@
 //! What the view holds is a handful of signals (the file, the way back,
 //! the parts of the document, a notice). The elements are built once; each
 //! reads the signals it shows. Reading the front matter and resolving
-//! links is `horizon-workspace`'s.
+//! links is `horizon-markdown`'s.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -18,7 +18,7 @@ use horizon_ui::{Callable, Callback, Component, El, dispatched, el};
 
 use horizon_components::markdown::{Headings, render};
 use horizon_components::{Chip, Tone};
-use horizon_workspace::markdown::{LinkTarget, parse, resolve_link};
+use horizon_markdown::{LinkTarget, parse, resolve_link};
 use keyboard_types::{Key, NamedKey};
 
 const BACK: &str = "Back";
@@ -168,7 +168,7 @@ impl Markdown {
 }
 
 /// A change of the file the view shows is read in when the host, which
-/// watches it, says it changed (`files.wait-for-change`).
+/// watches it, says it changed (`files.watch`).
 fn build(given: Markdown) -> (El, Controls) {
     let Markdown {
         path,
