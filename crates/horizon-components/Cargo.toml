@@ -1,0 +1,23 @@
+# What views are made of, drawn the same in each: a chip, a button, a
+# field's box, the controls (slider, select, color picker), and Markdown
+# as elements. Over `horizon-ui` only, so a view in the shell and one in an
+# extension's wasm component are built of the same.
+[package]
+name = "horizon-components"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+horizon-ui = { path = "../horizon-ui" }
+keyboard-types = "0.8"
+pulldown-cmark = "0.13"
+
+[dev-dependencies]
+horizon-theme-css = { path = "../horizon-theme-css" }
+# The gallery painted into pixels, with no window and no GPU.
+anyrender = "0.14"
+anyrender_vello_cpu = "0.18"
+blitz-paint = { workspace = true }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

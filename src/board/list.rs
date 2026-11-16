@@ -32,7 +32,7 @@ use keyboard_types::{Key, NamedKey};
 use super::follow;
 use super::{Activity, Job, Sessions, Source, activity_chip, run, tone, write_refusal};
 use crate::background::Background;
-use crate::parts::{Chip, Field, Prompt, Tone};
+use horizon_components::{Chip, Field, Prompt, Tone};
 
 // The measurements are in the theme's scaled lengths (`--u8` is 8 px at
 // the reference type size).

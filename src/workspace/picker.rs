@@ -12,7 +12,7 @@ use horizon_ui::{Class, El, el, prevent_default, stop_propagation};
 use keyboard_types::{Key, NamedKey};
 
 use super::{Shell, styles};
-use crate::parts::{Field, Prompt};
+use horizon_components::{Field, Prompt};
 
 /// One row: its parts as text, each under a class of its own.
 #[derive(Clone, PartialEq)]

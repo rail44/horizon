@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use horizon::parts::{ColorPicker, Drags, Range, Select, Slider};
+use horizon_components::{ColorPicker, Drags, Range, Select, Slider};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
@@ -348,7 +348,7 @@ fn a_color_picker_is_worked_from_the_keyboard() {
 
 #[test]
 fn a_button_is_pressed_by_a_click_and_by_enter_or_space_and_leaves_the_keys_where_they_were() {
-    use horizon::parts::Button;
+    use horizon_components::Button;
 
     let presses = Rc::new(RefCell::new(0));
     let counted = presses.clone();
@@ -382,7 +382,7 @@ fn a_button_is_pressed_by_a_click_and_by_enter_or_space_and_leaves_the_keys_wher
     assert_eq!(&*element.name.local, "button");
 }
 
-/// Paints the gallery of the parts in this machine's theme, to the file
+/// Paints the gallery of the components in this machine's theme, to the file
 /// `HORIZON_GALLERY_OUT` names (a PPM): a picture for a person to look
 /// at. Run by hand.
 #[test]
@@ -393,7 +393,7 @@ fn paint_the_gallery() {
     let out = std::env::var_os("HORIZON_GALLERY_OUT").expect("HORIZON_GALLERY_OUT");
     let (width, height) = (900u32, 840u32);
     let app = App::new(width, height, "Test", horizon_theme_css::CSS, || {
-        themed(Theme::of_this_machine, horizon::parts::gallery())
+        themed(Theme::of_this_machine, horizon_components::gallery())
     });
     app.resolve();
     let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);

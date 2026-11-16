@@ -22,7 +22,7 @@ use horizon_ui::{Component, El};
 use horizon_workspace::SessionId;
 
 use crate::background::Background;
-use crate::parts::{Chip, Tone};
+use horizon_components::{Chip, Tone};
 
 pub mod list;
 #[cfg(not(target_family = "wasm"))]

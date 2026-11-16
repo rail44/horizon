@@ -257,8 +257,8 @@ fn a_view_in_a_plugin_is_drawn_in_this_document_and_takes_its_keys() {
 
 #[test]
 #[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
-fn the_parts_are_drawn_from_a_plugin_with_their_sheets() {
-    let opened = open("parts");
+fn the_components_are_drawn_from_a_plugin_with_their_sheets() {
+    let opened = open("components");
     let chips = opened.all("chip");
     assert!(chips.len() >= 6, "{} chips", chips.len());
     // A chip's sheet came with it: it has its padding.

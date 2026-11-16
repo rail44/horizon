@@ -54,7 +54,7 @@ fn board_list(items: Vec<Item>) -> El {
 
 fn view(name: &str) -> Option<El> {
     match name {
-        "parts" => Some(horizon::parts::gallery()),
+        "components" => Some(horizon_components::gallery()),
         "board-list" => Some(board_list(tasks())),
         "board-list-empty" => Some(board_list(Vec::new())),
         // Never comes back: what the shell's limit on a call is for
@@ -84,7 +84,7 @@ struct Previews;
 
 impl Guest for Previews {
     fn names() -> Vec<String> {
-        ["board-list", "board-list-empty", "parts"]
+        ["board-list", "board-list-empty", "components"]
             .map(String::from)
             .to_vec()
     }

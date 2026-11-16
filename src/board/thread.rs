@@ -30,8 +30,8 @@ use keyboard_types::{Key, NamedKey};
 use super::list::key_name;
 use super::{Activity, Job, Sessions, Source, activity_chip, follow, run, tone, write_refusal};
 use crate::background::Background;
-use crate::markdown::{Headings, render};
-use crate::parts::{Button, ButtonKind, Chip, Field, Prompt, Tone};
+use horizon_components::markdown::{Headings, render};
+use horizon_components::{Button, ButtonKind, Chip, Field, Prompt, Tone};
 
 /// How many cells wide a post is taken to be when deciding whether to
 /// fold it: an owner's is narrower by its indent.

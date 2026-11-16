@@ -2968,6 +2968,7 @@ dependencies = [
  "horizon-board",
  "horizon-board-view",
  "horizon-cli",
+ "horizon-components",
  "horizon-config",
  "horizon-control",
  "horizon-shell-runtime",
@@ -3110,6 +3111,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-components"
+version = "0.1.0"
+dependencies = [
+ "anyrender",
+ "anyrender_vello_cpu",
+ "blitz-paint",
+ "horizon-theme-css",
+ "horizon-ui",
+ "keyboard-types",
+ "pulldown-cmark",
+]
+
+[[package]]
 name = "horizon-config"
 version = "0.1.0"
 dependencies = [
@@ -3173,6 +3187,7 @@ version = "0.1.0"
 dependencies = [
  "horizon",
  "horizon-board",
+ "horizon-components",
  "horizon-ui",
  "wit-bindgen 0.63.0",
 ]

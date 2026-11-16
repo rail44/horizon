@@ -23,6 +23,7 @@ members = [
     "crates/horizon-logd",
     "crates/horizon-wiki",
     "crates/horizon-ui",
+    "crates/horizon-components",
     "crates/horizon-ui-macros",
     "crates/horizon-theme-css",
     "preview-plugin",
@@ -93,6 +94,7 @@ publish = false
 
 [dependencies]
 horizon-ui = { path = "crates/horizon-ui" }
+horizon-components = { path = "crates/horizon-components" }
 horizon-board = { path = "crates/horizon-board" }
 horizon-board-view = { path = "crates/horizon-board-view" }
 horizon-workspace = { path = "crates/horizon-workspace" }

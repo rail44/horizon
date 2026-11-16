@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 [target.'cfg(target_family = "wasm")'.dependencies]
 horizon-ui = { path = "../crates/horizon-ui" }
 horizon = { path = ".." }
+horizon-components = { path = "../crates/horizon-components" }
 horizon-board = { path = "../crates/horizon-board" }
 wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }
 

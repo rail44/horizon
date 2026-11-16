@@ -1,5 +1,6 @@
-//! Every part in every kind it has, on one page: what the parts are
-//! looked at on (the `parts` preview, `tests/parts.rs`'s picture).
+//! Every component in every kind it has, on one page: what the components
+//! are looked at on (the `components` preview, `tests/components.rs`'s
+//! picture).
 
 use horizon_ui::{Component, El, el};
 
@@ -12,7 +13,7 @@ mod styles {
                    background: var(--background); color: var(--text);
                    font-family: var(--font-family); font-size: var(--body-size);
                    line-height: var(--body-line); }
-        .part { display: flex; flex-direction: column; gap: var(--u8); }
+        .entry { display: flex; flex-direction: column; gap: var(--u8); }
         .name { font-weight: 600; }
         .line { display: flex; align-items: flex-start; gap: var(--u8); }
         .said { font-size: var(--meta-size); line-height: var(--meta-line);
@@ -20,11 +21,11 @@ mod styles {
     "}
 }
 
-/// One part of the gallery: its name, and lines of it as it is placed,
-/// each with what the line is.
-fn part(name: &str, lines: Vec<(&str, Vec<El>)>) -> El {
+/// One component in the gallery: its name, and lines of it as it is
+/// placed, each with what the line is.
+fn entry(name: &str, lines: Vec<(&str, Vec<El>)>) -> El {
     el("div")
-        .class(styles::PART)
+        .class(styles::ENTRY)
         .child(el("div").class(styles::NAME).text(name))
         .children(lines.into_iter().map(|(said, shown)| {
             el("div")
@@ -37,7 +38,7 @@ fn part(name: &str, lines: Vec<(&str, Vec<El>)>) -> El {
 fn buttons() -> El {
     use ButtonKind::Primary;
     use ButtonSize::Small;
-    part(
+    entry(
         "button",
         vec![
             (
@@ -96,7 +97,7 @@ fn fields() -> El {
     };
     let typed = el("input").attr("type", "text");
     typed.set_value("something typed");
-    part(
+    entry(
         "field",
         vec![(
             "empty with its prompt, and typed in (the box around is whoever places it's)",
@@ -139,7 +140,7 @@ fn markdown() -> El {
             .attr("style", "flex: 1; min-width: 0;")
             .child(render(SAMPLE, headings, Rc::new(|_| {})))
     };
-    part(
+    entry(
         "markdown",
         vec![(
             "a page or a message, and a post among posts",
@@ -160,7 +161,7 @@ pub fn gallery() -> El {
     ];
     let gallery = el("div")
         .class(styles::GALLERY)
-        .child(part(
+        .child(entry(
             "chip",
             vec![
                 (

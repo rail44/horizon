@@ -19,6 +19,7 @@ mod chip;
 mod color;
 mod field;
 mod gallery;
+pub mod markdown;
 mod select;
 mod slider;
 
@@ -34,14 +35,14 @@ pub use slider::{Range, Slider};
 type Moved = Rc<dyn Fn(f32, f32)>;
 
 /// What follows the pointer while a button is held: a thumb being
-/// dragged. A part begins a drag on its own element; the moves that
+/// dragged. A component begins a drag on its own element; the moves that
 /// follow arrive wherever the pointer is, so the view wires them in at
 /// its root.
 #[derive(Clone, Default)]
 pub struct Drags(Rc<RefCell<Option<Moved>>>);
 
 impl Drags {
-    /// From a part: `moved` hears where the pointer is, on the page,
+    /// From a component: `moved` hears where the pointer is, on the page,
     /// until the button comes up.
     pub fn begin(&self, moved: impl Fn(f32, f32) + 'static) {
         *self.0.borrow_mut() = Some(Rc::new(moved));

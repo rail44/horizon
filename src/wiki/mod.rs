@@ -41,7 +41,7 @@ use horizon_ui::{
 };
 use horizon_wiki::Store;
 
-use crate::parts::{Button, Chip, Press, Tone};
+use horizon_components::{Button, Chip, Press, Tone};
 use horizon_wiki::anchor::Anchor;
 use horizon_wiki::annotation::{Agent, AgentType, Annotation, markdown_body};
 use horizon_wiki::view_model::{PlacedThread, WikiPage};
@@ -700,10 +700,14 @@ fn composer(state: State) -> El {
         .focus();
     el("div")
         .class(styles::COMPOSER)
-        .child(el("div").class(styles::FIELD).child(crate::parts::Field {
-            input: field,
-            prompt: None,
-        }))
+        .child(
+            el("div")
+                .class(styles::FIELD)
+                .child(horizon_components::Field {
+                    input: field,
+                    prompt: None,
+                }),
+        )
         .child(
             el("div")
                 .class(styles::SEND)
@@ -720,9 +724,9 @@ fn post(annotation: &Annotation) -> El {
     let when = annotation.created.replace('T', " ").replace('Z', "");
     el("div")
         .class((styles::POST, person))
-        .child(crate::markdown::render(
+        .child(horizon_components::markdown::render(
             &annotation.body.value,
-            crate::markdown::Headings::AsText,
+            horizon_components::markdown::Headings::AsText,
             Rc::new(|_| {}),
         ))
         .child(el("div").class(styles::WHEN).text(&when))

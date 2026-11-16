@@ -16,8 +16,8 @@ use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
 use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Callback, Component, El, el};
 
-use crate::parts::{ColorPicker, Drags, Range, Select, Slider};
 use crate::plugin::{Command, Mounted, Plugin};
+use horizon_components::{ColorPicker, Drags, Range, Select, Slider};
 
 mod styles {
     horizon_ui::css_module! {"

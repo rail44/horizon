@@ -18,17 +18,16 @@ use horizon_ui::{Callable, Callback, Component, El, dispatched, el};
 #[cfg(not(target_family = "wasm"))]
 use horizon_ui::{each_layout, relayout};
 
-use crate::parts::{Chip, Tone};
+use horizon_components::{Chip, Tone};
 use horizon_workspace::markdown::{LinkTarget, parse, resolve_link};
 use keyboard_types::{Key, NamedKey};
 
 use crate::wake::Wake;
 
-mod render;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod watch;
 
-pub use render::{Headings, render};
+use horizon_components::markdown::{Headings, render};
 
 const BACK: &str = "Back";
 const NO_DOCUMENT: &str = "No document";

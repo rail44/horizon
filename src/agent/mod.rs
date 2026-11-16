@@ -20,7 +20,7 @@ use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::windowed::{follow_tail, windowed};
 use horizon_ui::{Callback, Component, El, dispatched, el, prevent_default, stop_propagation};
 
-use crate::parts::{self, Button, ButtonKind, ButtonSize, Chip, Field, Prompt};
+use horizon_components::{self as components, Button, ButtonKind, ButtonSize, Chip, Field, Prompt};
 use keyboard_types::{Key, NamedKey};
 
 use horizon_agent_display::chrome;
@@ -445,7 +445,7 @@ fn notice_line(notice: &Notice) -> El {
 /// The running session's state, following it.
 fn session_state_chip(state: Agent) -> El {
     Chip {
-        tone: parts::Tone::Accent,
+        tone: components::Tone::Accent,
         text: "",
     }
     .view()
@@ -497,9 +497,9 @@ fn turn_card(turn: &Turn, state: Agent) -> El {
     for part in &turn.parts {
         match part {
             TurnPart::Text(text) => {
-                let body = crate::markdown::render(
+                let body = horizon_components::markdown::render(
                     text,
-                    crate::markdown::Headings::Scaled,
+                    horizon_components::markdown::Headings::Scaled,
                     Rc::new(|_| {}),
                 );
                 card.child(el("div").class("text").child(body));
@@ -529,8 +529,8 @@ fn turn_card(turn: &Turn, state: Agent) -> El {
     }
     if !running {
         let label = match turn.state {
-            TurnState::Stopped => Some((parts::Tone::Muted, chrome::STOPPED)),
-            TurnState::Failed => Some((parts::Tone::Danger, chrome::FAILED)),
+            TurnState::Stopped => Some((components::Tone::Muted, chrome::STOPPED)),
+            TurnState::Failed => Some((components::Tone::Danger, chrome::FAILED)),
             TurnState::Done | TurnState::Running => None,
         };
         let elapsed = turn
@@ -604,7 +604,7 @@ fn receipt_block(receipt: Rc<Receipt>, carries: bool, state: Agent) -> El {
         .child(el("span").text(&receipt_line_text(&receipt)));
     if failed > 0 {
         line.child(Chip {
-            tone: parts::Tone::Danger,
+            tone: components::Tone::Danger,
             text: &chrome::failed_calls(failed),
         });
     }
@@ -681,12 +681,12 @@ fn approval_block(approval: &Approval, state: Agent) -> El {
     el("div")
         .class(styles::APPROVAL)
         .child(Chip {
-            tone: parts::Tone::Accent,
+            tone: components::Tone::Accent,
             text: chrome::APPROVAL_NEEDED,
         })
         .child(el("span").class(styles::REASON).text(&approval.reason))
         .child(Chip {
-            tone: parts::Tone::Muted,
+            tone: components::Tone::Muted,
             text: "Enter",
         })
         .child(
@@ -702,7 +702,7 @@ fn approval_block(approval: &Approval, state: Agent) -> El {
             .class("approve"),
         )
         .child(Chip {
-            tone: parts::Tone::Muted,
+            tone: components::Tone::Muted,
             text: "Esc",
         })
         .child(

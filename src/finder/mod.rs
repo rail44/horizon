@@ -17,7 +17,7 @@ use horizon_ui::{
 };
 use keyboard_types::{Key, NamedKey};
 
-use crate::parts::{Field, Prompt};
+use horizon_components::{Field, Prompt};
 
 mod listing;
 mod source;

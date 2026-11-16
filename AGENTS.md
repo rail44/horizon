@@ -290,7 +290,8 @@ is using. A view is checked without a window: the tests under `tests/`
 build a view (or the whole shell) into a document, feed it the document's
 own input events, and assert on the document; a test that is about what is
 drawn paints the page into pixels on the CPU and reads them
-(`tests/terminal.rs`, `tests/parts.rs`, `tests/workspace.rs`). The window
+(`tests/terminal.rs`, `tests/workspace.rs`,
+`crates/horizon-components/tests/components.rs`). The window
 itself does not open on a virtual display (Vello's window renderer finds
 no adapter that can present there), so what only a window shows is looked
 at by a person.
@@ -335,6 +336,9 @@ contents.
 A view is a function that builds elements once and follows signals
 afterwards. `crates/horizon-ui` is what a view builds and reads with
 (`El`, `Page`) and the only code that names Blitz's document;
+`crates/horizon-components` is what several views draw the same (chip,
+button, field, the controls, Markdown as elements), over `horizon-ui`
+alone;
 `crates/horizon-theme-css` is the theme and the type scale as CSS
 variables. Domain logic lives in shared crates; `src/` holds the views and
 their wiring:
@@ -374,8 +378,8 @@ their wiring:
 - `wiki/` — a page of the project wiki (`crates/horizon-wiki`) with the
   owner's comment threads anchored in it. See
   `docs/project-wiki-design.md`.
-- `theme_settings.rs` / `parts/` — the theme settings view, and the parts
-  it is made of (slider, select, color picker).
+- `theme_settings.rs` — the theme settings view, made of the components
+  (slider, select, color picker) of `crates/horizon-components`.
 - `preview.rs` — the preview pane: a view shown from a wasm plugin
   (`preview-plugin/`). The plugin has the view's signals and handlers, the
   document is the shell's. See `docs/preview-pane-design.md`.
@@ -423,10 +427,11 @@ their wiring:
   size written out, a variable the theme does not have, a property CSS
   does not have); the theme's variables are listed in
   `crates/horizon-theme-css/variables.txt`. What several views draw the
-  same is a part in `src/parts/` (chip, button, field, the controls), and
-  `parts::gallery` shows them all: `HORIZON_GALLERY_OUT=<file.ppm> cargo
-  nextest run -p horizon --test parts --run-ignored only
-  paint_the_gallery` paints it in this machine's theme.
+  same is a component in `crates/horizon-components` (chip, button, field,
+  the controls), and its `gallery` shows them all:
+  `HORIZON_GALLERY_OUT=<file.ppm> cargo nextest run -p horizon-components
+  --test components --run-ignored only paint_the_gallery` paints it in
+  this machine's theme.
 - **Tests are colocated** next to the code in the crates (an external
   `tests.rs` declared via `#[cfg(test)] mod tests;`, or an inline
   `#[cfg(test)] mod tests { ... }` block). The root package's views are

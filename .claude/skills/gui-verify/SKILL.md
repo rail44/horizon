@@ -28,7 +28,7 @@ own input events, and assert on the document.
 
 Each view has a file to start from: `tests/terminal.rs`, `tests/agent/`,
 `tests/board.rs`, `tests/board_thread.rs`, `tests/markdown.rs`,
-`tests/wiki.rs`, `tests/parts.rs`, and `tests/workspace.rs` for the whole
+`tests/wiki.rs`, `crates/horizon-components/tests/components.rs`, and `tests/workspace.rs` for the whole
 shell.
 
 ## What is drawn
