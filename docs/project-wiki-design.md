@@ -246,6 +246,13 @@ Diagrams are deferred; gpui-component (7591a35) has no mermaid rendering.
 
 ### Package layout (decided 2026-11-09)
 
+- **Since 2026-11-16 what the wiki gives agents is a crate of its own**,
+  `crates/horizon-wiki-agent` (the page tools, the thread role, the ids
+  that tie a thread to its session, the skill), over `horizon-wiki`,
+  which keeps the store, the pages and the threads: the wiki's view, an
+  extension, is over `horizon-wiki` alone. Where this document names
+  `crates/horizon-wiki/src/agent.rs` or the skill "registered from
+  `horizon-wiki`", that is where they are now.
 - **`crates/horizon-wiki`**, a new domain crate depending on neither
   `horizon-agent` nor gpui (the board crate's boundary): the store and its
   paths, the concept file, page reads and writes (whole and partial),

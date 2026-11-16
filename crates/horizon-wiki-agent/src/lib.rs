@@ -3,6 +3,8 @@
 //! page tools, the role a thread's session runs with, the input that hands a
 //! comment to it, and the derived ids that tie a thread to its session.
 
+pub mod skill;
+
 use std::path::PathBuf;
 
 use schemars::JsonSchema;
@@ -10,10 +12,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::annotation::{AgentType, Annotation, Target};
-use crate::page::{body, Edit};
-use crate::thread::Thread;
-use crate::{Store, WikiError};
+use horizon_wiki::annotation::{AgentType, Annotation, Target};
+use horizon_wiki::page::{body, Edit};
+use horizon_wiki::thread::Thread;
+use horizon_wiki::{Store, WikiError};
 
 /// The namespace the wiki's derived ids are made in (UUID v5).
 const NAMESPACE: Uuid = Uuid::from_u128(0x6f3c_2d5e_8a41_4b7f_9c0e_51d2_a7b8_3e64);
@@ -256,7 +258,7 @@ pub fn run_tool(store: &Store, tool_id: &str, input: &Value) -> Result<Value, St
                     .map(|page| WikiPageEntry {
                         name: page.name,
                         title: page.title,
-                        id: page.id.map(crate::page::urn),
+                        id: page.id.map(horizon_wiki::page::urn),
                     })
                     .collect(),
             })
@@ -275,7 +277,7 @@ pub fn run_tool(store: &Store, tool_id: &str, input: &Value) -> Result<Value, St
             let id = store.write_page(&page, &text).map_err(message)?;
             to_value(WikiPageWritten {
                 page,
-                id: crate::page::urn(id),
+                id: horizon_wiki::page::urn(id),
             })
         }
         "wiki_edit" => {
@@ -336,14 +338,14 @@ pub fn thread_input(store: &Store, page: &str, thread: &Thread, annotation: &Ann
     let current = store
         .read_page(page)
         .ok()
-        .map(|text| crate::logical::LogicalText::of_markdown(body(&text)))
+        .map(|text| horizon_wiki::logical::LogicalText::of_markdown(body(&text)))
         .zip(quote.as_ref())
-        .map(|(logical, quote)| crate::anchor::anchor(&logical, quote));
+        .map(|(logical, quote)| horizon_wiki::anchor::anchor(&logical, quote));
     let moved = match current {
-        Some(crate::anchor::Anchor::Orphaned) => {
+        Some(horizon_wiki::anchor::Anchor::Orphaned) => {
             "\nThe page has changed since, and the passage is no longer in it.\n"
         }
-        Some(crate::anchor::Anchor::Moved { exact: false, .. }) => {
+        Some(horizon_wiki::anchor::Anchor::Moved { exact: false, .. }) => {
             "\nThe page has changed since; the passage reads differently now.\n"
         }
         _ => "",
@@ -354,7 +356,7 @@ pub fn thread_input(store: &Store, page: &str, thread: &Thread, annotation: &Ann
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::annotation::{markdown_body, Agent};
+    use horizon_wiki::annotation::{markdown_body, Agent};
 
     #[test]
     fn derived_ids_are_stable_and_distinct() {

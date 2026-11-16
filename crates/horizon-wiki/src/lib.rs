@@ -5,13 +5,11 @@
 //! logical text comments are anchored in, the comment log, and the skill
 //! that maintains the wiki; it depends on neither `horizon-agent` nor gpui.
 
-pub mod agent;
 pub mod anchor;
 pub mod annotation;
 pub mod concepts;
 pub mod logical;
 pub mod page;
-pub mod skill;
 pub mod store;
 pub mod thread;
 pub mod view_model;

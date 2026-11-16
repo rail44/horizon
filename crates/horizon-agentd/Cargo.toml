@@ -11,6 +11,7 @@ horizon-acp = { path = "../horizon-acp" }
 horizon-agent = { path = "../horizon-agent" }
 horizon-board = { path = "../horizon-board" }
 horizon-wiki = { path = "../horizon-wiki" }
+horizon-wiki-agent = { path = "../horizon-wiki-agent" }
 horizon-config = { path = "../horizon-config" }
 horizon-sandbox = { path = "../horizon-sandbox" }
 horizon-wire = { path = "../horizon-wire" }

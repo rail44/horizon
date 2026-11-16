@@ -374,7 +374,8 @@ their wiring:
   share. The Markdown view (`horizon new markdown <path>`), the wiki
   (`horizon new wiki [<page>]`; a page of the project wiki,
   `crates/horizon-wiki`, with the owner's comment threads anchored in
-  it, `docs/project-wiki-design.md`) and the theme settings
+  it, `docs/project-wiki-design.md`; what the wiki gives agents is
+  `crates/horizon-wiki-agent`) and the theme settings
   (`horizon new theme-settings`) are not here: they are extensions, whole
   in `plugins/markdown`, `plugins/wiki` and `plugins/theme-settings`,
   over `horizon-ui` and `horizon-components`.

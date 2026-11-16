@@ -3066,6 +3066,7 @@ dependencies = [
  "horizon-daemon-testkit",
  "horizon-sandbox",
  "horizon-wiki",
+ "horizon-wiki-agent",
  "horizon-wire",
  "libc",
  "serde",
@@ -3190,12 +3191,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-markdown"
+version = "0.1.0"
+
+[[package]]
 name = "horizon-markdown-plugin"
 version = "0.1.0"
 dependencies = [
  "horizon-components",
+ "horizon-markdown",
  "horizon-ui",
- "horizon-workspace",
  "keyboard-types",
  "wit-bindgen 0.63.0",
 ]
@@ -3349,11 +3354,10 @@ dependencies = [
 name = "horizon-wiki"
 version = "0.1.0"
 dependencies = [
- "horizon-workspace",
+ "horizon-markdown",
  "jsonschema",
  "libc",
  "markdown",
- "schemars 1.2.3",
  "serde",
  "serde_json",
  "tempfile",
@@ -3362,13 +3366,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-wiki-agent"
+version = "0.1.0"
+dependencies = [
+ "horizon-wiki",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "horizon-wiki-plugin"
 version = "0.1.0"
 dependencies = [
  "horizon-components",
+ "horizon-markdown",
  "horizon-ui",
  "horizon-wiki",
- "horizon-workspace",
  "keyboard-types",
  "markdown",
  "uuid",

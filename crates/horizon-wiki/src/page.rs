@@ -36,7 +36,7 @@ struct Frontmatter<'a> {
 }
 
 /// Recognizes the same block the Markdown view splits off
-/// (`crates/horizon-workspace/src/markdown.rs`): an opening `---` line (LF or CRLF) and the
+/// (`crates/horizon-markdown`): an opening `---` line (LF or CRLF) and the
 /// first `---` or `...` line after it, so a page's body starts at the same
 /// byte here and in the view.
 fn frontmatter(text: &str) -> Option<Frontmatter<'_>> {
@@ -258,7 +258,7 @@ mod tests {
     }
 
     /// The body starts where the Markdown view's does
-    /// (`crates/horizon-workspace/src/markdown.rs`): CRLF fences and a `...` close count.
+    /// (`crates/horizon-markdown`): CRLF fences and a `...` close count.
     #[test]
     fn the_body_split_matches_the_markdown_view() {
         assert_eq!(body("---\r\ntitle: T\r\n---\r\nbody\r\n"), "body\r\n");

@@ -16,9 +16,9 @@ use std::sync::{Arc, Once};
 use horizon_agent::contract::{SessionId, SessionInput};
 use horizon_agent::roles::{RoleDefinition, RoleId};
 use horizon_agent::tools::{ExternalOutput, ExternalTool};
-use horizon_wiki::agent::{self, THREAD_ROLE_ID};
 use horizon_wiki::annotation::{markdown_body, Agent, Annotation};
 use horizon_wiki::{Store, Thread, WikiError};
+use horizon_wiki_agent::{self as agent, THREAD_ROLE_ID};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -55,7 +55,7 @@ pub(crate) fn register() {
             unattended: true,
         }]);
         horizon_agent::skills::register_external_skill_sources(vec![
-            horizon_wiki::skill::SKILL_SOURCE,
+            horizon_wiki_agent::skill::SKILL_SOURCE,
         ]);
         let tools = agent::tool_definitions()
             .into_iter()

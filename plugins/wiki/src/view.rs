@@ -43,10 +43,10 @@ use horizon_ui::{
 use horizon_wiki::Store;
 
 use horizon_components::{Button, Chip, Press, Tone};
+use horizon_markdown::{LinkTarget, resolve_link};
 use horizon_wiki::anchor::Anchor;
 use horizon_wiki::annotation::{Agent, AgentType, Annotation, markdown_body};
 use horizon_wiki::view_model::{PlacedThread, WikiPage};
-use horizon_workspace::markdown::{LinkTarget, resolve_link};
 use keyboard_types::{Key, NamedKey};
 
 mod render;
