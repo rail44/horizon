@@ -1,6 +1,14 @@
 //! What a CSS module is held to, beyond being CSS: its values come from
-//! the theme.
+//! the theme, and its rules are over its own elements.
 //!
+//! - A rule's selector names a class of the sheet. The classes are what
+//!   the module gives names no other sheet has; a rule without one
+//!   (`div { .. }`, `* { .. }`) is over every view in the document, which
+//!   the views share. (A rule inside another is under that one's, and
+//!   `:where(.a, .b)` or `:is(..)` names a class when each of its
+//!   selectors does.)
+//! - There is no `@layer`: the document's sheets are not layered, and the
+//!   engine does not take one that is among them.
 //! - A color is one of the theme's variables, not written out
 //!   (`transparent` and `currentColor` are not the theme's to give),
 //!   unless the sheet is let off that.
@@ -20,6 +28,8 @@ use lightningcss::declaration::DeclarationBlock;
 use lightningcss::properties::Property;
 use lightningcss::properties::custom::{CustomPropertyName, Variable};
 use lightningcss::properties::font::{FontSize, LineHeight};
+use lightningcss::rules::CssRule;
+use lightningcss::selector::{Component, Selector};
 use lightningcss::stylesheet::{PrinterOptions, StyleSheet};
 use lightningcss::traits::ToCss;
 use lightningcss::values::color::CssColor;
@@ -150,6 +160,50 @@ impl<'i> Visitor<'i> for Checks {
     }
 }
 
+/// Whether `selector` names a class: by itself, or in a `:where` or an
+/// `:is` every selector of which does.
+fn classed(selector: &Selector) -> bool {
+    selector
+        .iter_raw_match_order()
+        .any(|component| match component {
+            Component::Class(_) => true,
+            Component::Where(selectors) | Component::Is(selectors) => {
+                !selectors.is_empty() && selectors.iter().all(classed)
+            }
+            _ => false,
+        })
+}
+
+/// What among `rules`, the sheet's own or a conditional rule's, is over
+/// more than the sheet's elements.
+fn unconfined(rules: &[CssRule], faults: &mut Vec<String>) {
+    for rule in rules {
+        match rule {
+            CssRule::Style(style) => {
+                for selector in &style.selectors.0 {
+                    if !classed(selector) {
+                        let written =
+                            (selector.to_css_string(PrinterOptions::default())).unwrap_or_default();
+                        faults.push(format!(
+                            "the selector `{written}` names no class of this sheet: its rule \
+                             would be over every view in the document"
+                        ));
+                    }
+                }
+            }
+            CssRule::Media(media) => unconfined(&media.rules.0, faults),
+            CssRule::Supports(supports) => unconfined(&supports.rules.0, faults),
+            CssRule::Container(container) => unconfined(&container.rules.0, faults),
+            CssRule::LayerBlock(_) | CssRule::LayerStatement(_) => faults.push(
+                "`@layer`: the document's sheets are not layered, and the engine does not take \
+                 one that is among them"
+                    .to_string(),
+            ),
+            _ => {}
+        }
+    }
+}
+
 /// What in `sheet` is not as a CSS module is to be written, each said in
 /// a line.
 pub(crate) fn faults(sheet: &mut StyleSheet, written_colors: bool) -> Vec<String> {
@@ -157,6 +211,7 @@ pub(crate) fn faults(sheet: &mut StyleSheet, written_colors: bool) -> Vec<String
         written_colors,
         ..Checks::default()
     };
+    unconfined(&sheet.rules.0, &mut checks.faults);
     let Ok(()) = sheet.visit(&mut checks);
     let theme: HashSet<&str> = THEME.lines().map(str::trim).collect();
     let mut faults = checks.faults;
@@ -172,4 +227,61 @@ pub(crate) fn faults(sheet: &mut StyleSheet, written_colors: bool) -> Vec<String
         ));
     }
     faults
+}
+
+#[cfg(test)]
+mod tests {
+    use lightningcss::stylesheet::ParserOptions;
+
+    use super::*;
+
+    fn faults_of(css: &str) -> Vec<String> {
+        let mut sheet = StyleSheet::parse(css, ParserOptions::default()).expect("CSS");
+        faults(&mut sheet, false)
+    }
+
+    #[test]
+    fn a_rule_is_over_a_class_of_the_sheet() {
+        // A class anywhere in the selector, and whatever is inside a rule
+        // that has one.
+        let confined = "
+            .list { display: flex; > :first-child { margin: 0; } h1 { margin: 0; } }
+            .list .row:hover, div.row { display: flex; }
+            :where(.row) { flex: none; }
+            :is(.row, .list) > p { margin: 0; }
+            @media (min-width: 100px) { .list { display: block; } }
+            @keyframes turn { to { opacity: 0; } }
+        ";
+        assert_eq!(faults_of(confined), Vec::<String>::new());
+
+        for (css, selector) in [
+            ("div { display: flex; }", "div"),
+            ("* { margin: 0; }", "*"),
+            (".row, h1 { margin: 0; }", "h1"),
+            (":root { --x: 1px; }", ":root"),
+            ("@media (min-width: 100px) { p { margin: 0; } }", "p"),
+            ("body:has(.row) { margin: 0; }", "body:has(.row)"),
+            (":where(.row, p) { margin: 0; }", ":where(.row, p)"),
+            (":not(.row) { margin: 0; }", ":not(.row)"),
+        ] {
+            let faults = faults_of(css);
+            assert_eq!(faults.len(), 1, "{css}: {faults:?}");
+            assert!(
+                faults[0].starts_with(&format!("the selector `{selector}` names no class")),
+                "{css}: {faults:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_layer_is_refused() {
+        for css in [
+            "@layer extension { .row { margin: 0; } }",
+            "@layer one, two;",
+        ] {
+            let faults = faults_of(css);
+            assert_eq!(faults.len(), 1, "{css}: {faults:?}");
+            assert!(faults[0].starts_with("`@layer`"), "{css}: {faults:?}");
+        }
+    }
 }

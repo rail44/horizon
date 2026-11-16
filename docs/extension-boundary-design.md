@@ -312,6 +312,23 @@ The decisions and who made them are on board #76. What they come to:
   one in use (`docs/preview-pane-design.md`).
 - **A view that paints itself comes later**, through a subset of Canvas
   2D if at all.
+- **A plugin's CSS is kept to its own elements by how it is written.**
+  A sheet goes into the host's document as it is (`adopt-sheet`), beside
+  the shell's own views', which are written the same way: with
+  `css_module!`, which gives every class a name no other sheet has and
+  refuses a rule whose selector names none of them (`div { .. }`), so a
+  rule is over the elements its view put the class on. It refuses
+  `@layer` too. The host does not look into a sheet, so this holds for a
+  guest written with the SDK and not for one that calls `adopt-sheet`
+  with CSS of its own. What the engine has for keeping such a sheet in
+  (Blitz at the pinned revision, Stylo 0.22, measured 2026-11-16): a
+  rule inside `@scope` is not applied at all; a sheet nested under a
+  class (`.pane { <the sheet> }`) is kept to that class's subtree, with
+  `@media` inside it working and `:root` inside it matching nothing, but
+  a sheet wrapped as text gets out by closing the block, so the host
+  would have to parse it; an `@layer` beside unlayered sheets fails a
+  debug assertion in Stylo's rule tree. A sheet cannot reach the
+  network: the shell resolves only `data:` URLs.
 
 - **A pane's state is the extension's type.** The extension declares it
   in WIT, says when it changed (`state-changed`), and gives it when asked
@@ -400,9 +417,8 @@ The decisions and who made them are on board #76. What they come to:
   differ. What crosses to the host is unchanged (the component's type
   and the manifest's section), so an extension in another language is
   one whose WIT and section are written by hand. The Markdown view is
-  the first (`plugins/markdown`), beside the built-in one until it does
-  all the built-in one does.
+  the first (`plugins/markdown`).
 
-Open: keeping a plugin's CSS to its own tree; how the boundary is versioned;
-where extensions that are not this repository's live; the preview pane
-as one of them; a command's parameters; the built-in views made by the same command.
+Open: a sheet from a guest not written with the SDK (above); how the
+boundary is versioned; where extensions that are not this repository's
+live; a command's parameters beyond the one file a pane is made on.

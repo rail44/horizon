@@ -431,7 +431,10 @@ their wiring:
   (`el("div").class(styles::ROW)`), with names no other sheet has. The
   macro refuses what is not written from the theme (a color or a type
   size written out, a variable the theme does not have, a property CSS
-  does not have); the theme's variables are listed in
+  does not have), and what would be over more than the view's own
+  elements (a rule whose selector names no class of the sheet, an
+  `@layer`): every view's sheet, an extension's too, is in the one
+  document. The theme's variables are listed in
   `crates/horizon-theme-css/variables.txt`. What several views draw the
   same is a component in `crates/horizon-components` (chip, button, field,
   the controls), and its `gallery` shows them all:
