@@ -1,0 +1,43 @@
+package spike:bulk;
+
+/// The document's writes, one call each: what the boundary is today. The
+/// host makes a node and says its number.
+interface each {
+    create-element: func(tag: string) -> u64;
+    create-text: func(text: string) -> u64;
+    set-attribute: func(node: u64, name: string, value: string);
+    add-class: func(node: u64, class: string);
+    append: func(parent: u64, child: u64);
+}
+
+/// The same writes handed over together, as values of a WIT type. The
+/// guest numbers the nodes.
+interface typed {
+    variant op {
+        create-element(tuple<u64, string>),
+        create-text(tuple<u64, string>),
+        set-attribute(tuple<u64, string, string>),
+        add-class(tuple<u64, string>),
+        append(tuple<u64, u64>),
+    }
+    apply: func(ops: list<op>);
+}
+
+/// The same writes handed over together, as bytes in a form of the
+/// spike's own.
+interface packed {
+    apply: func(ops: list<u8>);
+}
+
+world guest {
+    import each;
+    import typed;
+    import packed;
+
+    /// Builds `rows` rows of a list, fifty-five writes each, one way.
+    export build-each: func(rows: u32);
+    export build-typed: func(rows: u32);
+    export build-packed: func(rows: u32);
+    /// Does nothing: what calling the guest costs.
+    export nothing: func();
+}

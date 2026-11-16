@@ -1,0 +1,10 @@
+[package]
+name = "host-bulk"
+description = "Times a guest building the same list three ways: a call for each write, the writes together as typed values, the writes together as bytes."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wasmtime = "50"
+wasmtime-wasi = "50"

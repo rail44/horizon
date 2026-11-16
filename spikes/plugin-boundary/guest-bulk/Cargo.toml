@@ -1,0 +1,12 @@
+[package]
+name = "guest-bulk"
+description = "A guest that builds the same list three ways: a call for each write, the writes together as typed values, the writes together as bytes."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }

@@ -1078,6 +1078,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "guest-bulk"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "guest-doc"
 version = "0.1.0"
 dependencies = [
@@ -1138,6 +1145,14 @@ name = "hermit-abi"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
+
+[[package]]
+name = "host-bulk"
+version = "0.1.0"
+dependencies = [
+ "wasmtime",
+ "wasmtime-wasi",
+]
 
 [[package]]
 name = "host-driver"
