@@ -19,9 +19,10 @@ and handlers, and the document is the shell's.
    store is handed in whole (`Source::Ready`), and following the log is
    native-only. `Background::run` runs its work in place in a plugin.
 2. A view in a plugin uses `horizon_ui` as it does natively. What does not
-   cross: a paint widget, `takes_text`, `on_paste`, the clipboard, the
-   page's selection, `windowed`. The events that cross are keys, pointer
-   events and `input` (`crates/horizon-ui/wit/plugin.wit`).
+   cross: a paint widget, `takes_text`, `on_paste`, the clipboard,
+   `windowed`. The events that cross are keys, pointer events and `input`,
+   and a view reads what is selected of its own text
+   (`crates/horizon-ui/wit/plugin.wit`).
 3. Add the preview to `preview-plugin/src/lib.rs`: a name in `names` and an
    arm in `view` that builds the view over sample data. The view's CSS
    comes with it (`horizon_ui::css_module!`).

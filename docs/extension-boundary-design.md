@@ -290,6 +290,12 @@ The decisions and who made them are on board #76. What they come to:
   watches files for its own views (`src/watch.rs`). A view
   watches one with `horizon_ui::guest::watch`, which reruns the plugin's
   effects after each change.
+- **A view reads what is selected of its own text.** The selection is the
+  page's, as the DOM's is the document's: `document.selection` gives, for
+  each element of the plugin's whose own lines of text it covers part of,
+  the bytes it covers, and `document.inline-text` that text. What is
+  selected in another view's elements is not said. Setting the selection
+  does not cross.
 - **wasmtime 50.** Done.
 - **The first extension is the Markdown view**, which has taken the
   built-in one's place: `markdown` is the extension, and the shell has no

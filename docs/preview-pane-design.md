@@ -38,7 +38,8 @@ shell's renderer with the shell's fonts, beside the native panes.
   said.
 
 What does not cross to a plugin: a paint widget, `takes_text`, `on_paste`,
-the clipboard, the page's selection, `windowed`. A view that needs one of
+the clipboard, `windowed`. (What is selected on the page does, as far as
+it is in the plugin's own elements: `document.selection`.) A view that needs one of
 them cannot be previewed yet.
 
 ## The plugin

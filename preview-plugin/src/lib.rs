@@ -57,6 +57,31 @@ fn view(name: &str) -> Option<El> {
         "components" => Some(horizon_components::gallery()),
         "board-list" => Some(board_list(tasks())),
         "board-list-empty" => Some(board_list(Vec::new())),
+        // What is selected of its words, said back: what a plugin hears of
+        // the page's selection (`tests/preview.rs`). Not among the names.
+        "selection" => {
+            use horizon_ui::reactive_graph::signal::RwSignal;
+            use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set};
+            use horizon_ui::{each_layout, el, relayout};
+
+            let said = RwSignal::new(String::new());
+            each_layout(move |page| {
+                let selected: String = (page.selection().into_iter())
+                    .filter_map(|(element, start, end)| {
+                        let text = page.inline_text(element)?;
+                        text.get(start..end).map(str::to_string)
+                    })
+                    .collect();
+                if selected != said.get_untracked() {
+                    said.set(selected);
+                    relayout();
+                }
+            });
+            let root = el("div");
+            root.child(el("p").class("words").text("Some words to select"))
+                .child(el("p").class("said").text_dyn(move || said.get()));
+            Some(root)
+        }
         // Never comes back: what the shell's limit on a call is for
         // (`tests/preview.rs`). Not among the names.
         "stuck" => {
@@ -77,6 +102,7 @@ wit_bindgen::generate!({
         "horizon:ui/desktop": horizon_ui::guest::bindings::horizon::ui::desktop,
         "horizon:ui/pane": horizon_ui::guest::bindings::horizon::ui::pane,
         "horizon:ui/files": horizon_ui::guest::bindings::horizon::ui::files,
+        "horizon:ui/theme": horizon_ui::guest::bindings::horizon::ui::theme,
     },
 });
 

@@ -350,6 +350,27 @@ impl Host for State {
         let element = El(self.own(node)?);
         Ok(host::lent(|page| page.has_focus_within(element)).unwrap_or(false))
     }
+
+    fn selection(&mut self) -> wasmtime::Result<Vec<self::horizon::ui::document::Selected>> {
+        let selection = host::lent(|page| page.selection()).unwrap_or_default();
+        // (What is selected in another view's elements is not this
+        // plugin's to hear of.)
+        Ok((selection.into_iter())
+            .filter(|(element, ..)| self.owned.contains(&element.0))
+            .map(
+                |(element, start, end)| self::horizon::ui::document::Selected {
+                    node: element.0.as_u64(),
+                    start: start as u32,
+                    end: end as u32,
+                },
+            )
+            .collect())
+    }
+
+    fn inline_text(&mut self, node: u64) -> wasmtime::Result<Option<String>> {
+        let element = El(self.own(node)?);
+        Ok(host::lent(|page| page.inline_text(element)).flatten())
+    }
 }
 
 impl self::horizon::ui::desktop::Host for State {

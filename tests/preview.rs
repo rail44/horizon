@@ -257,6 +257,20 @@ fn a_view_in_a_plugin_is_drawn_in_this_document_and_takes_its_keys() {
 
 #[test]
 #[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
+fn a_plugin_hears_what_is_selected_of_its_own_text() {
+    let opened = open("selection");
+    opened.until("the words", || opened.all("words").len() == 1);
+    assert_eq!(opened.text_of(opened.all("said")[0]), "");
+    // "words", selected as a drag over it would.
+    let words = horizon_ui::El(opened.all("words")[0]);
+    horizon_ui::testing::select(&opened.app, (words, 5), (words, 10));
+    opened.until("the selection said", || {
+        opened.text_of(opened.all("said")[0]) == "words"
+    });
+}
+
+#[test]
+#[ignore = "needs the plugin built for wasm32-wasip2: scripts/check-preview-plugin.sh"]
 fn the_components_are_drawn_from_a_plugin_with_their_sheets() {
     let opened = open("components");
     let chips = opened.all("chip");

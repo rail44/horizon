@@ -52,6 +52,22 @@ interface document {
     lines: func(node: u64) -> option<u32>;
     has-focus: func(node: u64) -> bool;
     has-focus-within: func(node: u64) -> bool;
+
+    /// A part of the text selected on the page: an element of the
+    /// plugin's whose own lines of text the selection covers part of, and
+    /// the bytes of that text (`inline-text`) it covers.
+    record selected {
+        node: u64,
+        start: u32,
+        end: u32,
+    }
+    /// The text selected on the page outside any field, as far as it is
+    /// in the plugin's own elements.
+    selection: func() -> list<selected>;
+    /// The text an element lays out in lines of its own: its text nodes'
+    /// and its inline descendants', in order. None for an element that
+    /// lays out blocks, or has not been laid out.
+    inline-text: func(node: u64) -> option<string>;
 }
 
 /// What every plugin exports: the events at the nodes it listens at,

@@ -399,6 +399,29 @@ impl Page<'_> {
     pub fn has_focus_within(&self, element: El) -> bool {
         host::has_focus_within(id(element))
     }
+
+    /// The text selected on the page outside any field, as far as it is
+    /// in the plugin's own elements: for each element whose own lines of
+    /// text the selection covers part of, the bytes of that text
+    /// ([`inline_text`](Self::inline_text)) it covers.
+    pub fn selection(&self) -> Vec<(El, usize, usize)> {
+        (host::selection().into_iter())
+            .map(|selected| {
+                (
+                    El(node(selected.node)),
+                    selected.start as usize,
+                    selected.end as usize,
+                )
+            })
+            .collect()
+    }
+
+    /// The text an element lays out in lines of its own: its text nodes'
+    /// and its inline descendants', in order. `None` for an element that
+    /// lays out blocks, or has not been laid out.
+    pub fn inline_text(&self, element: El) -> Option<String> {
+        host::inline_text(id(element))
+    }
 }
 
 /// Runs `work` after every layout from now on, for as long as what it was
