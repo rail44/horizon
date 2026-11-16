@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use horizon_ui::reactive_graph::traits::WithUntracked;
-use notify::RecommendedWatcher;
 
 use super::{Shell, plugins};
 use crate::extension::{Extension, load_all};
@@ -18,7 +17,7 @@ pub(super) struct Watched {
     /// The component's file.
     file: PathBuf,
     changed: Changed,
-    _watcher: RecommendedWatcher,
+    _watcher: watch::Watched,
 }
 
 impl Shell {
