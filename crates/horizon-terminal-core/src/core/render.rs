@@ -341,8 +341,8 @@ impl<'a> SpanStyle<'a> {
     ) -> Self {
         let underline = underline_kind(flags);
         Self {
-            fg: convert_color(cell_fg(fg, flags)),
-            bg: convert_color(cell_bg(bg, flags)),
+            fg: convert_color(cell_fg(fg, bg, flags)),
+            bg: convert_color(cell_bg(fg, bg, flags)),
             italic: flags.contains(Flags::ITALIC),
             strikethrough: flags.contains(Flags::STRIKEOUT),
             underline,
@@ -482,7 +482,7 @@ fn ends_with_zero_width(text: &str) -> bool {
 /// it stays here even though the final RGB resolution moved to the host
 /// (`docs/session-daemon-design.md` decision 8). Indexed/truecolor values
 /// pass through unchanged, matching pre-cut behavior.
-fn cell_fg(color: AnsiColor, flags: Flags) -> AnsiColor {
+fn promoted(color: AnsiColor, flags: Flags) -> AnsiColor {
     if flags.contains(Flags::BOLD) {
         match color {
             AnsiColor::Named(named) => AnsiColor::Named(named.to_bright()),
@@ -498,13 +498,22 @@ fn cell_fg(color: AnsiColor, flags: Flags) -> AnsiColor {
     }
 }
 
-fn cell_bg(color: AnsiColor, flags: Flags) -> AnsiColor {
-    let mut fg = cell_fg(AnsiColor::Named(AnsiNamedColor::Foreground), flags);
-    let mut bg = color;
-    if flags.contains(Flags::INVERSE) {
-        std::mem::swap(&mut fg, &mut bg);
+/// The color a cell's text is drawn in: its foreground, promoted, or
+/// under `INVERSE` its background.
+fn cell_fg(fg: AnsiColor, bg: AnsiColor, flags: Flags) -> AnsiColor {
+    match flags.contains(Flags::INVERSE) {
+        true => bg,
+        false => promoted(fg, flags),
     }
-    bg
+}
+
+/// The color a cell is filled with: its background, or under `INVERSE`
+/// its foreground, promoted.
+fn cell_bg(fg: AnsiColor, bg: AnsiColor, flags: Flags) -> AnsiColor {
+    match flags.contains(Flags::INVERSE) {
+        true => promoted(fg, flags),
+        false => bg,
+    }
 }
 
 /// `row` is already viewport-relative (the caller has added `display_offset`

@@ -68,9 +68,9 @@ pub enum TerminalColor {
 ///   (`cell_fg` applies `NamedColor::to_dim` under the `DIM` flag).
 /// - `Foreground`/`Background`/`Cursor` are the default-role slots; only
 ///   `Foreground` is ever bold/dim-promoted this way too, producing
-///   `BrightForeground`/`DimForeground` (`Background`/`Cursor` cells never
-///   carry `BOLD`/`DIM` promotion — `cell_bg` only reads the *default*
-///   foreground's promoted form when swapping colors under `INVERSE`).
+///   `BrightForeground`/`DimForeground`. Under `INVERSE` a cell's two
+///   colors change places after the promotion, so a promoted form can be
+///   a cell's background and `Background` its text's color.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum NamedColor {
     Black,

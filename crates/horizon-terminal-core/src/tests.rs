@@ -304,6 +304,37 @@ fn sgr_text_styles_reach_the_span() {
     assert!(frame.lines[7].spans.len() >= 2);
 }
 
+/// SGR 7 changes the places of a cell's two colors, whichever they are:
+/// text written in the default colors is the background's color on the
+/// foreground's, not the foreground's on itself.
+#[test]
+fn inverse_text_is_its_background_s_color_on_its_foreground_s() {
+    let mut core = TerminalCore::new(TerminalSize::new(40, 4));
+    core.write_vt(b"\x1b[7mD\x1b[0m\r\n\x1b[7;31;44mC\x1b[0m\r\n\x1b[7;1mB\x1b[0m");
+
+    let frame = core.snapshot_frame();
+    let span = |row: usize, text: &str| {
+        frame.lines[row]
+            .spans
+            .iter()
+            .find(|span| span.text == text)
+            .unwrap_or_else(|| panic!("no span {text:?} on row {row}"))
+            .clone()
+    };
+    let named = TerminalColor::Named;
+
+    let plain = span(0, "D");
+    assert_eq!(plain.fg, named(NamedColor::Background));
+    assert_eq!(plain.bg, named(NamedColor::Foreground));
+    let colored = span(1, "C");
+    assert_eq!(colored.fg, named(NamedColor::Blue));
+    assert_eq!(colored.bg, named(NamedColor::Red));
+    // Bold's brighter color goes with the foreground to where it is drawn.
+    let bold = span(2, "B");
+    assert_eq!(bold.fg, named(NamedColor::Background));
+    assert_eq!(bold.bg, named(NamedColor::BrightForeground));
+}
+
 /// SGR 58 (underline color) reaches the span in both its truecolor and
 /// indexed forms, and is normalized away on a cell that is not underlined
 /// (`TerminalSpan::underline_color`'s contract).
