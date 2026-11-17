@@ -941,7 +941,7 @@ mod tests {
             }),
             assistant_delta("a"),
             AgentFrameItem::HistoryCleared(HistoryCleared {
-                cleared_occurrence_ids: (0..12).map(|i| i.to_string()).collect(),
+                cleared_occurrence_ids: Vec::from_fn(12, |i| i.to_string()),
                 recovered_chars: 31_204,
             }),
             AgentFrameItem::MemoryDigest(MemoryDigest {

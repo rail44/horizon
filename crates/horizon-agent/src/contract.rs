@@ -72,7 +72,7 @@ impl OccurrenceId {
     /// suppressed rather than satisfied: a `Default` that silently mints a
     /// random identity is a hazard the moment any container derives
     /// `Default` and gets an occurrence nothing ever emitted.
-    #[allow(clippy::new_without_default)]
+    #[expect(clippy::new_without_default)]
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
     }

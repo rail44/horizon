@@ -250,7 +250,7 @@ fn a_worst_case_scroll_window_stays_under_the_events_cap() {
     for columns in [80usize, 200, 500, 1000] {
         let max_rows = (budget / (columns * WORST_CASE_BYTES_PER_CELL)).max(1);
         let row = TerminalLine {
-            spans: (0..columns).map(|_| worst_span()).collect(),
+            spans: Vec::from_fn(columns, |_| worst_span()),
         };
         let window = TerminalScrollWindow {
             lines: vec![row; max_rows],

@@ -481,7 +481,7 @@ fn resolve_standard_bash(
 /// host-execution-era request replayed against this build) and one whose
 /// grants no longer revalidate both forward the prior result rather than
 /// running anything.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn resolve_filesystem_denial_retry(
     session_id: SessionId,
     runtime: &SessionRuntime,

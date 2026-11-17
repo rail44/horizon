@@ -138,7 +138,7 @@ mod tests {
 
     /// Doc comments become descriptions; a field without one renders bare.
     #[derive(JsonSchema)]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     struct Sample {
         /// Counts containment refusals.
         denials: usize,
@@ -157,7 +157,7 @@ mod tests {
     /// A wrapped doc comment is reflowed, so a sentence does not break where
     /// the author's editor happened to wrap it.
     #[derive(JsonSchema)]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     struct Wrapped {
         /// Counts refusals the sandbox reported from the kernel,
         /// never ones a command merely printed.
@@ -177,7 +177,7 @@ mod tests {
     /// legend is one line per field, so the break must still separate the two
     /// sentences rather than run them together.
     #[derive(JsonSchema)]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     struct Paragraphs {
         /// Where it ended.
         ///
@@ -204,7 +204,7 @@ mod tests {
     /// and its tag once. A legend that only read the top level would come out
     /// empty and then vanish from the description without failing.
     #[derive(JsonSchema)]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     #[serde(tag = "status", rename_all = "snake_case")]
     enum Tagged {
         Started {

@@ -286,7 +286,7 @@ const fn box_segments(
 /// Looks up the four-arm style descriptor for a box-drawing codepoint.
 /// Returns `None` for rounded corners, diagonals, and anything outside
 /// U+2500..U+257F.
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 fn box_draw_segments(c: char) -> Option<BoxDrawSegments> {
     use BoxLineStyle::{Double, Heavy, Light, None as Empty};
 

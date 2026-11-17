@@ -9,10 +9,6 @@ pub(crate) const HELPER_BIN_NAME: &str = "horizon-sandbox-helper";
 /// Cargo's build output.
 const HELPER_PACKAGE: &str = "horizon-sandbox";
 
-// Unreferenced under cfg(test): only the production spawn_with_grants
-// (cfg(not(test)) in linux/mod.rs) calls this, but the module is compiled
-// under test for the unit tests below.
-#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn resolve() -> Result<PathBuf, SandboxError> {
     resolve_from(
         std::env::var_os("CARGO_BIN_EXE_horizon-sandbox-helper").map(PathBuf::from),
@@ -117,7 +113,6 @@ fn workspace_uplifted_helper(
 /// protocol marker (the `#[used]` static in `bin/horizon-sandbox-helper.rs`
 /// is `#[cfg(not(test))]`-gated so the harness variant does not carry it);
 /// choose the newest matching executable and cache it.
-#[cfg_attr(test, allow(dead_code))]
 fn cargo_test_artifact(executable_dir: &std::path::Path) -> Option<PathBuf> {
     static CACHED: OnceLock<Option<PathBuf>> = OnceLock::new();
     CACHED

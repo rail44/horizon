@@ -234,7 +234,7 @@ pub(super) fn models_url_for(kind: crate::config::ProviderKind, base_url: &str) 
 /// Anthropic's model-listing path: `{host}/v1/models`.
 fn anthropic_models_url(base_url: &str) -> String {
     let base = base_url.trim_end_matches('/');
-    let base = base.strip_suffix("/v1").unwrap_or(base);
+    let base = base.trim_suffix("/v1");
     format!("{base}/v1/models")
 }
 

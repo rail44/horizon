@@ -113,7 +113,7 @@ pub struct Record {
 /// is intact is never mistaken for full corruption just because its
 /// `event` key holds something this build can't decode.
 #[derive(Deserialize)]
-#[allow(dead_code)] // Only `schema`/`version`/`sequence`/`event_id` are read back out; the rest are a validity gate on the envelope's other keys.
+#[expect(dead_code)] // Only `schema`/`version`/`sequence`/`event_id` are read back out; the rest are a validity gate on the envelope's other keys.
 struct RecordEnvelope {
     schema: String,
     version: u32,
@@ -312,8 +312,8 @@ pub(crate) fn read_from(path: &Path, offset: u64) -> Result<ReadReport> {
     for raw_line in text.split_inclusive('\n') {
         line_end += raw_line.len() as u64;
         // The same line content `str::lines` yields: no `\n`, no trailing `\r`.
-        let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
-        let line = line.strip_suffix('\r').unwrap_or(line);
+        let line = raw_line.trim_suffix('\n');
+        let line = line.trim_suffix('\r');
         if line.trim().is_empty() {
             continue;
         }
@@ -408,7 +408,7 @@ pub(crate) fn cursor_line_matches(path: &Path, cursor: &LogCursor) -> Result<boo
     let Ok(text) = std::str::from_utf8(&line) else {
         return Ok(false);
     };
-    let text = text.strip_suffix('\r').unwrap_or(text);
+    let text = text.trim_suffix('\r');
     let Ok(envelope) = serde_json::from_str::<RecordEnvelope>(text) else {
         return Ok(false);
     };
@@ -912,7 +912,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
         let (writer, _init_rx) = WriterHandle::open(&path);
 
-        let session_ids: Vec<SessionId> = (0..4).map(|_| SessionId::new()).collect();
+        let session_ids = Vec::from_fn(4, |_| SessionId::new());
         let events_per_session = 25_usize;
         let large_payload = "x".repeat(6_000);
 

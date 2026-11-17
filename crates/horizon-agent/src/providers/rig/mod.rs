@@ -16,9 +16,9 @@ mod stream;
 pub(crate) use model_limits::list_model_ids;
 
 use clearing::ClearingState;
-#[allow(unused_imports)]
+#[expect(unused_imports)]
 use completion::{ToolCallDescriptor, TurnCompletion, complete_rig_turn};
-#[allow(unused_imports)]
+#[cfg(test)]
 use history::load_rig_session_history;
 use mapping::rig_workspace_snapshot_call;
 use session::spawn_rig_session;

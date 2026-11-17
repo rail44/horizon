@@ -45,7 +45,7 @@ pub(in crate::tools) fn execute(
             break;
         }
         visited += 1;
-        let relative = entry.path().strip_prefix(&base).unwrap_or(entry.path());
+        let relative = entry.path().trim_prefix(&base);
         if !matcher.is_match(relative) {
             continue;
         }

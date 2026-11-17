@@ -55,7 +55,6 @@ mod turn;
 // Re-export the public surface the parent `rig` module and tests depend on.
 // These must keep resolving as `super::session::<name>` from `rig/mod.rs` and
 // `tests.rs`.
-#[allow(unused_imports)]
 pub(crate) use state::SessionLoopState;
 
 /// Spawns one rig session with its initial provider configuration.

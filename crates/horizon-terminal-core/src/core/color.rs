@@ -85,7 +85,7 @@ pub struct TerminalColorScheme {
 /// serde shape; the wire-schema artifact sees this in its place.
 #[derive(JsonSchema)]
 #[schemars(rename = "Rgb")]
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct RgbSchema {
     r: u8,
     g: u8,

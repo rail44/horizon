@@ -238,7 +238,7 @@ impl AgentdHandle {
         (handle, host_tools, workspace_roots)
     }
 
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     fn parts() -> (
         Self,
         Receiver<HostToolRequest>,

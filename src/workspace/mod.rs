@@ -1052,7 +1052,7 @@ fn strip(shell: Shell) -> El {
                 .child(
                     el("div")
                         .class(styles::TITLE)
-                        .text_dyn(move || tab(index).map(|tab| tab.title).unwrap_or_default()),
+                        .text_dyn(move || tab(index).map_or_default(|tab| tab.title)),
                 )
                 // Closing a tab detaches the sessions in it.
                 .child(

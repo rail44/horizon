@@ -40,11 +40,10 @@ mod agent;
 mod board;
 mod markdown;
 mod report;
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[path = "../../tests/agent/sample.rs"]
 mod sample;
 mod shell;
-#[allow(dead_code)]
 #[path = "../../tests/support/mod.rs"]
 mod support;
 mod terminal;

@@ -784,7 +784,7 @@ fn run_writer(
 /// out earlier would answer without those records. If every handle is
 /// dropped first, the loop just returns and the rebuild is abandoned with
 /// the process; the projection stays unstamped and the next start rebuilds.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn run_writer_loop(
     file: impl Write,
     path: &Path,

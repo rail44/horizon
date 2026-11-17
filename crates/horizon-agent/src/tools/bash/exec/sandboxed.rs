@@ -66,7 +66,7 @@ pub use result::exclude_git_metadata;
 /// provisioning under the first writable root -- `SCRATCH_DIR_NAME` -- which
 /// replaced the retired bwrap backend's private `--tmpfs /tmp`), so the host
 /// temp dir must never be a writable root.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(in crate::tools::bash) fn run_sandboxed(
     registration: &Registration,
     identity: &crate::contract::ToolCallIdentity,

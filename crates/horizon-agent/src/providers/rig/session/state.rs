@@ -108,7 +108,7 @@ impl SessionLoopState {
     /// Constructs the state [`Self::run`] needs, doing the async init
     /// (clearing-state discovery, command bridging, wake registration) that
     /// must happen inside the loop's own runtime.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) async fn new(
         session_id: SessionId,
         commands_rx: crossbeam_channel::Receiver<Command>,

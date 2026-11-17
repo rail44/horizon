@@ -283,7 +283,7 @@ pub fn owner_id(wiki_root: &Path) -> Result<Uuid> {
 
 fn parse_owner(text: &str) -> Option<Uuid> {
     let value = text.trim();
-    Uuid::parse_str(value.strip_prefix("urn:uuid:").unwrap_or(value)).ok()
+    Uuid::parse_str(value.trim_prefix("urn:uuid:")).ok()
 }
 
 /// How a log is held while it is read, or read and appended to.

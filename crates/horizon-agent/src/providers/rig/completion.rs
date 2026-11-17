@@ -141,7 +141,7 @@ pub(super) struct ToolCallDescriptor {
     pub(super) args: serde_json::Value,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(super) async fn complete_rig_turn(
     config: &RigAgentConfig,
     environment: &SessionEnvironment,
@@ -412,7 +412,7 @@ async fn rig_provider_turn_with_retry(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn rig_provider_turn_streaming(
     config: &RigAgentConfig,
     client: RigCompletionClient,
@@ -441,7 +441,7 @@ async fn rig_provider_turn_streaming(
 /// One streamed provider turn on whichever client the turn's kind built:
 /// rig 0.44 hands every provider to a consumer as one erased
 /// `DynModel<Completion>`, so both kinds share this body unchanged.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn run_provider_stream(
     config: &RigAgentConfig,
     model: DynModel<Completion>,

@@ -43,7 +43,7 @@ use crate::worktree::WorktreeInfo;
 /// request as it arrives, forwarding the resulting (non-ephemeral) events to
 /// Horizon over the wire exactly as `LiveState::extend_provider_events`
 /// folded them in-process.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(super) fn run_session(
     session_id: SessionId,
     provider_id: ProviderId,
@@ -311,7 +311,7 @@ pub(super) fn run_session(
 /// `docs/agent-runtime-split-design.md` recorded as trimmed for agentd mode.
 /// Feedback keeps its dedicated wire variant through the shared conversion;
 /// it cannot also carry a conversation event.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn handle_provider_event(
     host: &dyn HostTools,
     state: &Arc<AgentdState>,

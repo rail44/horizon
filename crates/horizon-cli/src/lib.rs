@@ -46,7 +46,7 @@ use std::os::unix::net::UnixStream;
 /// `std::env::var` reads (`HORIZON_SOCKET`/`HORIZON_SESSION_ID`), done by
 /// the caller so this function stays a pure mapping from its arguments to
 /// an exit code plus writes to `stdout`/`stderr`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn run(
     args: &[String],
     env_socket: Option<String>,

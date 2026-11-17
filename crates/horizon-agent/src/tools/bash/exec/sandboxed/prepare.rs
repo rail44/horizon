@@ -182,7 +182,7 @@ fn configure_ssh_tunneling(
 // doc comment records Linux's separate enforcement/netcat dialect); on
 // Linux the only caller is `sandbox_provisioning_tests`, which clippy's
 // non-test lib target cannot see.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(all(not(target_os = "macos"), not(test)), expect(dead_code))]
 fn git_ssh_command_for_proxy(proxy_port: u16, known_hosts: &Path) -> String {
     format!(
         "ssh -o ProxyCommand='/usr/bin/nc -X connect -x 127.0.0.1:{proxy_port} %h %p' \

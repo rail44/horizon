@@ -21,7 +21,7 @@ mod fixture {
     }
 
     pub fn mount(state: Option<State>) -> u64 {
-        let view = state.map(|state| state.view).unwrap_or_default();
+        let view = state.map_or_default(|state| state.view);
         SHOWN.with(|shown| *shown.borrow_mut() = view.clone());
         let mounted = horizon_ui::guest::mount(|| crate::views::view(&view));
         mounted.unwrap_or_default()

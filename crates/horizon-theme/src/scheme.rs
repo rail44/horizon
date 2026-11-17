@@ -188,7 +188,6 @@ pub struct Scheme {
     pub background: u32,
     pub foreground: u32,
     /// Read only by `ansi`, which is native-only.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub cursor: u32,
     pub ansi: [u32; 16],
     pub accent: u32,

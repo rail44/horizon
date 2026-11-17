@@ -126,7 +126,6 @@ pub(crate) struct AgentdState {
 }
 
 impl AgentdState {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         providers: ProviderRegistry,
         agent_config: AgentConfig,

@@ -195,7 +195,7 @@ pub async fn connect_hub_client<T: RemoteSend>(
 /// package) without changing production's resolution when the env var is
 /// absent. Same convention shape as `$HORIZON_*_SOCKET` for socket paths.
 pub fn resolve_daemon_binary(binary_name: &str) -> PathBuf {
-    let stripped = binary_name.strip_prefix("horizon-").unwrap_or(binary_name);
+    let stripped = binary_name.trim_prefix("horizon-");
     let env_key = format!(
         "HORIZON_{}_BINARY",
         stripped.replace('-', "_").to_uppercase()
