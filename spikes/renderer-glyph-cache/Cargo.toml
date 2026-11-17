@@ -1,0 +1,27 @@
+[package]
+name = "renderer-glyph-cache-spike"
+description = "Spike: what a terminal's screen costs to draw in each of Vello's renderers, with and without the glyph cache."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Its own workspace: nothing here is part of Horizon's build or its gate.
+[workspace]
+
+[dependencies]
+anyrender = "0.15"
+anyrender_vello = "0.16"
+anyrender_vello_gpu = "0.12"
+anyrender_vello_cpu = "0.19"
+kurbo = "0.13"
+peniko = "0.6"
+parley = "0.13"
+# `anyrender_vello_gpu` draws to a window only: these are what it is built
+# on, to put its scene painter over a texture instead.
+vello_gpu = "0.4"
+wgpu_context = "0.11"
+pollster = "0.4"
+png = "0.17"
+
+[profile.release]
+opt-level = 3
