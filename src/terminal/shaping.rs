@@ -11,11 +11,13 @@ use parley::{FontContext, FontFamily, Layout, LayoutContext, PositionedLayoutIte
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub(super) struct Ink(pub(super) [u8; 3]);
 
-/// One row: its text, the color of each run by byte range, and the runs
-/// that have a background by column range.
+/// One row: its text, the color of each run by byte range, the runs in
+/// italics by byte range, and the runs that have a background by column
+/// range.
 pub(super) struct Row {
     pub(super) text: String,
     pub(super) colors: Vec<(Range<usize>, Ink)>,
+    pub(super) italics: Vec<Range<usize>>,
     pub(super) backgrounds: Vec<(Range<usize>, [u8; 3])>,
 }
 
@@ -49,6 +51,12 @@ impl Shaper {
             for (range, ink) in &row.colors {
                 builder.push(StyleProperty::Brush(*ink), range.clone());
             }
+            for range in &row.italics {
+                builder.push(
+                    StyleProperty::FontStyle(parley::FontStyle::Italic),
+                    range.clone(),
+                );
+            }
             builder.build(&row.text)
         });
         layout.break_all_lines(None);
@@ -59,6 +67,7 @@ impl Shaper {
         let row = Row {
             text: text.to_string(),
             colors: Vec::new(),
+            italics: Vec::new(),
             backgrounds: Vec::new(),
         };
         self.shape(&row, scale)

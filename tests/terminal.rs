@@ -786,3 +786,115 @@ fn blocks_have_no_seam_in_a_view_that_is_not_on_whole_pixels() {
         seams[0]
     );
 }
+
+/// The page as it is painted: each pixel's color, a row of pixels after
+/// another, 900 across.
+fn painted(opened: &Opened) -> Vec<[u8; 3]> {
+    use anyrender::ImageRenderer as _;
+
+    let (width, height) = (900, 540);
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut pixels = Vec::new();
+    let document = opened.app.document();
+    renderer.render_to_vec(
+        |scene| {
+            blitz_paint::paint_scene(scene, &mut document.borrow_mut(), 1.0, width, height, 0, 0)
+        },
+        &mut pixels,
+    );
+    let (rgba, _) = pixels.as_chunks::<4>();
+    (rgba.iter())
+        .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+        .collect()
+}
+
+/// The most pixels of `color` any one row of pixels has, among those of
+/// the screen's row `row`.
+fn longest_line_of(pixels: &[[u8; 3]], row: usize, color: [u8; 3]) -> usize {
+    (row * 18..(row + 1) * 18)
+        .map(|y| {
+            (pixels[y * 900..(y + 1) * 900].iter())
+                .filter(|pixel| **pixel == color)
+                .count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn text_is_underlined_and_struck_through_in_the_colors_it_was_written_with() {
+    let opened = open();
+    // Six cells underlined in red, six struck through in blue, six with
+    // two lines under them in the text's own color.
+    opened.run(
+        r"clear; printf '\033[4;58;2;255;0;0munders\033[0m\n\033[9;38;2;0;0;255mstruck\033[0m\n\033[4:2;38;2;0;160;0mdouble\033[0m\n'",
+    );
+    // (And the other lines there are, for a person to look at.)
+    opened.run(
+        r"printf '\033[4:3;58;2;255;0;0mcurled\033[0m \033[4:4mdotted\033[0m \033[4:5mdashed\033[0m \033[3mitalic\033[0m\n'",
+    );
+    opened.wait("the rows", |text| text.contains("dashed italic"));
+    let pixels = painted(&opened);
+    if let Some(path) = std::env::var_os("HORIZON_TEST_DUMP") {
+        std::fs::write(path, pixels.as_flattened()).unwrap();
+    }
+    let (first, second) = (opened.cell(0, 0).0, opened.cell(0, 1).0);
+    // (A line's two ends are on whole pixels: a pixel short at each.)
+    let six_cells = ((second - first) * 6.) as usize - 2;
+
+    let under = longest_line_of(&pixels, opened.row_of("unders"), [255, 0, 0]);
+    assert!(under >= six_cells, "{under} pixels of a red line");
+    let through = longest_line_of(&pixels, opened.row_of("struck"), [0, 0, 255]);
+    assert!(through >= six_cells, "{through} pixels of a blue line");
+    // Two lines: two rows of pixels that are the color all the way across.
+    let row = opened.row_of("double");
+    let lines = (row * 18..(row + 1) * 18)
+        .filter(|y| {
+            let across = &pixels[y * 900..(y + 1) * 900];
+            across.iter().filter(|pixel| **pixel == [0, 160, 0]).count() >= six_cells
+        })
+        .count();
+    assert_eq!(lines, 2, "rows of pixels that are a line");
+    // And none where nothing was asked for.
+    let plain = longest_line_of(&pixels, opened.row_of("double") + 1, [0, 160, 0]);
+    assert_eq!(plain, 0);
+}
+
+#[test]
+fn italics_are_not_drawn_as_upright_text() {
+    let opened = open();
+    opened.run(r"clear; printf 'llllllll\n\033[3mllllllll\033[0m\n'");
+    opened.wait("the rows", |text| {
+        text.lines().filter(|line| *line == "llllllll").count() == 2
+    });
+    let pixels = painted(&opened);
+    let row = opened.row_of("llllllll");
+    let band = |row: usize| &pixels[row * 18 * 900..(row + 1) * 18 * 900];
+    assert!(band(row) != band(row + 1), "the two rows are the same");
+}
+
+#[test]
+fn the_colors_a_program_sets_are_the_ones_it_is_drawn_in() {
+    let opened = open();
+    // The background (OSC 11) and the palette's red (OSC 4).
+    opened.run(
+        r"clear; printf '\033]11;rgb:10/20/30\007\033]4;1;rgb:aa/bb/cc\007\033[41m      \033[0m\n'; echo set",
+    );
+    opened.wait("the line", |text| text.lines().any(|line| line == "set"));
+    let started = Instant::now();
+    loop {
+        let pixels = painted(&opened);
+        let of = |color: [u8; 3]| pixels.iter().filter(|pixel| **pixel == color).count();
+        if of([0x10, 0x20, 0x30]) > pixels.len() / 2 && of([0xaa, 0xbb, 0xcc]) > 6 * 5 * 18 {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{} pixels of the background set and {} of the red set",
+            of([0x10, 0x20, 0x30]),
+            of([0xaa, 0xbb, 0xcc]),
+        );
+        opened.app.resolve();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}

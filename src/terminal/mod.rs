@@ -18,8 +18,8 @@ use horizon_terminal_core::{
     ClipboardDestination, KeyEventKind, NamedColor, TerminalColor, TerminalColorScheme,
     TerminalCommand, TerminalCursorShape, TerminalFrame, TerminalKeyInput, TerminalLine,
     TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport,
-    TerminalScroll, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalUpdate,
-    fixed_palette_rgb,
+    TerminalScroll, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalUnderline,
+    TerminalUpdate, fixed_palette_rgb,
 };
 use horizon_ui::blitz_traits::events::{
     BlitzImeEvent, BlitzKeyEvent, BlitzWheelDelta, DomEventData, MouseEventButton,
@@ -55,6 +55,38 @@ mod styles {
 
 fn dim(color: [u8; 3], toward: [u8; 3]) -> [u8; 3] {
     std::array::from_fn(|channel| ((color[channel] as u16 + toward[channel] as u16) / 2) as u8)
+}
+
+/// The colors a frame's logical ones are: the theme's, and over them the
+/// ones the program in the terminal has set (OSC 4, 10, 11, 12), by their
+/// place in the palette.
+#[derive(Clone, Copy)]
+struct Palette<'a> {
+    look: &'a TerminalLook,
+    set: &'a [(u16, [u8; 3])],
+}
+
+impl Palette<'_> {
+    fn rgb(&self, color: TerminalColor) -> [u8; 3] {
+        let place = match color {
+            TerminalColor::Rgb(_) => None,
+            TerminalColor::Indexed(index) => Some(index as u16),
+            TerminalColor::Named(named) => named.override_index(),
+        };
+        let set = place.and_then(|place| {
+            let at = (self.set).binary_search_by_key(&place, |(place, _)| *place);
+            Some(self.set[at.ok()?].1)
+        });
+        set.unwrap_or_else(|| rgb(color, self.look))
+    }
+
+    fn background(&self) -> [u8; 3] {
+        self.rgb(TerminalColor::Named(NamedColor::Background))
+    }
+
+    fn cursor(&self) -> [u8; 3] {
+        self.rgb(TerminalColor::Named(NamedColor::Cursor))
+    }
 }
 
 /// A frame's logical color in the theme's.
@@ -646,6 +678,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                 baseline: 0.,
                 // (The first paint takes the look as it is then.)
                 styled: u64::MAX,
+                set: Vec::new(),
             }
         });
 
@@ -756,11 +789,21 @@ struct Shaped {
     /// font's glyph cannot fill a cell taller than its em box, and its
     /// edges leave seams between cells.
     drawn: Vec<(usize, char, [u8; 3])>,
+    /// The lines under and through runs of cells.
+    lines: Vec<Ruled>,
 }
 
-fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, look: &TerminalLook) -> Shaped {
+/// A run of cells with a line under it, through it, or both.
+struct Ruled {
+    columns: std::ops::Range<usize>,
+    under: Option<(TerminalUnderline, [u8; 3])>,
+    through: Option<[u8; 3]>,
+}
+
+fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, palette: Palette) -> Shaped {
     let (mut text, mut colors, mut backgrounds, mut columns) =
         (String::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut italics, mut lines) = (Vec::new(), Vec::new());
     let mut drawn = Vec::new();
     let mut column = 0;
     for span in &line.spans {
@@ -775,28 +818,49 @@ fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, look: &TerminalLo
             columns.push((text.len(), column));
             // What is drawn from shapes is a blank to the font.
             if drawn_glyphs::is_geometric(character) {
-                drawn.push((column, character, rgb(span.fg, look)));
+                drawn.push((column, character, palette.rgb(span.fg)));
                 text.push(' ');
             } else {
                 text.push(character);
             }
             column += character.width().unwrap_or(0);
         }
-        colors.push((start..text.len(), Ink(rgb(span.fg, look))));
+        let ink = palette.rgb(span.fg);
+        colors.push((start..text.len(), Ink(ink)));
+        if span.italic {
+            italics.push(start..text.len());
+        }
         // The frame's count of the span's cells is what places the next
         // span, whatever the characters' own widths came to.
         let first = columns.iter().rev().find(|(byte, _)| *byte <= start);
         let from = first.map_or(column, |(_, column)| *column);
         let from = if text.len() == start { column } else { from };
         column = from + span.columns;
-        let background = rgb(span.bg, look);
-        if background != look.background {
+        let background = palette.rgb(span.bg);
+        if background != palette.background() {
             backgrounds.push((from..column, background));
+        }
+        // A link is underlined, whatever it was written with, unless it
+        // was written with an underline of its own.
+        let under = match (span.underline, &span.url) {
+            (TerminalUnderline::None, None) => None,
+            (TerminalUnderline::None, Some(_)) => Some(TerminalUnderline::Single),
+            (kind, _) => Some(kind),
+        };
+        let under = under.map(|kind| (kind, span.underline_color.map_or(ink, |c| palette.rgb(c))));
+        let through = span.strikethrough.then_some(ink);
+        if under.is_some() || through.is_some() {
+            lines.push(Ruled {
+                columns: from..column,
+                under,
+                through,
+            });
         }
     }
     let row = Row {
         text,
         colors,
+        italics,
         backgrounds,
     };
     Shaped {
@@ -805,6 +869,88 @@ fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, look: &TerminalLo
         row,
         columns,
         drawn,
+        lines,
+    }
+}
+
+/// Draws the lines under and through a row's cells, the row's top at
+/// `top` and its baseline `baseline` below that: each `thick` thick, all
+/// in device pixels, their edges on the display's pixels.
+fn rules(
+    scene: &mut impl PaintScene,
+    shaped: &Shaped,
+    cell: f64,
+    top: f64,
+    baseline: f64,
+    thick: f64,
+    inset: (f64, f64),
+) {
+    for ruled in &shaped.lines {
+        let (left, right) = (
+            on_pixel(ruled.columns.start as f64 * cell, inset.0),
+            on_pixel(ruled.columns.end as f64 * cell, inset.0),
+        );
+        let across = |scene: &mut _, color: [u8; 3], y: f64| {
+            fill(scene, color, Rect::new(left, y, right, y + thick));
+        };
+        if let Some(color) = ruled.through {
+            // Through the middle of a lowercase letter.
+            across(scene, color, on_pixel(top + baseline * 0.7, inset.1));
+        }
+        let Some((kind, color)) = ruled.under else {
+            continue;
+        };
+        let [r, g, b] = color;
+        let under = on_pixel(top + baseline + thick, inset.1);
+        let stroked = |scene: &mut _, stroke: Stroke, path: &kurbo::BezPath| {
+            PaintScene::stroke(
+                scene,
+                &stroke,
+                Affine::IDENTITY,
+                Color::from_rgb8(r, g, b),
+                None,
+                path,
+            );
+        };
+        let middle = under + thick / 2.;
+        let straight = || {
+            let mut path = kurbo::BezPath::new();
+            path.move_to((left, middle));
+            path.line_to((right, middle));
+            path
+        };
+        match kind {
+            TerminalUnderline::None => {}
+            TerminalUnderline::Single => across(scene, color, under),
+            TerminalUnderline::Double => {
+                across(scene, color, under);
+                across(scene, color, under + 2. * thick);
+            }
+            TerminalUnderline::Dotted => {
+                let dots = Stroke::new(thick).with_dashes(0., [thick, thick]);
+                stroked(scene, dots, &straight());
+            }
+            TerminalUnderline::Dashed => {
+                let dashes = Stroke::new(thick).with_dashes(0., [3. * thick, 2. * thick]);
+                stroked(scene, dashes, &straight());
+            }
+            TerminalUnderline::Curl => {
+                // A wave a cell long, as far above its middle as below.
+                let (half, rise) = (cell / 2., 1.5 * thick);
+                let mut path = kurbo::BezPath::new();
+                let (mut x, mut up) = (left, true);
+                path.move_to((x, middle + rise / 2.));
+                while x < right {
+                    let peak = match up {
+                        true => middle - rise,
+                        false => middle + 2. * rise,
+                    };
+                    path.quad_to((x + half / 2., peak), (x + half, middle + rise / 2.));
+                    (x, up) = (x + half, !up);
+                }
+                stroked(scene, Stroke::new(thick), &path);
+            }
+        }
     }
 }
 
@@ -909,6 +1055,8 @@ struct Screen {
     baseline: f32,
     /// Which of the looks given the rows were shaped in.
     styled: u64,
+    /// The colors the program had set when the rows were shaped.
+    set: Vec<(u16, [u8; 3])>,
 }
 
 fn fill(scene: &mut impl PaintScene, color: [u8; 3], rect: Rect) {
@@ -943,6 +1091,9 @@ fn glyphs(
         };
         let [r, g, b] = run.style().brush.0;
         let (font, style) = (run.run(), run.style_index());
+        // A font with no italic of its own is leaned over.
+        let leaned = (font.synthesis().skew())
+            .map(|degrees| Affine::skew(degrees.to_radians().tan() as f64, 0.));
         let placed = (font.clusters())
             .filter(|cluster| cluster.style_index() == style && !columns.is_empty())
             .flat_map(|cluster| {
@@ -970,7 +1121,7 @@ fn glyphs(
             &anyrender::Paint::from(Color::from_rgb8(r, g, b)),
             1.0,
             Affine::translate((0., top)),
-            None,
+            leaned,
             placed,
         );
     }
@@ -995,17 +1146,26 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             self.shaper = Shaper::with_font(&look.font_family, look.font_size);
             self.shaped_at = 0.;
         }
-        fill(
-            &mut scene,
-            look.background,
-            Rect::new(0., 0., width as f64, height as f64),
-        );
+        let whole = Rect::new(0., 0., width as f64, height as f64);
         let frame = self.state.frame.borrow();
         let Some(frame) = frame.as_ref() else {
+            fill(&mut scene, look.background, whole);
             return scene;
         };
+        let palette = Palette {
+            look,
+            set: &frame.palette_overrides,
+        };
+        fill(&mut scene, palette.background(), whole);
+        // Other colors set by the program: nothing shaped before holds.
+        if self.set != frame.palette_overrides {
+            self.set = frame.palette_overrides.clone();
+            self.shaped_at = 0.;
+        }
         let (cell, line) = (self.state.cells.get().0 * scale, look.line_height * scale);
         let font_px = look.font_size * scale as f32;
+        // How thick a line under or through text is.
+        let thick = (font_px as f64 / 14.).round().max(1.);
         let (left, above) = self.state.origin.get();
         let inset = ((left * scale).fract(), (above * scale).fract());
         if self.shaped_at != scale {
@@ -1034,7 +1194,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                 let top = (place as f64 - into as f64) * line;
                 let shaper = &mut self.shaper;
                 let shaped = (self.history.1.entry(row))
-                    .or_insert_with(|| shape(&window.lines[row], shaper, scale as f32, look));
+                    .or_insert_with(|| shape(&window.lines[row], shaper, scale as f32, palette));
                 for (columns, color) in &shaped.row.backgrounds {
                     let behind = Rect::new(
                         on_pixel(columns.start as f64 * cell, inset.0),
@@ -1054,6 +1214,8 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                     self.baseline,
                 );
                 shapes(&mut scene, shaped, cell, top, line, font_px, inset);
+                let baseline = self.baseline as f64;
+                rules(&mut scene, shaped, cell, top, baseline, thick, inset);
             }
             scene.pop_layer();
             return scene;
@@ -1090,7 +1252,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                     below = at.saturating_sub(index);
                     shaped
                 }
-                None => shape(wanted, &mut self.shaper, scale as f32, look),
+                None => shape(wanted, &mut self.shaper, scale as f32, palette),
             };
             self.rows.push(shaped);
         }
@@ -1144,11 +1306,13 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                 font_px,
                 inset,
             );
+            let (top, baseline) = (index as f64 * line, self.baseline as f64);
+            rules(&mut scene, shaped, cell, top, baseline, thick, inset);
         }
 
         if let Some(cursor) = frame.cursor {
             let place = cells(cursor.row, cursor.col, cursor.col + 1);
-            let [r, g, b] = look.cursor;
+            let [r, g, b] = palette.cursor();
             let preedit = self.state.preedit.borrow();
             if !preedit.is_empty() {
                 // What is being composed, over the cells from the cursor,
@@ -1166,10 +1330,10 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                         url: None,
                     }],
                 };
-                let shaped = shape(&composing, &mut self.shaper, scale as f32, look);
+                let shaped = shape(&composing, &mut self.shaper, scale as f32, palette);
                 let wide = shaped.line.spans[0].columns;
                 let over = cells(cursor.row, cursor.col, cursor.col + wide);
-                fill(&mut scene, look.background, over);
+                fill(&mut scene, palette.background(), over);
                 glyphs(
                     &mut scene,
                     &shaped,
@@ -1180,9 +1344,11 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                     self.baseline,
                 );
                 let under = Rect::new(over.x0, over.y1 - 1.5 * scale, over.x1, over.y1);
-                fill(&mut scene, look.cursor, under);
-            } else if !self.state.focused.get() {
-                // Without the focus, the cursor's outline.
+                fill(&mut scene, palette.cursor(), under);
+            } else if !self.state.focused.get() || cursor.shape == TerminalCursorShape::HollowBlock
+            {
+                // Without the focus, or where the program asks for it, the
+                // cursor's outline.
                 scene.stroke(
                     &Stroke::new(scale),
                     Affine::IDENTITY,
