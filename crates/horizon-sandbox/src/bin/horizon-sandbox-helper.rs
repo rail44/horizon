@@ -40,8 +40,8 @@ static HELPER_PROTOCOL_MARKER: &str = horizon_sandbox::HELPER_PROTOCOL_MARKER;
 #[cfg(target_os = "macos")]
 fn main() {
     // Keep a protocol marker in the actual helper executable. Cargo emits
-    // both this executable and a same-name test-harness artifact under
-    // `target/<profile>/deps`; the library resolver uses the marker only as
+    // both this executable and a same-name test-harness artifact in its
+    // build output; the library resolver uses the marker only as
     // a unit-test fallback to avoid executing the harness by mistake. The
     // `#[used]` static above is `#[cfg(not(test))]`-gated so the test harness
     // variant does not embed the marker; this black_box keeps the reference

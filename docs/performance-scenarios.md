@@ -80,7 +80,7 @@ goes, run the scenario alone under a profiler:
 
 ```sh
 cargo bench --bench scenarios --no-run         # prints the binary's path
-perf record -g target/release/deps/scenarios-<hash> board/select
+perf record -g <the path it printed> board/select
 perf report
 ```
 

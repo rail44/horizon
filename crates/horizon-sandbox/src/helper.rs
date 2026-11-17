@@ -5,6 +5,10 @@ use std::{path::PathBuf, sync::OnceLock};
 
 pub(crate) const HELPER_BIN_NAME: &str = "horizon-sandbox-helper";
 
+/// The package the helper is a binary of: the name of its directory in
+/// Cargo's build output.
+const HELPER_PACKAGE: &str = "horizon-sandbox";
+
 // Unreferenced under cfg(test): only the production spawn_with_grants
 // (cfg(not(test)) in linux/mod.rs) calls this, but the module is compiled
 // under test for the unit tests below.
@@ -47,19 +51,35 @@ fn adjacent_helper(
     if adjacent.is_file() {
         return Some(adjacent);
     }
-    // Only Cargo's deps layout permits searching a parent profile directory
-    // or scanning hashed artifacts. Installed binaries use adjacency/PATH.
-    if dir.file_name().is_none_or(|name| name != "deps") {
-        return None;
+    // Only an executable in Cargo's build output permits searching its
+    // profile directory or scanning hashed artifacts. Installed binaries use
+    // adjacency/PATH.
+    let profile_dir = cargo_profile_dir(dir)?;
+    cargo_profile_helper(profile_dir, manifest_dir).or_else(|| cargo_test_artifact(dir))
+}
+
+/// The profile directory (`target/<profile>`) of an executable Cargo built
+/// as an intermediate artifact, from the directory it is in:
+/// `<profile>/deps` up to Cargo 1.99, `<profile>/build/<package>/<hash>/out`
+/// from 1.100. `None` for a directory that is neither.
+fn cargo_profile_dir(dir: &std::path::Path) -> Option<&std::path::Path> {
+    let name = dir.file_name()?;
+    if name == "deps" {
+        return dir.parent();
     }
-    cargo_profile_helper(dir, manifest_dir).or_else(|| cargo_test_artifact(dir))
+    if name == "out" {
+        let build = dir.parent()?.parent()?.parent()?;
+        if build.file_name()? == "build" {
+            return build.parent();
+        }
+    }
+    None
 }
 
 fn cargo_profile_helper(
-    deps_dir: &std::path::Path,
+    profile_dir: &std::path::Path,
     manifest_dir: Option<&std::path::Path>,
 ) -> Option<PathBuf> {
-    let profile_dir = deps_dir.parent()?;
     let adjacent = profile_dir.join(HELPER_BIN_NAME);
     if adjacent.is_file() {
         return Some(adjacent);
@@ -89,32 +109,59 @@ fn workspace_uplifted_helper(
     None
 }
 
-/// Cargo builds an integration-test dependency's binary as a hashed file in
-/// `deps`, but does not always materialize the ordinary adjacent binary.
-/// The same directory can also contain a same-name Rust test harness, so a
-/// filename match is insufficient. The real entry point embeds a versioned
+/// Cargo builds an integration-test dependency's binary as an intermediate
+/// artifact (a hashed file in `deps` up to 1.99; in the helper's package's
+/// own `build/<package>/<hash>/out` from 1.100), but does not always
+/// materialize the ordinary adjacent binary. A same-name Rust test harness
+/// lies beside it, so a filename match is insufficient. The real entry point embeds a versioned
 /// protocol marker (the `#[used]` static in `bin/horizon-sandbox-helper.rs`
 /// is `#[cfg(not(test))]`-gated so the harness variant does not carry it);
 /// choose the newest matching executable and cache it.
 #[cfg_attr(test, allow(dead_code))]
-fn cargo_test_artifact(deps_dir: &std::path::Path) -> Option<PathBuf> {
+fn cargo_test_artifact(executable_dir: &std::path::Path) -> Option<PathBuf> {
     static CACHED: OnceLock<Option<PathBuf>> = OnceLock::new();
     CACHED
-        .get_or_init(|| find_cargo_test_artifact(deps_dir))
+        .get_or_init(|| find_cargo_test_artifact(&artifact_dirs(executable_dir)))
         .as_ref()
         .filter(|path| path.is_file())
         .cloned()
 }
 
-fn find_cargo_test_artifact(deps_dir: &std::path::Path) -> Option<PathBuf> {
-    let prefix = HELPER_BIN_NAME.replace('-', "_") + "-";
-    let mut candidates = std::fs::read_dir(deps_dir)
-        .ok()?
+/// The directories the helper's intermediate artifact may be in, for an
+/// executable in `executable_dir`: that directory itself (`deps`), or each
+/// build of the helper's package (`build/<package>/<hash>/out`).
+fn artifact_dirs(executable_dir: &std::path::Path) -> Vec<PathBuf> {
+    if executable_dir
+        .file_name()
+        .is_some_and(|name| name == "deps")
+    {
+        return vec![executable_dir.to_path_buf()];
+    }
+    let Some(profile_dir) = cargo_profile_dir(executable_dir) else {
+        return Vec::new();
+    };
+    let Ok(builds) = std::fs::read_dir(profile_dir.join("build").join(HELPER_PACKAGE)) else {
+        return Vec::new();
+    };
+    builds
+        .filter_map(Result::ok)
+        .map(|build| build.path().join("out"))
+        .collect()
+}
+
+fn find_cargo_test_artifact(dirs: &[PathBuf]) -> Option<PathBuf> {
+    // `horizon_sandbox_helper-<hash>`, or with no hash at all.
+    let stem = HELPER_BIN_NAME.replace('-', "_");
+    let prefix = format!("{stem}-");
+    let mut candidates = dirs
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let path = entry.path();
             let name = path.file_name()?.to_str()?;
-            if !name.starts_with(&prefix) || !path.is_file() {
+            if !(name == stem || name.starts_with(&prefix)) || !path.is_file() {
                 return None;
             }
             let modified = entry.metadata().ok()?.modified().ok()?;
@@ -220,6 +267,38 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// From Cargo 1.100 a test's executable is in its package's own build
+    /// directory, three levels under the profile's `build`.
+    #[test]
+    fn the_profile_is_found_from_a_package_s_own_build_directory() {
+        let root = test_dir("build-layout");
+        let profile = root.join("target/debug");
+        let executable = profile.join("build/pkg/0123abcd/out/test-0123abcd");
+        let adjacent = profile.join(HELPER_BIN_NAME);
+        touch(&adjacent);
+        assert_eq!(adjacent_helper(&executable, None), Some(adjacent.clone()));
+        // An `out` that is not Cargo's is not searched from.
+        assert!(adjacent_helper(&root.join("target/debug/elsewhere/out/test"), None).is_none());
+        fs::remove_file(adjacent).unwrap();
+
+        // With no helper uplifted, its own build's artifact is the one
+        // that carries the protocol marker.
+        let built = profile.join("build").join(super::HELPER_PACKAGE);
+        fs::create_dir_all(built.join("aaaa/out")).unwrap();
+        fs::create_dir_all(built.join("bbbb/out")).unwrap();
+        fs::write(
+            built.join("aaaa/out/horizon_sandbox_helper-aaaa"),
+            b"test harness",
+        )
+        .unwrap();
+        let real = built.join("bbbb/out/horizon_sandbox_helper");
+        fs::write(&real, crate::HELPER_PROTOCOL_MARKER.as_bytes()).unwrap();
+        let dirs = super::artifact_dirs(executable.parent().unwrap());
+        assert_eq!(dirs.len(), 2);
+        assert_eq!(find_cargo_test_artifact(&dirs), Some(real));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn artifact_scan_selects_newest_protocol_match_and_skips_test_harnesses() {
         let root = test_dir("artifacts");
@@ -255,7 +334,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(
-            find_cargo_test_artifact(&root),
+            find_cargo_test_artifact(std::slice::from_ref(&root)),
             Some(root.join("horizon_sandbox_helper-new"))
         );
         fs::remove_dir_all(root).unwrap();
@@ -264,11 +343,13 @@ mod tests {
     #[test]
     fn cached_artifact_is_revalidated_after_the_binary_disappears() {
         let root = test_dir("stale-cache");
-        let helper = root.join("horizon_sandbox_helper-current");
+        let deps = root.join("deps");
+        fs::create_dir_all(&deps).unwrap();
+        let helper = deps.join("horizon_sandbox_helper-current");
         fs::write(&helper, crate::HELPER_PROTOCOL_MARKER).unwrap();
-        assert_eq!(cargo_test_artifact(&root), Some(helper.clone()));
+        assert_eq!(cargo_test_artifact(&deps), Some(helper.clone()));
         fs::remove_file(helper).unwrap();
-        assert_eq!(cargo_test_artifact(&root), None);
+        assert_eq!(cargo_test_artifact(&deps), None);
         fs::remove_dir_all(root).unwrap();
     }
 

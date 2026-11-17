@@ -551,13 +551,10 @@ impl SessionLoopState {
             )
             .await;
 
-        if matches!(
+        !matches!(
             outcome.stop,
             CompletionStop::Failed | CompletionStop::Cancelled
-        ) {
-            return false;
-        }
-        true
+        )
     }
 }
 
