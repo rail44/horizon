@@ -705,10 +705,10 @@ mod tests {
 
     #[test]
     fn malformed_and_unsupported_states_are_distinct() {
-        assert!(matches!(
+        std::assert_matches!(
             Workspace::from_persisted_json("{"),
             Err(WorkspaceStateError::Malformed(_))
-        ));
+        );
         let mut value = state_value();
         value["version"] = json!(WORKSPACE_STATE_VERSION + 1);
         match Workspace::from_persisted_json(&value.to_string()) {
@@ -829,7 +829,7 @@ mod tests {
         assert!(outcome.removed.contains(&second_tab));
         assert_eq!(outcome.added, vec![daemon_only]);
         assert_eq!(workspace.tabs.len(), 1);
-        assert!(matches!(workspace.tabs[0].root, LayoutNode::Pane(_)));
+        std::assert_matches!(workspace.tabs[0].root, LayoutNode::Pane(_));
         assert_eq!(workspace.active_session_id(), Some(retained));
         assert_eq!(workspace.detached_session_count(), 1);
     }

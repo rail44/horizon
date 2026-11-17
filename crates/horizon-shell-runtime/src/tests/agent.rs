@@ -493,7 +493,7 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
     };
     assert_eq!(session_id, terminal_id);
 
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     let AgentCall::NewSession { meta, cwd, .. } = fake.next_call().await else {
         panic!("the agent spawn must land on agentd");
     };
@@ -543,17 +543,17 @@ async fn draining_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     else {
         panic!("expected the create call");
     };
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
 
     // A full round trip proves the runtime is established, which is what
     // `begin_reload` reads.
     let list_handle = agentd.clone();
     let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
     assert_eq!(listed.unwrap(), Ok(Vec::new()));
-    assert!(matches!(fake.next_call().await, AgentCall::List));
+    std::assert_matches!(fake.next_call().await, AgentCall::List);
 
     assert!(agentd.begin_reload(), "the agent runtime was established");
-    assert!(matches!(fake.next_call().await, AgentCall::Drain));
+    std::assert_matches!(fake.next_call().await, AgentCall::Drain);
 
     let frame = horizon_terminal_core::TerminalFrame::from_text("still alive".into());
     peer.frames.send(frame.clone()).unwrap();
@@ -575,11 +575,8 @@ async fn workspace_root_updates_reach_their_own_channel() {
     let mut agent = start_mock_session(&handle, session_id);
 
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
-    assert!(matches!(
-        fake.next_call().await,
-        AgentCall::NewSession { .. }
-    ));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
+    std::assert_matches!(fake.next_call().await, AgentCall::NewSession { .. });
     wait_until_ready(&mut agent).await;
     let (received, update) = workspace_roots
         .recv_timeout(Duration::from_secs(5))
@@ -622,7 +619,7 @@ async fn dropping_the_runtime_does_not_send_drain() {
     let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
     let responder = handle.responder();
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
 
     drop(handle);
 
@@ -668,7 +665,7 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
         },
     )
     .await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     let mut new_responder = None;
     let mut resume_responder = None;
     for _ in 0..2 {
@@ -691,14 +688,14 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
     fake.task.abort();
     drop(resume_responder);
 
-    assert!(matches!(
+    std::assert_matches!(
         next_agent_update(&mut ready).await,
         AgentUpdate::State(AttachmentState::Disconnected(_))
-    ));
-    assert!(matches!(
+    );
+    std::assert_matches!(
         next_agent_update(&mut restoring).await,
         AgentUpdate::State(AttachmentState::Failed(_))
-    ));
+    );
     assert!(handle
         .session_list()
         .unwrap_err()
@@ -836,8 +833,8 @@ async fn expect_drain(listener: &tokio::net::UnixListener) {
         },
     )
     .await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
-    assert!(matches!(fake.next_call().await, AgentCall::Drain));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
+    std::assert_matches!(fake.next_call().await, AgentCall::Drain);
 }
 
 /// Replaces the drained daemon with a compatible one and checks it is
@@ -852,7 +849,7 @@ async fn expect_respawn_adopted(
     let listener = bind_stub_listener(socket_path);
     let (stream, _) = listener.accept().await.unwrap();
     let mut fake = serve_fake_agentd(stream, FakeAgentBehavior::default()).await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
 
     let list_handle = handle.clone();
     let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
@@ -895,15 +892,15 @@ async fn a_request_rejected_for_the_extension_version_drains_and_respawns() {
         },
     )
     .await;
-    assert!(matches!(rejecting.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(rejecting.next_call().await, AgentCall::Initialize);
     let list_handle = handle.clone();
     let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
     assert!(listed
         .unwrap()
         .unwrap_err()
         .contains("horizon ext version mismatch"));
-    assert!(matches!(rejecting.next_call().await, AgentCall::List));
-    assert!(matches!(rejecting.next_call().await, AgentCall::Drain));
+    std::assert_matches!(rejecting.next_call().await, AgentCall::List);
+    std::assert_matches!(rejecting.next_call().await, AgentCall::Drain);
 
     expect_drain(&listener).await;
     expect_respawn_adopted(listener, &socket_path, &handle).await;
@@ -926,7 +923,7 @@ async fn two_transient_failures_do_not_consume_the_recovery_budget() {
 
     let (stream, _) = listener.accept().await.unwrap();
     let mut fake = serve_fake_agentd(stream, FakeAgentBehavior::default()).await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
 
     let list_handle = handle.clone();
     let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
@@ -959,7 +956,7 @@ async fn a_connection_drop_during_initialize_is_retried_not_fatal() {
 
     let (stream, _) = listener.accept().await.unwrap();
     let mut fake = serve_fake_agentd(stream, FakeAgentBehavior::default()).await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
 
     let list_handle = handle.clone();
     let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
@@ -977,7 +974,7 @@ async fn organizer_request_uses_existing_agent_connection() {
     let root = PathBuf::from("/project/organizer");
     let expected_root = root.clone();
     let request = tokio::task::spawn_blocking(move || agentd.ensure_board_organizer(root));
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     let AgentCall::EnsureBoardOrganizer(root, id) = fake.next_call().await else {
         panic!("organizer request must reach the existing agent connection");
     };
@@ -992,8 +989,8 @@ async fn replacing_an_agent_handle_keeps_the_new_attachment_live() {
     let id = SessionId::new();
     let old = agentd.attach_session(id);
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
-    assert!(matches!(fake.next_call().await, AgentCall::Resume { .. }));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
+    std::assert_matches!(fake.next_call().await, AgentCall::Resume { .. });
     let mut current = agentd.attach_session(id);
     let AgentCall::Resume { session_id, .. } = fake.next_call().await else {
         panic!("expected the replacement attachment");
@@ -1004,7 +1001,7 @@ async fn replacing_an_agent_handle_keeps_the_new_attachment_live() {
     fake.update(id, idle());
     assert!(is_idle_update(&next_agent_event(&mut current).await));
     current.sender().send(AgentCommand::ContinueTurn).unwrap();
-    assert!(matches!(fake.next_call().await, AgentCall::ContinueTurn));
+    std::assert_matches!(fake.next_call().await, AgentCall::ContinueTurn);
 }
 
 /// Commands wait for the resume response; the replay before it reaches the
@@ -1023,7 +1020,7 @@ async fn agent_commands_wait_for_the_resume_response_and_a_resume_error_fails() 
         },
     )
     .await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     let AgentCall::Resume { responder, .. } = fake.next_call().await else {
         panic!("resume");
     };
@@ -1058,8 +1055,8 @@ async fn agent_commands_wait_for_the_resume_response_and_a_resume_error_fails() 
         .unwrap()
         .respond_with_error(agent_client_protocol::Error::new(-32602, "unknown session"))
         .unwrap();
-    assert!(
-        matches!(next_agent_update(&mut failing).await, AgentUpdate::State(AttachmentState::Failed(message)) if message.contains("unknown session"))
+    std::assert_matches!(
+        next_agent_update(&mut failing).await, AgentUpdate::State(AttachmentState::Failed(message)) if message.contains("unknown session")
     );
 }
 
@@ -1080,7 +1077,7 @@ async fn attachment_closed_notices_follow_the_resume_boundary() {
         },
     )
     .await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
     let AgentCall::Resume { responder, .. } = fake.next_call().await else {
         panic!("resume");
     };
@@ -1099,8 +1096,8 @@ async fn attachment_closed_notices_follow_the_resume_boundary() {
     fake.connection
         .send_notification(closed(AttachmentEnd::Lagged))
         .unwrap();
-    assert!(
-        matches!(next_agent_update(&mut handle).await, AgentUpdate::State(AttachmentState::Failed(message)) if message.contains("buffer"))
+    std::assert_matches!(
+        next_agent_update(&mut handle).await, AgentUpdate::State(AttachmentState::Failed(message)) if message.contains("buffer")
     );
 }
 
@@ -1115,11 +1112,8 @@ async fn permission_requests_are_answered_from_the_panes_decisions() {
     let id = SessionId::new();
     let mut handle = start_mock_session(&agentd, id);
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
-    assert!(matches!(
-        fake.next_call().await,
-        AgentCall::NewSession { .. }
-    ));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
+    std::assert_matches!(fake.next_call().await, AgentCall::NewSession { .. });
     wait_until_ready(&mut handle).await;
 
     let identity = |occurrence: &str| ToolCallIdentity {
@@ -1180,21 +1174,21 @@ async fn permission_requests_are_answered_from_the_panes_decisions() {
     let answer = fake.permission(id, &identity("occ-3"));
     requested(next_agent_event(&mut handle).await);
     handle.sender().send(AgentCommand::Cancel).unwrap();
-    assert!(matches!(
+    std::assert_matches!(
         answer.block_task().await.unwrap().outcome,
         v2::RequestPermissionOutcome::Cancelled(_)
-    ));
-    assert!(matches!(fake.next_call().await, AgentCall::Cancel));
+    );
+    std::assert_matches!(fake.next_call().await, AgentCall::Cancel);
     assert_eq!(
         resolved(next_agent_event(&mut handle).await).1,
         PermissionDecision::Cancelled
     );
 
     let orphan = fake.permission(SessionId::new(), &identity("occ-4"));
-    assert!(matches!(
+    std::assert_matches!(
         orphan.block_task().await.unwrap().outcome,
         v2::RequestPermissionOutcome::Cancelled(_)
-    ));
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1204,11 +1198,8 @@ async fn prompts_and_close_reach_the_daemon_as_acp_requests() {
     let id = SessionId::new();
     let mut handle = start_mock_session(&agentd, id);
     let mut fake = serve_fake_agentd(server, FakeAgentBehavior::default()).await;
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
-    assert!(matches!(
-        fake.next_call().await,
-        AgentCall::NewSession { .. }
-    ));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
+    std::assert_matches!(fake.next_call().await, AgentCall::NewSession { .. });
     wait_until_ready(&mut handle).await;
     handle
         .sender()
@@ -1221,7 +1212,7 @@ async fn prompts_and_close_reach_the_daemon_as_acp_requests() {
     };
     assert_eq!(text, "hello");
     handle.sender().send(AgentCommand::Close).unwrap();
-    assert!(matches!(fake.next_call().await, AgentCall::Close));
+    std::assert_matches!(fake.next_call().await, AgentCall::Close);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1235,7 +1226,7 @@ async fn host_tool_requests_are_answered_through_the_responder() {
         tokio::task::spawn_blocking(move || agentd.session_list()).await
     };
     assert_eq!(listed.unwrap(), Ok(Vec::new()));
-    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    std::assert_matches!(fake.next_call().await, AgentCall::Initialize);
 
     let answer = fake.connection.send_request(HostToolRequest {
         request_id: "req-1".into(),

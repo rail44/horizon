@@ -360,10 +360,10 @@ mod tests {
         let without = Meta::from_iter([("other".to_owned(), json!(1))]);
         assert!(read_horizon_meta::<MessageMeta>(Some(&without)).is_none());
         let malformed = Meta::from_iter([(HORIZON_META_KEY.to_owned(), json!({"role": 7}))]);
-        assert!(matches!(
+        std::assert_matches!(
             read_horizon_meta::<MessageMeta>(Some(&malformed)),
             Some(Err(_))
-        ));
+        );
     }
 
     #[test]

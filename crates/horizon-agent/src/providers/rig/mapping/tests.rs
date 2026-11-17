@@ -244,11 +244,11 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
     let facts = decode::<FileEdits>(&result.output).unwrap();
     assert_eq!(facts.applied_count, 1);
     assert_eq!(facts.failed_index, Some(1));
-    assert!(matches!(
+    std::assert_matches!(
         facts.edits[0].outcome,
         EditOutcome::Applied { occurrences: 2 }
-    ));
-    assert!(matches!(facts.edits[1].outcome, EditOutcome::Failed { .. }));
+    );
+    std::assert_matches!(facts.edits[1].outcome, EditOutcome::Failed { .. });
     assert_eq!(facts.edits[2].outcome, EditOutcome::NotAttempted);
 
     writer.flush().unwrap();

@@ -185,8 +185,8 @@ mod tests {
             }),
         )]);
         let err = conn.handshake().unwrap_err();
-        assert!(
-            matches!(err, ClientError::Rejected(reason) if reason == "control version mismatch")
+        std::assert_matches!(
+            err, ClientError::Rejected(reason) if reason == "control version mismatch"
         );
     }
 
@@ -201,13 +201,13 @@ mod tests {
             }),
         )]);
         let err = conn.handshake().unwrap_err();
-        assert!(matches!(
+        std::assert_matches!(
             err,
             ClientError::IdMismatch {
                 expected: 1,
                 found: 99
             }
-        ));
+        );
     }
 
     #[test]
@@ -223,7 +223,7 @@ mod tests {
                 what: "sessions".to_string(),
             }))
             .unwrap_err();
-        assert!(matches!(err, ClientError::ServerError(m) if m == "no such session"));
+        std::assert_matches!(err, ClientError::ServerError(m) if m == "no such session");
     }
 
     #[test]
@@ -259,6 +259,6 @@ mod tests {
     fn connection_closed_before_a_reply_is_an_explicit_error() {
         let mut conn = Connection::new(Cursor::new(Vec::new()), Vec::new());
         let err = conn.handshake().unwrap_err();
-        assert!(matches!(err, ClientError::ConnectionClosed));
+        std::assert_matches!(err, ClientError::ConnectionClosed);
     }
 }

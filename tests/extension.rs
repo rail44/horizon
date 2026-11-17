@@ -340,7 +340,7 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
         })
     };
     let answer = ask("new", new(serde_json::json!(["third.md"])));
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     opened.until("the pane on the third file", || {
         opened.text().contains("Three")
     });
@@ -361,7 +361,7 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
         })
     });
     let answer = ask("plugin-command", serde_json::json!({ "name": "back" }));
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     opened.until("back on the third file", || {
         opened.model(|model| {
             let plugin = model.pane_plugin(third).expect("the pane's plugin");
@@ -382,7 +382,7 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
         "activate": true,
     });
     let answer = ask("new", preview);
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     let previewing = opened
         .model(|model| model.cursor_pane_id())
         .expect("the preview pane");
@@ -414,7 +414,7 @@ fn an_extension_is_shown_in_a_pane_that_keeps_its_state_and_carries_out_its_comm
         ),
     ];
     for answer in refused {
-        assert!(matches!(answer, EnvelopeBody::Error { .. }), "{answer:?}");
+        std::assert_matches!(answer, EnvelopeBody::Error { .. }, "{answer:?}");
     }
 
     // What is saved of the pane: the extension's name and its state.
@@ -473,7 +473,7 @@ fn a_package_the_configuration_names_is_read_on_reload_and_again_when_built() {
         opened.app.resolve();
         answer
     };
-    assert!(matches!(new(), EnvelopeBody::Error { .. }));
+    std::assert_matches!(new(), EnvelopeBody::Error { .. });
     opened.shell.execute(CommandId::ReloadConfig);
     opened.until("the extension loaded", || {
         matches!(new(), EnvelopeBody::Ok { .. })
@@ -618,9 +618,9 @@ fn the_shell_s_own_markdown_view_is_the_extension() {
     // A file there is not is refused; one there is, shown in a new tab
     // named for it.
     let missing = opened.new_markdown(&directory, "later.md");
-    assert!(matches!(missing, EnvelopeBody::Error(_)), "{missing:?}");
+    std::assert_matches!(missing, EnvelopeBody::Error(_), "{missing:?}");
     let answer = opened.new_markdown(&directory, "index.md");
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     opened.until("the file", || opened.text().contains("written 2026-11-08"));
     opened.until("the title", || opened.kept().0 == "index.md");
     assert_eq!(tabs(&opened), 2);
@@ -657,7 +657,7 @@ fn the_shell_s_own_markdown_view_is_the_extension() {
 
     // Asked for a file a pane shows already, that pane is the one.
     let answer = opened.new_markdown(&directory, "index.md");
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     assert_eq!(tabs(&opened), 2);
 
     // A file that went away is said in the pane, and one written in its
@@ -693,7 +693,7 @@ fn the_theme_settings_apply_a_seed_as_it_changes_and_save_it_when_asked() {
         "new",
         serde_json::json!({ "plugin": "theme-settings", "directory": "/", "activate": true }),
     );
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     // The derived colors, as swatches: sixteen, three, five, four, four.
     opened.until("the swatches", || opened.all("chip").len() == 32);
     assert!(opened.all("unsaved").is_empty());
@@ -740,7 +740,7 @@ fn the_theme_settings_apply_a_seed_as_it_changes_and_save_it_when_asked() {
         "new",
         serde_json::json!({ "plugin": "theme-settings", "directory": "/", "activate": true }),
     );
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     assert_eq!(opened.model(Workspace::tab_count), tabs);
 }
 

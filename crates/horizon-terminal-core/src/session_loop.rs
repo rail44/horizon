@@ -694,7 +694,7 @@ mod tests {
         let encoded = command_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("the key must still be encoded and forwarded to the PTY");
-        assert!(matches!(encoded, TerminalCommand::Input(bytes) if !bytes.is_empty()));
+        std::assert_matches!(encoded, TerminalCommand::Input(bytes) if !bytes.is_empty());
 
         assert!(
             frame_rx.recv_timeout(Duration::from_millis(100)).is_err(),
@@ -1144,13 +1144,13 @@ mod tests {
         let focus_in = command_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("focus-in should be reported once mode 1004 is enabled");
-        assert!(matches!(focus_in, TerminalCommand::Input(bytes) if bytes == b"\x1b[I"));
+        std::assert_matches!(focus_in, TerminalCommand::Input(bytes) if bytes == b"\x1b[I");
 
         focus_tx.send(false).unwrap();
         let focus_out = command_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("focus-out should be reported once mode 1004 is enabled");
-        assert!(matches!(focus_out, TerminalCommand::Input(bytes) if bytes == b"\x1b[O"));
+        std::assert_matches!(focus_out, TerminalCommand::Input(bytes) if bytes == b"\x1b[O");
     }
 
     /// End-to-end regression coverage for the live theme-apply re-push
@@ -1269,8 +1269,8 @@ mod tests {
         let reply = command_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("OSC 11 query reply after the confirmed re-push");
-        assert!(
-            matches!(reply, TerminalCommand::Input(bytes) if bytes == b"\x1b]11;rgb:0101/0202/0303\x07"),
+        std::assert_matches!(
+            reply, TerminalCommand::Input(bytes) if bytes == b"\x1b]11;rgb:0101/0202/0303\x07",
             "an app-set OSC 11 override must keep winning over a re-pushed scheme"
         );
     }
@@ -1381,24 +1381,24 @@ mod tests {
         let first = command_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("the query must be answered");
-        assert!(
-            matches!(&first, TerminalCommand::Input(bytes) if bytes.starts_with(b"\x1b]11;rgb:")),
+        std::assert_matches!(
+            &first, TerminalCommand::Input(bytes) if bytes.starts_with(b"\x1b]11;rgb:"),
             "the OSC 11 reply must precede every queued keystroke, got {first:?}"
         );
 
         let second = command_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("the Enter keystroke must still be forwarded");
-        assert!(
-            matches!(&second, TerminalCommand::Input(bytes) if bytes == b"\r"),
+        std::assert_matches!(
+            &second, TerminalCommand::Input(bytes) if bytes == b"\r",
             "the Enter keystroke must be forwarded right after the reply, got {second:?}"
         );
 
         let third = command_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("the 'a' keystroke must still be forwarded");
-        assert!(
-            matches!(&third, TerminalCommand::Input(bytes) if bytes == b"a"),
+        std::assert_matches!(
+            &third, TerminalCommand::Input(bytes) if bytes == b"a",
             "the 'a' keystroke must keep its queue position, got {third:?}"
         );
 

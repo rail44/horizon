@@ -581,8 +581,9 @@ fn enter_goes_into_the_field_and_escape_comes_out() {
         keyboard_types::Code::Escape,
         false,
     );
-    assert!(
-        matches!(opened.asked.borrow().as_slice(), [Asked::Deny(_)]),
+    std::assert_matches!(
+        opened.asked.borrow().as_slice(),
+        [Asked::Deny(_)],
         "{:?}",
         opened.asked.borrow()
     );

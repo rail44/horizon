@@ -500,7 +500,7 @@ mod tests {
 
         let result = root.without_pane(b).expect("a remains");
 
-        assert!(matches!(result, LayoutNode::Pane(id) if id == a));
+        std::assert_matches!(result, LayoutNode::Pane(id) if id == a);
     }
 
     #[test]
@@ -593,10 +593,9 @@ mod tests {
 
         root.flatten();
 
-        assert!(matches!(
+        std::assert_matches!(
             &root,
-            LayoutNode::Split { axis: SplitAxis::Vertical, children } if children.len() == 2
-        ));
+            LayoutNode::Split { axis: SplitAxis::Vertical, children } if children.len() == 2);
         assert_eq!(root.pane_ids(), vec![a, b]);
     }
 

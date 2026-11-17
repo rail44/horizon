@@ -757,14 +757,13 @@ mod tests {
         let decision = state.on_wheel(0.25, VR);
         assert_eq!(decision.ipc, ScrollIpc::None);
         assert!(decision.repaint);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 9,
                 fractional_row,
                 ..
-            } if (fractional_row - 0.75).abs() < 0.0001
-        ));
+            } if (fractional_row - 0.75).abs() < 0.0001);
 
         let (_, range, fractional_row) = state.visible_lines(VR).unwrap();
         assert_eq!(range, 9..15, "one clipped context row is painted");
@@ -775,34 +774,32 @@ mod tests {
     fn fractional_row_crossings_and_reversal_are_continuous() {
         let mut state = windowed_mid();
         state.on_wheel(0.95, VR);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 9,
                 fractional_row,
                 ..
-            } if (fractional_row - 0.05).abs() < 0.0001
-        ));
+            } if (fractional_row - 0.05).abs() < 0.0001);
 
         state.on_wheel(0.10, VR);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 8,
                 fractional_row,
                 ..
-            } if (fractional_row - 0.95).abs() < 0.0001
-        ));
+            } if (fractional_row - 0.95).abs() < 0.0001);
 
         state.on_wheel(-1.05, VR);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 10,
                 fractional_row: 0.0,
                 ..
             }
-        ));
+        );
     }
 
     /// Entering the one-viewport margin starts one proactive replacement,
@@ -828,14 +825,14 @@ mod tests {
                 height: VR * super::WINDOW_VIEWPORTS,
             }
         );
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 5,
                 fetch: Some(WindowFetch::Prefetch),
                 ..
             }
-        ));
+        );
 
         let second = state.on_wheel(2.0, VR);
         assert_eq!(second.ipc, ScrollIpc::None, "only one fetch is in flight");
@@ -843,19 +840,19 @@ mod tests {
             second.repaint,
             "the held overscan remains locally scrollable"
         );
-        assert!(matches!(state, Scrollback::Windowed { offset: 3, .. }));
+        std::assert_matches!(state, Scrollback::Windowed { offset: 3, .. });
 
         // The current old-window anchor is now 22. In the replacement whose
         // bottom has 20 rows below it, that same anchor lives at offset 8.
         assert!(state.install_window(window(15, 5, 12, 20)).installed);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 8,
                 fetch: None,
                 ..
             }
-        ));
+        );
     }
 
     /// The first scroll-back tick requests a window around the live tail and
@@ -895,21 +892,19 @@ mod tests {
         );
         assert_eq!(state.on_wheel(0.50, VR).ipc, ScrollIpc::None);
         state.on_wheel(-0.10, VR);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Requesting { pending_rows, .. }
-                if (pending_rows - 0.65).abs() < 0.0001
-        ));
+                if (pending_rows - 0.65).abs() < 0.0001);
 
         assert!(state.install_window(window(15, 9, 10, 0)).installed);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 9,
                 fractional_row,
                 ..
-            } if (fractional_row - 0.35).abs() < 0.0001
-        ));
+            } if (fractional_row - 0.35).abs() < 0.0001);
     }
 
     #[test]
@@ -924,7 +919,7 @@ mod tests {
         let install = state.install_window(window(10, 0, 0, 0));
         assert!(install.installed);
         assert_eq!(install.request, None);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 0,
@@ -932,7 +927,7 @@ mod tests {
                 fetch: None,
                 ..
             }
-        ));
+        );
     }
 
     #[test]
@@ -960,7 +955,7 @@ mod tests {
         let install = state.install_window(window(15, 5, 10, 20));
         assert!(install.installed);
         assert_eq!(install.request, Some((40, VR * super::WINDOW_VIEWPORTS)));
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 0,
@@ -970,7 +965,7 @@ mod tests {
                 }),
                 ..
             }
-        ));
+        );
     }
 
     #[test]
@@ -992,7 +987,7 @@ mod tests {
             fetch: None,
         };
         let decision = state.on_wheel(1.0, VR);
-        assert!(matches!(decision.ipc, ScrollIpc::Request { .. }));
+        std::assert_matches!(decision.ipc, ScrollIpc::Request { .. });
         let expected_anchor = match &state {
             Scrollback::Windowed {
                 window,
@@ -1072,14 +1067,14 @@ mod tests {
         let install = state.install_window(window(14, 2, 7, 3));
         assert!(install.installed);
         assert_eq!(install.request, None);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 4,
                 fetch: None,
                 ..
             }
-        ));
+        );
     }
 
     /// A prefetch reply that cannot represent the viewport the gesture has
@@ -1108,7 +1103,7 @@ mod tests {
             Some((2, 10 * super::WINDOW_VIEWPORTS)),
             "re-request centred on the held viewport's continuous anchor"
         );
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 2,
@@ -1116,8 +1111,7 @@ mod tests {
                 fetch: Some(WindowFetch::Edge { target_anchor }),
                 ..
             } if (fractional_row - 0.25).abs() < 0.0001
-                && (target_anchor - 1.75).abs() < 0.0001
-        ));
+                && (target_anchor - 1.75).abs() < 0.0001);
     }
 
     /// Crossing the block's top while a prefetch is in flight re-points the
@@ -1138,15 +1132,14 @@ mod tests {
         let decision = state.on_wheel(3.0, 10);
         assert_eq!(decision.ipc, ScrollIpc::None, "one fetch stays in flight");
         assert!(decision.repaint);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 0,
                 fractional_row: 0.0,
                 fetch: Some(WindowFetch::Edge { target_anchor }),
                 ..
-            } if (target_anchor - 5.75).abs() < 0.0001
-        ));
+            } if (target_anchor - 5.75).abs() < 0.0001);
     }
 
     /// Mirror of the top-edge conversion at the block's bottom edge.
@@ -1164,15 +1157,14 @@ mod tests {
         let decision = state.on_wheel(-3.0, 10);
         assert_eq!(decision.ipc, ScrollIpc::None);
         assert!(decision.repaint);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 4,
                 fractional_row: 0.0,
                 fetch: Some(WindowFetch::Edge { target_anchor }),
                 ..
-            } if (target_anchor - 2.0).abs() < 0.0001
-        ));
+            } if (target_anchor - 2.0).abs() < 0.0001);
     }
 
     /// Scrolling down past the block bottom when it is the live tail
@@ -1235,15 +1227,13 @@ mod tests {
             other => panic!("expected a recentred window request, got {other:?}"),
         }
         assert!(decision.repaint);
-        assert!(
-            matches!(
-                state,
-                Scrollback::Windowed {
-                    offset: 0,
-                    fetch: Some(WindowFetch::Edge { .. }),
-                    ..
-                }
-            ),
+        std::assert_matches!(
+            state,
+            Scrollback::Windowed {
+                offset: 0,
+                fetch: Some(WindowFetch::Edge { .. }),
+                ..
+            },
             "clamped at the edge with a re-fetch outstanding"
         );
 
@@ -1274,13 +1264,12 @@ mod tests {
                 height: VR * super::WINDOW_VIEWPORTS,
             }
         );
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 fetch: Some(WindowFetch::Edge { target_anchor }),
                 ..
-            } if (target_anchor - 25.3).abs() < 0.0001
-        ));
+            } if (target_anchor - 25.3).abs() < 0.0001);
 
         // Input continues while the replacement is in flight. It sends no
         // second request, but the eventual reply must land at this new target.
@@ -1289,15 +1278,14 @@ mod tests {
         let install = state.install_window(window(15, 5, 10, 20));
         assert!(install.installed);
         assert_eq!(install.request, None);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 4,
                 fractional_row,
                 fetch: None,
                 ..
-            } if (fractional_row - 0.3).abs() < 0.0001
-        ));
+            } if (fractional_row - 0.3).abs() < 0.0001);
     }
 
     #[test]
@@ -1321,15 +1309,14 @@ mod tests {
         let install = state.install_window(window(15, 5, 10, 5));
         assert!(install.installed);
         assert_eq!(install.request, None);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 5,
                 fractional_row,
                 fetch: None,
                 ..
-            } if (fractional_row - 0.7).abs() < 0.0001
-        ));
+            } if (fractional_row - 0.7).abs() < 0.0001);
     }
 
     #[test]
@@ -1363,7 +1350,7 @@ mod tests {
         let decision = state.on_wheel(5.0, VR);
         assert_eq!(decision.ipc, ScrollIpc::None);
         assert!(decision.repaint);
-        assert!(matches!(state, Scrollback::Windowed { offset: 0, .. }));
+        std::assert_matches!(state, Scrollback::Windowed { offset: 0, .. });
 
         // Already at the top: the next up-tick changes nothing.
         let decision = state.on_wheel(1.0, VR);
@@ -1380,14 +1367,14 @@ mod tests {
             pending_rows: 20.0,
         };
         assert!(state.install_window(window(15, 5, 10, 15)).installed);
-        assert!(matches!(
+        std::assert_matches!(
             state,
             Scrollback::Windowed {
                 offset: 5,
                 fetch: None,
                 ..
             }
-        ));
+        );
     }
 
     /// A window arriving with no request outstanding is a late/superseded

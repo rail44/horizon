@@ -281,7 +281,7 @@ mod proxy_environment_tests {
             );
         }
         for key in ["all_proxy", "ALL_PROXY"] {
-            assert!(matches!(env.get(OsStr::new(key)), Some(None)));
+            std::assert_matches!(env.get(OsStr::new(key)), Some(None));
         }
     }
 }

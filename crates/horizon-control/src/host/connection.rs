@@ -213,8 +213,9 @@ mod tests {
             "the request after rejection must be ignored"
         );
         assert_eq!(responses[0].id, 1);
-        assert!(
-            matches!(responses[0].body, EnvelopeBody::Rejected(_)),
+        std::assert_matches!(
+            responses[0].body,
+            EnvelopeBody::Rejected(_),
             "expected Rejected, got {:?}",
             responses[0].body
         );
@@ -236,7 +237,7 @@ mod tests {
 
         result.expect("rejection is not an error");
         assert_eq!(responses.len(), 1);
-        assert!(matches!(responses[0].body, EnvelopeBody::Rejected(_)));
+        std::assert_matches!(responses[0].body, EnvelopeBody::Rejected(_));
     }
 
     #[test]
@@ -257,14 +258,10 @@ mod tests {
         result.unwrap();
         assert_eq!(responses.len(), 2);
         assert_eq!(responses[1].id, 42);
-        assert!(matches!(
-            responses[1].body,
-            EnvelopeBody::Ok { session_id: None }
-        ));
-        assert!(matches!(
+        std::assert_matches!(responses[1].body, EnvelopeBody::Ok { session_id: None });
+        std::assert_matches!(
             executor.seen.lock().unwrap().as_slice(),
-            [ControlRequest::Invoke(invoke)] if invoke.command == "new-terminal"
-        ));
+            [ControlRequest::Invoke(invoke)] if invoke.command == "new-terminal");
     }
 
     #[test]
@@ -284,10 +281,9 @@ mod tests {
         result.unwrap();
         assert_eq!(responses.len(), 2);
         assert_eq!(responses[1].id, 7);
-        assert!(matches!(
+        std::assert_matches!(
             executor.seen.lock().unwrap().as_slice(),
-            [ControlRequest::Query(query)] if query.what == "sessions"
-        ));
+            [ControlRequest::Query(query)] if query.what == "sessions");
     }
 
     #[test]
@@ -310,12 +306,9 @@ mod tests {
 
         result.unwrap();
         assert_eq!(responses.len(), 3);
-        assert!(matches!(responses[1].body, EnvelopeBody::Error(_)));
+        std::assert_matches!(responses[1].body, EnvelopeBody::Error(_));
         assert_eq!(responses[2].id, 3);
-        assert!(matches!(
-            responses[2].body,
-            EnvelopeBody::Ok { session_id: None }
-        ));
+        std::assert_matches!(responses[2].body, EnvelopeBody::Ok { session_id: None });
     }
 
     #[test]

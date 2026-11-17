@@ -394,7 +394,7 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
     };
 
     let answer = ask(&fixture(), &["rows"], true);
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     assert_eq!(previews().len(), 1);
     opened.until("the rows", || opened.titles().len() == 3);
     // The pane has the keys: the rows' own move their selection.
@@ -403,7 +403,7 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
 
     // The same file again is the same pane's, made on what was asked for.
     let answer = ask(&fixture(), &["selection"], false);
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     assert_eq!(previews().len(), 1);
     opened.until("the other view", || {
         opened.all("words").len() == 1 && opened.titles().is_empty()
@@ -419,6 +419,6 @@ fn the_control_plane_shows_a_preview_in_a_pane_of_the_shell() {
 
     // What is not a file is refused, and opens nothing.
     let answer = ask(Path::new("/no/such/extension.wasm"), &[], false);
-    assert!(matches!(answer, EnvelopeBody::Error { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Error { .. }, "{answer:?}");
     assert_eq!(previews().len(), 1);
 }

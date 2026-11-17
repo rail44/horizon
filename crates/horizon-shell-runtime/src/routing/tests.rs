@@ -26,14 +26,11 @@ fn exit_retires_all_channels_after_delivering_the_exit() {
     let routes = TerminalRoutes::new();
     let peer = register(&routes);
     routes.route_terminal_update(peer.id, TerminalUpdate::Exited);
-    assert!(matches!(
-        peer.events.try_recv().unwrap(),
-        TerminalUpdate::Exited
-    ));
-    assert!(matches!(
+    std::assert_matches!(peer.events.try_recv().unwrap(), TerminalUpdate::Exited);
+    std::assert_matches!(
         peer.events.try_recv(),
         Err(crossbeam_channel::TryRecvError::Disconnected)
-    ));
+    );
     assert!(peer.frames.has_changed().is_err());
     assert!(peer.commands.is_closed());
 }
@@ -44,10 +41,10 @@ fn a_closed_frame_or_event_consumer_retires_the_whole_route() {
     let peer = register(&routes);
     drop(peer.frames);
     routes.route_terminal_frame(peer.id, TerminalFrame::from_text("next".into()));
-    assert!(matches!(
+    std::assert_matches!(
         peer.events.try_recv(),
         Err(crossbeam_channel::TryRecvError::Disconnected)
-    ));
+    );
     assert!(peer.commands.is_closed());
 
     let peer = register(&routes);
@@ -62,19 +59,19 @@ fn connection_failure_keeps_diagnostics_and_closes_commands() {
     let routes = TerminalRoutes::new();
     let peer = register(&routes);
     routes.connection_failed("runtime gone".into());
-    assert!(
-        matches!(peer.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "runtime gone")
+    std::assert_matches!(
+        peer.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "runtime gone"
     );
     assert!(peer.frames.has_changed().is_ok());
     assert!(peer.commands.is_closed());
     routes.terminal_failed(peer.id, "later diagnostic".into());
-    assert!(
-        matches!(peer.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "later diagnostic")
+    std::assert_matches!(
+        peer.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "later diagnostic"
     );
 
     let later = register(&routes);
-    assert!(
-        matches!(later.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "runtime gone")
+    std::assert_matches!(
+        later.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "runtime gone"
     );
     assert!(later.frames.has_changed().is_err());
     assert!(later.commands.is_closed());
@@ -94,8 +91,8 @@ fn dropping_an_old_agent_registration_keeps_the_replacement() {
     let current = routes.register_agent(id, new_tx);
     routes.unregister_agent(old);
     routes.agent_failed(current, "current diagnostic".into());
-    assert!(
-        matches!(new_rx.try_recv().unwrap(), AgentUpdate::State(AttachmentState::Failed(message)) if message == "current diagnostic")
+    std::assert_matches!(
+        new_rx.try_recv().unwrap(), AgentUpdate::State(AttachmentState::Failed(message)) if message == "current diagnostic"
     );
 }
 
@@ -194,18 +191,18 @@ async fn replacing_a_route_cancels_a_send_blocked_by_a_slow_view() {
             .unwrap()
             .unwrap()
     );
-    assert!(matches!(
+    std::assert_matches!(
         old_rx.recv().await,
         Some(AgentUpdate::State(AttachmentState::Restoring))
-    ));
+    );
     assert!(old_rx.recv().await.is_none());
     assert!(
         routes
             .send_agent(current, AgentUpdate::State(AttachmentState::Ready))
             .await
     );
-    assert!(matches!(
+    std::assert_matches!(
         new_rx.recv().await,
         Some(AgentUpdate::State(AttachmentState::Ready))
-    ));
+    );
 }

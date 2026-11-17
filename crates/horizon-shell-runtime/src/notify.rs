@@ -139,10 +139,10 @@ mod tests {
         let mut coalescer = NotifyCoalescer::default();
         let t0 = Instant::now();
         assert_eq!(coalescer.on_event(t0), NotifyDecision::Notify);
-        assert!(matches!(
+        std::assert_matches!(
             coalescer.on_event(t0 + Duration::from_millis(4)),
             NotifyDecision::Arm(_)
-        ));
+        );
         let flushed_at = t0 + NOTIFY_COALESCE_WINDOW;
         coalescer.on_flush(flushed_at);
         assert_eq!(

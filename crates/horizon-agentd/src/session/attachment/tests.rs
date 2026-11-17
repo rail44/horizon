@@ -212,10 +212,10 @@ fn session_end_drains_queued_final_events_before_closing() {
         attached.events.try_recv().unwrap(),
         AgentWireEvent::Event(message(1))
     );
-    assert!(matches!(
+    std::assert_matches!(
         attached.events.try_recv(),
         Err(mpsc::error::TryRecvError::Disconnected)
-    ));
+    );
 }
 
 #[test]

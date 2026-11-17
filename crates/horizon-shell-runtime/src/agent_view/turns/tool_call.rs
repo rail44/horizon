@@ -362,8 +362,8 @@ mod tests {
         ];
         let views = build_tool_call_views(&items);
         assert!(views[0].superseded());
-        assert!(
-            matches!(tool_call_body(&items, &views[0]), Some(ToolCallBody::Raw { ref lines, .. }) if lines.iter().any(|line| line.contains("replaces it")))
+        std::assert_matches!(
+            tool_call_body(&items, &views[0]), Some(ToolCallBody::Raw { ref lines, .. }) if lines.iter().any(|line| line.contains("replaces it"))
         );
         assert_eq!(
             tool_call_body(&items, &views[1]),

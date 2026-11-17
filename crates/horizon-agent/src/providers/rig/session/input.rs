@@ -540,8 +540,8 @@ mod recovery_tests {
         assert!(events.try_recv().is_err());
         state.pause_inputs(false);
         state.prepare_next_input().await;
-        assert!(
-            matches!(state.inbox.pop_front(), Some(Command::UserMessage { text }) if text.ends_with("pending"))
+        std::assert_matches!(
+            state.inbox.pop_front(), Some(Command::UserMessage { text }) if text.ends_with("pending")
         );
         assert_eq!(state.inputs.active_ids(), ["pending"]);
     }

@@ -801,8 +801,8 @@ mod tests {
         let mut current = host.subscribe_for_create(id);
         host.unsubscribe(id, &old);
         host.send_event(id, TerminalUpdate::Error("current diagnostic".into()));
-        assert!(
-            matches!(current.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "current diagnostic")
+        std::assert_matches!(
+            current.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "current diagnostic"
         );
     }
 
@@ -813,8 +813,8 @@ mod tests {
         let mut creating = host.subscribe_for_create(id);
         assert!(host.attach_subscribe(id).is_none());
         host.send_event(id, TerminalUpdate::Error("spawn diagnostic".into()));
-        assert!(
-            matches!(creating.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "spawn diagnostic")
+        std::assert_matches!(
+            creating.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "spawn diagnostic"
         );
     }
 

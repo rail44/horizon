@@ -137,25 +137,25 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
             assert_eq!(context.workspace_root.as_ref(), Some(&workspace_root));
             assert!(context.isolated_worktree);
             assert_eq!(context.parent_session_id, None);
-            assert!(
-                matches!(outgoing.try_recv().unwrap(), AgentWireEvent::Event(Event::EnvironmentActivated(identity))
-                if identity == worktree.identity())
+            std::assert_matches!(
+                outgoing.try_recv().unwrap(), AgentWireEvent::Event(Event::EnvironmentActivated(identity))
+                if identity == worktree.identity()
             );
-            assert!(
-                matches!(outgoing.try_recv().unwrap(), AgentWireEvent::WorkspaceRootResolved(resolved)
-                if resolved.workspace_root == workspace_root && resolved.parent_session_id.is_none())
+            std::assert_matches!(
+                outgoing.try_recv().unwrap(), AgentWireEvent::WorkspaceRootResolved(resolved)
+                if resolved.workspace_root == workspace_root && resolved.parent_session_id.is_none()
             );
             // A second activation must leave the current environment intact.
             environment.activate("HEAD", &live_state, &mut tool_state, &results, &commands);
-            assert!(
-                matches!(responses.try_recv().unwrap(), Command::EnvironmentActivationFailed { message }
-                if message == "Session already owns a worktree")
+            std::assert_matches!(
+                responses.try_recv().unwrap(), Command::EnvironmentActivationFailed { message }
+                if message == "Session already owns a worktree"
             );
             assert_eq!(tool_state.workspace_root(), Some(workspace_root.as_path()));
         } else {
-            assert!(
-                matches!(response, Command::EnvironmentActivationFailed { message }
-                if message == "Session persistence is unavailable")
+            std::assert_matches!(
+                response, Command::EnvironmentActivationFailed { message }
+                if message == "Session persistence is unavailable"
             );
             assert_eq!(tool_state.workspace_root(), Some(root.as_path()));
             assert!(lock_unpoisoned(&state.sessions)[&session_id]

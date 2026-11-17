@@ -1207,14 +1207,13 @@ mod tests {
             ApprovalGate::Pending
         );
         let result = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
-        assert!(matches!(
-            result,
-            crate::tools::ToolCompletion::ApprovalJudged(judgment)
-                if matches!(*judgment, ApprovalJudgment {
-                    decision: JudgeDecision::Escalate,
-                    ..
-                })
-        ));
+        std::assert_matches!(
+        result,
+        crate::tools::ToolCompletion::ApprovalJudged(judgment)
+            if matches!(*judgment, ApprovalJudgment {
+                decision: JudgeDecision::Escalate,
+                ..
+            }));
         assert!(crate::tools::drain_session_work(
             session,
             std::time::Duration::from_secs(2)

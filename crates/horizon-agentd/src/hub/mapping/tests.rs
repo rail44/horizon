@@ -91,9 +91,9 @@ fn message_ids_follow_commits_and_tool_calls() {
     );
     let ids: Vec<_> = updates.iter().filter_map(message_id).collect();
     assert_eq!(ids, ["msg-0", "msg-1", "msg-1", "msg-1", "msg-3"]);
-    assert!(
-        matches!(&updates[3], v2::SessionUpdate::AgentMessage(message)
-        if message.content == MaybeUndefined::Value(vec!["Mock response".to_string().into()]))
+    std::assert_matches!(
+        &updates[3], v2::SessionUpdate::AgentMessage(message)
+        if message.content == MaybeUndefined::Value(vec!["Mock response".to_string().into()])
     );
 }
 
@@ -252,8 +252,8 @@ fn replayed_approvals_are_asked_after_the_bootstrap_only_while_pending() {
     assert_eq!(pending[0].occurrence_id.0, "occ-2");
 
     let live = mapper.map(&AgentWireEvent::Event(approval("occ-3")));
-    assert!(matches!(&live[..], [Outgoing::AskPermission(request)]
-        if request.occurrence_id.0 == "occ-3"));
+    std::assert_matches!(&live[..], [Outgoing::AskPermission(request)]
+        if request.occurrence_id.0 == "occ-3");
     let settled = mapper.map(&AgentWireEvent::Event(Event::ToolCallFinished(
         ToolCallResult::cancelled(identity("call-1", "occ-3")),
     )));

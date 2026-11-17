@@ -231,9 +231,9 @@ mod tests {
         };
         let result = execute_operation(&state, SessionId::new(), &request);
         assert_eq!(result.output.to_json(), json!({"queued": true}));
-        assert!(
-            matches!(result.events.as_slice(), [Event::SessionInputSent { session_id, input }]
-            if *session_id == recipient && input.id == "review-request")
+        std::assert_matches!(
+            result.events.as_slice(), [Event::SessionInputSent { session_id, input }]
+            if *session_id == recipient && input.id == "review-request"
         );
     }
 }

@@ -198,10 +198,9 @@ fn thoughts_fold_by_message_id() {
         &mut model,
         v2::SessionUpdate::AgentThoughtChunk(v2::ContentChunk::new("ok".into(), "r1")),
     );
-    assert!(matches!(
+    std::assert_matches!(
         model.frame.items.as_slice(),
-        [AgentFrameItem::Thought(Thought { text, .. })] if text == "hmm ok"
-    ));
+        [AgentFrameItem::Thought(Thought { text, .. })] if text == "hmm ok");
 }
 
 #[test]
@@ -500,10 +499,9 @@ fn argument_progress_is_replaced_in_place_and_removed_on_close() {
             },
         ));
     }
-    assert!(matches!(
+    std::assert_matches!(
         model.frame.items.as_slice(),
-        [AgentFrameItem::ToolCallPreparing(ToolCallPreparing { key })] if key == "call-1"
-    ));
+        [AgentFrameItem::ToolCallPreparing(ToolCallPreparing { key })] if key == "call-1");
     model.apply(AgentEvent::ToolCallProgress(
         ToolCallProgressEvent::Closed {
             key: "call-1".into(),

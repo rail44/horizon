@@ -873,7 +873,7 @@ fn fold_emits_activity_changes_only() {
     let outcome = fold_until_terminal(&events, &cancel, &mut |activity| {
         sink.lock().unwrap().push(activity);
     });
-    assert!(matches!(outcome.terminal, Terminal::Completed));
+    std::assert_matches!(outcome.terminal, Terminal::Completed);
     assert_eq!(
         *observed.lock().unwrap(),
         vec![None, Some("fs_grep".to_string())],

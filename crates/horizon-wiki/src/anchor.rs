@@ -361,7 +361,7 @@ mod tests {
         let edited = LogicalText::of_markdown("Since 2026, the sandbox helper runs nono first.");
         let found = anchor(&edited, &quote);
         assert_eq!(edited.slice(found.range().unwrap()), "nono");
-        assert!(matches!(found, Anchor::Moved { exact: true, .. }));
+        std::assert_matches!(found, Anchor::Moved { exact: true, .. });
     }
 
     #[test]

@@ -109,7 +109,7 @@ fn open_at(name: &str, width: u32) -> Opened {
     // (The extensions are read once the shell is drawn.)
     opened.until("the extensions", || opened.shell.extensions_read());
     let answer = opened.new_wiki(&["sandbox"]);
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     opened.until("the page", || opened.text().contains("runs"));
     opened
 }
@@ -294,14 +294,14 @@ fn a_page_is_asked_for_by_its_name_from_its_project() {
     assert!(format!("{error:?}").contains("no page"), "{error:?}");
     // With no page named, the overview, in a pane of its own.
     let answer = opened.new_wiki(&[]);
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     opened.until("the overview", || {
         opened.text().contains("What the project is.")
     });
     assert_eq!(tabs(&opened), 3);
     // Asked for a page a pane shows already, that pane is the one.
     let answer = opened.new_wiki(&["sandbox"]);
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     assert_eq!(tabs(&opened), 3);
 }
 

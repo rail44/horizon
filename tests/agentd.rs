@@ -264,7 +264,7 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     press(&app, Key::Character(":".into()), Modifiers::default());
     commit("switch model");
     enter();
-    assert!(matches!(shell.modal(), Some(Modal::Models(_))));
+    std::assert_matches!(shell.modal(), Some(Modal::Models(_)));
     let rows = || {
         let document = app.document();
         let document = document.borrow();

@@ -42,7 +42,7 @@ fn only_explicit_terminal_outcomes_enter_the_delivery_queue() {
     };
     index.fold(record(session, Event::InputOutcome(outcome.clone())));
     assert!(
-        matches!(index.pending.get(&(session,"result".into())),Some(Pending::Answer{outcome:value,..}) if value==&outcome)
+        matches!(index.pending.get(&(session,"result".into())), Some(Pending::Answer{outcome:value,..}) if value==&outcome)
     );
     index.fold(record(
         session,
@@ -111,8 +111,8 @@ fn queueing_an_input_is_not_a_durable_receipt() {
     };
     let mut index = Index::default();
     assert!(!super::receipt(&state, &index, target, input.clone()));
-    assert!(
-        matches!(receiver.try_recv().unwrap(),horizon_agent::contract::Command::SessionInput(value) if value==input)
+    std::assert_matches!(
+        receiver.try_recv().unwrap(),horizon_agent::contract::Command::SessionInput(value) if value==input
     );
     index.fold(record(target, Event::InputAccepted(input.clone())));
     assert!(super::receipt(&state, &index, target, input));
@@ -205,7 +205,7 @@ fn tail_read_failure_does_not_discard_earlier_records_in_the_same_batch() {
     std::fs::write(&path, text).unwrap();
     let records = tail.read().unwrap();
     assert_eq!(records.len(), 1);
-    assert!(matches!(&records[0].event,Event::DeliveryAcknowledged(id) if id=="retained"));
+    std::assert_matches!(&records[0].event,Event::DeliveryAcknowledged(id) if id=="retained");
     assert!(tail.read().unwrap().is_empty());
 }
 
@@ -246,22 +246,22 @@ async fn pending_receipt_orders_one_recipient_without_blocking_another() {
         );
     }
     outbox.deliver_outputs().await.unwrap();
-    assert!(
-        matches!(receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "request")
+    std::assert_matches!(
+        receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "request"
     );
     assert!(
         receiver.try_recv().is_err(),
         "Correction waits for request receipt"
     );
-    assert!(
-        matches!(other_receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "unrelated")
+    std::assert_matches!(
+        other_receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "unrelated"
     );
     outbox.index.accepted.insert((target, "request".into()));
     // A missing source writer prevents acknowledgement in this isolated
     // test, but an accepted first request must still release its successor.
     assert!(outbox.deliver_outputs().await.is_err());
-    assert!(
-        matches!(receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "correction")
+    std::assert_matches!(
+        receiver.try_recv().unwrap(), Command::SessionInput(input) if input.id == "correction"
     );
 }
 

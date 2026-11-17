@@ -304,14 +304,8 @@ async fn next_terminal_call(
 async fn expect_terminald_handshake(
     calls: &mut tokio::sync::mpsc::UnboundedReceiver<TerminalCall>,
 ) {
-    assert!(matches!(
-        next_terminal_call(calls).await,
-        TerminalCall::Hello
-    ));
-    assert!(matches!(
-        next_terminal_call(calls).await,
-        TerminalCall::ListTerminals
-    ));
+    std::assert_matches!(next_terminal_call(calls).await, TerminalCall::Hello);
+    std::assert_matches!(next_terminal_call(calls).await, TerminalCall::ListTerminals);
 }
 
 /// Reads frames off a terminal handle's `frames()` stream until one whose
@@ -384,10 +378,10 @@ fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
 
     agent_routes.connection_failed("the agent runtime died".to_string());
 
-    assert!(matches!(
+    std::assert_matches!(
         agent_event_rx.try_recv().unwrap(),
         AgentUpdate::State(AttachmentState::Failed(_))
-    ));
+    );
     assert!(
         terminal_event_rx
             .recv_timeout(Duration::from_millis(100))
@@ -551,7 +545,7 @@ async fn a_clean_exit_retires_the_pane_even_when_the_frames_watch_closes_first()
         .events()
         .recv_timeout(Duration::from_secs(5))
         .expect("Exited must reach the pane even though the frames watch closed first");
-    assert!(matches!(update, TerminalUpdate::Exited), "got {update:?}");
+    std::assert_matches!(update, TerminalUpdate::Exited, "got {update:?}");
 }
 
 /// Review fix 3: the frames watch inlines its seed (the retained latest
@@ -678,16 +672,16 @@ async fn an_established_terminald_disconnect_reports_errors_without_reconnecting
         .events()
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    assert!(matches!(terminal_error, TerminalUpdate::Error(_)));
+    std::assert_matches!(terminal_error, TerminalUpdate::Error(_));
 
     let late_terminal = handle.start_terminal(Uuid::new_v4(), spec());
-    assert!(matches!(
+    std::assert_matches!(
         late_terminal
             .events()
             .recv_timeout(Duration::from_secs(5))
             .unwrap(),
         TerminalUpdate::Error(_)
-    ));
+    );
 }
 
 /// Decision 6's skew insurance, end to end through the runtime: a terminald
@@ -797,7 +791,7 @@ async fn a_range_rejecting_terminald_is_drained_via_rtc_and_the_respawn_adopted(
     };
     let (mut drain_calls, _conn_2, _serve_2) = serve_fake_terminal_hub(stream, behavior).await;
     let drain = next_terminal_call(&mut drain_calls).await;
-    assert!(matches!(drain, TerminalCall::Drain), "got {drain:?}");
+    std::assert_matches!(drain, TerminalCall::Drain, "got {drain:?}");
 
     drop(listener);
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -908,18 +902,19 @@ async fn an_oversized_rtc_request_fails_the_op_and_stops_the_runtime() {
         .events()
         .recv_timeout(Duration::from_secs(10))
         .expect("the oversized create must fail loudly, not hang");
-    assert!(
-        matches!(update, TerminalUpdate::Error(_)),
+    std::assert_matches!(
+        update,
+        TerminalUpdate::Error(_),
         "expected a create failure, got {update:?}"
     );
 
     // The latched request channel ends the connection; later panes get
     // the failure rather than a hang.
     let late = handle.start_terminal(Uuid::new_v4(), spec());
-    assert!(matches!(
+    std::assert_matches!(
         late.events().recv_timeout(Duration::from_secs(10)).unwrap(),
         TerminalUpdate::Error(_)
-    ));
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -955,8 +950,8 @@ async fn replacing_a_terminal_handle_keeps_the_new_wire_attachment_live() {
         .send(TerminalUpdate::Error("current diagnostic".into()))
         .await
         .unwrap();
-    assert!(
-        matches!(current.events().recv_timeout(Duration::from_secs(5)).unwrap(), TerminalUpdate::Error(message) if message == "current diagnostic")
+    std::assert_matches!(
+        current.events().recv_timeout(Duration::from_secs(5)).unwrap(), TerminalUpdate::Error(message) if message == "current diagnostic"
     );
     let input = TerminalCommand::Input(b"still attached".to_vec());
     current.sender().send(input.clone()).unwrap();

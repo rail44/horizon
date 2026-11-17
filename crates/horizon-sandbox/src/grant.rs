@@ -471,10 +471,9 @@ mod tests {
         let root = test_dir("parent-component");
         let attempted = root.join("missing").join("..").join("leaf");
 
-        assert!(matches!(
+        std::assert_matches!(
             resolve_denial(attempted.clone(), FilesystemGrantAccess::ReadWrite),
-            Err(SandboxError::UnsupportedGrantTarget(path)) if path == attempted
-        ));
+            Err(SandboxError::UnsupportedGrantTarget(path)) if path == attempted);
         fs::remove_dir_all(root).expect("remove test directory");
     }
 
@@ -486,10 +485,9 @@ mod tests {
             unique_suffix()
         ));
         assert!(!attempted.exists());
-        assert!(matches!(
+        std::assert_matches!(
             resolve_denial(attempted.clone(), FilesystemGrantAccess::ReadWrite),
-            Err(SandboxError::UnsupportedGrantTarget(path)) if path == attempted
-        ));
+            Err(SandboxError::UnsupportedGrantTarget(path)) if path == attempted);
     }
 
     /// The 2026-07-28 defect: a `/tmp/<leaf>` attempt proposed the writable
@@ -510,9 +508,9 @@ mod tests {
         let error = resolve_denial(attempted.clone(), FilesystemGrantAccess::ReadWrite)
             .expect_err("/tmp must never be proposed as a writable tree");
 
-        assert!(
-            matches!(&error, SandboxError::UngrantableDenial { attempted: path, tree }
-                if *path == attempted && tree == Path::new("/tmp")),
+        std::assert_matches!(
+            &error, SandboxError::UngrantableDenial { attempted: path, tree }
+                if *path == attempted && tree == Path::new("/tmp"),
             "unexpected error: {error:?}"
         );
         let message = error.to_string();
@@ -579,10 +577,9 @@ mod tests {
         // symlink onto a protected target is refused -- holds everywhere.
         symlink("/dev", &attempted).expect("create symlink");
 
-        assert!(matches!(
+        std::assert_matches!(
             resolve_denial(attempted.clone(), FilesystemGrantAccess::Read),
-            Err(SandboxError::UnsupportedGrantTarget(path)) if path == attempted
-        ));
+            Err(SandboxError::UnsupportedGrantTarget(path)) if path == attempted);
         fs::remove_dir_all(root).expect("remove test directory");
     }
 
@@ -603,10 +600,9 @@ mod tests {
         fs::remove_file(&attempted).unwrap();
         symlink(&second, &attempted).unwrap();
 
-        assert!(matches!(
+        std::assert_matches!(
             revalidate_denial(&denial),
-            Err(SandboxError::GrantProposalChanged { attempted: path }) if path == attempted
-        ));
+            Err(SandboxError::GrantProposalChanged { attempted: path }) if path == attempted);
         fs::remove_dir_all(root).expect("remove test directory");
     }
 
@@ -624,10 +620,9 @@ mod tests {
 
         symlink(&outside, &link).unwrap();
 
-        assert!(matches!(
+        std::assert_matches!(
             revalidate_denial(&denial),
-            Err(SandboxError::GrantProposalChanged { attempted: path }) if path == attempted
-        ));
+            Err(SandboxError::GrantProposalChanged { attempted: path }) if path == attempted);
         fs::remove_dir_all(root).expect("remove test directory");
         fs::remove_dir_all(outside).expect("remove test directory");
     }
@@ -728,10 +723,10 @@ mod tests {
             excluded_subpaths: Vec::new(),
         };
         fs::remove_dir_all(&root).expect("remove test directory");
-        assert!(matches!(
+        std::assert_matches!(
             revalidate_grant(&grant),
             Err(SandboxError::InvalidRoot { .. })
-        ));
+        );
     }
 
     #[test]
@@ -750,10 +745,10 @@ mod tests {
         fs::remove_dir(&target).expect("remove target directory");
         fs::write(&target, "now a file").expect("replace with a file");
 
-        assert!(matches!(
+        std::assert_matches!(
             revalidate_grant(&grant),
             Err(SandboxError::GrantTypeChanged { .. })
-        ));
+        );
         fs::remove_dir_all(root).expect("remove test directory");
     }
 
@@ -765,10 +760,9 @@ mod tests {
             scope: FilesystemGrantScope::DirectoryTree,
             excluded_subpaths: Vec::new(),
         };
-        assert!(matches!(
+        std::assert_matches!(
             revalidate_grant(&grant),
-            Err(SandboxError::UnsupportedGrantTarget(path)) if path == Path::new("/usr")
-        ));
+            Err(SandboxError::UnsupportedGrantTarget(path)) if path == Path::new("/usr"));
     }
 
     // --- the ancestor rule -------------------------------------------------

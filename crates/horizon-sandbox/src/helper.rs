@@ -235,10 +235,7 @@ mod tests {
             assert_eq!(&resolve().unwrap(), expected);
             fs::remove_file(expected).unwrap();
         }
-        assert!(matches!(
-            resolve(),
-            Err(crate::SandboxError::HelperNotFound)
-        ));
+        std::assert_matches!(resolve(), Err(crate::SandboxError::HelperNotFound));
         fs::remove_dir_all(root).unwrap();
     }
 

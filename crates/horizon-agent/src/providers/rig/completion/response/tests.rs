@@ -161,29 +161,29 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
     response.push(tool_end_item(raw.clone()));
     let before_finish: Vec<_> = rx.try_iter().collect();
     assert_eq!(before_finish.len(), 4);
-    assert!(matches!(
+    std::assert_matches!(
         before_finish[0]
             .clone()
             .into_event()
             .expect("conversation event"),
         Event::ProviderRequestFirstToken
-    ));
+    );
     // Reasoning deltas are not shown (decided), so the first event after
     // first-token is the assistant text.
-    assert!(matches!(
+    std::assert_matches!(
         before_finish[1]
             .clone()
             .into_event()
             .expect("conversation event"),
         Event::AssistantTextDelta(_)
-    ));
-    assert!(matches!(
+    );
+    std::assert_matches!(
         before_finish[1]
             .clone()
             .into_event()
             .expect("conversation event"),
         Event::AssistantTextDelta(_)
-    ));
+    );
     let Event::ToolCallRequested(request) = &before_finish[3]
         .clone()
         .into_event()
@@ -192,8 +192,8 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
         panic!("tool request")
     };
     assert_eq!(request.input.0, serde_json::json!({"path":"README.md"}));
-    assert!(
-        matches!(&before_finish[3], ProviderEvent::Event { provider_payload: Some(value), .. } if value == &payload)
+    std::assert_matches!(
+        &before_finish[3], ProviderEvent::Event { provider_payload: Some(value), .. } if value == &payload
     );
     let _ = rx.try_iter().collect::<Vec<_>>();
     let (message, outcome) = response.finish_test(
@@ -415,8 +415,8 @@ fn explicit_finish_reasons_override_usage_and_missing_metadata_is_bounded() {
     }
     let (tx, _) = crossbeam_channel::unbounded();
     let response = ResponseCollector::new(&config(), tx);
-    assert!(matches!(
+    std::assert_matches!(
         response.finish(ResponseEnd::Finished, None, None).1.stop,
         CompletionStop::Unknown { .. }
-    ));
+    );
 }

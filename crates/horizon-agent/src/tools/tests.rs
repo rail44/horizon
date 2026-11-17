@@ -242,8 +242,8 @@ fn processing_preserves_provider_payload_on_original_event_only() {
         ),
     );
 
-    assert!(
-        matches!(&processing.horizon_events[0], ProviderEvent::Event { provider_payload: Some(value), .. } if value == &payload)
+    std::assert_matches!(
+        &processing.horizon_events[0], ProviderEvent::Event { provider_payload: Some(value), .. } if value == &payload
     );
     assert!(processing
         .horizon_events
@@ -311,7 +311,7 @@ fn fs_read_out_of_root_routes_to_approval() {
         },
     );
 
-    assert!(matches!(execution, Execution::AwaitApproval(_)));
+    std::assert_matches!(execution, Execution::AwaitApproval(_));
 }
 
 /// An in-root `fs_read` still auto-executes (the routing is only for
@@ -335,10 +335,10 @@ fn fs_read_in_root_auto_executes() {
         },
     );
 
-    assert!(matches!(
+    std::assert_matches!(
         execution,
         Execution::Applied(crate::tools::ToolUpdate::Finished { .. })
-    ));
+    );
 }
 
 /// `execute_approved` with `allow_out_of_root = true` (the post-approval
@@ -384,7 +384,7 @@ fn fs_grep_and_glob_out_of_root_route_to_approval() {
             occurrence_id: crate::contract::OccurrenceId("call-grep".to_string()),
         },
     );
-    assert!(matches!(execution, Execution::AwaitApproval(_)));
+    std::assert_matches!(execution, Execution::AwaitApproval(_));
 
     let execution = execute_agent_tool(
         &StubHostTools,
@@ -397,7 +397,7 @@ fn fs_grep_and_glob_out_of_root_route_to_approval() {
             occurrence_id: crate::contract::OccurrenceId("call-glob".to_string()),
         },
     );
-    assert!(matches!(execution, Execution::AwaitApproval(_)));
+    std::assert_matches!(execution, Execution::AwaitApproval(_));
 }
 
 // --- Git metadata reads and the unattended refusal ----------------------
@@ -505,11 +505,9 @@ fn reads_reach_a_linked_worktrees_own_git_metadata() {
             SessionId::new(),
             &read_request("call-meta-scan", tool_id, input),
         );
-        assert!(
-            matches!(
-                execution,
-                Execution::Applied(crate::tools::ToolUpdate::Finished { .. })
-            ),
+        std::assert_matches!(
+            execution,
+            Execution::Applied(crate::tools::ToolUpdate::Finished { .. }),
             "{tool_id} over this session's Git metadata must not need approval: {execution:?}"
         );
     }
@@ -568,10 +566,10 @@ fn an_attended_session_still_asks_for_an_out_of_root_read() {
         json!({ "path": outside_file.display().to_string() }),
     );
 
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request),
         Execution::AwaitApproval(_)
-    ));
+    );
     assert!(
         crate::tools::unattended_refusal_result(&tool_state, &request).is_none(),
         "an attended session has someone to ask"
@@ -695,10 +693,10 @@ fn fs_read_missing_path_arg_does_not_route_to_approval() {
         },
     );
 
-    assert!(matches!(
+    std::assert_matches!(
         execution,
         Execution::Applied(crate::tools::ToolUpdate::Finished { .. })
-    ));
+    );
 }
 
 #[test]
@@ -1825,10 +1823,9 @@ fn resolve_approval_forwards_non_horizon_executed_tools() {
         ApprovalDecision::Approve,
     );
 
-    assert!(matches!(
+    std::assert_matches!(
         outcome,
-        ApprovalOutcome::Forward(Command::ApproveToolCall { identity: id }) if id.call_id == call_id
-    ));
+        ApprovalOutcome::Forward(Command::ApproveToolCall { identity: id }) if id.call_id == call_id);
 }
 
 #[test]
@@ -1850,10 +1847,9 @@ fn resolve_auto_approval_forwards_standard_candidate_without_a_prompt() {
     };
 
     let outcome = resolve_auto_approval(&frame, SessionId::new(), &candidate);
-    assert!(matches!(
+    std::assert_matches!(
         outcome,
-        ApprovalOutcome::Forward(Command::ApproveToolCall { identity: id }) if id.call_id == call_id
-    ));
+        ApprovalOutcome::Forward(Command::ApproveToolCall { identity: id }) if id.call_id == call_id);
     assert!(!frame
         .items
         .iter()
@@ -1878,10 +1874,9 @@ fn resolve_approval_forwards_when_no_runtime_registered() {
         ApprovalDecision::Deny { reason: None },
     );
 
-    assert!(matches!(
+    std::assert_matches!(
         outcome,
-        ApprovalOutcome::Forward(Command::DenyToolCall { identity: id, .. }) if id.call_id == call_id
-    ));
+        ApprovalOutcome::Forward(Command::DenyToolCall { identity: id, .. }) if id.call_id == call_id);
 }
 
 #[test]
@@ -1963,16 +1958,16 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
         if automatic {
             let mut stale = candidate.clone();
             stale.request.input = json!({"path":target,"content":"different"}).into();
-            assert!(matches!(
+            std::assert_matches!(
                 resolve_auto_approval(&frame, session_id, &stale),
                 ApprovalOutcome::AlreadyResolved
-            ));
+            );
             let mut mismatched = candidate.clone();
             mismatched.approval.occurrence_id = crate::contract::OccurrenceId::new();
-            assert!(matches!(
+            std::assert_matches!(
                 resolve_auto_approval(&frame, session_id, &mismatched),
                 ApprovalOutcome::AlreadyResolved
-            ));
+            );
             assert!(!target.exists());
         }
         let outcome = if automatic {
@@ -1993,7 +1988,7 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
         };
         let frame = live.frame();
 
-        assert!(matches!(
+        std::assert_matches!(
             events.as_slice(),
             [
                 Event::StateChanged(crate::contract::SessionState::ToolRunning),
@@ -2001,7 +1996,7 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
                 Event::ToolCallFinished(_),
                 Event::StateChanged(crate::contract::SessionState::Running)
             ]
-        ));
+        );
         assert_eq!(result.occurrence_id, request.occurrence_id);
         assert!(!result.is_error());
         assert_eq!(fs::read_to_string(&target).unwrap(), "approved content");
@@ -2019,7 +2014,7 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
                 ApprovalDecision::Approve,
             )
         };
-        assert!(matches!(repeated, ApprovalOutcome::AlreadyResolved));
+        std::assert_matches!(repeated, ApprovalOutcome::AlreadyResolved);
         assert_eq!(fs::read_to_string(target).unwrap(), "later edit");
         unregister_session_runtime(session_id);
     }
@@ -2158,7 +2153,7 @@ fn resolve_approval_second_approve_is_noop() {
             .identity(),
         ApprovalDecision::Approve,
     );
-    assert!(matches!(second, ApprovalOutcome::AlreadyResolved));
+    std::assert_matches!(second, ApprovalOutcome::AlreadyResolved);
     assert_eq!(fs::read_to_string(&target).unwrap(), "externally changed");
 }
 
@@ -2207,7 +2202,7 @@ fn resolve_approval_deny_then_approve_is_noop() {
             .identity(),
         ApprovalDecision::Approve,
     );
-    assert!(matches!(approved_late, ApprovalOutcome::AlreadyResolved));
+    std::assert_matches!(approved_late, ApprovalOutcome::AlreadyResolved);
     assert!(!target.exists());
 }
 
@@ -2255,8 +2250,9 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
         frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Approve,
     );
-    assert!(
-        matches!(first, ApprovalOutcome::Applied(ToolUpdate::Finished { .. })),
+    std::assert_matches!(
+        first,
+        ApprovalOutcome::Applied(ToolUpdate::Finished { .. }),
         "first occurrence's approve should execute fs_write"
     );
     assert_eq!(fs::read_to_string(&target_a).unwrap(), "first");
@@ -2281,11 +2277,9 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
             .identity(),
         ApprovalDecision::Approve,
     );
-    assert!(
-        matches!(
-            second,
-            ApprovalOutcome::Applied(ToolUpdate::Finished { .. })
-        ),
+    std::assert_matches!(
+        second,
+        ApprovalOutcome::Applied(ToolUpdate::Finished { .. }),
         "second occurrence's approve must execute, not be swallowed as \
          AlreadyResolved just because an earlier occurrence of the same \
          call_id already finished: {second:?}"
@@ -2349,11 +2343,9 @@ fn fs_edit_auto_executes_in_an_isolated_session() {
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
-    assert!(
-        matches!(
-            execution,
-            Execution::Applied(crate::tools::ToolUpdate::Finished { .. })
-        ),
+    std::assert_matches!(
+        execution,
+        Execution::Applied(crate::tools::ToolUpdate::Finished { .. }),
         "expected a synchronous applied update for a contained fs_edit, got {execution:?}"
     );
     assert_eq!(fs::read_to_string(&target).unwrap(), "after");
@@ -2426,7 +2418,7 @@ fn fs_write_into_the_gitdir_waits_for_approval_and_writes_nothing() {
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
-    assert!(matches!(execution, Execution::AwaitApproval(_)));
+    std::assert_matches!(execution, Execution::AwaitApproval(_));
     assert!(!target.exists(), "must not have run yet");
 }
 
@@ -2459,10 +2451,10 @@ fn invalid_web_fetch_finishes_as_an_auto_boundary_error_without_network() {
         occurrence_id: crate::contract::OccurrenceId::new(),
     };
 
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
         Execution::Applied(crate::tools::ToolUpdate::Started { .. })
-    ));
+    );
     let result = expect_finished(
         results_rx
             .recv_timeout(Duration::from_secs(5))
@@ -2543,10 +2535,10 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
 
     let started = std::time::Instant::now();
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
-    assert!(matches!(
+    std::assert_matches!(
         execution,
         Execution::Applied(crate::tools::ToolUpdate::Started { .. })
-    ));
+    );
 
     let completion = bash_results_rx
         .recv_timeout(std::time::Duration::from_secs(10))
@@ -2618,10 +2610,10 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
-    assert!(matches!(
+    std::assert_matches!(
         execution,
         Execution::Applied(crate::tools::ToolUpdate::Started { .. })
-    ));
+    );
 
     let completion = bash_results_rx
         .recv_timeout(std::time::Duration::from_secs(10))
@@ -2736,11 +2728,9 @@ fn bash_auto_executes_sandboxed_in_a_non_isolated_session() {
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
-    assert!(
-        matches!(
-            execution,
-            Execution::Applied(crate::tools::ToolUpdate::Started { .. })
-        ),
+    std::assert_matches!(
+        execution,
+        Execution::Applied(crate::tools::ToolUpdate::Started { .. }),
         "expected an automatic start, got {execution:?}"
     );
     let result = expect_finished(
@@ -2803,10 +2793,10 @@ fn tier1_sandboxed_bash_cannot_write_the_plain_checkouts_gitdir() {
         occurrence_id: crate::contract::OccurrenceId::new(),
     };
 
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
         Execution::Applied(crate::tools::ToolUpdate::Started { .. })
-    ));
+    );
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("the sandboxed bash call should finish");
@@ -2867,11 +2857,9 @@ fn approve_area(
     let frame = live_state.frame();
     let identity = frame.tool_call_request(&call_id).unwrap().identity();
     let outcome = resolve_approval(&frame, session_id, identity, ApprovalDecision::Approve);
-    assert!(
-        matches!(
-            outcome,
-            ApprovalOutcome::Applied(ToolUpdate::Finished { .. })
-        ),
+    std::assert_matches!(
+        outcome,
+        ApprovalOutcome::Applied(ToolUpdate::Finished { .. }),
         "an approved area request settles the asking call, got {outcome:?}"
     );
 }
@@ -2930,10 +2918,10 @@ fn an_area_grant_over_a_plain_checkout_commits_without_opening_hooks_or_config()
 
     // A git metadata write is no longer classified before the run: the
     // call is contained, and what it may not write is the sandbox's answer.
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
         Execution::Applied(_)
-    ));
+    );
     let refused = match bash_results_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("the contained run's completion")
@@ -2963,7 +2951,7 @@ fn an_area_grant_over_a_plain_checkout_commits_without_opening_hooks_or_config()
 
     // The commit itself now runs with the area, still sandboxed.
     let started = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
-    assert!(matches!(started, Execution::Applied(_)), "got {started:?}");
+    std::assert_matches!(started, Execution::Applied(_), "got {started:?}");
     let result = match bash_results_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("sandboxed Git completion")
@@ -3019,10 +3007,10 @@ fn an_area_grant_over_a_linked_worktree_commits_and_stays_sandboxed() {
         input: json!({ "command": "git status --short" }).into(),
         occurrence_id: crate::contract::OccurrenceId("sandboxed-git-status".to_string()),
     };
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &status_request),
         Execution::Applied(crate::tools::ToolUpdate::Started { .. })
-    ));
+    );
     let status_result = expect_finished(
         bash_results_rx
             .recv_timeout(Duration::from_secs(10))
@@ -3056,10 +3044,10 @@ fn an_area_grant_over_a_linked_worktree_commits_and_stays_sandboxed() {
     let grants = crate::tools::metadata_grants(&metadata_roots);
     approve_area(session_id, &live_state, &grants, "commit the change");
 
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
         Execution::Applied(_)
-    ));
+    );
     let result = expect_finished(
         bash_results_rx
             .recv_timeout(Duration::from_secs(10))
@@ -3150,10 +3138,10 @@ fn an_area_grant_over_linked_metadata_denies_hooks_and_config_writes() {
         crate::tools::bash::metadata_writable_roots(&worktree).expect("linked metadata roots");
     let grants = crate::tools::metadata_grants(&metadata_roots);
     approve_area(session_id, &live_state, &grants, "write the change");
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
         Execution::Applied(_)
-    ));
+    );
 
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
@@ -3284,10 +3272,10 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
     };
     let outcome =
         resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
-    assert!(matches!(
+    std::assert_matches!(
         outcome,
         ApprovalOutcome::Applied(ToolUpdate::Started { .. })
-    ));
+    );
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("sandboxed retry completion");
@@ -3327,10 +3315,10 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
         .into(),
         occurrence_id: crate::contract::OccurrenceId("bash-filesystem-later".to_string()),
     };
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &later_request),
         Execution::Applied(crate::tools::ToolUpdate::Started { .. })
-    ));
+    );
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("later sandboxed completion");
@@ -3386,10 +3374,10 @@ fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
         .into(),
         occurrence_id: crate::contract::OccurrenceId("bash-configured-grant".to_string()),
     };
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
         Execution::Applied(crate::tools::ToolUpdate::Started { .. })
-    ));
+    );
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("configured-grant completion");
@@ -3416,15 +3404,16 @@ fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
                 .clone(),
         ),
     };
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &other_request),
         Execution::Applied(crate::tools::ToolUpdate::Started { .. })
-    ));
+    );
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("ungranted completion");
-    assert!(
-        matches!(completion, BashCompletion::FilesystemDenied { .. }),
+    std::assert_matches!(
+        completion,
+        BashCompletion::FilesystemDenied { .. },
         "an unconfigured directory must still be a boundary crossing"
     );
     assert!(!outside.exists());
@@ -3539,10 +3528,10 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
             assert_eq!(result, prior_result);
             assert!(frame.unfinished_tool_calls().is_empty());
             assert!(frame.pending_approval_call_ids().is_empty());
-            assert!(
-                matches!(events.as_slice(), [Event::ToolCallFinished(_), Event::ToolCallFinished(result), Event::StateChanged(crate::contract::SessionState::Running)]
+            std::assert_matches!(
+                events.as_slice(), [Event::ToolCallFinished(_), Event::ToolCallFinished(result), Event::StateChanged(crate::contract::SessionState::Running)]
                 if result.occurrence_id == request.occurrence_id
-                    && result.output["cancelled"] == true)
+                    && result.output["cancelled"] == true
             );
         }
         other => panic!("deny must forward the first sandbox result: {other:?}"),
@@ -3682,10 +3671,10 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
     );
     let calls = crate::frame::tool_call_occurrences(&frame.items);
     assert_eq!(calls.len(), 2);
-    assert!(matches!(
+    std::assert_matches!(
         calls[0].result.map(|result| &result.outcome),
         Some(crate::contract::ToolOutcome::Superseded { .. })
-    ));
+    );
     assert_eq!(
         calls[1].result.map(|result| &result.outcome),
         Some(&crate::contract::ToolOutcome::Succeeded)
@@ -3827,10 +3816,10 @@ fn resolve_approval_web_fetch_deny_does_not_mutate_the_domain_policy() {
         ApprovalDecision::Deny { reason: None },
     );
 
-    assert!(matches!(
+    std::assert_matches!(
         outcome,
         ApprovalOutcome::Applied(ToolUpdate::Finished { .. })
-    ));
+    );
     assert!(!tool_state.is_domain_allowed("example.com"));
     unregister_session_runtime(session_id);
 }
@@ -3866,10 +3855,10 @@ fn resolve_approval_web_fetch_approve_adds_only_the_exact_session_grant() {
     let outcome =
         resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
 
-    assert!(matches!(
+    std::assert_matches!(
         outcome,
         ApprovalOutcome::Applied(ToolUpdate::Started { .. })
-    ));
+    );
     assert!(approved_state.is_domain_allowed("example.com"));
     assert!(!approved_state.is_domain_allowed("www.example.com"));
     assert!(!other_state.is_domain_allowed("example.com"));
@@ -4063,8 +4052,9 @@ fn approving_an_area_grant_adds_the_area_and_denying_leaves_the_session_as_it_wa
     let denied = asked(ApprovalDecision::Deny {
         reason: Some("no".to_string()),
     });
-    assert!(
-        matches!(denied, ApprovalOutcome::Applied(_)),
+    std::assert_matches!(
+        denied,
+        ApprovalOutcome::Applied(_),
         "a denial settles the asking call, got {denied:?}"
     );
     assert!(
@@ -4188,8 +4178,9 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
             .identity(),
         ApprovalDecision::Approve,
     );
-    assert!(
-        matches!(second, ApprovalOutcome::AlreadyResolved),
+    std::assert_matches!(
+        second,
+        ApprovalOutcome::AlreadyResolved,
         "a duplicate approve of a still-running bash call must be dropped, got: {second:?}"
     );
 

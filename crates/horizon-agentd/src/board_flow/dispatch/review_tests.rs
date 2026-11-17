@@ -117,8 +117,8 @@ async fn replayed_review_result_preserves_board_destination_and_receipt() {
     // A restart before acceptance retries the same identity and destination.
     let mut runner = board_outbox(state.clone(), log.clone());
     runner.tick().await.unwrap();
-    assert!(
-        matches!(receiver.try_recv().unwrap(), Command::SessionInput(retried) if retried == input)
+    std::assert_matches!(
+        receiver.try_recv().unwrap(), Command::SessionInput(retried) if retried == input
     );
     writer
         .append(record(task_session, Event::InputAccepted(input)))

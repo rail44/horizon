@@ -772,15 +772,13 @@ mod tests {
                 ("Search font_size".to_string(), CallStatus::Done),
             ]
         );
-        assert!(matches!(
+        std::assert_matches!(
             &receipt.calls[0].body,
-            Some(CallBody::Diff(lines)) if lines.iter().any(|line| line.kind == DiffKind::Added)
-        ));
-        assert!(matches!(
+            Some(CallBody::Diff(lines)) if lines.iter().any(|line| line.kind == DiffKind::Added));
+        std::assert_matches!(
             &receipt.calls[2].body,
-            Some(CallBody::Output { lines, omitted: 0 }) if lines == &["ok".to_string()]
-        ));
-        assert!(matches!(&receipt.calls[4].body, Some(CallBody::Text(_))));
+            Some(CallBody::Output { lines, omitted: 0 }) if lines == &["ok".to_string()]);
+        std::assert_matches!(&receipt.calls[4].body, Some(CallBody::Text(_)));
     }
 
     #[test]
@@ -829,9 +827,9 @@ mod tests {
         assert!(!merged.running && !merged.failed);
         assert_eq!(receipts[1].key, 8);
         assert_eq!(receipts[1].summary, "Ran 1 command");
-        assert!(matches!(turn.parts[0], TurnPart::Receipt(_)));
+        std::assert_matches!(turn.parts[0], TurnPart::Receipt(_));
         assert_eq!(turn.parts[1], TurnPart::Text("between".to_string()));
-        assert!(matches!(turn.parts[2], TurnPart::Receipt(_)));
+        std::assert_matches!(turn.parts[2], TurnPart::Receipt(_));
         assert_eq!(turn.parts[3], TurnPart::Text("after".to_string()));
     }
 
@@ -987,8 +985,8 @@ mod tests {
                 (Tone::Danger, "gone".to_string()),
             ]
         );
-        assert!(matches!(*adapted.transcript.units[1], Unit::Notice(_)));
-        assert!(matches!(*adapted.transcript.units[2], Unit::Turn(_)));
+        std::assert_matches!(*adapted.transcript.units[1], Unit::Notice(_));
+        std::assert_matches!(*adapted.transcript.units[2], Unit::Turn(_));
         assert_eq!(adapted.transcript.status, Status::Terminated);
     }
 

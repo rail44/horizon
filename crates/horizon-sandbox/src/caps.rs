@@ -288,12 +288,12 @@ mod tests {
             scope: FilesystemGrantScope::DirectoryTree,
             excluded_subpaths: Vec::new(),
         };
-        assert!(matches!(
+        std::assert_matches!(
             build_with_grants(&base, &[protected]),
             Err(SandboxError::UnsupportedGrantTarget(_))
-        ));
-        assert!(
-            matches!(build(&base), Err(SandboxError::InvalidLoopbackEndpoint(addr)) if addr == invalid_endpoint)
+        );
+        std::assert_matches!(
+            build(&base), Err(SandboxError::InvalidLoopbackEndpoint(addr)) if addr == invalid_endpoint
         );
         let NetworkPolicy::Proxied {
             loopback_connect, ..
@@ -302,8 +302,8 @@ mod tests {
             unreachable!()
         };
         loopback_connect.clear();
-        assert!(
-            matches!(build(&base), Err(SandboxError::InvalidProxyEndpoint(addr)) if addr == invalid_proxy)
+        std::assert_matches!(
+            build(&base), Err(SandboxError::InvalidProxyEndpoint(addr)) if addr == invalid_proxy
         );
     }
 
@@ -316,10 +316,9 @@ mod tests {
             scope: FilesystemGrantScope::DirectoryTree,
             excluded_subpaths: Vec::new(),
         };
-        assert!(matches!(
+        std::assert_matches!(
             build_with_grants(&base, &[protected]),
-            Err(SandboxError::UnsupportedGrantTarget(path)) if path == Path::new("/proc")
-        ));
+            Err(SandboxError::UnsupportedGrantTarget(path)) if path == Path::new("/proc"));
 
         let root_write = FilesystemGrant {
             path: Path::new("/").to_path_buf(),
@@ -327,10 +326,9 @@ mod tests {
             scope: FilesystemGrantScope::DirectoryTree,
             excluded_subpaths: Vec::new(),
         };
-        assert!(matches!(
+        std::assert_matches!(
             build_with_grants(&base, &[root_write]),
-            Err(SandboxError::UnsupportedGrantTarget(path)) if path == Path::new("/")
-        ));
+            Err(SandboxError::UnsupportedGrantTarget(path)) if path == Path::new("/"));
     }
 
     #[test]
@@ -357,14 +355,13 @@ mod tests {
     fn network_proxied_rejects_non_exact_loopback_endpoints() {
         for addr in ["127.0.0.2:43123", "[::1]:43123", "127.0.0.1:0"] {
             let addr = addr.parse().unwrap();
-            assert!(matches!(
+            std::assert_matches!(
                 build(&policy(vec![], NetworkPolicy::Proxied {
                     proxy_addr: addr,
                     loopback_connect: Vec::new(),
                     unix_socket_connect: Vec::new(),
                 })),
-                Err(SandboxError::InvalidProxyEndpoint(rejected)) if rejected == addr
-            ));
+                Err(SandboxError::InvalidProxyEndpoint(rejected)) if rejected == addr);
         }
     }
 
@@ -372,14 +369,13 @@ mod tests {
     fn network_proxied_rejects_invalid_loopback_connect_entries() {
         for addr in ["10.0.0.1:4226", "[::1]:4226", "127.0.0.1:0"] {
             let addr = addr.parse().unwrap();
-            assert!(matches!(
+            std::assert_matches!(
                 build(&policy(vec![], NetworkPolicy::Proxied {
                     proxy_addr: "127.0.0.1:43123".parse().unwrap(),
                     loopback_connect: vec![addr],
                     unix_socket_connect: Vec::new(),
                 })),
-                Err(SandboxError::InvalidLoopbackEndpoint(rejected)) if rejected == addr
-            ));
+                Err(SandboxError::InvalidLoopbackEndpoint(rejected)) if rejected == addr);
         }
     }
 
@@ -442,12 +438,12 @@ mod tests {
         let sockets = caps.unix_socket_capabilities();
         assert_eq!(sockets.len(), 1);
         assert_eq!(sockets[0].mode, UnixSocketMode::ConnectBind);
-        assert!(matches!(sockets[0].scope, SocketScope::DirChildren));
+        std::assert_matches!(sockets[0].scope, SocketScope::DirChildren);
     }
 
     #[test]
     fn proxied_unix_socket_grants_reject_relative_paths() {
-        assert!(matches!(
+        std::assert_matches!(
             build(&policy(
                 vec![],
                 NetworkPolicy::Proxied {
@@ -461,8 +457,7 @@ mod tests {
                 },
             )),
             Err(SandboxError::UnsupportedGrantTarget(path))
-                if path == Path::new("relative.sock")
-        ));
+                if path == Path::new("relative.sock"));
     }
 
     #[test]
@@ -551,7 +546,7 @@ mod tests {
             NetworkPolicy::Disabled,
         );
         let err = build(&policy).unwrap_err();
-        assert!(matches!(err, SandboxError::InvalidRoot { .. }));
+        std::assert_matches!(err, SandboxError::InvalidRoot { .. });
     }
 
     #[test]

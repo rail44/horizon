@@ -155,15 +155,16 @@ fn writes_on_an_in_memory_store_are_refused_without_reaching_a_daemon() {
             store.mark_read(1, "viewer", "m1").await,
             store.advance_cursor("viewer", 9).await,
         ] {
-            assert!(
-                matches!(result, Err(StoreError::ReadOnly)),
+            std::assert_matches!(
+                result,
+                Err(StoreError::ReadOnly),
                 "expected a read-only refusal, got {result:?}"
             );
         }
-        assert!(matches!(
+        std::assert_matches!(
             store.subscribe(None).await.err(),
             Some(StoreError::ReadOnly)
-        ));
+        );
     });
 
     assert_eq!(store.list(None, true).unwrap().items, before);

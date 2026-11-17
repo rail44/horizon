@@ -250,6 +250,6 @@ mod tests {
         let error = reader
             .read(std::process::id().saturating_add(1))
             .expect_err("sender pid must be checked");
-        assert!(matches!(error, ReportError::UnexpectedSender(_)));
+        std::assert_matches!(error, ReportError::UnexpectedSender(_));
     }
 }

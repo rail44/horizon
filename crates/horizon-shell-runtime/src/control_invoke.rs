@@ -332,18 +332,18 @@ mod tests {
 
     #[test]
     fn runtime_reload_and_model_switch_dispatch() {
-        assert!(matches!(
+        std::assert_matches!(
             parse(&Invoke {
                 command: "reload-agent-runtime".into(),
                 args: serde_json::json!({})
             })
             .unwrap(),
             Command::Execute(horizon_workspace::commands::CommandId::ReloadAgentRuntime)
-        ));
-        assert!(
-            matches!(parse(&Invoke { command: "set-model".into(), args: serde_json::json!({
+        );
+        std::assert_matches!(
+            parse(&Invoke { command: "set-model".into(), args: serde_json::json!({
             "session_id": uuid::Uuid::nil().to_string(), "provider": "p", "model": "m",
-        }) }).unwrap(), Command::SetModel { provider, model, .. } if provider == "p" && model == "m")
+        }) }).unwrap(), Command::SetModel { provider, model, .. } if provider == "p" && model == "m"
         );
     }
 

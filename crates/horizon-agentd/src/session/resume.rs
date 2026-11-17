@@ -689,8 +689,8 @@ mod delivery_tests {
             Event::InputStarted(vec!["first".into()]),
         ];
         let outcomes = interrupted_input_outcomes(&events);
-        assert!(
-            matches!(&outcomes[..], [Event::InputOutcome(SessionInputOutcome { input_ids, reply_to: Some(route), outcome: InputResult::Interrupted, .. })] if input_ids == &["first"] && route == "one")
+        std::assert_matches!(
+            &outcomes[..], [Event::InputOutcome(SessionInputOutcome { input_ids, reply_to: Some(route), outcome: InputResult::Interrupted, .. })] if input_ids == &["first"] && route == "one"
         );
         events.extend(outcomes);
         assert!(interrupted_input_outcomes(&events).is_empty());

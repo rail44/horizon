@@ -180,8 +180,8 @@ async fn ingest_appends_and_assigns_seq() {
     assert_eq!(lines.len(), 2);
     let event: horizon_board::Envelope = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(event.version, horizon_board::VERSION);
-    assert!(
-        matches!(event.event, horizon_board::BoardEvent::ItemStored { id: 1, item } if item.id == 1)
+    std::assert_matches!(
+        event.event, horizon_board::BoardEvent::ItemStored { id: 1, item } if item.id == 1
     );
     assert!(lines[0].contains("\"id\":1"));
     assert!(lines[1].contains("\"id\":2"));
@@ -220,8 +220,9 @@ async fn ingest_comment_on_nonexistent_item_is_rejected() {
             },
         )
         .await;
-    assert!(
-        matches!(result, Err(LogError::ItemNotFound(99))),
+    std::assert_matches!(
+        result,
+        Err(LogError::ItemNotFound(99)),
         "expected ItemNotFound(99), got {result:?}"
     );
 }
@@ -383,8 +384,9 @@ async fn edit_on_nonexistent_item_is_rejected() {
             },
         )
         .await;
-    assert!(
-        matches!(result, Err(LogError::ItemNotFound(99))),
+    std::assert_matches!(
+        result,
+        Err(LogError::ItemNotFound(99)),
         "expected ItemNotFound(99), got {result:?}"
     );
 }
@@ -486,7 +488,7 @@ async fn subscribe_receives_poke_after_ingest() {
         )
         .await
         .expect("ingest");
-    assert!(matches!(reply, IngestReply::Item(_)));
+    std::assert_matches!(reply, IngestReply::Item(_));
 
     // The subscriber should receive a poke with seq=1.
     let poke = tokio::time::timeout(Duration::from_secs(5), sub.read_line())

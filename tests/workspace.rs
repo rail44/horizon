@@ -618,8 +618,9 @@ fn the_control_plane_makes_lists_attaches_and_ends_sessions() {
         "attach",
         serde_json::json!({ "session_id": made, "activate": true }),
     );
-    assert!(
-        matches!(attached, EnvelopeBody::Ok { session_id: None }),
+    std::assert_matches!(
+        attached,
+        EnvelopeBody::Ok { session_id: None },
         "{attached:?}"
     );
     assert_eq!(opened.panes().len(), 2);
@@ -628,7 +629,7 @@ fn the_control_plane_makes_lists_attaches_and_ends_sessions() {
         "terminate-session",
         serde_json::json!({ "session_id": made }),
     );
-    assert!(matches!(ended, EnvelopeBody::Ok { .. }), "{ended:?}");
+    std::assert_matches!(ended, EnvelopeBody::Ok { .. }, "{ended:?}");
     assert_eq!(opened.panes(), vec![first]);
     assert_eq!(opened.sessions(), 1);
 
@@ -648,10 +649,7 @@ fn the_control_plane_makes_lists_attaches_and_ends_sessions() {
         ),
     ] {
         let answer = invoke(command, args);
-        assert!(
-            matches!(answer, EnvelopeBody::Error(_)),
-            "{command}: {answer:?}"
-        );
+        std::assert_matches!(answer, EnvelopeBody::Error(_), "{command}: {answer:?}");
     }
 }
 
@@ -797,15 +795,15 @@ fn the_control_plane_switches_a_sessions_model_through_the_runtime() {
             .expect("an answer")
     };
     let answer = ask("small");
-    assert!(matches!(answer, EnvelopeBody::Ok { .. }), "{answer:?}");
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
     assert_eq!(
         *switched.0.lock().unwrap(),
         [(session, "local".to_string(), "small".to_string())]
     );
     // What the runtime refuses is the answer.
     let answer = ask("gone");
-    assert!(
-        matches!(&answer, EnvelopeBody::Error(error) if error.message.contains("no such model")),
+    std::assert_matches!(
+        &answer, EnvelopeBody::Error(error) if error.message.contains("no such model"),
         "{answer:?}"
     );
 }

@@ -200,7 +200,7 @@ mod tests {
             .expect("read reply")
             .expect("connection should not have closed");
 
-        assert!(matches!(reply.body, EnvelopeBody::HelloAck(_)));
+        std::assert_matches!(reply.body, EnvelopeBody::HelloAck(_));
 
         drop(idle_connection);
         drop(second);

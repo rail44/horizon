@@ -222,10 +222,7 @@ mod tests {
     async fn non_hello_methods_are_refused_until_hello_succeeds() {
         let hub = test_hub();
 
-        assert!(matches!(
-            hub.list_terminals().await,
-            Err(HubError::HelloRequired)
-        ));
+        std::assert_matches!(hub.list_terminals().await, Err(HubError::HelloRequired));
 
         let disjoint = ClientHello {
             supported: VersionRange {
@@ -238,10 +235,7 @@ mod tests {
             hub.hello(disjoint).await,
             Err(HubError::IncompatibleVersion { .. })
         ));
-        assert!(matches!(
-            hub.list_terminals().await,
-            Err(HubError::HelloRequired)
-        ));
+        std::assert_matches!(hub.list_terminals().await, Err(HubError::HelloRequired));
         assert!(matches!(
             hub.attach_terminal(Uuid::new_v4()).await,
             Err(HubError::HelloRequired)

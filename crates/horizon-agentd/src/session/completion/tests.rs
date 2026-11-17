@@ -124,8 +124,8 @@ fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_reque
         fold_tool_completion(&state, &live, &commands, session, completion.clone());
         let forwarded = drain_events(&mut outgoing);
         let retry_events = if kind == 3 {
-            assert!(matches!(&forwarded[0], Event::ToolCallFinished(result)
-                if result.occurrence_id == original && result.is_superseded()));
+            std::assert_matches!(&forwarded[0], Event::ToolCallFinished(result)
+                if result.occurrence_id == original && result.is_superseded());
             &forwarded[1..]
         } else {
             &forwarded[..]
@@ -138,9 +138,9 @@ fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_reque
         assert!(!reissued.occurrence_id.0.is_empty());
         assert_ne!(reissued.occurrence_id, original.clone());
         assert_eq!(approval.occurrence_id, reissued.occurrence_id);
-        assert!(
-            matches!(responses.try_recv(), Ok(Command::ToolCallReissued(identity))
-            if identity == reissued.identity())
+        std::assert_matches!(
+            responses.try_recv(), Ok(Command::ToolCallReissued(identity))
+            if identity == reissued.identity()
         );
         match &approval.kind {
             ApprovalKind::DomainDenialRetry { prior_result, .. }
@@ -258,10 +258,9 @@ fn fold_bash_completion_reports_running_once_no_approval_remains_pending() {
         "call_b's approval is still outstanding, so the reported state must \
          stay WaitingForApproval, got: {forwarded:?}"
     );
-    assert!(matches!(
+    std::assert_matches!(
         commands_rx.try_recv(),
-        Ok(Command::ToolCallResult(result)) if result.call_id == call_a
-    ));
+        Ok(Command::ToolCallResult(result)) if result.call_id == call_a);
 
     // Approving `call_b` folds its own running pair the same way
     // `call_a`'s did, then its completion arrives too.
@@ -469,10 +468,7 @@ fn approval_for_denials(
         forwarded.last(),
         Some(&Event::StateChanged(SessionState::WaitingForApproval))
     );
-    assert!(matches!(
-        commands_rx.try_recv(),
-        Ok(Command::ToolCallReissued(_))
-    ));
+    std::assert_matches!(commands_rx.try_recv(), Ok(Command::ToolCallReissued(_)));
     assert!(commands_rx.try_recv().is_err());
     forwarded
         .iter()
@@ -598,10 +594,9 @@ fn auto_approval_verdict_forwards_existing_approved_path_without_prompt() {
         },
     );
 
-    assert!(matches!(
+    std::assert_matches!(
         commands_rx.try_recv(),
-        Ok(Command::ApproveToolCall { identity }) if identity == candidate.request.identity()
-    ));
+        Ok(Command::ApproveToolCall { identity }) if identity == candidate.request.identity());
     assert!(drain_events(&mut outgoing_rx).is_empty());
     assert!(live_state
         .frame()
@@ -932,18 +927,18 @@ fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider
         forwarded.last(),
         Some(&Event::StateChanged(SessionState::WaitingForApproval))
     );
-    assert!(
-        matches!(commands_rx.try_recv(), Ok(Command::ToolCallReissued(identity))
-        if identity.occurrence_id == reissued_occurrence_id)
+    std::assert_matches!(
+        commands_rx.try_recv(), Ok(Command::ToolCallReissued(identity))
+        if identity.occurrence_id == reissued_occurrence_id
     );
     assert!(commands_rx.try_recv().is_err());
     let frame = live_state.frame();
     let pending = frame.unfinished_tool_calls();
     assert_eq!(pending.len(), 1, "the redirecting attempt must be closed");
     assert_eq!(pending[0].occurrence_id, reissued_occurrence_id);
-    assert!(matches!(&forwarded[0], Event::ToolCallFinished(result)
+    std::assert_matches!(&forwarded[0], Event::ToolCallFinished(result)
         if result.occurrence_id == original_request.occurrence_id
-            && result.is_superseded()));
+            && result.is_superseded());
 
     let dir = tempfile::tempdir().unwrap();
     let (results, _) = unbounded();
@@ -963,12 +958,12 @@ fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider
         frame.tool_call_request(&call_id).unwrap().identity(),
         horizon_agent::tools::ApprovalDecision::Deny { reason: None },
     );
-    assert!(matches!(
+    std::assert_matches!(
         outcome,
         horizon_agent::tools::ApprovalOutcome::Applied(
             horizon_agent::tools::ToolUpdate::Finished { .. }
         )
-    ));
+    );
     assert!(live_state.frame().unfinished_tool_calls().is_empty());
     horizon_agent::tools::unregister_session_runtime(session_id);
 }
@@ -1065,8 +1060,8 @@ fn synchronous_and_async_results_preserve_sibling_approval_and_publish_before_de
                 )),
             );
         }
-        assert!(
-            matches!(responses.try_recv().unwrap(), Command::ToolCallResult(result) if result.call_id == primary.request.call_id)
+        std::assert_matches!(
+            responses.try_recv().unwrap(), Command::ToolCallResult(result) if result.call_id == primary.request.call_id
         );
         let events = drain_events(&mut outgoing);
         assert_eq!(live.events()[prior_events..], events);
@@ -1074,10 +1069,7 @@ fn synchronous_and_async_results_preserve_sibling_approval_and_publish_before_de
             events.last(),
             Some(&Event::StateChanged(SessionState::WaitingForApproval))
         );
-        assert!(matches!(
-            &events[events.len() - 2],
-            Event::ToolCallFinished(_)
-        ));
+        std::assert_matches!(&events[events.len() - 2], Event::ToolCallFinished(_));
         // A repeated decision sees the committed state and cannot write again.
         let duplicate = horizon_agent::tools::resolve_approval(
             &live.frame(),

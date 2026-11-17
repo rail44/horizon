@@ -642,22 +642,22 @@ mod tests {
                 receive().clone().into_event().expect("conversation event"),
                 Event::StateChanged(SessionState::Running)
             );
-            assert!(matches!(
+            std::assert_matches!(
                 receive().clone().into_event().expect("conversation event"),
                 Event::MessageCommitted(Message {
                     role: MessageRole::User,
                     ..
                 })
-            ));
+            );
             if expected_call == "mock-streaming-tool-1" {
                 for expected_bytes in [0, 64, 512] {
                     let event = receive();
-                    assert!(
-                        matches!(event, ProviderEvent::ToolCallProgress(progress) if progress.bytes == expected_bytes)
+                    std::assert_matches!(
+                        event, ProviderEvent::ToolCallProgress(progress) if progress.bytes == expected_bytes
                     );
                 }
-                assert!(
-                    matches!(receive(), ProviderEvent::ToolCallProgressClosed(key) if key == expected_call)
+                std::assert_matches!(
+                    receive(), ProviderEvent::ToolCallProgressClosed(key) if key == expected_call
                 );
             }
             let Event::ToolCallRequested(request) =
@@ -672,10 +672,10 @@ mod tests {
                 receive().clone().into_event().expect("conversation event"),
                 Event::StateChanged(SessionState::Terminated)
             );
-            assert!(matches!(
+            std::assert_matches!(
                 receive().clone().into_event().expect("conversation event"),
                 Event::Exited(_)
-            ));
+            );
         }
     }
 
@@ -710,7 +710,7 @@ mod tests {
             !seen.contains(&Event::StateChanged(SessionState::Terminated)),
             "{seen:?}"
         );
-        assert!(matches!(seen.last(), Some(Event::Exited(_))), "{seen:?}");
+        std::assert_matches!(seen.last(), Some(Event::Exited(_)), "{seen:?}");
     }
 
     #[test]

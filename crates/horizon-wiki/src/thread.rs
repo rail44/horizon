@@ -401,14 +401,14 @@ mod tests {
         let (page, question) = store
             .ask("sandbox", 0..7, owner.clone(), markdown_body("q"))
             .unwrap();
-        assert!(matches!(
+        std::assert_matches!(
             store.reply(page, "urn:uuid:nope", owner, markdown_body("r")),
             Err(WikiError::NotFound(_))
-        ));
-        assert!(matches!(
+        );
+        std::assert_matches!(
             store.append_annotation(page, &question),
             Err(WikiError::Invalid(_))
-        ));
+        );
     }
 
     #[test]

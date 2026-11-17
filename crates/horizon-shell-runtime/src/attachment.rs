@@ -373,8 +373,8 @@ mod tests {
         state.opened(Ok(()));
         assert!(state.is_ready());
         state.opened(Ok(()));
-        assert!(
-            matches!(&state, AttachmentState::Failed(message) if message == "Unexpected session replay boundary")
+        std::assert_matches!(
+            &state, AttachmentState::Failed(message) if message == "Unexpected session replay boundary"
         );
 
         let mut state = AttachmentState::Restoring;
@@ -387,14 +387,14 @@ mod tests {
         for initial in [AttachmentState::Connecting, AttachmentState::Restoring] {
             let mut state = initial;
             state.stream_ended();
-            assert!(matches!(state, AttachmentState::Failed(_)));
+            std::assert_matches!(state, AttachmentState::Failed(_));
         }
         let mut state = AttachmentState::Ready;
         state.stream_ended();
-        assert!(matches!(state, AttachmentState::Disconnected(_)));
+        std::assert_matches!(state, AttachmentState::Disconnected(_));
 
         let mut state = attachment_end_state(AttachmentEnd::Lagged);
-        assert!(matches!(state, AttachmentState::Failed(_)));
+        std::assert_matches!(state, AttachmentState::Failed(_));
         let failure = state.clone();
         state.stream_ended();
         assert_eq!(state, failure);
@@ -403,10 +403,7 @@ mod tests {
             AttachmentEnd::Detached,
             AttachmentEnd::SessionEnded,
         ] {
-            assert!(matches!(
-                attachment_end_state(end),
-                AttachmentState::Disconnected(_)
-            ));
+            std::assert_matches!(attachment_end_state(end), AttachmentState::Disconnected(_));
         }
     }
 }

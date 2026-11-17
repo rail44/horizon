@@ -129,7 +129,7 @@ mod tests {
             )
             .await
             .expect("shutdown must not wait for host settlement");
-            assert!(matches!(state.inbox.front(), Some(Command::Shutdown)));
+            std::assert_matches!(state.inbox.front(), Some(Command::Shutdown));
             assert!(state.rig_history.is_empty());
         }
     }
@@ -245,7 +245,7 @@ mod tests {
                 }
                 tokio::task::yield_now().await;
             };
-            assert!(matches!(request, ProviderEvent::SettleTools { .. }));
+            std::assert_matches!(request, ProviderEvent::SettleTools { .. });
             let processing =
                 process_agent_provider_event(&NoHost, &tools, session, &live, request).unwrap();
             for command in processing.provider_commands {

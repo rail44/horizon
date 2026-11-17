@@ -200,10 +200,10 @@ mod tests {
 
         fs::create_dir_all(&root).unwrap();
         fs::write(&path, b"not json").unwrap();
-        assert!(matches!(
+        std::assert_matches!(
             store.load(1).unwrap(),
             LoadResult::Invalid(InvalidState::Corrupt(_))
-        ));
+        );
 
         fs::write(&path, br#"{"version":2}"#).unwrap();
         assert_eq!(

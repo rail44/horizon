@@ -592,13 +592,11 @@ mod tests {
 
     #[test]
     fn sessions_and_state_are_queries() {
-        assert!(matches!(
+        std::assert_matches!(
             to_request(&Subcommand::Sessions, None, None),
-            Request::Query(q) if q.what == "sessions"
-        ));
-        assert!(matches!(
+            Request::Query(q) if q.what == "sessions");
+        std::assert_matches!(
             to_request(&Subcommand::State, None, None),
-            Request::Query(q) if q.what == "state"
-        ));
+            Request::Query(q) if q.what == "state");
     }
 }

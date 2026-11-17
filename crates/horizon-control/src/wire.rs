@@ -212,14 +212,12 @@ mod tests {
         );
 
         let result = read_envelope(&mut reader);
-        assert!(
-            matches!(
-                result,
-                Err(WireError::VersionMismatch {
-                    expected: CONTROL_VERSION,
-                    found: 99
-                })
-            ),
+        std::assert_matches!(
+            result,
+            Err(WireError::VersionMismatch {
+                expected: CONTROL_VERSION,
+                found: 99
+            }),
             "{result:?}"
         );
     }
@@ -248,21 +246,21 @@ mod tests {
     fn clean_disconnect_between_messages_is_not_an_error() {
         let mut reader = BufReader::new(b"".as_slice());
         let result = read_envelope(&mut reader);
-        assert!(matches!(result, Ok(None)), "{result:?}");
+        std::assert_matches!(result, Ok(None), "{result:?}");
     }
 
     #[test]
     fn torn_line_without_trailing_newline_is_an_explicit_error() {
         let mut reader = BufReader::new(b"{\"v\":1,\"id\":1,\"kind\":\"query\"".as_slice());
         let result = read_envelope(&mut reader);
-        assert!(matches!(result, Err(WireError::TornLine)), "{result:?}");
+        std::assert_matches!(result, Err(WireError::TornLine), "{result:?}");
     }
 
     #[test]
     fn malformed_json_is_an_explicit_error() {
         let mut reader = BufReader::new(b"not json at all\n".as_slice());
         let result = read_envelope(&mut reader);
-        assert!(matches!(result, Err(WireError::Json(_))), "{result:?}");
+        std::assert_matches!(result, Err(WireError::Json(_)), "{result:?}");
     }
 
     #[test]

@@ -847,7 +847,7 @@ mod tests {
             let services = state.mach_services();
             let (tx, rx) = crossbeam_channel::unbounded();
             register_session_runtime(session, state.clone(), live.clone(), tx);
-            assert!(matches!(
+            std::assert_matches!(
                 resolve_approval(
                     &live.frame(),
                     session,
@@ -855,7 +855,7 @@ mod tests {
                     ApprovalDecision::Approve
                 ),
                 ApprovalOutcome::PersistenceFailed(_)
-            ));
+            );
             assert_eq!(live.events(), history);
             assert_eq!(state.filesystem_grants_snapshot(), grants);
             assert_eq!(state.mach_services(), services);

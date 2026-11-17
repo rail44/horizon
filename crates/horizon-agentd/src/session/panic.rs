@@ -407,10 +407,9 @@ mod tests {
             ],
             "the detailed provider error is already folded before disconnect"
         );
-        assert!(matches!(
+        std::assert_matches!(
             frame.items.last(),
-            Some(AgentFrameItem::Error(error)) if error.message == panic_message
-        ));
+            Some(AgentFrameItem::Error(error)) if error.message == panic_message);
     }
 
     #[test]

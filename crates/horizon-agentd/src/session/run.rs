@@ -429,13 +429,13 @@ mod tests {
         assert!(live.events().is_empty());
         assert!(output.try_recv().is_err());
         let events = super::super::test_support::drain_events(&mut published);
-        assert!(matches!(
+        std::assert_matches!(
             events.as_slice(),
             [
                 Event::Error(_),
                 Event::StateChanged(contract::SessionState::Terminated)
             ]
-        ));
+        );
         assert_eq!(live.replay_events(), events);
     }
 
@@ -500,8 +500,8 @@ mod tests {
                 base: "selected-base".into()
             }
         );
-        assert!(
-            matches!(provider_rx.try_recv().unwrap(), Command::ToolCallResult(result) if result.call_id == call_id)
+        std::assert_matches!(
+            provider_rx.try_recv().unwrap(), Command::ToolCallResult(result) if result.call_id == call_id
         );
         assert!(provider_rx.try_recv().is_err());
     }

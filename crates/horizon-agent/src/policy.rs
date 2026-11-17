@@ -585,8 +585,8 @@ mod tests {
             )
         };
         let target = granted.join("Cargo.toml");
-        assert!(matches!(read(&target), ToolPlan::Approval(_)));
-        assert!(matches!(read(&not_spill), ToolPlan::Approval(_)));
+        std::assert_matches!(read(&target), ToolPlan::Approval(_));
+        std::assert_matches!(read(&not_spill), ToolPlan::Approval(_));
         assert_eq!(
             read(&spill),
             ToolPlan::Automatic(AutomaticTool::Synchronous)
@@ -872,12 +872,12 @@ mod tests {
             3,
             "request + approval + state change"
         );
-        assert!(matches!(boundary_events[0], Event::ToolCallRequested(_)));
-        assert!(matches!(boundary_events[1], Event::ApprovalRequested(_)));
-        assert!(matches!(
+        std::assert_matches!(boundary_events[0], Event::ToolCallRequested(_));
+        std::assert_matches!(boundary_events[1], Event::ApprovalRequested(_));
+        std::assert_matches!(
             boundary_events[2],
             Event::StateChanged(SessionState::WaitingForApproval)
-        ));
+        );
         if let (Event::ApprovalRequested(boundary), Event::ApprovalRequested(always_ask)) =
             (&boundary_events[1], &always_ask_events[1])
         {

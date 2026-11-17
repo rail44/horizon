@@ -147,7 +147,7 @@ fn curl_request(target: &str) -> ToolCallRequest {
 }
 
 fn start_request(tool_state: &ToolSessionState, session_id: SessionId, request: &ToolCallRequest) {
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(
             &StubHostTools,
             tool_state,
@@ -158,7 +158,7 @@ fn start_request(tool_state: &ToolSessionState, session_id: SessionId, request: 
         Ok(Execution::Applied(
             horizon_agent::tools::ToolUpdate::Started { .. }
         ))
-    ));
+    );
 }
 
 fn expect_domain_denied(
@@ -298,7 +298,7 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
             },
         ))])
         .unwrap();
-    assert!(matches!(
+    std::assert_matches!(
         resolve_approval(
             &frame,
             session_a,
@@ -306,7 +306,7 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
             ApprovalDecision::Approve,
         ),
         ApprovalOutcome::Applied(horizon_agent::tools::ToolUpdate::Started { .. })
-    ));
+    );
     let reached = match rx_a
         .recv_timeout(Duration::from_secs(30))
         .expect("approved retry completion")
@@ -352,7 +352,7 @@ fn proxy_unaware_direct_connect_cannot_bypass_the_fixed_endpoint() {
         input: json!({ "command": "exec 3<>/dev/tcp/127.0.0.2/80" }).into(),
         occurrence_id: horizon_agent::contract::OccurrenceId::new(),
     };
-    assert!(matches!(
+    std::assert_matches!(
         execute_agent_tool(
             &StubHostTools,
             &tool_state,
@@ -363,7 +363,7 @@ fn proxy_unaware_direct_connect_cannot_bypass_the_fixed_endpoint() {
         Ok(Execution::Applied(
             horizon_agent::tools::ToolUpdate::Started { .. }
         ))
-    ));
+    );
     match rx
         .recv_timeout(Duration::from_secs(30))
         .expect("completion")

@@ -356,7 +356,7 @@ mod tests {
             session,
             Command::Cancel { request_id: None },
         );
-        assert!(matches!(received.try_recv(), Ok(Command::Cancel { .. })));
+        std::assert_matches!(received.try_recv(), Ok(Command::Cancel { .. }));
         assert!(live.frame().unfinished_tool_calls().is_empty());
         assert!(live.frame().pending_approval_call_id().is_none());
         let cancelled = live.events();
@@ -464,8 +464,8 @@ mod tests {
         assert!(result.is_error());
         let message = result.output["message"].as_str().unwrap().to_string();
         assert!(message.contains(&root.display().to_string()), "{message}");
-        assert!(
-            matches!(commands.as_slice(), [Command::ToolCallResult(forwarded)] if forwarded.call_id == request.call_id),
+        std::assert_matches!(
+            commands.as_slice(), [Command::ToolCallResult(forwarded)] if forwarded.call_id == request.call_id,
             "the model must receive the refusal as this call's result: {commands:?}"
         );
     }
@@ -535,10 +535,10 @@ mod tests {
 
         // The original command is forwarded to the provider unchanged so
         // the resume itself still happens.
-        assert!(matches!(
+        std::assert_matches!(
             commands_rx.try_recv().expect("the command is forwarded"),
             Command::ContinueTurn
-        ));
+        );
     }
 
     /// The no-op replay case documented on
@@ -672,7 +672,7 @@ mod tests {
             .expect("an ApprovalResolved event in the live state");
         assert_eq!(resolved.0, call_id);
         assert_eq!(resolved.1, occurrence_id);
-        assert!(matches!(resolved.2, ApprovalDecisionPayload::Approve));
+        std::assert_matches!(resolved.2, ApprovalDecisionPayload::Approve);
 
         // The `Forward` branch sends the original command to the provider,
         // so the resume path beyond the audit row is unchanged.

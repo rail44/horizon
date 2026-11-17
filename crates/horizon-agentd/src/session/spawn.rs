@@ -290,8 +290,8 @@ mod tests {
         let sent = outgoing_rx
             .try_recv()
             .expect("a SessionModel event should have been sent");
-        assert!(
-            matches!(&sent, AgentWireEvent::SessionModel(model) if model == "test-model"),
+        std::assert_matches!(
+            &sent, AgentWireEvent::SessionModel(model) if model == "test-model",
             "expected a SessionModel wire event, got: {sent:?}",
         );
     }

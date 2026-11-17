@@ -30,13 +30,13 @@ fn mock_agent_emits_initial_session_events() {
         first.clone().into_event().expect("conversation event"),
         agent::Event::StateChanged(agent::SessionState::Created)
     );
-    assert!(matches!(
+    std::assert_matches!(
         first,
         agent::ProviderEvent::Event {
             provider_payload: None,
             ..
         }
-    ));
+    );
 }
 
 #[test]
@@ -549,10 +549,9 @@ fn tool_call_progress_updates_in_place_and_closes_before_the_real_request() {
         )])
         .unwrap();
     assert_eq!(frame.items.len(), 1);
-    assert!(matches!(
+    std::assert_matches!(
         &frame.items[0],
-        AgentFrameItem::ToolCallPreparing(progress) if progress.bytes == 16
-    ));
+        AgentFrameItem::ToolCallPreparing(progress) if progress.bytes == 16);
 
     frame = live
         .extend_provider_events([crate::contract::ProviderEvent::tool_call_progress(
@@ -564,11 +563,10 @@ fn tool_call_progress_updates_in_place_and_closes_before_the_real_request() {
         )])
         .unwrap();
     assert_eq!(frame.items.len(), 1);
-    assert!(matches!(
+    std::assert_matches!(
         &frame.items[0],
         AgentFrameItem::ToolCallPreparing(progress)
-            if progress.bytes == 96 && progress.tool_id.as_deref() == Some("fs_write")
-    ));
+            if progress.bytes == 96 && progress.tool_id.as_deref() == Some("fs_write"));
 
     // The stream key can differ from the provider's finalized call ID.
     frame = live
@@ -584,10 +582,9 @@ fn tool_call_progress_updates_in_place_and_closes_before_the_real_request() {
         ])
         .unwrap();
     assert_eq!(frame.items.len(), 1);
-    assert!(matches!(
+    std::assert_matches!(
         &frame.items[0],
-        AgentFrameItem::ToolCallRequested(request) if request.tool_id == "fs_write"
-    ));
+        AgentFrameItem::ToolCallRequested(request) if request.tool_id == "fs_write");
 }
 
 /// `docs/agent-output-ui-amendment.md`'s 2026-07-12 addendum (turn
@@ -955,13 +952,13 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
         recv_event(&rx),
         agent::Event::StateChanged(agent::SessionState::Running)
     );
-    assert!(matches!(
+    std::assert_matches!(
         recv_event(&rx),
         agent::Event::MessageCommitted(agent::Message {
             role: agent::MessageRole::User,
             ..
         })
-    ));
+    );
 
     // The provider-request lifecycle markers (see `Event::ProviderRequestSent`'s
     // doc comment) bracket the turn before any streamed content: sent, then
@@ -975,10 +972,7 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
 
     // Cancel as soon as the first streamed chunk arrives, well before the
     // mock's simulated turn would finish on its own.
-    assert!(matches!(
-        recv_event(&rx),
-        agent::Event::AssistantTextDelta(_)
-    ));
+    std::assert_matches!(recv_event(&rx), agent::Event::AssistantTextDelta(_));
     let _ = tx.send(agent::Command::Cancel { request_id: None });
 
     let mut partial_commit = None;
@@ -1103,13 +1097,13 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
         recv_event(&rx),
         agent::Event::StateChanged(agent::SessionState::Running)
     );
-    assert!(matches!(
+    std::assert_matches!(
         recv_event(&rx),
         agent::Event::MessageCommitted(agent::Message {
             role: agent::MessageRole::User,
             ..
         })
-    ));
+    );
     let identity = match recv_event(&rx) {
         agent::Event::ToolCallRequested(request) => {
             assert_eq!(request.tool_id, "mock_approval_required");
@@ -1158,20 +1152,18 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
         recv_event(&rx),
         agent::Event::StateChanged(agent::SessionState::Running)
     );
-    assert!(matches!(
+    std::assert_matches!(
         recv_event(&rx),
         agent::Event::MessageCommitted(agent::Message {
             role: agent::MessageRole::User,
             text,
-        }) if text == "hello again"
-    ));
-    assert!(matches!(
+        }) if text == "hello again");
+    std::assert_matches!(
         recv_event(&rx),
         agent::Event::MessageCommitted(agent::Message {
             role: agent::MessageRole::Assistant,
             text,
-        }) if text == "Mock response: hello again"
-    ));
+        }) if text == "Mock response: hello again");
     assert_eq!(
         recv_event(&rx),
         agent::Event::StateChanged(agent::SessionState::WaitingForUser)
@@ -1564,11 +1556,9 @@ fn approval_decisions_are_retained_while_continue_remains_audit_only() {
         &mut turn,
     );
 
-    assert!(
-        matches!(
-            frame.items.as_slice(),
-            [AgentFrameItem::ApprovalResolved(_)]
-        ),
+    std::assert_matches!(
+        frame.items.as_slice(),
+        [AgentFrameItem::ApprovalResolved(_)],
         "approval decisions must survive replay; got {:?}",
         frame.items
     );

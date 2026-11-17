@@ -516,8 +516,8 @@ mod response_tests {
         }
         live.extend_provider_events([ProviderEvent::ToolCallProgressClosed("a".into())])
             .unwrap();
-        assert!(
-            matches!(&live.frame().items[..], [AgentFrameItem::ToolCallPreparing(progress)] if progress.key == "b")
+        std::assert_matches!(
+            &live.frame().items[..], [AgentFrameItem::ToolCallPreparing(progress)] if progress.key == "b"
         );
         live.extend_events([Event::ProviderRequestFinished]);
         assert!(live.frame().items.is_empty());
