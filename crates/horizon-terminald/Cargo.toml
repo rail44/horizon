@@ -30,5 +30,5 @@ uuid = { version = "1.18", features = ["v4"] }
 horizon-daemon-testkit = { path = "../horizon-daemon-testkit" }
 termwiz = { version = "0.23.3", features = ["use_serde"] }
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

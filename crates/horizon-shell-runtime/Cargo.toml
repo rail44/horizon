@@ -28,5 +28,5 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 [dev-dependencies]
 anyhow = "1.0"
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

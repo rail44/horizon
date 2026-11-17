@@ -8,5 +8,5 @@ edition = "2024"
 # (`docs/theme-design.md`). No dependencies.
 [dependencies]
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

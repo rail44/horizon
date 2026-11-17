@@ -19,5 +19,5 @@ anyrender = "0.14"
 anyrender_vello_cpu = "0.18"
 blitz-paint = { workspace = true }
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

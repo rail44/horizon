@@ -38,5 +38,5 @@ nono = "0.82"
 [target.'cfg(target_os = "linux")'.dependencies]
 horizon-sandbox-runtime = { path = "../horizon-sandbox-runtime" }
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

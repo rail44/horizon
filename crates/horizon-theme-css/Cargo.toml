@@ -10,5 +10,5 @@ horizon-ui = { path = "../horizon-ui" }
 horizon-config = { path = "../horizon-config" }
 horizon-theme = { path = "../horizon-theme" }
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

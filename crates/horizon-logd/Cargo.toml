@@ -16,5 +16,5 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-
 horizon-board = { path = "../horizon-board" }
 horizon-daemon-testkit = { path = "../horizon-daemon-testkit" }
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

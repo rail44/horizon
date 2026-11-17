@@ -16,12 +16,18 @@ step() {
 }
 
 step cargo fmt --all -- --check
+
+# `-D warnings` is for what rustc and clippy say of the code. What Cargo
+# says of a manifest (a dependency declared and not used) is a warning of
+# its own, which `build.warnings` has fail the step.
+export CARGO_BUILD_WARNINGS=deny
 step cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # The extensions (`plugins/*`) are built for a guest only: the clippy above sees empty crates, so they are linted for their
 # own target, and the tests that show them load their components from
 # where this builds them.
 step ./scripts/extensions.sh clippy --locked -- -D warnings
+unset CARGO_BUILD_WARNINGS
 step ./scripts/extensions.sh build --locked
 
 # Inside a Horizon sandboxed agent session the default nextest profile

@@ -47,5 +47,5 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["s
 # a `UnixStream` pair.
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "net", "time", "io-util"] }
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

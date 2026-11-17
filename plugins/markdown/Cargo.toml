@@ -17,5 +17,5 @@ horizon-markdown = { path = "../../crates/horizon-markdown" }
 keyboard-types = "0.8"
 wit-bindgen = { version = "0.63", features = ["async", "async-spawn", "inter-task-wakeup"] }
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

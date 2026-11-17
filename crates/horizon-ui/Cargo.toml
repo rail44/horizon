@@ -23,5 +23,5 @@ keyboard-types = "0.8"
 [dev-dependencies]
 keyboard-types = "0.8"
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

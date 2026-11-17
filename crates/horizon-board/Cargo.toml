@@ -17,5 +17,5 @@ thiserror = "2.0"
 # synchronous file folds.
 tokio = { version = "1.52", features = ["rt", "net", "time", "macros", "io-util"] }
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

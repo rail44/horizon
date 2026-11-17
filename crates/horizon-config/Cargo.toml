@@ -23,8 +23,8 @@ toml = { version = "1", features = ["preserve_order"] }
 # crate's own public surface -- see `grants`' module doc.
 horizon-sandbox = { path = "../horizon-sandbox" }
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true
 
 [dev-dependencies]
 uuid = { version = "1.18", features = ["v4"] }

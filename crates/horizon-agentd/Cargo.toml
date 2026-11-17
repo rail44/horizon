@@ -41,5 +41,5 @@ horizon-agent = { path = "../horizon-agent", features = ["test-fixtures"] }
 # hermetic-spawn contract that terminald's suite also spawns through.
 horizon-daemon-testkit = { path = "../horizon-daemon-testkit" }
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

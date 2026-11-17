@@ -68,8 +68,8 @@ those.
 
 ```sh
 cargo fmt
-cargo clippy --workspace --all-targets --locked -- -D warnings
-./scripts/extensions.sh clippy --locked -- -D warnings
+CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --locked -- -D warnings
+CARGO_BUILD_WARNINGS=deny ./scripts/extensions.sh clippy --locked -- -D warnings
 ./scripts/extensions.sh build --locked
 cargo nextest run --workspace --locked
 ./scripts/check-wire-schema.sh
@@ -95,6 +95,11 @@ exclusion's reason in a TOML `#` comment above the section, not inside the
 filter string. When a run dumps many failures, parse `cargo nextest run
 --format json` with `jq` rather than grepping the prose log — it is more
 reliable and cheaper.
+
+`CARGO_BUILD_WARNINGS=deny` is for Cargo's own lints, which `-D warnings`
+does not reach: a dependency a member declares and does not use
+(`cargo::unused_dependencies`, on for every member through the workspace's
+`[workspace.lints]`) fails the step with it.
 
 The two steps before the tests are the extensions' (`plugins/*`): their
 code is built for a guest only, so the workspace's clippy sees empty

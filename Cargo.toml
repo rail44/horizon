@@ -47,6 +47,15 @@ exclude = ["duckdb-ext"]
 # with no feature of its own). (The vocabularies' JSON payloads travel as
 # `contract::JsonValue` -- JSON text on this binary wire -- precisely so
 # no second, self-describing codec is ever needed.)
+# Every member takes these (`[lints] workspace = true`).
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# A dependency a member declares and does not use. The gate has warnings
+# as errors (`scripts/gate.sh`).
+[workspace.lints.cargo]
+unused_dependencies = "warn"
+
 [workspace.dependencies]
 remoc = { version = "=0.20.6", default-features = false, features = ["rtc"] }
 # The ACP SDK and its schema crate: exact pins, upgraded together
@@ -173,8 +182,8 @@ name = "scenarios"
 path = "benches/scenarios/main.rs"
 harness = false
 
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true
 
 # Debug-build CPU profiles show the hot code lives almost entirely in
 # dependencies (layout, shaping and rasterizing), so optimize external crates even in dev builds.
