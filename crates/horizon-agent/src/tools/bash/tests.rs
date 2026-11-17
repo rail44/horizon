@@ -206,10 +206,12 @@ fn a_timed_out_call_reports_no_directory_when_the_kill_beat_the_report() {
     )
     .to_json();
 
-    assert!(output["message"]
-        .as_str()
-        .expect("message")
-        .contains("timed out"));
+    assert!(
+        output["message"]
+            .as_str()
+            .expect("message")
+            .contains("timed out")
+    );
     assert!(
         output.get("cwd").is_none(),
         "a group SIGKILL takes the reporting wrapper with it: {output}"
@@ -300,10 +302,12 @@ fn timeout_kills_the_process_and_reports_captured_partial_output() {
         "should be killed well before the full 5s sleep completes"
     );
     assert_eq!(output["is_error"], true);
-    assert!(output["message"]
-        .as_str()
-        .expect("message")
-        .contains("timed out"));
+    assert!(
+        output["message"]
+            .as_str()
+            .expect("message")
+            .contains("timed out")
+    );
     assert!(
         output["output"]
             .as_str()
@@ -478,10 +482,12 @@ fn background_child_holding_the_pipe_does_not_hang_the_call() {
             .contains("visible"),
         "output produced before the child exited must be captured: {output}"
     );
-    assert!(output["note"]
-        .as_str()
-        .expect("a cut-short drain should be noted in the result")
-        .contains("background"),);
+    assert!(
+        output["note"]
+            .as_str()
+            .expect("a cut-short drain should be noted in the result")
+            .contains("background"),
+    );
     // The kill registration must not outlive the call.
     assert!(!super::registry::is_running(session_id, &call_id));
 }
@@ -1068,10 +1074,12 @@ fn run_job_body_still_sends_a_completion_when_work_panics() {
     assert_eq!(result.call_id, call_id);
     assert_eq!(result.occurrence_id, occurrence);
     assert_eq!(result.output["is_error"], true);
-    assert!(result.output["message"]
-        .as_str()
-        .expect("message")
-        .contains("injected panic"));
+    assert!(
+        result.output["message"]
+            .as_str()
+            .expect("message")
+            .contains("injected panic")
+    );
 }
 
 // --- panic safety: exec.rs panic points --------------------------------

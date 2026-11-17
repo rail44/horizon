@@ -244,10 +244,10 @@ fn shared_tree_grant(
 fn nearest_existing_dir(path: &Path) -> Option<PathBuf> {
     let mut current = path.to_path_buf();
     loop {
-        if let Ok(canonical) = current.canonicalize() {
-            if canonical.is_dir() {
-                return Some(canonical);
-            }
+        if let Ok(canonical) = current.canonicalize()
+            && canonical.is_dir()
+        {
+            return Some(canonical);
         }
         if !current.pop() || current.as_os_str().is_empty() {
             return None;
@@ -860,9 +860,11 @@ mod tests {
             grants.len() >= 2,
             "no shared tree exists, so each attempt keeps its own grant: {grants:?}"
         );
-        assert!(grants
-            .iter()
-            .all(|grant| !is_overbroad_tree(&grant.path, None)));
+        assert!(
+            grants
+                .iter()
+                .all(|grant| !is_overbroad_tree(&grant.path, None))
+        );
         fs::remove_dir_all(first).expect("remove test directory");
         fs::remove_dir_all(second).expect("remove test directory");
     }

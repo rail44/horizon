@@ -25,10 +25,10 @@
 use std::sync::Arc;
 
 use horizon_board::wire::LogHubServerShared;
-use horizon_logd::{handle_subscribe, Hub, SubscriberRegistry};
+use horizon_logd::{Hub, SubscriberRegistry, handle_subscribe};
+use horizon_wire::WireCodec;
 use horizon_wire::daemon;
 use horizon_wire::socket::default_logd_socket_path;
-use horizon_wire::WireCodec;
 use tokio::io::AsyncBufReadExt;
 use tokio::net::UnixStream;
 

@@ -1,11 +1,11 @@
 //! Settle stopped provider batches against the host's acknowledged results.
-use super::{processing::Processing, ToolUpdate};
+use super::{ToolUpdate, processing::Processing};
 use crate::{
     contract::{
         ApprovalKind, Command, ProviderEvent, SessionId, ToolCallIdentity, ToolCallResult,
         ToolOutcome,
     },
-    frame::{tool_call_occurrences, AgentFrameItem},
+    frame::{AgentFrameItem, tool_call_occurrences},
     live::LiveState,
 };
 

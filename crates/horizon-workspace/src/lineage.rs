@@ -4,8 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::types::SessionSummary;
 use crate::SessionId;
+use crate::types::SessionSummary;
 
 /// One rendered row: a session summary plus its resolved position in the
 /// derivation forest. `depth` (0 for a root) drives indentation;
@@ -121,21 +121,20 @@ pub fn abbreviate_directory(
     repo_root: Option<&std::path::Path>,
     home: Option<&std::path::Path>,
 ) -> String {
-    if let Some(repo_root) = repo_root {
-        if let Ok(relative) = root.strip_prefix(repo_root) {
-            if !relative.as_os_str().is_empty() {
-                return relative.display().to_string();
-            }
-        }
+    if let Some(repo_root) = repo_root
+        && let Ok(relative) = root.strip_prefix(repo_root)
+        && !relative.as_os_str().is_empty()
+    {
+        return relative.display().to_string();
     }
-    if let Some(home) = home {
-        if let Ok(relative) = root.strip_prefix(home) {
-            return if relative.as_os_str().is_empty() {
-                "~".to_string()
-            } else {
-                format!("~/{}", relative.display())
-            };
-        }
+    if let Some(home) = home
+        && let Ok(relative) = root.strip_prefix(home)
+    {
+        return if relative.as_os_str().is_empty() {
+            "~".to_string()
+        } else {
+            format!("~/{}", relative.display())
+        };
     }
     root.display().to_string()
 }
@@ -159,12 +158,12 @@ pub fn enclosing_repo_root(root: &std::path::Path) -> Option<std::path::PathBuf>
 mod tests {
     use std::collections::HashSet;
 
-    use crate::types::SessionKind;
     use crate::SessionId;
+    use crate::types::SessionKind;
 
     use std::path::Path;
 
-    use super::{abbreviate_directory, order_as_lineage_tree, subtree_session_ids, SessionSummary};
+    use super::{SessionSummary, abbreviate_directory, order_as_lineage_tree, subtree_session_ids};
 
     fn summary(
         id: SessionId,

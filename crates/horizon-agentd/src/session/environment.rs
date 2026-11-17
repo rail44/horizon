@@ -7,7 +7,7 @@ use super::setup::{
     configured_domains, configured_filesystem_grants, configured_loopback_connect,
     configured_mach_services, project_is_trusted, skill_discovery_root, tool_session_builder_for,
 };
-use super::state::{lock_unpoisoned, AgentdState};
+use super::state::{AgentdState, lock_unpoisoned};
 use crate::worktree;
 use crossbeam_channel::Sender;
 use horizon_agent::config::AgentConfig;
@@ -19,7 +19,7 @@ use horizon_agent::persistence::event_log::PersistedSessionContext;
 use horizon_agent::roles::RoleId;
 use horizon_agent::skills::SkillRegistry;
 use horizon_agent::tools::{
-    register_session_runtime, RecallContext, SessionDomainPolicy, ToolCompletion, ToolSessionState,
+    RecallContext, SessionDomainPolicy, ToolCompletion, ToolSessionState, register_session_runtime,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -271,7 +271,9 @@ mod tests {
         flagged.host_execution_requested = true;
         let request = decision_request("m", &flagged);
         let (instructions, _) = ask_human(&request);
-        assert!(instructions.contains("outside Horizon's filesystem, network, and process sandbox"));
+        assert!(
+            instructions.contains("outside Horizon's filesystem, network, and process sandbox")
+        );
         assert_eq!(request.state["host_execution_requested"], true);
     }
 

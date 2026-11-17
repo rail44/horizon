@@ -9,11 +9,11 @@
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
+use crate::store::Store;
 use crate::store::source::{LogSource, Source};
 use crate::store::types::StoreError;
-use crate::store::Store;
 use crate::wire::{
-    log_client_hello, IngestReply, IngestRequest, LogError, LogHub, LogHubClient, SubscribeRequest,
+    IngestReply, IngestRequest, LogError, LogHub, LogHubClient, SubscribeRequest, log_client_hello,
 };
 
 /// Connects to logd (spawning it if necessary), hellos, and sends one

@@ -10,8 +10,8 @@ use crate::frame::AgentFrame;
 use crate::judge::ApprovalCandidate;
 use crate::tools::bash;
 use crate::tools::bash::{ApprovalSource, HostExecutionApproval, SandboxedApprovalOrigin};
-use crate::tools::output::{error as error_output, Response};
-use crate::tools::state::{session_runtime, SessionRuntime, ToolSessionState};
+use crate::tools::output::{Response, error as error_output};
+use crate::tools::state::{SessionRuntime, ToolSessionState, session_runtime};
 
 /// The user's decision on a pending `ApprovalRequested` tool call.
 #[derive(Clone, Debug)]
@@ -84,17 +84,17 @@ pub fn resolve_approval(
         return ApprovalOutcome::AlreadyResolved;
     }
     super::background::cancel_judgment(session_id, &request.identity());
-    if is_horizon_executed_tool(&request.tool_id) {
-        if let Some(runtime) = session_runtime(session_id) {
-            return dispatch_approval(
-                session_id,
-                &runtime,
-                request,
-                &decision,
-                approval.kind.clone(),
-                ApprovalSource::Human,
-            );
-        }
+    if is_horizon_executed_tool(&request.tool_id)
+        && let Some(runtime) = session_runtime(session_id)
+    {
+        return dispatch_approval(
+            session_id,
+            &runtime,
+            request,
+            &decision,
+            approval.kind.clone(),
+            ApprovalSource::Human,
+        );
     }
     ApprovalOutcome::Forward(match decision {
         ApprovalDecision::Approve => Command::ApproveToolCall { identity },

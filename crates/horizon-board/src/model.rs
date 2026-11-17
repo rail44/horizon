@@ -81,10 +81,10 @@ pub fn tree_order(items: &[Item], top_level_only: bool) -> Vec<(&Item, usize)> {
     // items whose parent is absent are orphans and become roots).
     let mut children: HashMap<u64, Vec<&Item>> = HashMap::new();
     for item in items {
-        if let Some(parent) = item.parent {
-            if id_set.contains(&parent) {
-                children.entry(parent).or_default().push(item);
-            }
+        if let Some(parent) = item.parent
+            && id_set.contains(&parent)
+        {
+            children.entry(parent).or_default().push(item);
         }
     }
     for kids in children.values_mut() {

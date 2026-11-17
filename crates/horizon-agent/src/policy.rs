@@ -8,8 +8,8 @@ use crate::tools::input::{PreparedCall, ToolInput};
 use serde_json::Value;
 
 use crate::contract::{ApprovalKind, ApprovalRequest, ToolCallRequest, ToolPermission};
-use crate::tools::call_escapes_root;
 use crate::tools::ToolSessionState;
+use crate::tools::call_escapes_root;
 
 /// A per-call trust classification -- the tier a single tool call falls
 /// into, not a static per-tool-id policy. See the design doc's "The three
@@ -134,19 +134,19 @@ pub(crate) fn plan_prepared_call(
     if crate::tools::is_external_tool(&request.tool_id) {
         return ToolPlan::Automatic(AutomaticTool::Synchronous);
     }
-    if matches!(request.tool_id.as_str(), "fs_write" | "fs_edit") {
-        if let Some(root) = tool_state.primary_checkout_without_write_access() {
-            return approval(
-                format!(
-                    "`{}` would write inside the shared primary checkout `{}`. Allow direct \
+    if matches!(request.tool_id.as_str(), "fs_write" | "fs_edit")
+        && let Some(root) = tool_state.primary_checkout_without_write_access()
+    {
+        return approval(
+            format!(
+                "`{}` would write inside the shared primary checkout `{}`. Allow direct \
                      edits for this session, or call `worktree_enter` to work in a disposable \
                      worktree instead?",
-                    request.tool_id,
-                    root.display()
-                ),
-                ApprovalKind::Standard,
-            );
-        }
+                request.tool_id,
+                root.display()
+            ),
+            ApprovalKind::Standard,
+        );
     }
     match crate::tools::permission_for_tool(&request.tool_id) {
         Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
@@ -157,7 +157,13 @@ pub(crate) fn plan_prepared_call(
                     "fs_glob" => "find files in",
                     _ => "read",
                 };
-                approval(format!("`{}` requested to {verb} `{path}`, which is outside the session's workspace root. Allow this?", request.tool_id), ApprovalKind::Standard)
+                approval(
+                    format!(
+                        "`{}` requested to {verb} `{path}`, which is outside the session's workspace root. Allow this?",
+                        request.tool_id
+                    ),
+                    ApprovalKind::Standard,
+                )
             } else {
                 ToolPlan::Automatic(AutomaticTool::Synchronous)
             }
@@ -488,9 +494,11 @@ mod tests {
             &tool_state,
             SessionId::new(),
         );
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, Event::ApprovalRequested(_))));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::ApprovalRequested(_)))
+        );
     }
 
     #[test]
@@ -521,9 +529,11 @@ mod tests {
 
         tool_state.allow_domain("docs.example.com");
         let events = policy_events(&request, &tool_state, SessionId::new());
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, Event::ApprovalRequested(_))));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::ApprovalRequested(_)))
+        );
     }
 
     #[test]
@@ -537,9 +547,11 @@ mod tests {
             &tool_state,
             SessionId::new(),
         );
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, Event::ApprovalRequested(_))));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::ApprovalRequested(_)))
+        );
     }
 
     #[test]
@@ -687,9 +699,11 @@ mod tests {
             panic!("bash without a sandbox must ask, got {plan:?}");
         };
         assert_eq!(approval.kind, ApprovalKind::Standard);
-        assert!(approval
-            .reason
-            .contains("host process's ordinary authority"));
+        assert!(
+            approval
+                .reason
+                .contains("host process's ordinary authority")
+        );
     }
 
     #[test]
@@ -826,9 +840,11 @@ mod tests {
             1,
             "only the original event, nothing else: {events:?}"
         );
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, Event::ApprovalRequested(_))));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::ApprovalRequested(_)))
+        );
     }
 
     #[test]
@@ -840,9 +856,11 @@ mod tests {
             SessionId::new(),
         );
 
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, Event::ApprovalRequested(_))));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::ApprovalRequested(_)))
+        );
     }
 
     /// Both policy classes derive the same typed candidate shape.

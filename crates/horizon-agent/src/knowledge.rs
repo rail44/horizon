@@ -39,7 +39,7 @@ use crate::instructions::cap_to_chars;
 
 mod document;
 pub(crate) use document::KnowledgeStatus;
-use document::{is_valid_slug, parse_knowledge_md, serialize_entry, ParsedKnowledgeMd};
+use document::{ParsedKnowledgeMd, is_valid_slug, parse_knowledge_md, serialize_entry};
 
 // --- constants -----------------------------------------------------------
 
@@ -387,7 +387,8 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("XDG_DATA_HOME", &dir);
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_DATA_HOME", &dir) };
         dir
     }
 
@@ -624,9 +625,11 @@ mod tests {
         // sandbox may place TMPDIR inside a worktree, which would make
         // `main_root` resolve to the real project instead of returning
         // None. `scrub_git_env` preserves `GIT_CEILING_DIRECTORIES`.
-        std::env::set_var("GIT_CEILING_DIRECTORIES", dir.parent().unwrap());
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("GIT_CEILING_DIRECTORIES", dir.parent().unwrap()) };
         assert_eq!(prompt_section(&dir), None);
-        std::env::remove_var("GIT_CEILING_DIRECTORIES");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("GIT_CEILING_DIRECTORIES") };
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&_data);
     }

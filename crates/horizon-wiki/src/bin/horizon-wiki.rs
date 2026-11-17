@@ -11,8 +11,8 @@
 
 use std::process::ExitCode;
 
-use horizon_wiki::concepts::{concept_graph, parse_concepts, parse_namespace_arcs, placement};
 use horizon_wiki::Store;
+use horizon_wiki::concepts::{concept_graph, parse_concepts, parse_namespace_arcs, placement};
 
 const USAGE: &str = "usage:
   horizon-wiki store-dir PROJECT_ROOT

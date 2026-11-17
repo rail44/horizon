@@ -2,8 +2,8 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
-use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::Url;
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 const DNS_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_URL_BYTES: usize = 8 * 1024;
@@ -75,10 +75,10 @@ pub(super) fn validate_url(url: &Url) -> Result<String, String> {
         .trim_end_matches('.')
         .to_ascii_lowercase();
     reject_hostname(&host).map_err(|error| error.to_string())?;
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_forbidden_ip(ip) {
-            return Err("web_fetch refuses non-public IP addresses".to_string());
-        }
+    if let Ok(ip) = host.parse::<IpAddr>()
+        && is_forbidden_ip(ip)
+    {
+        return Err("web_fetch refuses non-public IP addresses".to_string());
     }
     let port = url
         .port_or_known_default()

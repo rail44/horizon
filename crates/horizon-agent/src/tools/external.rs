@@ -189,9 +189,11 @@ mod tests {
             "{}",
             entry.description
         );
-        assert!(entry
-            .description
-            .contains("echo — The input, returned unchanged."));
+        assert!(
+            entry
+                .description
+                .contains("echo — The input, returned unchanged.")
+        );
         assert!(entry.description.contains("\nbare"));
     }
 
@@ -215,10 +217,12 @@ mod tests {
     fn a_built_in_id_is_refused() {
         let error = register_external_tools(vec![tool("fs_read", echo())]).unwrap_err();
         assert!(error.contains("fs_read"), "{error}");
-        assert!(!crate::tools::definitions()
-            .iter()
-            .any(|definition| definition.id == "fs_read"
-                && definition.description == "fs_read description"));
+        assert!(
+            !crate::tools::definitions()
+                .iter()
+                .any(|definition| definition.id == "fs_read"
+                    && definition.description == "fs_read description")
+        );
     }
 
     #[test]

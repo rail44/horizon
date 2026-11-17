@@ -61,9 +61,7 @@ pub enum SandboxError {
         source: std::io::Error,
     },
 
-    #[error(
-        "approved filesystem path {approved} now resolves to {resolved}; refusing stale grant"
-    )]
+    #[error("approved filesystem path {approved} now resolves to {resolved}; refusing stale grant")]
     GrantChanged {
         approved: PathBuf,
         resolved: PathBuf,

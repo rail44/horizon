@@ -98,7 +98,7 @@ pub(crate) fn bind(path: &Path) -> io::Result<UnixListener> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{Envelope, EnvelopeBody, Hello, CONTROL_VERSION};
+    use crate::contract::{CONTROL_VERSION, Envelope, EnvelopeBody, Hello};
     use crate::host::executor::ControlRequest;
     use crate::wire;
     use std::io::BufReader;

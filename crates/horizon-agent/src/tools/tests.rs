@@ -15,7 +15,7 @@ use crate::frame::{AgentFrame, AgentFrameItem};
 use crate::live::LiveState;
 use crate::tools::execution::{Execution, HostTools};
 use crate::tools::state::{
-    register_session_runtime, session_runtime, unregister_session_runtime, ToolSessionState,
+    ToolSessionState, register_session_runtime, session_runtime, unregister_session_runtime,
 };
 use crate::tools::synchronous as sync_tools;
 use crate::tools::test_support::{execute_agent_tool, process_agent_provider_event};
@@ -245,17 +245,19 @@ fn processing_preserves_provider_payload_on_original_event_only() {
     std::assert_matches!(
         &processing.horizon_events[0], ProviderEvent::Event { provider_payload: Some(value), .. } if value == &payload
     );
-    assert!(processing
-        .horizon_events
-        .iter()
-        .skip(1)
-        .all(|event| matches!(
-            event,
-            ProviderEvent::Event {
-                provider_payload: None,
-                ..
-            }
-        )));
+    assert!(
+        processing
+            .horizon_events
+            .iter()
+            .skip(1)
+            .all(|event| matches!(
+                event,
+                ProviderEvent::Event {
+                    provider_payload: None,
+                    ..
+                }
+            ))
+    );
 }
 
 // --- fs_read -----------------------------------------------------------
@@ -358,10 +360,12 @@ fn fs_read_approved_reads_out_of_root_file() {
     );
 
     assert!(!is_error(&output));
-    assert!(output["content"]
-        .as_str()
-        .unwrap()
-        .contains("external content"));
+    assert!(
+        output["content"]
+            .as_str()
+            .unwrap()
+            .contains("external content")
+    );
 }
 
 /// `fs_grep` and `fs_glob` out-of-root base paths also route to approval.
@@ -579,9 +583,11 @@ fn an_attended_session_still_asks_for_an_out_of_root_read() {
         &tool_state,
         SessionId::new(),
     );
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, Event::ApprovalRequested(_))));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::ApprovalRequested(_)))
+    );
 
     fs::remove_dir_all(outside).unwrap();
 }
@@ -723,10 +729,12 @@ fn fs_read_windows_lines_and_reports_truncation_notice() {
     assert_eq!(output["total_lines"], 10);
     assert_eq!(output["truncated"], true);
     assert_eq!(output["next_offset"], 4);
-    assert!(output["notice"]
-        .as_str()
-        .unwrap()
-        .contains("Showing lines 1-3 of 10"));
+    assert!(
+        output["notice"]
+            .as_str()
+            .unwrap()
+            .contains("Showing lines 1-3 of 10")
+    );
     assert!(output["content"].as_str().unwrap().contains("line 1"));
     assert!(!output["content"].as_str().unwrap().contains("line 4"));
 }
@@ -790,10 +798,12 @@ fn fs_read_caps_total_content_at_a_line_boundary_and_returns_next_offset() {
         output["next_offset"].as_u64().unwrap(),
         output["end_line"].as_u64().unwrap() + 1
     );
-    assert!(output["notice"]
-        .as_str()
-        .unwrap()
-        .contains("50000-character cap"));
+    assert!(
+        output["notice"]
+            .as_str()
+            .unwrap()
+            .contains("50000-character cap")
+    );
     assert!(output["content_version"].is_string());
 }
 
@@ -954,10 +964,12 @@ fn process_agent_provider_event_never_asks_approval_for_an_unknown_tool_and_cont
     // The turn continues: the provider gets the result back as a real
     // `Command::ToolCallResult`, exactly like any other tool's outcome, so
     // the model can correct itself instead of the turn stalling forever.
-    assert!(processing
-        .provider_commands
-        .iter()
-        .any(|command| matches!(command, Command::ToolCallResult(r) if r.call_id == call_id)));
+    assert!(
+        processing
+            .provider_commands
+            .iter()
+            .any(|command| matches!(command, Command::ToolCallResult(r) if r.call_id == call_id))
+    );
 }
 
 // --- fs_write ------------------------------------------------------------
@@ -993,10 +1005,12 @@ fn fs_write_overwrite_without_prior_read_is_error() {
     );
 
     assert!(is_error(&output));
-    assert!(output["message"]
-        .as_str()
-        .unwrap()
-        .contains("has not been read"));
+    assert!(
+        output["message"]
+            .as_str()
+            .unwrap()
+            .contains("has not been read")
+    );
     assert_eq!(fs::read_to_string(&target).unwrap(), "original");
 }
 
@@ -1046,10 +1060,12 @@ fn fs_write_overwrite_stale_after_external_modification_is_error() {
     );
 
     assert!(is_error(&output));
-    assert!(output["message"]
-        .as_str()
-        .unwrap()
-        .contains("changed on disk"));
+    assert!(
+        output["message"]
+            .as_str()
+            .unwrap()
+            .contains("changed on disk")
+    );
 }
 
 #[test]
@@ -1095,10 +1111,12 @@ fn fs_edit_without_prior_read_is_error() {
         sync_tools::execute_approved(&tool_state, "fs_edit", &one_edit(&target, "world", "there"));
 
     assert!(is_error(&output));
-    assert!(output["message"]
-        .as_str()
-        .unwrap()
-        .contains("has not been read"));
+    assert!(
+        output["message"]
+            .as_str()
+            .unwrap()
+            .contains("has not been read")
+    );
 }
 
 #[test]
@@ -1141,10 +1159,12 @@ fn fs_edit_multiple_matches_is_error() {
         sync_tools::execute_approved(&tool_state, "fs_edit", &one_edit(&target, "dup", "x"));
 
     assert!(is_error(&output));
-    assert!(output["message"]
-        .as_str()
-        .unwrap()
-        .contains("found 3 matches"));
+    assert!(
+        output["message"]
+            .as_str()
+            .unwrap()
+            .contains("found 3 matches")
+    );
 }
 
 #[test]
@@ -1194,10 +1214,12 @@ fn fs_edit_stale_after_external_modification_is_error() {
         sync_tools::execute_approved(&tool_state, "fs_edit", &one_edit(&target, "world", "there"));
 
     assert!(is_error(&output));
-    assert!(output["message"]
-        .as_str()
-        .unwrap()
-        .contains("changed on disk"));
+    assert!(
+        output["message"]
+            .as_str()
+            .unwrap()
+            .contains("changed on disk")
+    );
 }
 
 #[test]
@@ -1370,10 +1392,12 @@ fn fs_edit_stops_at_the_first_failure_and_reports_every_edits_outcome() {
     assert_eq!(output["applied_count"], 1);
     assert_eq!(output["edits"][0]["status"], "applied");
     assert_eq!(output["edits"][1]["status"], "failed");
-    assert!(output["edits"][1]["message"]
-        .as_str()
-        .unwrap()
-        .contains("not found"));
+    assert!(
+        output["edits"][1]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not found")
+    );
     assert_eq!(output["edits"][2]["status"], "not_attempted");
     // No rollback: the applied edit stays on disk, the not-attempted one
     // never ran.
@@ -1422,10 +1446,12 @@ fn fs_edit_requires_a_non_empty_edits_list() {
 
     let empty = sync_tools::execute_approved(&tool_state, "fs_edit", &json!({ "edits": [] }));
     assert!(is_error(&empty));
-    assert!(empty["message"]
-        .as_str()
-        .unwrap()
-        .contains("at least one entry"));
+    assert!(
+        empty["message"]
+            .as_str()
+            .unwrap()
+            .contains("at least one entry")
+    );
 }
 
 // --- fs_glob / fs_grep ------------------------------------------------
@@ -1706,11 +1732,13 @@ fn fs_glob_still_walks_plain_dotfiles() {
     .expect("fs_glob is auto-executed");
 
     assert!(!is_error(&output));
-    assert!(output["matches"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value.as_str().unwrap().ends_with(".eslintrc.json")));
+    assert!(
+        output["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value.as_str().unwrap().ends_with(".eslintrc.json"))
+    );
 }
 
 // The file-count and (grep-only) byte-count traversal caps below are
@@ -1741,10 +1769,12 @@ fn fs_glob_stops_at_file_count_cap_and_notes_truncation() {
         total_matches < 25,
         "expected the file-count cap to stop the scan early, got {total_matches}"
     );
-    assert!(output["note"]
-        .as_str()
-        .expect("note present when the scan is truncated")
-        .contains("scan truncated"));
+    assert!(
+        output["note"]
+            .as_str()
+            .expect("note present when the scan is truncated")
+            .contains("scan truncated")
+    );
 }
 
 #[test]
@@ -1771,10 +1801,12 @@ fn fs_grep_stops_at_byte_cap_and_notes_truncation() {
         total_matches < 10,
         "expected the byte cap to stop the scan before reading every file, got {total_matches}"
     );
-    assert!(output["note"]
-        .as_str()
-        .expect("note present when the scan is truncated")
-        .contains("scan truncated"));
+    assert!(
+        output["note"]
+            .as_str()
+            .expect("note present when the scan is truncated")
+            .contains("scan truncated")
+    );
 }
 
 // --- approval wiring -----------------------------------------------------
@@ -1850,10 +1882,12 @@ fn resolve_auto_approval_forwards_standard_candidate_without_a_prompt() {
     std::assert_matches!(
         outcome,
         ApprovalOutcome::Forward(Command::ApproveToolCall { identity: id }) if id.call_id == call_id);
-    assert!(!frame
-        .items
-        .iter()
-        .any(|item| matches!(item, AgentFrameItem::ApprovalRequested(_))));
+    assert!(
+        !frame
+            .items
+            .iter()
+            .any(|item| matches!(item, AgentFrameItem::ApprovalRequested(_)))
+    );
 }
 
 #[test]
@@ -2305,9 +2339,11 @@ fn fs_write_auto_executes_in_an_isolated_session_with_the_audit_marker() {
     let Execution::Applied(crate::tools::ToolUpdate::Finished { events, .. }) = execution else {
         panic!("expected a synchronous applied update for a contained fs_write");
     };
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, Event::ToolCallStarted(id) if id == &request.identity())));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::ToolCallStarted(id) if id == &request.identity()))
+    );
     let output = events
         .into_iter()
         .find_map(|event| match event {
@@ -2493,9 +2529,11 @@ fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox()
     let Execution::Applied(crate::tools::ToolUpdate::Started { events }) = execution else {
         panic!("expected an applied start for a contained bash call");
     };
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, Event::ToolCallStarted(id) if id == &request.identity())));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::ToolCallStarted(id) if id == &request.identity()))
+    );
 
     let completion = bash_results_rx
         .recv_timeout(std::time::Duration::from_secs(10))
@@ -2549,10 +2587,12 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
     );
     let result = expect_finished(completion);
     assert_eq!(result.output["is_error"], true);
-    assert!(result.output["message"]
-        .as_str()
-        .expect("message")
-        .contains("timed out"));
+    assert!(
+        result.output["message"]
+            .as_str()
+            .expect("message")
+            .contains("timed out")
+    );
     assert_eq!(result.output["sandboxed"], true);
 
     unregister_session_runtime(session_id);
@@ -3467,13 +3507,17 @@ fn an_approval_carrying_no_grant_refuses_to_run_the_call() {
         panic!("an approval with no grant must fail closed: {outcome:?}");
     };
     assert_eq!(result.output["is_error"], true);
-    assert!(result.output["message"]
-        .as_str()
-        .unwrap()
-        .contains("names no grant"));
-    assert!(bash_results_rx
-        .recv_timeout(Duration::from_millis(200))
-        .is_err());
+    assert!(
+        result.output["message"]
+            .as_str()
+            .unwrap()
+            .contains("names no grant")
+    );
+    assert!(
+        bash_results_rx
+            .recv_timeout(Duration::from_millis(200))
+            .is_err()
+    );
     unregister_session_runtime(session_id);
 }
 
@@ -3536,9 +3580,11 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
         }
         other => panic!("deny must forward the first sandbox result: {other:?}"),
     }
-    assert!(bash_results_rx
-        .recv_timeout(Duration::from_millis(200))
-        .is_err());
+    assert!(
+        bash_results_rx
+            .recv_timeout(Duration::from_millis(200))
+            .is_err()
+    );
     unregister_session_runtime(session_id);
 }
 
@@ -3975,10 +4021,11 @@ fn resolve_approval_starts_bash_on_approve_and_delivers_its_result() {
         panic!("approving bash should start it, not finish it synchronously");
     };
     let frame = live_state.frame();
-    assert!(frame
-        .items
-        .iter()
-        .any(|item| matches!(item, AgentFrameItem::ToolCallStarted(id) if id.call_id == call_id)));
+    assert!(
+        frame.items.iter().any(
+            |item| matches!(item, AgentFrameItem::ToolCallStarted(id) if id.call_id == call_id)
+        )
+    );
     assert!(!frame.has_tool_call_finished(&call_id));
 
     // The command actually ran on a background thread and its result
@@ -4118,9 +4165,11 @@ fn resolve_approval_denies_bash_without_running_it() {
     );
 
     // Never spawned: nothing ever arrives on the results channel.
-    assert!(bash_results_rx
-        .recv_timeout(std::time::Duration::from_millis(200))
-        .is_err());
+    assert!(
+        bash_results_rx
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_err()
+    );
 }
 
 /// Regression test for the 2026-07 repeated-approval OOM incident's root
@@ -4279,10 +4328,12 @@ fn fs_tools_reject_all_paths_when_workspace_root_unavailable() {
     .expect("fs_read is auto-executed");
 
     assert!(is_error(&output));
-    assert!(output["message"]
-        .as_str()
-        .unwrap()
-        .contains("workspace root"));
+    assert!(
+        output["message"]
+            .as_str()
+            .unwrap()
+            .contains("workspace root")
+    );
 }
 
 // --- session runtime registry ----------------------------------------------

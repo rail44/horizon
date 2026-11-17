@@ -8,11 +8,11 @@ use horizon_agent::persistence::event_log;
 use horizon_agent::roles::RoleId;
 use horizon_board::Store;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::roles;
 use super::ReplyAddress;
-use crate::session::{resume_session, spawn_session_thread, AgentdState};
+use super::roles;
+use crate::session::{AgentdState, resume_session, spawn_session_thread};
 
 static START_SESSION: Mutex<()> = Mutex::new(());
 
@@ -116,13 +116,18 @@ pub(crate) async fn operate(
             }
             let reply_to = ReplyAddress::review_result(root, id, caller)?;
             let target = reviewer_session(&state, store, root, id, caller, &tip).await?;
-            let events = queue(target, SessionInput {
-                id: source,
-                origin: format!("session:{}", caller.as_uuid()),
-                text: format!("Review task #{id} from {base} to {tip}. Checks: {checks}\nYour dedicated worktree is pinned to this exact target tip. Read the task's requirements and consultation with board_read. Inspect the full range and independently verify it without modifying the implementation. Return findings to the requesting task session."),
-                reply_to: Some(reply_to),
-                resume_work: false,
-            })?;
+            let events = queue(
+                target,
+                SessionInput {
+                    id: source,
+                    origin: format!("session:{}", caller.as_uuid()),
+                    text: format!(
+                        "Review task #{id} from {base} to {tip}. Checks: {checks}\nYour dedicated worktree is pinned to this exact target tip. Read the task's requirements and consultation with board_read. Inspect the full range and independently verify it without modifying the implementation. Return findings to the requesting task session."
+                    ),
+                    reply_to: Some(reply_to),
+                    resume_work: false,
+                },
+            )?;
             Ok((
                 json!({"session_id":target.as_uuid().to_string(),"queued":true}),
                 events,
@@ -489,12 +494,17 @@ mod review_tests {
         stop();
         let history = records(&state).unwrap();
         assert!(history.iter().all(|record| record.session_id == first));
-        assert!(history
-            .iter()
-            .any(|record| matches!(record.event, Event::SessionResumed)));
-        assert!(history
-            .iter()
-            .any(|record| matches!(record.event, Event::StateChanged(SessionState::Terminated))));
+        assert!(
+            history
+                .iter()
+                .any(|record| matches!(record.event, Event::SessionResumed))
+        );
+        assert!(
+            history.iter().any(|record| matches!(
+                record.event,
+                Event::StateChanged(SessionState::Terminated)
+            ))
+        );
         assert!(!history.iter().any(|record| matches!(
             record.event,
             Event::InputAccepted(_)

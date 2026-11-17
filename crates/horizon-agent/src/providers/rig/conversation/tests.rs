@@ -18,7 +18,7 @@ fn capture(rx: &crossbeam_channel::Receiver<ProviderEvent>, events: &mut Vec<Eve
 #[test]
 fn long_conversation_replays_two_clearing_passes_and_explicit_input_boundaries() {
     use crate::providers::rig::clearing::{
-        cleared_occurrence_ids_from_events, history_for_provider_request, ClearingState,
+        ClearingState, cleared_occurrence_ids_from_events, history_for_provider_request,
     };
     let (tx, rx) = crossbeam_channel::unbounded();
     let mut live = ConversationHistory::default();
@@ -261,13 +261,13 @@ fn unknown_codec_or_identity_conflicts_fail_without_changing_valid_history() {
     }
     assert!(history.apply(&invalid).is_err());
     assert_eq!(history.messages(), original);
-    assert!(ConversationHistory::from_events(&[Event::MessageCommitted(
-        crate::contract::Message {
+    assert!(
+        ConversationHistory::from_events(&[Event::MessageCommitted(crate::contract::Message {
             role: MessageRole::User,
             text: "missing journal".into()
-        }
-    )])
-    .is_err());
+        })])
+        .is_err()
+    );
 }
 
 #[test]

@@ -44,10 +44,10 @@ impl Execution {
     }
 
     pub(crate) fn reissue(&mut self, identity: ToolCallIdentity) {
-        if let Phase::Tools(calls) = &mut self.phase {
-            if let Some(call) = calls.get_mut(&identity.call_id) {
-                call.identity = identity;
-            }
+        if let Phase::Tools(calls) = &mut self.phase
+            && let Some(call) = calls.get_mut(&identity.call_id)
+        {
+            call.identity = identity;
         }
     }
 

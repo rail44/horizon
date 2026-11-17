@@ -16,13 +16,13 @@
 use std::path::Path;
 
 use schemars::generate::SchemaSettings;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use horizon_board::wire::{
-    IngestReply, IngestRequest, LogError, LogHubHello, SubscribePoke, SubscribeRequest,
-    LOG_PROTOCOL_VERSION,
+    IngestReply, IngestRequest, LOG_PROTOCOL_VERSION, LogError, LogHubHello, SubscribePoke,
+    SubscribeRequest,
 };
-use horizon_wire::schema_check::{sort_object_keys, PROTOCOL_VERSION_KEY};
+use horizon_wire::schema_check::{PROTOCOL_VERSION_KEY, sort_object_keys};
 use horizon_wire::{ClientHello, HubError};
 
 const ARTIFACT_RELATIVE_PATH: &str = "schema/log-wire.json";

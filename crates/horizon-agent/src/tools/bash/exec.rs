@@ -386,6 +386,9 @@ fn finished(_identity: &ToolCallIdentity, output: Response) -> BashCompletion {
 
 fn note_undrained(value: &mut Response, drain_grace: Duration) {
     if let Some(output) = value.bash_mut() {
-        output.note = Some(format!("output capture stopped {}ms after the command ended: a background process is still holding the output pipe, so anything it prints later is not included", drain_grace.as_millis()));
+        output.note = Some(format!(
+            "output capture stopped {}ms after the command ended: a background process is still holding the output pipe, so anything it prints later is not included",
+            drain_grace.as_millis()
+        ));
     }
 }

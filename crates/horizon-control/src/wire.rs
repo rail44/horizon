@@ -15,8 +15,8 @@ use std::io::{BufRead, Write};
 use serde::Deserialize;
 
 use crate::contract::{
-    Envelope, EnvelopeBody, ErrorMessage, Hello, HelloAck, Invoke, Query, Rejected, Sessions,
-    State, CONTROL_VERSION,
+    CONTROL_VERSION, Envelope, EnvelopeBody, ErrorMessage, Hello, HelloAck, Invoke, Query,
+    Rejected, Sessions, State,
 };
 
 /// Explicit, non-panicking failure modes for [`read_envelope`]. Unlike

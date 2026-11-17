@@ -11,7 +11,7 @@ use horizon_agent::contract::ProviderId;
 use horizon_agent::contract::{
     Error as AgentError, Event, ProviderEvent, SessionId, SessionState, TurnEndReason,
 };
-use horizon_agent::frame::{agent_frame_from_events, AgentFrame, AgentFrameItem};
+use horizon_agent::frame::{AgentFrame, AgentFrameItem, agent_frame_from_events};
 #[cfg(test)]
 use horizon_agent::persistence::event_log::PersistedSessionContext;
 use horizon_agent::persistence::event_log::{Appender, Record, WriterHandle};
@@ -20,7 +20,7 @@ use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, DuckdbSt
 use horizon_agent::roles::RoleId;
 use horizon_agent::tools::cancelled_tool_call_result;
 
-use super::state::{lock_unpoisoned, AgentdState};
+use super::state::{AgentdState, lock_unpoisoned};
 use crate::worktree;
 
 /// `docs/agent-runtime-split-design.md` step 4, "agentd start": reads the
@@ -475,13 +475,13 @@ pub(crate) fn resume_session(
     } else {
         None
     };
-    if let Some(root) = &context.workspace_root {
-        if !root.is_dir() {
-            return Err(format!(
-                "Retained consultation directory {} is unavailable",
-                root.display()
-            ));
-        }
+    if let Some(root) = &context.workspace_root
+        && !root.is_dir()
+    {
+        return Err(format!(
+            "Retained consultation directory {} is unavailable",
+            root.display()
+        ));
     }
     let mut transitions = interrupted_input_outcomes(&events);
     transitions.extend([
@@ -996,12 +996,14 @@ mod tests {
         let mut appender = Appender::new(writer, SessionId::new(), None, None);
         let original = vec![Event::StateChanged(SessionState::Running)];
         let mut events = original.clone();
-        assert!(settle_interrupted_turn(
-            &mut appender,
-            &agent_frame_from_events(&events),
-            &mut events
-        )
-        .is_err());
+        assert!(
+            settle_interrupted_turn(
+                &mut appender,
+                &agent_frame_from_events(&events),
+                &mut events
+            )
+            .is_err()
+        );
         assert_eq!(events, original);
     }
 
@@ -1550,8 +1552,15 @@ mod projection_resume_tests {
         let running = Event::StateChanged(SessionState::Running);
         let terminated = Event::StateChanged(SessionState::Terminated);
         let explore = Some(RoleId(horizon_agent::roles::EXPLORE_ROLE_ID.to_string()));
-        let [dead, waiting_session, mid_turn, exploration, revived, dies_in_tail, tail_only] =
-            std::array::from_fn(|_| SessionId::new());
+        let [
+            dead,
+            waiting_session,
+            mid_turn,
+            exploration,
+            revived,
+            dies_in_tail,
+            tail_only,
+        ] = std::array::from_fn(|_| SessionId::new());
 
         append_sessions(
             &full_log,
@@ -1658,7 +1667,8 @@ mod projection_resume_tests {
     #[test]
     fn full_mode_resume_commits_fixups_while_the_rebuild_is_still_running() {
         // nextest runs every test in its own process, so this cannot leak.
-        std::env::set_var("HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS", "3000");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS", "3000") };
         let dir = tempfile::tempdir().unwrap();
         let (log, db) = (
             dir.path().join("events.jsonl"),

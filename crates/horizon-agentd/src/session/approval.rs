@@ -13,8 +13,8 @@ use horizon_agent::contract::{
 use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::{
-    resolve_approval, should_fold_completion, start_approval_gate, unattended_refusal_result,
     ApprovalCandidate, ApprovalDecision, ApprovalGate, ApprovalOutcome, ToolSessionState,
+    resolve_approval, should_fold_completion, start_approval_gate, unattended_refusal_result,
 };
 
 use super::events::{apply_and_send_session_events, send_session_event};
@@ -844,10 +844,11 @@ mod tests {
         }
         assert_eq!(live.events(), before);
         assert!(rx.try_recv().is_err());
-        assert!(live
-            .frame()
-            .actionable_approval(&retry.request.identity())
-            .is_some());
+        assert!(
+            live.frame()
+                .actionable_approval(&retry.request.identity())
+                .is_some()
+        );
         let approve = Command::ApproveToolCall {
             identity: retry.request.identity(),
         };
@@ -872,10 +873,12 @@ mod tests {
         );
         assert!(rx.try_recv().is_err());
         assert_eq!(replay.events(), accepted);
-        assert!(replay
-            .frame()
-            .actionable_approval(&retry.request.identity())
-            .is_none());
+        assert!(
+            replay
+                .frame()
+                .actionable_approval(&retry.request.identity())
+                .is_none()
+        );
     }
 
     #[test]

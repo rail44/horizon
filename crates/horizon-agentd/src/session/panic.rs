@@ -13,7 +13,7 @@ use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 use horizon_agent::persistence::event_log::Appender;
 use horizon_agent::roles::RoleId;
-use horizon_agent::runtime_panic::{catch_runtime_panic, PanicLocation, PanicReport};
+use horizon_agent::runtime_panic::{PanicLocation, PanicReport, catch_runtime_panic};
 
 use super::events::{apply_and_send_session_events, send_session_event};
 use super::resume::session_is_dead;
@@ -211,8 +211,8 @@ pub(super) fn record_uncaught_session_panic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::test_support::{drain_events, test_state};
     use crate::session::Connection;
+    use crate::session::test_support::{drain_events, test_state};
     use horizon_agent::frame::agent_frame_from_events;
     use horizon_agent::persistence::event_log::WriterHandle;
 
@@ -233,9 +233,11 @@ mod tests {
             .location
             .as_ref()
             .expect("the panic hook must retain the source location");
-        assert!(location
-            .file
-            .ends_with("crates/horizon-agentd/src/session/panic.rs"));
+        assert!(
+            location
+                .file
+                .ends_with("crates/horizon-agentd/src/session/panic.rs")
+        );
         assert!(location.line > 0);
         assert_eq!(
             failure.message(),

@@ -9,7 +9,7 @@ use crate::persistence::projection::duckdb::{
 };
 use crate::tools::state::RecallContext;
 use crate::tools::synchronous::execute_auto;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// A projection slot already holding `store`.
 fn ready_slot(store: Store) -> SharedDuckdbStore {
@@ -234,10 +234,12 @@ fn search_defaults_to_this_session_and_flags_it_as_own() {
     let hits = output["hits"].as_array().expect("hits array");
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0]["own_session"], true);
-    assert!(hits[0]["snippet"]
-        .as_str()
-        .unwrap()
-        .contains("widget in session a"));
+    assert!(
+        hits[0]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("widget in session a")
+    );
 
     let _ = std::fs::remove_file(path);
 }
@@ -306,10 +308,12 @@ fn search_with_an_explicit_session_id_hits_only_that_session() {
         hits[0]["own_session"], false,
         "a hit from another session must not be flagged as own"
     );
-    assert!(hits[0]["snippet"]
-        .as_str()
-        .unwrap()
-        .contains("widget in session b"));
+    assert!(
+        hits[0]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("widget in session b")
+    );
 
     let _ = std::fs::remove_file(path);
 }
@@ -751,10 +755,12 @@ fn search_without_query_and_without_turn_outcome_errors_clearly() {
     let output =
         execute_auto(&tool_state, "recall_search", &json!({})).expect("recall_search handled");
     assert_eq!(output["is_error"], true);
-    assert!(output["message"]
-        .as_str()
-        .unwrap()
-        .contains("query` or a `turn_outcome`"));
+    assert!(
+        output["message"]
+            .as_str()
+            .unwrap()
+            .contains("query` or a `turn_outcome`")
+    );
 
     let _ = std::fs::remove_file(path);
 }

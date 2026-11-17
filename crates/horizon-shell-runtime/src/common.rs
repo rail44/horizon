@@ -18,9 +18,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
-use horizon_wire::{HubError, WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES};
-use remoc::rtc;
+use horizon_wire::{HubError, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES, WireCodec};
 use remoc::RemoteSend;
+use remoc::rtc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -288,7 +288,7 @@ where
         Err(_elapsed) => {
             return Err(EstablishError::Silence(format!(
                 "{daemon} sent no remoc handshake within {timeout:?}"
-            )))
+            )));
         }
     };
     let conn_task = tokio::spawn(conn);

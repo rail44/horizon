@@ -2,7 +2,7 @@ use super::super::memory::MemoryCheckpoint;
 use super::*;
 use crate::config::RigAgentConfig;
 use crate::contract::ProviderEvent;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -59,7 +59,8 @@ async fn cap_summary_request_disables_tools_without_changing_session_config() {
     let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
     let request = tokio::spawn(serve_summary_request(listener));
     let key_var = "HORIZON_TEST_CAP_SUMMARY_KEY";
-    std::env::set_var(key_var, "local-test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(key_var, "local-test-key") };
     let (events_tx, events) = crossbeam_channel::unbounded();
     let mut state = SessionLoopState {
         config: RigAgentConfig {
@@ -148,9 +149,11 @@ async fn memory_reminder_is_bounded_and_resets_for_the_next_interaction() {
                 .count(),
             1
         );
-        assert!(emitted
-            .iter()
-            .any(|event| matches!(event, Event::TurnEnded(TurnEndReason::Completed))));
+        assert!(
+            emitted
+                .iter()
+                .any(|event| matches!(event, Event::TurnEnded(TurnEndReason::Completed)))
+        );
     }
     state.memory = None;
     state.handle_user_message("ordinary role".into()).await;
@@ -226,11 +229,13 @@ async fn accepted_memory_updates_and_no_update_declarations_satisfy_the_checkpoi
             event.clone().into_event().expect("conversation event"),
             Event::MemoryDigest(_)
         )));
-        assert!(state
-            .handle_memory_checkpoint(TurnCompletion::default())
-            .await
-            .unwrap()
-            .is_completing());
+        assert!(
+            state
+                .handle_memory_checkpoint(TurnCompletion::default())
+                .await
+                .unwrap()
+                .is_completing()
+        );
         assert!(
             events.try_recv().is_err(),
             "a satisfied checkpoint must not remind or report a miss"

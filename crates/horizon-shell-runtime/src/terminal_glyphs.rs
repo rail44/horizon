@@ -1424,17 +1424,21 @@ mod tests {
     fn box_draw_lines_extend_to_cell_edges() {
         let vertical =
             box_draw_geometry_for_char('\u{2551}', 10.0, 20.0, 14.0).expect("expected geometry");
-        assert!(vertical
-            .rects()
-            .iter()
-            .all(|rect| rect.top == 0.0 && rect.bottom == 1.0));
+        assert!(
+            vertical
+                .rects()
+                .iter()
+                .all(|rect| rect.top == 0.0 && rect.bottom == 1.0)
+        );
 
         let horizontal =
             box_draw_geometry_for_char('\u{2550}', 10.0, 20.0, 14.0).expect("expected geometry");
-        assert!(horizontal
-            .rects()
-            .iter()
-            .all(|rect| rect.left == 0.0 && rect.right == 1.0));
+        assert!(
+            horizontal
+                .rects()
+                .iter()
+                .all(|rect| rect.left == 0.0 && rect.right == 1.0)
+        );
     }
 
     #[test]

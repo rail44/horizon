@@ -10,7 +10,7 @@
 
 use std::io::{BufRead, Write};
 
-use horizon_control::contract::{Envelope, EnvelopeBody, Hello, Query, State, CONTROL_VERSION};
+use horizon_control::contract::{CONTROL_VERSION, Envelope, EnvelopeBody, Hello, Query, State};
 use horizon_control::wire::{self, WireError};
 
 use crate::commands::Request;

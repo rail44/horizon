@@ -183,13 +183,13 @@ async fn load_catalog() -> Option<Catalog> {
         .filter(|url| !url.is_empty())
         .unwrap_or_else(|| DEFAULT_CATALOG_URL.to_string());
     let cache = cache_path();
-    if let Some(body) = fetch(&url).await {
-        if let Some(catalog) = parse_off_thread(body.clone()).await {
-            if let Some(path) = &cache {
-                write_cache(path.clone(), body).await;
-            }
-            return Some(catalog);
+    if let Some(body) = fetch(&url).await
+        && let Some(catalog) = parse_off_thread(body.clone()).await
+    {
+        if let Some(path) = &cache {
+            write_cache(path.clone(), body).await;
         }
+        return Some(catalog);
     }
     let path = cache?;
     let body = read_cache(path.clone()).await?;
@@ -436,16 +436,21 @@ mod tests {
 
     #[test]
     fn the_cache_path_follows_the_override_then_the_cache_home() {
-        std::env::set_var(CATALOG_CACHE_VAR, "/elsewhere/catalog.json");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(CATALOG_CACHE_VAR, "/elsewhere/catalog.json") };
         assert_eq!(cache_path(), Some(PathBuf::from("/elsewhere/catalog.json")));
-        std::env::remove_var(CATALOG_CACHE_VAR);
-        std::env::set_var(XDG_CACHE_HOME_VAR, "/cache-home");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(CATALOG_CACHE_VAR) };
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(XDG_CACHE_HOME_VAR, "/cache-home") };
         assert_eq!(
             cache_path(),
             Some(PathBuf::from("/cache-home/horizon/models-dev-api.json"))
         );
-        std::env::remove_var(XDG_CACHE_HOME_VAR);
-        std::env::set_var(HOME_VAR, "/home/someone");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(XDG_CACHE_HOME_VAR) };
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(HOME_VAR, "/home/someone") };
         assert_eq!(
             cache_path(),
             Some(PathBuf::from(
@@ -463,8 +468,10 @@ mod tests {
     async fn live_catalog_knows_ollama_cloud() {
         let dir = std::env::temp_dir().join(format!("horizon-catalog-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var(CATALOG_CACHE_VAR, dir.join("catalog.json"));
-        std::env::remove_var(CATALOG_URL_VAR);
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(CATALOG_CACHE_VAR, dir.join("catalog.json")) };
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(CATALOG_URL_VAR) };
         let limits = catalog_limits("https://ollama.com/v1", "deepseek-v4.1-flash").await;
         println!("live catalog, ollama-cloud / deepseek-v4.1-flash: {limits:?}");
         println!(
@@ -486,8 +493,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let cache = dir.join("catalog.json");
         std::fs::write(&cache, document()).unwrap();
-        std::env::set_var(CATALOG_URL_VAR, "http://127.0.0.1:1/api.json");
-        std::env::set_var(CATALOG_CACHE_VAR, &cache);
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(CATALOG_URL_VAR, "http://127.0.0.1:1/api.json") };
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(CATALOG_CACHE_VAR, &cache) };
 
         assert_eq!(
             catalog_limits("https://ollama.com/v1", "glm-5.3-flash")

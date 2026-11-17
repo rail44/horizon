@@ -12,15 +12,15 @@ mod rank;
 mod store;
 pub mod wire;
 
-pub use model::{read_position_advances, Comment, Item};
-pub use store::{sample_envelopes, ListResult, Position, Store, StoreError};
+pub use model::{Comment, Item, read_position_advances};
+pub use store::{ListResult, Position, Store, StoreError, sample_envelopes};
 
 pub use store::SubscribeStream;
 
 // Re-exported for `horizon-logd`'s write path (the append logic that moved
 // there from this crate's `store`). These were crate-internal when the write
 // path lived here; now the daemon needs them.
-pub use event::{read_text, BoardEvent, Envelope, ReadReport, SCHEMA, VERSION};
+pub use event::{BoardEvent, Envelope, ReadReport, SCHEMA, VERSION, read_text};
 pub use model::{fold, sorted_by_rank, tree_order};
 pub use rank::between as rank_between;
 pub use store::read_events;

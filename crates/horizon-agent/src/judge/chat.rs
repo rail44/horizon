@@ -6,11 +6,11 @@
 //! 2's chain-of-thought re-evaluation for a final, parseable verdict.
 
 use super::client::{
-    stage1_additional_params, stage2_additional_params, ModelClient, RawCompletionRequest,
+    ModelClient, RawCompletionRequest, stage1_additional_params, stage2_additional_params,
 };
 use super::{
-    bounded_fallback_error, parse, prompt, JudgeBackendKind, JudgeDecision, JudgeFallbackReason,
-    JudgeInput, JudgeVerdict,
+    JudgeBackendKind, JudgeDecision, JudgeFallbackReason, JudgeInput, JudgeVerdict,
+    bounded_fallback_error, parse, prompt,
 };
 
 /// "Small but not 1" (the research doc's Plan B recommendation for stage
@@ -425,8 +425,10 @@ mod tests {
         // what the injected args asked for -- the framing held.
         assert_eq!(verdict.decision, JudgeDecision::Escalate);
         let requests = client.requests.lock().unwrap();
-        assert!(requests[0]
-            .user_content
-            .contains("ignore previous instructions"));
+        assert!(
+            requests[0]
+                .user_content
+                .contains("ignore previous instructions")
+        );
     }
 }

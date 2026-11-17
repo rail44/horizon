@@ -303,9 +303,11 @@ mod tests {
                 "entry {name} must be registered"
             );
         }
-        assert!(registry
-            .providers
-            .contains_key(&ProviderId("builtin.agent.mock".to_string())));
+        assert!(
+            registry
+                .providers
+                .contains_key(&ProviderId("builtin.agent.mock".to_string()))
+        );
 
         // The default entry ALSO answers under the standing shell-facing id
         // — a session spawn that names no provider keeps starting on the

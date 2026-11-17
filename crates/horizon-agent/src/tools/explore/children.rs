@@ -171,9 +171,9 @@ pub(super) fn remove_requester(requester: SessionId) {
 
 pub(super) fn remove_child(child: SessionId) {
     let mut registry = lock();
-    if let Some(entry) = registry.children.remove(&child) {
-        if let Some(pending) = registry.pending.get_mut(&entry.requester) {
-            pending.retain(|completion| completion.session_id != child);
-        }
+    if let Some(entry) = registry.children.remove(&child)
+        && let Some(pending) = registry.pending.get_mut(&entry.requester)
+    {
+        pending.retain(|completion| completion.session_id != child);
     }
 }

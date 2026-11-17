@@ -212,10 +212,10 @@ pub(crate) async fn list_model_ids(
         return cached;
     }
     let ids = fetch_model_ids(kind, &url, api_key).await;
-    if !ids.is_empty() {
-        if let Ok(mut map) = cache_listings().lock() {
-            map.insert(url, ids.clone());
-        }
+    if !ids.is_empty()
+        && let Ok(mut map) = cache_listings().lock()
+    {
+        map.insert(url, ids.clone());
     }
     ids
 }
@@ -332,7 +332,8 @@ mod tests {
             // environment would intercept the loopback request and make the
             // test depend on the machine it runs on.
             for var in ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
-                std::env::remove_var(var);
+                // FIXME: Audit that the environment access only happens in single-threaded code.
+                unsafe { std::env::remove_var(var) };
             }
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -408,8 +409,10 @@ mod tests {
     async fn the_entrys_own_key_variable_authenticates_the_lookup() {
         // OPENAI_API_KEY holds a key the mock rejects, so a lookup reading
         // it instead of the entry's own variable comes back `None`.
-        std::env::set_var(crate::config::OPENAI_API_KEY_VAR, "not-this-entrys-key");
-        std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_A", "entry-key");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(crate::config::OPENAI_API_KEY_VAR, "not-this-entrys-key") };
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_A", "entry-key") };
         let mock = ModelsMock::start("entry-key").await;
 
         let limits = model_limits(&config_on(
@@ -433,8 +436,10 @@ mod tests {
     async fn entries_differing_only_by_key_variable_do_not_share_an_answer() {
         // Same base URL and model, different key variables: the rejected
         // entry's `None` must not become the other entry's cached answer.
-        std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_A", "stale-key");
-        std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_B", "live-key");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_A", "stale-key") };
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_B", "live-key") };
         let mock = ModelsMock::start("live-key").await;
 
         assert_eq!(
@@ -463,7 +468,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_cached_answer_is_reused_for_the_same_entry() {
-        std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_A", "entry-key");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_A", "entry-key") };
         let mock = ModelsMock::start("entry-key").await;
         let config = config_on(&mock.base_url, "HORIZON_TEST_MODEL_LIMITS_KEY_A");
 
@@ -484,7 +490,8 @@ mod tests {
             RigAgentConfig::default().api_key_env,
             crate::config::OPENAI_API_KEY_VAR
         );
-        std::env::set_var(crate::config::OPENAI_API_KEY_VAR, "default-key");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(crate::config::OPENAI_API_KEY_VAR, "default-key") };
         let mock = ModelsMock::start("default-key").await;
 
         let limits = model_limits(&config_on(
@@ -507,7 +514,8 @@ mod tests {
     #[tokio::test]
     async fn an_anthropic_entry_is_never_asked_for_an_openai_listing() {
         // The entry's key must not reach an OpenAI-shaped endpoint.
-        std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_B", "live-key");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_B", "live-key") };
         let mock = ModelsMock::start("live-key").await;
         let anthropic = RigAgentConfig {
             kind: ProviderKind::Anthropic,
@@ -517,12 +525,14 @@ mod tests {
         assert_eq!(model_limits(&anthropic).await, None);
         // An openai-compatible entry on the same endpoint proves the mock
         // was reachable all along, and counts the requests it really got.
-        assert!(model_limits(&config_on(
-            &mock.base_url,
-            "HORIZON_TEST_MODEL_LIMITS_KEY_B"
-        ))
-        .await
-        .is_some());
+        assert!(
+            model_limits(&config_on(
+                &mock.base_url,
+                "HORIZON_TEST_MODEL_LIMITS_KEY_B"
+            ))
+            .await
+            .is_some()
+        );
         assert_eq!(
             mock.recorded().len(),
             1,
@@ -550,7 +560,8 @@ mod tests {
     /// nothing listens on the fetch URL.
     #[tokio::test]
     async fn a_listing_without_limits_defers_to_the_catalog() {
-        std::env::set_var("HORIZON_TEST_CATALOG_KEY", "catalog-key");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HORIZON_TEST_CATALOG_KEY", "catalog-key") };
         let mock = ModelsMock::start("catalog-key").await;
         let dir = std::env::temp_dir().join(format!("horizon-catalog-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -566,11 +577,15 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        std::env::set_var(
-            super::super::model_catalog::CATALOG_URL_VAR,
-            "http://127.0.0.1:1/api.json",
-        );
-        std::env::set_var(super::super::model_catalog::CATALOG_CACHE_VAR, &cache);
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe {
+            std::env::set_var(
+                super::super::model_catalog::CATALOG_URL_VAR,
+                "http://127.0.0.1:1/api.json",
+            )
+        };
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(super::super::model_catalog::CATALOG_CACHE_VAR, &cache) };
 
         let mut config = config_on(&mock.base_url, "HORIZON_TEST_CATALOG_KEY");
         config.model = "unlisted-model".to_string();

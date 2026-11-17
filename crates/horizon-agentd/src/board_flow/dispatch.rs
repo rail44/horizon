@@ -6,9 +6,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{operations, ReplyAddress};
+use super::{ReplyAddress, operations};
 use crate::outbox::log::Index;
-use crate::outbox::{parse_session, receipt, BoxFuture, Context, Reply, ReplySink, TriggerSource};
+use crate::outbox::{BoxFuture, Context, Reply, ReplySink, TriggerSource, parse_session, receipt};
 use crate::session::AgentdState;
 use horizon_agent::contract::{SessionId, SessionInput};
 use horizon_agent::persistence::event_log::Record;
@@ -169,7 +169,7 @@ impl ReplySink for BoardSink {
                     )
                 }
                 ReplyAddress::Session { .. } => {
-                    return Err("A session address belongs to the outbox core".into())
+                    return Err("A session address belongs to the outbox core".into());
                 }
             })
         })
@@ -301,8 +301,20 @@ async fn handle_event(
     match event {
         BoardEvent::ItemStored { id, .. } if previous.is_none() => {
             let organizer = operations::organizer_session(state, &project.root)?;
-            Ok(receipt(state,index,organizer,SessionInput{id:event_id,origin:"board".into(),
-                text:format!("Task #{id} was registered. Organize its priority and dependencies, then select useful task consultations."),reply_to:None,resume_work:false}))
+            Ok(receipt(
+                state,
+                index,
+                organizer,
+                SessionInput {
+                    id: event_id,
+                    origin: "board".into(),
+                    text: format!(
+                        "Task #{id} was registered. Organize its priority and dependencies, then select useful task consultations."
+                    ),
+                    reply_to: None,
+                    resume_work: false,
+                },
+            ))
         }
         BoardEvent::MessageAdded { id, message } if message.author == "owner" => {
             let task =
@@ -347,14 +359,39 @@ async fn handle_event(
                     // Explicitly ended sessions stay ended. A later owner post resumes
                     // them and the task skill rereads the current prerequisites.
                     if state.session_exists(target) {
-                        done &= receipt(state,index,target,SessionInput{id:format!("{event_id}:dependent:{}",dependent.id),origin:"board".into(),
-                            text:format!("Prerequisite #{id} was closed. It may have been completed or withdrawn. Reread task #{} and all prerequisites before deciding what to do.",dependent.id),reply_to:None,resume_work:false});
+                        done &= receipt(
+                            state,
+                            index,
+                            target,
+                            SessionInput {
+                                id: format!("{event_id}:dependent:{}", dependent.id),
+                                origin: "board".into(),
+                                text: format!(
+                                    "Prerequisite #{id} was closed. It may have been completed or withdrawn. Reread task #{} and all prerequisites before deciding what to do.",
+                                    dependent.id
+                                ),
+                                reply_to: None,
+                                resume_work: false,
+                            },
+                        );
                     }
                 }
             }
             let organizer = operations::organizer_session(state, &project.root)?;
-            done &= receipt(state,index,organizer,SessionInput{id:format!("{event_id}:organizer"),origin:"board".into(),
-                text:format!("Task #{id} was closed. It may have been completed or withdrawn. Reassess the current priorities, prerequisites, and useful parallel work."),reply_to:None,resume_work:false});
+            done &= receipt(
+                state,
+                index,
+                organizer,
+                SessionInput {
+                    id: format!("{event_id}:organizer"),
+                    origin: "board".into(),
+                    text: format!(
+                        "Task #{id} was closed. It may have been completed or withdrawn. Reassess the current priorities, prerequisites, and useful parallel work."
+                    ),
+                    reply_to: None,
+                    resume_work: false,
+                },
+            );
             Ok(done)
         }
         _ => Ok(true),
@@ -422,9 +459,11 @@ mod retry_tests {
             length: 100,
             pending: true,
         };
-        assert!(project
-            .finish_pass(12, false, Err("temporary logd failure".into()))
-            .is_err());
+        assert!(
+            project
+                .finish_pass(12, false, Err("temporary logd failure".into()))
+                .is_err()
+        );
         assert_eq!(project.cursor, 7);
         assert!(project.pending);
         project.finish_pass(12, false, Ok(())).unwrap();

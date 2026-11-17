@@ -13,12 +13,12 @@
 
 use std::path::Path;
 
-use schemars::generate::SchemaSettings;
 use schemars::JsonSchema;
-use serde_json::{json, Value};
+use schemars::generate::SchemaSettings;
+use serde_json::{Value, json};
 
 use horizon_acp::*;
-use horizon_wire::schema_check::{sort_object_keys, PROTOCOL_VERSION_KEY};
+use horizon_wire::schema_check::{PROTOCOL_VERSION_KEY, sort_object_keys};
 
 const ARTIFACT_RELATIVE_PATH: &str = "schema/acp-ext-wire.json";
 

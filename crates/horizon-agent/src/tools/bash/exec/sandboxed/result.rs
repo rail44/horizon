@@ -345,10 +345,12 @@ mod tests {
             BashCompletion::FilesystemDenied { result, .. } => result,
             _ => panic!("the fixture's filesystem denial must yield a filesystem retry"),
         };
-        assert!(result.output["network_guidance"]
-            .as_str()
-            .unwrap()
-            .contains("insteadOf"));
+        assert!(
+            result.output["network_guidance"]
+                .as_str()
+                .unwrap()
+                .contains("insteadOf")
+        );
     }
     use crate::tools::bash::BashCompletion;
     use horizon_sandbox::{
@@ -446,10 +448,12 @@ mod tests {
             result.output["ungrantable_filesystem_paths"][0]["path"],
             "/"
         );
-        assert!(result.output["note"]
-            .as_str()
-            .unwrap()
-            .contains("output capture stopped"));
+        assert!(
+            result.output["note"]
+                .as_str()
+                .unwrap()
+                .contains("output capture stopped")
+        );
         assert_eq!(cwd, PathBuf::from("/workspace/next"));
     }
 
@@ -493,14 +497,16 @@ mod tests {
                     "/workspace"
                 })
             );
-            assert!(result.output["message"]
-                .as_str()
-                .unwrap()
-                .contains(if killed {
-                    "timed out"
-                } else {
-                    "failed to wait"
-                }));
+            assert!(
+                result.output["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(if killed {
+                        "timed out"
+                    } else {
+                        "failed to wait"
+                    })
+            );
             assert_eq!(
                 cwd,
                 PathBuf::from(if killed {
@@ -533,10 +539,12 @@ mod tests {
             assert!(result.output.get("note").is_none());
             if raw_status == 9 {
                 assert_eq!(cwd, PathBuf::from("/workspace/next"));
-                assert!(result.output["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains("signal 9"));
+                assert!(
+                    result.output["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("signal 9")
+                );
             } else {
                 assert_eq!(result.output["exit_code"], raw_status >> 8);
                 assert_eq!(cwd, PathBuf::from("/workspace/next"));

@@ -1,5 +1,5 @@
 //! Sandboxed bash: prepare authority, capture execution, then classify the result.
-use super::{failed_output, finished, infrastructure_output, BashCompletion};
+use super::{BashCompletion, failed_output, finished, infrastructure_output};
 use crate::config::BashToolConfig;
 use crate::tools::bash::registry::Registration;
 use crate::tools::network::SessionNetworkProxy;

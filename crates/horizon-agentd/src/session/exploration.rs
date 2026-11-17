@@ -9,7 +9,7 @@ use horizon_agent::hosting::AgentWireEvent;
 
 use super::events::send_session_event;
 use super::spawn::spawn_session_thread;
-use super::state::{lock_unpoisoned, AgentdState};
+use super::state::{AgentdState, lock_unpoisoned};
 
 /// `horizon-agent`'s `task` seam (`docs/agent-explore-design.md`),
 /// implemented against this daemon's own session hosting: spawn a peer
@@ -111,8 +111,8 @@ mod tests {
     use horizon_agent::contract::{Event, ToolCallId, ToolCallRequest};
     use horizon_agent::live::LiveState;
     use horizon_agent::tools::{
-        execute_agent_tool, register_session_runtime, unregister_session_runtime, Execution,
-        RecallContext, ToolCompletion, ToolSessionState,
+        Execution, RecallContext, ToolCompletion, ToolSessionState, execute_agent_tool,
+        register_session_runtime, unregister_session_runtime,
     };
     use std::time::Duration;
 
@@ -364,8 +364,8 @@ mod tests {
     fn child_retirement_can_reenter_the_session_table_after_its_parent_entry_is_gone() {
         use horizon_agent::tools::{ExplorationHost, StartedExploration};
         use std::sync::{
-            atomic::{AtomicBool, Ordering},
             Mutex,
+            atomic::{AtomicBool, Ordering},
         };
         struct ChildHost {
             state: Arc<AgentdState>,

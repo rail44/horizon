@@ -1,8 +1,8 @@
 use super::*;
 use crate::contract::{
-    event_kind, ApprovalKind, ApprovalRequest, Event, Message, MessageRole, OccurrenceId,
-    ProviderId, ProviderRequestSent, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
-    TurnEndReason,
+    ApprovalKind, ApprovalRequest, Event, Message, MessageRole, OccurrenceId, ProviderId,
+    ProviderRequestSent, SessionState, ToolCallId, ToolCallRequest, ToolCallResult, TurnEndReason,
+    event_kind,
 };
 use crate::roles::RoleId;
 use duckdb::params;
@@ -140,22 +140,30 @@ fn persists_provider_request_lifecycle_events_without_a_dedicated_projection() {
     assert_eq!(events[2].event_kind, "provider_request_finished");
     assert_eq!(events[2].event, Event::ProviderRequestFinished);
 
-    assert!(store
-        .messages_for_session(session_id)
-        .expect("messages")
-        .is_empty());
-    assert!(store
-        .tool_calls_for_session(session_id)
-        .expect("tool calls")
-        .is_empty());
-    assert!(store
-        .tool_results_for_session(session_id)
-        .expect("tool results")
-        .is_empty());
-    assert!(store
-        .approvals_for_session(session_id)
-        .expect("approvals")
-        .is_empty());
+    assert!(
+        store
+            .messages_for_session(session_id)
+            .expect("messages")
+            .is_empty()
+    );
+    assert!(
+        store
+            .tool_calls_for_session(session_id)
+            .expect("tool calls")
+            .is_empty()
+    );
+    assert!(
+        store
+            .tool_results_for_session(session_id)
+            .expect("tool results")
+            .is_empty()
+    );
+    assert!(
+        store
+            .approvals_for_session(session_id)
+            .expect("approvals")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -388,15 +396,17 @@ fn rebuilds_query_projections_from_durable_events() {
             ",
         )
         .expect("clear projections");
-    assert!(store
-        .session_snapshots()
-        .expect("empty snapshots")
-        .iter()
-        .all(|snapshot| {
-            snapshot.message_count == 0
-                && snapshot.tool_call_count == 0
-                && snapshot.approval_count == 0
-        }));
+    assert!(
+        store
+            .session_snapshots()
+            .expect("empty snapshots")
+            .iter()
+            .all(|snapshot| {
+                snapshot.message_count == 0
+                    && snapshot.tool_call_count == 0
+                    && snapshot.approval_count == 0
+            })
+    );
 
     store.rebuild_projections().expect("rebuild projections");
     let snapshots = store.session_snapshots().expect("snapshots");
@@ -1197,7 +1207,7 @@ fn rebuild_and_live_append_produce_identical_label_rows() {
 #[test]
 fn live_projection_reflects_writer_thread_appends_through_the_shared_handle() {
     use crate::persistence::event_log::{
-        Record, WriterHandle, WriterInit, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION,
+        AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION, Record, WriterHandle, WriterInit,
     };
 
     let event_log_path = std::env::temp_dir().join(format!(
@@ -1551,9 +1561,11 @@ fn session_context_round_trips_and_the_last_non_null_wins() {
     }
     let rebuilt = store.session_records(session_id, 3).unwrap();
     assert_eq!(rebuilt.len(), 4);
-    assert!(rebuilt
-        .iter()
-        .all(|record| record.session_context.as_ref() == Some(&second)));
+    assert!(
+        rebuilt
+            .iter()
+            .all(|record| record.session_context.as_ref() == Some(&second))
+    );
 }
 
 /// Apart from the context (every rebuilt record carries the session's

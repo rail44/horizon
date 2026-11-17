@@ -343,10 +343,10 @@ impl Workspace {
         let mut session_ids = Vec::new();
         self.panes.retain(|pane| {
             if pane_ids.contains(&pane.id) {
-                if let Some(session_id) = pane.session_id {
-                    if !session_ids.contains(&session_id) {
-                        session_ids.push(session_id);
-                    }
+                if let Some(session_id) = pane.session_id
+                    && !session_ids.contains(&session_id)
+                {
+                    session_ids.push(session_id);
                 }
                 false
             } else {

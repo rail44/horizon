@@ -150,9 +150,11 @@ async fn an_answer_is_recorded_once_and_suspends_an_answered_thread() {
     assert_eq!(answer.body.value, "The sandbox helper.");
     assert_eq!(answer.creator, Agent::session(session.as_uuid()));
     assert!(agent::unanswered(&threads[0]).is_empty());
-    assert!(receiver
-        .try_iter()
-        .any(|command| matches!(command, Command::Suspend)));
+    assert!(
+        receiver
+            .try_iter()
+            .any(|command| matches!(command, Command::Suspend))
+    );
 }
 
 #[tokio::test]
@@ -190,9 +192,11 @@ async fn a_thread_with_a_newer_comment_is_not_suspended() {
         )
         .await
         .unwrap();
-    assert!(!receiver
-        .try_iter()
-        .any(|command| matches!(command, Command::Suspend)));
+    assert!(
+        !receiver
+            .try_iter()
+            .any(|command| matches!(command, Command::Suspend))
+    );
 }
 
 #[test]
@@ -201,9 +205,11 @@ fn registration_adds_the_role_skill_and_tools_once() {
     register();
     let role = horizon_agent::roles::resolve(&RoleId(THREAD_ROLE_ID.into())).unwrap();
     assert!(role.unattended);
-    assert!(!horizon_agent::roles::user_launchable()
-        .iter()
-        .any(|role| role.id == THREAD_ROLE_ID));
+    assert!(
+        !horizon_agent::roles::user_launchable()
+            .iter()
+            .any(|role| role.id == THREAD_ROLE_ID)
+    );
     // Each wiki tool id is taken now.
     for tool in ["wiki_list", "wiki_read", "wiki_write", "wiki_edit"] {
         let again = ExternalTool {
@@ -275,8 +281,10 @@ async fn a_thread_session_is_spawned_then_resumed_after_a_suspend() {
     assert!(state.session_exists(session));
     state.writer().unwrap().flush().unwrap();
     let history = state.flushed_session_records(session).unwrap();
-    assert!(history
-        .iter()
-        .any(|record| matches!(record.event, Event::SessionResumed)));
+    assert!(
+        history
+            .iter()
+            .any(|record| matches!(record.event, Event::SessionResumed))
+    );
     state.send_command(session, Command::Shutdown);
 }

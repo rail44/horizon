@@ -1,19 +1,19 @@
 //! Snapshot thread-safe job inputs, enqueue them, and annotate their completion.
 
 use super::{
-    exec, git, registry, ApprovalSource, BashCompletion, HostExecutionApproval,
-    SandboxedApprovalOrigin,
+    ApprovalSource, BashCompletion, HostExecutionApproval, SandboxedApprovalOrigin, exec, git,
+    registry,
 };
 use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallIdentity};
+use crate::tools::ToolSessionState;
 use crate::tools::input::{Bash, PreparedCall};
 use crate::tools::network::SessionNetworkProxy;
+use crate::tools::output::{Response, error as error_output};
 use crate::tools::output::{
     annotate_auto_approval, annotate_domain_approval, annotate_filesystem_grant_approval,
     annotate_git_operation_approval, annotate_host_execution_approval, annotate_sandboxed,
 };
-use crate::tools::output::{error as error_output, Response};
-use crate::tools::ToolSessionState;
 use crossbeam_channel::Sender;
 #[cfg(test)]
 use serde_json::Value;
@@ -53,9 +53,9 @@ impl BashJob {
     fn enqueue(
         self,
         work: impl FnOnce(&Self, &registry::Registration) -> BashCompletion
-            + Send
-            + std::panic::UnwindSafe
-            + 'static,
+        + Send
+        + std::panic::UnwindSafe
+        + 'static,
     ) {
         let registration =
             registry::Registration::for_execution(self.session_id, self.identity.clone());
@@ -398,7 +398,7 @@ mod tests {
     use super::*;
     use crate::config::AgentToolsConfig;
     use crate::contract::ToolCallId;
-    use crate::tools::{session_tool_work_settled, RecallContext};
+    use crate::tools::{RecallContext, session_tool_work_settled};
     use crossbeam_channel::unbounded;
     use std::time::{Duration, Instant};
 

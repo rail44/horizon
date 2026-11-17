@@ -13,12 +13,12 @@ pub use receipt::*;
 pub use tool_call::*;
 
 pub use crate::agent_model::{
-    aggregate_receipt, build_tool_call_views, group_into_turns, segment_bursts, tool_call_source,
-    ToolCallView,
+    ToolCallView, aggregate_receipt, build_tool_call_views, group_into_turns, segment_bursts,
+    tool_call_source,
 };
 pub use horizon_agent::transcript::{
-    cap_lines_head, cap_lines_tail, classify, edit_entries, reconstruct_line_diff, str_field,
-    DiffLine, DiffLineKind,
+    DiffLine, DiffLineKind, cap_lines_head, cap_lines_tail, classify, edit_entries,
+    reconstruct_line_diff, str_field,
 };
 
 /// `1 {singular}` / `{count} {plural}`.

@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use horizon_board::wire::{
-    log_version_range, IngestReply, IngestRequest, LogError, LogHub, LogHubHello, SubscribePoke,
+    IngestReply, IngestRequest, LogError, LogHub, LogHubHello, SubscribePoke, log_version_range,
 };
-use horizon_wire::{negotiate_hello, ClientHello, HelloGate, HubError};
+use horizon_wire::{ClientHello, HelloGate, HubError, negotiate_hello};
 
 use crate::subscribers::SubscriberRegistry;
 
@@ -95,7 +95,7 @@ impl LogHub for Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_board::wire::{log_client_hello, LOG_PROTOCOL_VERSION};
+    use horizon_board::wire::{LOG_PROTOCOL_VERSION, log_client_hello};
     use horizon_wire::VersionRange;
 
     fn test_hub() -> Hub {

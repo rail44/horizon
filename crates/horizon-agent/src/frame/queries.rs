@@ -188,7 +188,7 @@ impl AgentFrame {
     fn items_since_latest_request(
         &self,
         call_id: &ToolCallId,
-    ) -> impl Iterator<Item = &AgentFrameItem> {
+    ) -> impl Iterator<Item = &AgentFrameItem> + use<'_> {
         let start = self
             .items
             .iter()
@@ -529,8 +529,8 @@ mod field_scoped_reads_tests {
     }
 
     #[test]
-    fn actionable_pending_approval_call_ids_in_still_excludes_a_ghost_once_a_later_request_has_started(
-    ) {
+    fn actionable_pending_approval_call_ids_in_still_excludes_a_ghost_once_a_later_request_has_started()
+     {
         // The realistic post-fix shape of the ghost repro: an earlier
         // approval never got decided before its own turn ended (a ghost),
         // and a later turn's request was since approved -- its

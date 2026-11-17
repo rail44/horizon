@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::Sender;
 
@@ -16,8 +16,8 @@ use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
 use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::roles::RoleId;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Notify;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::worktree::WorktreeInfo;
 

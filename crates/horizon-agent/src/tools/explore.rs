@@ -205,7 +205,7 @@ pub(crate) fn start(
             return synchronous(
                 request,
                 error_output(format!("could not start a task session: {message}")),
-            )
+            );
         }
     };
 
@@ -395,7 +395,7 @@ fn synchronous(_request: &ToolCallRequest, output: Response) -> ToolOutput {
     output.into()
 }
 
-use super::output::{error as error_output, Response, TaskOutput, TaskReport};
+use super::output::{Response, TaskOutput, TaskReport, error as error_output};
 
 /// Reasoning-close tags a serving layer can leak into an assistant message
 /// with no opening tag anywhere -- the `</mm:think>` shape observed

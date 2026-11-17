@@ -1,7 +1,7 @@
 [package]
 name = "horizon-shell-runtime"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # The shell's side of the two daemons, apart from any UI framework: the
 # eager clients of `horizon-agentd` and `horizon-terminald`, their route

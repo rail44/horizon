@@ -4,17 +4,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::Client;
 use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
-use agent_client_protocol::Client;
+use agent_client_protocol::v2::schema as v2;
 use horizon_acp as acp;
 use horizon_agent::contract::{ApprovalRequest, Command, SessionId};
 use horizon_agent::hosting::{AgentWireEvent, AttachmentEnd};
 use tokio::sync::{mpsc, oneshot};
 
-use super::mapping::{self, horizon_meta, Mapper, Outgoing};
-use super::{call_error, Shared};
+use super::mapping::{self, Mapper, Outgoing, horizon_meta};
+use super::{Shared, call_error};
 use crate::session::{AttachmentLease, Bootstrap};
 
 /// The request that opened the attachment; answered by the pump.

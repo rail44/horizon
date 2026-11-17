@@ -4,7 +4,7 @@ use super::*;
 use crate::contract::{ToolCallId, ToolCallRequest, ToolCallResult};
 use crate::frame::{agent_frame_from_events, tool_call_occurrences};
 use crate::persistence::projection::duckdb::Store;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn old_record(sequence: u64, session_id: SessionId, event: Value) -> Value {
     json!({
@@ -129,9 +129,11 @@ fn converted_history_rebuilds_exact_execution_rows_and_preserves_the_source() {
         calls[0].request.occurrence_id,
         calls[1].request.occurrence_id
     );
-    assert!(calls
-        .iter()
-        .all(|call| call.started && call.result.is_some()));
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.started && call.result.is_some())
+    );
     let store = Store::open_in_memory().unwrap();
     let imported = store
         .replace_from_event_log_records(report.records)

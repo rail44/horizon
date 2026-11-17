@@ -26,11 +26,11 @@ pub mod socket;
 pub mod spawn;
 
 pub use channels::{
-    channel_schema, receive_pump, CappedReceiver, CappedWatchReceiver, CHANNEL_BUFFER,
-    COMMAND_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES,
-    TERMINAL_EVENT_MAX_ITEM_BYTES,
+    CHANNEL_BUFFER, COMMAND_MAX_ITEM_BYTES, CappedReceiver, CappedWatchReceiver,
+    FRAME_MAX_ITEM_BYTES, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES,
+    TERMINAL_EVENT_MAX_ITEM_BYTES, channel_schema, receive_pump,
 };
 pub use codec::{DecodeSkipLog, WireCodec};
-pub use hub::{negotiate_hello, HelloGate, HubError};
+pub use hub::{HelloGate, HubError, negotiate_hello};
 pub use negotiate::{ClientHello, VersionRange};
 pub use session::SessionId;

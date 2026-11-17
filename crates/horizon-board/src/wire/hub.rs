@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use horizon_wire::{ClientHello, HubError, VersionRange};
 
 use super::{
-    IngestReply, IngestRequest, LogHubHello, LOG_PROTOCOL_VERSION,
+    IngestReply, IngestRequest, LOG_PROTOCOL_VERSION, LogHubHello,
     MIN_SUPPORTED_LOG_PROTOCOL_VERSION,
 };
 

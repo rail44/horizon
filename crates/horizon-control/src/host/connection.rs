@@ -14,7 +14,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
-use crate::contract::{Envelope, EnvelopeBody, ErrorMessage, HelloAck, Rejected, CONTROL_VERSION};
+use crate::contract::{CONTROL_VERSION, Envelope, EnvelopeBody, ErrorMessage, HelloAck, Rejected};
 use crate::wire::{self, WireError};
 
 use super::executor::{ControlExecutor, ControlRequest};

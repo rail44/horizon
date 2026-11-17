@@ -4,9 +4,9 @@
 use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
+use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client, Error, JsonRpcRequest};
 use horizon_acp as acp;
 use tokio::net::UnixStream;
@@ -79,7 +79,7 @@ pub async fn connect_acp(stream: UnixStream) -> AcpClient {
     let (cx_tx, cx_rx) = oneshot::channel();
 
     macro_rules! notification {
-        ($builder:expr, $ty:ty, $variant:ident) => {{
+        ($builder:expr_2021, $ty:ty, $variant:ident) => {{
             let tx = inbox_tx.clone();
             $builder.on_receive_notification(
                 async move |notification: $ty, _cx: V2ConnectionTo<Agent>| {
@@ -91,7 +91,7 @@ pub async fn connect_acp(stream: UnixStream) -> AcpClient {
         }};
     }
     macro_rules! request {
-        ($builder:expr, $ty:ty, $variant:ident) => {{
+        ($builder:expr_2021, $ty:ty, $variant:ident) => {{
             let tx = inbox_tx.clone();
             $builder.on_receive_request(
                 async move |request: $ty,

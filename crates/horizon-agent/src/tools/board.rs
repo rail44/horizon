@@ -3,7 +3,7 @@
 //! identity; models cannot impersonate another author. Operating policy lives
 //! in the board skills, while the host validates ordinary data operations.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::execution::ToolOutput;
 use crate::contract::{Event, SessionId, ToolCallRequest};

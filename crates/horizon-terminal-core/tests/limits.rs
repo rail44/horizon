@@ -20,7 +20,7 @@
 use horizon_terminal_core::{
     TerminalColor, TerminalLine, TerminalScrollWindow, TerminalSpan, TerminalUnderline,
 };
-use horizon_wire::{WireCodec, TERMINAL_EVENT_MAX_ITEM_BYTES};
+use horizon_wire::{TERMINAL_EVENT_MAX_ITEM_BYTES, WireCodec};
 use remoc::codec::Codec;
 use remoc::prelude::*;
 use tokio::net::UnixStream;

@@ -33,15 +33,14 @@ pub(crate) fn policy_events(
     _session: SessionId,
 ) -> Vec<Event> {
     let mut events = vec![event.clone()];
-    if let Event::ToolCallRequested(request) = event {
-        if let crate::policy::ToolPlan::Approval(approval) =
+    if let Event::ToolCallRequested(request) = event
+        && let crate::policy::ToolPlan::Approval(approval) =
             crate::policy::plan_tool_call(state, request)
-        {
-            events.extend([
-                Event::ApprovalRequested(*approval),
-                Event::StateChanged(crate::contract::SessionState::WaitingForApproval),
-            ]);
-        }
+    {
+        events.extend([
+            Event::ApprovalRequested(*approval),
+            Event::StateChanged(crate::contract::SessionState::WaitingForApproval),
+        ]);
     }
     events
 }

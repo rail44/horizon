@@ -158,13 +158,17 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
                 if message == "Session persistence is unavailable"
             );
             assert_eq!(tool_state.workspace_root(), Some(root.as_path()));
-            assert!(lock_unpoisoned(&state.sessions)[&session_id]
-                .worktree
-                .is_none());
-            assert!(!root
-                .join(".horizon/worktrees")
-                .join(crate::worktree::short_slug(session_id.as_uuid()))
-                .exists());
+            assert!(
+                lock_unpoisoned(&state.sessions)[&session_id]
+                    .worktree
+                    .is_none()
+            );
+            assert!(
+                !root
+                    .join(".horizon/worktrees")
+                    .join(crate::worktree::short_slug(session_id.as_uuid()))
+                    .exists()
+            );
             assert!(records.is_empty());
             assert!(outgoing.try_recv().is_err());
         }
@@ -216,8 +220,10 @@ fn environment_rebuild_retains_additional_grants_without_granting_the_old_root()
         std::slice::from_ref(&grant)
     );
     assert_eq!(context.filesystem_grants, [grant]);
-    assert!(!context
-        .filesystem_grants
-        .iter()
-        .any(|grant| grant.path == old_root));
+    assert!(
+        !context
+            .filesystem_grants
+            .iter()
+            .any(|grant| grant.path == old_root)
+    );
 }

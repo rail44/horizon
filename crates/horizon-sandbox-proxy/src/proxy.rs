@@ -5,8 +5,8 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use hudsucker::hyper_util::client::legacy::connect::HttpConnector;
 use hudsucker::Proxy;
+use hudsucker::hyper_util::client::legacy::connect::HttpConnector;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;

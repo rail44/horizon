@@ -1,7 +1,7 @@
 //! Ordinary board writes against isolated temporary logs (no daemon sockets).
 use horizon_board::{
-    wire::{IngestReply, IngestRequest as Request, LogError},
     Comment, Position, Store,
+    wire::{IngestReply, IngestRequest as Request, LogError},
 };
 use horizon_logd::writer::perform;
 use std::path::PathBuf;
@@ -71,18 +71,20 @@ fn rejected_and_duplicate_writes_leave_bytes_and_sequence_unchanged() {
         .unwrap();
     assert_eq!(sequences, [2]);
     let before = std::fs::read(&b.0).unwrap();
-    assert!(b
-        .write(Request::SetParent {
+    assert!(
+        b.write(Request::SetParent {
             id,
             parent: Some(id),
             position: Position::Bottom,
         })
-        .is_err());
-    assert!(b
-        .write(Request::PostMessage { id, message })
-        .unwrap()
-        .1
-        .is_empty());
+        .is_err()
+    );
+    assert!(
+        b.write(Request::PostMessage { id, message })
+            .unwrap()
+            .1
+            .is_empty()
+    );
     assert_eq!(std::fs::read(&b.0).unwrap(), before);
     let (_, sequences) = b
         .write(Request::Comment {
@@ -188,11 +190,13 @@ fn closing_and_reopening_update_status_atomically_without_interpreting_it() {
     assert_eq!(sequences.len(), 1);
     assert!(b.item(id).is_closed);
     assert_eq!(b.item(id).status, "withdrawn by owner");
-    assert!(Store::at(b.0.clone())
-        .list(None, false)
-        .unwrap()
-        .items
-        .is_empty());
+    assert!(
+        Store::at(b.0.clone())
+            .list(None, false)
+            .unwrap()
+            .items
+            .is_empty()
+    );
     assert_eq!(
         Store::at(b.0.clone()).list(None, true).unwrap().items.len(),
         1
@@ -276,54 +280,60 @@ fn rank_changes_only_sibling_order_and_preserves_dependencies() {
     assert!(b.item(second).rank < b.item(first).rank);
     assert_eq!(b.item(first).depends_on, vec![other]);
     assert_eq!(b.item(other), untouched);
-    assert!(b
-        .write(Request::MoveItem {
+    assert!(
+        b.write(Request::MoveItem {
             id: first,
             position: Position::After(other)
         })
-        .is_err());
-    assert!(b
-        .write(Request::MoveItem {
+        .is_err()
+    );
+    assert!(
+        b.write(Request::MoveItem {
             id: first,
             position: Position::After(first)
         })
-        .is_err());
+        .is_err()
+    );
 }
 #[test]
 fn relationships_reject_missing_references_and_cycles() {
     let b = Board::new();
     let a = b.add(None);
     let c = b.add(Some(a));
-    assert!(b
-        .write(Request::SetParent {
+    assert!(
+        b.write(Request::SetParent {
             id: a,
             parent: Some(c),
             position: Position::Bottom
         })
-        .is_err());
+        .is_err()
+    );
     b.write(Request::SetDependencies {
         id: a,
         depends_on: vec![c],
     })
     .unwrap();
-    assert!(b
-        .write(Request::SetDependencies {
+    assert!(
+        b.write(Request::SetDependencies {
             id: c,
             depends_on: vec![a]
         })
-        .is_err());
-    assert!(b
-        .write(Request::SetDependencies {
+        .is_err()
+    );
+    assert!(
+        b.write(Request::SetDependencies {
             id: c,
             depends_on: vec![99]
         })
-        .is_err());
-    assert!(b
-        .write(Request::SetDependencies {
+        .is_err()
+    );
+    assert!(
+        b.write(Request::SetDependencies {
             id: c,
             depends_on: vec![a, a]
         })
-        .is_err());
+        .is_err()
+    );
 }
 #[test]
 fn closure_is_independent_of_project_status_and_session_binding_is_atomic() {
@@ -355,11 +365,13 @@ fn closure_is_independent_of_project_status_and_session_binding_is_atomic() {
         .unwrap();
     assert!(reply.1.is_empty());
     assert_eq!(b.item(id).session_id.as_deref(), Some("first"));
-    assert!(Store::at(b.0.clone())
-        .list(None, false)
-        .unwrap()
-        .items
-        .is_empty());
+    assert!(
+        Store::at(b.0.clone())
+            .list(None, false)
+            .unwrap()
+            .items
+            .is_empty()
+    );
     assert_eq!(b.item(id).status, "waiting for artifact");
 }
 #[test]
@@ -410,22 +422,24 @@ fn stable_message_delivery_preserves_duplicates_and_read_prefix() {
         message: message.clone(),
     })
     .unwrap();
-    assert!(b
-        .write(Request::PostMessage {
+    assert!(
+        b.write(Request::PostMessage {
             id,
             message: message.clone()
         })
         .unwrap()
         .1
-        .is_empty());
+        .is_empty()
+    );
     let mut conflicting = message;
     conflicting.text = "changed".into();
-    assert!(b
-        .write(Request::PostMessage {
+    assert!(
+        b.write(Request::PostMessage {
             id,
             message: conflicting
         })
-        .is_err());
+        .is_err()
+    );
     b.write(Request::Comment {
         id,
         author: "owner".into(),
@@ -451,19 +465,22 @@ fn stable_message_delivery_preserves_duplicates_and_read_prefix() {
         Store::at(b.0.clone()).read_positions("owner").unwrap()[&id],
         last.clone()
     );
-    assert!(Store::at(b.0.clone())
-        .read_positions("another reader")
-        .unwrap()
-        .is_empty());
-    assert!(b
-        .write(Request::MarkRead {
+    assert!(
+        Store::at(b.0.clone())
+            .read_positions("another reader")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        b.write(Request::MarkRead {
             id,
             reader: "owner".into(),
             message_id: last.clone()
         })
         .unwrap()
         .1
-        .is_empty());
+        .is_empty()
+    );
     b.write(Request::MarkRead {
         id,
         reader: "owner".into(),
@@ -509,7 +526,7 @@ fn import_high_water_survives_without_creating_runnable_events() {
 
 #[test]
 fn read_prefix_replays_sparse_events_and_never_regresses() {
-    use horizon_board::{read_position_advances, BoardEvent, Envelope, SCHEMA, VERSION};
+    use horizon_board::{BoardEvent, Envelope, SCHEMA, VERSION, read_position_advances};
     use std::io::Write;
     let board = Board::new();
     let task = board.add(None);
@@ -564,23 +581,27 @@ fn read_prefix_replays_sparse_events_and_never_regresses() {
     assert!(!read_position_advances(&item, Some("middle"), "a"));
     assert!(!read_position_advances(&item, None, "unknown"));
     for id in ["middle", "a", "z-last-lexically"] {
-        assert!(board
+        assert!(
+            board
+                .write(Request::MarkRead {
+                    id: task,
+                    reader: "owner".into(),
+                    message_id: id.into()
+                })
+                .unwrap()
+                .1
+                .is_empty()
+        );
+    }
+    assert!(
+        board
             .write(Request::MarkRead {
                 id: task,
                 reader: "owner".into(),
-                message_id: id.into()
+                message_id: "unknown".into()
             })
-            .unwrap()
-            .1
-            .is_empty());
-    }
-    assert!(board
-        .write(Request::MarkRead {
-            id: task,
-            reader: "owner".into(),
-            message_id: "unknown".into()
-        })
-        .is_err());
+            .is_err()
+    );
     board
         .write(Request::PostMessage {
             id: task,
@@ -599,14 +620,16 @@ fn read_prefix_replays_sparse_events_and_never_regresses() {
         Some("middle"),
         "0-new"
     ));
-    assert!(!board
-        .write(Request::MarkRead {
-            id: task,
-            reader: "owner".into(),
-            message_id: "0-new".into()
-        })
-        .unwrap()
-        .1
-        .is_empty());
+    assert!(
+        !board
+            .write(Request::MarkRead {
+                id: task,
+                reader: "owner".into(),
+                message_id: "0-new".into()
+            })
+            .unwrap()
+            .1
+            .is_empty()
+    );
     assert_eq!(store.read_positions("owner").unwrap()[&task], "0-new");
 }

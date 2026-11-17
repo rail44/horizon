@@ -23,8 +23,8 @@ pub mod types;
 pub use mode::Direction;
 pub use operations::CloseCursorOutcome;
 pub use persistence::{
-    InventoryError, InventoryReconcile, SessionInventory, WorkspaceStateError,
-    WORKSPACE_STATE_VERSION,
+    InventoryError, InventoryReconcile, SessionInventory, WORKSPACE_STATE_VERSION,
+    WorkspaceStateError,
 };
 pub use session_id::SessionId;
 pub use types::{PaneId, PluginPane, SessionKind, SplitAxis, Workspace};

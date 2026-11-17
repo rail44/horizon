@@ -43,11 +43,11 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 
 use horizon_agent::contract::{Event, SessionId};
 
-use super::state::{lock_unpoisoned, AgentdState};
+use super::state::{AgentdState, lock_unpoisoned};
 
 /// Every in-process subscription currently installed, keyed by the
 /// *observed* session's id. At most one per session: the only subscriber

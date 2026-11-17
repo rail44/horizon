@@ -48,15 +48,14 @@ pub fn upgrade_conversation_records(records: &[Value]) -> Result<Vec<Value>, Str
         {
             retries.insert(id.to_owned());
         }
-        if let Some(approval) = event.get("ApprovalRequested") {
-            if approval["kind"].as_object().is_some_and(|kind| {
+        if let Some(approval) = event.get("ApprovalRequested")
+            && approval["kind"].as_object().is_some_and(|kind| {
                 kind.values()
                     .any(|value| value.get("prior_result").is_some())
-            }) {
-                if let Some(id) = approval["occurrence_id"].as_str() {
-                    retries.insert(id.to_owned());
-                }
-            }
+            })
+            && let Some(id) = approval["occurrence_id"].as_str()
+        {
+            retries.insert(id.to_owned());
         }
     }
     let mut output = Vec::new();

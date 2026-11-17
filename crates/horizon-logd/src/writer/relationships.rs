@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use horizon_board::wire::LogError;
-use horizon_board::{rank_between, sorted_by_rank, Item, Position};
+use horizon_board::{Item, Position, rank_between, sorted_by_rank};
 
 use super::invalid;
 

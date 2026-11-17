@@ -189,9 +189,11 @@ fn sample_envelopes_are_stamped_and_sequenced_deterministically() {
 
     let stamps: Vec<u64> = envelopes.iter().map(|e| e.at).collect();
     assert_eq!(stamps, vec![1_767_225_600_000, 1_767_225_660_000]);
-    assert!(envelopes
-        .iter()
-        .all(|e| e.schema == crate::SCHEMA && e.version == crate::VERSION));
+    assert!(
+        envelopes
+            .iter()
+            .all(|e| e.schema == crate::SCHEMA && e.version == crate::VERSION)
+    );
 
     let report = Store::in_memory(envelopes).events().unwrap();
     assert_eq!(report.sequences, vec![1, 2]);

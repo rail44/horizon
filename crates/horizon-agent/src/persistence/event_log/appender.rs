@@ -3,12 +3,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use uuid::Uuid;
 
-use crate::contract::{event_kind, ProviderEvent, ProviderId, SessionId};
+use crate::contract::{ProviderEvent, ProviderId, SessionId, event_kind};
 use crate::roles::RoleId;
 
 use super::{
-    PersistedSessionContext, Record, TurnTracker, WriterHandle, AGENT_EVENT_LOG_SCHEMA,
-    AGENT_EVENT_LOG_VERSION,
+    AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION, PersistedSessionContext, Record, TurnTracker,
+    WriterHandle,
 };
 
 /// Enqueued records, not yet acknowledged by the writer. Dropping this does

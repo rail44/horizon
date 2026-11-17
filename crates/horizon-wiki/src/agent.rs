@@ -7,11 +7,11 @@ use std::path::PathBuf;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::annotation::{AgentType, Annotation, Target};
-use crate::page::{body, Edit};
+use crate::page::{Edit, body};
 use crate::thread::Thread;
 use crate::{Store, WikiError};
 
@@ -354,7 +354,7 @@ pub fn thread_input(store: &Store, page: &str, thread: &Thread, annotation: &Ann
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::annotation::{markdown_body, Agent};
+    use crate::annotation::{Agent, markdown_body};
 
     #[test]
     fn derived_ids_are_stable_and_distinct() {
@@ -439,11 +439,13 @@ mod tests {
         let list = run_tool(&store, "wiki_list", &json!({})).unwrap();
         assert_eq!(list["pages"][0]["name"], "p");
         assert!(run_tool(&store, "wiki_read", &json!({"page": "../x"})).is_err());
-        assert!(run_tool(
-            &store,
-            "wiki_edit",
-            &json!({"page": "p", "edits": [{"old": "zz", "new": ""}]})
-        )
-        .is_err());
+        assert!(
+            run_tool(
+                &store,
+                "wiki_edit",
+                &json!({"page": "p", "edits": [{"old": "zz", "new": ""}]})
+            )
+            .is_err()
+        );
     }
 }

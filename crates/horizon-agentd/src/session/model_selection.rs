@@ -2,7 +2,7 @@
 
 use horizon_agent::contract::{Command, ProviderEvent, SessionId};
 
-use super::state::{lock_unpoisoned, AgentdState};
+use super::state::{AgentdState, lock_unpoisoned};
 
 pub(super) fn resolve(state: &AgentdState, provider: &str, model: &str) -> Result<Command, String> {
     let config = lock_unpoisoned(&state.agent_config);

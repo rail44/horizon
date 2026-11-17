@@ -142,10 +142,12 @@ mod tests {
         state.activate_environment().await;
         assert_eq!(state.environment, old_environment);
         assert_eq!(state.extra_sections, ["original instructions"]);
-        assert!(state
-            .inputs
-            .take_additions()
-            .unwrap()
-            .contains("base missing"));
+        assert!(
+            state
+                .inputs
+                .take_additions()
+                .unwrap()
+                .contains("base missing")
+        );
     }
 }

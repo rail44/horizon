@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 
 use horizon_agent::contract::{
     self, Command, Error as AgentError, Event, Initialization, ProviderEvent, ProviderId, SessionId,
@@ -14,8 +14,8 @@ use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 use horizon_agent::roles::RoleId;
 use horizon_agent::tools::{
-    process_agent_provider_event, register_session_runtime, HostTools, ToolCompletion,
-    ToolSessionState,
+    HostTools, ToolCompletion, ToolSessionState, process_agent_provider_event,
+    register_session_runtime,
 };
 
 use super::approval::{dispatch_inbound_command, gate_processing_approval};
@@ -26,11 +26,11 @@ use super::events::{
 };
 use super::host_tools::AgentdHostTools;
 use super::panic::{
-    catch_session_panic, record_session_loop_panic, record_unexpected_provider_exit,
-    SessionLoopPhase,
+    SessionLoopPhase, catch_session_panic, record_session_loop_panic,
+    record_unexpected_provider_exit,
 };
 use super::setup::project_is_trusted;
-use super::state::{lock_unpoisoned, AgentdState};
+use super::state::{AgentdState, lock_unpoisoned};
 use crate::worktree::WorktreeInfo;
 
 /// The session's whole lifetime, from `Initialize` through to the
@@ -149,12 +149,11 @@ pub(super) fn run_session(
         let identity = lock_unpoisoned(&state.sessions)
             .get(&session_id)
             .and_then(|entry| entry.worktree.as_ref().map(WorktreeInfo::identity));
-        if let Some(identity) = identity {
-            if let Err(error) = live_state
+        if let Some(identity) = identity
+            && let Err(error) = live_state
                 .activate_context(persisted_context, Event::EnvironmentActivated(identity))
-            {
-                report_persistence_failure(state, &live_state, session_id, error);
-            }
+        {
+            report_persistence_failure(state, &live_state, session_id, error);
         }
     }
     let (async_results_tx, async_results_rx) = unbounded::<ToolCompletion>();
@@ -184,94 +183,94 @@ pub(super) fn run_session(
         .unwrap_or_else(crossbeam_channel::never);
     let mut stopped = false;
 
-    let loop_outcome = catch_session_panic(phase, || loop {
-        if !stopped {
-            if let Some(message) = live_state.persistence_failure() {
+    let loop_outcome = catch_session_panic(phase, || {
+        loop {
+            if !stopped && let Some(message) = live_state.persistence_failure() {
                 report_persistence_failure(state, &live_state, session_id, message);
                 let _ = commands_tx.send(Command::Shutdown);
                 provider_events = crossbeam_channel::never();
                 failure_rx = crossbeam_channel::never();
                 stopped = true;
             }
-        }
-        phase.set(SessionLoopPhase::WaitingForInput);
-        crossbeam_channel::select! {
-            recv(failure_rx) -> message => {
-                if let Ok(message) = message { report_persistence_failure(state, &live_state, session_id, message); }
-            },
-            recv(provider_events) -> message => match message {
-                Ok(provider_event) => {
-                    phase.set(SessionLoopPhase::ProviderEvent(provider_event.kind()));
-                    if let Some(Event::EnvironmentReady { base }) = provider_event.as_event() {
-                        environment.activate(base, &live_state, &mut tool_state, &async_results_tx, &commands_tx);
-                        continue;
-                    }
-                    if matches!(provider_event, ProviderEvent::SettleTools { .. }) {
-                        // Prefer completions already delivered by workers over a
-                        // cancellation racing this provider settlement barrier.
-                        for completion in async_results_rx.try_iter() {
-                            if !matches!(completion, ToolCompletion::ApprovalJudged(_)) {
-                                fold_tool_completion(state, &live_state, &commands_tx, session_id, completion);
+            phase.set(SessionLoopPhase::WaitingForInput);
+            crossbeam_channel::select! {
+                recv(failure_rx) -> message => {
+                    if let Ok(message) = message { report_persistence_failure(state, &live_state, session_id, message); }
+                },
+                recv(provider_events) -> message => match message {
+                    Ok(provider_event) => {
+                        phase.set(SessionLoopPhase::ProviderEvent(provider_event.kind()));
+                        if let Some(Event::EnvironmentReady { base }) = provider_event.as_event() {
+                            environment.activate(base, &live_state, &mut tool_state, &async_results_tx, &commands_tx);
+                            continue;
+                        }
+                        if matches!(provider_event, ProviderEvent::SettleTools { .. }) {
+                            // Prefer completions already delivered by workers over a
+                            // cancellation racing this provider settlement barrier.
+                            for completion in async_results_rx.try_iter() {
+                                if !matches!(completion, ToolCompletion::ApprovalJudged(_)) {
+                                    fold_tool_completion(state, &live_state, &commands_tx, session_id, completion);
+                                }
                             }
                         }
+                        handle_provider_event(
+                            &host,
+                            state,
+                            &tool_state,
+                            &live_state,
+                            &commands_tx,
+                            &inbound_rx,
+                            session_id,
+                            provider_event,
+                        );
                     }
-                    handle_provider_event(
-                        &host,
-                        state,
-                        &tool_state,
-                        &live_state,
-                        &commands_tx,
-                        &inbound_rx,
-                        session_id,
-                        provider_event,
-                    );
-                }
-                Err(_) => {
-                    record_unexpected_provider_exit(state, &live_state, session_id);
-                    break;
-                }
-            },
-            recv(async_results_rx) -> message => {
-                if let Ok(completion) = message {
-                    if stopped { continue; }
-                    phase.set(SessionLoopPhase::ToolCompletion);
-                    // Inputs already waiting at this tool boundary must reach
-                    // the provider before its result starts the next round.
-                    for command in inbound_rx.try_iter() {
-                        dispatch_inbound_command(state, &live_state, &commands_tx, session_id, command);
+                    Err(_) => {
+                        record_unexpected_provider_exit(state, &live_state, session_id);
+                        break;
                     }
-                    fold_tool_completion(
-                        state,
-                        &live_state,
-                        &commands_tx,
-                        session_id,
-                        completion,
-                    );
-                }
-            },
-            recv(inbound_rx) -> message => match message {
-                Ok(command) => {
-                    if stopped {
-                        if matches!(command, Command::Shutdown) { break; }
-                        continue;
+                },
+                recv(async_results_rx) -> message => {
+                    if let Ok(completion) = message {
+                        if stopped { continue; }
+                        phase.set(SessionLoopPhase::ToolCompletion);
+                        // Inputs already waiting at this tool boundary must reach
+                        // the provider before its result starts the next round.
+                        for command in inbound_rx.try_iter() {
+                            dispatch_inbound_command(state, &live_state, &commands_tx, session_id, command);
+                        }
+                        fold_tool_completion(
+                            state,
+                            &live_state,
+                            &commands_tx,
+                            session_id,
+                            completion,
+                        );
                     }
-                    phase.set(SessionLoopPhase::InboundCommand);
-                    dispatch_inbound_command(
-                        state,
-                        &live_state,
-                        &commands_tx,
-                        session_id,
-                        command,
-                    );
-                }
-                Err(_) => break,
-            },
-            recv(replay_rx) -> message => {
-                if let Ok(reply_tx) = message {
-                    phase.set(SessionLoopPhase::Replay);
-                    super::attachment::capture(state, session_id, &live_state, reply_tx);
-                }
-            },
+                },
+                recv(inbound_rx) -> message => match message {
+                    Ok(command) => {
+                        if stopped {
+                            if matches!(command, Command::Shutdown) { break; }
+                            continue;
+                        }
+                        phase.set(SessionLoopPhase::InboundCommand);
+                        dispatch_inbound_command(
+                            state,
+                            &live_state,
+                            &commands_tx,
+                            session_id,
+                            command,
+                        );
+                    }
+                    Err(_) => break,
+                },
+                recv(replay_rx) -> message => {
+                    if let Ok(reply_tx) = message {
+                        phase.set(SessionLoopPhase::Replay);
+                        super::attachment::capture(state, session_id, &live_state, reply_tx);
+                    }
+                },
+            }
         }
     });
 
@@ -323,12 +322,11 @@ fn handle_provider_event(
     session_id: SessionId,
     provider_event: ProviderEvent,
 ) {
-    if let Some(Event::ToolCallFinished(result)) = provider_event.as_event() {
-        if !horizon_agent::tools::ToolCompletion::Finished(result.clone())
+    if let Some(Event::ToolCallFinished(result)) = provider_event.as_event()
+        && !horizon_agent::tools::ToolCompletion::Finished(result.clone())
             .matches_live_request(&live_state.frame())
-        {
-            return;
-        }
+    {
+        return;
     }
     if !super::events::execution_available(state, live_state, session_id) {
         return;

@@ -1,7 +1,7 @@
 //! Exercise both adapters through real HTTP/SSE, without an external provider.
 use super::*;
 use crate::contract::ConversationInputKind;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -60,7 +60,15 @@ async fn serve_transport(
     } else {
         "text/event-stream"
     };
-    let head = format!("HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", response.len() + if matches!(transport, Transport::Complete) { 0 } else { 128 });
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        response.len()
+            + if matches!(transport, Transport::Complete) {
+                0
+            } else {
+                128
+            }
+    );
     socket.write_all(head.as_bytes()).await.unwrap();
     socket.write_all(response.as_bytes()).await.unwrap();
     if matches!(transport, Transport::Stall) {
@@ -109,7 +117,8 @@ fn response(kind: ProviderKind) -> String {
 async fn provider_wire_contract_covers_both_adapters_and_rejections() {
     // nextest isolates this environment mutation; no real secret or endpoint.
     let key = "HORIZON_TEST_PROVIDER_VARIANTS_KEY";
-    std::env::set_var(key, "local-test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(key, "local-test-key") };
     for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
         for rejected in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -157,9 +166,11 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
             match kind {
                 ProviderKind::OpenAiCompatible => {
                     assert!(headers.starts_with("POST /v1/chat/completions "));
-                    assert!(headers
-                        .to_lowercase()
-                        .contains("authorization: bearer local-test-key"));
+                    assert!(
+                        headers
+                            .to_lowercase()
+                            .contains("authorization: bearer local-test-key")
+                    );
                     assert_eq!(request["parallel_tool_calls"], true);
                     assert_eq!(request["tools"][0]["function"]["name"], "fs_read");
                 }
@@ -276,7 +287,8 @@ fn tool_call_cut_by_usage_cap(kind: ProviderKind) -> String {
 #[tokio::test]
 async fn provider_wire_reports_an_open_tool_call_as_a_truncation() {
     let key = "HORIZON_TEST_PROVIDER_OPEN_CALL_KEY";
-    std::env::set_var(key, "local-test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(key, "local-test-key") };
     for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let config = RigAgentConfig {
@@ -335,7 +347,8 @@ async fn provider_wire_reports_an_open_tool_call_as_a_truncation() {
 #[tokio::test]
 async fn provider_wire_interruption_retains_tools_for_both_adapters() {
     let key = "HORIZON_TEST_PROVIDER_INTERRUPTION_KEY";
-    std::env::set_var(key, "local-test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(key, "local-test-key") };
     for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
         for (transport, cancel) in [
             (Transport::Cut, false),
@@ -448,7 +461,8 @@ async fn provider_wire_interruption_retains_tools_for_both_adapters() {
 #[tokio::test]
 async fn provider_wire_finish_reasons_override_counts_for_both_adapters() {
     let key = "HORIZON_TEST_PROVIDER_FINISH_REASON_KEY";
-    std::env::set_var(key, "local-test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(key, "local-test-key") };
     for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
         for limited in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -499,7 +513,8 @@ async fn provider_wire_finish_reasons_override_counts_for_both_adapters() {
 #[tokio::test]
 async fn provider_wire_retry_discards_previous_text_and_never_repeats_issued_tools() {
     let key = "HORIZON_TEST_PROVIDER_RETRY_KEY";
-    std::env::set_var(key, "local-test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(key, "local-test-key") };
     for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
         for issued in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -582,9 +597,11 @@ async fn provider_wire_retry_discards_previous_text_and_never_repeats_issued_too
             );
             let frame = crate::frame::agent_frame_from_events(&events);
             assert!(!frame.items.iter().any(|item| matches!(item, crate::frame::AgentFrameItem::AssistantTextDelta(delta) if delta.text.contains("discarded attempt"))));
-            assert!(!serde_json::to_string(&history.messages())
-                .unwrap()
-                .contains("discarded attempt"));
+            assert!(
+                !serde_json::to_string(&history.messages())
+                    .unwrap()
+                    .contains("discarded attempt")
+            );
         }
     }
 }
@@ -592,7 +609,8 @@ async fn provider_wire_retry_discards_previous_text_and_never_repeats_issued_too
 #[tokio::test]
 async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
     let key = "HORIZON_TEST_PROVIDER_MULTIPLE_KEY";
-    std::env::set_var(key, "local-test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(key, "local-test-key") };
     for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
         let original: Vec<Value> = response(kind)
             .split("\n\n")
@@ -687,18 +705,21 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
         )));
         let live = crate::live::LiveState::with_disabled_persistence();
         live.extend_provider_events(events).unwrap();
-        assert!(!live
-            .frame()
-            .items
-            .iter()
-            .any(|item| matches!(item, crate::frame::AgentFrameItem::ToolCallPreparing(_))));
+        assert!(
+            !live
+                .frame()
+                .items
+                .iter()
+                .any(|item| matches!(item, crate::frame::AgentFrameItem::ToolCallPreparing(_)))
+        );
     }
 }
 
 #[tokio::test]
 async fn provider_wire_replay_sends_identical_requests_after_signed_tool_response() {
     let key = "HORIZON_TEST_HISTORY_REPLAY_KEY";
-    std::env::set_var(key, "local-test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(key, "local-test-key") };
     for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let config = RigAgentConfig {

@@ -682,7 +682,7 @@ fn read_config(path: Option<&Path>) -> ConfigRead {
         // No file written yet is the common case, not a warning.
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return ConfigRead::Missing,
         Err(error) => {
-            return ConfigRead::ReadError(format!("could not read {}: {error}", path.display()))
+            return ConfigRead::ReadError(format!("could not read {}: {error}", path.display()));
         }
     };
     match parse(&contents) {

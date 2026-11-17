@@ -1,9 +1,10 @@
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    write_horizon_meta, ApprovalKind, ApprovalMeta, MessageMeta, ModelOptionMeta,
-    SessionEventNotification, SessionId, TaskProgressNotification, TaskProgressState, ToolCallMeta,
-    ToolCallProgressEvent, ToolOutcome, MODEL_CONFIG_ID, STOP_REASON_DOOM_LOOP, STOP_REASON_FAILED,
+    ApprovalKind, ApprovalMeta, MODEL_CONFIG_ID, MessageMeta, ModelOptionMeta,
+    STOP_REASON_DOOM_LOOP, STOP_REASON_FAILED, SessionEventNotification, SessionId,
+    TaskProgressNotification, TaskProgressState, ToolCallMeta, ToolCallProgressEvent, ToolOutcome,
+    write_horizon_meta,
 };
 use serde_json::json;
 

@@ -618,10 +618,12 @@ mod tests {
         assert_eq!(enter.permission, ToolPermission::AutoAllowRead);
         assert_eq!(enter.input_schema["type"], "object");
         assert_eq!(enter.input_schema["additionalProperties"], json!(false));
-        assert!(enter
-            .input_schema
-            .get("properties")
-            .is_none_or(|properties| properties == &json!({})));
+        assert!(
+            enter
+                .input_schema
+                .get("properties")
+                .is_none_or(|properties| properties == &json!({}))
+        );
         assert!(enter.input_schema.get("required").is_none());
         assert!(
             enter.description.contains("next turn boundary")

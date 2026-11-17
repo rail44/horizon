@@ -81,7 +81,7 @@ pub use linux::execute_supervised_helper;
 pub use macos::apply_seatbelt_to_self;
 
 #[cfg(target_os = "macos")]
-pub use macos::denials::{security_service_grants, DenialCollector};
+pub use macos::denials::{DenialCollector, security_service_grants};
 
 /// The security services nono's macOS profile denies `mach-lookup` for
 /// (nono 0.68.0 `sandbox/macos.rs`'s `generate_profile`), and whose denies

@@ -12,7 +12,7 @@ use serde_json::json;
 use super::super::completion::CompletionStop;
 use super::super::conversation::Prompt;
 use super::state::SessionLoopState;
-use super::{deterministic_rig_response, TurnCompletion};
+use super::{TurnCompletion, deterministic_rig_response};
 use crate::config::RigAgentConfig;
 use crate::contract::{
     Command, ContinuationVerdict, ConversationInputKind, Event, Message as AgentMessage,

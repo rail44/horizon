@@ -19,9 +19,9 @@
 //! network, and (new, see `crate::caps`) signal containment are still
 //! fully enforced via Landlock.
 
+use crate::SandboxedChild;
 use crate::error::SandboxError;
 use crate::policy::{SandboxPolicy, SandboxStdio};
-use crate::SandboxedChild;
 use std::ffi::OsString;
 #[cfg(not(test))]
 use std::os::unix::process::CommandExt;

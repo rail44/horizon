@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::tools::output::{Response, SearchResult, WebSearch};
 use async_trait::async_trait;
 use reqwest::header::HeaderValue;
-use reqwest::{redirect, Client, Url};
+use reqwest::{Client, Url, redirect};
 use serde::{Deserialize, Serialize};
 
 use crate::config::EXA_API_KEY_VAR;
@@ -193,7 +193,7 @@ pub(super) async fn execute(input: crate::tools::input::WebSearch) -> Response {
         _ => {
             return error_output(format!(
                 "web_search is not configured; set {EXA_API_KEY_VAR} in Horizon's environment"
-            ))
+            ));
         }
     };
     let adapter = match ExaAdapter::production(api_key) {
@@ -268,7 +268,7 @@ use super::error_output;
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::sync::Mutex;
 
     use super::*;
@@ -345,11 +345,13 @@ mod tests {
             Some("https://example.com/path")
         );
         assert!(normalize_result_url("javascript:alert(1)".to_string()).is_none());
-        assert!(normalize_result_url(format!(
-            "https://example.com/{}",
-            "x".repeat(MAX_RESULT_URL_CHARACTERS)
-        ))
-        .is_none());
+        assert!(
+            normalize_result_url(format!(
+                "https://example.com/{}",
+                "x".repeat(MAX_RESULT_URL_CHARACTERS)
+            ))
+            .is_none()
+        );
         assert_eq!(
             redact_secret("server echoed test-secret", "test-secret"),
             "server echoed [REDACTED]"

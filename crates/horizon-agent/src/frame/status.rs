@@ -53,7 +53,7 @@ impl AgentFrame {
 mod tests {
     use super::*;
     use crate::contract::{Error, Event, Message, MessageRole};
-    use crate::frame::{agent_frame_from_events, apply_agent_event_to_frame, TurnClock};
+    use crate::frame::{TurnClock, agent_frame_from_events, apply_agent_event_to_frame};
 
     #[test]
     fn failed_turn_survives_idle_and_restart_until_work_actually_resumes() {

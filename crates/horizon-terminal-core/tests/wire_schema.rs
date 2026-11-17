@@ -38,15 +38,15 @@
 use std::path::Path;
 
 use schemars::generate::SchemaSettings;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use horizon_terminal_core::wire::{
-    TerminalAttachment, TerminalHubHello, TERMINAL_PROTOCOL_VERSION,
+    TERMINAL_PROTOCOL_VERSION, TerminalAttachment, TerminalHubHello,
 };
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
-use horizon_wire::schema_check::{sort_object_keys, PROTOCOL_VERSION_KEY};
+use horizon_wire::schema_check::{PROTOCOL_VERSION_KEY, sort_object_keys};
 use horizon_wire::{ClientHello, HubError};
 
 const ARTIFACT_RELATIVE_PATH: &str = "schema/terminal-wire.json";

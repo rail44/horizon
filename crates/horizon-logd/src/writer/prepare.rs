@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use horizon_board::wire::{IngestReply, IngestRequest, LogError};
-use horizon_board::{fold, BoardEvent, Comment, Item, ReadReport};
+use horizon_board::{BoardEvent, Comment, Item, ReadReport, fold};
 
 use super::relationships::{compute_rank, set_parent, validate_dependencies};
 use super::{invalid, messages, unix_ms};
@@ -50,10 +50,10 @@ pub(super) fn prepare(
             parent,
             position,
         } => {
-            if let Some(parent) = parent {
-                if !items.contains_key(&parent) {
-                    return Err(LogError::ItemNotFound(parent));
-                }
+            if let Some(parent) = parent
+                && !items.contains_key(&parent)
+            {
+                return Err(LogError::ItemNotFound(parent));
             }
             let id = report
                 .max_id

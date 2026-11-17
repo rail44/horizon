@@ -89,7 +89,7 @@ mod tests {
             ToolOutcome,
         },
         live::LiveState,
-        tools::{process_agent_provider_event, HostTools, ToolSessionBuilder},
+        tools::{HostTools, ToolSessionBuilder, process_agent_provider_event},
     };
     use serde_json::json;
 

@@ -1,7 +1,7 @@
 //! Message identity and monotonic read positions within an item's conversation.
 
 use horizon_board::wire::{IngestReply, LogError};
-use horizon_board::{read_position_advances, BoardEvent, Comment, Envelope, Item};
+use horizon_board::{BoardEvent, Comment, Envelope, Item, read_position_advances};
 
 use super::invalid;
 use super::prepare::PreparedWrite;
@@ -44,10 +44,11 @@ pub(super) fn mark_read(
             reader: owner,
             message_id: seen,
         } = &envelope.event
+            && *id == item.id
+            && owner == &reader
+            && read_position_advances(item, current, seen)
         {
-            if *id == item.id && owner == &reader && read_position_advances(item, current, seen) {
-                current = Some(seen);
-            }
+            current = Some(seen);
         }
     }
     if !read_position_advances(item, current, &message_id) {

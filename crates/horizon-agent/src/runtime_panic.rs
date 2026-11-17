@@ -11,7 +11,7 @@ use std::{
     any::Any,
     cell::RefCell,
     fmt,
-    panic::{catch_unwind, AssertUnwindSafe},
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::Once,
 };
 
@@ -114,9 +114,11 @@ mod tests {
 
         assert_eq!(report.payload, "runtime invariant failed");
         let location = report.location.expect("source location");
-        assert!(location
-            .file
-            .ends_with("crates/horizon-agent/src/runtime_panic.rs"));
+        assert!(
+            location
+                .file
+                .ends_with("crates/horizon-agent/src/runtime_panic.rs")
+        );
         assert!(location.line > 0);
     }
 

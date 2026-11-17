@@ -239,8 +239,7 @@ mod tests {
 
     #[test]
     fn parse_stage2_reads_json_wrapped_in_prose() {
-        let text =
-            "Sure, here is my answer: {\"reasoning\": \"ok\", \"verdict\": \"AutoApprove\"} \
+        let text = "Sure, here is my answer: {\"reasoning\": \"ok\", \"verdict\": \"AutoApprove\"} \
                      -- done.";
         assert_eq!(parse_stage2(text), JudgeDecision::AutoApprove);
     }

@@ -1,6 +1,6 @@
 use super::*;
-use crate::session::test_support::{drain_events, judge_candidate, test_state, tool_identity};
 use crate::session::Connection;
+use crate::session::test_support::{drain_events, judge_candidate, test_state, tool_identity};
 use crossbeam_channel::unbounded;
 use horizon_agent::contract::SessionId;
 use horizon_agent::contract::{ApprovalKind, ApprovalRequest, ToolCallId};
@@ -130,8 +130,11 @@ fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_reque
         } else {
             &forwarded[..]
         };
-        let [Event::ToolCallRequested(reissued), Event::ApprovalRequested(approval), Event::StateChanged(SessionState::WaitingForApproval)] =
-            retry_events
+        let [
+            Event::ToolCallRequested(reissued),
+            Event::ApprovalRequested(approval),
+            Event::StateChanged(SessionState::WaitingForApproval),
+        ] = retry_events
         else {
             panic!("unexpected reissue ordering: {forwarded:?}");
         };
@@ -598,10 +601,12 @@ fn auto_approval_verdict_forwards_existing_approved_path_without_prompt() {
         commands_rx.try_recv(),
         Ok(Command::ApproveToolCall { identity }) if identity == candidate.request.identity());
     assert!(drain_events(&mut outgoing_rx).is_empty());
-    assert!(live_state
-        .frame()
-        .actionable_pending_approval_call_ids()
-        .is_empty());
+    assert!(
+        live_state
+            .frame()
+            .actionable_pending_approval_call_ids()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -712,10 +717,12 @@ fn a_judge_escalation_in_an_unattended_session_refuses_instead_of_prompting() {
     };
     assert_eq!(result.call_id, request.call_id);
     assert!(result.is_error());
-    assert!(result.output["message"]
-        .as_str()
-        .unwrap()
-        .contains(&root.display().to_string()));
+    assert!(
+        result.output["message"]
+            .as_str()
+            .unwrap()
+            .contains(&root.display().to_string())
+    );
 
     let fanned = drain_events(&mut outgoing_rx);
     assert!(
@@ -794,10 +801,12 @@ fn a_judge_approved_out_of_root_read_still_runs_in_an_unattended_session() {
         panic!("expected a tool result, got {forwarded:?}");
     };
     assert!(!result.is_error(), "{:?}", result.output);
-    assert!(result.output["content"]
-        .as_str()
-        .unwrap()
-        .contains("judge said yes"));
+    assert!(
+        result.output["content"]
+            .as_str()
+            .unwrap()
+            .contains("judge said yes")
+    );
 
     horizon_agent::tools::unregister_session_runtime(session_id);
     std::fs::remove_dir_all(outside).unwrap();
@@ -912,7 +921,7 @@ fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider
             Event::ApprovalRequested(ApprovalRequest {
                 call_id: approval_call_id,
                 kind: ApprovalKind::DomainGrant { domains },
-                occurrence_id: ref occ,
+                occurrence_id: occ,
                 ..
             }) if approval_call_id == &call_id
                 && domains == &["redirect.example".to_string()]
@@ -988,7 +997,7 @@ fn deliver_judgment(
 #[test]
 fn synchronous_and_async_results_preserve_sibling_approval_and_publish_before_delivery() {
     use horizon_agent::tools::{
-        register_session_runtime, unregister_session_runtime, ApprovalDecision, ToolSessionBuilder,
+        ApprovalDecision, ToolSessionBuilder, register_session_runtime, unregister_session_runtime,
     };
     for synchronous in [false, true] {
         let dir = tempfile::tempdir().unwrap();

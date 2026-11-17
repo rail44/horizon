@@ -2,27 +2,26 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use super::completion::{
+    MULTI_TOOL_TEST_BATCH_SIZE, ProviderRequestSpan, ProviderWait, TurnCompletion,
     await_provider_phase, output_cap_truncated, partial_assistant_message,
-    provider_additional_params, rig_tool_definitions, ProviderRequestSpan, ProviderWait,
-    TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
+    provider_additional_params, rig_tool_definitions,
 };
-use super::guards::{tool_result_fingerprint, GuardHalt, TurnLoopGuard};
+use super::guards::{GuardHalt, TurnLoopGuard, tool_result_fingerprint};
 use super::mapping::{
-    horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
-    horizon_tool_definition_from_rig, rig_messages_from_horizon_events,
-    rig_tool_call_provider_payload, rig_tool_call_request, rig_workspace_snapshot_call,
-    rig_workspace_snapshot_call_with_provider_metadata, RIG_PROVIDER_PAYLOAD_SCHEMA,
-    RIG_PROVIDER_PAYLOAD_VERSION,
+    RIG_PROVIDER_PAYLOAD_SCHEMA, RIG_PROVIDER_PAYLOAD_VERSION, horizon_events_from_rig_message,
+    horizon_provider_events_from_rig_message, horizon_tool_definition_from_rig,
+    rig_messages_from_horizon_events, rig_tool_call_provider_payload, rig_tool_call_request,
+    rig_workspace_snapshot_call, rig_workspace_snapshot_call_with_provider_metadata,
 };
 use super::retry::{
-    retry_backoff, retryable_rejection, sleep_unless_cancelled, with_pre_generation_retry, Attempt,
-    Retried, PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF,
+    Attempt, PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF, Retried, retry_backoff,
+    retryable_rejection, sleep_unless_cancelled, with_pre_generation_retry,
 };
 use super::session::SessionLoopState;
 use super::session_prompt::{session_environment, session_extra_sections};
 use super::*;
 use crate::config::RigAgentConfig;
-use crate::roles::{resolve, RoleId};
+use crate::roles::{RoleId, resolve};
 
 /// Mirrors the built-in defaults in `agent::config` (`DEFAULT_ITERATION_CAP`/
 /// `DEFAULT_DOOM_LOOP_WINDOW`) for these guard-logic unit tests, which
@@ -37,11 +36,11 @@ use crate::contract::{
     ToolPermission, TurnEndReason,
 };
 use crate::registry::Provider as AgentProvider;
-use rig_core::completion::{
-    message::{Text, ToolCall, ToolFunction, ToolResultContent, UserContent},
-    AssistantContent, Message as RigMessage, ToolDefinition,
-};
 use rig_core::ProviderResponseError;
+use rig_core::completion::{
+    AssistantContent, Message as RigMessage, ToolDefinition,
+    message::{Text, ToolCall, ToolFunction, ToolResultContent, UserContent},
+};
 
 fn recv_provider(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> ProviderEvent {
     rx.recv_timeout(std::time::Duration::from_secs(1))
@@ -512,8 +511,7 @@ async fn a_5xx_exhausts_the_attempt_budget_and_fails() {
 #[test]
 fn openai_compatible_turns_explicitly_enable_parallel_tool_calls() {
     assert_eq!(
-        provider_additional_params(crate::config::ProviderKind::OpenAiCompatible)
-            ["parallel_tool_calls"],
+        provider_additional_params(crate::config::ProviderKind::OpenAiCompatible)["parallel_tool_calls"],
         serde_json::Value::Bool(true)
     );
     // The anthropic kind carries nothing openai-specific.
@@ -2730,7 +2728,8 @@ fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
     // `web_search` is environment-gated on `EXA_API_KEY` (see
     // `rig_tool_definitions`); set it so this test's "every catalog tool"
     // assertion is independent of the host's environment.
-    std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
     let all = crate::tools::definitions();
 
     let definitions = rig_tool_definitions(None, true);
@@ -2785,7 +2784,8 @@ fn rig_tool_definitions_with_an_empty_allow_list_returns_no_tools() {
 
 #[test]
 fn web_search_is_not_advertised_when_exa_api_key_is_unset() {
-    std::env::remove_var(crate::config::EXA_API_KEY_VAR);
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var(crate::config::EXA_API_KEY_VAR) };
 
     let definitions = rig_tool_definitions(None, true);
     let names: HashSet<&str> = definitions
@@ -2804,7 +2804,8 @@ fn web_search_is_not_advertised_when_exa_api_key_is_unset() {
 
 #[test]
 fn web_search_is_advertised_when_exa_api_key_is_set() {
-    std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
 
     let definitions = rig_tool_definitions(None, true);
     let names: HashSet<&str> = definitions
@@ -3102,7 +3103,8 @@ fn git_repo_with_agents_md(label: &str) -> std::path::PathBuf {
     // to the real project's store and inject real entries into these
     // tests' section assertions. `scrub_git_env` preserves
     // `GIT_CEILING_DIRECTORIES`, so the ceiling stays in effect.
-    std::env::set_var("GIT_CEILING_DIRECTORIES", dir.parent().unwrap());
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("GIT_CEILING_DIRECTORIES", dir.parent().unwrap()) };
     dir
 }
 
@@ -3299,8 +3301,8 @@ fn session_extra_sections_includes_the_delegation_block_only_when_task_is_advert
 }
 
 #[test]
-fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instructions_for_config_role(
-) {
+fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instructions_for_config_role()
+ {
     let cwd = git_repo_with_agents_md("config-role");
     let environment = test_environment(cwd.clone());
     let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
@@ -3380,7 +3382,8 @@ fn task_output_is_advertised_only_alongside_task() {
 
 #[test]
 fn knowledge_tools_are_advertised_for_a_trusted_session() {
-    std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
     let definitions = rig_tool_definitions(None, true);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
     assert!(
@@ -3395,7 +3398,8 @@ fn knowledge_tools_are_advertised_for_a_trusted_session() {
 
 #[test]
 fn knowledge_tools_are_not_advertised_for_an_untrusted_session() {
-    std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key") };
     let definitions = rig_tool_definitions(None, false);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
     assert!(
@@ -3813,9 +3817,10 @@ fn activation_waits_for_the_complete_tool_batch_and_blocks_the_next_provider_rou
         )))
         .unwrap();
     }
-    assert!(rx
-        .recv_timeout(std::time::Duration::from_millis(100))
-        .is_err());
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(100))
+            .is_err()
+    );
     tx.send(Command::ToolCallResult(ToolCallResult::new(
         (calls.last().unwrap().clone()).clone(),
         crate::contract::OccurrenceId((calls.last().unwrap().clone()).0.clone()),
@@ -3828,9 +3833,10 @@ fn activation_waits_for_the_complete_tool_batch_and_blocks_the_next_provider_rou
             break;
         }
     }
-    assert!(rx
-        .recv_timeout(std::time::Duration::from_millis(100))
-        .is_err());
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(100))
+            .is_err()
+    );
     tx.send(Command::EnvironmentPrepared {
         workspace_root: std::env::current_dir().unwrap(),
         branch: "horizon/test".into(),
@@ -3880,9 +3886,10 @@ fn cancel_preserves_queued_requests_without_automatically_starting_them() {
             })
         ));
     }
-    assert!(rx
-        .recv_timeout(std::time::Duration::from_millis(100))
-        .is_err());
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(100))
+            .is_err()
+    );
     tx.send(Command::SessionInput(crate::contract::SessionInput {
         resume_work: false,
         id: "passive".into(),
@@ -3891,9 +3898,10 @@ fn cancel_preserves_queued_requests_without_automatically_starting_them() {
         reply_to: None,
     }))
     .unwrap();
-    assert!(rx
-        .recv_timeout(std::time::Duration::from_millis(100))
-        .is_err());
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(100))
+            .is_err()
+    );
     tx.send(Command::SessionInput(crate::contract::SessionInput {
         resume_work: true,
         id: "owner".into(),

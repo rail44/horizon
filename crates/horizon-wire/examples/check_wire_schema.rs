@@ -32,7 +32,7 @@
 
 use std::process::ExitCode;
 
-use horizon_wire::schema_check::{classify_schema_change, Classification, PROTOCOL_VERSION_KEY};
+use horizon_wire::schema_check::{Classification, PROTOCOL_VERSION_KEY, classify_schema_change};
 use serde_json::{Map, Value};
 
 fn main() -> ExitCode {

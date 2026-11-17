@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use crossbeam_channel::Sender;
 use rig_core::{
     completion::{
-        message::{AssistantMessage, ToolCall},
         AssistantContent, CompletionResponse, Message,
+        message::{AssistantMessage, ToolCall},
     },
     streaming::{Item, StreamEvent},
 };
@@ -18,12 +18,12 @@ use crate::{
 };
 
 use super::super::{
-    mapping::{rig_tool_call_provider_payload, rig_tool_call_request},
     StreamDeltaBuffer, StreamDeltaKind,
+    mapping::{rig_tool_call_provider_payload, rig_tool_call_request},
 };
 use super::{
-    make_tool_call_arguments_replay_safe, partial_assistant_message,
-    repair_double_encoded_tool_arguments, CompletionStop, ToolCallDescriptor, TurnCompletion,
+    CompletionStop, ToolCallDescriptor, TurnCompletion, make_tool_call_arguments_replay_safe,
+    partial_assistant_message, repair_double_encoded_tool_arguments,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]

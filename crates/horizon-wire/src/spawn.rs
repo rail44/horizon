@@ -206,12 +206,12 @@ pub fn resolve_daemon_binary(binary_name: &str) -> PathBuf {
             return path;
         }
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(binary_name);
-            if candidate.is_file() {
-                return candidate;
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join(binary_name);
+        if candidate.is_file() {
+            return candidate;
         }
     }
     PathBuf::from(binary_name)

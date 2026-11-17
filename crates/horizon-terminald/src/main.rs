@@ -45,9 +45,9 @@ mod terminal;
 use std::sync::Arc;
 
 use horizon_terminal_core::wire::TerminalHubServerShared;
+use horizon_wire::WireCodec;
 use horizon_wire::daemon;
 use horizon_wire::socket::default_terminald_socket_path;
-use horizon_wire::WireCodec;
 use hub::Hub;
 use terminal::TerminalHost;
 use tokio::net::UnixStream;

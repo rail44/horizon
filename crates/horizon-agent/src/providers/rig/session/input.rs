@@ -197,11 +197,12 @@ impl SessionLoopState {
         self.prioritize_lifecycle_control();
         if self.inbox.is_empty() && !self.execution.has_pending_tools() {
             self.activate_environment().await;
-            if !self.inputs.is_paused() && !self.has_pending_stop() {
-                if let Some(text) = self.inputs.start_next() {
-                    self.record_active_input();
-                    self.inbox.push_front(Command::UserMessage { text });
-                }
+            if !self.inputs.is_paused()
+                && !self.has_pending_stop()
+                && let Some(text) = self.inputs.start_next()
+            {
+                self.record_active_input();
+                self.inbox.push_front(Command::UserMessage { text });
             }
         }
     }

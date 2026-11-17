@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use duckdb::{params, params_from_iter, types::Value as DuckValue, OptionalExt};
+use duckdb::{OptionalExt, params, params_from_iter, types::Value as DuckValue};
 #[cfg(test)]
 use serde_json::Value;
 
@@ -9,20 +9,20 @@ use crate::contract::{Event, SessionState};
 #[cfg(test)]
 use crate::contract::{MessageRole, ToolCallId};
 #[cfg(test)]
-use crate::frame::{agent_frame_from_events, AgentFrame};
+use crate::frame::{AgentFrame, agent_frame_from_events};
 use crate::persistence::event_log::{
-    LogCursor, PersistedSessionContext, Record, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION,
+    AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION, LogCursor, PersistedSessionContext, Record,
 };
 use crate::roles::RoleId;
 
-use super::{
-    schema::PROJECTION_SCHEMA_VERSION, session_id_text, AgentStoredEvent, RecallEntry,
-    RecallEntryKind, RecallSearchReport, RecallSessionSummary, SessionLiveness, Store,
-};
 #[cfg(test)]
 use super::{
     AgentStoredApproval, AgentStoredMessage, AgentStoredSession, AgentStoredSessionSnapshot,
     AgentStoredToolCall, AgentStoredToolResult, AgentStoredTurn,
+};
+use super::{
+    AgentStoredEvent, RecallEntry, RecallEntryKind, RecallSearchReport, RecallSessionSummary,
+    SessionLiveness, Store, schema::PROJECTION_SCHEMA_VERSION, session_id_text,
 };
 
 /// How many characters of `text`/`input_json`/`output_json` `search_history`

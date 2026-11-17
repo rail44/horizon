@@ -151,7 +151,8 @@ async fn session(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
     let key_var = "HORIZON_TEST_CONTINUATION_KEY";
-    std::env::set_var(key_var, "local-test-key");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(key_var, "local-test-key") };
     let (events_tx, events) = crossbeam_channel::unbounded();
     let state = SessionLoopState {
         config: RigAgentConfig {
@@ -345,10 +346,12 @@ async fn client_errors_and_timeouts_hand_back_with_a_fallback_reason() {
         assert!(!verdicts[0].continued);
         assert_eq!(verdicts[0].fallback_reason.as_deref(), Some(reason));
         if reason == "client_error" {
-            assert!(verdicts[0]
-                .fallback_error
-                .as_deref()
-                .is_some_and(|error| error.contains("decision endpoint said no")));
+            assert!(
+                verdicts[0]
+                    .fallback_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("decision endpoint said no"))
+            );
         }
         assert_eq!(turn_ends(&emitted), vec![TurnEndReason::Completed]);
     }
@@ -448,10 +451,12 @@ async fn a_pending_stop_or_queued_addition_is_left_to_the_turn_loop() {
 
     let (mut state, _events, _server) = session(Some(check(client.clone())), Vec::new()).await;
     state.inbox.push_back(Command::Shutdown);
-    assert!(state
-        .handle_continuation_check(completing())
-        .await
-        .is_none());
+    assert!(
+        state
+            .handle_continuation_check(completing())
+            .await
+            .is_none()
+    );
     assert_eq!(client.request_count(), 0);
 }
 

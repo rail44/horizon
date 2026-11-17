@@ -244,9 +244,11 @@ fn failed_response_does_not_commit_text_but_keeps_tool_call_durability() {
             .try_iter()
             .filter_map(ProviderEvent::into_event)
             .collect();
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, Event::MessageCommitted(_))));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::MessageCommitted(_)))
+        );
         assert_eq!(
             events
                 .iter()
@@ -284,9 +286,11 @@ fn cancelled_response_retains_observed_history_and_suppresses_truncation() {
     else {
         panic!("partial history")
     };
-    assert!(content
-        .iter()
-        .any(|item| matches!(item, AssistantContent::Text(text) if text.text == "partial")));
+    assert!(
+        content
+            .iter()
+            .any(|item| matches!(item, AssistantContent::Text(text) if text.text == "partial"))
+    );
     assert!(content.iter().any(|item| matches!(item, AssistantContent::ToolCall(call) if serde_json::Value::Object(call.function.arguments.clone()) == serde_json::json!({"path":"README.md"}))));
 }
 

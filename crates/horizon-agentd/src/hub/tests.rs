@@ -48,11 +48,12 @@ fn ready_state() -> Arc<AgentdState> {
 async fn methods_are_refused_until_initialize_succeeds() {
     let cx = connect(ready_state()).await;
 
-    assert!(cx
-        .send_request(v2::ListSessionsRequest::new())
-        .block_task()
-        .await
-        .is_err());
+    assert!(
+        cx.send_request(v2::ListSessionsRequest::new())
+            .block_task()
+            .await
+            .is_err()
+    );
 
     let response = cx
         .send_request(initialize_request(acp::HORIZON_ACP_EXT_VERSION))
@@ -74,11 +75,12 @@ async fn methods_are_refused_until_initialize_succeeds() {
         .unwrap();
     assert!(listed.sessions.is_empty());
 
-    assert!(cx
-        .send_request(initialize_request(acp::HORIZON_ACP_EXT_VERSION))
-        .block_task()
-        .await
-        .is_err());
+    assert!(
+        cx.send_request(initialize_request(acp::HORIZON_ACP_EXT_VERSION))
+            .block_task()
+            .await
+            .is_err()
+    );
 }
 
 /// A client at another extension version still initializes and learns the
@@ -135,7 +137,8 @@ async fn an_ext_version_mismatch_initializes_but_refuses_everything_else() {
 /// from racing another test.
 #[tokio::test]
 async fn reload_provider_config_rebuilds_the_registry_from_the_config_file() {
-    std::env::set_var("OPENAI_API_KEY", "test-only");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("OPENAI_API_KEY", "test-only") };
 
     let dir = tempfile::tempdir().expect("tempdir");
     let config = dir.path().join("config.toml");

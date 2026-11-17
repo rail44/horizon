@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -8,13 +8,13 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_terminal_core::{
-    core_channels, run_terminal_core, CoreInput, CoreSenders, ScrollWindowRequest,
-    SelectionCommand, TerminalCommand, TerminalCoreOptions, TerminalFrame, TerminalKeyInput,
-    TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+    CoreInput, CoreSenders, ScrollWindowRequest, SelectionCommand, TerminalCommand,
+    TerminalCoreOptions, TerminalFrame, TerminalKeyInput, TerminalSpawnSpec, TerminalSummary,
+    TerminalUpdate, core_channels, run_terminal_core,
 };
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use uuid::Uuid;
 
 /// How long [`TerminalHost::create`] waits for a PTY spawn before reporting

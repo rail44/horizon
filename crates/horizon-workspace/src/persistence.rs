@@ -6,11 +6,11 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::SessionId;
 use crate::types::{
     LayoutChild, LayoutNode, Pane, PaneId, PluginPane, SessionKind, SplitAxis, Tab, TabId,
     Workspace, WorkspaceSession,
 };
-use crate::SessionId;
 
 pub const WORKSPACE_STATE_VERSION: u32 = 1;
 
@@ -191,15 +191,15 @@ impl Workspace {
     ) -> Result<InventoryReconcile, InventoryError> {
         let inventory_by_id = inventory.validate()?;
         for session in &self.sessions {
-            if let Some(kind) = inventory_by_id.get(&session.id) {
-                if *kind != session.kind {
-                    return Err(InventoryError(format!(
-                        "session {:?} changed kind from {} to {}",
-                        session.id,
-                        session.kind.label(),
-                        kind.label()
-                    )));
-                }
+            if let Some(kind) = inventory_by_id.get(&session.id)
+                && *kind != session.kind
+            {
+                return Err(InventoryError(format!(
+                    "session {:?} changed kind from {} to {}",
+                    session.id,
+                    session.kind.label(),
+                    kind.label()
+                )));
             }
         }
 
@@ -264,10 +264,10 @@ impl Workspace {
             retained_tabs.push(tab);
         }
         self.tabs = retained_tabs;
-        if !self.tabs.iter().any(|tab| tab.id == self.active_tab) {
-            if let Some(tab) = self.tabs.first() {
-                self.active_tab = tab.id;
-            }
+        if !self.tabs.iter().any(|tab| tab.id == self.active_tab)
+            && let Some(tab) = self.tabs.first()
+        {
+            self.active_tab = tab.id;
         }
         self.exit_workspace_mode();
     }
@@ -514,7 +514,7 @@ fn sort_session_ids(ids: &mut [SessionId]) {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use crate::operations::Content;
 
@@ -835,8 +835,8 @@ mod tests {
     }
 
     #[test]
-    fn inventory_preserves_detached_metadata_and_leaves_the_workspace_empty_when_all_panes_are_gone(
-    ) {
+    fn inventory_preserves_detached_metadata_and_leaves_the_workspace_empty_when_all_panes_are_gone()
+     {
         // 2026-07-18 owner clarification: pruning every persisted pane away
         // used to auto-create a fresh terminal (`created_terminal`, now
         // removed) so the workspace never reached zero tabs. A zero-tab

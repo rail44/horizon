@@ -1,8 +1,8 @@
 //! Own one request span and its response until the retry decision consumes it.
 use super::super::retry::Attempt;
 use super::{
-    response::{ResponseCollector, ResponseEnd},
     ProviderRequestSpan, TurnCompletion,
+    response::{ResponseCollector, ResponseEnd},
 };
 use crate::{
     config::RigAgentConfig,

@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    decode_model_option_id, read_horizon_meta, MemoryEvent, MessageMeta, ModelOptionMeta,
-    SessionEventNotification, TaskProgressNotification, TaskProgressState, ToolCallMeta,
-    ToolCallProgressEvent, MODEL_CONFIG_ID, STOP_REASON_DOOM_LOOP, STOP_REASON_FAILED,
+    MODEL_CONFIG_ID, MemoryEvent, MessageMeta, ModelOptionMeta, STOP_REASON_DOOM_LOOP,
+    STOP_REASON_FAILED, SessionEventNotification, TaskProgressNotification, TaskProgressState,
+    ToolCallMeta, ToolCallProgressEvent, decode_model_option_id, read_horizon_meta,
 };
 
 use super::types::*;

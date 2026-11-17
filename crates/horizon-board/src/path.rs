@@ -86,10 +86,13 @@ mod tests {
     // here is this test's alone.
     #[test]
     fn horizon_data_home_is_named_ahead_of_the_xdg_one() {
-        std::env::set_var("XDG_DATA_HOME", "/xdg");
-        std::env::set_var("HORIZON_DATA_HOME", "/horizon");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_DATA_HOME", "/xdg") };
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HORIZON_DATA_HOME", "/horizon") };
         assert_eq!(data_home(), PathBuf::from("/horizon"));
-        std::env::set_var("HORIZON_DATA_HOME", "");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HORIZON_DATA_HOME", "") };
         assert_eq!(data_home(), PathBuf::from("/xdg"));
     }
 

@@ -15,13 +15,12 @@ impl ConversationHistory {
                                 result,
                                 &call.tool.function.name,
                             );
-                            if let Message::User { content } = &mut message {
-                                if let Some(
-                                    rig_core::completion::message::UserContent::ToolResult(result),
-                                ) = content.first_mut()
-                                {
-                                    result.call = call.tool.id.clone();
-                                }
+                            if let Message::User { content } = &mut message
+                                && let Some(rig_core::completion::message::UserContent::ToolResult(
+                                    result,
+                                )) = content.first_mut()
+                            {
+                                result.call = call.tool.id.clone();
                             }
                             messages.push(message);
                         }

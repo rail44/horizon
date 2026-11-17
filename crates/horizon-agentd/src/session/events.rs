@@ -7,7 +7,7 @@ use horizon_agent::contract::{Event, SessionId};
 use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 
-use super::state::{lock_unpoisoned, AgentdState};
+use super::state::{AgentdState, lock_unpoisoned};
 
 /// Publish a new event to internal observers and the current attachment.
 /// Ephemeral progress is retained for the next snapshot. A full live mailbox
@@ -96,8 +96,8 @@ pub(super) fn persist_and_send_session_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::test_support::test_state;
     use crate::session::Connection;
+    use crate::session::test_support::test_state;
     use horizon_agent::contract::{Event, SessionState};
 
     #[test]

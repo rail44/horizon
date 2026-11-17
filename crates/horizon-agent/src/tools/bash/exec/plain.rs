@@ -1,7 +1,7 @@
 //! Ordinary host execution uses async pipes and abortable output pumps.
-use super::stream::pump;
 #[cfg(unix)]
 use super::BASH_NICE_LEVEL;
+use super::stream::pump;
 use super::{failed_output, note_undrained, status_output, take, timeout_output, wrapped_script};
 use crate::config::BashToolConfig;
 use crate::tools::bash::registry::Registration;
@@ -139,10 +139,8 @@ async fn capture(
 
     let outcome = tokio::time::timeout(timeout, child.wait()).await;
     let killed = outcome.is_err();
-    if killed {
-        if let Some(guard) = &guard {
-            guard.kill();
-        }
+    if killed && let Some(guard) = &guard {
+        guard.kill();
     }
     // Reap the child (a no-op if `wait` above already completed it). In the
     // common case that closes the pipes' write ends and the pump tasks see

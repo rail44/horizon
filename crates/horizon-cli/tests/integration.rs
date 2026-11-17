@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use horizon_control::contract::{
-    Envelope, EnvelopeBody, ErrorMessage, HelloAck, Rejected, SessionEntry, Sessions, State,
-    CONTROL_VERSION,
+    CONTROL_VERSION, Envelope, EnvelopeBody, ErrorMessage, HelloAck, Rejected, SessionEntry,
+    Sessions, State,
 };
 use horizon_control::wire;
 

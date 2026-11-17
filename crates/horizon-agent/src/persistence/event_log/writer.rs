@@ -6,12 +6,12 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 
 use crate::persistence::projection::duckdb::{ApplyRecordsReport, DuckdbStoreHandle, Store};
 
 use super::{
-    cursor_line_matches, health::WriterHealth, read, read_from, LogCursor, ReadReport, Record,
+    LogCursor, ReadReport, Record, cursor_line_matches, health::WriterHealth, read, read_from,
 };
 
 /// A single append-only JSONL event log file must have **at most one**
@@ -377,22 +377,19 @@ fn start_up(
     reader: impl FnOnce(&Path) -> Result<ReadReport>,
     log_skipped_summary: bool,
 ) -> Result<StartedLog> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("create agent event log directory {}", parent.display())
-            })?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create agent event log directory {}", parent.display()))?;
     }
 
     let report = reader(path)?;
-    if log_skipped_summary {
-        if let Some(summary) = report.skipped_summary() {
-            eprintln!(
-                "horizon agent event log: {summary} while opening {}",
-                path.display()
-            );
-        }
+    if log_skipped_summary && let Some(summary) = report.skipped_summary() {
+        eprintln!(
+            "horizon agent event log: {summary} while opening {}",
+            path.display()
+        );
     }
     let next_sequence = report
         .max_known_sequence
@@ -452,17 +449,16 @@ fn discard_partial_tail(file: &mut std::fs::File) -> std::io::Result<()> {
 /// down the JSONL writer thread it shares a process with -- JSONL stays the
 /// source of truth regardless, and the next restart's rebuild reconciles.
 fn open_duckdb_store(duckdb_path: &Path) -> Option<Store> {
-    if let Some(parent) = duckdb_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            if let Err(error) = std::fs::create_dir_all(parent) {
-                eprintln!(
-                    "horizon-agentd: failed to create DuckDB projection directory {} ({error}); \
+    if let Some(parent) = duckdb_path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        eprintln!(
+            "horizon-agentd: failed to create DuckDB projection directory {} ({error}); \
                      live projection disabled for this run",
-                    parent.display()
-                );
-                return None;
-            }
-        }
+            parent.display()
+        );
+        return None;
     }
 
     match Store::open(duckdb_path) {
@@ -723,12 +719,12 @@ fn append_jsonl_record(writer: &mut impl Write, record: &Record) -> Result<u64> 
 /// A failed write may have left a partial record. Keep that failure until
 /// restart: another successful flush cannot establish a complete history.
 fn retain_write_failure<T>(result: &Result<T>, failure: &mut Option<String>) {
-    if failure.is_none() {
-        if let Err(error) = result {
-            let message = format!("{error:#}");
-            eprintln!("horizon agent event log: writer stopped after {message}");
-            *failure = Some(message);
-        }
+    if failure.is_none()
+        && let Err(error) = result
+    {
+        let message = format!("{error:#}");
+        eprintln!("horizon agent event log: writer stopped after {message}");
+        *failure = Some(message);
     }
 }
 
@@ -1724,7 +1720,8 @@ mod tests {
     /// once everything appended meanwhile is in it.
     fn assert_rebuild_does_not_hold_the_writer(seed_records: u64) {
         // nextest runs every test in its own process, so this cannot leak.
-        std::env::set_var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR, "1500");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR, "1500") };
         let dir = tempfile::tempdir().unwrap();
         let (log, db) = (
             dir.path().join("events.jsonl"),
@@ -1772,7 +1769,8 @@ mod tests {
                 event_id: last.event_id,
             })
         );
-        std::env::remove_var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR);
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR) };
         shut_down(Boot {
             writer,
             report,

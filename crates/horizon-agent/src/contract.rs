@@ -1172,10 +1172,12 @@ mod json_value_tests {
             call_id: ToolCallId("internal-retry".into()),
             occurrence_id: OccurrenceId::new(),
         };
-        assert!(serde_json::from_value::<Command>(serde_json::json!({
-            "ToolCallReissued": identity,
-        }))
-        .is_err());
+        assert!(
+            serde_json::from_value::<Command>(serde_json::json!({
+                "ToolCallReissued": identity,
+            }))
+            .is_err()
+        );
         assert!(serde_json::to_value(Command::ToolCallReissued(identity)).is_err());
     }
 

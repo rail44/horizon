@@ -48,7 +48,7 @@ mod terminal;
 use std::path::Path;
 use std::sync::Arc;
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use horizon_acp::{HostToolRequest, ProviderSummary, SessionId, SessionNewMeta};
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
@@ -57,7 +57,7 @@ use routing::{AgentRoutes, RouteKey, TerminalRoutes};
 use uuid::Uuid;
 
 use common::RuntimeControl;
-use request::{request, RequestError};
+use request::{RequestError, request};
 
 pub use notify::{NotifyCoalescer, NotifyDecision};
 

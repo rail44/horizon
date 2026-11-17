@@ -12,8 +12,8 @@ use crossbeam_channel::Sender;
 use futures_util::StreamExt;
 use rig_core::{
     completion::{
-        message::{Text, ToolCall},
         AssistantContent, CompletionRequest, Message, ToolDefinition,
+        message::{Text, ToolCall},
     },
     driver::DynModel,
     operation::Completion,
@@ -26,16 +26,16 @@ use crate::{
     contract::{
         Error, Event, MessageRole, ProviderEvent, ProviderRateLimited, ToolCallId, ToolCallResult,
     },
-    prompt::{system_prompt, SessionEnvironment},
-    tools::{definitions, Definition},
+    prompt::{SessionEnvironment, system_prompt},
+    tools::{Definition, definitions},
 };
 
 use super::{
-    clearing::{history_for_provider_request, ClearingState},
+    clearing::{ClearingState, history_for_provider_request},
     mapping::{
         horizon_provider_events_from_rig_message, rig_fs_read_call, rig_multi_snapshot_calls,
     },
-    retry::{with_pre_generation_retry, Attempt, Retried},
+    retry::{Attempt, Retried, with_pre_generation_retry},
     rig_workspace_snapshot_call,
 };
 
@@ -479,7 +479,7 @@ async fn run_provider_stream(
     {
         Ok(ProviderWait::Ready(Ok(stream))) => stream,
         Ok(ProviderWait::Cancelled) => {
-            return attempt.close(Ok(ResponseEnd::Cancelled), None, None)
+            return attempt.close(Ok(ResponseEnd::Cancelled), None, None);
         }
         Ok(ProviderWait::Ready(Err(error))) => return attempt.close(Err(error.into()), None, None),
         Err(error) => return attempt.close(Err(error), None, None),

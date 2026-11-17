@@ -17,7 +17,7 @@ pub(crate) use model_limits::list_model_ids;
 
 use clearing::ClearingState;
 #[allow(unused_imports)]
-use completion::{complete_rig_turn, ToolCallDescriptor, TurnCompletion};
+use completion::{ToolCallDescriptor, TurnCompletion, complete_rig_turn};
 #[allow(unused_imports)]
 use history::load_rig_session_history;
 use mapping::rig_workspace_snapshot_call;

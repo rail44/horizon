@@ -4,8 +4,8 @@ use super::super::conversation::Prompt;
 use crate::contract::{ToolCallResult, ToolOutcome};
 
 use super::{
-    deterministic_rig_response, deterministic_tool_result_response, tool_result_fingerprint,
-    SessionLoopState,
+    SessionLoopState, deterministic_rig_response, deterministic_tool_result_response,
+    tool_result_fingerprint,
 };
 
 impl SessionLoopState {
@@ -63,15 +63,13 @@ impl SessionLoopState {
         // (no_update) satisfy the turn-end checkpoint.
         if descriptor.tool_id == crate::tools::MEMORY_UPDATE_TOOL_ID
             && result.outcome == ToolOutcome::Succeeded
+            && let Some(memory) = self.memory.as_mut()
+            && let Ok(digest) = crate::tools::parse_update(&descriptor.args)
         {
-            if let Some(memory) = self.memory.as_mut() {
-                if let Ok(digest) = crate::tools::parse_update(&descriptor.args) {
-                    memory.record_update(&digest);
-                    let _ = self
-                        .events_tx
-                        .send(crate::contract::Event::MemoryDigest(digest).into());
-                }
-            }
+            memory.record_update(&digest);
+            let _ = self
+                .events_tx
+                .send(crate::contract::Event::MemoryDigest(digest).into());
         }
     }
 

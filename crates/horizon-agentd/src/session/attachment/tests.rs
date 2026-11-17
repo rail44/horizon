@@ -62,11 +62,13 @@ fn replacement_revokes_old_commands_and_old_drop_keeps_new_subscription() {
         AgentWireEvent::Event(message(1))
     );
     drop(current);
-    assert!(lock_unpoisoned(&state.agent_subscribers)
-        .get(&session)
-        .unwrap()
-        .subscriber
-        .is_none());
+    assert!(
+        lock_unpoisoned(&state.agent_subscribers)
+            .get(&session)
+            .unwrap()
+            .subscriber
+            .is_none()
+    );
 }
 
 #[test]
@@ -82,11 +84,13 @@ fn cancelled_bootstrap_never_replaces_a_live_attachment_and_dropped_reply_releas
     let (reply, receive) = oneshot::channel();
     capture(&state, session, &live, reply);
     drop(receive);
-    assert!(lock_unpoisoned(&state.agent_subscribers)
-        .get(&session)
-        .unwrap()
-        .subscriber
-        .is_none());
+    assert!(
+        lock_unpoisoned(&state.agent_subscribers)
+            .get(&session)
+            .unwrap()
+            .subscriber
+            .is_none()
+    );
 }
 
 #[test]
@@ -136,9 +140,11 @@ fn detached_progress_is_seeded_and_closed_previews_and_tasks_stay_closed() {
     send_session_event(&state, session, AgentWireEvent::TaskProgress(task.clone()));
     let first = snapshot(&state, session, &live);
     assert!(first.metadata.contains(&preview));
-    assert!(first
-        .metadata
-        .contains(&AgentWireEvent::TaskProgress(task.clone())));
+    assert!(
+        first
+            .metadata
+            .contains(&AgentWireEvent::TaskProgress(task.clone()))
+    );
     send_session_event(
         &state,
         session,
@@ -161,19 +167,23 @@ async fn missing_or_ended_session_is_an_error_not_empty_history() {
     let state = test_state();
     let connection = crate::session::Connection::new(state.clone());
     let session = SessionId::new();
-    assert!(connection
-        .attach(session)
-        .await
-        .err()
-        .unwrap()
-        .contains("Unknown"));
+    assert!(
+        connection
+            .attach(session)
+            .await
+            .err()
+            .unwrap()
+            .contains("Unknown")
+    );
     let _commands = state.install_test_session(session);
-    assert!(connection
-        .attach(session)
-        .await
-        .err()
-        .unwrap()
-        .contains("ended"));
+    assert!(
+        connection
+            .attach(session)
+            .await
+            .err()
+            .unwrap()
+            .contains("ended")
+    );
 }
 
 #[tokio::test]
@@ -231,10 +241,12 @@ fn duplicate_creation_preserves_the_existing_session_command_owner() {
         workspace_root: None,
         spawn_source_session_id: None,
     };
-    assert!(connection
-        .handle_session_new(request)
-        .unwrap_err()
-        .contains("already exists"));
+    assert!(
+        connection
+            .handle_session_new(request)
+            .unwrap_err()
+            .contains("already exists")
+    );
     assert!(state.send_command(session, Command::ContinueTurn));
     assert_eq!(commands.try_recv().unwrap(), Command::ContinueTurn);
 }

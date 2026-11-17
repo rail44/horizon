@@ -14,9 +14,9 @@ use horizon_agent::contract::{
 };
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::{
-    execute_agent_tool, register_session_runtime, resolve_approval, unregister_session_runtime,
     ApprovalDecision, ApprovalOutcome, BashCompletion, Execution, HostTools, RecallContext,
-    SessionNetworkProxy, ToolSessionState,
+    SessionNetworkProxy, ToolSessionState, execute_agent_tool, register_session_runtime,
+    resolve_approval, unregister_session_runtime,
 };
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -315,10 +315,12 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
             panic!("unexpected approval judgment: {judgment:?}")
         }
         BashCompletion::Finished(result) => {
-            assert!(result.output["output"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("ORIGIN-X"));
+            assert!(
+                result.output["output"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("ORIGIN-X")
+            );
             result
         }
         other => panic!("approved retry did not finish normally: {other:?}"),

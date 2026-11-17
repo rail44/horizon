@@ -23,8 +23,8 @@ use super::client::ModelClient;
 use super::client::RigModelClient;
 use super::ratelimit::RateLimiter;
 use super::{
-    record, run_judge, ApprovalCandidate, ApprovalJudgment, JudgeApprovalContext, JudgeBackend,
-    JudgeFallbackReason, JudgeInput, JudgeVerdict,
+    ApprovalCandidate, ApprovalJudgment, JudgeApprovalContext, JudgeBackend, JudgeFallbackReason,
+    JudgeInput, JudgeVerdict, record, run_judge,
 };
 
 const JUDGE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -312,12 +312,14 @@ mod tests {
     #[test]
     fn unset_key_variables_leave_human_approval_active() {
         let (writer, path) = writer();
-        assert!(JudgeHandle::new(
-            Some(&connection("HORIZON_JUDGE_TEST_UNSET_KEY")),
-            Some(&auxiliary("HORIZON_JUDGE_TEST_UNSET_AUX_KEY")),
-            Some(writer),
-        )
-        .is_none());
+        assert!(
+            JudgeHandle::new(
+                Some(&connection("HORIZON_JUDGE_TEST_UNSET_KEY")),
+                Some(&auxiliary("HORIZON_JUDGE_TEST_UNSET_AUX_KEY")),
+                Some(writer),
+            )
+            .is_none()
+        );
         let _ = std::fs::remove_file(path);
     }
 
@@ -384,7 +386,8 @@ mod tests {
     fn the_handle_reads_the_threshold_from_the_environment() {
         // nextest runs each test in its own process, so this variable
         // cannot leak into another test.
-        std::env::set_var(ASK_THRESHOLD_VAR, "0.35");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(ASK_THRESHOLD_VAR, "0.35") };
         let (writer, path) = writer();
         let judge = JudgeHandle::new(Some(&connection("PATH")), None, Some(writer)).expect("judge");
         assert_eq!(judge.ask_threshold(), Some(0.35));

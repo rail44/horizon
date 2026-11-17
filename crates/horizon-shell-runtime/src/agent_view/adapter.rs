@@ -18,8 +18,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use horizon_acp::{MemoryDigest, MemoryField, TaskProgressNotification, ToolOutcome};
 
 use super::turns::{
-    build_tool_call_views, group_into_turns, humanize_duration, pluralize, receipt_summary,
-    segment_bursts, str_field, tool_call_body, DiffLineKind, ToolCallBody, ToolCallView,
+    DiffLineKind, ToolCallBody, ToolCallView, build_tool_call_views, group_into_turns,
+    humanize_duration, pluralize, receipt_summary, segment_bursts, str_field, tool_call_body,
 };
 use crate::agent_display::chrome;
 use crate::agent_display::{
@@ -27,8 +27,8 @@ use crate::agent_display::{
     Receipt, Status, Task, Tone, Transcript, Turn, TurnPart, TurnState, Unit,
 };
 use crate::agent_model::{
-    actionable_pending_approval_identities_in, state_indicates_turn_in_flight, AgentFrameItem,
-    AgentModel, MessageRole, SessionState, ToolCallIdentity, TurnEndReason, TurnSpan,
+    AgentFrameItem, AgentModel, MessageRole, SessionState, ToolCallIdentity, TurnEndReason,
+    TurnSpan, actionable_pending_approval_identities_in, state_indicates_turn_in_flight,
 };
 
 /// The display model, and the identity behind each approval id it carries.
@@ -182,11 +182,11 @@ fn units(
             continue;
         }
         let range = span.start..span.end;
-        if let Some((held, kept)) = settled.spans.get(position) {
-            if *held == range {
-                units.extend(kept.iter().cloned());
-                continue;
-            }
+        if let Some((held, kept)) = settled.spans.get(position)
+            && *held == range
+        {
+            units.extend(kept.iter().cloned());
+            continue;
         }
         settled.spans.truncate(position);
         let worded: Vec<Rc<Unit>> = span_units(items, &span, false, pending)

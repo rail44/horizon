@@ -147,11 +147,11 @@ pub fn run(
                 return 1;
             }
         };
-        if state.destructive_commands.iter().any(|c| c == name) {
-            if let Err(message) = confirm::resolve(parsed.global.yes, stdin_is_tty, name, ask) {
-                let _ = writeln!(stderr, "error: {message}");
-                return 1;
-            }
+        if state.destructive_commands.iter().any(|c| c == name)
+            && let Err(message) = confirm::resolve(parsed.global.yes, stdin_is_tty, name, ask)
+        {
+            let _ = writeln!(stderr, "error: {message}");
+            return 1;
         }
     }
 

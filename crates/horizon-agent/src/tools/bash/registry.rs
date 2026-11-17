@@ -1,5 +1,5 @@
 //! Own each bash job from enqueue through completion, including cancellation.
-use std::collections::{hash_map::Entry, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use super::process::KillHandle;

@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use horizon_terminal_core::TerminalFrame;
-use horizon_wire::{CappedWatchReceiver, WireCodec, FRAME_MAX_ITEM_BYTES};
+use horizon_wire::{CappedWatchReceiver, FRAME_MAX_ITEM_BYTES, WireCodec};
 use remoc::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::net::UnixStream;

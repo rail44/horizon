@@ -3,9 +3,9 @@ use super::super::{failed_output, infrastructure_output, stream::spawn_blocking_
 use crate::config::BashToolConfig;
 use crate::tools::bash::process::kill_process_tree;
 use crate::tools::bash::registry::Registration;
+use crate::tools::output::Response;
 #[cfg(target_os = "linux")]
 use crate::tools::output::annotate_sandboxed;
-use crate::tools::output::Response;
 use std::process::ExitStatus;
 use std::time::Duration;
 

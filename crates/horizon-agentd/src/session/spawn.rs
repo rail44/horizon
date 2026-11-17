@@ -16,10 +16,10 @@ use horizon_agent::tools::unregister_session_runtime;
 
 use super::events::send_session_event;
 use super::panic::{
-    catch_session_panic, record_uncaught_session_panic, SessionLoopPhase, SessionPanic,
+    SessionLoopPhase, SessionPanic, catch_session_panic, record_uncaught_session_panic,
 };
 use super::run::run_session;
-use super::state::{lock_unpoisoned, AgentdState, SessionEntry};
+use super::state::{AgentdState, SessionEntry, lock_unpoisoned};
 use crate::worktree::{self, WorktreeInfo};
 
 /// Resolves this session's model (pure and synchronous -- see
@@ -254,13 +254,12 @@ pub(super) fn spawn_session_thread_with_context(
         if let Some(worktree) = entry
             .and_then(|entry| entry.worktree)
             .filter(|_| !suspended)
+            && (!work_settled || !worktree::remove_worktree_if_clean(&worktree))
         {
-            if !work_settled || !worktree::remove_worktree_if_clean(&worktree) {
-                eprintln!(
-                    "horizon-agentd: kept worktree {} for {session_id:?} (not clean or background work still stopping)",
-                    worktree.path.display()
-                );
-            }
+            eprintln!(
+                "horizon-agentd: kept worktree {} for {session_id:?} (not clean or background work still stopping)",
+                worktree.path.display()
+            );
         }
     });
 }
@@ -268,8 +267,8 @@ pub(super) fn spawn_session_thread_with_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::test_support::state_with_rig_config;
     use crate::session::Connection;
+    use crate::session::test_support::state_with_rig_config;
 
     /// A resolvable model (rig provider, `api_key_present: true`) is both
     /// returned (for `SessionEntry::model`) and announced live as a

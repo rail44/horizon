@@ -4,13 +4,13 @@
 //! per-tool classifier is `horizon_agent::transcript::classify`.
 
 use horizon_agent::contract::tool_output::{
-    decode, BashOutput, EditOutcome, FileEdits, FileRead, FileWritten, Location, Matches,
+    BashOutput, EditOutcome, FileEdits, FileRead, FileWritten, Location, Matches, decode,
 };
 use horizon_agent::transcript::ToolCallClassification;
 use serde_json::Value;
 
+use super::{DiffLine, DiffLineKind, ToolCallView, classify, edit_entries, str_field};
 use super::{cap_lines_head, cap_lines_tail, reconstruct_line_diff, tool_call_source};
-use super::{classify, edit_entries, str_field, DiffLine, DiffLineKind, ToolCallView};
 use crate::agent_model::AgentFrameItem;
 
 /// A tool call's expanded-row body (stage D, decision 3's "each row
@@ -278,7 +278,7 @@ mod tests {
     use serde_json::json;
 
     use super::super::test_support::*;
-    use super::super::{build_tool_call_views, DiffLineKind};
+    use super::super::{DiffLineKind, build_tool_call_views};
     use super::*;
 
     fn with_occurrence(mut item: AgentFrameItem, occurrence: &str) -> AgentFrameItem {
@@ -761,12 +761,16 @@ mod tests {
         else {
             panic!("expected edit receipts")
         };
-        assert!(lines
-            .iter()
-            .any(|line| line.text.contains("applied (2 replacements)")));
-        assert!(lines
-            .iter()
-            .any(|line| line.text.contains("failed: not found")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.text.contains("applied (2 replacements)"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.text.contains("failed: not found"))
+        );
         assert!(lines.iter().any(|line| line.text.contains("not attempted")));
         assert_eq!(
             lines

@@ -22,21 +22,21 @@ use std::process::Command;
 use std::time::Duration;
 
 use horizon_daemon_testkit::{
-    connect_hub_client, connect_initialized, connect_with_retry, drain_with_timeout,
-    resolve_daemon_binary, scratch_socket, sibling_daemon_binary, wait_for_exit, AgentdPaths,
-    AgentdProcess, AgentdSpawn, DaemonProcess,
+    AgentdPaths, AgentdProcess, AgentdSpawn, DaemonProcess, connect_hub_client,
+    connect_initialized, connect_with_retry, drain_with_timeout, resolve_daemon_binary,
+    scratch_socket, sibling_daemon_binary, wait_for_exit,
 };
 use horizon_terminal_core::wire::{
-    terminal_client_hello, TerminalHub as _, TerminalHubClient,
-    MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION, TERMINAL_PROTOCOL_VERSION,
+    MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION, TERMINAL_PROTOCOL_VERSION, TerminalHub as _,
+    TerminalHubClient, terminal_client_hello,
 };
 use horizon_terminal_core::{
     TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize, TerminalSpawnSpec,
     TerminalSummary, TerminalUpdate,
 };
 use horizon_wire::{
-    CappedReceiver, CappedWatchReceiver, ClientHello, HubError, VersionRange, WireCodec,
-    FRAME_MAX_ITEM_BYTES, TERMINAL_EVENT_MAX_ITEM_BYTES,
+    CappedReceiver, CappedWatchReceiver, ClientHello, FRAME_MAX_ITEM_BYTES, HubError,
+    TERMINAL_EVENT_MAX_ITEM_BYTES, VersionRange, WireCodec,
 };
 use remoc::rch;
 use tokio::net::UnixStream;
@@ -595,10 +595,10 @@ async fn undersized_geometry_reaches_the_pty_as_the_same_effective_size() {
                     .await
                     .unwrap()
                     .expect("live terminal");
-                if let TerminalUpdate::Title(Some(title)) = event {
-                    if title == expected {
-                        break;
-                    }
+                if let TerminalUpdate::Title(Some(title)) = event
+                    && title == expected
+                {
+                    break;
                 }
             }
         })

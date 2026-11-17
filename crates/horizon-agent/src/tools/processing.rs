@@ -1,5 +1,5 @@
 //! Coordinate one provider event with its tool plan and acknowledged lifecycle.
-use super::{execute_agent_tool, Execution, HostTools, ToolSessionState, ToolUpdate};
+use super::{Execution, HostTools, ToolSessionState, ToolUpdate, execute_agent_tool};
 use crate::contract::{Command, Event, ProviderEvent, SessionId};
 use crate::judge::ApprovalCandidate;
 use crate::live::LiveState;

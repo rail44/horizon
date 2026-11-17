@@ -1,7 +1,7 @@
 use super::*;
+use crate::outbox::Outbox;
 use crate::outbox::log::Pending;
 use crate::outbox::tests::record;
-use crate::outbox::Outbox;
 use horizon_agent::contract::{Command, Event, InputResult, SessionInputOutcome, SessionWorktree};
 use horizon_agent::persistence::event_log::{WriterHandle, WriterInit};
 
@@ -171,10 +171,12 @@ async fn review_continuation_rejects_a_different_project_at_either_session() {
             .index_mut()
             .projects
             .insert(mismatch, root.join("different-project"));
-        assert!(runner
-            .deliver_one(reviewer, "result", answer(reply.clone()))
-            .await
-            .is_err());
+        assert!(
+            runner
+                .deliver_one(reviewer, "result", answer(reply.clone()))
+                .await
+                .is_err()
+        );
         assert!(receiver.try_recv().is_err());
     }
 }

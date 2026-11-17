@@ -24,18 +24,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use agent_client_protocol::Error;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema as v2;
-use agent_client_protocol::Error;
 use horizon_acp as acp;
 use horizon_agent::contract::{
     Event, Exit, MessageRole, ProviderEvent, ProviderId, SessionId, SessionState, TurnEndReason,
 };
 use horizon_agent::persistence::event_log::{Appender, WriterHandle, WriterInit};
 use horizon_daemon_testkit::{
-    agentd_hermetic_command, cargo_bin_exe_var, connect_acp, connect_initialized,
-    connect_with_retry, initialize_request, resolve_daemon_binary, spawn_with_link_retry,
-    wait_for_exit, AcpClient, AgentdPaths, AgentdProcess, AgentdSpawn, Inbound,
+    AcpClient, AgentdPaths, AgentdProcess, AgentdSpawn, Inbound, agentd_hermetic_command,
+    cargo_bin_exe_var, connect_acp, connect_initialized, connect_with_retry, initialize_request,
+    resolve_daemon_binary, spawn_with_link_retry, wait_for_exit,
 };
 
 /// The env var `horizon-agentd`'s `main` reads to artificially delay its
@@ -546,14 +546,13 @@ async fn wait_for_persisted_event(
     mut predicate: impl FnMut(&Event) -> bool,
 ) {
     for _ in 0..200 {
-        if let Ok(report) = horizon_agent::persistence::event_log::read(path) {
-            if report
+        if let Ok(report) = horizon_agent::persistence::event_log::read(path)
+            && report
                 .records
                 .iter()
                 .any(|record| record.session_id == session_id && predicate(&record.event))
-            {
-                return;
-            }
+        {
+            return;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -652,10 +651,12 @@ api_key_env = "HORIZON_SWITCH_TEST_KEY"
         .unwrap();
     applied(&mut client, "added/wire-model").await;
 
-    assert!(client
-        .request(set_model(session_id, "missing/bad-model"))
-        .await
-        .is_err());
+    assert!(
+        client
+            .request(set_model(session_id, "missing/bad-model"))
+            .await
+            .is_err()
+    );
     let replay = resume(&mut client, session_id).await.unwrap();
     assert!(
         replay
@@ -1284,9 +1285,11 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
             .any(|inbound| matches!(inbound, Inbound::Permission(..))),
         "the cancelled approval must not be asked again"
     );
-    assert!(collected
-        .iter()
-        .any(|inbound| user_message(inbound).as_deref() == Some("hello again")));
+    assert!(
+        collected
+            .iter()
+            .any(|inbound| user_message(inbound).as_deref() == Some("hello again"))
+    );
 
     wait_for_persisted_event(&respawned.event_log_path, session_id, |event| {
         matches!(event, Event::MessageCommitted(message)
@@ -2493,9 +2496,11 @@ async fn repeated_attachments_during_streaming_join_history_and_live_exactly_onc
             collect_until(&mut client, |inbound| idle_stop_reason(inbound).is_some()).await,
         );
     }
-    assert!(!messages
-        .iter()
-        .any(|inbound| { idle_stop_reason(inbound) == Some(Some(v2::StopReason::Cancelled)) }));
+    assert!(
+        !messages
+            .iter()
+            .any(|inbound| { idle_stop_reason(inbound) == Some(Some(v2::StopReason::Cancelled)) })
+    );
     let replay = resume(&mut client, session).await.unwrap();
     assert_eq!(
         messages.iter().map(wire).collect::<Vec<_>>(),

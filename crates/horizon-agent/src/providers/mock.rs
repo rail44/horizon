@@ -1,6 +1,6 @@
 use std::{collections::HashSet, ops::ControlFlow, thread, time::Duration};
 
-use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 
 use crate::contract::*;
 use crate::registry::{Provider, SessionHandle};

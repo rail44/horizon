@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use horizon_wire::{
-    channel_schema, CappedReceiver, CappedWatchReceiver, ClientHello, HubError, VersionRange,
-    WireCodec, FRAME_MAX_ITEM_BYTES, TERMINAL_EVENT_MAX_ITEM_BYTES,
+    CappedReceiver, CappedWatchReceiver, ClientHello, FRAME_MAX_ITEM_BYTES, HubError,
+    TERMINAL_EVENT_MAX_ITEM_BYTES, VersionRange, WireCodec, channel_schema,
 };
 
 use crate::{TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};

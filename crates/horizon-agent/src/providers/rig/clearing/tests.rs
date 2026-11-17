@@ -2,7 +2,7 @@ use super::super::conversation::{ConversationHistory, Prompt};
 use super::*;
 use crate::contract::ProviderEvent;
 use crate::contract::{ConversationInputKind, OccurrenceId, ToolCallId, ToolCallIdentity};
-use crossbeam_channel::{unbounded, Sender};
+use crossbeam_channel::{Sender, unbounded};
 use rig_core::completion::message::{ToolCall, ToolFunction};
 
 fn id(value: &str) -> OccurrenceId {
@@ -118,9 +118,11 @@ fn floor_tail_and_current_batch_prevent_small_or_unsafe_passes() {
     let plan = plan_clearing_pass(&history, &ClearedResults::default());
     assert!(plan.cleared_occurrence_ids.contains(&id("occ-0")));
     for index in 36..40 {
-        assert!(!plan
-            .cleared_occurrence_ids
-            .contains(&id(&format!("occ-{index}"))));
+        assert!(
+            !plan
+                .cleared_occurrence_ids
+                .contains(&id(&format!("occ-{index}")))
+        );
     }
     assert_eq!(plan.cleared_occurrence_ids.len(), 36);
     assert!(plan.recovered_chars >= 36 * 16_384);
@@ -157,10 +159,12 @@ fn a_later_pass_can_clear_an_aged_result_whose_provider_id_was_reused() {
     }
     let second = state.run_pass(&history).unwrap();
     assert!(second.cleared_occurrence_ids.contains(&id("later")));
-    assert!(second
-        .cleared_occurrence_ids
-        .iter()
-        .all(|id| !first.cleared_occurrence_ids.contains(id)));
+    assert!(
+        second
+            .cleared_occurrence_ids
+            .iter()
+            .all(|id| !first.cleared_occurrence_ids.contains(id))
+    );
     assert!(state.run_pass(&history).is_none());
 }
 #[test]

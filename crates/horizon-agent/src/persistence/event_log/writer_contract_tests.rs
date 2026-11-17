@@ -29,9 +29,11 @@ fn a_projection_without_a_cursor_rebuilds_on_restart() {
     let rebuilt = boot(&log, &path);
     assert_eq!(rebuilt.report.read_after, None);
     let store = rebuilt.store.clone().unwrap();
-    assert!(store
-        .query(|store| store.matches_log_prefix(&records))
-        .unwrap());
+    assert!(
+        store
+            .query(|store| store.matches_log_prefix(&records))
+            .unwrap()
+    );
     assert_eq!(
         store
             .query(|store| store.messages_for_session(session))
@@ -56,12 +58,14 @@ fn replacing_the_log_with_equal_sequences_rebuilds_different_event_ids() {
     write_log(&log, std::slice::from_ref(&replacement));
     let rebuilt = boot(&log, &path);
     assert_eq!(rebuilt.report.read_after, None);
-    assert!(rebuilt
-        .store
-        .as_ref()
-        .unwrap()
-        .query(|store| store.matches_log_prefix(std::slice::from_ref(&replacement)))
-        .unwrap());
+    assert!(
+        rebuilt
+            .store
+            .as_ref()
+            .unwrap()
+            .query(|store| store.matches_log_prefix(std::slice::from_ref(&replacement)))
+            .unwrap()
+    );
     shut_down(rebuilt);
 }
 
@@ -101,11 +105,13 @@ fn projection_failure_revokes_readers_but_keeps_writing_the_authoritative_log() 
     writer.append(message_record(session, 2, "after")).unwrap();
     writer.flush().unwrap();
     assert!(writer.failure().is_none());
-    assert!(reader
-        .query(|store| store.max_last_sequence())
-        .unwrap_err()
-        .to_string()
-        .contains("unavailable"));
+    assert!(
+        reader
+            .query(|store| store.max_last_sequence())
+            .unwrap_err()
+            .to_string()
+            .contains("unavailable")
+    );
     drop(writer);
     worker.join().unwrap();
     drop(reader);
@@ -129,12 +135,14 @@ fn projection_failure_revokes_readers_but_keeps_writing_the_authoritative_log() 
     repaired[1].turn_id = Some("recovered-turn".into());
     write_log(&path, &repaired);
     let rebuilt = boot(&path, &db_path);
-    assert!(rebuilt
-        .store
-        .as_ref()
-        .unwrap()
-        .query(|store| store.matches_log_prefix(&repaired))
-        .unwrap());
+    assert!(
+        rebuilt
+            .store
+            .as_ref()
+            .unwrap()
+            .query(|store| store.matches_log_prefix(&repaired))
+            .unwrap()
+    );
     shut_down(rebuilt);
 }
 struct FailAfterFirstRecord {
@@ -177,13 +185,15 @@ fn a_failed_batch_is_not_published_and_restart_recovers_only_its_saved_prefix() 
         message_record(session, 0, "saved"),
         message_record(session, 1, "unsaved"),
     ];
-    assert!(live
-        .extend_provider_events(events.iter().map(|record| record.event.clone().into()))
-        .is_err());
+    assert!(
+        live.extend_provider_events(events.iter().map(|record| record.event.clone().into()))
+            .is_err()
+    );
     assert!(live.events().is_empty());
-    assert!(live
-        .extend_provider_events([record_at(session, 2).event.into()])
-        .is_err());
+    assert!(
+        live.extend_provider_events([record_at(session, 2).event.into()])
+            .is_err()
+    );
     drop(live);
     drop(writer);
     worker.join().unwrap();

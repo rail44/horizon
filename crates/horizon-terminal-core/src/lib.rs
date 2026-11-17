@@ -32,16 +32,16 @@ pub use contract::{
     ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand, TerminalKeyInput,
     TerminalNotification, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
-pub use core::{TerminalColorScheme, DEFAULT_SCROLLBACK_LINES};
+pub use core::{DEFAULT_SCROLLBACK_LINES, TerminalColorScheme};
 pub use session_loop::{
-    core_channels, run_terminal_core, CoreInput, CoreReceivers, CoreSenders, TerminalCoreOptions,
+    CoreInput, CoreReceivers, CoreSenders, TerminalCoreOptions, core_channels, run_terminal_core,
 };
 pub use types::{
-    fixed_palette_rgb, KeyEventKind, NamedColor, TerminalColor, TerminalCursor,
-    TerminalCursorShape, TerminalFrame, TerminalLine, TerminalMouseButton, TerminalMouseKind,
-    TerminalMouseModifiers, TerminalMouseReport, TerminalScroll, TerminalScrollWindow,
-    TerminalSelection, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalSpan,
-    TerminalUnderline,
+    KeyEventKind, NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame,
+    TerminalLine, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
+    TerminalMouseReport, TerminalScroll, TerminalScrollWindow, TerminalSelection,
+    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalSpan, TerminalUnderline,
+    fixed_palette_rgb,
 };
 
 #[cfg(test)]

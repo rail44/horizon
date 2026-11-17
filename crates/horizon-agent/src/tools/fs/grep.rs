@@ -97,7 +97,7 @@ pub(in crate::tools) fn execute(
         Some(glob_pattern) => match Glob::new(glob_pattern) {
             Ok(glob) => Some(glob.compile_matcher()),
             Err(error) => {
-                return error_output(format!("invalid glob pattern `{glob_pattern}`: {error}"))
+                return error_output(format!("invalid glob pattern `{glob_pattern}`: {error}"));
             }
         },
         None => None,
@@ -145,10 +145,10 @@ fn scan(
             }
             results.visited += 1;
             let relative = entry.path().strip_prefix(base).unwrap_or(entry.path());
-            if let Some(matcher) = matcher {
-                if !matcher.is_match(relative) {
-                    continue;
-                }
+            if let Some(matcher) = matcher
+                && !matcher.is_match(relative)
+            {
+                continue;
             }
             scan_file(entry.path(), regex, limit, &mut results);
         }

@@ -35,9 +35,9 @@
 
 pub mod denials;
 
+use crate::SandboxedChild;
 use crate::error::SandboxError;
 use crate::policy::{SandboxPolicy, SandboxStdio};
-use crate::SandboxedChild;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 

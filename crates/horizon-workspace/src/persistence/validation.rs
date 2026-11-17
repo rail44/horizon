@@ -1,8 +1,8 @@
 //! Validate persisted sessions, layout membership, and attachment references.
 
 use super::{
-    state_error, PaneState, SessionId, SessionKind, WorkspaceState, WorkspaceStateError,
-    WORKSPACE_STATE_VERSION,
+    PaneState, SessionId, SessionKind, WORKSPACE_STATE_VERSION, WorkspaceState,
+    WorkspaceStateError, state_error,
 };
 use std::collections::{HashMap, HashSet};
 

@@ -1,5 +1,5 @@
 use crate::contract::SessionId;
-use crate::prompt::{system_prompt, SessionEnvironment};
+use crate::prompt::{SessionEnvironment, system_prompt};
 use crate::registry;
 use crate::{contract as agent, frame::*, tools::test_support::policy_events};
 
@@ -668,11 +668,13 @@ fn agent_frame_from_events_folds_a_turn_ended_with_no_preceding_events() {
         agent_frame_from_events(&[agent::Event::TurnEnded(agent::TurnEndReason::Cancelled)]);
 
     match frame.items.as_slice() {
-        [AgentFrameItem::TurnEnded {
-            reason,
-            model,
-            elapsed,
-        }] => {
+        [
+            AgentFrameItem::TurnEnded {
+                reason,
+                model,
+                elapsed,
+            },
+        ] => {
             assert_eq!(*reason, agent::TurnEndReason::Cancelled);
             assert_eq!(*model, None);
             assert_eq!(*elapsed, std::time::Duration::ZERO);

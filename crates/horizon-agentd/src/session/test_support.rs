@@ -103,10 +103,14 @@ pub(crate) fn state_with_trusted_projects(trusted: Vec<std::path::PathBuf>) -> A
 
 #[test]
 fn session_fixtures_do_not_read_host_provider_or_persistence_settings() {
-    std::env::set_var("OPENAI_API_KEY", "fixture-only");
-    std::env::set_var("HORIZON_AGENT_CLEARING_THRESHOLD_PCT", "1");
-    std::env::set_var("HORIZON_AGENT_EVENT_LOG", "host-events.jsonl");
-    std::env::set_var("HORIZON_AGENT_STATE_DB", "host-state.duckdb");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("OPENAI_API_KEY", "fixture-only") };
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HORIZON_AGENT_CLEARING_THRESHOLD_PCT", "1") };
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HORIZON_AGENT_EVENT_LOG", "host-events.jsonl") };
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HORIZON_AGENT_STATE_DB", "host-state.duckdb") };
     for state in [
         test_state(),
         state_with_rig_config(false, "test-model"),

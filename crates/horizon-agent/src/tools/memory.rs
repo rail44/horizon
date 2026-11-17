@@ -26,9 +26,9 @@
 //! and emits the event — so the state mutation and the persistence happen in
 //! one place (the loop), not split across a host boundary.
 
+use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
-use serde_json::Value;
 
 use crate::contract::{Event, MemoryDigest, MemoryField, MemoryOp};
 use crate::tools::output::error as error_output;

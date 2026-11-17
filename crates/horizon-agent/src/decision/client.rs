@@ -171,7 +171,8 @@ mod tests {
     #[tokio::test]
     async fn loopback_decide_posts_to_the_decision_url_as_written_and_parses_the_answers() {
         let key_var = "HORIZON_DECISION_TEST_LOOPBACK_KEY";
-        std::env::set_var(key_var, "secret-token");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(key_var, "secret-token") };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(serve_once(
@@ -211,7 +212,8 @@ mod tests {
     #[tokio::test]
     async fn loopback_decide_maps_an_error_status_to_its_message() {
         let key_var = "HORIZON_DECISION_TEST_LOOPBACK_ERROR_KEY";
-        std::env::set_var(key_var, "secret-token");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(key_var, "secret-token") };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(serve_once(

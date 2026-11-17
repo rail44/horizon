@@ -4,7 +4,7 @@ use crate::contract::{Event, OccurrenceId, SessionId};
 use crate::persistence::projection::duckdb::DuckdbStoreHandle;
 
 use super::clearing::cleared_occurrence_ids_from_events;
-use crate::tools::{memory_document_from_events, MemoryDocument};
+use crate::tools::{MemoryDocument, memory_document_from_events};
 
 /// Everything a resumed session has to rebuild from its persisted events:
 /// the canonical Rig history, plus the Tier 1 cleared set frozen by whatever

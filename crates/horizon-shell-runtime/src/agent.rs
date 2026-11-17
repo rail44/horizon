@@ -13,29 +13,29 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
+use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{
-    is_incoming_transport_closed, Agent, ByteStreams, Client, JsonRpcRequest,
+    Agent, ByteStreams, Client, JsonRpcRequest, is_incoming_transport_closed,
 };
 use horizon_acp::{
-    read_horizon_meta, write_horizon_meta, DrainRequest, EnsureBoardOrganizerRequest,
-    HostToolRequest, InitializeMeta, ListProviderModelsRequest, ListProvidersRequest,
+    DrainRequest, EnsureBoardOrganizerRequest, HORIZON_ACP_EXT_VERSION, HostToolRequest,
+    InitializeMeta, ListProviderModelsRequest, ListProvidersRequest, MODEL_CONFIG_ID,
     MemoryNotification, ProviderSummary, ReloadProviderConfigRequest, SessionEventNotification,
     SessionId, SessionInfoMeta, SessionNewMeta, TaskProgressNotification,
-    ToolCallProgressNotification, WatchBoardRequest, HORIZON_ACP_EXT_VERSION, MODEL_CONFIG_ID,
+    ToolCallProgressNotification, WatchBoardRequest, read_horizon_meta, write_horizon_meta,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use super::attachment::{acp_session_id, AgentCommand, Inbound};
+use super::attachment::{AgentCommand, Inbound, acp_session_id};
 use super::common::{
-    establish_timeout, wait_until_refusing, EstablishError, RuntimeControl, StreamEnd, OP_TIMEOUT,
-    SILENCE_MISMATCH_THRESHOLD,
+    EstablishError, OP_TIMEOUT, RuntimeControl, SILENCE_MISMATCH_THRESHOLD, StreamEnd,
+    establish_timeout, wait_until_refusing,
 };
 use super::connection::connect_or_spawn_agentd_retrying;
-use super::routing::{parse_session_id, AgentRoutes, RouteKey, EXT_VERSION_MISMATCH};
+use super::routing::{AgentRoutes, EXT_VERSION_MISMATCH, RouteKey, parse_session_id};
 use crate::agent_model::AgentEvent;
 
 /// The binary id this client reports in `initialize`.
@@ -325,7 +325,7 @@ fn client(
     routes: &Arc<AgentRoutes>,
 ) -> agent_client_protocol::v2::Builder<
     Client,
-    impl agent_client_protocol::HandleDispatchFrom<Agent>,
+    impl agent_client_protocol::HandleDispatchFrom<Agent> + use<>,
     agent_client_protocol::NullRun,
 > {
     let updates = routes.clone();
@@ -494,23 +494,23 @@ async fn initialize(connection: &V2ConnectionTo<Agent>) -> Result<(), EstablishE
         Err(_elapsed) => {
             return Err(EstablishError::Silence(format!(
                 "agentd did not answer initialize within {timeout:?}"
-            )))
+            )));
         }
         Ok(Err(error)) if error.message.starts_with(EXT_VERSION_MISMATCH) => {
             return Err(EstablishError::Rejected(format!(
                 "agentd rejected the handshake: {}",
                 error.message
-            )))
+            )));
         }
         Ok(Err(error)) if is_incoming_transport_closed(&error) => {
             return Err(EstablishError::Transient(format!(
                 "the connection dropped during initialize: {error}"
-            )))
+            )));
         }
         Ok(Err(error)) => {
             return Err(EstablishError::Fatal(format!(
                 "agentd answered initialize with an unexpected error: {error}"
-            )))
+            )));
         }
         Ok(Ok(response)) => response,
     };
@@ -521,15 +521,15 @@ async fn initialize(connection: &V2ConnectionTo<Agent>) -> Result<(), EstablishE
         Some(Ok(meta)) => {
             drain_on(connection).await;
             return Err(EstablishError::Rejected(format!(
-            "{EXT_VERSION_MISMATCH}: agentd {} speaks v{}, this shell v{HORIZON_ACP_EXT_VERSION}",
-            meta.binary_id, meta.ext_version
-        )));
+                "{EXT_VERSION_MISMATCH}: agentd {} speaks v{}, this shell v{HORIZON_ACP_EXT_VERSION}",
+                meta.binary_id, meta.ext_version
+            )));
         }
         Some(Err(_)) | None => {
             return Err(EstablishError::Rejected(format!(
                 "agentd did not report a horizon extension version (this shell speaks \
                  v{HORIZON_ACP_EXT_VERSION})"
-            )))
+            )));
         }
     }
     if response.capabilities.session.is_none() {

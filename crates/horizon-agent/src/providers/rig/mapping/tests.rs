@@ -182,11 +182,11 @@ fn provider_results_preserve_outcome_separately_from_arbitrary_tool_data() {
 
 #[test]
 fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
-    use crate::contract::tool_output::{decode, EditOutcome, FileEdits};
+    use crate::contract::tool_output::{EditOutcome, FileEdits, decode};
     use crate::contract::{SessionId, ToolOutcome};
     use crate::live::LiveState;
     use crate::persistence::{event_log, projection::duckdb::Store};
-    use crate::tools::{execute_agent_tool, Execution, HostTools, ToolSessionBuilder, ToolUpdate};
+    use crate::tools::{Execution, HostTools, ToolSessionBuilder, ToolUpdate, execute_agent_tool};
     use serde_json::json;
 
     struct NoHost;

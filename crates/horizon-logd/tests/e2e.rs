@@ -10,12 +10,12 @@ use std::process::Command;
 use std::time::Duration;
 
 use horizon_board::wire::{
-    log_client_hello, IngestReply, IngestRequest, LogHub as _, LogHubClient, LOG_PROTOCOL_VERSION,
-    MIN_SUPPORTED_LOG_PROTOCOL_VERSION,
+    IngestReply, IngestRequest, LOG_PROTOCOL_VERSION, LogHub as _, LogHubClient,
+    MIN_SUPPORTED_LOG_PROTOCOL_VERSION, log_client_hello,
 };
 use horizon_daemon_testkit::{
-    connect_hub_client, connect_with_retry, resolve_daemon_binary, scratch_socket, wait_for_exit,
-    DaemonProcess,
+    DaemonProcess, connect_hub_client, connect_with_retry, resolve_daemon_binary, scratch_socket,
+    wait_for_exit,
 };
 use horizon_wire::{ClientHello, HubError, VersionRange, WireCodec};
 
@@ -246,10 +246,13 @@ async fn board_store_client_round_trip_through_real_logd() {
     // next to the test process's own executable (which is under deps/, not
     // next to the daemon). `CARGO_BIN_EXE_horizon-logd` is guaranteed by
     // cargo for this test's own package.
-    std::env::set_var(
-        "HORIZON_LOGD_BINARY",
-        resolve_logd_binary().to_string_lossy().to_string(),
-    );
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe {
+        std::env::set_var(
+            "HORIZON_LOGD_BINARY",
+            resolve_logd_binary().to_string_lossy().to_string(),
+        )
+    };
 
     let dir = std::env::temp_dir().join(format!(
         "horizon-logd-board-rt-{}",
@@ -290,7 +293,8 @@ async fn board_store_client_round_trip_through_real_logd() {
     assert!(store.show(1).unwrap().unwrap().is_closed);
 
     drop(logd);
-    std::env::remove_var("HORIZON_LOGD_BINARY");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("HORIZON_LOGD_BINARY") };
 }
 
 // ---- subscribe (stage B) --------------------------------------------------
@@ -303,10 +307,13 @@ async fn edit_updates_title_and_body_through_logd() {
 
     let logd = spawn_logd_for_store().await;
 
-    std::env::set_var(
-        "HORIZON_LOGD_BINARY",
-        resolve_logd_binary().to_string_lossy().to_string(),
-    );
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe {
+        std::env::set_var(
+            "HORIZON_LOGD_BINARY",
+            resolve_logd_binary().to_string_lossy().to_string(),
+        )
+    };
 
     let dir = std::env::temp_dir().join(format!(
         "horizon-logd-board-edit-{}",
@@ -348,7 +355,8 @@ async fn edit_updates_title_and_body_through_logd() {
     assert_eq!(shown.body, "new body");
 
     drop(logd);
-    std::env::remove_var("HORIZON_LOGD_BINARY");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("HORIZON_LOGD_BINARY") };
 }
 
 /// `edit` on a nonexistent item returns `ItemNotFound`.

@@ -78,7 +78,7 @@ pub(super) fn scan(args: &[String]) -> Result<Arguments, UsageError> {
                 });
             }
             _ if arg.starts_with("--") => {
-                return Err(UsageError(format!("unrecognized flag: {arg}")))
+                return Err(UsageError(format!("unrecognized flag: {arg}")));
             }
             _ => parsed.positionals.push(arg.clone()),
         }

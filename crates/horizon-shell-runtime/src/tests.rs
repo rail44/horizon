@@ -28,8 +28,8 @@ use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use horizon_terminal_core::wire::{
-    TerminalAttachment, TerminalHub, TerminalHubClient, TerminalHubHello, TerminalHubServerShared,
-    TERMINAL_PROTOCOL_VERSION,
+    TERMINAL_PROTOCOL_VERSION, TerminalAttachment, TerminalHub, TerminalHubClient,
+    TerminalHubHello, TerminalHubServerShared,
 };
 use horizon_terminal_core::{
     ClipboardDestination, TerminalColorScheme, TerminalFrame, TerminalSize,
@@ -396,9 +396,11 @@ fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
     let (later_events, later_events_rx) = unbounded();
     let (later_commands, _later_commands_rx) = tokio::sync::mpsc::unbounded_channel();
     terminal_routes.register_terminal(later_id, later_frames, later_events, later_commands);
-    assert!(later_events_rx
-        .recv_timeout(Duration::from_millis(100))
-        .is_err());
+    assert!(
+        later_events_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

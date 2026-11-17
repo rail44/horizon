@@ -4,9 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::store::Store;
 use crate::store::source::{LogSource, Source};
 use crate::store::types::StoreError;
-use crate::store::Store;
 
 impl Store {
     /// Resolves the store from the current directory's main git root.

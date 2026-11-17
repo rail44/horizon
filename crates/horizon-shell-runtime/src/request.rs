@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use crossbeam_channel::{bounded, RecvTimeoutError, Sender};
+use crossbeam_channel::{RecvTimeoutError, Sender, bounded};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::SYNC_REPLY_TIMEOUT;

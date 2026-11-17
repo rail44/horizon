@@ -321,12 +321,16 @@ mod tests {
             "default_model = \"m\"\nsmall_model = { provider = \"p\", model = \"s\", effort = 1 }\n",
         );
         assert_eq!(warnings.len(), 2, "warnings = {warnings:?}");
-        assert!(warnings
-            .iter()
-            .any(|w| w.starts_with("default_model:") && w.contains("inline table")));
-        assert!(warnings
-            .iter()
-            .any(|w| w.starts_with("small_model:") && w.contains("\"effort\"")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.starts_with("default_model:") && w.contains("inline table"))
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.starts_with("small_model:") && w.contains("\"effort\""))
+        );
     }
 
     #[test]
@@ -334,9 +338,11 @@ mod tests {
         // Same probable-typo treatment inside [[providers]] entries as
         // everywhere else: serde would silently default a misspelled key.
         let warnings = collect_warnings("[[providers]]\nname = \"x\"\napi_key = \"leak\"\n");
-        assert!(warnings
-            .iter()
-            .any(|warning| warning.contains("unrecognized key \"api_key\"")));
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("unrecognized key \"api_key\""))
+        );
     }
 
     #[test]

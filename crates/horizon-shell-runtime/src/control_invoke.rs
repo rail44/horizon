@@ -223,7 +223,7 @@ mod tests {
     // (raised for `theme.rs`'s large `json!` macro) then can't absorb the
     // `#[test]` expansion on top, hitting the limit before the test body
     // even compiles. Narrowing the import sidesteps that.
-    use super::{optional_string_arg, parse, required_string_arg, session_id_arg, Command};
+    use super::{Command, optional_string_arg, parse, required_string_arg, session_id_arg};
     use horizon_control::contract::Invoke;
 
     #[test]

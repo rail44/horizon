@@ -12,7 +12,7 @@ use horizon_agent::live::LiveState;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use super::state::{lock_unpoisoned, AgentdState};
+use super::state::{AgentdState, lock_unpoisoned};
 
 // A slow attachment must not block the session or retain unbounded updates.
 const LIVE_CAPACITY: usize = 256;
@@ -53,15 +53,15 @@ impl SessionStream {
             }
             _ => {}
         }
-        if let Some(subscriber) = &self.subscriber {
-            if let Err(error) = subscriber.events.try_send(event) {
-                let reason = match error {
-                    mpsc::error::TrySendError::Full(_) => AttachmentEnd::Lagged,
-                    mpsc::error::TrySendError::Closed(_) => AttachmentEnd::Detached,
-                };
-                subscriber.end.send_replace(Some(reason));
-                self.subscriber = None;
-            }
+        if let Some(subscriber) = &self.subscriber
+            && let Err(error) = subscriber.events.try_send(event)
+        {
+            let reason = match error {
+                mpsc::error::TrySendError::Full(_) => AttachmentEnd::Lagged,
+                mpsc::error::TrySendError::Closed(_) => AttachmentEnd::Detached,
+            };
+            subscriber.end.send_replace(Some(reason));
+            self.subscriber = None;
         }
     }
 
@@ -118,19 +118,18 @@ impl AttachmentLease {
 impl Drop for AttachmentLease {
     fn drop(&mut self) {
         let mut streams = lock_unpoisoned(&self.state.agent_subscribers);
-        if let Some(stream) = streams.get_mut(&self.session) {
-            if stream
+        if let Some(stream) = streams.get_mut(&self.session)
+            && stream
                 .subscriber
                 .as_ref()
                 .is_some_and(|subscriber| subscriber.id == self.id)
-            {
-                stream
-                    .subscriber
-                    .take()
-                    .unwrap()
-                    .end
-                    .send_replace(Some(AttachmentEnd::Detached));
-            }
+        {
+            stream
+                .subscriber
+                .take()
+                .unwrap()
+                .end
+                .send_replace(Some(AttachmentEnd::Detached));
         }
     }
 }

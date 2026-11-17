@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::contract::SessionId;
 

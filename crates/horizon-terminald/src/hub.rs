@@ -17,20 +17,20 @@
 //! watch whose send fails only once every receiver is gone).
 
 use horizon_terminal_core::wire::{
-    terminal_version_range, TerminalAttachment, TerminalHub, TerminalHubHello,
+    TerminalAttachment, TerminalHub, TerminalHubHello, terminal_version_range,
 };
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 use horizon_wire::{
-    receive_pump, ClientHello, HelloGate, HubError, WireCodec, CHANNEL_BUFFER,
-    COMMAND_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES, TERMINAL_EVENT_MAX_ITEM_BYTES,
+    CHANNEL_BUFFER, COMMAND_MAX_ITEM_BYTES, ClientHello, FRAME_MAX_ITEM_BYTES, HelloGate, HubError,
+    TERMINAL_EVENT_MAX_ITEM_BYTES, WireCodec, receive_pump,
 };
 use remoc::rch;
 use uuid::Uuid;
 
-use crate::terminal::{SubscriberChannels, TerminalHost};
 use crate::DAEMON_NAME;
+use crate::terminal::{SubscriberChannels, TerminalHost};
 
 pub(crate) struct Hub {
     terminals: TerminalHost,
@@ -205,7 +205,7 @@ impl TerminalHub for Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_terminal_core::wire::{terminal_client_hello, TERMINAL_PROTOCOL_VERSION};
+    use horizon_terminal_core::wire::{TERMINAL_PROTOCOL_VERSION, terminal_client_hello};
     use horizon_wire::VersionRange;
 
     fn test_hub() -> Hub {

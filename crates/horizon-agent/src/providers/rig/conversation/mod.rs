@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 pub(crate) use test_support::{announcement, fixture};
 
 use crossbeam_channel::Sender;
-use rig_core::completion::{message::ToolCall, AssistantContent, Message};
+use rig_core::completion::{AssistantContent, Message, message::ToolCall};
 
 use crate::contract::{
     ConversationInputKind, ConversationRecord, Event, OccurrenceId, ProviderEvent, ToolCallId,
@@ -274,12 +274,10 @@ impl ConversationHistory {
             if response_id.is_empty() {
                 return Err("Empty conversation response identity".into());
             }
-            if let Some(&index) = self.response_indices.get(response_id) {
-                if self.entries[index].turn != self.turn || index + 1 != self.entries.len() {
-                    return Err(
-                        "Conversation response identity belongs to an earlier response".into(),
-                    );
-                }
+            if let Some(&index) = self.response_indices.get(response_id)
+                && (self.entries[index].turn != self.turn || index + 1 != self.entries.len())
+            {
+                return Err("Conversation response identity belongs to an earlier response".into());
             }
         }
         match record {
@@ -303,19 +301,18 @@ impl ConversationHistory {
                 }
                 let reasoning =
                     serde_json::from_value(reasoning.0.clone()).map_err(|e| e.to_string())?;
-                if let Some(&(entry, call)) = self.occurrences.get(&identity.occurrence_id) {
-                    if self.response(entry).id != *response_id
-                        || self.response(entry).calls[call].identity != *identity
-                    {
-                        return Err("Reused execution identity in conversation".into());
-                    }
+                if let Some(&(entry, call)) = self.occurrences.get(&identity.occurrence_id)
+                    && (self.response(entry).id != *response_id
+                        || self.response(entry).calls[call].identity != *identity)
+                {
+                    return Err("Reused execution identity in conversation".into());
                 }
-                if let Some(&entry) = self.response_indices.get(response_id) {
-                    if self.response(entry).calls.iter().any(|call| {
+                if let Some(&entry) = self.response_indices.get(response_id)
+                    && self.response(entry).calls.iter().any(|call| {
                         call.identity.call_id == identity.call_id && call.identity != *identity
-                    }) {
-                        return Err("Duplicate provider call ID within one response".into());
-                    }
+                    })
+                {
+                    return Err("Duplicate provider call ID within one response".into());
                 }
                 let entry = self.ensure_response(response_id);
                 self.add_call(entry, identity, tool)?;
@@ -360,12 +357,11 @@ impl ConversationHistory {
                     {
                         return Err("Duplicate response tool identity".into());
                     }
-                    if let Some(&(entry, call)) = self.occurrences.get(&identity.occurrence_id) {
-                        if self.response(entry).id != *response_id
-                            || self.response(entry).calls[call].identity != *identity
-                        {
-                            return Err("Reused execution identity in conversation".into());
-                        }
+                    if let Some(&(entry, call)) = self.occurrences.get(&identity.occurrence_id)
+                        && (self.response(entry).id != *response_id
+                            || self.response(entry).calls[call].identity != *identity)
+                    {
+                        return Err("Reused execution identity in conversation".into());
                     }
                 }
                 let entry = self.ensure_response(response_id);

@@ -395,11 +395,11 @@ fn loopback_connect_grant_does_not_allow_bind() {
         Some(23),
         "bind must stay denied even with a loopback_connect grant: {denied:?}"
     );
-    assert!(denied
-        .2
-        .ipc_denials
-        .iter()
-        .any(|record| { record.target == sccache_addr.to_string() && record.operation == "bind" }));
+    assert!(
+        denied.2.ipc_denials.iter().any(|record| {
+            record.target == sccache_addr.to_string() && record.operation == "bind"
+        })
+    );
 
     std::fs::remove_dir_all(root).expect("remove test directory");
 }
@@ -487,11 +487,13 @@ fn proxy_connects_from_a_non_main_thread_reach_only_the_trusted_endpoint() {
         Some(23),
         "a same-port decoy must stay denied from a non-main thread: {denied:?}"
     );
-    assert!(denied
-        .2
-        .ipc_denials
-        .iter()
-        .any(|record| record.target == decoy_addr.to_string() && record.operation == "connect"));
+    assert!(
+        denied
+            .2
+            .ipc_denials
+            .iter()
+            .any(|record| record.target == decoy_addr.to_string() && record.operation == "connect")
+    );
 
     std::fs::remove_dir_all(root).expect("remove test directory");
 }

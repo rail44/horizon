@@ -771,10 +771,10 @@ mod tests {
         // (captured 2026-09-10). parse_record's rfind anchor makes the
         // banner's quoted predicate fall out on its own; the column header
         // has no record shape at all.
-        assert!(parse_record(
-            "Filtering the log data using \"composedMessage CONTAINS \"Sandbox:\"\""
-        )
-        .is_none());
+        assert!(
+            parse_record("Filtering the log data using \"composedMessage CONTAINS \"Sandbox:\"\"")
+                .is_none()
+        );
         assert!(parse_record("Timestamp               Ty Process[PID:TID]").is_none());
     }
 

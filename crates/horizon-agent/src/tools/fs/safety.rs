@@ -291,10 +291,10 @@ fn other_working_trees(tool_state: &ToolSessionState) -> Vec<PathBuf> {
         return Vec::new();
     };
     let mut trees = Vec::new();
-    if common_dir.file_name().is_some_and(|name| name == ".git") {
-        if let Some(main) = common_dir.parent() {
-            trees.push(main.to_path_buf());
-        }
+    if common_dir.file_name().is_some_and(|name| name == ".git")
+        && let Some(main) = common_dir.parent()
+    {
+        trees.push(main.to_path_buf());
     }
     if let Ok(entries) = std::fs::read_dir(common_dir.join("worktrees")) {
         for entry in entries.flatten() {

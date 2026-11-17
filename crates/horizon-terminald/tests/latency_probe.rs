@@ -34,16 +34,16 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use horizon_daemon_testkit::{
-    connect_hub_client, connect_with_retry, resolve_daemon_binary, scratch_socket, DaemonProcess,
+    DaemonProcess, connect_hub_client, connect_with_retry, resolve_daemon_binary, scratch_socket,
 };
 use horizon_terminal_core::wire::{
-    terminal_client_hello, TerminalAttachment, TerminalHub as _, TerminalHubClient,
+    TerminalAttachment, TerminalHub as _, TerminalHubClient, terminal_client_hello,
 };
 use horizon_terminal_core::{
     KeyEventKind, TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize,
     TerminalSpawnSpec,
 };
-use horizon_wire::{CappedWatchReceiver, WireCodec, FRAME_MAX_ITEM_BYTES};
+use horizon_wire::{CappedWatchReceiver, FRAME_MAX_ITEM_BYTES, WireCodec};
 use remoc::rch;
 use termwiz::input::{KeyCode, Modifiers};
 
@@ -624,12 +624,12 @@ async fn probe_decrqm_negotiation_bare_query() {
             frame = snap;
         }
         let text = frame.text();
-        if let Some(start) = text.find("DECRQM-REPLY:") {
-            if let Some(end_rel) = text[start..].find(":END") {
-                let hex = &text[start + "DECRQM-REPLY:".len()..start + end_rel];
-                found = Some(hex.to_string());
-                break;
-            }
+        if let Some(start) = text.find("DECRQM-REPLY:")
+            && let Some(end_rel) = text[start..].find(":END")
+        {
+            let hex = &text[start + "DECRQM-REPLY:".len()..start + end_rel];
+            found = Some(hex.to_string());
+            break;
         }
     }
 

@@ -8,7 +8,7 @@ use std::path::Path;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::store::{Store, CONCEPTS_FILE};
+use crate::store::{CONCEPTS_FILE, Store};
 use crate::{Result, WikiError};
 
 const ID_KEY: &str = "id";
@@ -139,7 +139,7 @@ impl Store {
                 return Err(WikiError::Invalid(format!(
                     "page `{name}` is {}; its id cannot change",
                     urn(kept)
-                )))
+                )));
             }
             (Some(given), _) => (given, text.to_string()),
             (None, kept) => {
@@ -173,13 +173,13 @@ impl Store {
                     return Err(WikiError::Invalid(format!(
                         "edit {}: `old` is not in the page",
                         index + 1
-                    )))
+                    )));
                 }
                 n => {
                     return Err(WikiError::Invalid(format!(
                         "edit {}: `old` occurs {n} times; include more context",
                         index + 1
-                    )))
+                    )));
                 }
             }
         }

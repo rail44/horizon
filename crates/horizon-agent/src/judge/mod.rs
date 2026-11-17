@@ -1128,10 +1128,12 @@ mod tests {
             ));
             assert!(rx.try_recv().is_err());
             writer.flush().unwrap();
-            assert!(crate::persistence::event_log::read(&path)
-                .unwrap()
-                .records
-                .is_empty());
+            assert!(
+                crate::persistence::event_log::read(&path)
+                    .unwrap()
+                    .records
+                    .is_empty()
+            );
             drop(owner);
             let _ = std::fs::remove_file(path);
         }

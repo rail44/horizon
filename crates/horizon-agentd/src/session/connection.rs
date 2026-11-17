@@ -12,7 +12,7 @@ use horizon_agent::persistence::event_log::WriterHandle;
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::spawn::spawn_session_thread;
-use super::state::{lock_unpoisoned, AgentdState};
+use super::state::{AgentdState, lock_unpoisoned};
 
 /// A resumed session may still be waiting for its DuckDB projection.
 /// Timeout is an explicit failure, never a successful empty history.
@@ -159,10 +159,10 @@ impl Connection {
         if !lock_unpoisoned(&self.state.providers).contains(&new.provider_id) {
             return Err(format!("Unknown agent provider {}", new.provider_id.0));
         }
-        if let Some(role) = &new.role_id {
-            if horizon_agent::roles::resolve(role).is_none() {
-                return Err(format!("Unknown role `{}`", role.0));
-            }
+        if let Some(role) = &new.role_id
+            && horizon_agent::roles::resolve(role).is_none()
+        {
+            return Err(format!("Unknown role `{}`", role.0));
         }
         spawn_session_thread(
             self.state.clone(),
@@ -591,9 +591,11 @@ mod tests {
         let connection = Connection::new(state);
         let before = connection.session_model(session_id);
         let mut events = connection.subscribe_agent(session_id);
-        assert!(connection
-            .set_session_model(session_id, "openai".into(), "new-model".into())
-            .is_err());
+        assert!(
+            connection
+                .set_session_model(session_id, "openai".into(), "new-model".into())
+                .is_err()
+        );
         assert_eq!(connection.session_model(session_id), before);
         assert!(events.try_recv().is_err());
     }

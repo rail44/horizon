@@ -163,8 +163,8 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{SessionKind, SplitAxis};
     use crate::SessionId;
+    use crate::types::{SessionKind, SplitAxis};
 
     #[test]
     fn cursor_follows_focus_outside_the_mode() {

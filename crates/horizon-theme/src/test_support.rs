@@ -1,6 +1,6 @@
 //! Seeds as written, for the theme's tests.
 
-use super::scheme::{scheme_from, Scheme};
+use super::scheme::{Scheme, scheme_from};
 use super::written::Written;
 
 /// The seed with `colors` written: `surface_base` and `accent`.

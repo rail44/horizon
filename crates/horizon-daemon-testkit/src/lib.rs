@@ -26,11 +26,11 @@ pub mod binary;
 pub mod hub;
 pub mod process;
 
-pub use acp::{connect_acp, connect_initialized, initialize_request, AcpClient, Inbound};
-pub use agentd::{agentd_hermetic_command, AgentdPaths, AgentdProcess, AgentdSpawn};
+pub use acp::{AcpClient, Inbound, connect_acp, connect_initialized, initialize_request};
+pub use agentd::{AgentdPaths, AgentdProcess, AgentdSpawn, agentd_hermetic_command};
 pub use binary::{
-    cargo_bin_exe_var, resolve_daemon_binary, sibling_daemon_binary, spawn_with_link_retry,
-    TRANSIENT_LINK_RETRY_DELAY,
+    TRANSIENT_LINK_RETRY_DELAY, cargo_bin_exe_var, resolve_daemon_binary, sibling_daemon_binary,
+    spawn_with_link_retry,
 };
 pub use hub::{connect_hub_client, connect_with_retry, drain_with_timeout};
-pub use process::{scratch_file, scratch_socket, wait_for_exit, DaemonProcess};
+pub use process::{DaemonProcess, scratch_file, scratch_socket, wait_for_exit};

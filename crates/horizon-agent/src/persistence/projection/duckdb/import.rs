@@ -3,8 +3,8 @@ use anyhow::Result;
 use crate::persistence::event_log::{LogCursor, ReadReport, Record};
 
 use super::{
-    schema::{DROP_ALL_AGENT_STATE_SQL, INITIALIZE_SCHEMA_SQL, PROJECTION_SCHEMA_VERSION},
     Store,
+    schema::{DROP_ALL_AGENT_STATE_SQL, INITIALIZE_SCHEMA_SQL, PROJECTION_SCHEMA_VERSION},
 };
 
 /// How many records one [`Store::apply_records`] transaction covers.

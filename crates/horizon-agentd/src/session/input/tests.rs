@@ -1,9 +1,9 @@
 use super::*;
+use crate::session::Connection;
 use crate::session::approval::dispatch_inbound_command;
 use crate::session::test_support::{drain_events, test_state};
-use crate::session::Connection;
 use horizon_agent::contract::{Command, InputResult, SessionInputOutcome};
-use horizon_agent::persistence::event_log::{read, WriterHandle, WriterInit};
+use horizon_agent::persistence::event_log::{WriterHandle, WriterInit, read};
 
 fn input(id: &str) -> SessionInput {
     SessionInput {
@@ -132,9 +132,11 @@ fn unavailable_persistence_never_forwards_or_publishes_an_input() {
             Command::SessionInput(input("rejected")),
         );
         assert!(live.events().is_empty());
-        assert!(commands
-            .try_iter()
-            .all(|command| matches!(command, Command::Shutdown)));
+        assert!(
+            commands
+                .try_iter()
+                .all(|command| matches!(command, Command::Shutdown))
+        );
         let published = drain_events(&mut events);
         std::assert_matches!(
             published.as_slice(),

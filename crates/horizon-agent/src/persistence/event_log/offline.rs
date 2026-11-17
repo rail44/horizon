@@ -1,7 +1,7 @@
 //! Offline conversion writes a separate bundle and never activates it.
-use super::{upgrade_conversation_records, Record};
+use super::{Record, upgrade_conversation_records};
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{fs, io::Write, path::Path};
 
 /// The source must belong to a stopped writer. The destination must not exist.

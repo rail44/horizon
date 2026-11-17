@@ -13,7 +13,7 @@ use std::io::Write;
 
 use options::Options;
 
-use horizon_board::{tree_order, Item, ListResult, Position, Store, StoreError};
+use horizon_board::{Item, ListResult, Position, Store, StoreError, tree_order};
 
 /// If `args[0]` is `"board"`, dispatches the board subcommand family and
 /// returns `Some(exit_code)`. Returns `None` when this isn't a board

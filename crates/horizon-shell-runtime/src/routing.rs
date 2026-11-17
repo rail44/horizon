@@ -14,12 +14,12 @@ use std::sync::Mutex;
 
 use super::attachment::{AgentUpdate, AttachmentState, Inbound};
 use crate::agent_model::AgentEvent;
-use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::v2::Responder;
+use agent_client_protocol::v2::schema as v2;
 use crossbeam_channel::Sender;
 use horizon_acp::{
-    read_horizon_meta, HostToolRequest, HostToolResponse, SessionEventNotification, SessionId,
-    SessionInfoMeta,
+    HostToolRequest, HostToolResponse, SessionEventNotification, SessionId, SessionInfoMeta,
+    read_horizon_meta,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalFrame, TerminalUpdate};
 use uuid::Uuid;
@@ -293,12 +293,11 @@ impl AgentRoutes {
         let Some(session_id) = parse_session_id(&notification.session_id) else {
             return;
         };
-        if let v2::SessionUpdate::SessionInfoUpdate(info) = &notification.update {
-            if let agent_client_protocol::schema::MaybeUndefined::Value(meta) = &info.meta {
-                if let Some(Ok(meta)) = read_horizon_meta::<SessionInfoMeta>(Some(meta)) {
-                    self.route_session_info(session_id, &meta);
-                }
-            }
+        if let v2::SessionUpdate::SessionInfoUpdate(info) = &notification.update
+            && let agent_client_protocol::schema::MaybeUndefined::Value(meta) = &info.meta
+            && let Some(Ok(meta)) = read_horizon_meta::<SessionInfoMeta>(Some(meta))
+        {
+            self.route_session_info(session_id, &meta);
         }
         let _ = self.deliver(
             session_id,

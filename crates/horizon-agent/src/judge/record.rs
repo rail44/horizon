@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::contract::{Event, SessionId};
 use crate::persistence::event_log::{
-    Record, WriterHandle, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION,
+    AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION, Record, WriterHandle,
 };
 
 use super::{JudgeBackendKind, JudgeDecision, JudgeFallbackReason, JudgeInput, JudgeVerdict};

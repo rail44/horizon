@@ -7,7 +7,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::event::{BoardEvent, Envelope, ReadReport};
-use crate::model::{fold, read_position_advances, sorted_by_rank, Item};
+use crate::model::{Item, fold, read_position_advances, sorted_by_rank};
 use crate::store::types::ListResult;
 
 /// Lists items by rank, optionally filtered by project-defined state.
@@ -84,14 +84,12 @@ pub(crate) fn read_positions(envelopes: &[Envelope], reader: &str) -> HashMap<u6
             reader: owner,
             message_id,
         } = &envelope.event
+            && owner == reader
+            && items.get(id).is_some_and(|item| {
+                read_position_advances(item, positions.get(id).map(String::as_str), message_id)
+            })
         {
-            if owner == reader
-                && items.get(id).is_some_and(|item| {
-                    read_position_advances(item, positions.get(id).map(String::as_str), message_id)
-                })
-            {
-                positions.insert(*id, message_id.clone());
-            }
+            positions.insert(*id, message_id.clone());
         }
     }
     positions

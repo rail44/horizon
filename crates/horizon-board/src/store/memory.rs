@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use crate::event::{self, BoardEvent, Envelope, ReadReport, SCHEMA, VERSION};
-use crate::store::source::Source;
 use crate::store::Store;
+use crate::store::source::Source;
 
 /// The timestamp the first envelope from [`sample_envelopes`] carries
 /// (2026-01-01T00:00:00Z in unix milliseconds, the unit the event log uses).

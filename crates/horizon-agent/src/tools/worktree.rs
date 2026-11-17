@@ -4,7 +4,7 @@
 //! switch itself happens at the provider's next turn boundary.
 
 use super::execution::{HostTools, ToolOutput};
-use super::output::{error, Response, WorktreeRequested};
+use super::output::{Response, WorktreeRequested, error};
 use crate::contract::SessionId;
 
 pub(crate) const TOOL_ID: &str = "worktree_enter";

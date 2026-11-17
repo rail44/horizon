@@ -30,12 +30,12 @@ pub(in crate::tools) fn execute(
         if let Err(error) = check_staleness(tool_state, &resolved, path_arg) {
             return error;
         }
-    } else if let Some(parent) = resolved.parent() {
-        if let Err(error) = fs::create_dir_all(parent) {
-            return error_output(format!(
-                "failed to create parent directories for `{path_arg}`: {error}"
-            ));
-        }
+    } else if let Some(parent) = resolved.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        return error_output(format!(
+            "failed to create parent directories for `{path_arg}`: {error}"
+        ));
     }
 
     if let Err(error) = fs::write(&resolved, content) {

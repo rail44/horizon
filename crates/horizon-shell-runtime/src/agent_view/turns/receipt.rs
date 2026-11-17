@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use horizon_acp::ToolOutcome;
 
-use super::{aggregate_receipt, pluralize, ToolCallView};
+use super::{ToolCallView, aggregate_receipt, pluralize};
 
 /// Humanizes a duration: `38s`, `2m 05s`. Whole seconds only.
 pub fn humanize_duration(elapsed: Duration) -> String {

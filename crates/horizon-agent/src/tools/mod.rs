@@ -10,11 +10,11 @@ mod config;
 mod execution;
 pub(crate) mod explore;
 mod external;
+pub use external::{
+    ExternalOutput, ExternalTool, ExternalToolCall, ExternalToolExecutor, register_external_tools,
+};
 pub(crate) use external::{
     is_registered as is_external_tool, requires_trusted_project as external_requires_trust,
-};
-pub use external::{
-    register_external_tools, ExternalOutput, ExternalTool, ExternalToolCall, ExternalToolExecutor,
 };
 mod fs;
 pub(crate) mod input;
@@ -33,15 +33,15 @@ pub use background::{drain_session_work, session_tool_work_settled};
 pub(crate) mod web;
 
 pub use approval::{
-    refuse_unattended, resolve_approval, resolve_auto_approval, unattended_refusal_result,
-    ApprovalDecision, ApprovalOutcome,
+    ApprovalDecision, ApprovalOutcome, refuse_unattended, resolve_approval, resolve_auto_approval,
+    unattended_refusal_result,
 };
 pub use bash::exclude_git_metadata;
 #[cfg(test)]
 pub(crate) use bash::metadata_grants;
 pub(crate) use bash::metadata_writable_roots;
-pub(crate) use catalog::{definitions, permission_for_tool, Definition};
-pub use completion::{should_fold_completion, BashCompletion, ToolCompletion};
+pub(crate) use catalog::{Definition, definitions, permission_for_tool};
+pub use completion::{BashCompletion, ToolCompletion, should_fold_completion};
 pub(crate) use fs::{call_escapes_root, call_writes_git_metadata, out_of_root_refusal};
 // The `task` daemon seam (`docs/agent-explore-design.md`): `pub`
 // because `horizon-agentd` implements it and installs it on every
@@ -57,7 +57,7 @@ pub use board::BoardHost;
 // tool id — re-exported `pub(crate)` so the rig session loop and the clearing
 // projection can reach them without `memory` itself being a `pub` module.
 pub(crate) use memory::{
-    memory_document_from_events, parse_update, MemoryDocument, TOOL_ID as MEMORY_UPDATE_TOOL_ID,
+    MemoryDocument, TOOL_ID as MEMORY_UPDATE_TOOL_ID, memory_document_from_events, parse_update,
 };
 // The model-visible ids of that tool and its companion fetch tool, named
 // for the places outside `explore` that have to recognize them: dispatch
@@ -79,7 +79,7 @@ pub(crate) use explore::{notification_event, register_wake, take_notification, u
 // this module owns stays crate-local per the usual convention.
 pub(crate) use execution::tool_result_message;
 pub use execution::{
-    cancel_tool_execution, cancelled_tool_call_result, execute_agent_tool, Execution, HostTools,
+    Execution, HostTools, cancel_tool_execution, cancelled_tool_call_result, execute_agent_tool,
 };
 // `SessionNetworkProxy` is `pub` (not `pub(crate)`) for the same reason as
 // `execute_agent_tool`/`Execution` above: the leg 4b containment tests in
@@ -89,8 +89,8 @@ pub use execution::{
 pub use network::{SessionDomainPolicy, SessionNetworkProxy};
 pub use processing::process_agent_provider_event;
 pub use state::{
-    register_session_runtime, unregister_session_runtime, RecallContext, ToolSessionBuilder,
-    ToolSessionState,
+    RecallContext, ToolSessionBuilder, ToolSessionState, register_session_runtime,
+    unregister_session_runtime,
 };
 // Narrow, crate-internal-only read for the approval judge --
 // see `state::live_frame_for_session`'s own doc comment for why this stays

@@ -1,6 +1,6 @@
 //! Durable input acceptance, outbound delivery and acknowledgement for a live session.
 
-use horizon_agent::contract::{pending_input_outcomes, Event, SessionId, SessionInput};
+use horizon_agent::contract::{Event, SessionId, SessionInput, pending_input_outcomes};
 use horizon_agent::live::LiveState;
 
 use super::events::persist_and_send_session_event;

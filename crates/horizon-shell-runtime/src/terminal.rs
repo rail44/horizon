@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use horizon_terminal_core::wire::{
-    terminal_client_hello, TerminalAttachment, TerminalHub as _, TerminalHubClient,
+    TerminalAttachment, TerminalHub as _, TerminalHubClient, terminal_client_hello,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use horizon_wire::{DecodeSkipLog, HubError, WireCodec};
@@ -37,9 +37,9 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use uuid::Uuid;
 
 use super::common::{
-    connect_hub, establish_for_drain, establish_timeout, wait_until_refusing, with_deadline,
-    ConnTask, Connected, EstablishError, RuntimeControl, StreamEnd, OP_TIMEOUT,
-    SILENCE_MISMATCH_THRESHOLD,
+    ConnTask, Connected, EstablishError, OP_TIMEOUT, RuntimeControl, SILENCE_MISMATCH_THRESHOLD,
+    StreamEnd, connect_hub, establish_for_drain, establish_timeout, wait_until_refusing,
+    with_deadline,
 };
 use super::connection::connect_or_spawn_terminald_retrying;
 use super::routing::{RouteKey, TerminalRoutes};

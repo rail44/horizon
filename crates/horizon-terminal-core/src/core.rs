@@ -9,8 +9,8 @@ use alacritty_terminal::vte::ansi::{Processor, Timeout};
 use termwiz::escape::csi::KittyKeyboardFlags;
 use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
 
-use self::color::resolve_query_color;
 pub use self::color::TerminalColorScheme;
+use self::color::resolve_query_color;
 use self::events::EventSink;
 pub(crate) use self::events::TerminalEvents;
 use self::input::{arrow_scroll_input, sgr_mouse_input, sgr_mouse_wheel_input};

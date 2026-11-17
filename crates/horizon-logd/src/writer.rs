@@ -13,7 +13,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
 use horizon_board::wire::{IngestReply, IngestRequest, LogError};
-use horizon_board::{read_events, BoardEvent, Envelope, ReadReport, SCHEMA, VERSION};
+use horizon_board::{BoardEvent, Envelope, ReadReport, SCHEMA, VERSION, read_events};
 
 /// Advisory exclusive lock via `flock(2)`. Held until the file is dropped
 /// (the kernel releases it on close). Used across the read-fold-append
@@ -85,7 +85,9 @@ fn invalid(text: &str) -> LogError {
 pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<u64>), LogError> {
     let (mut file, report) = open_locked(path)?;
     if report.corrupt_count > 0 || report.skipped_count > 0 || report.torn_trailing {
-        return Err(invalid("Board contains unreadable or legacy records; import or repair an isolated copy before writing"));
+        return Err(invalid(
+            "Board contains unreadable or legacy records; import or repair an isolated copy before writing",
+        ));
     }
     let prepared = prepare::prepare(&report, request)?;
     let sequences = if let Some(event) = prepared.event {

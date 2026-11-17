@@ -7,10 +7,10 @@ use horizon_sandbox_proxy::Allowlist;
 use reqwest::header::{
     ACCEPT, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, LOCATION,
 };
-use reqwest::{redirect, Client, StatusCode, Url};
+use reqwest::{Client, StatusCode, Url, redirect};
 
 use super::error_output;
-use super::ssrf::{remote_addr_is_safe, validate_url, SafeResolver};
+use super::ssrf::{SafeResolver, remote_addr_is_safe, validate_url};
 
 use crate::transcript::truncate_chars;
 
@@ -39,7 +39,7 @@ pub(super) async fn execute(
     let initial_url = match Url::parse(&input.url) {
         Ok(url) => url,
         Err(error) => {
-            return FetchOutcome::Finished(error_output(format!("invalid web_fetch URL: {error}")))
+            return FetchOutcome::Finished(error_output(format!("invalid web_fetch URL: {error}")));
         }
     };
 
@@ -298,7 +298,7 @@ fn supported_content_type(content_type: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     async fn read_response(
         response: reqwest::Response,
@@ -405,16 +405,20 @@ mod tests {
             "example.com"
         );
         assert!(domain_from_input(&json!({ "url": "file:///etc/passwd" })).is_err());
-        assert!(domain_from_input(&json!({
-            "url": "https://example.com",
-            "max_characters": 50001
-        }))
-        .is_err());
-        assert!(domain_from_input(&json!({
-            "url": "https://example.com",
-            "surprise": true
-        }))
-        .is_err());
+        assert!(
+            domain_from_input(&json!({
+                "url": "https://example.com",
+                "max_characters": 50001
+            }))
+            .is_err()
+        );
+        assert!(
+            domain_from_input(&json!({
+                "url": "https://example.com",
+                "surprise": true
+            }))
+            .is_err()
+        );
     }
 
     #[test]

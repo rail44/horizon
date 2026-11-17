@@ -221,9 +221,12 @@ mod tests {
 
         let (first_url, first_requests) = endpoint(3);
         let (second_url, second_requests) = endpoint(2);
-        std::env::set_var("OPENAI_API_KEY", "wrong-conversation-key");
-        std::env::set_var("HORIZON_TEST_AUX_FIRST_KEY", "first-helper-key");
-        std::env::set_var("HORIZON_TEST_AUX_SECOND_KEY", "second-helper-key");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("OPENAI_API_KEY", "wrong-conversation-key") };
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HORIZON_TEST_AUX_FIRST_KEY", "first-helper-key") };
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HORIZON_TEST_AUX_SECOND_KEY", "second-helper-key") };
         let first = AuxiliaryConfig {
             base_url: Some(first_url),
             api_key_env: "HORIZON_TEST_AUX_FIRST_KEY".into(),

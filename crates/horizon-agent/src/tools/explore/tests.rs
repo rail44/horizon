@@ -157,7 +157,8 @@ impl Requester {
             })),
         )
         .unwrap();
-        let output = processing
+
+        processing
             .horizon_events
             .iter()
             .find_map(
@@ -166,9 +167,7 @@ impl Requester {
                     _ => None,
                 },
             )
-            .expect("every task/task_output call resolves synchronously");
-
-        output
+            .expect("every task/task_output call resolves synchronously")
     }
 
     fn launch(&self, call_id: &str, description: &str, prompt: &str) -> serde_json::Value {

@@ -77,12 +77,12 @@ impl ToolUpdate {
     pub(crate) fn decline_retry(live: &LiveState, result: ToolCallResult) -> Result<Self, String> {
         let request = live.frame().tool_call_request(&result.call_id).cloned();
         let mut events = vec![Event::ToolCallFinished(result.clone())];
-        if let Some(request) = request {
-            if request.occurrence_id != result.occurrence_id {
-                events.push(Event::ToolCallFinished(ToolCallResult::cancelled(
-                    request.identity(),
-                )));
-            }
+        if let Some(request) = request
+            && request.occurrence_id != result.occurrence_id
+        {
+            events.push(Event::ToolCallFinished(ToolCallResult::cancelled(
+                request.identity(),
+            )));
         }
         Self::finish_and_apply(live, events, result)
     }
@@ -163,13 +163,15 @@ mod tests {
         assert!(
             ToolUpdate::execute(&live, &request, || panic!("side effect must not run")).is_err()
         );
-        assert!(ToolUpdate::finish(
-            &live,
-            request
-                .identity()
-                .result(serde_json::json!({"finished":true}))
-        )
-        .is_err());
+        assert!(
+            ToolUpdate::finish(
+                &live,
+                request
+                    .identity()
+                    .result(serde_json::json!({"finished":true}))
+            )
+            .is_err()
+        );
         assert_eq!(live.events(), history);
     }
 }

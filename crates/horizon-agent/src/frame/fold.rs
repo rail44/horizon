@@ -94,11 +94,10 @@ pub(crate) fn apply_agent_event_to_frame(
                 last_response_item_mut(frame, turn.response_start, |item| {
                     matches!(item, AgentFrameItem::ReasoningDelta(_))
                 })
+                && existing.role == delta.role
             {
-                if existing.role == delta.role {
-                    existing.text.push_str(&delta.text);
-                    return;
-                }
+                existing.text.push_str(&delta.text);
+                return;
             }
             frame
                 .items
@@ -109,11 +108,10 @@ pub(crate) fn apply_agent_event_to_frame(
                 last_response_item_mut(frame, turn.response_start, |item| {
                     matches!(item, AgentFrameItem::AssistantTextDelta(_))
                 })
+                && existing.role == delta.role
             {
-                if existing.role == delta.role {
-                    existing.text.push_str(&delta.text);
-                    return;
-                }
+                existing.text.push_str(&delta.text);
+                return;
             }
             frame
                 .items
@@ -163,15 +161,12 @@ pub(crate) fn apply_agent_event_to_frame(
                 last_current_turn_item_index(frame, is_turn_boundary_item, |item| {
                     matches!(item, AgentFrameItem::Message(_))
                 })
+                && index >= turn.response_start
+                && let AgentFrameItem::Message(existing) = &frame.items[index]
+                && existing.role == message.role
             {
-                if index >= turn.response_start {
-                    if let AgentFrameItem::Message(existing) = &frame.items[index] {
-                        if existing.role == message.role {
-                            frame.items[index] = AgentFrameItem::Message(message.clone());
-                            return;
-                        }
-                    }
-                }
+                frame.items[index] = AgentFrameItem::Message(message.clone());
+                return;
             }
             frame.items.push(AgentFrameItem::Message(message.clone()));
         }
@@ -498,10 +493,12 @@ mod response_tests {
         let frame = live.frame();
         assert_eq!(frame, agent_frame_from_events(&events));
         assert_eq!(frame.items.iter().filter(|item| matches!(item, AgentFrameItem::Message(message) if message.role == MessageRole::Assistant && message.text == "new answer")).count(), 1);
-        assert!(!frame
-            .items
-            .iter()
-            .any(|item| matches!(item, AgentFrameItem::AssistantTextDelta(_))));
+        assert!(
+            !frame
+                .items
+                .iter()
+                .any(|item| matches!(item, AgentFrameItem::AssistantTextDelta(_)))
+        );
     }
     #[test]
     fn finalizing_one_interleaved_preview_does_not_remove_its_sibling() {

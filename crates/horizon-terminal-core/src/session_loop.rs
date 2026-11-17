@@ -23,7 +23,7 @@ use std::time::Instant;
 mod channels;
 mod frames;
 
-pub use channels::{core_channels, CoreInput, CoreReceivers, CoreSenders};
+pub use channels::{CoreInput, CoreReceivers, CoreSenders, core_channels};
 
 use frames::FramePublisher;
 
@@ -1066,10 +1066,10 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             assert!(Instant::now() < deadline, "never saw the PTY text land");
-            if let Ok(frame) = frame_rx.recv_timeout(Duration::from_millis(50)) {
-                if frame.text().contains("hello") {
-                    break;
-                }
+            if let Ok(frame) = frame_rx.recv_timeout(Duration::from_millis(50))
+                && frame.text().contains("hello")
+            {
+                break;
             }
         }
 
@@ -1310,11 +1310,10 @@ mod tests {
             let _ = pty_tx.send(query.to_vec());
             if let Ok(TerminalCommand::Input(bytes)) =
                 command_rx.recv_timeout(Duration::from_millis(50))
+                && bytes == expected
             {
-                if bytes == expected {
-                    while command_rx.try_recv().is_ok() {}
-                    return true;
-                }
+                while command_rx.try_recv().is_ok() {}
+                return true;
             }
         }
         false

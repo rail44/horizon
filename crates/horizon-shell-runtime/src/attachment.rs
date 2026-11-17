@@ -7,17 +7,17 @@
 
 use std::{sync::Arc, time::Duration};
 
-use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::Agent;
 use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
-use agent_client_protocol::Agent;
+use agent_client_protocol::v2::schema as v2;
 use horizon_acp::{
-    write_horizon_meta, AttachmentEnd, ContinueTurnRequest, PermissionResponseMeta,
-    SessionEventNotification, SessionId, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY,
+    AttachmentEnd, ContinueTurnRequest, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY,
+    PermissionResponseMeta, SessionEventNotification, SessionId, write_horizon_meta,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use super::routing::{cancelled_permission, AgentRoutes, RouteKey};
+use super::routing::{AgentRoutes, RouteKey, cancelled_permission};
 use crate::agent_model::{AgentEvent, Permission, PermissionDecision, ToolCallIdentity};
 
 /// How long an attachment may stay short of ready.

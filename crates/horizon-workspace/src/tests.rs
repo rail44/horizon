@@ -1,7 +1,7 @@
 use super::types::{LayoutNode, PaneSummary, SessionSummary, TabSummary};
 use super::*;
-use crate::operations::Content;
 use crate::SessionId;
+use crate::operations::Content;
 
 #[test]
 fn terminal_pane_references_top_level_session() {

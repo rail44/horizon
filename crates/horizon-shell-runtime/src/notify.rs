@@ -83,7 +83,7 @@ impl NotifyCoalescer {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{NotifyCoalescer, NotifyDecision, NOTIFY_COALESCE_WINDOW};
+    use super::{NOTIFY_COALESCE_WINDOW, NotifyCoalescer, NotifyDecision};
 
     #[test]
     fn a_lone_event_notifies_immediately() {

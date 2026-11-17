@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::super::{reconstruct_line_diff, DiffLineKind};
+use super::super::{DiffLineKind, reconstruct_line_diff};
 
 /// Reads a string field out of a tool's input/output JSON. Public so
 /// `src/agent/turns`'s `terse_summary` (which stayed behind, see

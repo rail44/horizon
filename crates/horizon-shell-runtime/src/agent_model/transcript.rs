@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use horizon_acp::ToolOutcome;
 use horizon_agent::transcript::{
-    classify, edit_entries, reconstruct_line_diff, DiffLineKind, FileEffect, ToolCallClassification,
+    DiffLineKind, FileEffect, ToolCallClassification, classify, edit_entries, reconstruct_line_diff,
 };
 use serde_json::Value;
 
@@ -200,7 +200,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
 }
 
 fn affected_files(tool_id: &str, input: &Value, output: Option<&Value>) -> Vec<FileEffect> {
-    use horizon_agent::contract::tool_output::{decode, EditOutcome, FileEdits, FileWritten};
+    use horizon_agent::contract::tool_output::{EditOutcome, FileEdits, FileWritten, decode};
     let Some(output) = output else {
         return Vec::new();
     };

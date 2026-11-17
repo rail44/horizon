@@ -166,7 +166,7 @@ fn place(logical: &LogicalText, blocks: &[Range<usize>], thread: Thread) -> Plac
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::annotation::{markdown_body, Agent};
+    use crate::annotation::{Agent, markdown_body};
 
     struct Scratch(std::path::PathBuf);
 

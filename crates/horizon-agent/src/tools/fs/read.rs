@@ -42,7 +42,7 @@ pub(in crate::tools) fn execute(
     let content = match fs::read_to_string(&resolved) {
         Ok(content) => content,
         Err(error) => {
-            return error_output(format!("cannot read `{path_arg}` as UTF-8 text: {error}"))
+            return error_output(format!("cannot read `{path_arg}` as UTF-8 text: {error}"));
         }
     };
 

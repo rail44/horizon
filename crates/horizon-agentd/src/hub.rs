@@ -22,9 +22,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
+use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client, Error};
 use horizon_acp as acp;
 use horizon_agent::contract::{Command, ProviderId, SessionId};
@@ -35,8 +35,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::session::{AgentdState, Connection, HOST_TOOL_TIMEOUT};
 use crate::DAEMON_NAME;
+use crate::session::{AgentdState, Connection, HOST_TOOL_TIMEOUT};
 
 use attachment::Opening;
 
@@ -127,10 +127,10 @@ impl Shared {
         generation: u64,
         commands: mpsc::UnboundedSender<Command>,
     ) {
-        if let Some(slot) = self.slots().get_mut(&session_id) {
-            if slot.generation == generation {
-                slot.commands = Some(commands);
-            }
+        if let Some(slot) = self.slots().get_mut(&session_id)
+            && slot.generation == generation
+        {
+            slot.commands = Some(commands);
         }
     }
 
@@ -319,12 +319,12 @@ impl Shared {
             Some(Ok(meta)) => meta,
             Some(Err(error)) => {
                 return responder
-                    .respond_with_error(call_error(format!("Invalid _meta.horizon: {error}")))
+                    .respond_with_error(call_error(format!("Invalid _meta.horizon: {error}")));
             }
             None => {
                 return responder.respond_with_error(call_error(
                     "session/new needs _meta.horizon with the session id and provider",
-                ))
+                ));
             }
         };
         let new = SessionNew {
@@ -690,7 +690,7 @@ where
     let transport = ByteStreams::new(write.compat_write(), read.compat());
 
     macro_rules! on_request {
-        ($builder:expr, $ty:ty, $method:ident) => {{
+        ($builder:expr_2021, $ty:ty, $method:ident) => {{
             let shared = shared.clone();
             $builder.on_receive_request(
                 async move |request: $ty,
@@ -759,10 +759,10 @@ where
 /// Flush queued log work on graceful daemon exit. Session publication already
 /// waits for its own commit; the exit barrier also covers non-session appends.
 pub(crate) fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
-    if let Some(writer) = writer {
-        if let Err(error) = writer.flush() {
-            eprintln!("horizon-agentd: failed to flush event log before draining: {error}");
-        }
+    if let Some(writer) = writer
+        && let Err(error) = writer.flush()
+    {
+        eprintln!("horizon-agentd: failed to flush event log before draining: {error}");
     }
 }
 

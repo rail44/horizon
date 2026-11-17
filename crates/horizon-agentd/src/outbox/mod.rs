@@ -229,10 +229,8 @@ impl Outbox {
                     continue;
                 }
             };
-            if !done {
-                if let Some(key) = recipient {
-                    waiting_recipients.insert(key);
-                }
+            if !done && let Some(key) = recipient {
+                waiting_recipients.insert(key);
             }
             if done {
                 match self.state.acknowledge_delivery(source, id.clone()) {

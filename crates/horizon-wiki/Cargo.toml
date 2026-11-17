@@ -1,7 +1,7 @@
 [package]
 name = "horizon-wiki"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # The project wiki as an extension package (docs/project-wiki-design.md):
 # its store, pages, concept file, comment threads anchored with a subset of

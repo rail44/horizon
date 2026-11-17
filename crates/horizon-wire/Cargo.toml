@@ -1,7 +1,7 @@
 [package]
 name = "horizon-wire"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # The domain-free foundation every runtime's wire is built on
 # (docs/runtime-crate-alignment-design.md judgment 2). It deliberately

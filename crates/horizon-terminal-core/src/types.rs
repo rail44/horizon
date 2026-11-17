@@ -4,7 +4,7 @@ mod key_event;
 mod mouse;
 mod size;
 
-pub use color::{fixed_palette_rgb, NamedColor, TerminalColor};
+pub use color::{NamedColor, TerminalColor, fixed_palette_rgb};
 pub use frame::{
     TerminalCursor, TerminalCursorShape, TerminalFrame, TerminalLine, TerminalScrollWindow,
     TerminalSelection, TerminalSpan, TerminalUnderline,

@@ -1,7 +1,7 @@
 //! Resolve each authority category in config order, retaining refusal diagnostics.
 
 use super::{
-    expand, validate_domain_entry, validate_loopback_endpoint, ProjectGrant, RawProjectGrant,
+    ProjectGrant, RawProjectGrant, expand, validate_domain_entry, validate_loopback_endpoint,
 };
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};

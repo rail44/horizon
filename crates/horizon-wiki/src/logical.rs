@@ -17,8 +17,8 @@
 
 use std::ops::Range;
 
-use markdown::mdast::Node;
 use markdown::ParseOptions;
+use markdown::mdast::Node;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogicalText {

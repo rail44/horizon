@@ -9,16 +9,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::v2::ConnectionTo as V2ConnectionTo;
 use agent_client_protocol::v2::Responder;
+use agent_client_protocol::v2::schema as v2;
 use agent_client_protocol::{Agent, ByteStreams, Client};
 use horizon_acp::{
-    read_horizon_meta, write_horizon_meta, AttachmentEnd, ContinueTurnRequest, DrainRequest,
-    EmptyResponse, EnsureBoardOrganizerRequest, EnsureBoardOrganizerResponse, HostToolRequest,
-    HostToolResponse, InitializeMeta, PermissionResponseMeta, SessionEventNotification, SessionId,
-    SessionInfoMeta, SessionNewMeta, HORIZON_ACP_EXT_VERSION, PERMISSION_OPTION_APPROVE,
-    PERMISSION_OPTION_DENY,
+    AttachmentEnd, ContinueTurnRequest, DrainRequest, EmptyResponse, EnsureBoardOrganizerRequest,
+    EnsureBoardOrganizerResponse, HORIZON_ACP_EXT_VERSION, HostToolRequest, HostToolResponse,
+    InitializeMeta, PERMISSION_OPTION_APPROVE, PERMISSION_OPTION_DENY, PermissionResponseMeta,
+    SessionEventNotification, SessionId, SessionInfoMeta, SessionNewMeta, read_horizon_meta,
+    write_horizon_meta,
 };
 use horizon_agent::contract::ProviderId;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -28,9 +28,9 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use super::super::attachment::acp_session_id;
 use super::super::*;
 use super::{
-    bind_stub_listener, expect_terminald_handshake, hold_silently, next_terminal_call,
-    read_until_closed, recv_frame, serve_fake_terminal_hub, spec, stub_socket_paths, FakeBehavior,
-    TerminalCall,
+    FakeBehavior, TerminalCall, bind_stub_listener, expect_terminald_handshake, hold_silently,
+    next_terminal_call, read_until_closed, recv_frame, serve_fake_terminal_hub, spec,
+    stub_socket_paths,
 };
 use crate::agent_model::{AgentEvent, PermissionDecision, ToolCallIdentity};
 
@@ -696,10 +696,12 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
         next_agent_update(&mut restoring).await,
         AgentUpdate::State(AttachmentState::Failed(_))
     );
-    assert!(handle
-        .session_list()
-        .unwrap_err()
-        .contains("runtime stopped"));
+    assert!(
+        handle
+            .session_list()
+            .unwrap_err()
+            .contains("runtime stopped")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -738,7 +740,8 @@ async fn a_rejected_initialize_on_a_test_stream_is_a_terminal_failure() {
 /// cannot answer that either, so the runtime reports the manual fix.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_silent_daemon_is_reported_as_needing_a_manual_stop() {
-    std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300") };
     let (socket_path, control_socket) = stub_socket_paths("probe");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
@@ -777,7 +780,8 @@ async fn a_silent_daemon_is_reported_as_needing_a_manual_stop() {
 /// hint instead of draining again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping() {
-    std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300") };
     let (socket_path, control_socket) = stub_socket_paths("fatal");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
@@ -895,10 +899,12 @@ async fn a_request_rejected_for_the_extension_version_drains_and_respawns() {
     std::assert_matches!(rejecting.next_call().await, AgentCall::Initialize);
     let list_handle = handle.clone();
     let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
-    assert!(listed
-        .unwrap()
-        .unwrap_err()
-        .contains("horizon ext version mismatch"));
+    assert!(
+        listed
+            .unwrap()
+            .unwrap_err()
+            .contains("horizon ext version mismatch")
+    );
     std::assert_matches!(rejecting.next_call().await, AgentCall::List);
     std::assert_matches!(rejecting.next_call().await, AgentCall::Drain);
 

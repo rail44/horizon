@@ -664,10 +664,12 @@ mod tests {
         let registry = SkillRegistry::embedded();
         let output = execute_read(&registry, &serde_json::json!({ "id": "no-such-skill" }));
         assert_eq!(output["is_error"], true);
-        assert!(output["message"]
-            .as_str()
-            .unwrap()
-            .contains("horizon-config"));
+        assert!(
+            output["message"]
+                .as_str()
+                .unwrap()
+                .contains("horizon-config")
+        );
     }
 
     #[test]
@@ -696,8 +698,7 @@ mod tests {
     /// must appear in [`embedded_skills`] and be resolvable through a
     /// [`SkillRegistry`]. This is the mechanism `horizon-agentd` uses to
     /// contribute `horizon-board`'s keeper skill without a Cargo edge.
-    const TEST_EXTERNAL_SKILL_SOURCE: &str =
-        "---\nname: test-external-skill\ndescription: An externally-registered test skill.\n---\nTest body.\n";
+    const TEST_EXTERNAL_SKILL_SOURCE: &str = "---\nname: test-external-skill\ndescription: An externally-registered test skill.\n---\nTest body.\n";
 
     #[test]
     fn register_external_skill_sources_makes_the_skill_embedded() {

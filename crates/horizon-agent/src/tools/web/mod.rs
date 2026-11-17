@@ -13,10 +13,10 @@ use horizon_sandbox_proxy::Allowlist;
 use reqwest::Url;
 
 use crate::contract::{OccurrenceId, SessionId, ToolCallId, ToolCallIdentity};
+use crate::tools::ToolCompletion;
 use crate::tools::output::error as error_output;
 use crate::tools::output::{annotate_auto_approval, annotate_domain_approval};
 use crate::tools::state::ToolSessionState;
-use crate::tools::ToolCompletion;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FetchGate {
@@ -104,14 +104,13 @@ pub(crate) fn spawn(
             }),
         };
         let was_current = registration.finish();
-        if was_current {
-            if let Some(completion) = completion {
+        if was_current
+            && let Some(completion) = completion {
                 if matches!(completion, ToolCompletion::Finished(_)) {
                     clear_approved_domains(session_id, &identity);
                 }
                 let _ = result_tx.send(completion);
             }
-        }
     });
 }
 

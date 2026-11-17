@@ -35,7 +35,7 @@ use crate::{
 use super::completion::{
     complete_rig_turn, deterministic_rig_response, deterministic_tool_result_response,
 };
-use super::guards::{tool_result_fingerprint, GuardHalt, TurnLoopGuard};
+use super::guards::{GuardHalt, TurnLoopGuard, tool_result_fingerprint};
 use super::history::load_rig_session_history;
 use super::model_limits::model_limits;
 use super::session_prompt::{session_environment, session_extra_sections};

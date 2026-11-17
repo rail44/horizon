@@ -11,7 +11,7 @@ pub(super) fn affected_files(
     let Some(output) = output else {
         return Vec::new();
     };
-    use crate::contract::tool_output::{decode, EditOutcome, FileEdits, FileWritten};
+    use crate::contract::tool_output::{EditOutcome, FileEdits, FileWritten, decode};
     match tool_id {
         "fs_edit" => decode::<FileEdits>(output)
             .map(|result| {

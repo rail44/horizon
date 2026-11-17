@@ -121,10 +121,10 @@ impl Store {
                 annotation.id
             )));
         }
-        if let Target::Annotation(parent) = &annotation.target {
-            if !existing.iter().any(|known| &known.id == parent) {
-                return Err(WikiError::NotFound(format!("annotation {parent}")));
-            }
+        if let Target::Annotation(parent) = &annotation.target
+            && !existing.iter().any(|known| &known.id == parent)
+        {
+            return Err(WikiError::NotFound(format!("annotation {parent}")));
         }
         // A torn last line must not swallow this one.
         let separator = if raw.last().is_some_and(|byte| *byte != b'\n') {
@@ -259,10 +259,10 @@ pub fn assemble(annotations: Vec<Annotation>) -> Vec<Thread> {
 /// directory above every project's store), made on first use.
 pub fn owner_id(wiki_root: &Path) -> Result<Uuid> {
     let path = wiki_root.join("owner");
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Some(id) = parse_owner(&text) {
-            return Ok(id);
-        }
+    if let Ok(text) = std::fs::read_to_string(&path)
+        && let Some(id) = parse_owner(&text)
+    {
+        return Ok(id);
     }
     std::fs::create_dir_all(wiki_root)?;
     let id = Uuid::new_v4();
@@ -456,8 +456,10 @@ mod tests {
     fn an_empty_selection_is_refused() {
         let (_dir, store) = store_with_page();
         let owner = Agent::person(Uuid::new_v4(), "owner");
-        assert!(store
-            .ask("sandbox", 3..3, owner, markdown_body("q"))
-            .is_err());
+        assert!(
+            store
+                .ask("sandbox", 3..3, owner, markdown_body("q"))
+                .is_err()
+        );
     }
 }

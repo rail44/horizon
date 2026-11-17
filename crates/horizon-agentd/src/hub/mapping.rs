@@ -247,10 +247,10 @@ impl Mapper {
     /// Drops the open assistant stream without a commit, moving the counter
     /// past its id so no later message reuses it.
     fn close_stream(&mut self) {
-        if let Some(id) = self.open_stream.take() {
-            if id == self.next_message_id() {
-                self.message_seq += 1;
-            }
+        if let Some(id) = self.open_stream.take()
+            && id == self.next_message_id()
+        {
+            self.message_seq += 1;
         }
     }
 

@@ -1,12 +1,12 @@
 use super::input::{PreparedCall, ToolInput};
-use super::output::{error as error_output, Response};
+use super::output::{Response, error as error_output};
 use super::transition::ToolUpdate;
 use crate::contract::{Event, Message, MessageRole, SessionId, ToolCallRequest, ToolCallResult};
 use crate::judge::ApprovalCandidate;
 use crate::live::LiveState;
-use crate::policy::{plan_prepared_call, AutomaticTool, ToolPlan};
+use crate::policy::{AutomaticTool, ToolPlan, plan_prepared_call};
 use crate::tools::output::annotate_auto_approval;
-use crate::tools::state::{session_runtime, ToolSessionState};
+use crate::tools::state::{ToolSessionState, session_runtime};
 use crate::tools::{bash, board};
 use serde_json::Value;
 
@@ -69,7 +69,7 @@ pub fn execute_agent_tool(
         Ok(prepared) => prepared,
         Err(message) => {
             return ToolUpdate::finish(live, request.identity().finish(error_output(message)))
-                .map(Execution::Applied)
+                .map(Execution::Applied);
         }
     };
     match plan_prepared_call(tool_state, &prepared) {
@@ -192,38 +192,38 @@ fn execute_synchronous(
 ) -> ToolOutput {
     match &request.input {
         ToolInput::Task(input) => {
-            return crate::tools::explore::start(tool_state, session_id, request, input)
+            return crate::tools::explore::start(tool_state, session_id, request, input);
         }
         ToolInput::TaskOutput(input) => {
-            return crate::tools::explore::output(session_id, request, input)
+            return crate::tools::explore::output(session_id, request, input);
         }
         ToolInput::BashJobOutput(input) => {
-            return crate::tools::bash::jobs::output(session_id, input).into()
+            return crate::tools::bash::jobs::output(session_id, input).into();
         }
         ToolInput::BashJobCancel(input) => {
-            return crate::tools::bash::jobs::cancel_tool(session_id, input).into()
+            return crate::tools::bash::jobs::cancel_tool(session_id, input).into();
         }
         ToolInput::EnterWorktree(_) => return crate::tools::worktree::enter(host, session_id),
         _ => {}
     }
-    if let ToolInput::Bash(input) = &request.input {
-        if input.background {
-            let receipt = match tool_state.workspace_root() {
-                Some(workspace_root) => crate::tools::bash::jobs::launch(
-                    session_id,
-                    &request.identity(),
-                    tool_state,
-                    workspace_root,
-                    &input.command,
-                ),
-                None => error_output("background bash requires a workspace root"),
-            };
-            return receipt.into();
-        }
+    if let ToolInput::Bash(input) = &request.input
+        && input.background
+    {
+        let receipt = match tool_state.workspace_root() {
+            Some(workspace_root) => crate::tools::bash::jobs::launch(
+                session_id,
+                &request.identity(),
+                tool_state,
+                workspace_root,
+                &input.command,
+            ),
+            None => error_output("background bash requires a workspace root"),
+        };
+        return receipt.into();
     }
     match request.tool_id.as_str() {
         "board_update" | "board_session" => {
-            return board::execute_operation(tool_state, session_id, request)
+            return board::execute_operation(tool_state, session_id, request);
         }
         "board_comment" => return board::execute_comment(tool_state, session_id, request),
         _ => {}
@@ -321,7 +321,7 @@ mod tests {
     fn restored_invalid_approvals_cannot_write_spawn_or_install_grants() {
         use crate::contract::{ApprovalKind, ApprovalRequest};
         use crate::tools::{
-            resolve_approval, resolve_auto_approval, ApprovalDecision, ApprovalOutcome,
+            ApprovalDecision, ApprovalOutcome, resolve_approval, resolve_auto_approval,
         };
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("marker");
@@ -450,15 +450,17 @@ mod tests {
                 LiveState::with_event_log_and_history(session, None, None, writer, history.clone());
             let (tx, rx) = crossbeam_channel::unbounded();
             register_session_runtime(session, state.clone(), live.clone(), tx);
-            assert!(execute_automatic(
-                &MustNotRun,
-                &state,
-                session,
-                &live,
-                &PreparedCall::new(&request).unwrap(),
-                mode
-            )
-            .is_err());
+            assert!(
+                execute_automatic(
+                    &MustNotRun,
+                    &state,
+                    session,
+                    &live,
+                    &PreparedCall::new(&request).unwrap(),
+                    mode
+                )
+                .is_err()
+            );
             assert_eq!(live.events(), history);
             assert!(!marker.exists());
             assert!(rx.try_recv().is_err());

@@ -1,5 +1,5 @@
 //! Sticky writer failure, broadcast to every session sharing the log.
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex, Weak};
 
 #[derive(Clone, Default)]

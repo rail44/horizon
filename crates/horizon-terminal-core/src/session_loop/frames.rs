@@ -133,11 +133,13 @@ mod tests {
 
         core.write_vt(b" latest");
         frames.notify_at(&core, now + COALESCE_WINDOW);
-        assert!(receive
-            .try_recv()
-            .unwrap()
-            .text()
-            .contains("pending latest"));
+        assert!(
+            receive
+                .try_recv()
+                .unwrap()
+                .text()
+                .contains("pending latest")
+        );
         assert!(!frames.flush_timer().same_channel(&old_timer));
         frames.flush(&core);
         assert!(receive.try_recv().is_err());

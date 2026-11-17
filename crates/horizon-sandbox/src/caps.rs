@@ -463,11 +463,12 @@ mod tests {
     #[test]
     fn full_scope_grants_root_read() {
         let caps = build(&policy(vec![], NetworkPolicy::Disabled)).unwrap();
-        assert!(caps
-            .fs_capabilities()
-            .iter()
-            .any(|cap| cap.resolved == Path::new("/").canonicalize().unwrap()
-                && cap.access == AccessMode::Read));
+        assert!(
+            caps.fs_capabilities()
+                .iter()
+                .any(|cap| cap.resolved == Path::new("/").canonicalize().unwrap()
+                    && cap.access == AccessMode::Read)
+        );
     }
 
     /// Roots scope grants every baseline dir that exists on this host, in
@@ -516,11 +517,12 @@ mod tests {
     fn writable_root_is_granted_read_write() {
         let dir = std::env::temp_dir();
         let caps = build(&policy(vec![dir.clone()], NetworkPolicy::Disabled)).unwrap();
-        assert!(caps
-            .fs_capabilities()
-            .iter()
-            .any(|cap| cap.resolved == dir.canonicalize().unwrap()
-                && cap.access == AccessMode::ReadWrite));
+        assert!(
+            caps.fs_capabilities()
+                .iter()
+                .any(|cap| cap.resolved == dir.canonicalize().unwrap()
+                    && cap.access == AccessMode::ReadWrite)
+        );
     }
 
     #[test]

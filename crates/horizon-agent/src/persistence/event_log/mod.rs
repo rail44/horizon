@@ -40,9 +40,13 @@ pub struct UnsupportedEventLogFormat {
 
 impl std::fmt::Display for UnsupportedEventLogFormat {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter,
+        write!(
+            formatter,
             "agent event log {} has version {:?}; explicit format conversion to version {} is required; run horizon-migrate-conversation (for v1/v2, first run scripts/migrate-agent-history.py) before starting Horizon",
-            self.path.display(), self.found, AGENT_EVENT_LOG_VERSION)
+            self.path.display(),
+            self.found,
+            AGENT_EVENT_LOG_VERSION
+        )
     }
 }
 
@@ -315,18 +319,17 @@ pub(crate) fn read_from(path: &Path, offset: u64) -> Result<ReadReport> {
         }
         // A format cutover must be explicit. Silently skipping an old log
         // would lose resumable sessions and let the writer append mixed formats.
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
-            if value.get("schema").and_then(serde_json::Value::as_str)
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line)
+            && value.get("schema").and_then(serde_json::Value::as_str)
                 == Some(AGENT_EVENT_LOG_SCHEMA)
-                && value.get("version").and_then(serde_json::Value::as_u64)
-                    != Some(u64::from(AGENT_EVENT_LOG_VERSION))
-            {
-                return Err(UnsupportedEventLogFormat {
-                    path: path.to_path_buf(),
-                    found: value.get("version").and_then(serde_json::Value::as_u64),
-                }
-                .into());
+            && value.get("version").and_then(serde_json::Value::as_u64)
+                != Some(u64::from(AGENT_EVENT_LOG_VERSION))
+        {
+            return Err(UnsupportedEventLogFormat {
+                path: path.to_path_buf(),
+                found: value.get("version").and_then(serde_json::Value::as_u64),
             }
+            .into());
         }
         match decode_record_tolerantly(line) {
             DecodedLine::Record(record)

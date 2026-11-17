@@ -36,7 +36,7 @@
 //! only override path.
 
 mod selection;
-pub use selection::{resolve_model_selection, ResolvedModelSelection};
+pub use selection::{ResolvedModelSelection, resolve_model_selection};
 
 use std::path::PathBuf;
 
@@ -872,7 +872,8 @@ mod tests {
     /// redirects it, and `None` leaves rig's own default.
     #[test]
     fn the_entrys_base_url_is_used_as_written() {
-        std::env::set_var("OPENAI_BASE_URL", "https://env.invalid");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("OPENAI_BASE_URL", "https://env.invalid") };
         let entry = NamedProviderConfig {
             base_url: Some("https://provider.invalid".to_string()),
             ..NamedProviderConfig::default()
@@ -883,7 +884,8 @@ mod tests {
         );
         assert_eq!(entry.discovery_base_url(), "https://provider.invalid");
         assert_eq!(NamedProviderConfig::default().resolved().base_url, None);
-        std::env::remove_var("OPENAI_BASE_URL");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("OPENAI_BASE_URL") };
     }
 
     #[test]

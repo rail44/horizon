@@ -2,7 +2,7 @@ use termwiz::input::{KeyCode, Modifiers};
 
 use super::*;
 use crate::core::TerminalCore;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::fmt::Debug;
 
 #[test]
@@ -69,10 +69,12 @@ fn vt_stream_preserves_ansi_foreground_color() {
     let frame = core.snapshot_frame();
     assert!(frame.text().contains("red plain"));
     let first_line = &frame.lines[0];
-    assert!(first_line
-        .spans
-        .iter()
-        .any(|span| { span.text == "red" && span.fg == TerminalColor::Named(NamedColor::Red) }));
+    assert!(
+        first_line
+            .spans
+            .iter()
+            .any(|span| { span.text == "red" && span.fg == TerminalColor::Named(NamedColor::Red) })
+    );
     assert!(first_line.spans.iter().any(|span| {
         span.text == "plain" && span.fg == TerminalColor::Named(NamedColor::Foreground)
     }));
@@ -120,18 +122,21 @@ fn osc_10_foreground_override_lands_at_index_256() {
 fn osc_104_reset_clears_a_previously_set_slot() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt(b"\x1b]4;1;rgb:00/ff/00\x1b\\");
-    assert!(core
-        .snapshot_frame()
-        .palette_overrides
-        .iter()
-        .any(|(index, _)| *index == 1));
+    assert!(
+        core.snapshot_frame()
+            .palette_overrides
+            .iter()
+            .any(|(index, _)| *index == 1)
+    );
 
     core.write_vt(b"\x1b]104;1\x1b\\");
-    assert!(!core
-        .snapshot_frame()
-        .palette_overrides
-        .iter()
-        .any(|(index, _)| *index == 1));
+    assert!(
+        !core
+            .snapshot_frame()
+            .palette_overrides
+            .iter()
+            .any(|(index, _)| *index == 1)
+    );
 }
 
 /// Ground truth for the "gaps in bg-colored regions" dogfooding report
@@ -492,10 +497,12 @@ fn vt_stream_tracks_wide_character_columns() {
     assert_eq!(frame.cursor.map(|cursor| cursor.col), Some(6));
     // The three wide cells share one style and one width class, so they
     // arrive as a single merged span.
-    assert!(frame.lines[0]
-        .spans
-        .iter()
-        .any(|span| span.text == "日本語" && span.columns == 6));
+    assert!(
+        frame.lines[0]
+            .spans
+            .iter()
+            .any(|span| span.text == "日本語" && span.columns == 6)
+    );
 }
 
 /// Backlog 45: SGR 8 (conceal) sets `Flags::HIDDEN` on a cell but leaves
@@ -2492,14 +2499,15 @@ fn legacy_text_key_matches_pre_existing_bytes_over_printable_range_and_ctrl_tabl
 
     // Super/Cmd alone drops the key entirely (`character_input`'s
     // `modifiers.meta()` check).
-    assert!(core
-        .key_input(
+    assert!(
+        core.key_input(
             KeyCode::Char('a'),
             Modifiers::SUPER,
             KeyEventKind::Press,
             None
         )
-        .is_empty());
+        .is_empty()
+    );
 }
 
 fn assert_serde_round_trip<T>(value: T)

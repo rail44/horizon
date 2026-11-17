@@ -20,7 +20,7 @@ use crate::{
 use super::super::completion::{CompletionStop, Truncation};
 use super::state::SessionLoopState;
 use super::{
-    complete_rig_turn, deterministic_rig_response, GuardHalt, ToolCallDescriptor, TurnCompletion,
+    GuardHalt, ToolCallDescriptor, TurnCompletion, complete_rig_turn, deterministic_rig_response,
 };
 
 impl SessionLoopState {
@@ -84,19 +84,19 @@ impl SessionLoopState {
                 outcome.stop = CompletionStop::Cancelled;
                 self.pause_inputs(true);
             }
-            if outcome.is_completing() {
-                if let Some(text) = self.inputs.take_additions() {
-                    let _ = self
-                        .events_tx
-                        .send(crate::tools::notification_event(text.clone()).into());
-                    outcome = self
-                        .run_cancellable_turn(
-                            Prompt::input(ConversationInputKind::Notification, text.clone()),
-                            || deterministic_rig_response(&text),
-                        )
-                        .await;
-                    continue;
-                }
+            if outcome.is_completing()
+                && let Some(text) = self.inputs.take_additions()
+            {
+                let _ = self
+                    .events_tx
+                    .send(crate::tools::notification_event(text.clone()).into());
+                outcome = self
+                    .run_cancellable_turn(
+                        Prompt::input(ConversationInputKind::Notification, text.clone()),
+                        || deterministic_rig_response(&text),
+                    )
+                    .await;
+                continue;
             }
             if !matches!(outcome.stop, CompletionStop::Finished { .. }) {
                 self.settle_outcome(&mut outcome).await;

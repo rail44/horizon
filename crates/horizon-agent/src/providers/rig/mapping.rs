@@ -3,8 +3,8 @@ use crate::contract::{
     ToolCallId, ToolCallRequest, ToolCallResult,
 };
 use rig_core::completion::{
-    message::{ToolCall, ToolFunction},
     AssistantContent, Message,
+    message::{ToolCall, ToolFunction},
 };
 
 #[cfg(test)]
@@ -58,11 +58,13 @@ pub(super) fn horizon_events_from_rig_message(message: Message) -> Vec<Event> {
 
 pub(super) fn horizon_provider_events_from_rig_message(message: Message) -> Vec<ProviderEvent> {
     match message {
-        Message::System { content } => vec![Event::MessageCommitted(AgentMessage {
-            role: MessageRole::Assistant,
-            text: format!("system: {content}"),
-        })
-        .into()],
+        Message::System { content } => vec![
+            Event::MessageCommitted(AgentMessage {
+                role: MessageRole::Assistant,
+                text: format!("system: {content}"),
+            })
+            .into(),
+        ],
         Message::User { content } => content
             .into_iter()
             .filter_map(|content| match content {

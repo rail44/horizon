@@ -21,8 +21,8 @@ mod test_support;
 pub use status::SessionStatus;
 pub use types::{AgentFrame, AgentFrameItem};
 
-pub use fold::agent_frame_from_events;
 pub(crate) use fold::TurnClock;
+pub use fold::agent_frame_from_events;
 pub(crate) use fold::{
     agent_frame_and_turn_clock_from_events, apply_agent_event_to_frame,
     apply_tool_call_progress_to_frame,
@@ -35,4 +35,4 @@ pub use queries::{
 pub(crate) use tool_calls::tool_call_occurrences;
 
 #[cfg(test)]
-pub(crate) use test_support::{render_agent_transcript, StateEntry};
+pub(crate) use test_support::{StateEntry, render_agent_transcript};

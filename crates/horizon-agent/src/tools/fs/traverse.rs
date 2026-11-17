@@ -55,7 +55,7 @@ fn is_skipped_dir(entry: &DirEntry) -> bool {
 /// Callers are responsible for enforcing the traversal file-count cap
 /// (`agent::config::FsToolConfig::traversal_max_files`, and for `fs_grep` a
 /// byte budget too) since only they know how to report which cap tripped.
-pub(super) fn walk(base: &Path) -> impl Iterator<Item = DirEntry> {
+pub(super) fn walk(base: &Path) -> impl Iterator<Item = DirEntry> + use<> {
     WalkBuilder::new(base)
         .hidden(false)
         .filter_entry(|entry| !is_skipped_dir(entry))

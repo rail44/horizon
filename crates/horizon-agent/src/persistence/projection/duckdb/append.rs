@@ -1,19 +1,19 @@
 use anyhow::{Context, Result};
-use duckdb::params;
 #[cfg(test)]
 use duckdb::OptionalExt;
+use duckdb::params;
 #[cfg(test)]
 use uuid::Uuid;
 
 #[cfg(test)]
 use crate::contract::SessionId;
 #[cfg(test)]
-use crate::contract::{event_kind, Event, ProviderId};
+use crate::contract::{Event, ProviderId, event_kind};
 use crate::persistence::event_log::{LogCursor, Record};
 
-use super::{projection::EventRecordRef, session_id_text, Store};
 #[cfg(test)]
 use super::{AgentStoredEvent, AppendEvent};
+use super::{Store, projection::EventRecordRef, session_id_text};
 
 impl Store {
     /// [`Self::append_record_uncommitted`], wrapped in its own transaction

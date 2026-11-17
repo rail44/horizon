@@ -31,7 +31,7 @@
 
 use alacritty_terminal::term::TermMode;
 use termwiz::escape::csi::KittyKeyboardFlags;
-use termwiz::input::{KeyCode, Modifiers, CSI, SS3};
+use termwiz::input::{CSI, KeyCode, Modifiers, SS3};
 
 use crate::types::KeyEventKind;
 
@@ -577,15 +577,15 @@ fn encode_char(c: char, mods: Modifiers) -> String {
         mods
     };
 
-    if mods.contains(Modifiers::CTRL) {
-        if let Some(mapped) = ctrl_mapping(c) {
-            let mut out = String::new();
-            if mods.contains(Modifiers::ALT) {
-                out.push('\x1b');
-            }
-            out.push(mapped);
-            return out;
+    if mods.contains(Modifiers::CTRL)
+        && let Some(mapped) = ctrl_mapping(c)
+    {
+        let mut out = String::new();
+        if mods.contains(Modifiers::ALT) {
+            out.push('\x1b');
         }
+        out.push(mapped);
+        return out;
     }
     if (c.is_ascii_alphanumeric() || c.is_ascii_punctuation()) && mods.contains(Modifiers::ALT) {
         let mut out = String::new();
@@ -1008,7 +1008,9 @@ pub(crate) const KITTY_COMPLIANCE: &[FeatureEntry] = &[
              app::keymap now maps NamedKey::F1..F24 to a TermKeyCode, so this path is reachable \
              from the real UI too.",
         ),
-        tests: &["high_function_keys_use_legacy_numbers_without_kitty_flags_and_pua_codes_with_them"],
+        tests: &[
+            "high_function_keys_use_legacy_numbers_without_kitty_flags_and_pua_codes_with_them",
+        ],
     },
     FeatureEntry {
         feature: "Functional key definitions: F25-F35",

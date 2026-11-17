@@ -87,10 +87,10 @@ impl SessionLoopState {
     /// the tool-loop guards, standing-memory checkpoint, and the
     /// continuation check's per-turn inputs (`request` is what started it).
     fn begin_interaction(&mut self, request: &str) -> bool {
-        if let Some((result, tool_id)) = self.execution.take_halted() {
-            if !self.retain_prompt(Prompt::result(&result, &tool_id)) {
-                return false;
-            }
+        if let Some((result, tool_id)) = self.execution.take_halted()
+            && !self.retain_prompt(Prompt::result(&result, &tool_id))
+        {
+            return false;
         }
         self.rig_history.open_turn(&self.events_tx);
         self.guard.reset();

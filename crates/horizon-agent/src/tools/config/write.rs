@@ -34,15 +34,14 @@ pub(super) fn execute(
         if let Err(error) = check_staleness(tool_state, &path) {
             return error;
         }
-    } else if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            if let Err(error) = fs::create_dir_all(parent) {
-                return error_output(format!(
-                    "failed to create parent directories for `{}`: {error}",
-                    path.display()
-                ));
-            }
-        }
+    } else if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        return error_output(format!(
+            "failed to create parent directories for `{}`: {error}",
+            path.display()
+        ));
     }
 
     if let Err(error) = write_atomically(&path, content) {
@@ -113,7 +112,7 @@ fn write_atomically(path: &Path, content: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     fn execute(state: &ToolSessionState, path: Option<PathBuf>, raw: &Value) -> Value {
         crate::tools::test_support::with_input::<crate::tools::input::ConfigWrite>(raw, |input| {

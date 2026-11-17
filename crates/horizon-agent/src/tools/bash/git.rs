@@ -268,9 +268,11 @@ mod tests {
             foreign_dot_git.display().to_string(),
         )
         .unwrap();
-        assert!(metadata_writable_roots(&fixture.workspace)
-            .unwrap_err()
-            .contains("does not point to this workspace"));
+        assert!(
+            metadata_writable_roots(&fixture.workspace)
+                .unwrap_err()
+                .contains("does not point to this workspace")
+        );
         fs::remove_dir_all(fixture.root).unwrap();
     }
 

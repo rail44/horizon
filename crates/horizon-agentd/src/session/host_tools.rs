@@ -111,7 +111,7 @@ mod tests {
     use horizon_agent::contract::{Event, OccurrenceId, ProviderId, ToolCallId, ToolCallRequest};
     use horizon_agent::live::LiveState;
     use horizon_agent::tools::{
-        execute_agent_tool, Execution, RecallContext, ToolSessionBuilder, ToolUpdate,
+        Execution, RecallContext, ToolSessionBuilder, ToolUpdate, execute_agent_tool,
     };
     use std::path::Path;
 
@@ -140,9 +140,11 @@ mod tests {
         let Ok(Execution::Applied(ToolUpdate::Finished { events, result })) = execution else {
             panic!("worktree_enter resolves synchronously, got {execution:?}");
         };
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, Event::ToolCallStarted(_))));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::ToolCallStarted(_)))
+        );
         (result.is_error(), result.output.0)
     }
 

@@ -4,7 +4,7 @@
 #[cfg(test)]
 use serde_json::Value;
 
-use super::{catalog::Definition, config, fs, knowledge, memory, recall, ToolSessionState};
+use super::{ToolSessionState, catalog::Definition, config, fs, knowledge, memory, recall};
 use crate::contract::ToolPermission;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -176,10 +176,10 @@ mod tests {
         }
         let state = ToolSessionState::without_root();
         for definition in definitions {
-            if let Some(tool) = SynchronousTool::find(&definition.id) {
-                if tool.permission() == ToolPermission::RequireApproval {
-                    assert!(execute_auto(&state, &definition.id, &serde_json::json!({})).is_none());
-                }
+            if let Some(tool) = SynchronousTool::find(&definition.id)
+                && tool.permission() == ToolPermission::RequireApproval
+            {
+                assert!(execute_auto(&state, &definition.id, &serde_json::json!({})).is_none());
             }
         }
         assert!(execute_auto(&state, "unknown.tool", &Value::Null).is_none());

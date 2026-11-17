@@ -126,10 +126,10 @@ pub fn concept_graph(arcs: &[Arc], concepts: &[Concept]) -> String {
     let of = concept_by_namespace(concepts);
     let mut weights: BTreeMap<(&str, &str), f64> = BTreeMap::new();
     for arc in arcs {
-        if let (Some(a), Some(b)) = (of.get(arc.src.as_str()), of.get(arc.dst.as_str())) {
-            if a != b {
-                *weights.entry((a, b)).or_default() += arc.weight;
-            }
+        if let (Some(a), Some(b)) = (of.get(arc.src.as_str()), of.get(arc.dst.as_str()))
+            && a != b
+        {
+            *weights.entry((a, b)).or_default() += arc.weight;
         }
     }
     let mut rows: Vec<((&str, &str), f64)> = weights.into_iter().collect();

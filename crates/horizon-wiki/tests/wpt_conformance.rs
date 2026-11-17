@@ -6,8 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
-use horizon_wiki::annotation::{markdown_body, Agent, Annotation};
 use horizon_wiki::Store;
+use horizon_wiki::annotation::{Agent, Annotation, markdown_body};
 use serde_json::Value;
 use uuid::Uuid;
 

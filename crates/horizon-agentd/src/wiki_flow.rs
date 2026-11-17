@@ -17,13 +17,13 @@ use horizon_agent::contract::{SessionId, SessionInput};
 use horizon_agent::roles::{RoleDefinition, RoleId};
 use horizon_agent::tools::{ExternalOutput, ExternalTool};
 use horizon_wiki::agent::{self, THREAD_ROLE_ID};
-use horizon_wiki::annotation::{markdown_body, Agent, Annotation};
+use horizon_wiki::annotation::{Agent, Annotation, markdown_body};
 use horizon_wiki::{Store, Thread, WikiError};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::outbox::{BoxFuture, Context, Reply, ReplySink, TriggerSource};
-use crate::session::{resume_session, spawn_session_thread, AgentdState};
+use crate::session::{AgentdState, resume_session, spawn_session_thread};
 
 const KIND: &str = "wiki";
 

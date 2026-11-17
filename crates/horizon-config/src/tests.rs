@@ -557,18 +557,24 @@ fn a_default_model_naming_an_unknown_entry_warns_and_is_treated_as_absent() {
     )
     .unwrap();
     assert_eq!(config.resolved_providers().default_model, None);
-    assert!(provider_config_warnings(&config)
-        .iter()
-        .any(|warning| warning.starts_with("default_model:") && warning.contains("renamed-away")));
+    assert!(
+        provider_config_warnings(&config)
+            .iter()
+            .any(
+                |warning| warning.starts_with("default_model:") && warning.contains("renamed-away")
+            )
+    );
 }
 
 #[test]
 fn a_missing_default_model_warns_naming_the_key_and_resolves_no_model() {
     let config = parse("[[providers]]\nname = \"synthetic\"\n").unwrap();
     assert_eq!(config.resolved_providers().default_model, None);
-    assert!(provider_config_warnings(&config)
-        .iter()
-        .any(|warning| warning.starts_with("default_model: not set")));
+    assert!(
+        provider_config_warnings(&config)
+            .iter()
+            .any(|warning| warning.starts_with("default_model: not set"))
+    );
 }
 
 #[test]
@@ -647,19 +653,23 @@ fn small_model_is_independent_of_default_model_and_never_uses_anthropic() {
             model: model.into(),
         });
         assert!(invalid_config.resolved_small_model().is_err());
-        assert!(provider_config_warnings(&invalid_config)
-            .iter()
-            .any(|w| w.starts_with("small_model:")));
+        assert!(
+            provider_config_warnings(&invalid_config)
+                .iter()
+                .any(|w| w.starts_with("small_model:"))
+        );
     }
     let mut anthropic = config.clone();
     anthropic.small_model = Some(RawModelPair {
         provider: "chat".into(),
         model: "small".into(),
     });
-    assert!(anthropic
-        .resolved_small_model()
-        .unwrap_err()
-        .contains("openai-compatible"));
+    assert!(
+        anthropic
+            .resolved_small_model()
+            .unwrap_err()
+            .contains("openai-compatible")
+    );
 }
 
 #[test]
@@ -671,9 +681,11 @@ fn an_absent_decision_model_warns_naming_the_key_and_the_disabled_checks() {
         "approval judgments fall back to small_model's chat judge and turn-continuation checks \
          are disabled"
     ));
-    assert!(provider_config_warnings(&config)
-        .iter()
-        .any(|warning| warning.starts_with("decision_model: not set")));
+    assert!(
+        provider_config_warnings(&config)
+            .iter()
+            .any(|warning| warning.starts_with("decision_model: not set"))
+    );
 }
 
 #[test]
@@ -681,10 +693,12 @@ fn a_decision_model_without_a_model_id_is_rejected() {
     let config =
         parse("decision_model = { provider = \"ollama\" }\n[[providers]]\nname = \"ollama\"\n")
             .unwrap();
-    assert!(config
-        .resolved_decision_model()
-        .unwrap_err()
-        .starts_with("decision_model: has no model id"));
+    assert!(
+        config
+            .resolved_decision_model()
+            .unwrap_err()
+            .starts_with("decision_model: has no model id")
+    );
 }
 
 #[test]
@@ -697,9 +711,11 @@ fn a_decision_model_naming_an_unknown_entry_is_rejected() {
     let error = config.resolved_decision_model().unwrap_err();
     assert!(error.starts_with("decision_model:"));
     assert!(error.contains("\"missing\""));
-    assert!(provider_config_warnings(&config)
-        .iter()
-        .any(|warning| warning.starts_with("decision_model:")));
+    assert!(
+        provider_config_warnings(&config)
+            .iter()
+            .any(|warning| warning.starts_with("decision_model:"))
+    );
 }
 
 #[test]
@@ -733,9 +749,11 @@ fn a_valid_decision_model_resolves_its_entry_and_model() {
     assert_eq!(decision.url, "https://api.deepinfra.com/v1/decisions");
     assert_eq!(decision.provider.api_key_env, "DEEPINFRA_API_KEY");
     assert_eq!(decision.model, "Cloudflare/clef");
-    assert!(!provider_config_warnings(&config)
-        .iter()
-        .any(|warning| warning.starts_with("decision_model:")));
+    assert!(
+        !provider_config_warnings(&config)
+            .iter()
+            .any(|warning| warning.starts_with("decision_model:"))
+    );
 }
 
 #[test]
@@ -751,9 +769,11 @@ fn a_decision_model_on_an_entry_without_a_decision_url_is_rejected() {
         "{error}"
     );
     assert!(error.contains("turn-continuation checks are disabled"));
-    assert!(provider_config_warnings(&config)
-        .iter()
-        .any(|warning| warning.starts_with("decision_model:")));
+    assert!(
+        provider_config_warnings(&config)
+            .iter()
+            .any(|warning| warning.starts_with("decision_model:"))
+    );
 }
 
 #[test]
@@ -780,9 +800,11 @@ fn nameless_entries_are_dropped_and_warned() {
             .collect::<Vec<_>>(),
         vec!["synthetic"]
     );
-    assert!(provider_config_warnings(&config)
-        .iter()
-        .any(|warning| warning.contains("entry 1 has no name")));
+    assert!(
+        provider_config_warnings(&config)
+            .iter()
+            .any(|warning| warning.contains("entry 1 has no name"))
+    );
 }
 
 #[test]
@@ -792,9 +814,11 @@ fn duplicate_entry_names_warn_about_the_shadowed_later_entry() {
          [[providers]]\nname = \"synthetic\"\nkind = \"anthropic\"\n",
     )
     .unwrap();
-    assert!(provider_config_warnings(&config)
-        .iter()
-        .any(|warning| warning.contains("duplicate name")));
+    assert!(
+        provider_config_warnings(&config)
+            .iter()
+            .any(|warning| warning.contains("duplicate name"))
+    );
     // Resolution itself keeps both (file order); only selection of the
     // shadowed entry is ambiguous, which the warning names.
     assert_eq!(config.resolved_providers().providers.len(), 2);

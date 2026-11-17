@@ -1,6 +1,6 @@
 //! Resolve a model choice against one catalog snapshot before applying it.
 
-use super::{apply_provider_entry, NamedProviderConfig, ProvidersTable, RigAgentConfig};
+use super::{NamedProviderConfig, ProvidersTable, RigAgentConfig, apply_provider_entry};
 
 /// A validated snapshot passed inside the daemon, never accepted over the wire.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,13 +91,17 @@ mod tests {
     fn resolved_provider_settings_cannot_cross_the_command_wire_boundary() {
         let selection = resolve_model_selection(&catalog(), "selected", "chosen").unwrap();
         assert!(serde_json::to_value(Command::ApplySessionModel(Box::new(selection))).is_err());
-        assert!(serde_json::from_value::<Command>(serde_json::json!({
-            "ApplySessionModel": { "entry": { "base_url": "https://unconfigured.invalid" } }
-        }))
-        .is_err());
-        assert!(serde_json::from_value::<Command>(serde_json::json!({
-            "SetSessionModel": { "provider": "selected", "model": "chosen" }
-        }))
-        .is_ok());
+        assert!(
+            serde_json::from_value::<Command>(serde_json::json!({
+                "ApplySessionModel": { "entry": { "base_url": "https://unconfigured.invalid" } }
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<Command>(serde_json::json!({
+                "SetSessionModel": { "provider": "selected", "model": "chosen" }
+            }))
+            .is_ok()
+        );
     }
 }
