@@ -41,6 +41,8 @@ pub mod bindings {
         world: "view",
         pub_export_macro: true,
         export_macro_name: "export_events",
+        // (What a view is told is compared with what it was told.)
+        additional_derives: [PartialEq],
     });
 }
 

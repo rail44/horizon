@@ -428,6 +428,23 @@ The decisions and who made them are on board #76. What they come to:
   without the lock the daemon's writers take: a log is only appended to,
   a line at a time. `create` may refuse, in words (`result<state,
   string>`), which is what the command line answers with.
+- **The list of sessions is the fourth extension** (`plugins/sessions`),
+  and the first that reads and acts on the workspace. Two interfaces of
+  `horizon:ui` are for that, apart so that reading the sessions is not
+  asking to change them: `sessions` (`all`: each session's kind, title,
+  directory, the project the directory is in, what it was derived from
+  and what it is doing; and a `watch` resource whose `changed` comes back
+  when they have changed) and `session-control` (`show`, `terminate`,
+  `terminate-with-derived`, `open-terminal`, each on a session's id).
+  The shell says what its sessions are whenever its model changes
+  (`src/workspace/session_feed.rs`) and does what is asked with the
+  functions its own commands use; it knows nothing of the list. The keys
+  in the list (a step, the next that waits, a search, the question before
+  a session is ended) are the view's own and are not commands of the
+  shell. A project is the repository a directory is in, a linked
+  worktree's being the repository it is a worktree of
+  (`horizon_workspace::lineage::project_root`). A preview pane is given
+  neither interface.
 - **A preview pane shows extensions only.** The preview plugins it also
   showed (views of the shell's own, built into wasm over sample data)
   went on 2026-11-16, and with them the root library's build for a guest

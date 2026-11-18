@@ -42,7 +42,7 @@ fn open_with(opening: Opening) -> Opened {
     let extensions =
         horizon::extension::own_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug"));
     assert_eq!(extensions.first(), Some(&component()));
-    assert_eq!(extensions.len(), 3, "{extensions:?}");
+    assert_eq!(extensions.len(), 4, "{extensions:?}");
     let mut shell = None;
     let app = App::new(1200, 800, "Test", css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));

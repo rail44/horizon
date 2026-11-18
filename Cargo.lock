@@ -3242,6 +3242,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-sessions-plugin"
+version = "0.1.0"
+dependencies = [
+ "horizon-components",
+ "horizon-ui",
+ "keyboard-types",
+ "wit-bindgen 0.63.0",
+]
+
+[[package]]
 name = "horizon-shell-runtime"
 version = "0.1.0"
 dependencies = [
