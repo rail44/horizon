@@ -65,6 +65,7 @@ mod models;
 mod palette;
 mod picker;
 mod plugins;
+mod program;
 mod reload;
 mod sessions;
 
@@ -665,8 +666,9 @@ impl Shell {
     }
 
     /// Takes in what the terminals reported since the last layout: a
-    /// title, a working directory, and that the shell in one has gone,
-    /// which ends its session.
+    /// title, a working directory, what the program in one says of its
+    /// own state, and that the shell in one has gone, which ends its
+    /// session.
     fn take_in_sessions(&self) {
         let arrived = std::mem::take(&mut *self.kept().arrived.lock().unwrap());
         if !arrived.is_empty() {
@@ -677,7 +679,7 @@ impl Shell {
         }
         self.tell_boards();
         let (mut titles, mut directories, mut exited) = (Vec::new(), Vec::new(), Vec::new());
-        let mut notifications = Vec::new();
+        let (mut notifications, mut programs) = (Vec::new(), Vec::new());
         // What a session says of itself is read from the session, whether a
         // pane shows it or not.
         let kept = self.kept();
@@ -699,6 +701,9 @@ impl Shell {
                     TerminalUpdate::WorkingDirectory(directory) => {
                         directories.push((*id, directory));
                     }
+                    TerminalUpdate::ProgramStatus(status) => {
+                        programs.push((*id, status.map(program::arrived)));
+                    }
                     _ => {}
                 }
             }
@@ -712,19 +717,39 @@ impl Shell {
                 titles.push((*id, Some(title)));
             }
         }
-        // A notification is for a session the owner is not looking at:
-        // not the active pane's, or any while the window is away.
+        // The session the owner is looking at: the active pane's, and
+        // none while the window is away.
+        let looked_at = (self.model)
+            .with_untracked(Workspace::active_terminal_session_id)
+            .filter(|_| crate::window::active());
+        // A notification is for a session the owner is not looking at.
         if let Some(notify) = kept.notify.as_ref() {
-            let looked_at = (self.model)
-                .with_untracked(Workspace::active_terminal_session_id)
-                .filter(|_| crate::window::active());
             for (session, notification) in notifications {
                 if looked_at != Some(session) {
                     notify(session, notification);
                 }
             }
         }
-        if titles.is_empty() && directories.is_empty() && exited.is_empty() {
+        // What a program reported is news until its session is looked at,
+        // which may be now, or at a layout long after the report.
+        let news = looked_at.filter(|looked_at| {
+            programs.iter().any(|(session, _)| session == looked_at)
+                || self.model.with_untracked(|model| {
+                    (model.session_summaries().iter()).any(|session| {
+                        session.id == *looked_at
+                            && session
+                                .program
+                                .as_ref()
+                                .is_some_and(|program| !program.seen)
+                    })
+                })
+        });
+        if titles.is_empty()
+            && directories.is_empty()
+            && exited.is_empty()
+            && programs.is_empty()
+            && news.is_none()
+        {
             return;
         }
         let ended = !exited.is_empty();
@@ -734,6 +759,12 @@ impl Shell {
             }
             for (session, directory) in directories {
                 model.set_session_directory(session, directory);
+            }
+            for (session, status) in programs {
+                model.set_session_program_status(session, status);
+            }
+            if let Some(session) = news {
+                model.mark_session_program_seen(session);
             }
             for session in exited {
                 model.terminate_session(session);
@@ -1053,11 +1084,12 @@ fn strip(shell: Shell) -> El {
                         .is_some_and(|tab| tab.active)
                         .then_some(styles::ACTIVE)
                 })
-                .child(
-                    el("div")
-                        .class(styles::TITLE)
-                        .text_dyn(move || tab(index).map_or_default(|tab| tab.title)),
-                )
+                .child(el("div").class(styles::TITLE).text_dyn(move || {
+                    tab(index).map_or_default(|tab| match &tab.program {
+                        Some(status) => format!("{} {}", program::mark(status), tab.title),
+                        None => tab.title,
+                    })
+                }))
                 // Closing a tab detaches the sessions in it.
                 .child(
                     el("div")

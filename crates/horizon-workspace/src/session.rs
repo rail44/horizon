@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::types::{SessionKind, Workspace, WorkspaceSession};
+use super::types::{ProgramStatus, SessionKind, Workspace, WorkspaceSession};
 use crate::SessionId;
 
 impl Workspace {
@@ -46,6 +46,41 @@ impl Workspace {
         }
         session.title = derived;
         true
+    }
+
+    /// Records what the program in a terminal session says of its own
+    /// state, or with `None` that it took its report back (a no-op if
+    /// `session_id` is unknown). What is recorded has not been looked at:
+    /// [`Self::mark_session_program_seen`] says when it has. Returns
+    /// whether the model changed.
+    pub fn set_session_program_status(
+        &mut self,
+        session_id: SessionId,
+        status: Option<ProgramStatus>,
+    ) -> bool {
+        let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) else {
+            return false;
+        };
+        if session.program == status {
+            return false;
+        }
+        session.program = status;
+        true
+    }
+
+    /// Records that the owner has looked at a session since its program
+    /// last reported. Returns whether the model changed.
+    pub fn mark_session_program_seen(&mut self, session_id: SessionId) -> bool {
+        let program = (self.sessions.iter_mut())
+            .find(|s| s.id == session_id)
+            .and_then(|session| session.program.as_mut());
+        match program {
+            Some(program) if !program.seen => {
+                program.seen = true;
+                true
+            }
+            _ => false,
+        }
     }
 
     pub fn terminate_session(&mut self, session_id: SessionId) -> bool {

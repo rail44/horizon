@@ -863,6 +863,83 @@ fn a_notification_a_program_asks_for_is_posted_unless_its_pane_is_looked_at() {
     assert!(opened.model(|model| model.is_active_pane(first)));
 }
 
+#[test]
+fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
+    use horizon_workspace::types::{ProgramState, ProgramStatus};
+
+    let opened = open();
+    let first = opened.panes()[0];
+    let session = opened.model(|model| model.terminal_session_id(first).unwrap());
+    opened.prompt(first);
+    let program = || -> Option<ProgramStatus> {
+        opened.model(|model| {
+            let mut sessions = model.session_summaries().into_iter();
+            sessions.find(|summary| summary.id == session)?.program
+        })
+    };
+    let state = || program().map(|program| program.state);
+    let text_of = |node: NodeId| {
+        let document = opened.app.document();
+        let document = document.borrow();
+        document.get_node(node).unwrap().text_content()
+    };
+    let tab = |index: usize| text_of(opened.all("tab-label")[index]);
+    assert!(!tab(0).starts_with('◐'), "{}", tab(0));
+
+    // A program that says nothing of itself has no mark; one that reports
+    // has the mark of what it reports before its title.
+    opened.run(r"printf '\033]7501;state=working:app=claude-code\033\\'");
+    opened.until("working", || state() == Some(ProgramState::Working));
+    assert!(tab(0).starts_with("◐ "), "{}", tab(0));
+
+    opened.run(
+        r"printf '\033]7501;state=blocked:app=claude-code:kind=permission:msg=YXBwcm92ZSBCYXNoOiBscw==\033\\'",
+    );
+    opened.until("blocked", || state() == Some(ProgramState::Blocked));
+    assert!(tab(0).starts_with("? "), "{}", tab(0));
+    assert_eq!(
+        program().and_then(|program| program.message).as_deref(),
+        Some("approve Bash: ls")
+    );
+
+    // Done while another tab is the one looked at: news, on the tab and
+    // in the session manager's line.
+    opened.run(r"sleep 0.4; printf '\033]7501;state=done:app=claude-code\033\\'");
+    opened.chord();
+    opened.character("t");
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
+    opened.until("done", || state() == Some(ProgramState::Done));
+    assert!(program().is_some_and(|program| !program.seen));
+    assert!(tab(0).starts_with("● "), "{}", tab(0));
+    assert!(!tab(1).starts_with('●'), "{}", tab(1));
+
+    opened.chord();
+    opened.character(":");
+    opened.commit("manage");
+    opened.named(NamedKey::Enter);
+    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
+    let lines: Vec<String> = opened.all("session").into_iter().map(text_of).collect();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("claude-code: done, unseen")),
+        "{lines:?}"
+    );
+    opened.named(NamedKey::Escape);
+
+    // Looked at, it is news no longer, and marked as a program at rest.
+    opened.shell.reveal_session(session);
+    opened.app.run_effects();
+    opened.until("seen", || program().is_some_and(|program| program.seen));
+    assert!(tab(0).starts_with("✳ "), "{}", tab(0));
+
+    // Taken back, as a program does on its way out: no mark.
+    opened.prompt(first);
+    opened.run(r"printf '\033]7501;state=clear\033\\'");
+    opened.until("cleared", || program().is_none());
+    assert!(!tab(0).starts_with('✳'), "{}", tab(0));
+}
+
 /// How many pixels of the page inside a node's box are not `background`.
 fn inked(opened: &Opened, node: NodeId, background: [u8; 3]) -> usize {
     use anyrender::ImageRenderer as _;

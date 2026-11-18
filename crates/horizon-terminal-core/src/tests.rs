@@ -3045,8 +3045,6 @@ fn a_program_asking_whether_its_status_is_read_is_answered() {
 
 #[test]
 fn a_programs_status_is_read_off_the_stream_and_leaves_the_screen_alone() {
-    use crate::core::program_status::{BlockedKind, ProgramState, ProgramStatusUpdate};
-
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     let events = core.write_vt(
         b"hi\x1b]7501;state=blocked:app=claude-code:kind=permission\x1b\\\
@@ -3054,12 +3052,11 @@ fn a_programs_status_is_read_off_the_stream_and_leaves_the_screen_alone() {
           \x1b]7501;state=clear\x1b\\",
     );
 
-    let [ProgramStatusUpdate::Set(status), ProgramStatusUpdate::Clear] = &events.program_status[..]
-    else {
+    let [Some(status), None] = &events.program_status[..] else {
         panic!("read {:?}", events.program_status);
     };
     assert_eq!(status.state, ProgramState::Blocked);
-    assert_eq!(status.kind, Some(BlockedKind::Permission));
+    assert_eq!(status.blocked_on, Some(ProgramBlockedOn::Permission));
     assert_eq!(status.app.as_deref(), Some("claude-code"));
     assert!(events.pty_writes.is_empty());
     assert_eq!(core.snapshot_text().trim(), "hi");

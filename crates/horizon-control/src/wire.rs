@@ -160,6 +160,7 @@ mod tests {
                     kind: "agent".to_string(),
                     attached: true,
                     title: "agent: fix bug".to_string(),
+                    program: None,
                 }],
             }),
             EnvelopeBody::State(State {

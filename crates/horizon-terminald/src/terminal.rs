@@ -9,8 +9,8 @@ use std::time::Duration;
 use crossbeam_channel::{Receiver, Sender};
 use horizon_terminal_core::{
     CoreInput, CoreSenders, ScrollWindowRequest, SelectionCommand, TerminalCommand,
-    TerminalCoreOptions, TerminalFrame, TerminalKeyInput, TerminalSpawnSpec, TerminalSummary,
-    TerminalUpdate, core_channels, run_terminal_core,
+    TerminalCoreOptions, TerminalFrame, TerminalKeyInput, TerminalProgramStatus, TerminalSpawnSpec,
+    TerminalSummary, TerminalUpdate, core_channels, run_terminal_core,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -52,6 +52,11 @@ struct HostedTerminal {
     /// any -- the change filter for [`TerminalHost::publish_cwd`] and the
     /// value a newly installed subscriber is sent first.
     cwd: Option<PathBuf>,
+    /// What the program in the session last said of its own state
+    /// ([`TerminalUpdate::ProgramStatus`]), if it has not taken it back --
+    /// the change filter for [`TerminalHost::publish_program_status`] and
+    /// what a newly installed subscriber is sent with the cwd.
+    program_status: Option<TerminalProgramStatus>,
 }
 
 /// The local (sync-sendable, unbounded) halves of one attachment's two
@@ -145,19 +150,25 @@ impl TerminalHost {
         let (frame_tx, frame_rx) = unbounded_channel();
         let (event_tx, event_rx) = unbounded_channel();
         let mut subscribers = self.subscribers.lock().unwrap();
-        let (latest, cwd) = {
+        let (latest, cwd, program_status) = {
             let sessions = self.sessions.lock().unwrap();
             match sessions.get(&session_id) {
                 Some(session) => (
                     session.latest_frame.lock().unwrap().clone(),
                     session.cwd.clone(),
+                    session.program_status.clone(),
                 ),
                 None if require_existing => return None,
-                None => (None, None),
+                None => (None, None, None),
             }
         };
         if let Some(cwd) = cwd {
             let _ = event_tx.send(TerminalUpdate::WorkingDirectory(cwd));
+        }
+        // A program that waits on its user says so once and then says
+        // nothing: a client that attaches later is told what stands.
+        if program_status.is_some() {
+            let _ = event_tx.send(TerminalUpdate::ProgramStatus(program_status));
         }
         let registration = Uuid::new_v4();
         subscribers.insert(
@@ -397,6 +408,23 @@ impl TerminalHost {
         self.send_event(session_id, TerminalUpdate::WorkingDirectory(cwd));
     }
 
+    /// Records what the program in `session_id` says of its own state and
+    /// sends it as [`TerminalUpdate::ProgramStatus`] when it differs from
+    /// what stands. A no-op for an unknown session.
+    fn publish_program_status(&self, session_id: Uuid, status: Option<TerminalProgramStatus>) {
+        {
+            let mut sessions = self.sessions.lock().unwrap();
+            let Some(session) = sessions.get_mut(&session_id) else {
+                return;
+            };
+            if session.program_status == status {
+                return;
+            }
+            session.program_status = status.clone();
+        }
+        self.send_event(session_id, TerminalUpdate::ProgramStatus(status));
+    }
+
     /// Reads `session_id`'s shell process cwd and publishes it if it changed.
     fn refresh_cwd(&self, session_id: Uuid) {
         let pid = self
@@ -499,6 +527,9 @@ impl TerminalHost {
                                 host.tear_down_session(session_id);
                                 return;
                             }
+                            TerminalUpdate::ProgramStatus(status) => {
+                                host.publish_program_status(session_id, status);
+                            }
                             other => host.send_event(session_id, other),
                         }
                     }
@@ -589,6 +620,7 @@ fn spawn_terminal(
             pid,
             killer,
             cwd: None,
+            program_status: None,
         },
         frame_rx,
         update_rx,
@@ -803,6 +835,7 @@ mod tests {
             pid: None,
             killer: Arc::new(Mutex::new(Box::new(killer))),
             cwd: None,
+            program_status: None,
         };
         (session, command_rx, killed)
     }
@@ -875,6 +908,44 @@ mod tests {
             Ok(TerminalUpdate::WorkingDirectory("/work/repo".into()))
         );
         assert!(reattached.events.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_programs_status_is_published_on_change_and_stands_for_a_fresh_subscriber() {
+        let host = TerminalHost::new();
+        let id = Uuid::new_v4();
+        let (session, _command_rx, _killed) = fake_session();
+        assert!(host.install_if_vacant(id, session));
+        let blocked = TerminalProgramStatus {
+            state: horizon_terminal_core::ProgramState::Blocked,
+            blocked_on: None,
+            app: Some("claude-code".into()),
+            message: None,
+        };
+
+        let mut first = host.attach_subscribe(id).expect("live session");
+        host.publish_program_status(id, Some(blocked.clone()));
+        host.publish_program_status(id, Some(blocked.clone()));
+        assert_eq!(
+            first.events.try_recv(),
+            Ok(TerminalUpdate::ProgramStatus(Some(blocked.clone())))
+        );
+        assert!(first.events.try_recv().is_err(), "a repeat is not sent");
+
+        let mut reattached = host.attach_subscribe(id).expect("live session");
+        assert_eq!(
+            reattached.events.try_recv(),
+            Ok(TerminalUpdate::ProgramStatus(Some(blocked)))
+        );
+
+        // Taken back, it is told once and no longer stands.
+        host.publish_program_status(id, None);
+        assert_eq!(
+            reattached.events.try_recv(),
+            Ok(TerminalUpdate::ProgramStatus(None))
+        );
+        let mut later = host.attach_subscribe(id).expect("live session");
+        assert!(later.events.try_recv().is_err());
     }
 
     #[test]

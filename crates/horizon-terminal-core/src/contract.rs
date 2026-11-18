@@ -145,6 +145,44 @@ pub struct TerminalNotification {
     pub body: String,
 }
 
+/// What a program in the terminal says of its own state, read from the
+/// root record of its OSC 7501 reports (the Program Status Protocol,
+/// `core::program_status`) and delivered to the client as
+/// [`TerminalUpdate::ProgramStatus`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalProgramStatus {
+    pub state: ProgramState,
+    /// What the program waits for. Only with [`ProgramState::Blocked`],
+    /// and not always then.
+    pub blocked_on: Option<ProgramBlockedOn>,
+    /// The program's name for itself, such as `claude-code`.
+    pub app: Option<String>,
+    /// Why, or what about, in the program's words.
+    pub message: Option<String>,
+}
+
+/// The protocol's states.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum ProgramState {
+    /// At rest, waiting for the next instruction.
+    Idle,
+    Working,
+    /// Finished a piece of work the user has not looked at yet.
+    Done,
+    /// Cannot go on until the user does something.
+    Blocked,
+    /// Failed and stopped.
+    Error,
+}
+
+/// What a blocked program is waiting for (the protocol's `kind`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum ProgramBlockedOn {
+    Permission,
+    Question,
+    Auth,
+}
+
 /// The non-frame terminal events, carried on the attachment's `events`
 /// mpsc channel (`TerminalAttachment::events`). Since wire v11 the frame
 /// snapshots that used to be a `Snapshot`/`FrameDiff` variant here travel
@@ -183,6 +221,12 @@ pub enum TerminalUpdate {
     /// every newly installed subscriber, so a reattaching client learns the
     /// current value without a request (`docs/terminald-split-design.md`).
     WorkingDirectory(PathBuf),
+    /// Daemon → client: what the program in the session says of its own
+    /// state ([`TerminalProgramStatus`]), or `None` once it has taken its
+    /// report back, as one does on its way out. Sent when it changes and,
+    /// while there is one, once to every newly installed subscriber, as
+    /// the working directory is.
+    ProgramStatus(Option<TerminalProgramStatus>),
 }
 
 /// Which OS clipboard buffer a [`TerminalUpdate::Clipboard`] targets.

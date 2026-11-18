@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::SessionId;
 
-use super::{LayoutNode, PaneId, SessionKind, TabId};
+use super::{LayoutNode, PaneId, ProgramStatus, SessionKind, TabId};
 
 #[derive(Clone, Debug)]
 pub struct Workspace {
@@ -57,6 +57,11 @@ pub struct WorkspaceSession {
     /// never guessed at spawn time. Same "not persisted, goes back to
     /// `None` until re-adopted" caveat as `directory`.
     pub parent_session_id: Option<SessionId>,
+    /// What the program in a terminal session says of its own state, while
+    /// one reports ([`ProgramStatus`]). Set through
+    /// [`Workspace::set_session_program_status`] from what
+    /// `horizon-terminald` sends. Not persisted, as `directory` is not.
+    pub program: Option<ProgramStatus>,
 }
 
 #[derive(Clone, Debug)]
@@ -89,6 +94,7 @@ impl WorkspaceSession {
             title: session_title(kind, display_number),
             directory: None,
             parent_session_id: None,
+            program: None,
         }
     }
 

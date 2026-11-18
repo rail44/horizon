@@ -175,10 +175,8 @@ fn send_terminal_events(
     for notification in events.notifications {
         let _ = update_tx.send(TerminalUpdate::Notification(notification));
     }
-    // Read, and not yet sent to a client: what a program reports, and
-    // when, is being measured before the wire carries it.
-    for update in events.program_status {
-        tracing::debug!(?update, "program status (OSC 7501)");
+    for status in events.program_status {
+        let _ = update_tx.send(TerminalUpdate::ProgramStatus(status));
     }
 }
 
@@ -1526,5 +1524,61 @@ mod tests {
             actual, expected,
             "Enter must not overtake text or pasted input"
         );
+    }
+
+    #[test]
+    fn run_terminal_core_answers_a_status_query_and_forwards_the_reports() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, _frame_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (_senders, receivers) = core_channels();
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(20, 5),
+                TerminalCoreOptions::default(),
+                pty_rx,
+                receivers,
+                command_tx,
+                frame_tx,
+                update_tx,
+            );
+        });
+
+        // The question, a report, a background command's own record (which
+        // is not the program's), and the report taken back.
+        pty_tx
+            .send(
+                b"\x1b]7501;?\x1b\\\x1b]7501;state=blocked:app=claude-code:kind=question\x1b\\\
+                  \x1b]7501;state=working:id=bt7g05417\x1b\\\x1b]7501;state=clear\x1b\\"
+                    .to_vec(),
+            )
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut statuses = Vec::new();
+        while Instant::now() < deadline && statuses.len() < 2 {
+            if let Ok(TerminalUpdate::ProgramStatus(status)) =
+                update_rx.recv_timeout(Duration::from_millis(50))
+            {
+                statuses.push(status);
+            }
+        }
+        let [Some(status), None] = &statuses[..] else {
+            panic!("forwarded {statuses:?}");
+        };
+        assert_eq!(status.state, crate::ProgramState::Blocked);
+        assert_eq!(status.blocked_on, Some(crate::ProgramBlockedOn::Question));
+        assert_eq!(status.app.as_deref(), Some("claude-code"));
+
+        // The answer goes to the program as any other reply does.
+        let mut answered = false;
+        while let Ok(command) = command_rx.recv_timeout(Duration::from_millis(200)) {
+            if let TerminalCommand::Input(bytes) = command {
+                answered |= bytes.starts_with(b"\x1b]7501;?:states=");
+            }
+        }
+        assert!(answered, "the status query is answered on the PTY");
     }
 }

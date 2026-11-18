@@ -25,7 +25,7 @@ mod color;
 mod events;
 mod input;
 mod osc_notify;
-pub(crate) mod program_status;
+mod program_status;
 mod render;
 
 /// Built-in fallback for `Term`'s `scrolling_history` (`TermConfig`), used

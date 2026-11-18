@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::SessionId;
 
-use super::SessionKind;
+use super::{ProgramStatus, SessionKind};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TabSummary {
@@ -11,6 +11,9 @@ pub struct TabSummary {
     pub active: bool,
     pub pane_count: usize,
     pub active_session_id: Option<SessionId>,
+    /// What the program in the session the tab is titled after says of
+    /// its own state -- `WorkspaceSession::program`.
+    pub program: Option<ProgramStatus>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -27,6 +30,8 @@ pub struct SessionSummary {
     /// (`docs/session-relationship-design.md` decision 4b) derives its
     /// derivation tree from this field across every summary.
     pub parent_session_id: Option<SessionId>,
+    /// Mirrors `WorkspaceSession::program` -- see its doc comment.
+    pub program: Option<ProgramStatus>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

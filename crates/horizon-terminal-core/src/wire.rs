@@ -61,7 +61,11 @@ use crate::{TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, 
 /// Version 20: `TerminalUpdate::Notification` added — OSC 9/777
 /// desktop-notification requests extracted from the PTY stream
 /// (`contract::TerminalNotification`).
-pub const TERMINAL_PROTOCOL_VERSION: u32 = 20;
+///
+/// Version 21: `TerminalUpdate::ProgramStatus` added — what a program in
+/// the terminal says of its own state over OSC 7501
+/// (`contract::TerminalProgramStatus`).
+pub const TERMINAL_PROTOCOL_VERSION: u32 = 21;
 
 /// The oldest terminal-wire version this build is still willing to
 /// negotiate down to in [`TerminalHub::hello`] — the low end of the
@@ -79,7 +83,7 @@ pub const TERMINAL_PROTOCOL_VERSION: u32 = 20;
 /// KeyInput` is sent unconditionally now — no per-keystroke gate survives
 /// at all, versioned or otherwise (`src/terminal/session.rs`'s key-dispatch
 /// path).
-pub const MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION: u32 = 20;
+pub const MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION: u32 = 21;
 
 /// The version range this build advertises in every `hello` to
 /// `horizon-terminald`.
@@ -212,8 +216,8 @@ mod tests {
     /// so each pins its half against the literal 20.
     #[test]
     fn the_split_started_at_the_pre_split_version() {
-        assert_eq!(TERMINAL_PROTOCOL_VERSION, 20);
-        assert_eq!(MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION, 20);
+        assert_eq!(TERMINAL_PROTOCOL_VERSION, 21);
+        assert_eq!(MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION, 21);
     }
 
     /// The fields the request enum reads for `method`: what serde is asked
