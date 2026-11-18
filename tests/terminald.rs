@@ -145,6 +145,7 @@ fn a_session_of_a_real_terminald_runs_what_is_typed_into_the_view() {
             session: Session::attached(handle).into(),
             look: Theme::built_in().terminal().into(),
             open_url: None,
+            drags: Default::default(),
         });
         terminal = Some(state);
         root.focus()

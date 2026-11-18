@@ -33,19 +33,32 @@ pub use slider::{Range, Slider};
 
 /// Hears where the pointer is, on the page.
 type Moved = Rc<dyn Fn(f32, f32)>;
+/// A drag in progress: what hears its moves, and what hears where its
+/// button came up.
+type Drag = (Moved, Option<Moved>);
 
 /// What follows the pointer while a button is held: a thumb being
-/// dragged. A component begins a drag on its own element; the moves that
-/// follow arrive wherever the pointer is, so the view wires them in at
-/// its root.
+/// dragged, text being selected. A component begins a drag on its own
+/// element; the moves that follow arrive wherever the pointer is, so the
+/// view wires them in at its root.
 #[derive(Clone, Default)]
-pub struct Drags(Rc<RefCell<Option<Moved>>>);
+pub struct Drags(Rc<RefCell<Option<Drag>>>);
 
 impl Drags {
     /// From a component: `moved` hears where the pointer is, on the page,
     /// until the button comes up.
     pub fn begin(&self, moved: impl Fn(f32, f32) + 'static) {
-        *self.0.borrow_mut() = Some(Rc::new(moved));
+        *self.0.borrow_mut() = Some((Rc::new(moved), None));
+    }
+
+    /// [`begin`](Self::begin), and `ended` hears where the button came
+    /// up.
+    pub fn begin_until(
+        &self,
+        moved: impl Fn(f32, f32) + 'static,
+        ended: impl Fn(f32, f32) + 'static,
+    ) {
+        *self.0.borrow_mut() = Some((Rc::new(moved), Some(Rc::new(ended))));
     }
 
     /// From the view: `root`'s pointer moves and releases drive the drag
@@ -57,12 +70,17 @@ impl Drags {
                 return;
             };
             let moved = moving.0.borrow().clone();
-            if let Some(moved) = moved {
+            if let Some((moved, _)) = moved {
                 moved(pointer.page_x(), pointer.page_y());
             }
         })
-        .on("pointerup", move |_| {
-            *ending.0.borrow_mut() = None;
+        .on("pointerup", move |event| {
+            let drag = ending.0.borrow_mut().take();
+            let (Some((_, Some(ended))), DomEventData::PointerUp(pointer)) = (drag, &event.data)
+            else {
+                return;
+            };
+            ended(pointer.page_x(), pointer.page_y());
         })
     }
 }

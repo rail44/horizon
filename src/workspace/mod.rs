@@ -363,6 +363,9 @@ struct Kept {
     /// The same, for what wakes the page from another thread.
     wake: Wake,
     open_url: OpenUrl,
+    /// The drag in progress that a view began: its moves are heard at the
+    /// shell's root, wherever the pointer goes.
+    drags: horizon_components::Drags,
     notify: Option<Notify>,
     models: Option<Arc<dyn Models>>,
     agent_runtime: Option<AgentRuntime>,
@@ -518,6 +521,7 @@ impl Shell {
                         session,
                         look: Signal::derive(move || shell.theme.with(Theme::terminal)),
                         open_url: Some(kept.open_url.clone()),
+                        drags: kept.drags.clone(),
                     }
                     .mount_keeping();
                     terminal = Some((session_id, view));
@@ -1117,6 +1121,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             waker: RefCell::default(),
             wake: Wake::default(),
             open_url: opening.open_url.unwrap_or_else(|| Rc::new(|_| {})),
+            drags: Default::default(),
             notify: opening.notify,
             models: opening.models,
             agent_runtime: opening.agent_runtime,
@@ -1159,6 +1164,9 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         });
     }
 
+    // A drag a view began (a terminal's selection) goes on wherever the
+    // pointer is.
+    let root = shell.kept().drags.wire(root);
     root.attr("tabindex", "0")
         .class(styles::WORKSPACE)
         .class_dyn(move || {

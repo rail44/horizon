@@ -31,6 +31,7 @@ use peniko::{Color, Fill};
 use termwiz::input::{KeyCode, Modifiers};
 use unicode_width::UnicodeWidthChar;
 
+use horizon_components::Drags;
 use horizon_shell_runtime::terminal_glyphs::{self as drawn_glyphs, GlyphShape};
 use horizon_shell_runtime::terminal_links::{is_openable_url, url_from_lines};
 use horizon_shell_runtime::terminal_scrollback::{ScrollIpc, Scrollback};
@@ -161,6 +162,7 @@ struct State {
     reporting: Cell<Option<TerminalMouseButton>>,
     /// What a link clicked with the platform's key held is opened with.
     open_url: Option<OpenUrl>,
+    drags: Drags,
     /// Whether a button went down here and is still held, and whether what
     /// it drags is a selection (or, otherwise, a report to the program).
     dragging: Cell<Option<bool>>,
@@ -173,6 +175,7 @@ impl State {
             session,
             look,
             open_url,
+            drags,
         } = given;
         Self {
             session,
@@ -191,6 +194,7 @@ impl State {
             clicked: Cell::new(None),
             reporting: Cell::new(None),
             open_url,
+            drags,
             dragging: Cell::new(None),
         }
     }
@@ -208,6 +212,10 @@ pub struct TerminalView {
     pub look: Signal<TerminalLook>,
     /// Opens a link clicked with the platform's key held.
     pub open_url: Option<OpenUrl>,
+    /// Where the moves of a drag begun here are heard, wherever on the
+    /// page the pointer goes, and where the button comes up
+    /// (`Drags::wire`, at the root of whatever the view is placed in).
+    pub drags: Drags,
 }
 
 impl Component for TerminalView {
@@ -444,10 +452,8 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
 
     let (keyed, released, composed, pasted) =
         (state.clone(), state.clone(), state.clone(), state.clone());
-    let (pressed, moved, lifted, wheeled) =
-        (state.clone(), state.clone(), state.clone(), state.clone());
-    let (cell_down, cell_move, cell_up, cell_wheel) =
-        (cell_at.clone(), cell_at.clone(), cell_at.clone(), cell_at);
+    let (pressed, wheeled) = (state.clone(), state.clone());
+    let (cell_down, cell_wheel) = (cell_at.clone(), cell_at);
     let reports_down = reports;
     let area = state.clone();
     element
@@ -541,6 +547,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                     point,
                     modifiers: mouse_modifiers(&pointer.mods),
                 }));
+                drag(&pressed, mouse_modifiers(&pointer.mods));
                 return;
             }
             // The middle button pastes the primary selection.
@@ -573,41 +580,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                     _ => TerminalSelectionKind::Line,
                 },
             });
-        })
-        .on("pointermove", move |event| {
-            let DomEventData::PointerMove(pointer) = &event.data else {
-                return;
-            };
-            let Some(selects) = moved.dragging.get() else {
-                return;
-            };
-            let point = cell_move(pointer.element.x, pointer.element.y);
-            if selects {
-                moved.scrollback.borrow_mut().abandon();
-                moved.session.send(TerminalCommand::SelectionUpdate(point));
-            } else if let Some(button) = moved.reporting.get() {
-                (moved.session).send(TerminalCommand::Mouse(TerminalMouseReport {
-                    kind: TerminalMouseKind::Drag,
-                    button,
-                    point,
-                    modifiers: mouse_modifiers(&pointer.mods),
-                }));
-            }
-        })
-        .on("pointerup", move |event| {
-            let DomEventData::PointerUp(pointer) = &event.data else {
-                return;
-            };
-            if lifted.dragging.take() == Some(false) {
-                let point = cell_up(pointer.element.x, pointer.element.y);
-                let held = lifted.reporting.take();
-                (lifted.session).send(TerminalCommand::Mouse(TerminalMouseReport {
-                    kind: TerminalMouseKind::Release,
-                    button: held.unwrap_or_else(|| button(pointer.button)),
-                    point,
-                    modifiers: mouse_modifiers(&pointer.mods),
-                }));
-            }
+            drag(&pressed, mouse_modifiers(&pointer.mods));
         })
         .on("wheel", move |event| {
             let DomEventData::Wheel(wheel) = &event.data else {
@@ -729,6 +702,60 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
         }
     });
     (element, Terminal { state, element })
+}
+
+/// The cell under a point of the page, the nearest of the screen's for a
+/// point outside the view's box.
+fn cell_on_page(state: &State, x: f32, y: f32) -> TerminalSelectionPoint {
+    let (width, columns, rows) = state.cells.get();
+    let (left, top) = state.origin.get();
+    let (x, y) = (x as f64 - left, y as f64 - top);
+    TerminalSelectionPoint {
+        row: ((y / state.look.borrow().line_height).max(0.) as usize).min(rows.saturating_sub(1)),
+        col: ((x / width).max(0.) as usize).min(columns.saturating_sub(1)),
+    }
+}
+
+/// Follows the pointer from a press in the view until its button comes
+/// up, wherever on the page it goes: the selection's other end, or for a
+/// press that was the program's the drag and the release reported to it
+/// with `modifiers`, the press's.
+fn drag(state: &Rc<State>, modifiers: TerminalMouseModifiers) {
+    let (moved, lifted) = (state.clone(), state.clone());
+    state.drags.begin_until(
+        move |x, y| {
+            let point = cell_on_page(&moved, x, y);
+            match moved.dragging.get() {
+                Some(true) => {
+                    moved.scrollback.borrow_mut().abandon();
+                    moved.session.send(TerminalCommand::SelectionUpdate(point));
+                }
+                Some(false) => {
+                    let Some(button) = moved.reporting.get() else {
+                        return;
+                    };
+                    (moved.session).send(TerminalCommand::Mouse(TerminalMouseReport {
+                        kind: TerminalMouseKind::Drag,
+                        button,
+                        point,
+                        modifiers,
+                    }));
+                }
+                None => {}
+            }
+        },
+        move |x, y| {
+            let (dragged, held) = (lifted.dragging.take(), lifted.reporting.take());
+            if let (Some(false), Some(button)) = (dragged, held) {
+                (lifted.session).send(TerminalCommand::Mouse(TerminalMouseReport {
+                    kind: TerminalMouseKind::Release,
+                    button,
+                    point: cell_on_page(&lifted, x, y),
+                    modifiers,
+                }));
+            }
+        },
+    );
 }
 
 /// The colors a program in the terminal is answered with when it asks:

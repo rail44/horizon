@@ -47,21 +47,29 @@ fn open_at(style: &str) -> Opened {
     let (given, log) = (session.clone(), opened_urls.clone());
     let mut terminal = None;
     let app = App::new(900, 540, "Test", "", || {
+        let drags = horizon_components::Drags::default();
         let look = RwSignal::new(Theme::built_in().terminal());
         followed = Some(look);
         let (root, state) = build(TerminalView {
             session: given,
             look: look.into(),
             open_url: Some(Rc::new(move |url| log.borrow_mut().push(url.to_string()))),
+            drags: drags.clone(),
         });
         terminal = Some(state);
         root.focus();
-        horizon_ui::el("div")
-            .attr(
-                "style",
-                &format!("height: 100%; box-sizing: border-box; {style}"),
-            )
-            .child(root)
+        // The page around the view: where a drag that leaves it is heard.
+        let around = horizon_ui::el("div")
+            .attr("style", "width: 100%; height: 100%;")
+            .child(
+                horizon_ui::el("div")
+                    .attr(
+                        "style",
+                        &format!("height: 100%; box-sizing: border-box; {style}"),
+                    )
+                    .child(root),
+            );
+        drags.wire(around)
     });
     app.resolve();
     let opened = Opened {
@@ -897,4 +905,65 @@ fn the_colors_a_program_sets_are_the_ones_it_is_drawn_in() {
         opened.app.resolve();
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+#[test]
+fn a_drag_goes_on_outside_the_view_and_ends_where_the_button_comes_up() {
+    // The view in a part of the page, with page to its right and below.
+    let opened = open_at("width: 450px; height: 270px;");
+    opened.run("echo select-me-please");
+    opened.wait("the line", |text| {
+        text.lines().any(|line| line == "select-me-please")
+    });
+    let row = opened.row_of("select-me-please");
+    let (columns, rows) = opened.terminal.size();
+    let width = 450. / (columns as f32 + 0.5);
+    let cell = |column: usize| ((column as f32 + 0.5) * width, (row as f32 + 0.5) * 18.);
+    // The selection, once it is `wanted` (or whatever it is by then).
+    let selection = |wanted: Option<((usize, usize), (usize, usize))>| {
+        let started = Instant::now();
+        loop {
+            opened.app.resolve();
+            let selection = opened.terminal.frame().and_then(|frame| frame.selection);
+            let ends = selection.map(|s| ((s.start.row, s.start.col), (s.end.row, s.end.col)));
+            if ends == wanted || started.elapsed() > Duration::from_secs(5) {
+                return ends;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+
+    let (x, y) = cell(2);
+    pointer(&opened.app, x, y, Pointer::Move);
+    pointer(&opened.app, x, y, Pointer::Down);
+    let (x, y) = cell(5);
+    pointer(&opened.app, x, y, Pointer::Drag);
+    let inside = Some(((row, 2), (row, 5)));
+    assert_eq!(selection(inside), inside);
+
+    // Out of the box, to the right of it and below it: the selection
+    // goes to the screen's last cell, the nearest to the pointer.
+    pointer(&opened.app, 700., 400., Pointer::Drag);
+    let outside = Some(((row, 2), (rows - 1, columns - 1)));
+    assert_eq!(selection(outside), outside);
+
+    // The button comes up out there: a move back in, with no button
+    // held, selects nothing more.
+    pointer(&opened.app, 700., 400., Pointer::Up);
+    let (x, y) = cell(9);
+    pointer(&opened.app, x, y, Pointer::Move);
+    for _ in 0..20 {
+        opened.app.resolve();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(selection(outside), outside);
+
+    // A drag back from where it began takes in both its ends.
+    let (x, y) = cell(8);
+    pointer(&opened.app, x, y, Pointer::Down);
+    let (x, y) = cell(4);
+    pointer(&opened.app, x, y, Pointer::Drag);
+    pointer(&opened.app, x, y, Pointer::Up);
+    let backwards = Some(((row, 4), (row, 8)));
+    assert_eq!(selection(backwards), backwards);
 }

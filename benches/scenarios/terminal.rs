@@ -62,6 +62,7 @@ fn open(cells: usize) -> Opened {
             session: session.into(),
             look: Theme::built_in().terminal().into(),
             open_url: None,
+            drags: Default::default(),
         });
         terminal = Some(state);
         root.focus();
