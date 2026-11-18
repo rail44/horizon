@@ -172,33 +172,40 @@ pub struct SessionEntry {
     pub kind: String,
     pub attached: bool,
     pub title: String,
-    /// What the program in a terminal session says of its own state, while
-    /// one reports. Absent for a session with none, and from an app built
-    /// before this field.
+    /// What the session is doing, while the app knows: for a terminal
+    /// session what the program in it reports of itself, for an agent
+    /// session what its runtime says of it. Absent for a session nothing
+    /// is known of, and from an app built before this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub program: Option<ProgramEntry>,
+    pub activity: Option<ActivityEntry>,
 }
 
-/// A program's report of its own state over OSC 7501, the Program Status
-/// Protocol, in the protocol's own words.
+/// What a session is doing.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ProgramEntry {
-    /// `idle`, `working`, `done`, `blocked` or `error`.
+pub struct ActivityEntry {
+    /// The session's state, in its own kind's word. For a terminal
+    /// session's program, the Program Status Protocol's (OSC 7501):
+    /// `idle`, `working`, `done`, `blocked` or `error`. For an agent
+    /// session: `starting`, `running`, `running-a-tool`,
+    /// `waiting-for-input`, `waiting-for-approval`, `cancelled`,
+    /// `completed`, `failed`, `paused`, `terminated`, `loading` or
+    /// `unavailable`.
     pub state: String,
-    /// What a blocked program waits for, where it says: `permission`,
-    /// `question` or `auth`.
+    /// What the session waits on its owner for, the same for every kind
+    /// of session: `approval`, `input`, `login`, `blocked` (it does not
+    /// say what for), `failed`, or `unseen` (it finished, and nobody has
+    /// looked). Absent for a session that waits on nobody.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocked_on: Option<String>,
-    /// The program's name for itself, such as `claude-code`.
+    pub attention: Option<String>,
+    /// Whether the session has been looked at since it came to be in this
+    /// state.
+    pub seen: bool,
+    /// A program's name for itself, such as `claude-code`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
-    /// Why, or what about, in the program's words.
+    /// Why, or what about, in a program's words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// Whether the session has been looked at since the report. A program
-    /// that is done stays `done` until its next instruction, so this is
-    /// what tells finished work nobody has looked at from the rest.
-    pub seen: bool,
 }
 
 /// Reply to `Query { what: "state" }` -- a snapshot equivalent to the app's

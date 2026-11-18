@@ -865,17 +865,20 @@ fn a_notification_a_program_asks_for_is_posted_unless_its_pane_is_looked_at() {
 
 #[test]
 fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
-    use horizon_workspace::types::{ProgramState, ProgramStatus};
+    use horizon_workspace::types::{Doing, ProgramState, ProgramStatus, SessionActivity};
 
     let opened = open();
     let first = opened.panes()[0];
     let session = opened.model(|model| model.terminal_session_id(first).unwrap());
     opened.prompt(first);
+    let activity = || -> Option<SessionActivity> {
+        opened.model(|model| model.session_activity(session).cloned())
+    };
     let program = || -> Option<ProgramStatus> {
-        opened.model(|model| {
-            let mut sessions = model.session_summaries().into_iter();
-            sessions.find(|summary| summary.id == session)?.program
-        })
+        match activity()?.doing {
+            Doing::Program(program) => Some(program),
+            Doing::Agent(_) => None,
+        }
     };
     let state = || program().map(|program| program.state);
     let text_of = |node: NodeId| {
@@ -909,7 +912,7 @@ fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
     opened.character("t");
     assert_eq!(opened.model(Workspace::active_tab_index), 1);
     opened.until("done", || state() == Some(ProgramState::Done));
-    assert!(program().is_some_and(|program| !program.seen));
+    assert!(activity().is_some_and(|activity| !activity.seen));
     assert!(tab(0).starts_with("● "), "{}", tab(0));
     assert!(!tab(1).starts_with('●'), "{}", tab(1));
 
@@ -922,7 +925,7 @@ fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("claude-code: done, unseen")),
+            .any(|line| line.contains("claude-code: done [unseen]")),
         "{lines:?}"
     );
     opened.named(NamedKey::Escape);
@@ -930,7 +933,7 @@ fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
     // Looked at, it is news no longer, and marked as a program at rest.
     opened.shell.reveal_session(session);
     opened.app.run_effects();
-    opened.until("seen", || program().is_some_and(|program| program.seen));
+    opened.until("seen", || activity().is_some_and(|activity| activity.seen));
     assert!(tab(0).starts_with("✳ "), "{}", tab(0));
 
     // Taken back, as a program does on its way out: no mark.

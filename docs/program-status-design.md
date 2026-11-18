@@ -1,15 +1,18 @@
 # Program Status Design
 
-Scope: what a program running in a terminal session says of its own state
-over OSC 7501, the Program Status Protocol
-(<https://www.superlogical.com/rex/docs/build/program-status>, revision
-0.4), from the PTY to the tab strip, the session manager and
-`horizon sessions`.
+Scope: what a session is doing, as the tab strip, the session manager and
+`horizon sessions` show it. Foremost that is what a program running in a
+terminal session says of its own state over OSC 7501, the Program Status
+Protocol (<https://www.superlogical.com/rex/docs/build/program-status>,
+revision 0.4), followed here from the PTY on.
 
 A coding agent that runs as a TUI in a terminal pane (Claude Code, Codex)
 reports this way whether it is working, waiting on its user, or done. The
 session stays a terminal session: nothing here sends the program input,
 answers its prompts, learns its own session id, or resumes it.
+
+An agent session of `horizon-agentd` shows in the same places, from what
+its runtime says of it (§3).
 
 ## 1. Pipeline
 
@@ -35,37 +38,66 @@ answers its prompts, learns its own session id, or resumes it.
    stands to every newly installed subscriber, as it does the working
    directory. A program that waits on its user reports once and then says
    nothing, so a shell that attaches later is told.
-6. **Model** — `Workspace::set_session_program_status` records it on the
-   session (`WorkspaceSession::program`,
-   `crates/horizon-workspace/src/types/program.rs`), in the protocol's own
-   words. Not persisted.
-7. **Seen** — `ProgramStatus::seen` is set by
-   `Workspace::mark_session_program_seen` when the session is the active
-   pane's in a window that has the focus: the condition under which a
-   notification from that session is not posted
-   (`Shell::take_in_sessions`, `src/workspace/mod.rs`). Claude Code keeps
-   reporting `done` until its next prompt, typed at or not, so finished
-   work that has not been looked at is told apart here and not by the
-   program.
+6. **Model** — `Workspace::set_session_activity` records it on the
+   session (`WorkspaceSession::activity`, a `Doing::Program` in
+   `crates/horizon-workspace/src/types/activity.rs`), in the protocol's
+   own words. Not persisted.
+7. **Seen** — `SessionActivity::seen` is set by
+   `Workspace::mark_session_seen` when the session is the active pane's in
+   a window that has the focus: the condition under which a notification
+   from that session is not posted (`Shell::take_in_sessions`,
+   `src/workspace/mod.rs`). It is unset when the session comes to be doing
+   something else. Claude Code keeps reporting `done` until its next
+   prompt, typed at or not, so finished work that has not been looked at
+   is told apart here and not by the program.
 
 ## 2. Where it shows
 
-- **Tab strip** — a mark before the title of a tab whose titled session
-  has a status (`src/workspace/program.rs`, `mark`): `◐` working, `?`
-  blocked, `●` done and not seen, `!` error, `✳` idle or done and seen.
-  A program that is answered leaves out the mark it puts in its own title
-  otherwise (Claude Code's `✳` and `◐`), which is why the tab draws one.
-  The mark is text in the tab's label, not a designed indicator.
-- **Session manager** — the session's line carries
-  `<app>: <state> (<waiting for>), unseen — <message>` as far as each part
-  is there (`program::line`).
-- **`horizon sessions`** — `SessionEntry::program`
-  (`crates/horizon-control/src/contract.rs`): `state`, `blocked_on`, `app`,
-  `message`, `seen`. Absent for a session whose program does not report.
-  The text form adds a column, `<app>:<state>(<waiting for>)`, with
-  `,unseen` on finished work nobody has looked at.
+What a session is doing is kept in its own kind's words, and read one way
+for every kind: `SessionActivity::attention`, what the session waits on
+its owner for.
 
-## 3. What a status does not say
+| Attention | A terminal's program | An agent session |
+| --- | --- | --- |
+| `approval` | `blocked`, `kind=permission` | `waiting-for-approval` |
+| `input` | `blocked`, `kind=question` | `paused` (stopped by a guard, to be told to go on) |
+| `login` | `blocked`, `kind=auth` | — |
+| `blocked` | `blocked` with no kind | — |
+| `failed` | `error` | `failed` |
+| `unseen` | `done`, not seen | `completed`, not seen |
+
+- **Tab strip** — a mark before the title of a tab whose titled session
+  has an activity (`src/workspace/activity.rs`, `mark`): `?` for
+  `approval`, `input`, `login` and `blocked`, `!` for `failed`, `●` for
+  `unseen`; otherwise `◐` at work and `✳` at rest. A program that is
+  answered leaves out the mark it puts in its own title otherwise (Claude
+  Code's `✳` and `◐`), which is why the tab draws one. The mark is text in
+  the tab's label, not a designed indicator.
+- **Session manager** — the session's line carries
+  `<app>: <state> [<attention>] — <message>` as far as each part is there
+  (`activity::line`).
+- **`horizon sessions`** — `SessionEntry::activity`
+  (`crates/horizon-control/src/contract.rs`): `state` (the kind's own
+  word), `attention`, `seen`, and a program's `app` and `message`. Absent
+  for a session nothing is known of. The text form adds a column,
+  `<app>:<state> [<attention>]`, and then the message.
+
+## 3. Agent sessions
+
+The shell is attached to every agent session of the workspace, shown or
+detached (`src/restore.rs` attaches the ones that come back), and each
+says what it is doing when asked (`AgentSession::activity`, the status the
+board's rows show). `Shell::take_in_sessions` asks at every layout and
+tells the model where the answer is not what it has (`Doing::Agent`,
+`AgentStatus`); an agent session wakes the page when it changes.
+
+`loading`, `unavailable` and `terminated` have no mark on a tab: there is
+no session at the other end to be at rest.
+
+Seen is not persisted, for either kind: after the shell is restarted, a
+session that had finished is `unseen` again until it is looked at.
+
+## 4. What a program's status does not say
 
 - Which of the program's own sessions it is: the protocol carries no
   session id. `/clear`, a resumed conversation and a restarted program in
@@ -79,7 +111,7 @@ answers its prompts, learns its own session id, or resumes it.
   implement the protocol, Claude Code inside tmux or as a background
   session (`claude --bg`, also while attached), or Codex before 0.163.0.
 
-## 4. Measured
+## 5. Measured
 
 Claude Code 2.1.327, 2026-11-18, in a PTY read by the terminal core
 (`crates/horizon-terminal-core/src/program_status_probe.rs`, an ignored

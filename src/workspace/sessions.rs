@@ -48,8 +48,8 @@ fn row(session: &SessionRow) -> Row {
         let short = abbreviate_directory(directory, repository.as_deref(), home.as_deref());
         parts.push((styles::ABOUT, short));
     }
-    if let Some(status) = &summary.program {
-        parts.push((styles::ABOUT, super::program::line(status)));
+    if let Some(activity) = &summary.activity {
+        parts.push((styles::ABOUT, super::activity::line(activity)));
     }
     if session.has_children {
         parts.push((styles::ABOUT, "subtree".to_string()));

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::types::{ProgramStatus, SessionKind, Workspace, WorkspaceSession};
+use super::types::{Doing, SessionActivity, SessionKind, Workspace, WorkspaceSession};
 use crate::SessionId;
 
 impl Workspace {
@@ -48,35 +48,32 @@ impl Workspace {
         true
     }
 
-    /// Records what the program in a terminal session says of its own
-    /// state, or with `None` that it took its report back (a no-op if
-    /// `session_id` is unknown). What is recorded has not been looked at:
-    /// [`Self::mark_session_program_seen`] says when it has. Returns
-    /// whether the model changed.
-    pub fn set_session_program_status(
-        &mut self,
-        session_id: SessionId,
-        status: Option<ProgramStatus>,
-    ) -> bool {
+    /// Records what a session is doing, or with `None` that this is no
+    /// longer known (a no-op if `session_id` is unknown). A session that
+    /// goes on doing what it was doing keeps whether it was looked at;
+    /// what it newly does has not been, until
+    /// [`Self::mark_session_seen`] says so. Returns whether the model
+    /// changed.
+    pub fn set_session_activity(&mut self, session_id: SessionId, doing: Option<Doing>) -> bool {
         let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) else {
             return false;
         };
-        if session.program == status {
+        if session.activity.as_ref().map(|activity| &activity.doing) == doing.as_ref() {
             return false;
         }
-        session.program = status;
+        session.activity = doing.map(|doing| SessionActivity { doing, seen: false });
         true
     }
 
-    /// Records that the owner has looked at a session since its program
-    /// last reported. Returns whether the model changed.
-    pub fn mark_session_program_seen(&mut self, session_id: SessionId) -> bool {
-        let program = (self.sessions.iter_mut())
+    /// Records that the owner has looked at a session since it came to be
+    /// doing what it does. Returns whether the model changed.
+    pub fn mark_session_seen(&mut self, session_id: SessionId) -> bool {
+        let activity = (self.sessions.iter_mut())
             .find(|s| s.id == session_id)
-            .and_then(|session| session.program.as_mut());
-        match program {
-            Some(program) if !program.seen => {
-                program.seen = true;
+            .and_then(|session| session.activity.as_mut());
+        match activity {
+            Some(activity) if !activity.seen => {
+                activity.seen = true;
                 true
             }
             _ => false,

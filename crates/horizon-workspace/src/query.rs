@@ -149,6 +149,14 @@ impl Workspace {
         self.terminal_session_id(active)
     }
 
+    /// What a session is doing, while that is known.
+    pub fn session_activity(
+        &self,
+        session_id: SessionId,
+    ) -> Option<&super::types::SessionActivity> {
+        self.session(session_id)?.activity.as_ref()
+    }
+
     pub fn active_session_id(&self) -> Option<SessionId> {
         let active = self.active_tab()?.active;
         self.panes
@@ -256,7 +264,7 @@ impl Workspace {
                 attached: self.session_is_referenced(session.id),
                 directory: session.directory.clone(),
                 parent_session_id: session.parent_session_id,
-                program: session.program.clone(),
+                activity: session.activity.clone(),
             })
             .collect()
     }
@@ -271,9 +279,9 @@ impl Workspace {
                 active: tab.id == self.active_tab,
                 pane_count: tab.root.pane_ids().len(),
                 active_session_id: self.tab_session_id(tab),
-                program: (self.tab_session_id(tab))
+                activity: (self.tab_session_id(tab))
                     .and_then(|session| self.session(session))
-                    .and_then(|session| session.program.clone()),
+                    .and_then(|session| session.activity.clone()),
             })
             .collect()
     }

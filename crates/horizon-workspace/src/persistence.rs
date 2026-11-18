@@ -366,9 +366,9 @@ impl WorkspaceState {
                     // Same as `directory` above -- `WorkspaceSession::
                     // parent_session_id`'s doc comment.
                     parent_session_id: None,
-                    // Not persisted either: a program that still reports
-                    // is heard from again once its terminal is reattached.
-                    program: None,
+                    // Not persisted either: a session says what it is
+                    // doing again once it is reattached.
+                    activity: None,
                 })
                 .collect(),
             active_tab: self.active_tab,

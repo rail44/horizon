@@ -564,7 +564,7 @@ fn detached_session_summaries_list_unattached_sessions() {
             attached: false,
             directory: None,
             parent_session_id: None,
-            program: None,
+            activity: None,
         }]
     );
 }
@@ -588,7 +588,7 @@ fn session_summaries_include_attached_and_detached_sessions() {
                 attached: true,
                 directory: None,
                 parent_session_id: None,
-                program: None,
+                activity: None,
             },
             SessionSummary {
                 id: detached_session,
@@ -598,7 +598,7 @@ fn session_summaries_include_attached_and_detached_sessions() {
                 attached: false,
                 directory: None,
                 parent_session_id: None,
-                program: None,
+                activity: None,
             },
         ]
     );
@@ -741,7 +741,7 @@ fn opening_tab_is_reflected_in_tab_summaries() {
                 active: false,
                 pane_count: 1,
                 active_session_id: Some(first_session),
-                program: None,
+                activity: None,
             },
             TabSummary {
                 index: 1,
@@ -749,7 +749,7 @@ fn opening_tab_is_reflected_in_tab_summaries() {
                 active: true,
                 pane_count: 1,
                 active_session_id: Some(agent_session),
-                program: None,
+                activity: None,
             },
         ]
     );
@@ -1138,51 +1138,103 @@ fn a_title_reset_restores_the_fallback_and_an_unknown_session_is_ignored() {
 }
 
 #[test]
-fn a_programs_status_is_news_until_its_session_is_looked_at() {
-    use crate::types::{ProgramState, ProgramStatus};
+fn what_a_session_does_is_news_until_the_session_is_looked_at() {
+    use crate::types::{
+        AgentStatus, Attention, BlockedOn, Doing, ProgramState, ProgramStatus, SessionActivity,
+    };
 
     let mut workspace = Workspace::mvp();
     let session = workspace.active_terminal_session_id().expect("session");
-    let done = ProgramStatus {
-        state: ProgramState::Done,
-        blocked_on: None,
-        app: Some("claude-code".into()),
-        message: None,
-        seen: false,
+    let program = |state, blocked_on| {
+        Doing::Program(ProgramStatus {
+            state,
+            blocked_on,
+            app: Some("claude-code".into()),
+            message: None,
+        })
     };
+    let activity = |workspace: &Workspace| workspace.session_summaries().remove(0).activity;
+    let attention =
+        |workspace: &Workspace| activity(workspace).and_then(|activity| activity.attention());
+    let done = program(ProgramState::Done, None);
 
-    assert!(workspace.set_session_program_status(session, Some(done.clone())));
-    assert!(!workspace.set_session_program_status(session, Some(done.clone())));
-    let summary = workspace.session_summaries().remove(0);
-    assert!(
-        summary
-            .program
-            .as_ref()
-            .is_some_and(ProgramStatus::wants_the_owner)
-    );
+    assert!(workspace.set_session_activity(session, Some(done.clone())));
+    assert!(!workspace.set_session_activity(session, Some(done.clone())));
+    assert_eq!(attention(&workspace), Some(Attention::Unseen));
     // The tab is titled after the session, and says the same of it.
-    assert_eq!(workspace.tab_summaries()[0].program, summary.program);
+    assert_eq!(workspace.tab_summaries()[0].activity, activity(&workspace));
 
-    assert!(workspace.mark_session_program_seen(session));
-    assert!(!workspace.mark_session_program_seen(session));
-    let seen = workspace
-        .session_summaries()
-        .remove(0)
-        .program
-        .expect("a status");
-    assert!(seen.seen && !seen.wants_the_owner());
+    assert!(workspace.mark_session_seen(session));
+    assert!(!workspace.mark_session_seen(session));
+    assert_eq!(attention(&workspace), None);
+    // Still done, said again: the same piece of work, and still seen.
+    assert!(!workspace.set_session_activity(session, Some(done)));
+    assert_eq!(attention(&workspace), None);
 
-    // The same report again is the same piece of work: still seen. A
-    // program that waits is waited on whether looked at or not.
-    let blocked = ProgramStatus {
-        state: ProgramState::Blocked,
-        seen: true,
-        ..done
-    };
-    assert!(blocked.wants_the_owner());
+    // What it newly does has not been looked at, and a session that waits
+    // is waited on whether looked at or not.
+    let blocked = program(ProgramState::Blocked, Some(BlockedOn::Permission));
+    assert!(workspace.set_session_activity(session, Some(blocked)));
+    assert!(activity(&workspace).is_some_and(|activity| !activity.seen));
+    workspace.mark_session_seen(session);
+    assert_eq!(attention(&workspace), Some(Attention::Approval));
 
-    assert!(workspace.set_session_program_status(session, None));
-    assert_eq!(workspace.session_summaries()[0].program, None);
-    assert!(!workspace.mark_session_program_seen(session));
-    assert!(!workspace.set_session_program_status(SessionId::new(), None));
+    assert!(workspace.set_session_activity(session, None));
+    assert_eq!(activity(&workspace), None);
+    assert!(!workspace.mark_session_seen(session));
+    assert!(!workspace.set_session_activity(SessionId::new(), None));
+
+    // Every kind's words have the one reading.
+    let reads = |doing, seen| SessionActivity { doing, seen }.attention();
+    let question = Some(BlockedOn::Question);
+    for (doing, seen, read) in [
+        (
+            program(ProgramState::Blocked, question),
+            true,
+            Some(Attention::Input),
+        ),
+        (
+            program(ProgramState::Blocked, Some(BlockedOn::Auth)),
+            true,
+            Some(Attention::Login),
+        ),
+        (
+            program(ProgramState::Blocked, None),
+            true,
+            Some(Attention::Blocked),
+        ),
+        (
+            program(ProgramState::Error, None),
+            true,
+            Some(Attention::Failed),
+        ),
+        (program(ProgramState::Working, None), false, None),
+        (program(ProgramState::Idle, None), false, None),
+        (
+            Doing::Agent(AgentStatus::WaitingForApproval),
+            true,
+            Some(Attention::Approval),
+        ),
+        (
+            Doing::Agent(AgentStatus::Paused),
+            true,
+            Some(Attention::Input),
+        ),
+        (
+            Doing::Agent(AgentStatus::Failed),
+            true,
+            Some(Attention::Failed),
+        ),
+        (
+            Doing::Agent(AgentStatus::Completed),
+            false,
+            Some(Attention::Unseen),
+        ),
+        (Doing::Agent(AgentStatus::Completed), true, None),
+        (Doing::Agent(AgentStatus::WaitingForInput), false, None),
+        (Doing::Agent(AgentStatus::Running), false, None),
+        (Doing::Agent(AgentStatus::Cancelled), false, None),
+    ] {
+        assert_eq!(reads(doing.clone(), seen), read, "{doing:?}, seen: {seen}");
+    }
 }
