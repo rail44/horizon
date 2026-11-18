@@ -564,6 +564,7 @@ fn detached_session_summaries_list_unattached_sessions() {
             attached: false,
             directory: None,
             parent_session_id: None,
+            program: None,
         }]
     );
 }
@@ -587,6 +588,7 @@ fn session_summaries_include_attached_and_detached_sessions() {
                 attached: true,
                 directory: None,
                 parent_session_id: None,
+                program: None,
             },
             SessionSummary {
                 id: detached_session,
@@ -596,6 +598,7 @@ fn session_summaries_include_attached_and_detached_sessions() {
                 attached: false,
                 directory: None,
                 parent_session_id: None,
+                program: None,
             },
         ]
     );
@@ -738,6 +741,7 @@ fn opening_tab_is_reflected_in_tab_summaries() {
                 active: false,
                 pane_count: 1,
                 active_session_id: Some(first_session),
+                program: None,
             },
             TabSummary {
                 index: 1,
@@ -745,6 +749,7 @@ fn opening_tab_is_reflected_in_tab_summaries() {
                 active: true,
                 pane_count: 1,
                 active_session_id: Some(agent_session),
+                program: None,
             },
         ]
     );
@@ -1130,4 +1135,54 @@ fn a_title_reset_restores_the_fallback_and_an_unknown_session_is_ignored() {
     assert_eq!(workspace.session_summaries()[0].title, fallback);
     // A report for a session the model does not know is a no-op.
     assert!(!workspace.set_session_derived_title(SessionId::new(), Some("nope")));
+}
+
+#[test]
+fn a_programs_status_is_news_until_its_session_is_looked_at() {
+    use crate::types::{ProgramState, ProgramStatus};
+
+    let mut workspace = Workspace::mvp();
+    let session = workspace.active_terminal_session_id().expect("session");
+    let done = ProgramStatus {
+        state: ProgramState::Done,
+        blocked_on: None,
+        app: Some("claude-code".into()),
+        message: None,
+        seen: false,
+    };
+
+    assert!(workspace.set_session_program_status(session, Some(done.clone())));
+    assert!(!workspace.set_session_program_status(session, Some(done.clone())));
+    let summary = workspace.session_summaries().remove(0);
+    assert!(
+        summary
+            .program
+            .as_ref()
+            .is_some_and(ProgramStatus::wants_the_owner)
+    );
+    // The tab is titled after the session, and says the same of it.
+    assert_eq!(workspace.tab_summaries()[0].program, summary.program);
+
+    assert!(workspace.mark_session_program_seen(session));
+    assert!(!workspace.mark_session_program_seen(session));
+    let seen = workspace
+        .session_summaries()
+        .remove(0)
+        .program
+        .expect("a status");
+    assert!(seen.seen && !seen.wants_the_owner());
+
+    // The same report again is the same piece of work: still seen. A
+    // program that waits is waited on whether looked at or not.
+    let blocked = ProgramStatus {
+        state: ProgramState::Blocked,
+        seen: true,
+        ..done
+    };
+    assert!(blocked.wants_the_owner());
+
+    assert!(workspace.set_session_program_status(session, None));
+    assert_eq!(workspace.session_summaries()[0].program, None);
+    assert!(!workspace.mark_session_program_seen(session));
+    assert!(!workspace.set_session_program_status(SessionId::new(), None));
 }

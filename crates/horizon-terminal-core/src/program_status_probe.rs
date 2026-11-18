@@ -93,6 +93,9 @@ impl Probe {
         for update in events.program_status {
             self.note(&format!("read  {update:?}"));
         }
+        if let Some(title) = events.title {
+            self.note(&format!("title {title}"));
+        }
     }
 
     /// Logs every whole OSC 7501 sequence in the stream as it was sent,

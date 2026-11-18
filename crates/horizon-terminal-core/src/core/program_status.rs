@@ -15,6 +15,8 @@
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
 
+use crate::contract::{ProgramBlockedOn, ProgramState, TerminalProgramStatus};
+
 /// What the terminal answers a query with: the states and the kinds of
 /// `blocked` it reads.
 pub(super) const QUERY_REPLY: &[u8] =
@@ -28,53 +30,13 @@ const MAX_APP: usize = 32;
 /// The longest `msg` once decoded, in bytes.
 const MAX_MSG: usize = 2048;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProgramState {
-    /// At rest, waiting for the next instruction.
-    Idle,
-    Working,
-    /// Finished a piece of work the user has not looked at yet.
-    Done,
-    /// Cannot go on until the user does something.
-    Blocked,
-    /// Failed and stopped.
-    Error,
-}
-
-/// What a blocked program is waiting for.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BlockedKind {
-    Permission,
-    Question,
-    Auth,
-}
-
-/// A program's report of its own state.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ProgramStatus {
-    pub state: ProgramState,
-    /// Only with [`ProgramState::Blocked`], and not always then.
-    pub kind: Option<BlockedKind>,
-    /// The program's name for itself, such as `claude-code`.
-    pub app: Option<String>,
-    /// Why, or what about, in the program's words.
-    pub msg: Option<String>,
-}
-
-/// A change to what the terminal knows of the program's state.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ProgramStatusUpdate {
-    Set(ProgramStatus),
-    /// The program took its report back, as one does on its way out.
-    Clear,
-}
-
 /// One OSC 7501 sequence, read.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Message {
     /// The program asks whether its reports are read.
     Query,
-    Update(ProgramStatusUpdate),
+    /// The program's state, or `None` once it has taken its report back.
+    Update(Option<TerminalProgramStatus>),
 }
 
 /// Reads the body between `ESC ] 7501 ;` and the terminator. `None` is a
@@ -103,7 +65,7 @@ pub(super) fn parse(body: &[u8]) -> Option<Message> {
         }
     }
     let state = match state? {
-        "clear" => return Some(Message::Update(ProgramStatusUpdate::Clear)),
+        "clear" => return Some(Message::Update(None)),
         "idle" => ProgramState::Idle,
         "working" => ProgramState::Working,
         "done" => ProgramState::Done,
@@ -111,19 +73,19 @@ pub(super) fn parse(body: &[u8]) -> Option<Message> {
         "error" => ProgramState::Error,
         _ => return None,
     };
-    let kind = match kind.filter(|_| state == ProgramState::Blocked) {
-        Some("permission") => Some(BlockedKind::Permission),
-        Some("question") => Some(BlockedKind::Question),
-        Some("auth") => Some(BlockedKind::Auth),
+    let blocked_on = match kind.filter(|_| state == ProgramState::Blocked) {
+        Some("permission") => Some(ProgramBlockedOn::Permission),
+        Some("question") => Some(ProgramBlockedOn::Question),
+        Some("auth") => Some(ProgramBlockedOn::Auth),
         _ => None,
     };
-    Some(Message::Update(ProgramStatusUpdate::Set(ProgramStatus {
+    Some(Message::Update(Some(TerminalProgramStatus {
         state,
-        kind,
+        blocked_on,
         app: app
             .filter(|app| !app.is_empty() && app.len() <= MAX_APP)
             .map(str::to_string),
-        msg: msg.and_then(decoded),
+        message: msg.and_then(decoded),
     })))
 }
 
@@ -145,9 +107,9 @@ fn decoded(value: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn set(body: &str) -> ProgramStatus {
+    fn set(body: &str) -> TerminalProgramStatus {
         match parse(body.as_bytes()) {
-            Some(Message::Update(ProgramStatusUpdate::Set(status))) => status,
+            Some(Message::Update(Some(status))) => status,
             other => panic!("{body:?} read as {other:?}, not as a report"),
         }
     }
@@ -164,8 +126,8 @@ mod tests {
         let status = set("state=working:app=claude-code");
         assert_eq!(status.state, ProgramState::Working);
         assert_eq!(status.app.as_deref(), Some("claude-code"));
-        assert_eq!(status.kind, None);
-        assert_eq!(status.msg, None);
+        assert_eq!(status.blocked_on, None);
+        assert_eq!(status.message, None);
     }
 
     #[test]
@@ -175,15 +137,15 @@ mod tests {
             "state=blocked:app=codex:kind=permission:msg={msg}"
         ));
         assert_eq!(status.state, ProgramState::Blocked);
-        assert_eq!(status.kind, Some(BlockedKind::Permission));
-        assert_eq!(status.msg.as_deref(), Some("approve Write: notes.md"));
-        assert_eq!(set("state=blocked").kind, None);
-        assert_eq!(set("state=blocked:kind=other").kind, None);
+        assert_eq!(status.blocked_on, Some(ProgramBlockedOn::Permission));
+        assert_eq!(status.message.as_deref(), Some("approve Write: notes.md"));
+        assert_eq!(set("state=blocked").blocked_on, None);
+        assert_eq!(set("state=blocked:kind=other").blocked_on, None);
     }
 
     #[test]
     fn a_kind_means_nothing_outside_blocked() {
-        assert_eq!(set("state=working:kind=question").kind, None);
+        assert_eq!(set("state=working:kind=question").blocked_on, None);
     }
 
     #[test]
@@ -202,10 +164,7 @@ mod tests {
 
     #[test]
     fn clear_without_an_id_takes_the_report_back() {
-        assert_eq!(
-            parse(b"state=clear"),
-            Some(Message::Update(ProgramStatusUpdate::Clear))
-        );
+        assert_eq!(parse(b"state=clear"), Some(Message::Update(None)));
     }
 
     #[test]
@@ -221,13 +180,13 @@ mod tests {
     fn a_message_is_text_without_control_characters_and_within_the_limit() {
         let msg = STANDARD_NO_PAD.encode("line one\nline\x1b two");
         assert_eq!(
-            set(&format!("state=error:msg={msg}")).msg.as_deref(),
+            set(&format!("state=error:msg={msg}")).message.as_deref(),
             Some("line oneline two")
         );
-        assert_eq!(set("state=error:msg=!!!").msg, None);
+        assert_eq!(set("state=error:msg=!!!").message, None);
         let long = STANDARD.encode("x".repeat(MAX_MSG + 1));
         assert!(long.len() < MAX_BODY);
-        assert_eq!(set(&format!("state=error:msg={long}")).msg, None);
+        assert_eq!(set(&format!("state=error:msg={long}")).message, None);
         assert_eq!(set(&format!("state=idle:app={}", "a".repeat(33))).app, None);
     }
 }

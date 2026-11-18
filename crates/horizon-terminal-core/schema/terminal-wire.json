@@ -135,6 +135,46 @@
       ],
       "type": "string"
     },
+    "ProgramBlockedOn": {
+      "description": "What a blocked program is waiting for (the protocol's `kind`).",
+      "enum": [
+        "Permission",
+        "Question",
+        "Auth"
+      ],
+      "type": "string"
+    },
+    "ProgramState": {
+      "description": "The protocol's states.",
+      "oneOf": [
+        {
+          "enum": [
+            "Working"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "Idle",
+          "description": "At rest, waiting for the next instruction.",
+          "type": "string"
+        },
+        {
+          "const": "Done",
+          "description": "Finished a piece of work the user has not looked at yet.",
+          "type": "string"
+        },
+        {
+          "const": "Blocked",
+          "description": "Cannot go on until the user does something.",
+          "type": "string"
+        },
+        {
+          "const": "Error",
+          "description": "Failed and stopped.",
+          "type": "string"
+        }
+      ]
+    },
     "Rgb": {
       "description": "Schema stand-in for `alacritty_terminal::vte::ansi::Rgb`, which\n(de)serializes as a plain `{r, g, b}` u8 struct but is external and\ncannot derive `JsonSchema` itself. Kept byte-for-byte in sync with that\nserde shape; the wire-schema artifact sees this in its place.",
       "properties": {
@@ -805,6 +845,43 @@
       ],
       "type": "object"
     },
+    "TerminalProgramStatus": {
+      "description": "What a program in the terminal says of its own state, read from the\nroot record of its OSC 7501 reports (the Program Status Protocol,\n`core::program_status`) and delivered to the client as\n[`TerminalUpdate::ProgramStatus`].",
+      "properties": {
+        "app": {
+          "description": "The program's name for itself, such as `claude-code`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blocked_on": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProgramBlockedOn"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the program waits for. Only with [`ProgramState::Blocked`],\nand not always then."
+        },
+        "message": {
+          "description": "Why, or what about, in the program's words.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ProgramState"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
     "TerminalScroll": {
       "properties": {
         "lines": {
@@ -1185,6 +1262,26 @@
             "WorkingDirectory"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Daemon → client: what the program in the session says of its own\nstate ([`TerminalProgramStatus`]), or `None` once it has taken its\nreport back, as one does on its way out. Sent when it changes and,\nwhile there is one, once to every newly installed subscriber, as\nthe working directory is.",
+          "properties": {
+            "ProgramStatus": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TerminalProgramStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "ProgramStatus"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1277,5 +1374,5 @@
     }
   },
   "title": "horizon-terminal-wire",
-  "x-session-protocol-version": 20
+  "x-session-protocol-version": 21
 }

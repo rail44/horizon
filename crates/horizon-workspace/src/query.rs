@@ -256,6 +256,7 @@ impl Workspace {
                 attached: self.session_is_referenced(session.id),
                 directory: session.directory.clone(),
                 parent_session_id: session.parent_session_id,
+                program: session.program.clone(),
             })
             .collect()
     }
@@ -270,6 +271,9 @@ impl Workspace {
                 active: tab.id == self.active_tab,
                 pane_count: tab.root.pane_ids().len(),
                 active_session_id: self.tab_session_id(tab),
+                program: (self.tab_session_id(tab))
+                    .and_then(|session| self.session(session))
+                    .and_then(|session| session.program.clone()),
             })
             .collect()
     }

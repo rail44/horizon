@@ -149,6 +149,7 @@ fn sessions_query_round_trips_through_the_handshake() {
                 kind: "agent".to_string(),
                 attached: true,
                 title: "agent: fix bug".to_string(),
+                program: None,
             }],
         })],
     );

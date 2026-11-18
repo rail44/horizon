@@ -114,6 +114,7 @@ impl Session {
                 TerminalUpdate::Title(_)
                     | TerminalUpdate::WorkingDirectory(_)
                     | TerminalUpdate::Notification(_)
+                    | TerminalUpdate::ProgramStatus(_)
                     | TerminalUpdate::Exited
             );
             match about_the_session {

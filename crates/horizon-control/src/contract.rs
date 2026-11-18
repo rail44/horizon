@@ -172,6 +172,33 @@ pub struct SessionEntry {
     pub kind: String,
     pub attached: bool,
     pub title: String,
+    /// What the program in a terminal session says of its own state, while
+    /// one reports. Absent for a session with none, and from an app built
+    /// before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<ProgramEntry>,
+}
+
+/// A program's report of its own state over OSC 7501, the Program Status
+/// Protocol, in the protocol's own words.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProgramEntry {
+    /// `idle`, `working`, `done`, `blocked` or `error`.
+    pub state: String,
+    /// What a blocked program waits for, where it says: `permission`,
+    /// `question` or `auth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_on: Option<String>,
+    /// The program's name for itself, such as `claude-code`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    /// Why, or what about, in the program's words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Whether the session has been looked at since the report. A program
+    /// that is done stays `done` until its next instruction, so this is
+    /// what tells finished work nobody has looked at from the rest.
+    pub seen: bool,
 }
 
 /// Reply to `Query { what: "state" }` -- a snapshot equivalent to the app's

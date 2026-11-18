@@ -2,7 +2,7 @@
 //! shell carries out so far (terminals, agents, sessions), and the two
 //! queries.
 
-use horizon_control::contract::{EnvelopeBody, Query, SessionEntry, Sessions, State};
+use horizon_control::contract::{EnvelopeBody, ProgramEntry, Query, SessionEntry, Sessions, State};
 use horizon_control::host::executor::{ControlRequest, error_body};
 use horizon_shell_runtime::AgentCommand;
 use horizon_shell_runtime::control_invoke::{self, Command};
@@ -348,6 +348,13 @@ impl Shell {
                             kind: session.kind.label().to_string(),
                             attached: session.attached,
                             title: session.title,
+                            program: session.program.map(|program| ProgramEntry {
+                                state: program.state.label().to_string(),
+                                blocked_on: program.blocked_on.map(|on| on.label().to_string()),
+                                app: program.app,
+                                message: program.message,
+                                seen: program.seen,
+                            }),
                         })
                         .collect()
                 }),

@@ -29,8 +29,9 @@ mod types;
 pub mod wire;
 
 pub use contract::{
-    ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand, TerminalKeyInput,
-    TerminalNotification, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+    ClipboardDestination, ProgramBlockedOn, ProgramState, ScrollWindowRequest, SelectionCommand,
+    TerminalCommand, TerminalKeyInput, TerminalNotification, TerminalProgramStatus,
+    TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 pub use core::{DEFAULT_SCROLLBACK_LINES, TerminalColorScheme};
 pub use session_loop::{

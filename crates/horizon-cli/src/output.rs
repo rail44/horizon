@@ -6,7 +6,7 @@
 
 use std::io::Write;
 
-use horizon_control::contract::{EnvelopeBody, Sessions, State};
+use horizon_control::contract::{EnvelopeBody, ProgramEntry, Sessions, State};
 
 pub fn render(body: &EnvelopeBody, json: bool, out: &mut impl Write) {
     if json {
@@ -60,12 +60,38 @@ fn render_sessions(sessions: &Sessions, out: &mut impl Write) {
         } else {
             "detached"
         };
-        let _ = writeln!(
+        let _ = write!(
             out,
             "{}  {}  {}  {}",
             session.session_id, session.kind, attached, session.title
         );
+        if let Some(program) = &session.program {
+            let _ = write!(out, "  {}", program_column(program));
+        }
+        let _ = writeln!(out);
     }
+}
+
+/// A program's state in one column: `<app>:<state>(<waiting for>)`, with
+/// `,unseen` on finished work nobody has looked at, and then its message.
+fn program_column(program: &ProgramEntry) -> String {
+    let mut column = String::new();
+    if let Some(app) = &program.app {
+        column.push_str(app);
+        column.push(':');
+    }
+    column.push_str(&program.state);
+    if let Some(on) = &program.blocked_on {
+        column.push_str(&format!("({on})"));
+    }
+    if program.state == "done" && !program.seen {
+        column.push_str(",unseen");
+    }
+    if let Some(message) = &program.message {
+        column.push_str("  ");
+        column.push_str(message);
+    }
+    column
 }
 
 fn render_state(state: &State, out: &mut impl Write) {
@@ -133,11 +159,46 @@ mod tests {
                 kind: "agent".to_string(),
                 attached: true,
                 title: "agent: fix bug".to_string(),
+                program: None,
             }],
         });
         assert_eq!(
             rendered(&body, false),
             "s-1  agent  attached  agent: fix bug\n"
+        );
+    }
+
+    #[test]
+    fn a_session_whose_program_reports_says_so_on_its_line() {
+        let entry = |program: ProgramEntry| SessionEntry {
+            session_id: "s-2".to_string(),
+            kind: "terminal".to_string(),
+            attached: false,
+            title: "notes".to_string(),
+            program: Some(program),
+        };
+        let body = EnvelopeBody::Sessions(Sessions {
+            sessions: vec![
+                entry(ProgramEntry {
+                    state: "blocked".to_string(),
+                    blocked_on: Some("permission".to_string()),
+                    app: Some("claude-code".to_string()),
+                    message: Some("approve Bash: touch notes.txt".to_string()),
+                    seen: false,
+                }),
+                entry(ProgramEntry {
+                    state: "done".to_string(),
+                    blocked_on: None,
+                    app: None,
+                    message: None,
+                    seen: false,
+                }),
+            ],
+        });
+        assert_eq!(
+            rendered(&body, false),
+            "s-2  terminal  detached  notes  claude-code:blocked(permission)  approve Bash: touch notes.txt\n\
+             s-2  terminal  detached  notes  done,unseen\n"
         );
     }
 
