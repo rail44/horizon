@@ -191,7 +191,7 @@ impl CommandId {
                 "manage-sessions",
                 "Manage Sessions",
                 CommandCategory::Workspace,
-                "Open the session manager to attach or terminate sessions.",
+                "Open the list of sessions, to go to one or terminate it.",
             ),
             CommandId::ReloadConfig => (
                 "reload-config",

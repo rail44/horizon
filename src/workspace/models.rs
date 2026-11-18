@@ -10,7 +10,7 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update, With, WithUntracked};
 use horizon_workspace::{SessionId, Workspace};
 
-use super::picker::{self, Picked, Row};
+use super::picker::{self, Row};
 use super::{Models, Shell, styles};
 
 /// A provider's models: `None` while they are being asked for.
@@ -121,10 +121,7 @@ pub(super) fn view(shell: Shell, session: SessionId, models: std::sync::Arc<dyn 
             }
         }
     };
-    let picked = move |index: usize, picked: Picked| {
-        if !matches!(picked, Picked::Confirmed) {
-            return;
-        }
+    let picked = move |index: usize| {
         let query = shell.query.get_untracked();
         match stage.get_untracked() {
             None => {

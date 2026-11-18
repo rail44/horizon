@@ -444,7 +444,10 @@ The decisions and who made them are on board #76. What they come to:
   shell. A project is the repository a directory is in, a linked
   worktree's being the repository it is a worktree of
   (`horizon_workspace::lineage::project_root`). A preview pane is given
-  neither interface.
+  neither interface. The session manager is the same extension in a
+  sheet over the workspace (`src/workspace/sessions.rs`), run for as
+  long as the sheet is there; its asks to go to a session or open a
+  terminal also close the sheet.
 - **A preview pane shows extensions only.** The preview plugins it also
   showed (views of the shell's own, built into wasm over sample data)
   went on 2026-11-16, and with them the root library's build for a guest

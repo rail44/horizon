@@ -445,10 +445,82 @@ fn the_chosen_session_is_gone_to_and_a_terminal_opened_where_it_works() {
     assert_eq!(opened.titles().len(), 6);
 }
 
+#[test]
+fn the_session_manager_is_the_list_over_everything() {
+    use horizon::workspace::Modal;
+    use horizon_workspace::commands::CommandId;
+
+    let opened = open();
+    let places = Places::made("managed");
+    let made = make(&opened, &places);
+    let manage = || {
+        opened.shell.execute(CommandId::OpenSessionManager);
+        opened.app.run_effects();
+        opened.app.resolve();
+        assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
+        opened.until("the rows", || opened.titles().len() >= 4);
+    };
+    let has = |session: SessionId| opened.model(|model| model.session_kind(session).is_some());
+    let panes = || opened.model(|model| model.all_pane_ids().len());
+
+    // The list, with the keys. A session ended, the list stays.
+    manage();
+    assert_eq!(
+        opened.titles(),
+        ["build", "tests", "measure", "shell", "wiki"]
+    );
+    opened.character("j");
+    opened.character("x");
+    opened.character("y");
+    opened.until("the session ended", || !has(made.derived));
+    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
+    opened.until("the rows", || opened.titles().len() == 4);
+
+    // Gone to, a session no pane shows is in a pane beside the active
+    // one, and the list is left.
+    assert_eq!(panes(), 1);
+    opened.character("n");
+    opened.character("n");
+    assert_eq!(opened.chosen().as_deref(), Some("measure"));
+    opened.key(Key::Named(NamedKey::Enter));
+    opened.until("the list left", || opened.shell.modal().is_none());
+    assert_eq!(panes(), 2);
+    assert_eq!(
+        opened.model(Workspace::active_session_id),
+        Some(made.finished)
+    );
+    assert!(opened.titles().is_empty());
+
+    // Escape leaves it, once a search that stands is taken back.
+    manage();
+    opened.character("/");
+    opened.commit("build");
+    opened.until("the one found", || opened.titles() == ["build"]);
+    opened.key(Key::Named(NamedKey::Escape));
+    opened.until("all of them", || opened.titles().len() == 4);
+    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
+    opened.key(Key::Named(NamedKey::Escape));
+    opened.until("the list left", || opened.shell.modal().is_none());
+    // The pane that had the keys has them again.
+    assert_eq!(
+        opened.model(Workspace::active_session_id),
+        Some(made.finished)
+    );
+
+    // A terminal opened where a session works leaves it too.
+    manage();
+    let tabs = opened.model(Workspace::tab_count);
+    opened.character("t");
+    opened.until("the list left", || opened.shell.modal().is_none());
+    assert_eq!(opened.model(Workspace::tab_count), tabs + 1);
+    let _ = made.first;
+}
+
 /// Paints the list in a pane, in this machine's theme, to the file
 /// `HORIZON_SESSIONS_OUT` names (a PPM): a picture for a person to look
 /// at. With `HORIZON_SESSIONS_ASK` set, as it asks before it ends a
-/// session. Run by hand.
+/// session; with `HORIZON_SESSIONS_MODAL`, as the session manager shows
+/// it. Run by hand.
 #[test]
 #[ignore = "writes a picture for a person: set HORIZON_SESSIONS_OUT"]
 fn paint_the_list() {
@@ -461,7 +533,14 @@ fn paint_the_list() {
     });
     let places = Places::made("painted");
     make(&opened, &places);
-    opened.list();
+    match std::env::var_os("HORIZON_SESSIONS_MODAL") {
+        Some(_) => opened
+            .shell
+            .execute(horizon_workspace::commands::CommandId::OpenSessionManager),
+        None => opened.list(),
+    }
+    opened.app.run_effects();
+    opened.app.resolve();
     opened.until("the rows", || opened.titles().len() == 5);
     if std::env::var_os("HORIZON_SESSIONS_ASK").is_some() {
         opened.character("X");

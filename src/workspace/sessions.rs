@@ -1,104 +1,68 @@
-//! The session manager: every session of the workspace, shown or
-//! detached, as the tree of what each was derived from. Enter goes to the
-//! chosen session's pane, or puts a detached session in a pane beside the
-//! active one. Ctrl+Enter ends it, Ctrl+Shift+T ends it with everything
-//! derived from it, and Ctrl+O opens a terminal in its directory.
+//! The session manager: the list of the workspace's sessions (the
+//! extension `plugins/sessions`) over everything. Going to a session, or
+//! opening a terminal where one works, leaves it; so does Escape, or a
+//! press outside.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
-use horizon_ui::El;
-use horizon_ui::reactive_graph::traits::{GetUntracked, Set, With, WithUntracked};
-use horizon_workspace::lineage::{
-    SessionRow, abbreviate_directory, enclosing_repo_root, order_as_lineage_tree,
-};
-use horizon_workspace::types::SessionSummary;
-use horizon_workspace::{SessionKind, Workspace};
-use keyboard_types::Key;
+use horizon_ui::blitz_traits::events::DomEventData;
+use horizon_ui::reactive_graph::traits::Set;
+use horizon_ui::{El, el, prevent_default, stop_propagation};
+use horizon_workspace::SessionKind;
+use keyboard_types::{Key, NamedKey};
 
-use super::picker::{self, Picked, Row};
-use super::{Shell, styles};
+use super::{Shell, plugins, styles};
+use crate::plugin_host::{Asks, SessionAsk, SessionAsks};
 
-/// A step of the tree's indentation, in CSS pixels.
-const INDENT: f32 = 16.;
-
-/// The sessions whose titles hold `query`, as the tree they make.
-fn matching(model: &Workspace, query: &str) -> Vec<SessionRow> {
-    let query = query.trim().to_ascii_lowercase();
-    let sessions: Vec<SessionSummary> = (model.session_summaries().into_iter())
-        .filter(|session| query.is_empty() || session.title.to_ascii_lowercase().contains(&query))
-        .collect();
-    order_as_lineage_tree(&sessions)
-}
-
-fn row(session: &SessionRow) -> Row {
-    let summary = &session.summary;
-    let title = match session.depth {
-        0 => summary.title.clone(),
-        _ => format!("↳ {}", summary.title),
-    };
-    let mut parts = vec![(styles::NAME, title)];
-    parts.push(match summary.attached {
-        true => (styles::ATTACHED, "attached".to_string()),
-        false => (styles::DETACHED, "detached".to_string()),
-    });
-    if let Some(directory) = &summary.directory {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let repository = enclosing_repo_root(directory);
-        let short = abbreviate_directory(directory, repository.as_deref(), home.as_deref());
-        parts.push((styles::ABOUT, short));
-    }
-    if let Some(activity) = &summary.activity {
-        parts.push((styles::ABOUT, super::activity::line(activity)));
-    }
-    if session.has_children {
-        parts.push((styles::ABOUT, "subtree".to_string()));
-    }
-    Row {
-        key: format!("{:?} {parts:?}", summary.id),
-        class: (styles::SESSION, None),
-        parts,
-        indent: session.depth as f32 * INDENT,
-    }
-}
+/// The extension's name.
+const LIST: &str = "sessions";
 
 pub(super) fn view(shell: Shell) -> El {
-    let rows = move |query: &str| {
-        (shell.model).with(|model| matching(model, query).iter().map(row).collect())
+    let close = move || {
+        shell.modal.set(None);
+        shell.focus_active();
     };
-    let picked = move |index: usize, picked: Picked| {
-        let chosen = (shell.model).with_untracked(|model| {
-            (matching(model, &shell.query.get_untracked()).get(index))
-                .map(|row| row.summary.clone())
+    let sheet = el("div")
+        .class(styles::SHEET)
+        // A press in the list is not one outside it.
+        .on("pointerdown", |_| stop_propagation())
+        // (Escape the list had no use for.)
+        .on("keydown", move |event| {
+            let DomEventData::KeyDown(key) = &event.data else {
+                return;
+            };
+            if key.key == Key::Named(NamedKey::Escape) {
+                close();
+                prevent_default();
+                stop_propagation();
+            }
         });
-        let Some(session) = chosen else {
-            return;
-        };
-        match picked {
-            Picked::Confirmed => {
-                shell.modal.set(None);
-                shell.show_session(session.id);
-            }
-            // The list stays, without the session.
-            Picked::ConfirmedSecondary => _ = shell.terminate_session(session.id),
-            Picked::Chord(key) => {
-                let character = match &key.key {
-                    Key::Character(character) => character.to_lowercase(),
-                    _ => return,
-                };
-                match (character.as_str(), key.modifiers.shift()) {
-                    ("t", true) => shell.terminate_session_with_derived(session.id),
-                    ("o", false) => {
-                        if let Some(directory) = session.directory {
+    let sheet = match plugins::extension(LIST) {
+        Some(extension) => {
+            let SessionAsks { feed, act } = shell.session_asks();
+            let asks = Asks {
+                sessions: Some(SessionAsks {
+                    feed,
+                    act: Rc::new(move |ask| {
+                        if matches!(ask, SessionAsk::Show(_) | SessionAsk::OpenTerminal(_)) {
                             shell.modal.set(None);
-                            shell.open_terminal_in(directory);
                         }
-                    }
-                    _ => {}
-                }
-            }
+                        act(ask);
+                    }),
+                }),
+                ..Asks::default()
+            };
+            sheet.child(shell.run_extension(&extension, asks, None).0)
         }
+        None => sheet.child(Shell::no_extension(
+            "The list of sessions is an extension, and it is not built.",
+        )),
     };
-    picker::view(shell, rows, picked)
+    el("div")
+        .class(styles::SCRIM)
+        .on("pointerdown", move |_| close())
+        .child(sheet)
 }
 
 impl Shell {

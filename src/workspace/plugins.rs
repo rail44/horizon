@@ -341,6 +341,52 @@ impl Shell {
         }
     }
 
+    /// What is there in place of an extension's view that there is none
+    /// of: why.
+    pub(super) fn no_extension(why: &str) -> El {
+        el("div")
+            .class(styles::EXTENSION)
+            .child(el("div").class(styles::FAILED).text(why))
+    }
+
+    /// The view of `extension` made on `state`, in an element of its own
+    /// that says so where it could not be made or has failed since, and
+    /// what runs it. It runs for as long as what this is called under
+    /// lasts.
+    pub(super) fn run_extension(
+        &self,
+        extension: &Arc<Extension>,
+        asks: Asks,
+        state: Option<&str>,
+    ) -> (El, Option<Rc<crate::extension::Running>>) {
+        let failed = RwSignal::new(None::<String>);
+        let root = el("div").class(styles::EXTENSION).when(
+            move || failed.get().is_some(),
+            move || {
+                el("div")
+                    .class(styles::FAILED)
+                    .text_dyn(move || failed.get().unwrap_or_default())
+            },
+        );
+        let running = match extension.instantiate(asks, self.kept().wake.clone(), failed) {
+            Ok(running) => Rc::new(running),
+            Err(error) => {
+                failed.set(Some(error));
+                return (root, None);
+            }
+        };
+        match running.mount(state) {
+            Ok(node) => {
+                root.child(El(NodeId::from_u64(node)));
+            }
+            Err(error) => failed.update(|failed| {
+                failed.get_or_insert(error);
+            }),
+        }
+        running.follow();
+        (root, Some(running))
+    }
+
     /// A pane of `extension` on the state the model keeps for it, which
     /// goes back to the model as it changes, with the pane's title.
     fn mount_extension(
@@ -351,16 +397,7 @@ impl Shell {
     ) -> (El, Shown) {
         let shell = *self;
         let kept = self.kept();
-        let failed = RwSignal::new(None::<String>);
         let title = RwSignal::new(shown.title.clone());
-        let root = el("div").class(styles::EXTENSION).when(
-            move || failed.get().is_some(),
-            move || {
-                el("div")
-                    .class(styles::FAILED)
-                    .text_dyn(move || failed.get().unwrap_or_default())
-            },
-        );
         let asks = Asks {
             open_url: Some(kept.open_url.clone()),
             set_title: Some(Rc::new(move |text| title.set(text))),
@@ -368,22 +405,10 @@ impl Shell {
             sessions: Some(self.session_asks()),
         };
         let name = extension.name;
-        let running = match extension.instantiate(asks, kept.wake.clone(), failed) {
-            Ok(running) => Rc::new(running),
-            Err(error) => {
-                failed.set(Some(error));
-                return (root, Shown::none(name));
-            }
+        let (root, running) = self.run_extension(&extension, asks, shown.state.as_str());
+        let Some(running) = running else {
+            return (root, Shown::none(name));
         };
-        match running.mount(shown.state.as_str()) {
-            Ok(node) => {
-                root.child(El(NodeId::from_u64(node)));
-            }
-            Err(error) => failed.update(|failed| {
-                failed.get_or_insert(error);
-            }),
-        }
-        running.follow();
         // What the pane keeps, and its title, after the page's effects.
         let keeping = running.clone();
         horizon_ui::each_effects(move || {

@@ -72,17 +72,19 @@ manual smoke checks:
   sessions, and reconnects persisted agent sessions — use after rebuilding
   the session runtime crates, or to recover from a lost connection.
 
-Running the `manage sessions` command opens a separate modal listing every
-session the workspace knows about, as a derivation tree rather than a flat
-list (a session's recorded derivation parent is its parent; children
-are indented under it, roots first): arrows move the selection, `Enter`
-attaches a detached session as a split (or jumps to an attached session's
-pane), `cmd+Enter` terminates the selected session (the modal stays open),
-`cmd+o` opens a terminal in the selected session's directory (when known --
-rows with one show `dir`), `cmd+shift+t` terminates the selected session
-and every descendant (only on a row with children, shown with `subtree`;
-more destructive than the plain `cmd+Enter` terminate, which leaves
-children untouched), and `Esc` closes the modal.
+Running the `manage sessions` command opens the list of sessions over
+the workspace; `horizon new sessions` (or the view chooser) puts the same
+list in a pane, where it stays. It is an extension (`plugins/sessions`,
+built by `./scripts/extensions.sh build`). The sessions are under the
+project each works in, a session under the one it was derived from; within
+a project, what waits on you is first, then what finished and was not
+looked at, then what works, then what rests. The keys are in the band
+under the rows: `j`/`k` or the arrows move the selection, `n` goes to the
+next session that waits, `/` searches, `Enter` goes to the session's pane
+(a detached session is put in a split), `t` opens a terminal in the
+session's directory, `x` terminates the session and `X` terminates it with
+everything derived from it (each asks first, and `y` answers), and `Esc`
+closes the modal.
 
 The same command model is also reachable from outside the GUI: `horizon
 <subcommand>` (no arguments launches the GUI itself) is a thin client over a

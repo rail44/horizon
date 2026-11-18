@@ -374,64 +374,6 @@ fn a_shell_that_exits_takes_its_pane_and_the_last_leaves_an_empty_workspace() {
 }
 
 #[test]
-fn the_session_manager_puts_a_detached_session_back_and_ends_one() {
-    let opened = open();
-    let first = opened.panes()[0];
-    opened.prompt(first);
-    opened.run("echo kept-$((2+3))");
-    opened.wait(first, "the output", |text| text.contains("kept-5"));
-    let kept = opened.model(|model| model.terminal_session_id(first).unwrap());
-
-    // A second pane, and the first closed: its session is detached.
-    opened.chord();
-    opened.character("s");
-    opened.chord();
-    opened.character("h");
-    opened.character("x");
-    assert_eq!(opened.model(Workspace::detached_session_count), 1);
-
-    // The manager lists both, the detached one told apart.
-    opened.chord();
-    opened.character(":");
-    opened.commit("manage");
-    opened.named(NamedKey::Enter);
-    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
-    assert_eq!(opened.all("session").len(), 2);
-    assert_eq!(opened.all("detached").len(), 1);
-
-    // Enter on the detached session puts it in a pane beside the active
-    // one, as it was left.
-    opened.commit("#1");
-    assert_eq!(opened.all("session").len(), 1);
-    opened.named(NamedKey::Enter);
-    assert_eq!(opened.shell.modal(), None);
-    assert!(!opened.mode());
-    assert_eq!(opened.model(Workspace::detached_session_count), 0);
-    let panes = opened.panes();
-    assert_eq!(panes.len(), 2);
-    let back = (panes.iter().copied())
-        .find(|pane| opened.model(|model| model.terminal_session_id(*pane)) == Some(kept))
-        .expect("the session's pane");
-    opened.wait(back, "what it showed", |text| text.contains("kept-5"));
-    // It has the keys.
-    opened.run("echo back-$((4+4))");
-    opened.wait(back, "the output", |text| text.contains("back-8"));
-
-    // Ctrl+Enter ends the chosen session, and the list stays.
-    opened.chord();
-    opened.character(":");
-    opened.commit("manage");
-    opened.named(NamedKey::Enter);
-    opened.key(Key::Named(NamedKey::Enter), Modifiers::CONTROL);
-    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
-    assert_eq!(opened.sessions(), 1);
-    assert_eq!(opened.all("session").len(), 1);
-    assert_eq!(opened.panes().len(), 1);
-    opened.named(NamedKey::Escape);
-    assert_eq!(opened.shell.modal(), None);
-}
-
-#[test]
 fn the_configurations_chords_run_commands_and_replace_the_modes() {
     let opened = open();
     let config = horizon_config::parse(
@@ -864,7 +806,7 @@ fn a_notification_a_program_asks_for_is_posted_unless_its_pane_is_looked_at() {
 }
 
 #[test]
-fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
+fn what_a_program_says_of_its_state_is_on_its_tab() {
     use horizon_workspace::types::{Doing, ProgramState, ProgramStatus, SessionActivity};
 
     let opened = open();
@@ -905,8 +847,7 @@ fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
         Some("approve Bash: ls")
     );
 
-    // Done while another tab is the one looked at: news, on the tab and
-    // in the session manager's line.
+    // Done while another tab is the one looked at: news, on the tab.
     opened.run(r"sleep 0.4; printf '\033]7501;state=done:app=claude-code\033\\'");
     opened.chord();
     opened.character("t");
@@ -915,20 +856,6 @@ fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
     assert!(activity().is_some_and(|activity| !activity.seen));
     assert!(tab(0).starts_with("● "), "{}", tab(0));
     assert!(!tab(1).starts_with('●'), "{}", tab(1));
-
-    opened.chord();
-    opened.character(":");
-    opened.commit("manage");
-    opened.named(NamedKey::Enter);
-    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
-    let lines: Vec<String> = opened.all("session").into_iter().map(text_of).collect();
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("claude-code: done [unseen]")),
-        "{lines:?}"
-    );
-    opened.named(NamedKey::Escape);
 
     // Looked at, it is news no longer, and marked as a program at rest.
     opened.shell.reveal_session(session);

@@ -7,7 +7,7 @@ use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Track};
 use horizon_workspace::Workspace;
 use horizon_workspace::commands::{CommandId, command_entries, filter_command_entries};
 
-use super::picker::{self, Picked, Row};
+use super::picker::{self, Row};
 use super::{Shell, plugins, styles};
 
 /// What a palette row carries out.
@@ -83,14 +83,11 @@ pub(super) fn view(shell: Shell) -> El {
     };
     // A command is run on the mode's cursor, and the mode ends with it,
     // unless what it did was to open another list.
-    let picked = move |index: usize, picked: Picked| {
+    let picked = move |index: usize| {
         let entries = matching(shell, &shell.query.get_untracked());
         let Some(entry) = entries.get(index).filter(|entry| entry.enabled) else {
             return;
         };
-        if !matches!(picked, Picked::Confirmed) {
-            return;
-        }
         shell.modal.set(None);
         match entry.run {
             Run::Shell(command) => shell.execute(command),

@@ -115,18 +115,20 @@ pub(crate) mod styles {
                   overflow: hidden; background: var(--background);
                   border: var(--line) solid var(--border); border-radius: 8px;
                   box-shadow: var(--shadow-modal); }
+        .sheet { width: 720px; height: 480px; display: flex; overflow: hidden;
+                 background: var(--background);
+                 border: var(--line) solid var(--border); border-radius: 8px;
+                 box-shadow: var(--shadow-modal); }
+        .sheet > * { flex: 1; min-width: 0; }
         .search { flex: none; position: relative; display: flex; align-items: center;
                   height: 32px; padding: 0 var(--u12); border-bottom: var(--line) solid var(--border); }
         .search > * { flex: 1; font-size: var(--body-size); line-height: calc(var(--u4) * 5); }
         .items { flex: 1; min-height: 0; overflow-y: auto; }
         .item { display: flex; padding: 7px var(--u12); cursor: pointer; }
         .item.command { flex-direction: column; }
-        .item.session { align-items: baseline; gap: var(--u8); }
         .item .name { line-height: calc(var(--u4) * 5); }
-        .item .about, .item .attached, .item .detached {
-            font-size: var(--meta-size); line-height: var(--meta-line);
-            color: var(--text-muted); }
-        .item .attached { color: var(--success); }
+        .item .about { font-size: var(--meta-size); line-height: var(--meta-line);
+                       color: var(--text-muted); }
         .item.destructive .name { color: var(--danger); }
         .item.disabled { cursor: default; }
         .item.disabled .name { color: var(--text-muted); }

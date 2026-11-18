@@ -9,7 +9,7 @@ use horizon_ui::El;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
 use horizon_workspace::{PluginPane, SessionKind};
 
-use super::picker::{self, Picked, Row};
+use super::picker::{self, Row};
 use super::{Modal, Placement, Shell, plugins, styles};
 use crate::extension::Extension;
 use std::sync::Arc;
@@ -58,10 +58,7 @@ pub(super) fn view(shell: Shell, placement: Placement) -> El {
             })
             .collect()
     };
-    let picked = move |index: usize, picked: Picked| {
-        if !matches!(picked, Picked::Confirmed) {
-            return;
-        }
+    let picked = move |index: usize| {
         let mut choices = matching(&shell.query.get_untracked());
         if index < choices.len() {
             let (_, choice) = choices.swap_remove(index);

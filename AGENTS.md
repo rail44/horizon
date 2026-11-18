@@ -50,7 +50,8 @@ replaces the daemon side. The terminal hub runs the same lockstep over
 its `hello` (`MIN_SUPPORTED == current`). Rebuild, then restart the app
 itself.
 
-The Markdown view, the wiki and the theme settings are extensions (`plugins/*`),
+The Markdown view, the wiki, the theme settings and the list of sessions are
+extensions (`plugins/*`),
 wasm components `cargo build --workspace` does not build: the second
 command above does (`--release` for a release Horizon), and Horizon reads
 each component from beside its executable or from where that command
@@ -384,10 +385,12 @@ their wiring:
   share. The Markdown view (`horizon new markdown <path>`), the wiki
   (`horizon new wiki [<page>]`; a page of the project wiki,
   `crates/horizon-wiki`, with the owner's comment threads anchored in
-  it, `docs/project-wiki-design.md`) and the theme settings
-  (`horizon new theme-settings`) are not here: they are extensions, whole
-  in `plugins/markdown`, `plugins/wiki` and `plugins/theme-settings`,
-  over `horizon-ui` and `horizon-components`.
+  it, `docs/project-wiki-design.md`), the theme settings
+  (`horizon new theme-settings`) and the list of sessions
+  (`horizon new sessions`, which the session manager also shows) are not
+  here: they are extensions, whole in `plugins/markdown`, `plugins/wiki`,
+  `plugins/theme-settings` and `plugins/sessions`, over `horizon-ui` and
+  `horizon-components`.
 - `preview.rs` — the preview pane: an extension still being written,
   shown from its component's file. See `docs/preview-pane-design.md`.
 - `control.rs` — the bridge from the CLI control plane's listener to the
