@@ -967,3 +967,35 @@ fn a_drag_goes_on_outside_the_view_and_ends_where_the_button_comes_up() {
     let backwards = Some(((row, 4), (row, 8)));
     assert_eq!(selection(backwards), backwards);
 }
+
+#[test]
+fn a_notch_of_the_wheel_is_one_report_to_a_program_that_asked_for_the_mouse() {
+    let opened = open();
+    // A program that asks for the mouse, in SGR's form, and reads what it
+    // is sent: the terminal's own echo shows each report as it is written.
+    opened.run(r"clear; printf '\033[?1000h\033[?1006h'; cat");
+    opened.wait("the screen cleared", |text| !text.contains("clear"));
+    std::thread::sleep(Duration::from_millis(200));
+    opened.app.resolve();
+
+    move_to(&opened.app, 300., 200.);
+    opened.app.dispatch(UiEvent::Wheel(BlitzWheelEvent {
+        delta: BlitzWheelDelta::Lines(0., 1.),
+        coords: PointerCoords {
+            page_x: 300.,
+            page_y: 200.,
+            screen_x: 300.,
+            screen_y: 200.,
+            client_x: 300.,
+            client_y: 200.,
+        },
+        buttons: Default::default(),
+        mods: Default::default(),
+        element: Default::default(),
+    }));
+    opened.wait("the report", |text| text.contains("[<64;"));
+    // (Time for more of them to come, were there more.)
+    std::thread::sleep(Duration::from_millis(200));
+    let text = opened.wait("the report", |text| text.contains("[<64;"));
+    assert_eq!(text.matches("[<64;").count(), 1, "in:\n{text}");
+}

@@ -608,8 +608,17 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             // The wheel is the program's (or the peer's): whole rows, told
             // to it.
             wheeled.scrollback.borrow_mut().abandon();
+            // A program that asked for the mouse is told of each notch
+            // once, and moves by what it chooses to; one that is sent arrow
+            // keys for the wheel moves a row for each, three to the notch.
+            let reported =
+                (wheeled.frame.borrow().as_ref()).is_some_and(|frame| frame.mouse_reporting);
+            let to_a_notch = match reported {
+                true => 1.,
+                false => 3.,
+            };
             let turned = match wheel.delta {
-                BlitzWheelDelta::Lines(_, lines) => lines * 3.,
+                BlitzWheelDelta::Lines(_, lines) => lines * to_a_notch,
                 BlitzWheelDelta::Pixels(_, pixels) => pixels / line_height,
             };
             let turned = wheeled.wheel.get() + turned;
