@@ -114,6 +114,14 @@ pub enum TerminalCommand {
     /// over the spawn-time scheme -- see `core::color::resolve_query_color`.
     SetColorScheme(TerminalColorScheme),
     Shutdown,
+    /// SPIKE Y. Client → daemon: a view is here and has nothing: the
+    /// terminal's state, then what the PTY writes from there on.
+    WantState,
+    /// SPIKE Y. Client → daemon: this many bytes of `Output` have been
+    /// taken in. The daemon holds what it sends against these: a view that
+    /// falls too far behind is sent no more until it has caught up, and
+    /// then the state again.
+    OutputTaken(u64),
     /// Client → daemon: request a scrollback *window* — a contiguous block of
     /// history `height` rows tall, positioned `anchor` rows above the live
     /// bottom (a hypothetical `display_offset`). The daemon answers on the
@@ -216,6 +224,19 @@ pub enum TerminalUpdate {
     /// the postbag positional discipline. Phase 1 produces it daemon-side,
     /// the client does not consume it yet (§7 phase 2).
     ScrollWindow(TerminalScrollWindow),
+    /// SPIKE Y. Daemon → client: the terminal's whole state, as its engine
+    /// writes it out, in pieces: the last has `more` false. What follows is
+    /// the PTY's bytes from that state on.
+    State {
+        bytes: Vec<u8>,
+        more: bool,
+    },
+    /// SPIKE Y. Daemon → client: what the PTY wrote, as the daemon's own
+    /// terminal took it in.
+    Output(Vec<u8>),
+    /// SPIKE Y. Daemon → client: the terminal was resized here, between
+    /// the bytes before and the bytes after.
+    Resized(TerminalSize),
     /// Daemon → client: the session's current working directory, read from
     /// its shell process (board #69). Sent when the value changes and once to
     /// every newly installed subscriber, so a reattaching client learns the

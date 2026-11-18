@@ -1042,3 +1042,54 @@ fn the_wheel_over_the_window_held_has_the_page_drawn_again() {
     opened.app.resolve();
     assert_eq!(opened.terminal.scrolled_into(), Some(0.5));
 }
+
+/// SPIKE Y. More output than a view is sent: the daemon stops sending
+/// while the view is behind and sends the terminal's state when it has
+/// caught up, and the view ends with the screen the shell has.
+///
+/// Run by hand, with the engine built for speed
+/// (`LIBGHOSTTY_VT_SYS_OPTIMIZE=ReleaseFast`): as a debug build takes its
+/// bytes in, 27 MB is minutes.
+#[test]
+#[ignore = "a measurement: minutes with the engine's debug build"]
+fn a_flood_of_output_ends_with_the_screen_the_shell_has() {
+    let opened = open();
+    let states_before = opened.session.states_taken();
+    let started = Instant::now();
+    opened.run("yes flooding | head -n 3000000; echo flood-over");
+    // The view takes nothing in for a while: it falls behind.
+    std::thread::sleep(Duration::from_millis(1500));
+    let text = loop {
+        opened.app.resolve();
+        let text = opened.terminal.text();
+        if text.lines().any(|line| line == "flood-over") {
+            break text;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the flood did not end ({} states, {} bytes taken) in:\n{text}",
+            opened.session.states_taken(),
+            opened.session.bytes_taken(),
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    let took = started.elapsed();
+    // The last of the flood, then the mark, then the prompt.
+    let lines: Vec<&str> = text.lines().collect();
+    let mark = lines.iter().position(|line| *line == "flood-over").unwrap();
+    assert!(mark > 1, "in:\n{text}");
+    assert_eq!(lines[mark - 1], "flooding", "in:\n{text}");
+    assert!(lines[mark + 1].trim_end().ends_with('$'), "in:\n{text}");
+    let again = opened.session.states_taken() - states_before;
+    println!(
+        "27 MB of output in {took:?}; the state was sent again {again} times; {} bytes of output were taken in",
+        opened.session.bytes_taken(),
+    );
+    assert!(again > 0, "the view never fell behind");
+
+    // And the terminal goes on from there: what is typed next runs.
+    opened.run("echo after-the-flood");
+    opened.wait("the next command", |text| {
+        text.lines().any(|line| line == "after-the-flood")
+    });
+}

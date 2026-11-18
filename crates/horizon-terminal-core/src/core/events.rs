@@ -18,6 +18,9 @@ const OSC52_CLIPBOARD_WRITE_CAP: usize = 256 * 1024;
 #[derive(Clone, Default)]
 pub(crate) struct TerminalEvents {
     pub pty_writes: Vec<Vec<u8>>,
+    /// SPIKE Y. The bytes the terminal took in: what a view's own terminal
+    /// is to take in too.
+    pub output: Vec<u8>,
     pub title: Option<String>,
     pub bell_count: usize,
     /// Desktop-notification requests extracted from the raw PTY stream

@@ -15,6 +15,14 @@ pub enum CoreInput {
     Paste(String),
 }
 
+/// SPIKE Y. What a view says of the stream it is sent.
+pub enum StreamCommand {
+    /// It has nothing: the state, then the bytes.
+    Want,
+    /// It has taken this many bytes in.
+    Taken(u64),
+}
+
 pub struct CoreReceivers {
     pub(super) resize_rx: Receiver<TerminalSize>,
     pub(super) scroll_rx: Receiver<TerminalScroll>,
@@ -32,6 +40,7 @@ pub struct CoreReceivers {
     /// putting the window on the events mpsc as
     /// `TerminalUpdate::ScrollWindow`, never moving the live `display_offset`.
     pub(super) window_rx: Receiver<ScrollWindowRequest>,
+    pub(super) stream_rx: Receiver<StreamCommand>,
 }
 
 pub struct CoreSenders {
@@ -43,6 +52,7 @@ pub struct CoreSenders {
     pub focus_tx: Sender<bool>,
     pub color_scheme_tx: Sender<TerminalColorScheme>,
     pub window_tx: Sender<ScrollWindowRequest>,
+    pub stream_tx: Sender<StreamCommand>,
 }
 
 /// Create the matching command halves for one terminal core. The writer must
@@ -56,6 +66,7 @@ pub fn core_channels() -> (CoreSenders, CoreReceivers) {
     let (focus_tx, focus_rx) = crossbeam_channel::unbounded();
     let (color_scheme_tx, color_scheme_rx) = crossbeam_channel::unbounded();
     let (window_tx, window_rx) = crossbeam_channel::unbounded();
+    let (stream_tx, stream_rx) = crossbeam_channel::unbounded();
     (
         CoreSenders {
             resize_tx,
@@ -66,6 +77,7 @@ pub fn core_channels() -> (CoreSenders, CoreReceivers) {
             focus_tx,
             color_scheme_tx,
             window_tx,
+            stream_tx,
         },
         CoreReceivers {
             resize_rx,
@@ -76,6 +88,7 @@ pub fn core_channels() -> (CoreSenders, CoreReceivers) {
             focus_rx,
             color_scheme_rx,
             window_rx,
+            stream_rx,
         },
     )
 }

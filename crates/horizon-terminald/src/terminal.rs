@@ -700,6 +700,7 @@ fn run_writer(
         focus_tx,
         color_scheme_tx,
         window_tx,
+        stream_tx,
     } = senders;
     let mut last_size = None;
     while let Ok(command) = command_rx.recv() {
@@ -768,6 +769,12 @@ fn run_writer(
             }
             TerminalCommand::RequestScrollWindow { anchor, height } => {
                 let _ = window_tx.send(ScrollWindowRequest { anchor, height });
+            }
+            TerminalCommand::WantState => {
+                let _ = stream_tx.send(horizon_terminal_core::StreamCommand::Want);
+            }
+            TerminalCommand::OutputTaken(bytes) => {
+                let _ = stream_tx.send(horizon_terminal_core::StreamCommand::Taken(bytes));
             }
             TerminalCommand::Shutdown => {
                 let _ = killer.lock().unwrap().kill();

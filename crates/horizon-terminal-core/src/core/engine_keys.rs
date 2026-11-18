@@ -437,7 +437,8 @@ fn how_much_crosses_to_a_view() {
     for (columns, rows) in [(120u16, 40u16), (240, 70)] {
         // Plain text; text that changes color every few cells; and a
         // color for every cell.
-        let screens: [(&str, Box<dyn Fn(usize, usize) -> String>); 3] = [
+        type Screen = Box<dyn Fn(usize, usize) -> String>;
+        let screens: [(&str, Screen); 3] = [
             ("plain", Box::new(|_, _| String::new())),
             (
                 "a color every 7 cells",
@@ -728,4 +729,25 @@ fn a_state_handed_over_and_the_bytes_after_it_make_the_same_terminal() {
         }
         Err(error) => println!("cut off after the screen: {error:?}"),
     }
+}
+
+#[test]
+fn a_state_cut_off_after_the_screen_is_a_terminal_that_goes_on() {
+    let mut core = TerminalCore::new(TerminalSize::new(80, 24));
+    for line in 0..5000 {
+        core.write_vt(format!("line {line}\r\n").as_bytes());
+    }
+    let whole = core.state();
+    let screen = core.state_of_the_screen();
+    assert!(
+        screen.len() < whole.len(),
+        "{} of {}",
+        screen.len(),
+        whole.len()
+    );
+    let mut view = TerminalCore::from_state(&screen).expect("a terminal from the screen's part");
+    assert!(view.snapshot_text().contains("line 4999"));
+    core.write_vt(b"and then more");
+    view.take_in(b"and then more");
+    assert_eq!(view.snapshot_text(), core.snapshot_text());
 }

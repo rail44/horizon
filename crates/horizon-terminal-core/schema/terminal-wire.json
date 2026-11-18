@@ -563,6 +563,26 @@
           "type": "object"
         },
         {
+          "const": "WantState",
+          "description": "SPIKE Y. Client → daemon: a view is here and has nothing: the\nterminal's state, then what the PTY writes from there on.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "SPIKE Y. Client → daemon: this many bytes of `Output` have been\ntaken in. The daemon holds what it sends against these: a view that\nfalls too far behind is sent no more until it has caught up, and\nthen the state again.",
+          "properties": {
+            "OutputTaken": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "OutputTaken"
+          ],
+          "type": "object"
+        },
+        {
           "additionalProperties": false,
           "description": "Client → daemon: request a scrollback *window* — a contiguous block of\nhistory `height` rows tall, positioned `anchor` rows above the live\nbottom (a hypothetical `display_offset`). The daemon answers on the\nevents channel with [`TerminalUpdate::ScrollWindow`], a self-describing\nwindow (`docs/terminal-scrollback-design.md` §3.2, §9 option ii): the\nreply carries its own `viewport_offset`/`above`/`below`, so no\ncorrelation id is needed. Serving it never moves the live\n`display_offset` (`TerminalCore::snapshot_window`), so the live-frame\nwatch keeps showing the tail throughout. Phase 1 wires this\nend-to-end daemon-side, the client does not send it yet (§7 phase 2).",
           "properties": {
@@ -1252,6 +1272,69 @@
         },
         {
           "additionalProperties": false,
+          "description": "SPIKE Y. Daemon → client: the terminal's whole state, as its engine\nwrites it out, in pieces: the last has `more` false. What follows is\nthe PTY's bytes from that state on.",
+          "properties": {
+            "State": {
+              "properties": {
+                "bytes": {
+                  "items": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "more": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "bytes",
+                "more"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "State"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "SPIKE Y. Daemon → client: what the PTY wrote, as the daemon's own\nterminal took it in.",
+          "properties": {
+            "Output": {
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "Output"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "SPIKE Y. Daemon → client: the terminal was resized here, between\nthe bytes before and the bytes after.",
+          "properties": {
+            "Resized": {
+              "$ref": "#/$defs/TerminalSize"
+            }
+          },
+          "required": [
+            "Resized"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "Daemon → client: the session's current working directory, read from\nits shell process (board #69). Sent when the value changes and once to\nevery newly installed subscriber, so a reattaching client learns the\ncurrent value without a request (`docs/terminald-split-design.md`).",
           "properties": {
             "WorkingDirectory": {
@@ -1374,5 +1457,5 @@
     }
   },
   "title": "horizon-terminal-wire",
-  "x-session-protocol-version": 21
+  "x-session-protocol-version": 22
 }

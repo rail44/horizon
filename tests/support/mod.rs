@@ -142,6 +142,13 @@ fn run_writer(
             TerminalCommand::RequestScrollWindow { anchor, height } => {
                 let _ = (senders.window_tx).send(ScrollWindowRequest { anchor, height });
             }
+            TerminalCommand::WantState => {
+                let _ = (senders.stream_tx).send(horizon_terminal_core::StreamCommand::Want);
+            }
+            TerminalCommand::OutputTaken(bytes) => {
+                let _ =
+                    (senders.stream_tx).send(horizon_terminal_core::StreamCommand::Taken(bytes));
+            }
             TerminalCommand::Shutdown => {
                 let _ = killer.kill();
                 return;

@@ -14,6 +14,7 @@ use libghostty_vt::mode::Mode;
 use libghostty_vt::point::{Coordinate, Point};
 use libghostty_vt::report::SizeReportSize;
 use libghostty_vt::selection::{SelectLineOptions, SelectWordOptions, Selection};
+use libghostty_vt::snapshot::Decoder;
 use libghostty_vt::terminal::ScrollViewport;
 use termwiz::escape::csi::KittyKeyboardFlags;
 use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
@@ -87,6 +88,50 @@ impl TerminalCore {
         let _ = terminal.set_scrollback_max_lines(Some(scrollback_lines));
         let (cell_width, cell_height) = cell_pixels(size);
         let _ = terminal.resize(size.cols, size.rows, cell_width, cell_height);
+        Self::around(terminal, size)
+    }
+
+    /// SPIKE Y. A terminal from a state another wrote out
+    /// ([`Self::state`]): a view's own, which takes in the bytes that
+    /// follow that state.
+    pub fn from_state(state: &[u8]) -> Option<Self> {
+        let mut decoder = Decoder::new_buf(state).ok()?;
+        let _ = decoder.set_retain_continuation(true);
+        // The screen alone is a terminal already: a state cut off after it
+        // (what a view that fell behind is sent) is read as far as that.
+        let mut ready = decoder.ready().ok()?;
+        while let Ok(Some(_)) = ready.next() {}
+        let terminal = ready.into_terminal();
+        let size = TerminalSize::new(terminal.cols().ok()?, terminal.rows().ok()?);
+        Some(Self::around(terminal, size))
+    }
+
+    /// SPIKE Y. The terminal's whole state, for [`Self::from_state`].
+    pub fn state(&mut self) -> Vec<u8> {
+        let mut state = Vec::new();
+        let _ = self.terminal.encode_snapshot(&mut state);
+        state
+    }
+
+    /// SPIKE Y. The state as far as the screen and the history nearest
+    /// it: what a view that fell behind is sent, and draws from at once.
+    pub fn state_of_the_screen(&mut self) -> Vec<u8> {
+        let mut state = self.state();
+        let screen = Decoder::new_buf(&state)
+            .and_then(Decoder::ready)
+            .and_then(|ready| ready.decoder().source_offset());
+        if let Ok(screen) = screen {
+            state.truncate(screen);
+        }
+        state
+    }
+
+    /// The engine's terminal with its callbacks and what the core keeps
+    /// beside it.
+    fn around(mut terminal: Engine, size: TerminalSize) -> Self {
+        // So that the state can be written out with an escape sequence or
+        // a character half read.
+        let _ = terminal.set_continuation_max_bytes(4096);
 
         let events = EventSink::default();
         let size = Rc::new(Cell::new(size));
@@ -171,7 +216,22 @@ impl TerminalCore {
         }
     }
 
-    pub fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
+    /// SPIKE Y. Takes in bytes the daemon's terminal took in: what a
+    /// view's terminal does with them. What the engine would answer, ring
+    /// or copy is the daemon's to do, once, and is let go of here.
+    pub fn take_in(&mut self, bytes: &[u8]) {
+        let _ = self.write_vt(bytes);
+        // A hold the program never let go of: the daemon's own clock let
+        // its terminal's go, and no byte says so.
+        if self
+            .sync_flush_deadline()
+            .is_some_and(|deadline| deadline <= Instant::now())
+        {
+            let _ = self.flush_sync_update();
+        }
+    }
+
+    pub(crate) fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
         let scanned = self.osc_notifications.feed(bytes);
         let bytes = scanned.bytes;
         let held_before = self.held_since.get().is_some();
@@ -184,6 +244,7 @@ impl TerminalCore {
             held_before && self.held_since.get().is_some() && !self.released.get();
         let mut events = self.events.drain();
         events.visible_dirty = !bytes.is_empty() && !held_throughout;
+        events.output = bytes.to_vec();
         events.notifications = scanned.notifications;
         for message in scanned.program_status {
             match message {
@@ -205,7 +266,7 @@ impl TerminalCore {
     }
 
     /// Lets a synchronized update's hold go.
-    pub fn flush_sync_update(&mut self) -> TerminalEvents {
+    pub(crate) fn flush_sync_update(&mut self) -> TerminalEvents {
         let _ = self.terminal.set_mode(Mode::SYNC_OUTPUT, false);
         self.held_since.set(None);
         self.held_frame.borrow_mut().take();

@@ -22,7 +22,7 @@ use std::time::Instant;
 mod channels;
 mod frames;
 
-pub use channels::{CoreInput, CoreReceivers, CoreSenders, core_channels};
+pub use channels::{CoreInput, CoreReceivers, CoreSenders, StreamCommand, core_channels};
 
 use frames::FramePublisher;
 
@@ -110,6 +110,81 @@ fn drain_to_latest<T>(first: T, rx: &Receiver<T>) -> T {
     latest
 }
 
+/// SPIKE Y. What a view is sent of the terminal: its state when it asks,
+/// and from there what the PTY writes, held against what the view says it
+/// has taken in.
+#[derive(Default)]
+struct Stream {
+    /// A view asked, and is being sent the bytes.
+    wanted: bool,
+    /// Bytes sent that the view has not said it took in.
+    outstanding: u64,
+    /// The view fell too far behind: nothing is sent until it has taken
+    /// in what it was sent, and then the state again.
+    behind: bool,
+}
+
+/// How many bytes a view may have been sent and not taken in.
+const STREAM_AHEAD: u64 = 2 * 1024 * 1024;
+/// The largest piece a state is sent in: under the events channel's cap
+/// for an item.
+const STATE_PIECE: usize = 1024 * 1024;
+
+impl Stream {
+    fn state(&mut self, state: Vec<u8>, update_tx: &Sender<TerminalUpdate>) {
+        let pieces = state.chunks(STATE_PIECE).count().max(1);
+        let mut sent = 0;
+        for piece in state.chunks(STATE_PIECE) {
+            sent += 1;
+            let _ = update_tx.send(TerminalUpdate::State {
+                bytes: piece.to_vec(),
+                more: sent < pieces,
+            });
+        }
+        (self.outstanding, self.behind) = (0, false);
+    }
+
+    fn said(
+        &mut self,
+        command: StreamCommand,
+        core: &mut TerminalCore,
+        update_tx: &Sender<TerminalUpdate>,
+    ) {
+        match command {
+            StreamCommand::Want => {
+                self.wanted = true;
+                self.state(core.state(), update_tx);
+            }
+            StreamCommand::Taken(bytes) => {
+                self.outstanding = self.outstanding.saturating_sub(bytes);
+                if self.behind && self.outstanding == 0 {
+                    self.state(core.state_of_the_screen(), update_tx);
+                }
+            }
+        }
+    }
+
+    fn wrote(&mut self, bytes: Vec<u8>, update_tx: &Sender<TerminalUpdate>) {
+        if !self.wanted || self.behind || bytes.is_empty() {
+            return;
+        }
+        if self.outstanding > STREAM_AHEAD {
+            // What it has been sent stands; what it is not sent now it
+            // gets as the state, once it has caught up.
+            self.behind = true;
+            return;
+        }
+        self.outstanding += bytes.len() as u64;
+        let _ = update_tx.send(TerminalUpdate::Output(bytes));
+    }
+
+    fn resized(&mut self, size: TerminalSize, update_tx: &Sender<TerminalUpdate>) {
+        if self.wanted && !self.behind {
+            let _ = update_tx.send(TerminalUpdate::Resized(size));
+        }
+    }
+}
+
 /// Parse one PTY-output chunk and emit everything it produced: query/DA/DSR
 /// replies back into the PTY input (`TerminalCommand::Input`), bell/title/
 /// clipboard updates to the client, and -- when the grid actually changed --
@@ -122,8 +197,10 @@ fn process_pty_chunk(
     update_tx: &Sender<TerminalUpdate>,
     frames: &mut FramePublisher,
     sync_flush_rx: &mut Receiver<Instant>,
+    stream: &mut Stream,
 ) {
-    let events = core.write_vt(bytes);
+    let mut events = core.write_vt(bytes);
+    stream.wrote(std::mem::take(&mut events.output), update_tx);
     tracing::debug!(
         target: "horizon_terminal_core::session_loop",
         visible_dirty = events.visible_dirty,
@@ -214,12 +291,21 @@ fn drain_pty_output(
     update_tx: &Sender<TerminalUpdate>,
     frames: &mut FramePublisher,
     sync_flush_rx: &mut Receiver<Instant>,
-    mut budget: usize,
+    stream: &mut Stream,
 ) -> bool {
+    let mut budget = PTY_DRAIN_BUDGET;
     while budget > 0 {
         match pty_rx.try_recv() {
             Ok(bytes) => {
-                process_pty_chunk(core, &bytes, command_tx, update_tx, frames, sync_flush_rx);
+                process_pty_chunk(
+                    core,
+                    &bytes,
+                    command_tx,
+                    update_tx,
+                    frames,
+                    sync_flush_rx,
+                    stream,
+                );
                 budget -= 1;
             }
             Err(crossbeam_channel::TryRecvError::Empty) => return true,
@@ -247,12 +333,15 @@ pub fn run_terminal_core(
         focus_rx,
         color_scheme_rx,
         window_rx,
+        stream_rx,
     } = receivers;
     let mut core = TerminalCore::with_scrollback(size, options.scrollback_lines);
     core.set_color_scheme(options.color_scheme);
     let _ = frame_tx.send(core.snapshot_frame());
 
     let mut frames = FramePublisher::new(frame_tx, options.frame_interval);
+    // SPIKE Y: what a view that asked is sent.
+    let mut stream = Stream::default();
 
     // Failsafe for a synchronized-update window (BSU/ESU, private mode 2026)
     // left open by a PTY chunk that never delivers its closing ESU — see
@@ -271,7 +360,7 @@ pub fn run_terminal_core(
             &update_tx,
             &mut frames,
             &mut sync_flush_rx,
-            PTY_DRAIN_BUDGET,
+            &mut stream,
         ) {
             return;
         }
@@ -282,7 +371,14 @@ pub fn run_terminal_core(
                     return;
                 };
                 core.resize(size);
+                stream.resized(size, &update_tx);
                 frames.notify(&core);
+            }
+            recv(stream_rx) -> command => {
+                let Ok(command) = command else {
+                    return;
+                };
+                stream.said(command, &mut core, &update_tx);
             }
             recv(scroll_rx) -> scroll => {
                 let Ok(scroll) = scroll else {
@@ -315,7 +411,7 @@ pub fn run_terminal_core(
                 // paste order even when the core is busy draining output.
                 if !drain_pty_output(
                     &mut core, &pty_rx, &command_tx, &update_tx, &mut frames,
-                    &mut sync_flush_rx, PTY_DRAIN_BUDGET,
+                    &mut sync_flush_rx, &mut stream,
                 ) { return; }
                 let is_paste = matches!(input, CoreInput::Paste(_));
                 let input = match input {
@@ -407,6 +503,7 @@ pub fn run_terminal_core(
                     &update_tx,
                     &mut frames,
                     &mut sync_flush_rx,
+                    &mut stream,
                 );
             }
             recv(frames.flush_timer()) -> _ => {
