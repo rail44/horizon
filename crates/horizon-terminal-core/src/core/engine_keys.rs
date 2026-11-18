@@ -511,3 +511,221 @@ fn how_much_crosses_to_a_view() {
         );
     }
 }
+
+#[test]
+#[ignore = "an observation for the spike's record, not a check"]
+fn a_state_handed_over_and_the_bytes_after_it_make_the_same_terminal() {
+    use libghostty_vt::Terminal;
+    use libghostty_vt::fmt::{Extras, Format, Formatter};
+    use libghostty_vt::mode::Mode;
+    use libghostty_vt::snapshot::Decoder;
+
+    type Engine = Terminal<'static, 'static>;
+
+    // What a program might write: text in colors, the cursor moved about,
+    // the screen cleared, the other screen entered and left, a title,
+    // wide characters, a scroll region. The same bytes every run.
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move |below: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % below
+    };
+    let mut script = Vec::new();
+    for line in 0..6000u64 {
+        match next(40) {
+            0 => script.extend_from_slice(b"\x1b[2J\x1b[H"),
+            1 => script.extend_from_slice(b"\x1b[?1049h\x1b[2;2Hon the other screen\x1b[?1049l"),
+            2 => script.extend_from_slice(format!("\x1b]0;title {line}\x07").as_bytes()),
+            3 => script.extend_from_slice(b"\x1b[3;10r\x1b[10;1H\n\n\x1b[r"),
+            4 => script.extend_from_slice("日本語の行 ｶﾅ 🙂 e\u{301}".as_bytes()),
+            5 => script.extend_from_slice(b"\x1b[?2004h\x1b[?1h\x1b[>5u"),
+            6 => script.extend_from_slice(b"\x1b[?2004l\x1b[?1l\x1b[<u"),
+            7 => script
+                .extend_from_slice(format!("\x1b[{};{}H", 1 + next(24), 1 + next(80)).as_bytes()),
+            _ => {}
+        }
+        for word in 0..next(12) {
+            script.extend_from_slice(
+                format!(
+                    "\x1b[{};4{}m word{word} \x1b[38;2;{};{};{}m{line}\x1b[0m",
+                    30 + next(8),
+                    next(8),
+                    next(256),
+                    next(256),
+                    next(256)
+                )
+                .as_bytes(),
+            );
+        }
+        script.extend_from_slice(b"\r\n");
+    }
+
+    let new = || -> Engine {
+        let mut terminal = Terminal::new(80, 24).unwrap();
+        terminal.set_scrollback_max_bytes(Some(usize::MAX)).unwrap();
+        terminal.set_scrollback_max_lines(Some(2000)).unwrap();
+        // So that a state can be taken with an escape sequence half read.
+        terminal.set_continuation_max_bytes(4096).unwrap();
+        terminal
+    };
+    // Everything of a terminal that can be said in text.
+    let said = |terminal: &Engine| {
+        let mut all = Vec::new();
+        for format in [Format::Vt, Format::Plain] {
+            let mut formatter = Formatter::new(terminal).unwrap();
+            formatter.set_format(format).unwrap();
+            formatter.set_extras(Extras::all()).unwrap();
+            let length = formatter.format_len().unwrap();
+            let mut text = vec![0u8; length];
+            let written = formatter.format_buf(&mut text).unwrap();
+            text.truncate(written);
+            all.push(text);
+        }
+        (
+            all,
+            terminal.cursor_x().unwrap(),
+            terminal.cursor_y().unwrap(),
+            terminal.scrollback_rows().unwrap(),
+            terminal.title().unwrap().to_vec(),
+            terminal.kitty_keyboard_flags().unwrap().bits(),
+            [Mode::DECCKM, Mode::BRACKETED_PASTE, Mode::ALT_SCREEN_SAVE]
+                .map(|mode| terminal.mode(mode).unwrap()),
+        )
+    };
+
+    let mut daemon = new();
+    let mut views: Vec<(usize, bool, usize, Engine)> = Vec::new();
+    let mut at = 0;
+    let mut until_handover = 0u64;
+    while at < script.len() {
+        // A read of the PTY ends anywhere: in the middle of an escape
+        // sequence, in the middle of a character.
+        let length = (1 + next(300) as usize).min(script.len() - at);
+        let chunk = &script[at..at + length];
+        daemon.vt_write(chunk);
+        for (.., view) in &mut views {
+            view.vt_write(chunk);
+        }
+        at += length;
+        if until_handover == 0 {
+            until_handover = 40 + next(200);
+            let mut handed = Vec::new();
+            let half_read = !daemon.is_vt_ground().unwrap();
+            daemon.encode_snapshot(&mut handed).unwrap();
+            let mut decoder = Decoder::new_buf(&handed).unwrap();
+            decoder.set_retain_continuation(true).unwrap();
+            let view = decoder.decode().unwrap();
+            views.push((at, half_read, handed.len(), view));
+        }
+        until_handover -= 1;
+    }
+
+    let expected = said(&daemon);
+    let same = views
+        .iter()
+        .filter(|(.., view)| said(view) == expected)
+        .count();
+    let half_read = views.iter().filter(|(_, half_read, ..)| *half_read).count();
+    let same_half_read = (views.iter())
+        .filter(|(_, half_read, _, view)| *half_read && said(view) == expected)
+        .count();
+    println!(
+        "{} bytes written in reads of 1 to 300; a state handed over {} times, {half_read} of them with an escape sequence or a character half read",
+        script.len(),
+        views.len(),
+    );
+    println!(
+        "at the end, {same} of {} views say what the daemon says ({same_half_read} of the {half_read} half-read ones)",
+        views.len()
+    );
+    // Where they differ: is it only in how much of the oldest history is
+    // kept? The text both have, from the end back, is then the same.
+    let same_where_both_have = (views.iter())
+        .filter(|(.., view)| {
+            let got = said(view);
+            let (a, b) = (&expected.0[1], &got.0[1]);
+            let common = a.len().min(b.len());
+            a[a.len() - common..] == b[b.len() - common..]
+                && (got.1, got.2, &got.4, got.5, got.6)
+                    == (expected.1, expected.2, &expected.4, expected.5, expected.6)
+        })
+        .count();
+    println!(
+        "{same_where_both_have} of {} views say the same as the daemon for the text both have, the cursor, the title and the modes",
+        views.len()
+    );
+    for (at, half_read, _, view) in views
+        .iter()
+        .filter(|(.., view)| said(view) != expected)
+        .take(0)
+    {
+        let got = said(view);
+        let first_difference = |a: &[u8], b: &[u8]| {
+            let at = a
+                .iter()
+                .zip(b)
+                .position(|(a, b)| a != b)
+                .unwrap_or(a.len().min(b.len()));
+            let around = |text: &[u8]| {
+                String::from_utf8_lossy(&text[at.saturating_sub(30)..(at + 40).min(text.len())])
+                    .into_owned()
+            };
+            format!(
+                "at {at} of {}/{}: daemon {:?}, view {:?}",
+                a.len(),
+                b.len(),
+                around(a),
+                around(b)
+            )
+        };
+        println!(
+            "handed over at byte {at} (half read: {half_read}): as VT {}; as text {}; cursor {}; history {} against {}; title {}; kitty flags {}; modes {}",
+            got.0[0] == expected.0[0],
+            got.0[1] == expected.0[1],
+            (got.1, got.2) == (expected.1, expected.2),
+            got.3,
+            expected.3,
+            got.4 == expected.4,
+            got.5 == expected.5,
+            got.6 == expected.6,
+        );
+        if got.0[1] != expected.0[1] {
+            println!("   text: {}", first_difference(&expected.0[1], &got.0[1]));
+        } else if got.0[0] != expected.0[0] {
+            println!("   VT: {}", first_difference(&expected.0[0], &got.0[0]));
+        }
+    }
+
+    // How much of a handed-over state is the screen, which a view can draw
+    // from before the history has come.
+    let mut handed = Vec::new();
+    daemon.encode_snapshot(&mut handed).unwrap();
+    let decoder = Decoder::new_buf(&handed).unwrap();
+    let mut incremental = decoder.ready().unwrap();
+    let screen = incremental.decoder().source_offset().unwrap();
+    let rows_at_ready = incremental.terminal().scrollback_rows().unwrap();
+    let mut pages = 0;
+    while incremental.next().unwrap().is_some() {
+        pages += 1;
+    }
+    println!(
+        "a state of {} bytes: ready to draw after {screen} of them, with {rows_at_ready} rows of history; the rest in {pages} steps, to {} rows",
+        handed.len(),
+        incremental.terminal().scrollback_rows().unwrap(),
+    );
+    // And cut off there: is what was ready a terminal that goes on?
+    let cut = &handed[..screen];
+    match Decoder::new_buf(cut).and_then(Decoder::ready) {
+        Ok(ready) => {
+            let mut terminal = ready.into_terminal();
+            terminal.vt_write(b"after the cut");
+            println!(
+                "cut off after the screen: a terminal with {} rows of history that takes bytes",
+                terminal.scrollback_rows().unwrap()
+            );
+        }
+        Err(error) => println!("cut off after the screen: {error:?}"),
+    }
+}
