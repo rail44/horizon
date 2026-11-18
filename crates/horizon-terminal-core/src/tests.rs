@@ -1145,6 +1145,38 @@ fn selection_to_string_uses_alacritty_selection() {
     assert_eq!(core.selected_text(), Some("hello".to_string()));
 }
 
+/// A drag back from where it began takes in the cell it began in and the
+/// cell it has reached, as a drag forward does.
+#[test]
+fn a_selection_dragged_backwards_has_both_its_ends_in_it() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 3));
+    core.write_vt(b"0123456789\r\nabcdefghij");
+
+    core.start_selection(
+        TerminalSelectionPoint { row: 0, col: 8 },
+        TerminalSelectionKind::Simple,
+    );
+    core.update_selection(TerminalSelectionPoint { row: 0, col: 4 });
+    assert_eq!(core.selected_text(), Some("45678".to_string()));
+
+    // Up a row, too, and then forward past where it began.
+    core.start_selection(
+        TerminalSelectionPoint { row: 1, col: 2 },
+        TerminalSelectionKind::Simple,
+    );
+    core.update_selection(TerminalSelectionPoint { row: 0, col: 7 });
+    assert_eq!(core.selected_text(), Some("789\nabc".to_string()));
+    core.update_selection(TerminalSelectionPoint { row: 1, col: 5 });
+    assert_eq!(core.selected_text(), Some("cdef".to_string()));
+
+    // A press alone selects nothing.
+    core.start_selection(
+        TerminalSelectionPoint { row: 0, col: 3 },
+        TerminalSelectionKind::Simple,
+    );
+    assert_eq!(core.selected_text().unwrap_or_default(), "");
+}
+
 /// `TerminalSelectionKind::Word` maps to alacritty's `SelectionType::
 /// Semantic`, which selects the whole word under the click point as part
 /// of construction -- no drag needed, and no need to port termy's own

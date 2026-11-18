@@ -483,6 +483,9 @@ impl TerminalCore {
         let point = self.selection_point(point);
         if let Some(selection) = self.term.selection.as_mut() {
             selection.update(point, Side::Right);
+            // Whichever way the drag went, the cell it began in and the
+            // cell it has reached are both in it.
+            selection.include_all();
         }
     }
 
