@@ -16,7 +16,6 @@
 //! frame *transport* changed — full frames on a snapshot-valued signal, no
 //! wire diffing.
 
-#[cfg(test)]
 use std::time::Duration;
 use std::time::Instant;
 
@@ -47,6 +46,9 @@ use crate::{contract::TerminalKeyInput, types::KeyEventKind};
 pub struct TerminalCoreOptions {
     pub scrollback_lines: usize,
     pub color_scheme: TerminalColorScheme,
+    /// How long after a frame the next one waits: output that comes
+    /// faster than this is one frame.
+    pub frame_interval: Duration,
 }
 
 impl Default for TerminalCoreOptions {
@@ -54,6 +56,7 @@ impl Default for TerminalCoreOptions {
         Self {
             scrollback_lines: crate::core::DEFAULT_SCROLLBACK_LINES,
             color_scheme: TerminalColorScheme::default(),
+            frame_interval: frames::COALESCE_WINDOW,
         }
     }
 }
@@ -246,7 +249,7 @@ pub fn run_terminal_core(
     core.set_color_scheme(options.color_scheme);
     let _ = frame_tx.send(core.snapshot_frame());
 
-    let mut frames = FramePublisher::new(frame_tx);
+    let mut frames = FramePublisher::new(frame_tx, options.frame_interval);
 
     // Failsafe for a synchronized-update window (BSU/ESU, private mode 2026)
     // left open by a PTY chunk that never delivers its closing ESU — see
@@ -282,19 +285,25 @@ pub fn run_terminal_core(
                 let Ok(scroll) = scroll else {
                     return;
                 };
-                if let Some(input) = core.handle_scroll(scroll) {
-                    let _ = command_tx.send(TerminalCommand::Input(input));
+                // A wheel that is the program's changes nothing on the
+                // screen until the program answers: a frame for it now
+                // would be the one before over again, and would put the
+                // program's answer off to the end of the window.
+                match core.handle_scroll(scroll) {
+                    Some(input) => {
+                        let _ = command_tx.send(TerminalCommand::Input(input));
+                    }
+                    None => frames.notify(&core),
                 }
-                frames.notify(&core);
             }
             recv(mouse_rx) -> report => {
                 let Ok(report) = report else {
                     return;
                 };
+                // (Nor does a report to the program change the screen.)
                 if let Some(input) = core.handle_mouse_report(report) {
                     let _ = command_tx.send(TerminalCommand::Input(input));
                 }
-                frames.notify(&core);
             }
             recv(input_rx) -> input => {
                 let Ok(input) = input else { return; };
@@ -699,6 +708,50 @@ mod tests {
         assert!(
             frame_rx.recv_timeout(Duration::from_millis(100)).is_err(),
             "a key press with no PTY echo must not produce a snapshot notification"
+        );
+    }
+
+    /// A wheel that is the program's (it asked for the mouse) is written
+    /// to it and makes no frame: the screen changes when the program
+    /// answers, and a frame before that would put the answer's own frame
+    /// off to the end of the window.
+    #[test]
+    fn a_wheel_that_is_the_program_s_makes_no_frame_of_its_own() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
+        let (senders, receivers) = core_channels();
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(20, 10),
+                TerminalCoreOptions::default(),
+                pty_rx,
+                receivers,
+                command_tx,
+                frame_tx,
+                update_tx,
+            );
+        });
+        frame_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("startup snapshot");
+        // The program asks for the mouse, in SGR's form.
+        pty_tx.send(b"\x1b[?1000h\x1b[?1006h".to_vec()).unwrap();
+        while frame_rx.recv_timeout(Duration::from_millis(100)).is_ok() {}
+
+        let point = crate::types::TerminalSelectionPoint { row: 2, col: 3 };
+        (senders.scroll_tx)
+            .send(crate::types::TerminalScroll { lines: 1, point })
+            .unwrap();
+        let written = command_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("the wheel written to the program");
+        std::assert_matches!(written, TerminalCommand::Input(bytes) if bytes == b"\x1b[<64;4;3M");
+        assert!(
+            frame_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "a wheel the program has not answered made a frame"
         );
     }
 

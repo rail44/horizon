@@ -9,25 +9,29 @@ use crate::types::TerminalFrame;
 
 /// An idle terminal updates immediately; a burst produces at most one
 /// snapshot per window, without waking the loop when nothing changed.
-const COALESCE_WINDOW: Duration = Duration::from_millis(16);
+/// The window when none is asked for.
+pub(crate) const COALESCE_WINDOW: Duration = Duration::from_millis(16);
 
 /// Owns the frame channel and the state that must change together when a
 /// snapshot is sent or deferred. The session loop only requests updates
 /// and dispatches the one-shot timer; PTY parsing stays outside this type.
 pub(super) struct FramePublisher {
     frame_tx: Sender<TerminalFrame>,
+    /// How long after a snapshot the next one waits.
+    window: Duration,
     last_sent: Instant,
     pending_flush: Option<Receiver<Instant>>,
     idle: Receiver<Instant>,
 }
 
 impl FramePublisher {
-    pub(super) fn new(frame_tx: Sender<TerminalFrame>) -> Self {
+    pub(super) fn new(frame_tx: Sender<TerminalFrame>, window: Duration) -> Self {
         Self {
             frame_tx,
+            window,
             // The startup frame does not consume the first mutation's
             // immediate slot.
-            last_sent: Instant::now() - COALESCE_WINDOW,
+            last_sent: Instant::now() - window,
             pending_flush: None,
             idle: crossbeam_channel::never(),
         }
@@ -45,7 +49,7 @@ impl FramePublisher {
 
     fn notify_at(&mut self, core: &TerminalCore, now: Instant) {
         let elapsed = now.saturating_duration_since(self.last_sent);
-        if elapsed >= COALESCE_WINDOW {
+        if elapsed >= self.window {
             let _ = self.frame_tx.send(core.snapshot_frame());
             self.last_sent = now;
             // An old timer no longer corresponds to this send window.
@@ -55,7 +59,7 @@ impl FramePublisher {
         }
 
         self.pending_flush
-            .get_or_insert_with(|| crossbeam_channel::after(COALESCE_WINDOW - elapsed));
+            .get_or_insert_with(|| crossbeam_channel::after(self.window - elapsed));
     }
 
     /// Called when the one-shot timer fires. Snapshot at flush time so a
@@ -76,7 +80,7 @@ mod tests {
     #[test]
     fn first_mutation_is_immediate_and_idle_flushes_emit_nothing() {
         let (send, receive) = crossbeam_channel::unbounded();
-        let mut frames = FramePublisher::new(send);
+        let mut frames = FramePublisher::new(send, COALESCE_WINDOW);
         let mut core = TerminalCore::new(TerminalSize::new(20, 2));
         frames.flush(&core);
         assert!(receive.try_recv().is_err());
@@ -92,7 +96,7 @@ mod tests {
     #[test]
     fn burst_keeps_one_deadline_and_flushes_the_latest_state() {
         let (send, receive) = crossbeam_channel::unbounded();
-        let mut frames = FramePublisher::new(send);
+        let mut frames = FramePublisher::new(send, COALESCE_WINDOW);
         let mut core = TerminalCore::new(TerminalSize::new(20, 2));
         let now = Instant::now();
         frames.notify_at(&core, now);
@@ -120,7 +124,7 @@ mod tests {
     #[test]
     fn elapsed_window_sends_immediately_and_replaces_the_stale_timer() {
         let (send, receive) = crossbeam_channel::unbounded();
-        let mut frames = FramePublisher::new(send);
+        let mut frames = FramePublisher::new(send, COALESCE_WINDOW);
         let mut core = TerminalCore::new(TerminalSize::new(20, 2));
         let now = Instant::now();
         frames.notify_at(&core, now);

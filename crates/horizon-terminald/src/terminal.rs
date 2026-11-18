@@ -564,6 +564,7 @@ fn spawn_terminal(
     let options = TerminalCoreOptions {
         scrollback_lines: spec.scrollback_lines,
         color_scheme: spec.color_scheme,
+        frame_interval: frame_interval(),
     };
     thread::spawn(move || {
         run_terminal_core(
@@ -610,6 +611,19 @@ fn spawn_terminal(
 /// [`TerminalHost::forward_updates`] mirrors the same teardown on its
 /// channel-close arm, so even a missed `Exited` still reaps the session
 /// and subscriber — hence both fixes.
+/// How long after a frame a session's next one waits:
+/// `HORIZON_TERMINAL_FRAME_INTERVAL_MS`, a measurement switch read when a
+/// session is made, or the core's own interval. Zero is a frame for every
+/// change.
+fn frame_interval() -> Duration {
+    let asked = std::env::var("HORIZON_TERMINAL_FRAME_INTERVAL_MS").ok();
+    let millis = asked.and_then(|asked| asked.trim().parse::<u64>().ok());
+    match millis {
+        Some(millis) => Duration::from_millis(millis.min(1000)),
+        None => TerminalCoreOptions::default().frame_interval,
+    }
+}
+
 fn read_pty(reader: &mut dyn Read, pty_tx: Sender<Vec<u8>>, update_tx: Sender<TerminalUpdate>) {
     let mut buffer = [0_u8; 64 * 1024];
     loop {
