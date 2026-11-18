@@ -328,3 +328,89 @@ fn how_long_a_frame_takes_to_read_out_of_the_engine() {
         );
     }
 }
+
+#[test]
+#[ignore = "an observation for the spike's record, not a check"]
+fn what_the_engine_says_of_rows_as_output_scrolls() {
+    use libghostty_vt::Terminal;
+    use libghostty_vt::render::{RenderState, RowIterator};
+
+    let mut terminal: Terminal<'static, 'static> = Terminal::new(40, 10).unwrap();
+    let mut state: RenderState<'static> = RenderState::new().unwrap();
+    let mut rows: RowIterator<'static> = RowIterator::new().unwrap();
+    // The ids of the viewport's rows top to bottom, and which are marked
+    // changed; everything is then marked clean.
+    let mut read = |terminal: &Terminal<'static, 'static>| {
+        let snapshot = state.update(terminal).unwrap();
+        let whole = snapshot.dirty().unwrap();
+        let mut seen = Vec::new();
+        let mut iteration = rows.update(&snapshot).unwrap();
+        while let Some(row) = iteration.next() {
+            seen.push((row.id().unwrap(), row.dirty().unwrap()));
+            row.set_dirty(false).unwrap();
+        }
+        snapshot
+            .set_dirty(libghostty_vt::render::Dirty::Clean)
+            .unwrap();
+        (whole, seen)
+    };
+    let describe = |what: &str,
+                    before: &[(libghostty_vt::render::RowId, bool)],
+                    after: &(
+        libghostty_vt::render::Dirty,
+        Vec<(libghostty_vt::render::RowId, bool)>,
+    )| {
+        let (whole, rows) = after;
+        let changed = rows.iter().filter(|(_, changed)| *changed).count();
+        let kept = (rows.iter())
+            .filter(|(id, _)| before.iter().any(|(old, _)| old == id))
+            .count();
+        // Whether the rows kept are the old ones moved up by one.
+        let moved_up = rows.len() > 1
+            && (0..rows.len() - 1).all(|at| {
+                before
+                    .get(at + 1)
+                    .is_some_and(|(old, _)| *old == rows[at].0)
+            });
+        let in_place =
+            (0..rows.len()).all(|at| before.get(at).is_some_and(|(old, _)| *old == rows[at].0));
+        println!(
+            "{what}: whole {whole:?}; {changed} of {} rows marked changed; {kept} ids seen before; same places {in_place}; moved up one {moved_up}",
+            rows.len()
+        );
+    };
+
+    for line in 0..10 {
+        terminal.vt_write(format!("line {line}\r\n").as_bytes());
+    }
+    let (_, first) = read(&terminal);
+
+    let nothing = read(&terminal);
+    describe("nothing written", &first, &nothing);
+
+    terminal.vt_write(b"\x1b[3;1Hrow three written over");
+    let one = read(&terminal);
+    describe("one row written over", &nothing.1, &one);
+
+    terminal.vt_write(b"\x1b[10;1H\r\none more line");
+    let scrolled = read(&terminal);
+    describe(
+        "one line of output, the screen moves up one",
+        &one.1,
+        &scrolled,
+    );
+
+    terminal.vt_write(b"\r\nand another");
+    let again = read(&terminal);
+    describe("another line of output", &scrolled.1, &again);
+
+    for line in 0..5 {
+        terminal.vt_write(format!("\r\nburst {line}").as_bytes());
+    }
+    let burst = read(&terminal);
+    describe("five lines of output at once", &again.1, &burst);
+
+    terminal.vt_write(b"\x1b[2;8r\x1b[8;1H\r\nwithin a region\x1b[r");
+    let region = read(&terminal);
+    describe("a scroll within rows 2 to 8", &burst.1, &region);
+}
