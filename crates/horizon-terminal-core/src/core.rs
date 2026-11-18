@@ -34,6 +34,8 @@ use crate::types::{
 };
 
 mod color;
+#[cfg(test)]
+mod engine_keys;
 mod events;
 mod input;
 mod osc_notify;
