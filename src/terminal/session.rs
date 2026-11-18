@@ -141,6 +141,13 @@ impl Session {
     pub fn set_waker(&self, waker: Waker) {
         *self.waker.lock().unwrap() = Some(waker);
     }
+
+    /// Has the page laid out and drawn again: for a view whose own state
+    /// changed with nothing arriving and nothing of the document written
+    /// (its place in the scrollback, what the input method composes).
+    pub fn redraw(&self) {
+        wake(&self.waker);
+    }
 }
 
 fn keep(latest: &Latest, frame: TerminalFrame) {

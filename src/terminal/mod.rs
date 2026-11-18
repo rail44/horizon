@@ -511,6 +511,9 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                 }
                 _ => composed.preedit.borrow_mut().clear(),
             }
+            // What is being composed is drawn by the view, from its own
+            // state.
+            composed.session.redraw();
         })
         .on_paste(move |text| {
             pasted
@@ -601,6 +604,12 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                 let decision = (wheeled.scrollback.borrow_mut()).on_wheel(rows as f32, viewport);
                 if let ScrollIpc::Request { anchor, height } = decision.ipc {
                     (wheeled.session).send(TerminalCommand::RequestScrollWindow { anchor, height });
+                }
+                // The view moved over the window it holds: nothing comes
+                // from the daemon for that, and nothing of the document
+                // changed.
+                if decision.repaint {
+                    wheeled.session.redraw();
                 }
                 prevent_default();
                 return;

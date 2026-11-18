@@ -999,3 +999,46 @@ fn a_notch_of_the_wheel_is_one_report_to_a_program_that_asked_for_the_mouse() {
     let text = opened.wait("the report", |text| text.contains("[<64;"));
     assert_eq!(text.matches("[<64;").count(), 1, "in:\n{text}");
 }
+
+/// Counts the times it is woken.
+struct Woken(std::sync::atomic::AtomicUsize);
+
+impl std::task::Wake for Woken {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn the_wheel_over_the_window_held_has_the_page_drawn_again() {
+    use std::sync::atomic::Ordering;
+
+    let opened = open();
+    opened.run("seq 1 100");
+    opened.wait("the last number", |text| {
+        text.lines().any(|line| line == "100")
+    });
+    // Back into the history: a window of it is held from here on.
+    opened.wheel(10. * 18.);
+    let started = Instant::now();
+    while opened.terminal.scrolled_into().is_none() {
+        assert!(started.elapsed() < Duration::from_secs(10), "not scrolled");
+        opened.app.resolve();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // The shell is quiet: nothing arrives to wake the page. A turn of the
+    // wheel moves the view over the window it holds, and the page is asked
+    // to draw that.
+    let woken = std::sync::Arc::new(Woken(Default::default()));
+    opened.terminal.set_waker(woken.clone().into());
+    std::thread::sleep(Duration::from_millis(100));
+    let before = woken.0.load(Ordering::SeqCst);
+    opened.wheel(9.);
+    assert!(
+        woken.0.load(Ordering::SeqCst) > before,
+        "the page was not asked to draw the view where the wheel put it"
+    );
+    opened.app.resolve();
+    assert_eq!(opened.terminal.scrolled_into(), Some(0.5));
+}
