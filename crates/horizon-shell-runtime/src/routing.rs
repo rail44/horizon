@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::attachment::{AgentUpdate, AttachmentState, Inbound};
 use crate::agent_model::AgentEvent;
@@ -108,6 +108,9 @@ struct TerminalRouteState {
 
 /// The three channels of one attachment retire together. A connection
 /// failure closes only commands, keeping the pane's diagnostic channels.
+/// What is told that an event has arrived.
+pub(super) type Heard = Arc<dyn Fn() + Send + Sync>;
+
 struct TerminalRoute {
     key: RouteKey<Uuid>,
     /// The pane-facing frame stream: since wire v11 the frame path is a
@@ -116,6 +119,9 @@ struct TerminalRoute {
     frames: tokio::sync::watch::Sender<TerminalFrame>,
     /// The pane-facing non-frame events (title/bell/clipboard/exit/error).
     events: Sender<TerminalUpdate>,
+    /// Told when an event has been put on `events`: whoever takes them
+    /// from there is not waiting on it.
+    heard: Option<Heard>,
     /// The local (sync-sendable) half of each terminal's command bridge —
     /// the same queue the handle's own forwarding thread feeds; registered
     /// here so a broadcast (`TerminaldHandle::broadcast_terminal_color_scheme`)
@@ -465,10 +471,22 @@ impl TerminalRoutes {
                 key,
                 frames,
                 events,
+                heard: None,
                 commands: Some(commands),
             },
         );
         key
+    }
+
+    /// Has `heard` told of every event routed to the attachment from now
+    /// on.
+    pub(super) fn hear_terminal_events(&self, key: RouteKey<Uuid>, heard: Heard) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(route) =
+            (state.terminals.get_mut(&key.session_id)).filter(|route| route.key == key)
+        {
+            route.heard = Some(heard);
+        }
     }
 
     pub(super) fn unregister_terminal(&self, key: RouteKey<Uuid>) {
@@ -514,12 +532,18 @@ impl TerminalRoutes {
     pub(super) fn route_terminal_update(&self, key: RouteKey<Uuid>, update: TerminalUpdate) {
         let exited = matches!(update, TerminalUpdate::Exited);
         let mut state = self.state.lock().unwrap();
-        if state
-            .terminals
-            .get(&key.session_id)
-            .is_some_and(|route| route.key == key && (route.events.send(update).is_err() || exited))
-        {
+        let route = (state.terminals.get(&key.session_id)).filter(|route| route.key == key);
+        let Some(route) = route else {
+            return;
+        };
+        let heard = route.heard.clone();
+        if route.events.send(update).is_err() || exited {
             state.terminals.remove(&key.session_id);
+        }
+        // (Told with the routes free: what it wakes may come back here.)
+        drop(state);
+        if let Some(heard) = heard {
+            heard();
         }
     }
 

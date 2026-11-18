@@ -190,6 +190,13 @@ impl TerminalSessionHandle {
     pub fn events(&self) -> Receiver<TerminalUpdate> {
         self.events.clone()
     }
+
+    /// Has `heard` told whenever an event is put on [`events`](Self::events),
+    /// from the thread it arrived on: a frame's arrival is the watch's own
+    /// to wait for, and an event's is not anyone's.
+    pub fn hear_events(&self, heard: impl Fn() + Send + Sync + 'static) {
+        (self.routes).hear_terminal_events(self.route, Arc::new(heard));
+    }
 }
 
 impl Drop for TerminalSessionHandle {

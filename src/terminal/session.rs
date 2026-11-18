@@ -1,5 +1,5 @@
 //! One terminal session: commands in, the newest frame and the updates
-//! out, and someone to wake when a frame comes. A session outlives a view
+//! out, and someone to wake when either comes. A session outlives a view
 //! of it: the frame is kept for the next view to draw.
 //!
 //! What a session says is for two readers. What is drawn and what a view
@@ -44,6 +44,11 @@ impl Session {
         // The frames are a watch: its newest value is what a view draws,
         // and for a session attached to again it is there already.
         keep(&kept, frames.borrow_and_update().clone());
+        // An update is drawn too (a window of the scrollback) or acted on
+        // (a copy): whoever lays the page out is woken for it as for a
+        // frame.
+        let heard = Arc::clone(&waker);
+        handle.hear_events(move || wake(&heard));
         std::thread::spawn(move || {
             futures::executor::block_on(async {
                 while frames.changed().await.is_ok() {
@@ -131,7 +136,7 @@ impl Session {
         std::mem::take(&mut *self.for_keeper.borrow_mut())
     }
 
-    /// Who to wake when a frame arrives.
+    /// Who to wake when a frame or an update arrives.
     pub fn set_waker(&self, waker: Waker) {
         *self.waker.lock().unwrap() = Some(waker);
     }

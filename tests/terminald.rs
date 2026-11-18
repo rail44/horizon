@@ -294,3 +294,61 @@ fn reloading_the_terminal_runtime_ends_its_terminals_and_leaves_a_new_one() {
     drop(app);
     daemon.stop(terminald.handle());
 }
+
+/// Counts the times it is woken.
+struct Woken(std::sync::atomic::AtomicUsize);
+
+impl std::task::Wake for Woken {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn what_the_daemon_answers_with_wakes_the_page_though_no_frame_comes() {
+    use std::sync::atomic::Ordering;
+
+    let daemon = Daemon::prepare();
+    let terminald = daemon.connect();
+    let handle = terminald.start_terminal(uuid::Uuid::new_v4(), daemon.spec());
+    let session = Session::attached(handle);
+    let woken = std::sync::Arc::new(Woken(Default::default()));
+    session.set_waker(woken.clone().into());
+
+    // The shell's prompt, and then nothing more from it.
+    let started = Instant::now();
+    while woken.0.load(Ordering::SeqCst) == 0 {
+        assert!(started.elapsed() < Duration::from_secs(10), "no frame");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    let _ = session.take_updates();
+    let before = woken.0.load(Ordering::SeqCst);
+
+    // A window of the scrollback is asked for: the answer is an update,
+    // not a frame, and whoever lays the page out is woken for it.
+    session.send(
+        horizon_terminal_core::TerminalCommand::RequestScrollWindow {
+            anchor: 0,
+            height: 10,
+        },
+    );
+    let started = Instant::now();
+    while woken.0.load(Ordering::SeqCst) == before {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "not woken for the window"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let window = (session.take_updates().into_iter()).any(|update| {
+        matches!(
+            update,
+            horizon_terminal_core::TerminalUpdate::ScrollWindow(_)
+        )
+    });
+    assert!(window, "woken for something that was not the window");
+
+    drop(session);
+    daemon.stop(terminald);
+}
