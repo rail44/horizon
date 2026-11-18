@@ -303,7 +303,7 @@ fn the_sessions_are_listed_by_project_with_what_waits_first() {
     // Each row says what its session is and does, and its state.
     let rows = opened.texts("row");
     assert!(
-        rows[0].contains("agent · Run bash") && rows[0].contains("approval"),
+        rows[0].starts_with("buildagentapproval") && rows[0].ends_with("Run bash"),
         "{rows:?}"
     );
     assert!(rows[1].contains("working"), "{rows:?}");
@@ -311,7 +311,10 @@ fn the_sessions_are_listed_by_project_with_what_waits_first() {
         rows[2].contains("codex") && rows[2].contains("unseen"),
         "{rows:?}"
     );
-    assert!(rows[4].contains("agent · Updated two pages."), "{rows:?}");
+    assert!(
+        rows[4].starts_with("wikiagent") && rows[4].ends_with("Updated two pages."),
+        "{rows:?}"
+    );
     // (A terminal whose program says nothing has no state to be in since.)
     assert_eq!(rows[3], "shellterminal");
 

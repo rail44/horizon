@@ -1,5 +1,6 @@
-//! The list's view: a project's sessions under its name, each with its
-//! title, what it does or asks, its state and since when; a band of the
+//! The list's view: a project's sessions under its name, each a line of
+//! its title, what it is, its state and since when, with its words under
+//! it where it has some; a band of the
 //! keys under them. A typed key is a command of the list's, and `/` asks
 //! for the field a search is typed into.
 
@@ -17,7 +18,7 @@ use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, With};
-use horizon_ui::{Class, El, each_layout, el, prevent_default, stop_propagation};
+use horizon_ui::{El, each_layout, el, prevent_default, stop_propagation};
 use keyboard_types::{Key, NamedKey};
 
 use crate::list::{self, Group, Row};
@@ -39,23 +40,27 @@ mod styles {
                 padding: var(--u4) var(--u12); font-size: var(--meta-size);
                 line-height: var(--meta-line); color: var(--text-muted);
                 background: var(--band); }
-        .row { display: flex; align-items: center; box-sizing: border-box;
-               height: calc(var(--u24) * 2); cursor: pointer; border: 1px solid transparent; }
+        .row { display: flex; align-items: flex-start; box-sizing: border-box;
+               padding: var(--u8) var(--u12) var(--u8) 0; cursor: pointer;
+               border: 1px solid transparent; }
         .row:hover { background: var(--band); }
         .row.selected { background: var(--selection); }
-        .bar { flex: none; align-self: stretch; width: 2px; }
+        .bar { flex: none; align-self: stretch; width: 2px;
+               margin: calc(var(--u8) * -1) 0; }
         .row.selected .bar { background: var(--accent); }
-        .label { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-        .title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-        .row.news .title { font-weight: 600; }
-        .row.quiet .title { color: var(--text-muted); }
+        .label { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+        .headline { display: flex; align-items: baseline; gap: var(--u8); }
+        .title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
+                 text-overflow: ellipsis; }
+        .kind { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
+                font-size: var(--micro-size); line-height: var(--micro-line);
+                color: var(--text-muted); }
+        .time { flex: none; width: var(--u28); text-align: right;
+                font-size: var(--micro-size); line-height: var(--micro-line);
+                color: var(--text-muted); }
         .meta { overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
                 font-size: var(--micro-size); line-height: var(--micro-line);
                 color: var(--text-muted); }
-        .tail { flex: none; display: flex; align-items: center; gap: var(--u8);
-                padding: 0 var(--u12) 0 var(--u8); font-size: var(--micro-size);
-                line-height: var(--micro-line); color: var(--text-muted); }
-        .time { flex: none; width: var(--u28); text-align: right; }
         .foot { flex: none; display: flex; flex-wrap: wrap; align-items: center;
                 gap: 0 var(--u12); padding: var(--u4) var(--u12);
                 border-top: var(--line) solid var(--border); font-size: var(--micro-size);
@@ -160,21 +165,54 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows) -> El {
     };
     let chosen = id.clone();
     let is_chosen = move || state.chosen.get().as_deref() == Some(chosen.as_str());
-    let weight = move || -> Option<Class> {
+    let detail = move || {
         this.with(|row| {
-            let session = &row.as_ref()?.session;
-            match (list::waits(session), list::chip(session)) {
-                (true, _) => Some(styles::NEWS),
-                (false, None) => Some(styles::QUIET),
-                (false, Some(_)) => None,
-            }
+            let activity = row.as_ref()?.session.activity.as_ref()?;
+            activity.detail.clone()
         })
     };
     let (picked, shown) = (id.clone(), id.clone());
+    // The title's line says everything of the session but its words,
+    // which are under it where there are some. What state it is in is
+    // the chip's to say, and nothing else of the row's.
+    let headline = el("div")
+        .class(styles::HEADLINE)
+        .child(
+            el("span")
+                .class(styles::TITLE)
+                .text_dyn(said(|session| session.title.clone())),
+        )
+        .child(
+            el("span")
+                .class(styles::KIND)
+                .text_dyn(said(|session| list::kind(session).to_string())),
+        )
+        .each(
+            move || {
+                this.with(|row| {
+                    let session = &row.as_ref()?.session;
+                    Some((list::chip(session)?, tone(session)))
+                })
+                .into_iter()
+                .collect()
+            },
+            |(word, tone)| (*word, *tone as u8),
+            |(word, tone)| Chip {
+                tone: *tone,
+                text: word,
+            },
+        )
+        .child(el("span").class(styles::TIME).text_dyn(move || {
+            let now = state.now.get();
+            this.with(|row| {
+                let activity = row.as_ref()?.session.activity.as_ref()?;
+                Some(list::ago(activity.since_ms, now))
+            })
+            .unwrap_or_default()
+        }));
     let element = el("div")
         .class(styles::ROW)
         .class_dyn(move || is_chosen().then_some(styles::SELECTED))
-        .class_dyn(weight)
         .child(el("span").class(styles::BAR))
         .child(
             el("div")
@@ -183,46 +221,15 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows) -> El {
                     let depth = this.with(|row| row.as_ref().map_or(0, |row| row.depth));
                     format!("{}px", 12 + depth * 16)
                 })
-                .child(
-                    el("div")
-                        .class(styles::TITLE)
-                        .text_dyn(said(|session| session.title.clone())),
-                )
-                .child(el("div").class(styles::META).text_dyn(said(|session| {
-                    let detail =
-                        (session.activity.as_ref()).and_then(|activity| activity.detail.as_deref());
-                    match detail {
-                        Some(detail) => format!("{} · {detail}", list::kind(session)),
-                        None => list::kind(session).to_string(),
-                    }
-                }))),
-        )
-        .child(
-            el("div")
-                .class(styles::TAIL)
-                .each(
+                .child(headline)
+                .when(
+                    move || detail().is_some(),
                     move || {
-                        this.with(|row| {
-                            let session = &row.as_ref()?.session;
-                            Some((list::chip(session)?, tone(session)))
-                        })
-                        .into_iter()
-                        .collect()
+                        el("div")
+                            .class(styles::META)
+                            .text_dyn(move || detail().unwrap_or_default())
                     },
-                    |(word, tone)| (*word, *tone as u8),
-                    |(word, tone)| Chip {
-                        tone: *tone,
-                        text: word,
-                    },
-                )
-                .child(el("span").class(styles::TIME).text_dyn(move || {
-                    let now = state.now.get();
-                    this.with(|row| {
-                        let activity = row.as_ref()?.session.activity.as_ref()?;
-                        Some(list::ago(activity.since_ms, now))
-                    })
-                    .unwrap_or_default()
-                })),
+                ),
         )
         .on("click", move |_| state.chosen.set(Some(picked.clone())))
         .on("dblclick", move |_| control::show(&shown));
