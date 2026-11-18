@@ -279,14 +279,35 @@ fn how_long_a_frame_takes_to_read_out_of_the_engine() {
         core.write_vt(text.as_bytes());
         let written = started.elapsed();
 
-        let mut times = Vec::new();
-        for _ in 0..41 {
-            let started = Instant::now();
-            let frame = core.snapshot_frame();
-            times.push(started.elapsed());
-            assert_eq!(frame.lines.len(), rows as usize);
-        }
-        times.sort();
+        let median = |core: &mut TerminalCore, before: &dyn Fn(&mut TerminalCore, usize)| {
+            let mut times = Vec::new();
+            for round in 0..41 {
+                before(core, round);
+                let started = Instant::now();
+                let frame = core.snapshot_frame();
+                times.push(started.elapsed());
+                assert_eq!(frame.lines.len(), rows as usize);
+            }
+            times.sort();
+            times[20]
+        };
+        // Nothing written between frames; one row of the screen written
+        // over; and every row written again.
+        let unchanged = median(&mut core, &|_, _| {});
+        let one_row = median(&mut core, &|core, round| {
+            core.write_vt(format!("\x1b[5;1Hrow five, round {round}").as_bytes());
+        });
+        let every_row = median(&mut core, &|core, round| {
+            let mut screen = String::from("\x1b[H");
+            for line in 0..rows as usize {
+                screen += &format!("\x1b[{};1H", line + 1);
+                for column in 0..columns as usize {
+                    screen.push((b'!' + ((round + line * 31 + column * 7) % 90) as u8) as char);
+                }
+            }
+            core.write_vt(screen.as_bytes());
+        });
+        let times = [unchanged; 21];
         let mut window = Vec::new();
         for _ in 0..41 {
             let started = Instant::now();
@@ -296,7 +317,7 @@ fn how_long_a_frame_takes_to_read_out_of_the_engine() {
         }
         window.sort();
         println!(
-            "{columns}x{rows}: writing {} bytes {:?}; a frame {:?} (median of 41); a window of {} rows {:?}",
+            "{columns}x{rows}: writing {} bytes {:?}; a frame with nothing changed {:?}, one row {one_row:?}, every row {every_row:?} (medians of 41); a window of {} rows {:?}",
             text.len(),
             written,
             times[20],

@@ -12,7 +12,6 @@ use libghostty_vt::fmt::{Format, Formatter};
 use libghostty_vt::grid_ref::TrackedGridRef;
 use libghostty_vt::mode::Mode;
 use libghostty_vt::point::{Coordinate, Point};
-use libghostty_vt::render::RenderState;
 use libghostty_vt::report::SizeReportSize;
 use libghostty_vt::selection::{SelectLineOptions, SelectWordOptions, Selection};
 use libghostty_vt::terminal::ScrollViewport;
@@ -55,7 +54,7 @@ const SYNC_UPDATE_TIMEOUT: Duration = Duration::from_millis(150);
 pub struct TerminalCore {
     terminal: Engine,
     /// For the cursor's shape, which the engine keeps nowhere else.
-    render: Rc<RefCell<RenderState<'static>>>,
+    render: Rc<RefCell<render::Draw>>,
     /// The frame as it was when a synchronized update's hold began, while
     /// one is held: the engine writes to its screen through a hold, and
     /// what is shown meanwhile is what was there before it.
@@ -122,7 +121,7 @@ impl TerminalCore {
                 cell_height,
             })
         });
-        let render = Rc::new(RefCell::new(RenderState::new().expect("a render state")));
+        let render = Rc::new(RefCell::new(render::Draw::new()));
         let held_frame = Rc::new(RefCell::new(None));
         let (held, let_go) = (held_since.clone(), released.clone());
         let (drawn, kept, sized) = (render.clone(), held_frame.clone(), size.clone());

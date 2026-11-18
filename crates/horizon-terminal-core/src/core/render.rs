@@ -8,7 +8,7 @@ use std::cell::RefCell;
 
 use libghostty_vt::mode::Mode;
 use libghostty_vt::point::{Coordinate, Point, Space};
-use libghostty_vt::render::{CursorVisualStyle, RenderState};
+use libghostty_vt::render::{CellIterator, CursorVisualStyle, Dirty, RenderState, RowIterator};
 use libghostty_vt::screen::{CellContentTag, CellWide, Screen};
 use libghostty_vt::style::{Style, StyleColor, Underline};
 use libghostty_vt::{Error, Terminal};
@@ -56,9 +56,30 @@ pub(super) fn display_offset(terminal: &Engine) -> usize {
     (bar.total.saturating_sub(bar.offset + bar.len)) as usize
 }
 
+/// The engine's render state and what is kept from one frame to the next:
+/// the iterators it reads rows and cells through, and the rows read
+/// before, of which only those the engine marks changed are read again.
+pub(super) struct Draw {
+    state: RenderState<'static>,
+    rows: RowIterator<'static>,
+    cells: CellIterator<'static>,
+    lines: Vec<TerminalLine>,
+}
+
+impl Draw {
+    pub(super) fn new() -> Self {
+        Self {
+            state: RenderState::new().expect("a render state"),
+            rows: RowIterator::new().expect("a row iterator"),
+            cells: CellIterator::new().expect("a cell iterator"),
+            lines: Vec::new(),
+        }
+    }
+}
+
 pub(super) fn snapshot_frame(
     terminal: &Engine,
-    render: &RefCell<RenderState<'static>>,
+    draw: &RefCell<Draw>,
     size: TerminalSize,
 ) -> TerminalFrame {
     let rows = size.rows as usize;
@@ -66,11 +87,15 @@ pub(super) fn snapshot_frame(
     let offset = display_offset(terminal).min(history);
     // The viewport's top row, counted from the top of the whole buffer.
     let top = history - offset;
-    let lines = styled_rows(terminal, top, rows, size.cols as usize);
+    let (lines, cursor) = match drawn(terminal, &mut draw.borrow_mut(), rows) {
+        Some(read) => read,
+        // (The render state refused: the rows the slow way, and no cursor.)
+        None => (styled_rows(terminal, top, rows, size.cols as usize), None),
+    };
 
     TerminalFrame {
         lines,
-        cursor: cursor(terminal, render),
+        cursor,
         selection: selection_in_rows(terminal, top, size),
         mouse_reporting: mouse_mode(terminal) && mode(terminal, Mode::SGR_MOUSE),
         keys_as_escape_codes: (terminal.kitty_keyboard_flags())
@@ -80,23 +105,90 @@ pub(super) fn snapshot_frame(
     }
 }
 
-/// The cursor where the viewport shows it, with the shape the program set.
-/// The engine keeps the shape in its render state and nowhere else.
-fn cursor(terminal: &Engine, render: &RefCell<RenderState<'static>>) -> Option<TerminalCursor> {
-    let mut render = render.borrow_mut();
-    let snapshot = render.update(terminal).ok()?;
-    let cursor = snapshot.cursor().ok()?;
-    let at = cursor.viewport.filter(|_| cursor.visible)?;
-    Some(TerminalCursor {
-        row: at.y as usize,
-        col: at.x as usize,
-        shape: match cursor.visual_style {
-            CursorVisualStyle::Bar => TerminalCursorShape::Beam,
-            CursorVisualStyle::Underline => TerminalCursorShape::Underline,
-            CursorVisualStyle::BlockHollow => TerminalCursorShape::HollowBlock,
-            _ => TerminalCursorShape::Block,
-        },
-    })
+/// The viewport's rows and its cursor through the render state: the rows
+/// the engine marks changed since the last call are read, and the others
+/// are the ones kept.
+fn drawn(
+    terminal: &Engine,
+    draw: &mut Draw,
+    rows: usize,
+) -> Option<(Vec<TerminalLine>, Option<TerminalCursor>)> {
+    let Draw {
+        state,
+        rows: row_iterator,
+        cells: cell_iterator,
+        lines,
+    } = draw;
+    let snapshot = state.update(terminal).ok()?;
+    let all = lines.len() != rows || !matches!(snapshot.dirty(), Ok(Dirty::Clean | Dirty::Partial));
+    if all {
+        *lines = vec![TerminalLine { spans: Vec::new() }; rows];
+    }
+    let cursor = snapshot.cursor().ok().and_then(|cursor| {
+        let at = cursor.viewport.filter(|_| cursor.visible)?;
+        Some(TerminalCursor {
+            row: at.y as usize,
+            col: at.x as usize,
+            shape: match cursor.visual_style {
+                CursorVisualStyle::Bar => TerminalCursorShape::Beam,
+                CursorVisualStyle::Underline => TerminalCursorShape::Underline,
+                CursorVisualStyle::BlockHollow => TerminalCursorShape::HollowBlock,
+                _ => TerminalCursorShape::Block,
+            },
+        })
+    });
+
+    let mut graphemes = Vec::new();
+    let mut uri = vec![0u8; 2048];
+    let mut row_iteration = row_iterator.update(&snapshot).ok()?;
+    let mut y = 0usize;
+    while let Some(row) = row_iteration.next() {
+        let at = y;
+        y += 1;
+        if at >= rows {
+            break;
+        }
+        if !all && !row.dirty().unwrap_or(true) {
+            continue;
+        }
+        let mut line = TerminalLine { spans: Vec::new() };
+        let mut cell_iteration = cell_iterator.update(row).ok()?;
+        let mut x = 0u16;
+        while let Some(cell) = cell_iteration.next() {
+            let column = x;
+            x += 1;
+            let Ok(raw) = cell.raw_cell() else {
+                continue;
+            };
+            let length = cell.graphemes_len().unwrap_or(0) as usize;
+            graphemes.clear();
+            graphemes.resize(length, '\0');
+            if cell.graphemes_buf(&mut graphemes).is_err() {
+                graphemes.clear();
+            }
+            let url = match raw.has_hyperlink() {
+                Ok(true) => {
+                    let place = Point::Viewport(Coordinate {
+                        x: column,
+                        y: at as u32,
+                    });
+                    (terminal.grid_ref(place).ok()).and_then(|place| link(&place, &mut uri))
+                }
+                _ => None,
+            };
+            push_cell(
+                &mut line,
+                raw,
+                cell.style().unwrap_or_default(),
+                url.as_deref(),
+                &graphemes,
+            );
+        }
+        lines[at] = line;
+        let _ = row.set_dirty(false);
+    }
+    let _ = snapshot.set_dirty(Dirty::Clean);
+    Some((lines.clone(), cursor))
 }
 
 /// The selection as the rows from `top` down show it: clamped to them, and
@@ -312,62 +404,70 @@ fn styled_rows(
             let Ok(cell) = place.cell() else {
                 continue;
             };
-            let wide = cell.wide().unwrap_or(CellWide::Narrow);
-            // The second half of a wide character, and the blank a wide
-            // character leaves at a row's end when it wraps: its partner
-            // counts both columns.
-            if wide == CellWide::SpacerTail {
-                continue;
-            }
             let style = place.style().unwrap_or_default();
-            // A cell erased with a background color holds the color and
-            // no text.
-            let erased = match cell.content_tag() {
-                Ok(CellContentTag::BgColorPalette) => {
-                    (cell.bg_color_palette().ok()).map(|index| palette_color(index.0))
-                }
-                Ok(CellContentTag::BgColorRgb) => {
-                    (cell.bg_color_rgb().ok()).map(|rgb| TerminalColor::Rgb([rgb.r, rgb.g, rgb.b]))
-                }
-                _ => None,
-            };
             let url = match cell.has_hyperlink() {
                 Ok(true) => link(&place, &mut uri),
                 _ => None,
             };
-            let mut span = SpanStyle::of(style, url.as_deref());
-            if let Some(background) = erased {
-                span.bg = background;
-            }
-            let written = match place.graphemes(&mut graphemes) {
-                Ok(written) => written,
-                Err(_) => 0,
-            };
-            let (first, following) = match graphemes[..written].split_first() {
-                Some((first, following)) if *first != '\0' => (*first, following),
-                _ => (' ', &[][..]),
-            };
-            let cells = match wide {
-                CellWide::Wide => 2,
-                _ => 1,
-            };
-            if style.invisible {
-                // SGR 8 hides the glyph; the cell keeps its column.
-                push_styled_cell(line, ' ', cells, span);
-                continue;
-            }
-            if following.is_empty() || first == ' ' {
-                push_styled_cell(line, first, cells, span);
-            } else {
-                // A cell with combining characters is a span of its own.
-                line.spans.push(span.span(first.to_string(), cells));
-            }
-            for character in following {
-                push_styled_cell(line, *character, 0, span);
-            }
+            let written = place.graphemes(&mut graphemes).unwrap_or(0);
+            push_cell(line, cell, style, url.as_deref(), &graphemes[..written]);
         }
     }
     rows
+}
+
+/// Appends one cell of the engine's to a row: nothing for the second half
+/// of a wide character, a blank for a cell with no text or a hidden one,
+/// and its characters otherwise.
+fn push_cell(
+    line: &mut TerminalLine,
+    cell: libghostty_vt::screen::Cell,
+    style: Style,
+    url: Option<&str>,
+    graphemes: &[char],
+) {
+    let wide = cell.wide().unwrap_or(CellWide::Narrow);
+    // The second half of a wide character: its partner counts both
+    // columns.
+    if wide == CellWide::SpacerTail {
+        return;
+    }
+    // A cell erased with a background color holds the color and no text.
+    let erased = match cell.content_tag() {
+        Ok(CellContentTag::BgColorPalette) => {
+            (cell.bg_color_palette().ok()).map(|index| palette_color(index.0))
+        }
+        Ok(CellContentTag::BgColorRgb) => {
+            (cell.bg_color_rgb().ok()).map(|rgb| TerminalColor::Rgb([rgb.r, rgb.g, rgb.b]))
+        }
+        _ => None,
+    };
+    let mut span = SpanStyle::of(style, url);
+    if let Some(background) = erased {
+        span.bg = background;
+    }
+    let (first, following) = match graphemes.split_first() {
+        Some((first, following)) if *first != '\0' => (*first, following),
+        _ => (' ', &[][..]),
+    };
+    let cells = match wide {
+        CellWide::Wide => 2,
+        _ => 1,
+    };
+    if style.invisible {
+        // SGR 8 hides the glyph; the cell keeps its column.
+        push_styled_cell(line, ' ', cells, span);
+        return;
+    }
+    if following.is_empty() || first == ' ' {
+        push_styled_cell(line, first, cells, span);
+    } else {
+        // A cell with combining characters is a span of its own.
+        line.spans.push(span.span(first.to_string(), cells));
+    }
+    for character in following {
+        push_styled_cell(line, *character, 0, span);
+    }
 }
 
 /// The URI of the link a cell is in.
