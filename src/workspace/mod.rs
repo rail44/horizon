@@ -67,6 +67,7 @@ mod palette;
 mod picker;
 mod plugins;
 mod reload;
+mod session_feed;
 mod sessions;
 
 pub(crate) mod styles {
@@ -381,6 +382,8 @@ struct Kept {
     extensions_read: Cell<bool>,
     /// The extensions whose components are watched.
     watched: RefCell<Vec<extensions::Watched>>,
+    /// What plugins are told the workspace's sessions are.
+    sessions_feed: Arc<crate::plugin_host::SessionsFeed>,
     /// What the sessions the board views name are doing: every board view
     /// is given it.
     board_activity: RwSignal<HashMap<SessionId, crate::board::activity::BoardSessionActivity>>,
@@ -1178,6 +1181,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             own_extensions: opening.extensions,
             extensions_read: Cell::new(false),
             watched: RefCell::default(),
+            sessions_feed: Arc::default(),
             board_activity: RwSignal::new(HashMap::new()),
             refocus: Cell::new(false),
             board: opening.board,
@@ -1198,6 +1202,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         shell.reconcile();
     });
     each_layout(move |_| shell.take_in_sessions());
+    shell.feed_sessions();
     // The model is kept as it changes, though not at every step of a
     // boundary being dragged.
     if let Some(mut save) = opening.save {

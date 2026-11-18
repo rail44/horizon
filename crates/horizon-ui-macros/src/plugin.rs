@@ -387,6 +387,8 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
                     "horizon:ui/pane": ::horizon_ui::guest::bindings::horizon::ui::pane,
                     "horizon:ui/files": ::horizon_ui::guest::bindings::horizon::ui::files,
                     "horizon:ui/theme": ::horizon_ui::guest::bindings::horizon::ui::theme,
+                    "horizon:ui/sessions": ::horizon_ui::guest::bindings::horizon::ui::sessions,
+                    "horizon:ui/session-control": ::horizon_ui::guest::bindings::horizon::ui::session_control,
                 },
                 additional_derives: [#(#derives),*],
             });

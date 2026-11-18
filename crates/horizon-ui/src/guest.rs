@@ -737,7 +737,8 @@ pub fn start_tasks() {
     }));
 }
 
-/// A file watched: until it is dropped, `changed` is called whenever the
+/// Something watched ([`watch`], [`watch_sessions`]). For a file: until
+/// it is dropped, `changed` is called whenever the
 /// file changed and has sat still. `changed` reads the file and writes
 /// signals, whose effects draw it; it does not change the document
 /// itself, which may not be changed when it is called.
@@ -765,6 +766,26 @@ pub fn watch(path: &str, changed: impl Fn() + 'static) -> Watch {
             }
             // (What it writes to signals is drawn when the host next runs
             // the plugin's effects: a task does not change the document.)
+            changed();
+        }
+    });
+    Watch(dropped)
+}
+
+/// The workspace's sessions watched: until what is returned is dropped,
+/// `changed` is called whenever they have changed. As with a file's
+/// [`watch`], `changed` reads (`bindings::horizon::ui::sessions::all`)
+/// and writes signals, and does not change the document itself.
+pub fn watch_sessions(changed: impl Fn() + 'static) -> Watch {
+    let dropped = Rc::new(Cell::new(false));
+    let stops = dropped.clone();
+    let watching = bindings::horizon::ui::sessions::Watch::new();
+    spawn(async move {
+        while !stops.get() {
+            watching.changed().await;
+            if stops.get() {
+                break;
+            }
             changed();
         }
     });

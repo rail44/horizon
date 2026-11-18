@@ -154,6 +154,30 @@ pub fn enclosing_repo_root(root: &std::path::Path) -> Option<std::path::PathBuf>
         .map(std::path::Path::to_path_buf)
 }
 
+/// The repository `directory` is in, by its root: for a directory in a
+/// linked worktree, the repository the worktree is one of, wherever the
+/// worktree is. `None` outside any repository.
+///
+/// A linked worktree's `.git` is a file that names its metadata,
+/// `<repository>/.git/worktrees/<name>`; the repository is read from
+/// that path. No `git` is run.
+pub fn project_root(directory: &std::path::Path) -> Option<std::path::PathBuf> {
+    directory.ancestors().find_map(|ancestor| {
+        let git = ancestor.join(".git");
+        if git.is_dir() {
+            return Some(ancestor.to_path_buf());
+        }
+        let named = std::fs::read_to_string(&git).ok()?;
+        let metadata = std::path::Path::new(named.trim().strip_prefix("gitdir:")?.trim());
+        // (Relative to the worktree where it is written so.)
+        let metadata = ancestor.join(metadata);
+        let worktrees = metadata.parent()?;
+        let common = worktrees.parent()?;
+        let is_linked = worktrees.file_name()? == "worktrees" && common.file_name()? == ".git";
+        is_linked.then(|| common.parent().map(std::path::Path::to_path_buf))?
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -394,5 +418,56 @@ mod tests {
             ),
             "~/other-project/src"
         );
+    }
+
+    #[test]
+    fn a_worktrees_project_is_the_repository_it_is_a_worktree_of() {
+        use super::project_root;
+
+        let base = std::env::temp_dir().join(format!(
+            "horizon-project-root-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let repository = base.join("repository");
+        let inside = repository.join(".claude/worktrees/inside");
+        let outside = base.join("elsewhere/outside");
+        let plain = base.join("plain/notes");
+        for directory in [
+            repository.join(".git/worktrees/inside"),
+            repository.join(".git/worktrees/outside"),
+            repository.join("src/deep"),
+            inside.join("src"),
+            outside.join("src"),
+            plain.clone(),
+        ] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let metadata = |name: &str| repository.join(".git/worktrees").join(name);
+        std::fs::write(
+            inside.join(".git"),
+            format!("gitdir: {}\n", metadata("inside").display()),
+        )
+        .unwrap();
+        // As git writes it with `worktree.useRelativePaths`.
+        std::fs::write(
+            outside.join(".git"),
+            "gitdir: ../../repository/.git/worktrees/outside\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            project_root(&repository.join("src/deep")),
+            Some(repository.clone())
+        );
+        assert_eq!(project_root(&inside.join("src")), Some(repository.clone()));
+        let found = project_root(&outside.join("src")).expect("a repository");
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            repository.canonicalize().unwrap()
+        );
+        assert_eq!(project_root(&plain), None);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

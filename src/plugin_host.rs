@@ -53,14 +53,19 @@ wasmtime::component::bindgen!({
     imports: {
         "horizon:ui/files.[method]watch.changed": async | store | trappable,
         "horizon:ui/theme.save": async | store | trappable,
+        "horizon:ui/sessions.[method]watch.changed": async | store | trappable,
         default: trappable,
     },
     // Every call is made through the accessor, beside the plugin's tasks.
     exports: { default: async | store },
+    // (What a plugin is told of the sessions is compared with what it was
+    // told before.)
+    additional_derives: [PartialEq],
     with: {
         "horizon:ui/files.file": File,
         "horizon:ui/files.working-directory": WorkingDirectory,
         "horizon:ui/files.watch": Watching,
+        "horizon:ui/sessions.watch": SessionsWatching,
     },
 });
 
@@ -78,6 +83,65 @@ pub struct WorkingDirectory(pub PathBuf);
 /// where the file cannot be watched.
 pub struct Watching(Option<Arc<crate::watch::Kept>>);
 
+/// The sessions a plugin watches, for as long as the plugin holds this.
+pub struct SessionsWatching(tokio::sync::watch::Receiver<u64>);
+
+pub use self::horizon::ui::sessions::{
+    Activity as SessionActivity, Attention as SessionAttention, Project as SessionProject, Session,
+};
+
+/// The workspace's sessions as plugins are given them: whoever has the
+/// sessions says what they are whenever they change, and a plugin reads
+/// them and waits for the next change.
+pub struct SessionsFeed {
+    sessions: Mutex<Vec<Session>>,
+    changes: tokio::sync::watch::Sender<u64>,
+}
+
+impl Default for SessionsFeed {
+    fn default() -> Self {
+        Self {
+            sessions: Mutex::default(),
+            changes: tokio::sync::watch::Sender::new(0),
+        }
+    }
+}
+
+impl SessionsFeed {
+    /// Says what the sessions are; the plugins that wait are told where
+    /// that is not what they were.
+    pub fn set(&self, sessions: Vec<Session>) {
+        let mut kept = self.sessions.lock().unwrap();
+        if *kept != sessions {
+            *kept = sessions;
+            self.changes.send_modify(|change| *change += 1);
+        }
+    }
+
+    fn all(&self) -> Vec<Session> {
+        self.sessions.lock().unwrap().clone()
+    }
+}
+
+/// What a plugin asks the host to do to a session, named as the host
+/// named it to the plugin.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SessionAsk {
+    Show(String),
+    Terminate(String),
+    TerminateWithDerived(String),
+    OpenTerminal(String),
+}
+
+/// What the host does with the workspace's sessions for a plugin.
+#[derive(Clone)]
+pub struct SessionAsks {
+    /// What the sessions are.
+    pub feed: Arc<SessionsFeed>,
+    /// Does to a session what a plugin asked.
+    pub act: Rc<dyn Fn(SessionAsk)>,
+}
+
 /// What the host does for a plugin beyond the document, as whoever shows
 /// the plugin does it.
 #[derive(Clone, Default)]
@@ -88,6 +152,8 @@ pub struct Asks {
     pub set_title: Option<SetTitle>,
     /// The shell's theme.
     pub theme: Option<ThemeAsks>,
+    /// The workspace's sessions.
+    pub sessions: Option<SessionAsks>,
 }
 
 /// What the host does with the shell's theme for a plugin.
@@ -116,6 +182,7 @@ enum Asked {
     ApplyTheme(Seed),
     /// The answer goes back to the plugin's task that waits for it.
     SaveTheme(Seed, tokio::sync::oneshot::Sender<Result<String, String>>),
+    Session(SessionAsk),
 }
 
 /// The most memory a plugin may take.
@@ -153,6 +220,8 @@ pub struct State {
     /// The theme's seed and the file one is saved to, as they were when
     /// the plugin was started, if whoever shows it gives it the theme.
     theme: Option<(Seed, Option<PathBuf>)>,
+    /// The workspace's sessions, if whoever shows it gives them.
+    sessions: Option<Arc<SessionsFeed>>,
 }
 
 /// What a plugin leaves for this shell to do once the poll it was left in
@@ -480,6 +549,76 @@ impl<T: Send> self::horizon::ui::theme::HostWithStore<T> for HasSelf<State> {
     }
 }
 
+impl State {
+    fn sessions(&self) -> wasmtime::Result<&Arc<SessionsFeed>> {
+        (self.sessions.as_ref())
+            .ok_or_else(|| wasmtime::Error::msg("the sessions are not given to this plugin"))
+    }
+
+    fn ask_of_session(&mut self, ask: SessionAsk) -> wasmtime::Result<()> {
+        self.sessions()?;
+        (self.left.lock().unwrap().asked).push(Asked::Session(ask));
+        Ok(())
+    }
+}
+
+impl self::horizon::ui::sessions::Host for State {
+    fn all(&mut self) -> wasmtime::Result<Vec<Session>> {
+        Ok(self.sessions()?.all())
+    }
+}
+
+impl self::horizon::ui::sessions::HostWatch for State {
+    fn new(&mut self) -> wasmtime::Result<Resource<SessionsWatching>> {
+        let changes = self.sessions()?.changes.subscribe();
+        Ok(self.table.push(SessionsWatching(changes))?)
+    }
+
+    fn drop(&mut self, watch: Resource<SessionsWatching>) -> wasmtime::Result<()> {
+        self.table.delete(watch)?;
+        Ok(())
+    }
+}
+
+impl<T: Send> self::horizon::ui::sessions::HostWatchWithStore<T> for HasSelf<State> {
+    async fn changed(
+        accessor: &Accessor<T, Self>,
+        watch: Resource<SessionsWatching>,
+    ) -> wasmtime::Result<()> {
+        // What was seen stays the resource's: a change between two waits
+        // is told at the second.
+        let mut changes = accessor.with(|mut access| -> wasmtime::Result<_> {
+            Ok(access.get().table.get(&watch)?.0.clone())
+        })?;
+        // (A feed that has gone says nothing more: the wait goes on.)
+        if changes.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+        accessor.with(|mut access| -> wasmtime::Result<_> {
+            access.get().table.get_mut(&watch)?.0 = changes;
+            Ok(())
+        })
+    }
+}
+
+impl self::horizon::ui::session_control::Host for State {
+    fn show(&mut self, id: String) -> wasmtime::Result<()> {
+        self.ask_of_session(SessionAsk::Show(id))
+    }
+
+    fn terminate(&mut self, id: String) -> wasmtime::Result<()> {
+        self.ask_of_session(SessionAsk::Terminate(id))
+    }
+
+    fn terminate_with_derived(&mut self, id: String) -> wasmtime::Result<()> {
+        self.ask_of_session(SessionAsk::TerminateWithDerived(id))
+    }
+
+    fn open_terminal(&mut self, id: String) -> wasmtime::Result<()> {
+        self.ask_of_session(SessionAsk::OpenTerminal(id))
+    }
+}
+
 impl self::horizon::ui::files::Host for State {}
 
 impl self::horizon::ui::files::HostWatch for State {
@@ -788,6 +927,11 @@ impl Loaded {
                         let _ = answer.send(saved.map(|path| path.to_string_lossy().into_owned()));
                     }
                 }
+                Asked::Session(ask) => {
+                    if let Some(sessions) = &self.asks.sessions {
+                        (sessions.act)(ask);
+                    }
+                }
             }
         }
         // A handler holds the plugin loosely: the nodes may outlast it.
@@ -1004,6 +1148,7 @@ pub fn instantiate(
             limits: StoreLimitsBuilder::new().memory_size(MEMORY_LIMIT).build(),
             owned: HashSet::new(),
             theme: asks.theme.as_ref().map(|theme| (theme.now)()),
+            sessions: asks.sessions.as_ref().map(|sessions| sessions.feed.clone()),
         },
     );
     store.limiter(|state| &mut state.limits);
@@ -1073,6 +1218,34 @@ pub fn instantiate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_feed_tells_those_who_wait_only_of_what_changed() {
+        let named = |title: &str| Session {
+            id: "s-1".to_string(),
+            kind: "terminal".to_string(),
+            title: title.to_string(),
+            attached: true,
+            directory: None,
+            project: None,
+            parent: None,
+            activity: None,
+        };
+        let feed = SessionsFeed::default();
+        let mut changes = feed.changes.subscribe();
+        assert!(!changes.has_changed().unwrap());
+
+        feed.set(vec![named("notes")]);
+        assert!(changes.has_changed().unwrap());
+        changes.mark_unchanged();
+        assert_eq!(feed.all(), [named("notes")]);
+
+        // The same said again is no change.
+        feed.set(vec![named("notes")]);
+        assert!(!changes.has_changed().unwrap());
+        feed.set(vec![named("letters")]);
+        assert!(changes.has_changed().unwrap());
+    }
 
     /// What the host says of a component written as text.
     fn offered_to(name: &str, component: &str) -> Result<(), String> {

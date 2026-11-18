@@ -365,6 +365,7 @@ impl Shell {
             open_url: Some(kept.open_url.clone()),
             set_title: Some(Rc::new(move |text| title.set(text))),
             theme: Some(self.theme_asks()),
+            sessions: Some(self.session_asks()),
         };
         let name = extension.name;
         let running = match extension.instantiate(asks, kept.wake.clone(), failed) {
