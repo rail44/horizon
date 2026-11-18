@@ -83,6 +83,11 @@ fn linked_git_worktree(label: &str) -> (PathBuf, PathBuf) {
         &main,
         &["config", "user.email", "horizon-test@example.invalid"],
     );
+    // No hooks for what a test has the bash tool commit here either: that
+    // git runs with the machine's own configuration, and a hooks path set
+    // there for every repository would be run in the sandbox (observed: a
+    // hook whose tool wanted the network, which the sandbox does not give).
+    run_fixture_git(&main, &["config", "core.hooksPath", "/dev/null"]);
     fs::write(main.join("seed.txt"), "seed\n").unwrap();
     run_fixture_git(&main, &["add", "seed.txt"]);
     run_fixture_git(&main, &["commit", "-m", "seed"]);
