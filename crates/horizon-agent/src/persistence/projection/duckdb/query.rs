@@ -148,6 +148,30 @@ impl Store {
             .context("query agent session liveness")
     }
 
+    /// The sessions of `role`, the one with the latest event first, each
+    /// with the workspace root of its stored context.
+    pub(crate) fn sessions_with_role(
+        &self,
+        role: &RoleId,
+    ) -> Result<Vec<(SessionId, Option<std::path::PathBuf>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id, session_context_json
+             FROM agent_sessions
+             WHERE role_id = ?
+             ORDER BY last_sequence DESC",
+        )?;
+        let rows = stmt.query_map(params![&role.0], |row| {
+            let session_id = parse_session_id_column(0, &row.get::<_, String>(0)?)?;
+            let context = row
+                .get::<_, Option<String>>(1)?
+                .map(|json| decode_json_column::<PersistedSessionContext>(1, &json))
+                .transpose()?;
+            Ok((session_id, context.and_then(|c| c.workspace_root)))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .context("query agent sessions of a role")
+    }
+
     /// One session's records at or below `through_sequence`, rebuilt from the
     /// projection in sequence order. Every record carries the session's
     /// latest stored `session_context` (the only value a resume reads).

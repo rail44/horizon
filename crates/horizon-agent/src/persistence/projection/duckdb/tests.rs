@@ -1684,3 +1684,35 @@ fn an_event_this_build_cannot_read_is_passed_over_as_the_log_reader_does() {
         [0, 2]
     );
 }
+
+#[test]
+fn sessions_of_a_role_come_latest_first_with_their_roots() {
+    let store = Store::open_in_memory().expect("store");
+    let (older, newer, other) = (SessionId::new(), SessionId::new(), SessionId::new());
+    for (sequence, session, role, root) in [
+        (0, older, "organizer", "/tmp/a"),
+        (1, newer, "organizer", "/tmp/b"),
+        (2, other, "worker", "/tmp/c"),
+    ] {
+        let mut record = label_record(
+            &format!("e{sequence}"),
+            sequence,
+            session,
+            None,
+            Some(role),
+            Event::StateChanged(SessionState::Running),
+            1_700_000_000_000 + sequence,
+        );
+        record.session_context = Some(context_rooted_at(root));
+        store.append_record(&record).expect("append");
+    }
+    assert_eq!(
+        store
+            .sessions_with_role(&RoleId("organizer".into()))
+            .expect("sessions"),
+        [
+            (newer, Some(std::path::PathBuf::from("/tmp/b"))),
+            (older, Some(std::path::PathBuf::from("/tmp/a"))),
+        ]
+    );
+}
