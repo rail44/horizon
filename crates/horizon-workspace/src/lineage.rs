@@ -179,7 +179,7 @@ mod tests {
             attached: false,
             directory: directory.map(std::path::PathBuf::from),
             parent_session_id: parent,
-            program: None,
+            activity: None,
         }
     }
 

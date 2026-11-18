@@ -13,12 +13,15 @@ use std::time::{Duration, Instant};
 
 use horizon::agentd::{Agentd, RuntimeModels};
 use horizon::workspace::{self, Modal, Opening};
+use horizon_control::contract::{EnvelopeBody, Query};
+use horizon_control::host::executor::ControlRequest;
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::traits::{GetUntracked, WithUntracked};
 use horizon_workspace::Workspace;
 use horizon_workspace::commands::CommandId;
+use horizon_workspace::types::{AgentStatus, Doing};
 use keyboard_types::{Key, Modifiers, NamedKey};
 
 mod support;
@@ -252,6 +255,50 @@ api_key_env = "HORIZON_TEST_MOCK_KEY"
     until("a title", &|| {
         ["hello there", "ACP-OK"].contains(&title().as_str())
     });
+
+    // What the session is doing is the model's, in the runtime's words:
+    // the turn ended, in the pane that has the keys, so it has been
+    // looked at. The tab is marked as a session at rest, and `horizon
+    // sessions` says the same.
+    let activity = || {
+        shell.model.with_untracked(|model| {
+            let session = model.active_session_id()?;
+            model.session_activity(session).cloned()
+        })
+    };
+    until("the turn's end", &|| {
+        activity().is_some_and(|activity| {
+            activity.doing == Doing::Agent(AgentStatus::Completed) && activity.seen
+        })
+    });
+    until("the tab's mark", &|| {
+        text().contains(&format!("✳ {}", title()))
+    });
+    let (reply, answer) = std::sync::mpsc::channel();
+    shell.control_answering(
+        &ControlRequest::Query(Query {
+            what: "sessions".to_string(),
+        }),
+        move |body| reply.send(body).unwrap(),
+    );
+    let answer = answer
+        .recv_timeout(Duration::from_secs(5))
+        .expect("an answer");
+    let EnvelopeBody::Sessions(sessions) = answer else {
+        panic!("{answer:?}");
+    };
+    let told: Vec<_> = (sessions.sessions.iter())
+        .filter(|session| session.kind == "agent")
+        .filter_map(|session| session.activity.as_ref())
+        .map(|activity| {
+            (
+                activity.state.as_str(),
+                activity.attention.as_deref(),
+                activity.seen,
+            )
+        })
+        .collect();
+    assert_eq!(told, [("completed", None, true)]);
 
     // The model picker: the daemon's providers, then the chosen one's
     // models, and the choice goes to the daemon.

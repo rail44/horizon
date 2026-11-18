@@ -51,6 +51,7 @@ use crate::terminal::{Session, Terminal};
 use crate::wake::Wake;
 use held::Held;
 
+mod activity;
 mod arrangement;
 mod board_sessions;
 mod chooser;
@@ -65,7 +66,6 @@ mod models;
 mod palette;
 mod picker;
 mod plugins;
-mod program;
 mod reload;
 mod sessions;
 
@@ -665,10 +665,10 @@ impl Shell {
         };
     }
 
-    /// Takes in what the terminals reported since the last layout: a
-    /// title, a working directory, what the program in one says of its
-    /// own state, and that the shell in one has gone, which ends its
-    /// session.
+    /// Takes in what the sessions reported since the last layout: a
+    /// title, a working directory, what a session is doing (for a
+    /// terminal, what the program in it says of its own state), and that
+    /// the shell in a terminal has gone, which ends its session.
     fn take_in_sessions(&self) {
         let arrived = std::mem::take(&mut *self.kept().arrived.lock().unwrap());
         if !arrived.is_empty() {
@@ -679,7 +679,7 @@ impl Shell {
         }
         self.tell_boards();
         let (mut titles, mut directories, mut exited) = (Vec::new(), Vec::new(), Vec::new());
-        let (mut notifications, mut programs) = (Vec::new(), Vec::new());
+        let (mut notifications, mut activities) = (Vec::new(), Vec::new());
         // What a session says of itself is read from the session, whether a
         // pane shows it or not.
         let kept = self.kept();
@@ -702,7 +702,7 @@ impl Shell {
                         directories.push((*id, directory));
                     }
                     TerminalUpdate::ProgramStatus(status) => {
-                        programs.push((*id, status.map(program::arrived)));
+                        activities.push((*id, status.map(activity::reported)));
                     }
                     _ => {}
                 }
@@ -716,11 +716,20 @@ impl Shell {
             if let Some(title) = session.take_title() {
                 titles.push((*id, Some(title)));
             }
+            // An agent session is asked what it is doing, and the model
+            // told where that is not what it has.
+            let doing = activity::of_agent(session.activity());
+            let known = self.model.with_untracked(|model| {
+                model.session_activity(*id).map(|activity| &activity.doing) == Some(&doing)
+            });
+            if !known {
+                activities.push((*id, Some(doing)));
+            }
         }
         // The session the owner is looking at: the active pane's, and
         // none while the window is away.
         let looked_at = (self.model)
-            .with_untracked(Workspace::active_terminal_session_id)
+            .with_untracked(Workspace::active_session_id)
             .filter(|_| crate::window::active());
         // A notification is for a session the owner is not looking at.
         if let Some(notify) = kept.notify.as_ref() {
@@ -730,24 +739,18 @@ impl Shell {
                 }
             }
         }
-        // What a program reported is news until its session is looked at,
-        // which may be now, or at a layout long after the report.
+        // What a session came to be doing is news until the session is
+        // looked at, which may be now, or at a layout long after.
         let news = looked_at.filter(|looked_at| {
-            programs.iter().any(|(session, _)| session == looked_at)
+            activities.iter().any(|(session, _)| session == looked_at)
                 || self.model.with_untracked(|model| {
-                    (model.session_summaries().iter()).any(|session| {
-                        session.id == *looked_at
-                            && session
-                                .program
-                                .as_ref()
-                                .is_some_and(|program| !program.seen)
-                    })
+                    (model.session_activity(*looked_at)).is_some_and(|activity| !activity.seen)
                 })
         });
         if titles.is_empty()
             && directories.is_empty()
             && exited.is_empty()
-            && programs.is_empty()
+            && activities.is_empty()
             && news.is_none()
         {
             return;
@@ -760,11 +763,11 @@ impl Shell {
             for (session, directory) in directories {
                 model.set_session_directory(session, directory);
             }
-            for (session, status) in programs {
-                model.set_session_program_status(session, status);
+            for (session, doing) in activities {
+                model.set_session_activity(session, doing);
             }
             if let Some(session) = news {
-                model.mark_session_program_seen(session);
+                model.mark_session_seen(session);
             }
             for session in exited {
                 model.terminate_session(session);
@@ -1085,10 +1088,8 @@ fn strip(shell: Shell) -> El {
                         .then_some(styles::ACTIVE)
                 })
                 .child(el("div").class(styles::TITLE).text_dyn(move || {
-                    tab(index).map_or_default(|tab| match &tab.program {
-                        Some(status) => format!("{} {}", program::mark(status), tab.title),
-                        None => tab.title,
-                    })
+                    tab(index)
+                        .map_or_default(|tab| activity::marked(tab.activity.as_ref(), tab.title))
                 }))
                 // Closing a tab detaches the sessions in it.
                 .child(
