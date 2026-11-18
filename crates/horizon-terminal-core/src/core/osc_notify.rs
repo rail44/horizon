@@ -6,6 +6,10 @@
 //! - OSC 9 (iTerm2's Growl-style hook): `ESC ] 9 ; <body> (BEL | ESC \)`
 //! - OSC 777 `notify` (rxvt-unicode's): `ESC ] 777 ; notify ; <title> ; <body> (BEL | ESC \)`
 //!
+//! A program's report of its own state, OSC 7501 (`core::program_status`),
+//! is taken off the stream here too: it is no notification, but it is lost
+//! in the same way.
+//!
 //! `alacritty_terminal` recognizes neither code, so left in the stream
 //! both are swallowed silently — unknown OSC payloads never reach the grid
 //! (good: nothing misrenders) but they also never produce an `Event`,
@@ -45,6 +49,7 @@
 //!   real-world sequence stays one notification instead of turning into a
 //!   resync puzzle.
 
+use super::program_status::{self, Message};
 use crate::contract::TerminalNotification;
 
 /// Cap on one notification payload's captured length, in bytes. A
@@ -61,6 +66,37 @@ enum CaptureKind {
     Nine,
     /// OSC 777: `notify ; <title> ; <body>`, parsed at the terminator.
     SevenSeven7,
+    /// OSC 7501: a program's report of its own state, or its question
+    /// whether such reports are read (`core::program_status`). Not a
+    /// notification, but taken off the stream the same way and for the
+    /// same reason: the parser behind this scanner drops it unseen.
+    ProgramStatus,
+}
+
+/// What one [`OscNotificationScanner::feed`] took out of a chunk.
+#[derive(Debug, Default)]
+pub(super) struct Scanned {
+    /// The bytes for the VT parser: everything that is not one of this
+    /// scanner's sequences, in order.
+    pub bytes: Vec<u8>,
+    /// The notifications completed by the chunk, in arrival order.
+    pub notifications: Vec<TerminalNotification>,
+    /// The OSC 7501 sequences completed by the chunk, in arrival order.
+    pub program_status: Vec<Message>,
+}
+
+impl Scanned {
+    /// Takes in a completed capture's payload.
+    fn take(&mut self, kind: CaptureKind, payload: &[u8]) {
+        match kind {
+            CaptureKind::ProgramStatus => {
+                self.program_status.extend(program_status::parse(payload))
+            }
+            CaptureKind::Nine | CaptureKind::SevenSeven7 => {
+                self.notifications.extend(parse_payload(kind, payload));
+            }
+        }
+    }
 }
 
 /// Why [`OscNotificationScanner::scan_pass`] stopped.
@@ -109,23 +145,22 @@ pub(super) struct OscNotificationScanner {
 
 impl OscNotificationScanner {
     /// Feed one PTY chunk. Returns the bytes to hand to the VT parser (all
-    /// non-notification content, in order) and the notifications completed
-    /// by this chunk, in arrival order.
-    pub(super) fn feed(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<TerminalNotification>) {
+    /// the content this scanner does not take, in order) and what the
+    /// sequences completed by this chunk said, in arrival order.
+    pub(super) fn feed(&mut self, bytes: &[u8]) -> Scanned {
         self.buf.extend_from_slice(bytes);
-        let mut out = Vec::new();
-        let mut notifications = Vec::new();
+        let mut found = Scanned::default();
         let mut pos = 0;
         loop {
             match self.capture {
-                None => match self.scan_pass(pos, &mut out) {
+                None => match self.scan_pass(pos, &mut found.bytes) {
                     PassOutcome::NeedMore(next) => {
                         pos = next;
                         break;
                     }
                     PassOutcome::Capture(next) => pos = next,
                 },
-                Some(kind) => match self.scan_capture(pos, kind, &mut notifications) {
+                Some(kind) => match self.scan_capture(pos, kind, &mut found) {
                     CaptureOutcome::NeedMore(next) => {
                         pos = next;
                         break;
@@ -151,7 +186,7 @@ impl OscNotificationScanner {
             let tail = self.buf.split_off(self.buf.len() - 1);
             self.buf = tail;
         }
-        (out, notifications)
+        found
     }
 
     /// Pass-through scan from `pos`: copy every byte that is not part of a
@@ -204,6 +239,7 @@ impl OscNotificationScanner {
             let kind = match (digits, next) {
                 (d, b';') if d > 0 && num == 9 => Some(CaptureKind::Nine),
                 (d, b';') if d > 0 && num == 777 => Some(CaptureKind::SevenSeven7),
+                (d, b';') if d > 0 && num == 7501 => Some(CaptureKind::ProgramStatus),
                 _ => None,
             };
             match kind {
@@ -235,7 +271,7 @@ impl OscNotificationScanner {
         &mut self,
         pos: usize,
         kind: CaptureKind,
-        notes: &mut Vec<TerminalNotification>,
+        found: &mut Scanned,
     ) -> CaptureOutcome {
         let start = self.payload_start;
         let mut pos = pos.max(start);
@@ -252,7 +288,7 @@ impl OscNotificationScanner {
                         // terminator — and swallow the rest until one shows
                         // up.
                         self.overflowing = true;
-                        notes.extend(parse_payload(kind, &buf[start..start + PAYLOAD_CAP]));
+                        found.take(kind, &buf[start..start + PAYLOAD_CAP]);
                         return CaptureOutcome::NeedMore(buf.len());
                     }
                     if self.overflowing {
@@ -268,7 +304,7 @@ impl OscNotificationScanner {
             };
             if buf[stop] == 0x07 {
                 if !self.overflowing {
-                    notes.extend(parse_payload(kind, &buf[start..stop]));
+                    found.take(kind, &buf[start..stop]);
                 }
                 return CaptureOutcome::Done(stop + 1);
             }
@@ -284,7 +320,7 @@ impl OscNotificationScanner {
                 }
                 Some(b'\\') => {
                     if !self.overflowing {
-                        notes.extend(parse_payload(kind, &buf[start..stop]));
+                        found.take(kind, &buf[start..stop]);
                     }
                     return CaptureOutcome::Done(stop + 2);
                 }
@@ -305,6 +341,8 @@ fn parse_payload(kind: CaptureKind, payload: &[u8]) -> Option<TerminalNotificati
     let text = String::from_utf8_lossy(payload);
     let text = text.trim();
     match kind {
+        // Not a notification: `Scanned::take` reads it elsewhere.
+        CaptureKind::ProgramStatus => None,
         CaptureKind::Nine => {
             if text.is_empty() || is_conemu_progress(text) {
                 return None;
@@ -354,6 +392,15 @@ fn memchr(needle: u8, hay: &[u8]) -> Option<usize> {
 mod tests {
     use super::*;
 
+    /// What a chunk leaves for the parser, and the notifications in it.
+    fn feed(
+        scanner: &mut OscNotificationScanner,
+        bytes: &[u8],
+    ) -> (Vec<u8>, Vec<TerminalNotification>) {
+        let found = scanner.feed(bytes);
+        (found.bytes, found.notifications)
+    }
+
     fn feed_all(
         scanner: &mut OscNotificationScanner,
         chunks: &[&[u8]],
@@ -361,7 +408,7 @@ mod tests {
         let mut passthrough = Vec::new();
         let mut notes = Vec::new();
         for chunk in chunks {
-            let (out, batch) = scanner.feed(chunk);
+            let (out, batch) = feed(scanner, chunk);
             passthrough.extend(out);
             notes.extend(batch);
         }
@@ -385,7 +432,7 @@ mod tests {
     #[test]
     fn osc9_with_bel_terminator_is_extracted_and_removed() {
         let mut scanner = OscNotificationScanner::default();
-        let (out, notes) = scanner.feed(b"before\x1b]9;build done\x07after");
+        let (out, notes) = feed(&mut scanner, b"before\x1b]9;build done\x07after");
         assert_eq!(out, b"beforeafter");
         assert_eq!(notes, vec![body_only("build done")]);
     }
@@ -393,7 +440,7 @@ mod tests {
     #[test]
     fn osc9_with_st_terminator_is_extracted() {
         let mut scanner = OscNotificationScanner::default();
-        let (out, notes) = scanner.feed(b"\x1b]9;hello\x1b\\world");
+        let (out, notes) = feed(&mut scanner, b"\x1b]9;hello\x1b\\world");
         assert_eq!(out, b"world");
         assert_eq!(notes, vec![body_only("hello")]);
     }
@@ -401,7 +448,10 @@ mod tests {
     #[test]
     fn osc9_progress_report_is_swallowed_without_a_notification() {
         let mut scanner = OscNotificationScanner::default();
-        let (out, notes) = scanner.feed(b"a\x1b]9;4;1;80\x07b\x1b]9;4;0\x1b\\c\x1b]9;4\x07d");
+        let (out, notes) = feed(
+            &mut scanner,
+            b"a\x1b]9;4;1;80\x07b\x1b]9;4;0\x1b\\c\x1b]9;4\x07d",
+        );
         assert_eq!(out, b"abcd");
         assert!(notes.is_empty());
     }
@@ -409,7 +459,7 @@ mod tests {
     #[test]
     fn osc9_body_starting_with_a_digit_four_is_still_a_notification() {
         let mut scanner = OscNotificationScanner::default();
-        let (_, notes) = scanner.feed(b"\x1b]9;42 tests passed\x07\x1b]9;4 done\x07");
+        let (_, notes) = feed(&mut scanner, b"\x1b]9;42 tests passed\x07\x1b]9;4 done\x07");
         assert_eq!(
             notes,
             vec![body_only("42 tests passed"), body_only("4 done")]
@@ -419,7 +469,7 @@ mod tests {
     #[test]
     fn osc777_notify_with_title_and_body() {
         let mut scanner = OscNotificationScanner::default();
-        let (out, notes) = scanner.feed(b"\x1b]777;notify;Deploy;finished in 3s\x07!");
+        let (out, notes) = feed(&mut scanner, b"\x1b]777;notify;Deploy;finished in 3s\x07!");
         assert_eq!(out, b"!");
         assert_eq!(notes, vec![titled("Deploy", "finished in 3s")]);
     }
@@ -427,14 +477,14 @@ mod tests {
     #[test]
     fn osc777_notify_body_only_has_no_title() {
         let mut scanner = OscNotificationScanner::default();
-        let (_, notes) = scanner.feed(b"\x1b]777;notify;just a body\x07");
+        let (_, notes) = feed(&mut scanner, b"\x1b]777;notify;just a body\x07");
         assert_eq!(notes, vec![body_only("just a body")]);
     }
 
     #[test]
     fn osc777_non_notify_is_swallowed_without_a_notification() {
         let mut scanner = OscNotificationScanner::default();
-        let (out, notes) = scanner.feed(b"a\x1b]777;other;stuff\x07b");
+        let (out, notes) = feed(&mut scanner, b"a\x1b]777;other;stuff\x07b");
         assert_eq!(out, b"ab");
         assert!(notes.is_empty());
     }
@@ -460,7 +510,10 @@ mod tests {
     #[test]
     fn two_notifications_in_one_chunk() {
         let mut scanner = OscNotificationScanner::default();
-        let (out, notes) = scanner.feed(b"\x1b]9;one\x07mid\x1b]777;notify;T;B\x1b\\tail");
+        let (out, notes) = feed(
+            &mut scanner,
+            b"\x1b]9;one\x07mid\x1b]777;notify;T;B\x1b\\tail",
+        );
         assert_eq!(out, b"midtail");
         assert_eq!(notes, vec![body_only("one"), titled("T", "B")]);
     }
@@ -498,7 +551,7 @@ mod tests {
         let mut scanner = OscNotificationScanner::default();
         // Empty body: dropped entirely (header still swallowed — the
         // parser would ignore OSC 9 anyway).
-        let (out, notes) = scanner.feed(b"\x1b]9;\x07x");
+        let (out, notes) = feed(&mut scanner, b"\x1b]9;\x07x");
         assert_eq!(out, b"x");
         assert!(notes.is_empty());
         // No `;` at all: not a notification OSC — passed through byte-exact
@@ -518,7 +571,7 @@ mod tests {
         // The flood stays bounded: after the over-cap chunk the scanner
         // keeps at most one byte (for cross-chunk `ESC \` detection), and
         // the truncated notification went out exactly once.
-        let (_, notes) = scanner.feed(&chunk);
+        let (_, notes) = feed(&mut scanner, &chunk);
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].body.len(), PAYLOAD_CAP);
         assert!(scanner.buf.len() <= 1);
@@ -536,7 +589,7 @@ mod tests {
         chunk.extend_from_slice(b"\x1b]9;");
         chunk.extend(std::iter::repeat_n(b'x', 100_000));
         chunk.extend_from_slice(b"\x07after");
-        let (out, notes) = scanner.feed(&chunk);
+        let (out, notes) = feed(&mut scanner, &chunk);
         assert_eq!(out, b"after");
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].body.len(), PAYLOAD_CAP);
@@ -547,8 +600,38 @@ mod tests {
         // A malformed ESC not followed by `\` is payload content: the scan
         // keeps looking for BEL/ST instead of resyncing mid-notification.
         let mut scanner = OscNotificationScanner::default();
-        let (out, notes) = scanner.feed(b"\x1b]9;weird\x1b[31mbody\x07x");
+        let (out, notes) = feed(&mut scanner, b"\x1b]9;weird\x1b[31mbody\x07x");
         assert_eq!(out, b"x");
         assert_eq!(notes, vec![body_only("weird\x1b[31mbody")]);
+    }
+
+    #[test]
+    fn a_program_status_report_comes_off_the_stream_whole() {
+        let mut scanner = OscNotificationScanner::default();
+        let found = scanner.feed(b"a\x1b]7501;state=working:app=x\x1b\\b\x1b]7501;?\x07c");
+        assert_eq!(found.bytes, b"abc");
+        assert!(found.notifications.is_empty());
+        assert_eq!(found.program_status.len(), 2);
+        assert_eq!(found.program_status[1], Message::Query);
+    }
+
+    #[test]
+    fn a_program_status_report_split_across_chunks_is_read_once() {
+        let mut scanner = OscNotificationScanner::default();
+        let whole = b"\x1b]7501;state=blocked:kind=question\x1b\\";
+        for cut in 1..whole.len() {
+            let mut scanner_at = OscNotificationScanner::default();
+            let first = scanner_at.feed(&whole[..cut]);
+            let second = scanner_at.feed(&whole[cut..]);
+            assert!(
+                first.bytes.is_empty() && second.bytes.is_empty(),
+                "cut at {cut}"
+            );
+            assert_eq!(first.program_status.len() + second.program_status.len(), 1);
+        }
+        // OSC 7 and OSC 750 are other sequences, and stay the parser's.
+        let found = scanner.feed(b"\x1b]7;file:///tmp\x07\x1b]750;x\x07");
+        assert_eq!(found.bytes, b"\x1b]7;file:///tmp\x07\x1b]750;x\x07");
+        assert!(found.program_status.is_empty());
     }
 }

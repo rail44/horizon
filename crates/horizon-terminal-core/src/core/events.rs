@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::vte::ansi::Rgb;
 
+use super::program_status::ProgramStatusUpdate;
 use crate::contract::TerminalNotification;
 
 /// Formatter alacritty_terminal hands back for a color query
@@ -41,6 +42,11 @@ pub(crate) struct TerminalEvents {
     /// directly by `TerminalCore::write_vt` after `finish_advance`'s
     /// drain, exactly like `visible_dirty`.
     pub notifications: Vec<TerminalNotification>,
+    /// What the program in the terminal said of its own state (OSC 7501,
+    /// `core::program_status`) during the parser call that produced this
+    /// batch, in arrival order. Set by `TerminalCore::write_vt`, as
+    /// `notifications` is.
+    pub program_status: Vec<ProgramStatusUpdate>,
     /// OSC 52 clipboard-write payloads (`Event::ClipboardStore`) accepted
     /// this call, already capped at `OSC52_CLIPBOARD_WRITE_CAP` -- see
     /// `EventSink::send_event`. Both OSC 52 targets alacritty_terminal
@@ -90,6 +96,7 @@ impl fmt::Debug for TerminalEvents {
             .field("title", &self.title)
             .field("bell_count", &self.bell_count)
             .field("notifications", &self.notifications)
+            .field("program_status", &self.program_status)
             .field("clipboard_writes", &self.clipboard_writes)
             .field("color_requests", &self.color_requests.len())
             .field("window_size_requests", &self.window_size_requests.len())

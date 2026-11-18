@@ -3272,6 +3272,7 @@ dependencies = [
  "base64 0.23.1",
  "crossbeam-channel",
  "horizon-wire",
+ "portable-pty",
  "remoc",
  "schemars 1.2.3",
  "serde",

@@ -3029,3 +3029,38 @@ fn undersized_resize_keeps_wide_cells_and_reports_effective_geometry() {
         [b"\x1b[8;4;20t".to_vec()]
     );
 }
+
+#[test]
+fn a_program_asking_whether_its_status_is_read_is_answered() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    let events = core.write_vt(b"\x1b]7501;?\x1b\\");
+
+    assert_eq!(
+        events.pty_writes,
+        [b"\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\".to_vec()]
+    );
+    assert!(events.program_status.is_empty());
+    assert!(!events.visible_dirty);
+}
+
+#[test]
+fn a_programs_status_is_read_off_the_stream_and_leaves_the_screen_alone() {
+    use crate::core::program_status::{BlockedKind, ProgramState, ProgramStatusUpdate};
+
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    let events = core.write_vt(
+        b"hi\x1b]7501;state=blocked:app=claude-code:kind=permission\x1b\\\
+          \x1b]7501;state=working:app=claude-code:id=bt7g05417\x1b\\\
+          \x1b]7501;state=clear\x1b\\",
+    );
+
+    let [ProgramStatusUpdate::Set(status), ProgramStatusUpdate::Clear] = &events.program_status[..]
+    else {
+        panic!("read {:?}", events.program_status);
+    };
+    assert_eq!(status.state, ProgramState::Blocked);
+    assert_eq!(status.kind, Some(BlockedKind::Permission));
+    assert_eq!(status.app.as_deref(), Some("claude-code"));
+    assert!(events.pty_writes.is_empty());
+    assert_eq!(core.snapshot_text().trim(), "hi");
+}
