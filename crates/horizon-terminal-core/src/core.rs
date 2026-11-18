@@ -25,6 +25,7 @@ mod color;
 mod events;
 mod input;
 mod osc_notify;
+pub(crate) mod program_status;
 mod render;
 
 /// Built-in fallback for `Term`'s `scrolling_history` (`TermConfig`), used
@@ -157,7 +158,8 @@ impl TerminalCore {
         // even from inside a synchronized-update window (the scanner sees
         // the raw chunk, not the sync-buffered view) — a notification
         // surfacing "early" beats not surfacing at all.
-        let (bytes, notifications) = self.osc_notifications.feed(bytes);
+        let scanned = self.osc_notifications.feed(bytes);
+        let bytes = scanned.bytes;
         self.parser.advance(&mut self.term, &bytes);
 
         // Did this call actually touch the grid, or did it just add to an
@@ -176,7 +178,17 @@ impl TerminalCore {
         let visible_dirty = self.parser.sync_bytes_count() < bytes.len();
 
         let mut events = self.finish_advance(sync_output_was_active, visible_dirty);
-        events.notifications = notifications;
+        events.notifications = scanned.notifications;
+        for message in scanned.program_status {
+            match message {
+                // The answer is what has a program that asks first report
+                // at all.
+                program_status::Message::Query => {
+                    events.pty_writes.push(program_status::QUERY_REPLY.to_vec());
+                }
+                program_status::Message::Update(update) => events.program_status.push(update),
+            }
+        }
         events
     }
 

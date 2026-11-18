@@ -175,6 +175,11 @@ fn send_terminal_events(
     for notification in events.notifications {
         let _ = update_tx.send(TerminalUpdate::Notification(notification));
     }
+    // Read, and not yet sent to a client: what a program reports, and
+    // when, is being measured before the wire carries it.
+    for update in events.program_status {
+        tracing::debug!(?update, "program status (OSC 7501)");
+    }
 }
 
 /// Upper bound on PTY-output chunks processed by one [`drain_pty_output`]

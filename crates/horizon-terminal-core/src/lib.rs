@@ -45,4 +45,6 @@ pub use types::{
 };
 
 #[cfg(test)]
+mod program_status_probe;
+#[cfg(test)]
 mod tests;
