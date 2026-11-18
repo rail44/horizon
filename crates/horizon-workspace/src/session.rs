@@ -87,6 +87,16 @@ impl Workspace {
         }
     }
 
+    /// Ends a session and every session derived from it, however far
+    /// down. How many were ended: none for a session the workspace does
+    /// not have.
+    pub fn terminate_session_with_derived(&mut self, session_id: SessionId) -> usize {
+        let derived = crate::lineage::subtree_session_ids(&self.session_summaries(), session_id);
+        (derived.into_iter())
+            .filter(|id| self.terminate_session(*id))
+            .count()
+    }
+
     pub fn terminate_session(&mut self, session_id: SessionId) -> bool {
         let Some(_) = self.session(session_id) else {
             return false;

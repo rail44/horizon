@@ -4,8 +4,8 @@
 use std::path::Path;
 
 use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
-use horizon_workspace::CloseCursorOutcome;
 use horizon_workspace::commands::{CommandId, CommandState};
+use horizon_workspace::{CloseCursorOutcome, Workspace};
 
 use super::{Modal, Placement, Shell, plugins};
 
@@ -36,10 +36,12 @@ impl Shell {
             }),
             // The session is the cursor's: ended before the mode, and the
             // cursor with it, is left.
-            CommandId::TerminateActiveSession => self.change(|model| {
-                model.terminate_active_session();
-                model.exit_workspace_mode();
-            }),
+            CommandId::TerminateActiveSession => {
+                if let Some(session) = self.model.with_untracked(Workspace::cursor_session_id) {
+                    self.terminate_session(session);
+                }
+                self.change(Workspace::exit_workspace_mode);
+            }
             CommandId::TerminateAllDetachedSessions => self.change(|model| {
                 for session in model.detached_session_summaries() {
                     model.terminate_session(session.id);

@@ -297,6 +297,25 @@ impl Workspace {
         ))
     }
 
+    /// Brings a session in front of its owner: its pane made the active
+    /// one, or, for a session no pane shows, a pane of it beside the active
+    /// one. Workspace mode ends with it. `false` for a session the
+    /// workspace does not have, which changes nothing.
+    pub fn show_session(&mut self, session_id: SessionId) -> bool {
+        match self.pane_location_for_session(session_id) {
+            Some((tab, pane)) => {
+                self.activate_pane_index(tab, pane);
+            }
+            None => {
+                if (self.attach_existing_session_to_split_activated(session_id, true)).is_none() {
+                    return false;
+                }
+            }
+        }
+        self.exit_workspace_mode();
+        true
+    }
+
     pub fn activate_tab_index(&mut self, index: usize) -> bool {
         let Some(tab) = self.tabs.get(index) else {
             return false;

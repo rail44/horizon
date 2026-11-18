@@ -77,14 +77,10 @@ impl Shell {
                 }
                 done
             }
-            Command::Terminate(session) => {
-                let mut ended = false;
-                self.model_changed(|model| ended = model.terminate_session(session));
-                match ended {
-                    true => done,
-                    false => Err("unknown session".to_string()),
-                }
-            }
+            Command::Terminate(session) => match self.terminate_session(session) {
+                true => done,
+                false => Err("unknown session".to_string()),
+            },
             Command::TerminateAllDetached => {
                 self.execute(CommandId::TerminateAllDetachedSessions);
                 done

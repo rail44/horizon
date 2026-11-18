@@ -787,7 +787,7 @@ impl Shell {
         let shown =
             (self.model).with_untracked(|model| model.pane_location_for_session(session).is_some());
         if shown {
-            self.go_to_session(session);
+            self.show_session(session);
         }
     }
 
@@ -997,17 +997,26 @@ impl Shell {
     /// Goes to a session's pane, or puts a session no pane shows in one
     /// beside the active pane. A session this workspace does not have is
     /// left alone.
-    fn go_to_session(&self, session: SessionId) {
+    /// Brings a session in front of its owner, with the keys: its pane,
+    /// or a pane of it beside the active one.
+    pub(super) fn show_session(&self, session: SessionId) {
         self.change(|model| {
-            match model.pane_location_for_session(session) {
-                Some((tab, pane)) => {
-                    model.activate_pane_index(tab, pane);
-                }
-                None => {
-                    model.attach_existing_session_to_split_activated(session, true);
-                }
-            }
-            model.exit_workspace_mode();
+            model.show_session(session);
+        });
+    }
+
+    /// Ends a session; `false` for one the workspace does not have. The
+    /// focus stays where it is, which may be under an open list.
+    pub(super) fn terminate_session(&self, session: SessionId) -> bool {
+        let mut ended = false;
+        self.model_changed(|model| ended = model.terminate_session(session));
+        ended
+    }
+
+    /// Ends a session and every session derived from it.
+    pub(super) fn terminate_session_with_derived(&self, session: SessionId) {
+        self.model_changed(|model| {
+            model.terminate_session_with_derived(session);
         });
     }
 

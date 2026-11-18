@@ -1341,3 +1341,49 @@ fn what_was_looked_at_is_kept_across_a_restart() {
     other.set_session_activity(session, Some(done));
     assert!(!seen(&other));
 }
+
+#[test]
+fn showing_a_session_goes_to_its_pane_or_puts_it_beside_the_active_one() {
+    let mut workspace = Workspace::mvp();
+    let first = workspace.active_terminal_session_id().expect("session");
+    let second = SessionId::new();
+    workspace.split_active(SessionKind::Terminal, second);
+    assert_eq!(workspace.active_session_id(), Some(second));
+
+    // One a pane shows: that pane has the keys, and the mode is left.
+    workspace.enter_workspace_mode();
+    assert!(workspace.show_session(first));
+    assert_eq!(workspace.active_session_id(), Some(first));
+    assert!(!workspace.is_workspace_mode_active());
+    assert_eq!(workspace.visible_panes().len(), 2);
+
+    // One no pane shows: a pane of it, beside the active one.
+    let detached = SessionId::new();
+    workspace.register_detached_session(SessionKind::Agent, detached);
+    assert!(workspace.show_session(detached));
+    assert_eq!(workspace.active_session_id(), Some(detached));
+    assert_eq!(workspace.visible_panes().len(), 3);
+
+    // One the workspace does not have changes nothing.
+    assert!(!workspace.show_session(SessionId::new()));
+    assert_eq!(workspace.visible_panes().len(), 3);
+}
+
+#[test]
+fn ending_a_session_with_what_was_derived_from_it_leaves_the_others() {
+    let mut workspace = Workspace::mvp();
+    let kept = workspace.active_terminal_session_id().expect("session");
+    let (root, child, grandchild) = (SessionId::new(), SessionId::new(), SessionId::new());
+    for session in [root, child, grandchild] {
+        workspace.register_detached_session(SessionKind::Agent, session);
+    }
+    workspace.set_session_parent(child, root);
+    workspace.set_session_parent(grandchild, child);
+
+    assert_eq!(workspace.terminate_session_with_derived(child), 2);
+    let left: Vec<SessionId> = (workspace.session_summaries().iter())
+        .map(|session| session.id)
+        .collect();
+    assert_eq!(left, [kept, root]);
+    assert_eq!(workspace.terminate_session_with_derived(child), 0);
+}

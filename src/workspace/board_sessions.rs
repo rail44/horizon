@@ -17,20 +17,6 @@ use super::{RunningAgent, Shell};
 
 const NOT_IN_RUNTIME: &str = "The session is not available in the current agent runtime";
 
-/// The session's pane made the active one, or the session put in a pane
-/// beside the active one.
-fn show(model: &mut Workspace, session: SessionId) {
-    match model.pane_location_for_session(session) {
-        Some((tab, pane)) => {
-            model.activate_pane_index(tab, pane);
-        }
-        None => {
-            model.attach_existing_session_to_split_activated(session, true);
-        }
-    }
-    model.exit_workspace_mode();
-}
-
 impl Shell {
     /// Takes a session the agent runtime has into the workspace, detached
     /// if it was not in it, and attaches to it. (Called after a layout:
@@ -180,7 +166,7 @@ impl Shell {
                         return Ok(());
                     }
                     shell.kept().refocus.set(true);
-                    shell.model.update(|model| show(model, session));
+                    shell.model.update(|model| _ = model.show_session(session));
                     Ok(())
                 });
                 if let Err(error) = shown {
@@ -197,7 +183,7 @@ impl Shell {
         let kept = self.kept();
         let known = (self.model).with_untracked(|model| model.session_kind(session).is_some());
         let Some(runtime) = kept.agent_runtime.as_ref().filter(|_| !known) else {
-            self.go_to_session(session);
+            self.show_session(session);
             return;
         };
         let find = runtime.find.clone();
@@ -210,7 +196,7 @@ impl Shell {
                 match shown {
                     Ok(()) => {
                         shell.kept().refocus.set(true);
-                        shell.model.update(|model| show(model, session));
+                        shell.model.update(|model| _ = model.show_session(session));
                     }
                     Err(error) => failed.run(error),
                 }

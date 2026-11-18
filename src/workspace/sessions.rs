@@ -10,7 +10,6 @@ use horizon_ui::El;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set, With, WithUntracked};
 use horizon_workspace::lineage::{
     SessionRow, abbreviate_directory, enclosing_repo_root, order_as_lineage_tree,
-    subtree_session_ids,
 };
 use horizon_workspace::types::SessionSummary;
 use horizon_workspace::{SessionKind, Workspace};
@@ -77,36 +76,17 @@ pub(super) fn view(shell: Shell) -> El {
         match picked {
             Picked::Confirmed => {
                 shell.modal.set(None);
-                shell.change(|model| {
-                    match model.pane_location_for_session(session.id) {
-                        Some((tab, pane)) => {
-                            model.activate_pane_index(tab, pane);
-                        }
-                        None => {
-                            model.attach_existing_session_to_split_activated(session.id, true);
-                        }
-                    }
-                    model.exit_workspace_mode();
-                });
+                shell.show_session(session.id);
             }
             // The list stays, without the session.
-            Picked::ConfirmedSecondary => {
-                shell.model_changed(|model| {
-                    model.terminate_session(session.id);
-                });
-            }
+            Picked::ConfirmedSecondary => _ = shell.terminate_session(session.id),
             Picked::Chord(key) => {
                 let character = match &key.key {
                     Key::Character(character) => character.to_lowercase(),
                     _ => return,
                 };
                 match (character.as_str(), key.modifiers.shift()) {
-                    ("t", true) => shell.model_changed(|model| {
-                        let sessions = model.session_summaries();
-                        for id in subtree_session_ids(&sessions, session.id) {
-                            model.terminate_session(id);
-                        }
-                    }),
+                    ("t", true) => shell.terminate_session_with_derived(session.id),
                     ("o", false) => {
                         if let Some(directory) = session.directory {
                             shell.modal.set(None);
