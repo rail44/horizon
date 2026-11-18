@@ -46,8 +46,9 @@ its runtime says of it (§3).
    `Workspace::mark_session_seen` when the session is the active pane's in
    a window that has the focus: the condition under which a notification
    from that session is not posted (`Shell::take_in_sessions`,
-   `src/workspace/mod.rs`). It is unset when the session comes to be doing
-   something else. Claude Code keeps reporting `done` until its next
+   `src/workspace/mod.rs`). What the session comes to be doing next is
+   not seen, unless it is what was last looked at with no work since
+   (§3). Claude Code keeps reporting `done` until its next
    prompt, typed at or not, so finished work that has not been looked at
    is told apart here and not by the program.
 
@@ -94,8 +95,14 @@ tells the model where the answer is not what it has (`Doing::Agent`,
 `loading`, `unavailable` and `terminated` have no mark on a tab: there is
 no session at the other end to be at rest.
 
-Seen is not persisted, for either kind: after the shell is restarted, a
-session that had finished is `unseen` again until it is looked at.
+What a session was last seen doing is kept in `workspace.json`
+(`WorkspaceSession::looked_at`, `SessionState::looked_at`), for either
+kind, and dropped when the session is next at work. A session that says
+after the shell is restarted what it was last seen doing is seen; one that
+says something else is not. A session that worked and came back to the
+same words while the shell was away is taken as seen: nothing a session
+says tells one piece of finished work from the next. A program's message
+is part of what is kept.
 
 ## 4. What a program's status does not say
 

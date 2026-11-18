@@ -49,11 +49,11 @@ impl Workspace {
     }
 
     /// Records what a session is doing, or with `None` that this is no
-    /// longer known (a no-op if `session_id` is unknown). A session that
-    /// goes on doing what it was doing keeps whether it was looked at;
-    /// what it newly does has not been, until
-    /// [`Self::mark_session_seen`] says so. Returns whether the model
-    /// changed.
+    /// longer known (a no-op if `session_id` is unknown). What it does
+    /// has been looked at if it is what the session was last seen doing
+    /// with no work in between ([`WorkspaceSession::looked_at`]), and has
+    /// not been otherwise, until [`Self::mark_session_seen`] says so.
+    /// Returns whether the model changed.
     pub fn set_session_activity(&mut self, session_id: SessionId, doing: Option<Doing>) -> bool {
         let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) else {
             return false;
@@ -61,19 +61,26 @@ impl Workspace {
         if session.activity.as_ref().map(|activity| &activity.doing) == doing.as_ref() {
             return false;
         }
-        session.activity = doing.map(|doing| SessionActivity { doing, seen: false });
+        // Work makes what comes after it new, also where the session
+        // ends up saying what it said before.
+        if doing.as_ref().is_some_and(Doing::working) {
+            session.looked_at = None;
+        }
+        let seen = doing.is_some() && session.looked_at == doing;
+        session.activity = doing.map(|doing| SessionActivity { doing, seen });
         true
     }
 
     /// Records that the owner has looked at a session since it came to be
     /// doing what it does. Returns whether the model changed.
     pub fn mark_session_seen(&mut self, session_id: SessionId) -> bool {
-        let activity = (self.sessions.iter_mut())
-            .find(|s| s.id == session_id)
-            .and_then(|session| session.activity.as_mut());
-        match activity {
+        let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) else {
+            return false;
+        };
+        match session.activity.as_mut() {
             Some(activity) if !activity.seen => {
                 activity.seen = true;
+                session.looked_at = Some(activity.doing.clone());
                 true
             }
             _ => false,

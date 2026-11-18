@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::SessionId;
 
-use super::{LayoutNode, PaneId, SessionActivity, SessionKind, TabId};
+use super::{Doing, LayoutNode, PaneId, SessionActivity, SessionKind, TabId};
 
 #[derive(Clone, Debug)]
 pub struct Workspace {
@@ -63,6 +63,12 @@ pub struct WorkspaceSession {
     /// through [`Workspace::set_session_activity`]. Not persisted, as
     /// `directory` is not.
     pub activity: Option<SessionActivity>,
+    /// What the session was doing when its owner last looked at it, as
+    /// long as it has not been at work since. Persisted, unlike
+    /// `activity`: a session that says after a restart that it does what
+    /// it was last seen doing has been looked at
+    /// ([`Workspace::set_session_activity`]).
+    pub looked_at: Option<Doing>,
 }
 
 #[derive(Clone, Debug)]
@@ -96,6 +102,7 @@ impl WorkspaceSession {
             directory: None,
             parent_session_id: None,
             activity: None,
+            looked_at: None,
         }
     }
 

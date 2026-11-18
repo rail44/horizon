@@ -1238,3 +1238,106 @@ fn what_a_session_does_is_news_until_the_session_is_looked_at() {
         assert_eq!(reads(doing.clone(), seen), read, "{doing:?}, seen: {seen}");
     }
 }
+
+#[test]
+fn what_was_looked_at_stays_seen_until_the_session_has_been_at_work() {
+    use crate::types::{AgentStatus, Doing, ProgramState, ProgramStatus};
+
+    let mut workspace = Workspace::mvp();
+    let session = workspace.active_terminal_session_id().expect("session");
+    let seen = |workspace: &Workspace| {
+        (workspace.session_activity(session)).is_some_and(|activity| activity.seen)
+    };
+    let program = |state| {
+        Doing::Program(ProgramStatus {
+            state,
+            blocked_on: None,
+            app: None,
+            message: None,
+        })
+    };
+    let completed = Doing::Agent(AgentStatus::Completed);
+
+    // Out of reach and back with nothing done in between: still seen.
+    workspace.set_session_activity(session, Some(completed.clone()));
+    workspace.mark_session_seen(session);
+    workspace.set_session_activity(session, Some(Doing::Agent(AgentStatus::Loading)));
+    assert!(!seen(&workspace));
+    workspace.set_session_activity(session, Some(completed.clone()));
+    assert!(seen(&workspace));
+
+    // At work and done again: what is done now is new.
+    workspace.set_session_activity(session, Some(Doing::Agent(AgentStatus::Running)));
+    workspace.set_session_activity(session, Some(completed.clone()));
+    assert!(!seen(&workspace));
+
+    // The same holds for a program, also where it took its report back.
+    workspace.set_session_activity(session, Some(program(ProgramState::Done)));
+    workspace.mark_session_seen(session);
+    workspace.set_session_activity(session, None);
+    workspace.set_session_activity(session, Some(program(ProgramState::Done)));
+    assert!(seen(&workspace));
+    workspace.set_session_activity(session, Some(program(ProgramState::Working)));
+    workspace.set_session_activity(session, Some(program(ProgramState::Done)));
+    assert!(!seen(&workspace));
+}
+
+#[test]
+fn what_was_looked_at_is_kept_across_a_restart() {
+    use crate::types::{BlockedOn, Doing, ProgramState, ProgramStatus};
+
+    let mut workspace = Workspace::mvp();
+    let session = workspace.active_terminal_session_id().expect("session");
+    let done = Doing::Program(ProgramStatus {
+        state: ProgramState::Done,
+        blocked_on: None,
+        app: Some("claude-code".into()),
+        message: None,
+    });
+    let blocked = Doing::Program(ProgramStatus {
+        state: ProgramState::Blocked,
+        blocked_on: Some(BlockedOn::Permission),
+        app: Some("claude-code".into()),
+        message: Some("approve Bash: ls".into()),
+    });
+    let seen = |workspace: &Workspace| {
+        (workspace.session_activity(session)).is_some_and(|activity| activity.seen)
+    };
+
+    // Before anything is looked at, the state is as it was before this
+    // was kept: a build from then reads it.
+    let untouched = workspace.to_persisted_json().expect("serialize");
+    assert!(!untouched.contains("looked_at"), "{untouched}");
+
+    workspace.set_session_activity(session, Some(done.clone()));
+    workspace.mark_session_seen(session);
+    let json = workspace.to_persisted_json().expect("serialize");
+
+    // Restarted, the session says what it is doing again: the same as it
+    // was last seen doing, which has been looked at.
+    let mut restored = Workspace::from_persisted_json(&json).expect("restore");
+    assert_eq!(restored.session_activity(session), None);
+    restored.set_session_activity(session, Some(done.clone()));
+    assert!(seen(&restored));
+    assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
+
+    // Something else than it was last seen doing has not been.
+    let mut restored = Workspace::from_persisted_json(&json).expect("restore");
+    restored.set_session_activity(session, Some(blocked.clone()));
+    assert!(!seen(&restored));
+
+    // Every part of what was seen is kept.
+    restored.mark_session_seen(session);
+    let json = restored.to_persisted_json().expect("serialize");
+    let mut again = Workspace::from_persisted_json(&json).expect("restore");
+    again.set_session_activity(session, Some(blocked));
+    assert!(seen(&again));
+
+    // A word this build does not know is nothing looked at, not a state
+    // that cannot be read.
+    let unknown = json.replace("\"blocked\"", "\"dreaming\"");
+    assert_ne!(unknown, json);
+    let mut other = Workspace::from_persisted_json(&unknown).expect("restore");
+    other.set_session_activity(session, Some(done));
+    assert!(!seen(&other));
+}

@@ -99,6 +99,19 @@ pub enum Attention {
 }
 
 impl ProgramState {
+    const ALL: [Self; 5] = [
+        Self::Idle,
+        Self::Working,
+        Self::Done,
+        Self::Blocked,
+        Self::Error,
+    ];
+
+    /// The state a word of the protocol's names.
+    pub fn from_label(label: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|state| state.label() == label)
+    }
+
     /// The protocol's word for the state.
     pub fn label(self) -> &'static str {
         match self {
@@ -111,7 +124,45 @@ impl ProgramState {
     }
 }
 
+impl BlockedOn {
+    const ALL: [Self; 3] = [Self::Permission, Self::Question, Self::Auth];
+
+    /// What a word of the protocol's says is waited for.
+    pub fn from_label(label: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|on| on.label() == label)
+    }
+
+    /// The protocol's word for what is waited for.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Permission => "permission",
+            Self::Question => "question",
+            Self::Auth => "auth",
+        }
+    }
+}
+
 impl AgentStatus {
+    const ALL: [Self; 12] = [
+        Self::Loading,
+        Self::Unavailable,
+        Self::Starting,
+        Self::Running,
+        Self::ToolRunning,
+        Self::WaitingForInput,
+        Self::WaitingForApproval,
+        Self::Cancelled,
+        Self::Completed,
+        Self::Failed,
+        Self::Paused,
+        Self::Terminated,
+    ];
+
+    /// The status a label names.
+    pub fn from_label(label: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|status| status.label() == label)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Loading => "loading",
@@ -139,6 +190,18 @@ impl Attention {
             Self::Blocked => "blocked",
             Self::Failed => "failed",
             Self::Unseen => "unseen",
+        }
+    }
+}
+
+impl Doing {
+    /// Whether this is being at work.
+    pub fn working(&self) -> bool {
+        match self {
+            Self::Program(program) => program.state == ProgramState::Working,
+            Self::Agent(status) => {
+                matches!(status, AgentStatus::Running | AgentStatus::ToolRunning)
+            }
         }
     }
 }
@@ -179,12 +242,7 @@ impl SessionActivity {
 
     /// Whether the session is at work.
     pub fn working(&self) -> bool {
-        match &self.doing {
-            Doing::Program(program) => program.state == ProgramState::Working,
-            Doing::Agent(status) => {
-                matches!(status, AgentStatus::Running | AgentStatus::ToolRunning)
-            }
-        }
+        self.doing.working()
     }
 
     /// Whether there is a session at the other end to be at rest: an agent

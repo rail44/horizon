@@ -7,6 +7,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::SessionId;
+use crate::types::{AgentStatus, BlockedOn, Doing, ProgramState, ProgramStatus};
 use crate::types::{
     LayoutChild, LayoutNode, Pane, PaneId, PluginPane, SessionKind, SplitAxis, Tab, TabId,
     Workspace, WorkspaceSession,
@@ -150,6 +151,67 @@ struct SessionState {
     kind: SessionKindState,
     display_number: usize,
     title: String,
+    /// `WorkspaceSession::looked_at`. Left out where there is none, and
+    /// read as none where a word in it is not one this build knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    looked_at: Option<DoingState>,
+}
+
+/// What a session was doing when it was last looked at, in the words its
+/// kind says it in.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+enum DoingState {
+    Program {
+        state: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blocked_on: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+    Agent {
+        status: String,
+    },
+}
+
+impl From<&Doing> for DoingState {
+    fn from(doing: &Doing) -> Self {
+        match doing {
+            Doing::Program(program) => Self::Program {
+                state: program.state.label().to_string(),
+                blocked_on: program.blocked_on.map(|on| on.label().to_string()),
+                app: program.app.clone(),
+                message: program.message.clone(),
+            },
+            Doing::Agent(status) => Self::Agent {
+                status: status.label().to_string(),
+            },
+        }
+    }
+}
+
+impl DoingState {
+    fn into_doing(self) -> Option<Doing> {
+        Some(match self {
+            Self::Program {
+                state,
+                blocked_on,
+                app,
+                message,
+            } => Doing::Program(ProgramStatus {
+                state: ProgramState::from_label(&state)?,
+                blocked_on: match blocked_on {
+                    Some(on) => Some(BlockedOn::from_label(&on)?),
+                    None => None,
+                },
+                app,
+                message,
+            }),
+            Self::Agent { status } => Doing::Agent(AgentStatus::from_label(&status)?),
+        })
+    }
 }
 
 /// A session's persisted kind.
@@ -332,6 +394,7 @@ impl WorkspaceState {
                     kind: SessionKindState::from(session.kind),
                     display_number: session.display_number,
                     title: session.title.clone(),
+                    looked_at: session.looked_at.as_ref().map(DoingState::from),
                 })
                 .collect(),
         })
@@ -369,6 +432,7 @@ impl WorkspaceState {
                     // Not persisted either: a session says what it is
                     // doing again once it is reattached.
                     activity: None,
+                    looked_at: session.looked_at.and_then(DoingState::into_doing),
                 })
                 .collect(),
             active_tab: self.active_tab,
