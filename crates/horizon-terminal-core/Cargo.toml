@@ -10,7 +10,10 @@ edition = "2024"
 # environment) stays in the `horizon` binary; this crate only ever sees
 # bytes in and commands/updates out over plain channels.
 [dependencies]
-alacritty_terminal = "0.26.0"
+# SPIKE: libghostty-vt in alacritty_terminal's place. The binding's commit
+# whose build.rs pins ghostty vt-1.0.1; the build fetches ghostty and runs
+# zig (0.17).
+libghostty-vt = { git = "https://github.com/uzaaft/libghostty-rs", rev = "483ea3d5247b214060da58ef6037a95f30ae89fb" }
 # A program's words about its own state come encoded (`core::program_status`).
 base64 = "0.23"
 crossbeam-channel = "0.5"

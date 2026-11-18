@@ -1,61 +1,177 @@
-use alacritty_terminal::grid::{Dimensions, Indexed};
-use alacritty_terminal::index::{Line, Point};
-use alacritty_terminal::selection::SelectionRange;
-use alacritty_terminal::term::cell::{Cell, Flags};
-use alacritty_terminal::term::{Term, TermMode};
-use alacritty_terminal::vte::ansi::{
-    Color as AnsiColor, CursorShape as AnsiCursorShape, NamedColor as AnsiNamedColor,
-    Rgb as AnsiRgb,
-};
+//! SPIKE: the frame and the scrollback window read out of libghostty-vt.
+//!
+//! Both are rows of the screen's whole buffer (history, then the live
+//! screen), read a cell at a time through grid references. The cell-to-span
+//! merging is what it was over alacritty_terminal.
+
+use std::cell::RefCell;
+
+use libghostty_vt::mode::Mode;
+use libghostty_vt::point::{Coordinate, Point, Space};
+use libghostty_vt::render::{CursorVisualStyle, RenderState};
+use libghostty_vt::screen::{CellContentTag, CellWide, Screen};
+use libghostty_vt::style::{Style, StyleColor, Underline};
+use libghostty_vt::{Error, Terminal};
 use unicode_width::UnicodeWidthChar;
 
-use crate::core::events::EventSink;
 use crate::types::{
     NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame, TerminalLine,
     TerminalScrollWindow, TerminalSelection, TerminalSelectionPoint, TerminalSize, TerminalSpan,
     TerminalUnderline,
 };
 
-pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> TerminalFrame {
-    let content = term.renderable_content();
-    // `content.display_iter` and `content.cursor.point.line` (below) are
-    // both in `Term`'s absolute coordinate system: line 0 is the top of the
-    // *live* screen, and negative lines are scrollback history above it.
-    // `Grid::display_iter` walks only the window the current `display_offset`
-    // makes visible, but still yields lines in that absolute system -- e.g.
-    // with `display_offset == 10` on a 5-row viewport, every visible line is
-    // -10..=-6, entirely negative. Adding `display_offset` back converts an
-    // absolute line into "row from the top of what's actually on screen right
-    // now", the row index the returned `lines` is keyed by. (Skipping that
-    // shift silently dropped every cell once scrolled past one viewport's
-    // worth of history -- see this fix's regression tests.)
-    let display_offset = content.display_offset as i32;
-    let lines = styled_rows(content.display_iter, size.rows as usize, |line| {
-        line + display_offset
-    });
+pub(super) type Engine = Terminal<'static, 'static>;
+
+/// Whether a mode is set, and not where the engine cannot say.
+pub(super) fn mode(terminal: &Engine, mode: Mode) -> bool {
+    terminal.mode(mode).unwrap_or(false)
+}
+
+/// Whether the program asked for the mouse, in any of the ways there are.
+pub(super) fn mouse_mode(terminal: &Engine) -> bool {
+    [
+        Mode::X10_MOUSE,
+        Mode::NORMAL_MOUSE,
+        Mode::BUTTON_MOUSE,
+        Mode::ANY_MOUSE,
+    ]
+    .into_iter()
+    .any(|asked| mode(terminal, asked))
+}
+
+pub(super) fn alternate_screen(terminal: &Engine) -> bool {
+    matches!(terminal.active_screen(), Ok(Screen::Alternate))
+}
+
+/// How many rows of history there are above the live screen.
+fn history_rows(terminal: &Engine) -> usize {
+    terminal.scrollback_rows().unwrap_or(0)
+}
+
+/// How many rows above the bottom the viewport is.
+pub(super) fn display_offset(terminal: &Engine) -> usize {
+    let Ok(bar) = terminal.scrollbar() else {
+        return 0;
+    };
+    (bar.total.saturating_sub(bar.offset + bar.len)) as usize
+}
+
+pub(super) fn snapshot_frame(
+    terminal: &Engine,
+    render: &RefCell<RenderState<'static>>,
+    size: TerminalSize,
+) -> TerminalFrame {
+    let rows = size.rows as usize;
+    let history = history_rows(terminal);
+    let offset = display_offset(terminal).min(history);
+    // The viewport's top row, counted from the top of the whole buffer.
+    let top = history - offset;
+    let lines = styled_rows(terminal, top, rows, size.cols as usize);
 
     TerminalFrame {
         lines,
-        cursor: cursor_position(
-            content.cursor.shape,
-            content.cursor.point.line.0 + display_offset,
-            content.cursor.point.column.0,
-            size.rows as usize,
-        ),
-        selection: selection_in_viewport(content.selection, display_offset, size),
-        mouse_reporting: term.mode().intersects(TermMode::MOUSE_MODE)
-            && term.mode().contains(TermMode::SGR_MOUSE),
-        keys_as_escape_codes: term.mode().contains(TermMode::REPORT_ALL_KEYS_AS_ESC),
-        palette_overrides: palette_overrides(term),
-        // Windowed overscan is a primary-screen concept: the alt grid has no
-        // scrollback (`max_scroll_limit == 0`) and a mouse app owns the
-        // wheel, so both suspend it (mirrors `TerminalCore::
-        // application_scroll_mode`; `docs/terminal-scrollback-design.md`
-        // §2.1, §2.3).
-        scrollback_available: !term
-            .mode()
-            .intersects(TermMode::ALT_SCREEN | TermMode::MOUSE_MODE),
+        cursor: cursor(terminal, render),
+        selection: selection_in_rows(terminal, top, size),
+        mouse_reporting: mouse_mode(terminal) && mode(terminal, Mode::SGR_MOUSE),
+        keys_as_escape_codes: (terminal.kitty_keyboard_flags())
+            .is_ok_and(|flags| flags.bits() & 0b1000 != 0),
+        palette_overrides: palette_overrides(terminal),
+        scrollback_available: !(alternate_screen(terminal) || mouse_mode(terminal)),
     }
+}
+
+/// The cursor where the viewport shows it, with the shape the program set.
+/// The engine keeps the shape in its render state and nowhere else.
+fn cursor(terminal: &Engine, render: &RefCell<RenderState<'static>>) -> Option<TerminalCursor> {
+    let mut render = render.borrow_mut();
+    let snapshot = render.update(terminal).ok()?;
+    let cursor = snapshot.cursor().ok()?;
+    let at = cursor.viewport.filter(|_| cursor.visible)?;
+    Some(TerminalCursor {
+        row: at.y as usize,
+        col: at.x as usize,
+        shape: match cursor.visual_style {
+            CursorVisualStyle::Bar => TerminalCursorShape::Beam,
+            CursorVisualStyle::Underline => TerminalCursorShape::Underline,
+            CursorVisualStyle::BlockHollow => TerminalCursorShape::HollowBlock,
+            _ => TerminalCursorShape::Block,
+        },
+    })
+}
+
+/// The selection as the rows from `top` down show it: clamped to them, and
+/// none where it lies outside them.
+fn selection_in_rows(
+    terminal: &Engine,
+    top: usize,
+    size: TerminalSize,
+) -> Option<TerminalSelection> {
+    let selection = terminal.selection().ok()??;
+    let at = |end: &libghostty_vt::grid_ref::GridRef<'_>| {
+        let at = terminal.point_from_grid_ref(end, Space::Screen).ok()??;
+        Some((at.y as i64 - top as i64, at.x as usize))
+    };
+    let (mut start, mut end) = (at(&selection.start())?, at(&selection.end())?);
+    if start > end {
+        std::mem::swap(&mut start, &mut end);
+    }
+    let rows = size.rows as i64;
+    let last_col = size.cols.saturating_sub(1) as usize;
+    if end.0 < 0 || start.0 >= rows {
+        return None;
+    }
+    let start = match start.0 < 0 {
+        true => TerminalSelectionPoint { row: 0, col: 0 },
+        false => TerminalSelectionPoint {
+            row: start.0 as usize,
+            col: start.1.min(last_col),
+        },
+    };
+    let end = match end.0 >= rows {
+        true => TerminalSelectionPoint {
+            row: (rows - 1) as usize,
+            col: last_col,
+        },
+        false => TerminalSelectionPoint {
+            row: end.0 as usize,
+            col: end.1.min(last_col),
+        },
+    };
+    Some(TerminalSelection { start, end })
+}
+
+/// The colors the program has set over the defaults (OSC 4/10/11/12), by
+/// their place in the palette: what is set now, where it is not the
+/// default.
+fn palette_overrides(terminal: &Engine) -> Vec<(u16, [u8; 3])> {
+    let mut set = Vec::new();
+    if let (Ok(now), Ok(default)) = (terminal.color_palette(), terminal.default_color_palette()) {
+        for index in 0..256usize {
+            let (now, default) = (now.0[index], default.0[index]);
+            if now != default {
+                set.push((index as u16, [now.r, now.g, now.b]));
+            }
+        }
+    }
+    type Asked = Result<Option<libghostty_vt::color::Rgb>, Error>;
+    let role = |now: Asked, default: Asked| {
+        let (now, default) = (now.ok()?, default.ok()?);
+        now.filter(|now| Some(*now) != default)
+    };
+    let roles = [
+        (256, role(terminal.fg_color(), terminal.default_fg_color())),
+        (257, role(terminal.bg_color(), terminal.default_bg_color())),
+        (
+            258,
+            role(terminal.cursor_color(), terminal.default_cursor_color()),
+        ),
+    ];
+    for (index, rgb) in roles {
+        if let Some(rgb) = rgb {
+            set.push((index, [rgb.r, rgb.g, rgb.b]));
+        }
+    }
+    set
 }
 
 /// The session-daemon events-channel item cap a served scroll window must
@@ -130,55 +246,25 @@ fn max_window_rows(columns: usize, screen_lines: usize) -> usize {
 }
 
 /// Read a `height`-row scrollback window positioned `anchor` rows above the
-/// live bottom, **without moving `display_offset`** -- the live-frame watch
-/// keeps showing the tail throughout (`docs/terminal-scrollback-design.md`
-/// §2.2, §3.2). `anchor` is a hypothetical `display_offset`: the viewport at
-/// `anchor` shows grid lines from `Line(-anchor)` down, clamped to
-/// `0..=history_size`. `height` is clamped to [`max_window_rows`] so a served
-/// window can never overflow the events-channel item cap. The block extends a
-/// centered margin above and below that viewport, clamped to the true top
-/// (`topmost_line`) and the live edge (`bottommost_line`). `above`/`below`
-/// report the rows that remain outside the block (their zeroes are the
-/// true-top / live-edge signals) and are derived from the *clamped* block, so
-/// they stay exact for whatever window is actually returned; `viewport_offset`
-/// locates the viewport's top row within it. Built by a `grid.iter_from` walk
-/// that reuses [`styled_rows`] -- no engine change, no side effect on the live
-/// viewport.
+/// live bottom, without moving the viewport: the same block arithmetic as
+/// over alacritty_terminal, in rows counted from the top of the live screen
+/// (negative in the history).
 pub(super) fn snapshot_window(
-    term: &Term<EventSink>,
+    terminal: &Engine,
+    size: TerminalSize,
     anchor: usize,
     height: usize,
 ) -> TerminalScrollWindow {
-    let grid = term.grid();
-    let screen_lines = grid.screen_lines() as i32;
-    let history_size = grid.history_size() as i32;
-
-    // `anchor` == "rows above the live bottom" == a hypothetical
-    // `display_offset`, so it reaches at most `history_size` (viewport top ==
-    // topmost history line). Saturating: a request field wider than i32 (a
-    // corrupt or hostile peer) saturates to `i32::MAX` rather than wrapping
-    // to a nonsense negative line, so a huge anchor clamps to the true top,
-    // not silently back to the live edge.
+    let screen_lines = size.rows as i32;
+    let history_size = i32::try_from(history_rows(terminal)).unwrap_or(i32::MAX);
     let anchor = i32::try_from(anchor)
         .unwrap_or(i32::MAX)
         .clamp(0, history_size);
-
-    // Hard-clamp the requested height to a safe row count *before* the block
-    // math (see `max_window_rows`): an unbounded height would let a decorated
-    // full-scrollback window balloon past the events cap and collapse the
-    // attachment. The clamp is transparent to the client, which already
-    // tolerates a window narrower than requested (§3.2), and `above`/`below`
-    // stay exact because they are read off the clamped block below.
-    let max_rows = max_window_rows(grid.columns(), grid.screen_lines());
+    let max_rows = max_window_rows(size.cols as usize, size.rows as usize);
     let height = i32::try_from(height.min(max_rows)).unwrap_or(i32::MAX);
 
-    // The viewport at this anchor: top row `Line(-anchor)`, `screen_lines`
-    // tall (mirrors `display_offset == anchor`).
     let viewport_top = -anchor;
     let viewport_bottom = viewport_top + screen_lines - 1;
-
-    // Distribute the margin (rows beyond the viewport) above and below,
-    // centering the viewport in the block.
     let margin = height.saturating_sub(screen_lines).max(0);
     let margin_above = margin / 2;
     let margin_below = margin - margin_above;
@@ -193,130 +279,114 @@ pub(super) fn snapshot_window(
     let viewport_offset = (viewport_top - block_top) as usize;
     let row_count = (block_bottom - block_top + 1) as usize;
 
-    // `iter_from` yields the cell *after* its start point (its first `next`
-    // advances before reading -- see `Grid::display_iter`'s own `-1,
-    // last_column` seed), so seed one line above the block's top at the last
-    // column to make the first yielded cell `(block_top, col 0)`. Walk to the
-    // block's bottom row and stop (`iter_from` otherwise runs to the live
-    // tail). The seed point itself is never indexed -- the iterator advances
-    // past it before reading -- so seeding one line above `topmost` is safe.
-    let last_column = grid.last_column();
-    let start = Point::new(Line(block_top - 1), last_column);
-    let cells = grid
-        .iter_from(start)
-        .take_while(|indexed| indexed.point.line.0 <= block_bottom);
-    let lines = styled_rows(cells, row_count, |line| line - block_top);
-
+    // From the top of the whole buffer, the block's top row.
+    let top = (history_size + block_top) as usize;
     TerminalScrollWindow {
-        lines,
+        lines: styled_rows(terminal, top, row_count, size.cols as usize),
         viewport_offset,
         above,
         below,
     }
 }
 
-/// Build the per-row styled spans for a band of the grid, shared by the
-/// live-viewport snapshot ([`snapshot_frame`]) and the scrollback window
-/// ([`snapshot_window`]). `cells` walks the band in row-major order (either
-/// `display_iter` or an `iter_from` range); `line_to_row` maps a cell's
-/// absolute `Line` (line 0 = top of the live screen, negatives = history) to
-/// its 0-based index in the returned `Vec`, and a cell whose row falls
-/// outside `0..row_count` is dropped. `snapshot_frame` folds `display_offset`
-/// in (`line + display_offset`); `snapshot_window` subtracts the block's top
-/// line. The cell->span conversion (wide chars, zero-width combiners, SGR 8
-/// conceal, BCE blank runs) is identical for both callers.
-fn styled_rows<'a>(
-    cells: impl Iterator<Item = Indexed<&'a Cell>>,
+/// The styled spans of `row_count` rows from `top` down, `top` counted from
+/// the top of the whole buffer (history first).
+fn styled_rows(
+    terminal: &Engine,
+    top: usize,
     row_count: usize,
-    line_to_row: impl Fn(i32) -> i32,
+    columns: usize,
 ) -> Vec<TerminalLine> {
-    let mut styled_rows = vec![TerminalLine { spans: Vec::new() }; row_count];
-
-    for indexed in cells {
-        let row = line_to_row(indexed.point.line.0);
-        if row < 0 {
-            continue;
-        }
-
-        let row = row as usize;
-        if row >= styled_rows.len() {
-            continue;
-        }
-
-        let cell = indexed.cell;
-        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-            continue;
-        }
-
-        // Selection deliberately does *not* touch fg/bg here: it rides the
-        // frame as semantic metadata (`TerminalFrame::selection`), so spans
-        // stay pure content and dragging a selection changes no rows -- goal
-        // 2 of `docs/terminal-protocol-goals.md`.
-        // The OSC 8 URI alacritty already parsed onto the cell rides the
-        // style as part of the span-merge key, so linked and unlinked text
-        // never share a span (and two different URIs never merge either).
-        let hyperlink = cell.hyperlink();
-        let style = SpanStyle::from_cell(
-            cell.fg,
-            cell.bg,
-            cell.flags,
-            cell.underline_color(),
-            hyperlink.as_ref().map(|link| link.uri()),
-        );
-        let columns = cell_width(cell.c, cell.flags);
-        if cell.flags.contains(Flags::HIDDEN) {
-            // SGR 8 (conceal) hides the glyph but the cell still occupies its
-            // column in the grid -- unlike `WIDE_CHAR_SPACER`, whose partner
-            // cell already counts both columns' width, a concealed cell has
-            // no such partner. Emit it as a blank span (the same vocabulary
-            // `push_styled_cell` uses for BCE-erased/space-padding runs) so
-            // the row's running column offset stays correct for whatever
-            // comes after it, instead of silently dropping the column and
-            // shifting later spans left (backlog 45).
-            push_styled_cell(&mut styled_rows[row], ' ', columns, style);
-            continue;
-        }
-        let line = &mut styled_rows[row];
-        let zerowidth = cell.zerowidth().unwrap_or(&[]);
-        if zerowidth.is_empty() || cell.c == ' ' {
-            push_styled_cell(line, cell.c, columns, style);
-        } else {
-            // A printable cell carrying zero-width combining chars gets a
-            // span of its own instead of joining the neighboring run: the
-            // extra chars break the `columns == chars` equality the GUI's
-            // grid snapping keys on (see `push_styled_cell`), so merging them
-            // in would drop the *whole* run to natural shaping. Isolated, any
-            // shaping drift stays confined to this one cell -- exactly the
-            // pre-merge rendering. The trailing zero-width chars also fence
-            // the next cell out of this span (`push_styled_cell`'s
-            // ends-in-zero-width test).
-            line.spans.push(style.span(cell.c.to_string(), columns));
-        }
-        for ch in zerowidth {
-            push_styled_cell(line, *ch, 0, style);
+    let mut rows = vec![TerminalLine { spans: Vec::new() }; row_count];
+    let mut graphemes = ['\0'; 32];
+    let mut uri = vec![0u8; 2048];
+    for (row, line) in rows.iter_mut().enumerate() {
+        for column in 0..columns {
+            let at = Point::Screen(Coordinate {
+                x: column as u16,
+                y: (top + row) as u32,
+            });
+            let Ok(place) = terminal.grid_ref(at) else {
+                continue;
+            };
+            let Ok(cell) = place.cell() else {
+                continue;
+            };
+            let wide = cell.wide().unwrap_or(CellWide::Narrow);
+            // The second half of a wide character, and the blank a wide
+            // character leaves at a row's end when it wraps: its partner
+            // counts both columns.
+            if wide == CellWide::SpacerTail {
+                continue;
+            }
+            let style = place.style().unwrap_or_default();
+            // A cell erased with a background color holds the color and
+            // no text.
+            let erased = match cell.content_tag() {
+                Ok(CellContentTag::BgColorPalette) => {
+                    (cell.bg_color_palette().ok()).map(|index| palette_color(index.0))
+                }
+                Ok(CellContentTag::BgColorRgb) => {
+                    (cell.bg_color_rgb().ok()).map(|rgb| TerminalColor::Rgb([rgb.r, rgb.g, rgb.b]))
+                }
+                _ => None,
+            };
+            let url = match cell.has_hyperlink() {
+                Ok(true) => link(&place, &mut uri),
+                _ => None,
+            };
+            let mut span = SpanStyle::of(style, url.as_deref());
+            if let Some(background) = erased {
+                span.bg = background;
+            }
+            let written = match place.graphemes(&mut graphemes) {
+                Ok(written) => written,
+                Err(_) => 0,
+            };
+            let (first, following) = match graphemes[..written].split_first() {
+                Some((first, following)) if *first != '\0' => (*first, following),
+                _ => (' ', &[][..]),
+            };
+            let cells = match wide {
+                CellWide::Wide => 2,
+                _ => 1,
+            };
+            if style.invisible {
+                // SGR 8 hides the glyph; the cell keeps its column.
+                push_styled_cell(line, ' ', cells, span);
+                continue;
+            }
+            if following.is_empty() || first == ' ' {
+                push_styled_cell(line, first, cells, span);
+            } else {
+                // A cell with combining characters is a span of its own.
+                line.spans.push(span.span(first.to_string(), cells));
+            }
+            for character in following {
+                push_styled_cell(line, *character, 0, span);
+            }
         }
     }
-
-    styled_rows
+    rows
 }
 
-/// This session's live OSC 4/10/11/12 palette overrides
-/// (`Term::colors()`), as a sparse `(index, rgb)` table — see
-/// `TerminalFrame::palette_overrides`. `alacritty_terminal::term::color::COUNT`
-/// iterated in ascending order already yields the sorted order that field's
-/// `Eq`/`PartialEq` relies on.
-fn palette_overrides(term: &Term<EventSink>) -> Vec<(u16, [u8; 3])> {
-    let colors = term.colors();
-    (0..alacritty_terminal::term::color::COUNT)
-        .filter_map(|i| colors[i].map(|rgb| (i as u16, [rgb.r, rgb.g, rgb.b])))
-        .collect()
+/// The URI of the link a cell is in.
+fn link(place: &libghostty_vt::grid_ref::GridRef<'_>, buffer: &mut Vec<u8>) -> Option<String> {
+    let length = match place.hyperlink_uri(buffer) {
+        Ok(length) => length,
+        Err(Error::OutOfSpace { required }) => {
+            buffer.resize(required, 0);
+            place.hyperlink_uri(buffer).ok()?
+        }
+        Err(_) => return None,
+    };
+    let uri = std::str::from_utf8(&buffer[..length]).ok()?;
+    (!uri.is_empty()).then(|| uri.to_string())
 }
 
-/// A cell's full presentation state, as one value: the style half of
-/// [`push_styled_cell`]'s span-merge key (two adjacent cells can share a
-/// span only when every field here matches; the width-class fence
-/// documented there applies on top) and the source of every style field on
-/// the produced [`TerminalSpan`].
+/// A cell's full presentation state: the style half of
+/// [`push_styled_cell`]'s span-merge key, and the source of every style
+/// field on the produced [`TerminalSpan`].
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct SpanStyle<'a> {
     fg: TerminalColor,
@@ -325,34 +395,39 @@ struct SpanStyle<'a> {
     strikethrough: bool,
     underline: TerminalUnderline,
     underline_color: Option<TerminalColor>,
-    /// The cell's OSC 8 URI, borrowed from the grid (see `styled_rows`'s
-    /// read). Part of the merge key: a span carries at most one URI, so
-    /// linked text is never fused with plain or different-linked neighbors.
     url: Option<&'a str>,
 }
 
 impl<'a> SpanStyle<'a> {
-    fn from_cell(
-        fg: AnsiColor,
-        bg: AnsiColor,
-        flags: Flags,
-        underline_color: Option<AnsiColor>,
-        url: Option<&'a str>,
-    ) -> Self {
-        let underline = underline_kind(flags);
+    /// From the engine's style. Bold and faint are kept as the brighter
+    /// and the dimmer color, and inverse as the two colors' places changed,
+    /// as the frame's vocabulary has them.
+    fn of(style: Style, url: Option<&'a str>) -> Self {
+        let text = promoted(color(style.fg_color, NamedColor::Foreground), style);
+        let fill = color(style.bg_color, NamedColor::Background);
+        let (fg, bg) = match style.inverse {
+            true => (fill, text),
+            false => (text, fill),
+        };
+        let underline = match style.underline {
+            Underline::Single => TerminalUnderline::Single,
+            Underline::Double => TerminalUnderline::Double,
+            Underline::Curly => TerminalUnderline::Curl,
+            Underline::Dotted => TerminalUnderline::Dotted,
+            Underline::Dashed => TerminalUnderline::Dashed,
+            _ => TerminalUnderline::None,
+        };
+        let underline_color = match style.underline_color {
+            StyleColor::None => None,
+            set => Some(color(set, NamedColor::Foreground)),
+        };
         Self {
-            fg: convert_color(cell_fg(fg, bg, flags)),
-            bg: convert_color(cell_bg(fg, bg, flags)),
-            italic: flags.contains(Flags::ITALIC),
-            strikethrough: flags.contains(Flags::STRIKEOUT),
+            fg,
+            bg,
+            italic: style.italic,
+            strikethrough: style.strikethrough,
             underline,
-            // An SGR 58 color on a cell that is not underlined is
-            // presentation-dead -- normalize it away so it neither splits
-            // spans nor rides the wire (`TerminalSpan::underline_color`'s
-            // contract).
-            underline_color: (underline != TerminalUnderline::None)
-                .then(|| underline_color.map(convert_color))
-                .flatten(),
+            underline_color: underline_color.filter(|_| underline != TerminalUnderline::None),
             url,
         }
     }
@@ -382,25 +457,79 @@ impl<'a> SpanStyle<'a> {
     }
 }
 
-/// The one underline style a cell's flags express. alacritty stores the
-/// five SGR 4 sub-styles as separate bits but only ever sets one at a time
-/// (`Term::set_attribute` clears `ALL_UNDERLINES` before setting); the
-/// match order below is alacritty's own display precedence for the
-/// (unreachable in practice) multi-bit case.
-fn underline_kind(flags: Flags) -> TerminalUnderline {
-    if flags.contains(Flags::DOUBLE_UNDERLINE) {
-        TerminalUnderline::Double
-    } else if flags.contains(Flags::UNDERCURL) {
-        TerminalUnderline::Curl
-    } else if flags.contains(Flags::DOTTED_UNDERLINE) {
-        TerminalUnderline::Dotted
-    } else if flags.contains(Flags::DASHED_UNDERLINE) {
-        TerminalUnderline::Dashed
-    } else if flags.contains(Flags::UNDERLINE) {
-        TerminalUnderline::Single
-    } else {
-        TerminalUnderline::None
+/// The engine's color in the frame's vocabulary. The engine keeps a color
+/// of the palette by its place alone: the first sixteen are the named
+/// ones here, whether the program wrote SGR 31 or SGR 38;5;1.
+fn color(color: StyleColor, default: NamedColor) -> TerminalColor {
+    match color {
+        StyleColor::None => TerminalColor::Named(default),
+        StyleColor::Palette(index) => palette_color(index.0),
+        StyleColor::Rgb(rgb) => TerminalColor::Rgb([rgb.r, rgb.g, rgb.b]),
     }
+}
+
+fn palette_color(index: u8) -> TerminalColor {
+    use NamedColor::*;
+    const NAMED: [NamedColor; 16] = [
+        Black,
+        Red,
+        Green,
+        Yellow,
+        Blue,
+        Magenta,
+        Cyan,
+        White,
+        BrightBlack,
+        BrightRed,
+        BrightGreen,
+        BrightYellow,
+        BrightBlue,
+        BrightMagenta,
+        BrightCyan,
+        BrightWhite,
+    ];
+    match NAMED.get(index as usize) {
+        Some(named) => TerminalColor::Named(*named),
+        None => TerminalColor::Indexed(index),
+    }
+}
+
+/// The text's color with bold's brighter form or faint's dimmer one, for
+/// the eight base colors and the default foreground.
+fn promoted(color: TerminalColor, style: Style) -> TerminalColor {
+    use NamedColor::*;
+    let TerminalColor::Named(named) = color else {
+        return color;
+    };
+    let bright = match named {
+        Black => BrightBlack,
+        Red => BrightRed,
+        Green => BrightGreen,
+        Yellow => BrightYellow,
+        Blue => BrightBlue,
+        Magenta => BrightMagenta,
+        Cyan => BrightCyan,
+        White => BrightWhite,
+        Foreground => BrightForeground,
+        other => other,
+    };
+    let dim = match named {
+        Black => DimBlack,
+        Red => DimRed,
+        Green => DimGreen,
+        Yellow => DimYellow,
+        Blue => DimBlue,
+        Magenta => DimMagenta,
+        Cyan => DimCyan,
+        White => DimWhite,
+        Foreground => DimForeground,
+        other => other,
+    };
+    TerminalColor::Named(match (style.bold, style.faint) {
+        (true, _) => bright,
+        (false, true) => dim,
+        (false, false) => named,
+    })
 }
 
 /// Append one cell to the row, merging it into the trailing span whenever
@@ -452,18 +581,6 @@ fn push_styled_cell(line: &mut TerminalLine, ch: char, columns: usize, style: Sp
     line.spans.push(style.span(ch.to_string(), columns));
 }
 
-fn cell_width(ch: char, flags: Flags) -> usize {
-    if flags.contains(Flags::WIDE_CHAR) {
-        2
-    } else {
-        char_width(ch)
-    }
-}
-
-fn char_width(ch: char) -> usize {
-    ch.width().unwrap_or(0).max(1)
-}
-
 /// True when the span's text ends in a zero-width (combining) char --
 /// `push_styled_cell`'s fence keeping printable cells out of a span that
 /// carries a combining sequence. Also disambiguates the one case the
@@ -474,165 +591,4 @@ fn ends_with_zero_width(text: &str) -> bool {
     text.chars()
         .next_back()
         .is_some_and(|ch| ch.width().unwrap_or(0) == 0)
-}
-
-/// A cell's logical foreground color, with the bold/dim promotion
-/// (`NamedColor::to_bright`/`to_dim`) `alacritty_terminal` itself defines —
-/// this is state only the core can compute (it needs the cell's flags), so
-/// it stays here even though the final RGB resolution moved to the host
-/// (`docs/session-daemon-design.md` decision 8). Indexed/truecolor values
-/// pass through unchanged, matching pre-cut behavior.
-fn promoted(color: AnsiColor, flags: Flags) -> AnsiColor {
-    if flags.contains(Flags::BOLD) {
-        match color {
-            AnsiColor::Named(named) => AnsiColor::Named(named.to_bright()),
-            other => other,
-        }
-    } else if flags.contains(Flags::DIM) {
-        match color {
-            AnsiColor::Named(named) => AnsiColor::Named(named.to_dim()),
-            other => other,
-        }
-    } else {
-        color
-    }
-}
-
-/// The color a cell's text is drawn in: its foreground, promoted, or
-/// under `INVERSE` its background.
-fn cell_fg(fg: AnsiColor, bg: AnsiColor, flags: Flags) -> AnsiColor {
-    match flags.contains(Flags::INVERSE) {
-        true => bg,
-        false => promoted(fg, flags),
-    }
-}
-
-/// The color a cell is filled with: its background, or under `INVERSE`
-/// its foreground, promoted.
-fn cell_bg(fg: AnsiColor, bg: AnsiColor, flags: Flags) -> AnsiColor {
-    match flags.contains(Flags::INVERSE) {
-        true => promoted(fg, flags),
-        false => bg,
-    }
-}
-
-/// `row` is already viewport-relative (the caller has added `display_offset`
-/// -- see `snapshot_frame`'s comment). Bounded on both ends: negative means
-/// the live cursor is above the current (scrolled-up) viewport, and
-/// `row >= rows` means it's below -- either way the real cursor isn't part
-/// of what's currently on screen, so it must not be reported as visible at
-/// some other, wrong row. A DECTCEM-hidden cursor (`shape == Hidden`, how
-/// `RenderableCursor` reports `CSI ?25l`) is likewise `None` -- hidden means
-/// no cursor on the wire, not a shape variant.
-fn cursor_position(
-    shape: AnsiCursorShape,
-    row: i32,
-    col: usize,
-    rows: usize,
-) -> Option<TerminalCursor> {
-    let shape = match shape {
-        AnsiCursorShape::Block => TerminalCursorShape::Block,
-        AnsiCursorShape::Underline => TerminalCursorShape::Underline,
-        AnsiCursorShape::Beam => TerminalCursorShape::Beam,
-        AnsiCursorShape::HollowBlock => TerminalCursorShape::HollowBlock,
-        AnsiCursorShape::Hidden => return None,
-    };
-    (row >= 0 && (row as usize) < rows).then_some(TerminalCursor {
-        row: row as usize,
-        col,
-        shape,
-    })
-}
-
-/// Convert alacritty's buffer-coordinate `SelectionRange` into the frame's
-/// viewport-space [`TerminalSelection`]: shift by `display_offset` (the
-/// same absolute-line -> viewport-row conversion `snapshot_frame` applies
-/// to every cell) and clamp to the visible window. `None` when the
-/// selection misses the window entirely. Every row strictly between the
-/// two endpoints is fully selected (`TerminalSelectionKind` mints no block
-/// selections, so `SelectionRange::is_block` is never set on this path),
-/// which is what makes clamping an endpoint to the window edge exact: the
-/// off-screen remainder covered its rows in full.
-fn selection_in_viewport(
-    range: Option<SelectionRange>,
-    display_offset: i32,
-    size: TerminalSize,
-) -> Option<TerminalSelection> {
-    let range = range?;
-    let rows = size.rows as i32;
-    let last_col = size.cols.saturating_sub(1) as usize;
-    let start_row = range.start.line.0 + display_offset;
-    let end_row = range.end.line.0 + display_offset;
-    if end_row < 0 || start_row >= rows {
-        return None;
-    }
-
-    let start = if start_row < 0 {
-        TerminalSelectionPoint { row: 0, col: 0 }
-    } else {
-        TerminalSelectionPoint {
-            row: start_row as usize,
-            col: range.start.column.0.min(last_col),
-        }
-    };
-    let end = if end_row >= rows {
-        TerminalSelectionPoint {
-            row: (rows - 1) as usize,
-            col: last_col,
-        }
-    } else {
-        TerminalSelectionPoint {
-            row: end_row as usize,
-            col: range.end.column.0.min(last_col),
-        }
-    };
-    Some(TerminalSelection { start, end })
-}
-
-/// Convert `alacritty_terminal`'s VT-internal color representation into
-/// this crate's own [`TerminalColor`] — the one place a `TerminalFrame` is
-/// built, per `types::color`'s doc comment.
-fn convert_color(color: AnsiColor) -> TerminalColor {
-    match color {
-        AnsiColor::Spec(AnsiRgb { r, g, b }) => TerminalColor::Rgb([r, g, b]),
-        AnsiColor::Indexed(index) => TerminalColor::Indexed(index),
-        AnsiColor::Named(named) => TerminalColor::Named(convert_named(named)),
-    }
-}
-
-/// Convert every reachable `alacritty_terminal::vte::ansi::NamedColor`
-/// variant (see [`NamedColor`]'s doc comment for which ones `cell_fg`/
-/// `cell_bg` can actually produce) into this crate's owned enum.
-fn convert_named(named: AnsiNamedColor) -> NamedColor {
-    match named {
-        AnsiNamedColor::Black => NamedColor::Black,
-        AnsiNamedColor::Red => NamedColor::Red,
-        AnsiNamedColor::Green => NamedColor::Green,
-        AnsiNamedColor::Yellow => NamedColor::Yellow,
-        AnsiNamedColor::Blue => NamedColor::Blue,
-        AnsiNamedColor::Magenta => NamedColor::Magenta,
-        AnsiNamedColor::Cyan => NamedColor::Cyan,
-        AnsiNamedColor::White => NamedColor::White,
-        AnsiNamedColor::BrightBlack => NamedColor::BrightBlack,
-        AnsiNamedColor::BrightRed => NamedColor::BrightRed,
-        AnsiNamedColor::BrightGreen => NamedColor::BrightGreen,
-        AnsiNamedColor::BrightYellow => NamedColor::BrightYellow,
-        AnsiNamedColor::BrightBlue => NamedColor::BrightBlue,
-        AnsiNamedColor::BrightMagenta => NamedColor::BrightMagenta,
-        AnsiNamedColor::BrightCyan => NamedColor::BrightCyan,
-        AnsiNamedColor::BrightWhite => NamedColor::BrightWhite,
-        AnsiNamedColor::DimBlack => NamedColor::DimBlack,
-        AnsiNamedColor::DimRed => NamedColor::DimRed,
-        AnsiNamedColor::DimGreen => NamedColor::DimGreen,
-        AnsiNamedColor::DimYellow => NamedColor::DimYellow,
-        AnsiNamedColor::DimBlue => NamedColor::DimBlue,
-        AnsiNamedColor::DimMagenta => NamedColor::DimMagenta,
-        AnsiNamedColor::DimCyan => NamedColor::DimCyan,
-        AnsiNamedColor::DimWhite => NamedColor::DimWhite,
-        AnsiNamedColor::Foreground => NamedColor::Foreground,
-        AnsiNamedColor::Background => NamedColor::Background,
-        AnsiNamedColor::Cursor => NamedColor::Cursor,
-        AnsiNamedColor::BrightForeground => NamedColor::BrightForeground,
-        AnsiNamedColor::DimForeground => NamedColor::DimForeground,
-    }
 }

@@ -17,8 +17,6 @@
 //! `Term::colors()` and that snapshot are two independent consumers of the
 //! same underlying state, not a narrowing.
 
-use alacritty_terminal::term::color::Colors;
-use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -156,119 +154,35 @@ impl Default for TerminalColorScheme {
     }
 }
 
-/// Resolve the RGB value alacritty_terminal should report for color query
-/// `index`: 0..16 base ANSI, 16..232 color cube, 232..256 grayscale ramp,
-/// 256/257/258 foreground/background/cursor (see
-/// `alacritty_terminal::term::color::Colors` docs — these are the only
-/// indices reachable via OSC 4/10/11/12). `overrides` is the live palette
-/// (`Term::colors()`): an app that already set this slot via OSC
-/// 4/10/11/12 gets that value back; otherwise `scheme`.
-pub(super) fn resolve_query_color(
-    index: usize,
-    overrides: &Colors,
-    scheme: &TerminalColorScheme,
-) -> Rgb {
-    if let Some(rgb) = overrides[index] {
-        return rgb;
-    }
-    default_rgb(index, *scheme)
-}
-
-fn default_rgb(index: usize, scheme: TerminalColorScheme) -> Rgb {
-    if index < 16 {
-        return named_rgb(base_ansi_color(index), scheme);
-    }
-
-    if let Some([r, g, b]) = u8::try_from(index).ok().and_then(crate::fixed_palette_rgb) {
-        return Rgb { r, g, b };
-    }
-
-    named_rgb(
-        match index {
-            i if i == NamedColor::Background as usize => NamedColor::Background,
-            i if i == NamedColor::Cursor as usize => NamedColor::Cursor,
-            _ => NamedColor::Foreground,
-        },
-        scheme,
-    )
-}
-
-fn base_ansi_color(index: usize) -> NamedColor {
-    match index {
-        0 => NamedColor::Black,
-        1 => NamedColor::Red,
-        2 => NamedColor::Green,
-        3 => NamedColor::Yellow,
-        4 => NamedColor::Blue,
-        5 => NamedColor::Magenta,
-        6 => NamedColor::Cyan,
-        7 => NamedColor::White,
-        8 => NamedColor::BrightBlack,
-        9 => NamedColor::BrightRed,
-        10 => NamedColor::BrightGreen,
-        11 => NamedColor::BrightYellow,
-        12 => NamedColor::BrightBlue,
-        13 => NamedColor::BrightMagenta,
-        14 => NamedColor::BrightCyan,
-        _ => NamedColor::BrightWhite,
+impl TerminalColorScheme {
+    /// The sixteen colors of the palette, in its order.
+    pub(super) fn ansi(&self) -> [Rgb; 16] {
+        [
+            self.black,
+            self.red,
+            self.green,
+            self.yellow,
+            self.blue,
+            self.magenta,
+            self.cyan,
+            self.white,
+            self.bright_black,
+            self.bright_red,
+            self.bright_green,
+            self.bright_yellow,
+            self.bright_blue,
+            self.bright_magenta,
+            self.bright_cyan,
+            self.bright_white,
+        ]
     }
 }
 
-fn named_rgb(color: NamedColor, scheme: TerminalColorScheme) -> Rgb {
-    match color {
-        NamedColor::Black => scheme.black,
-        NamedColor::Red => scheme.red,
-        NamedColor::Green => scheme.green,
-        NamedColor::Yellow => scheme.yellow,
-        NamedColor::Blue => scheme.blue,
-        NamedColor::Magenta => scheme.magenta,
-        NamedColor::Cyan => scheme.cyan,
-        NamedColor::White => scheme.white,
-        NamedColor::BrightBlack => scheme.bright_black,
-        NamedColor::BrightRed => scheme.bright_red,
-        NamedColor::BrightGreen => scheme.bright_green,
-        NamedColor::BrightYellow => scheme.bright_yellow,
-        NamedColor::BrightBlue => scheme.bright_blue,
-        NamedColor::BrightMagenta => scheme.bright_magenta,
-        NamedColor::BrightCyan => scheme.bright_cyan,
-        NamedColor::BrightWhite => scheme.bright_white,
-        NamedColor::Foreground => scheme.foreground,
-        NamedColor::Background => scheme.background,
-        NamedColor::Cursor => scheme.cursor,
-        // Dim*/BrightForeground/DimForeground are not reachable through
-        // OSC 4/10/11/12 (index is always < 256, or exactly 256/257/258),
-        // so this arm is defensive rather than load-bearing.
-        _ => scheme.foreground,
-    }
-}
-
-#[cfg(test)]
-mod rgb_schema_tests {
-    use super::*;
-
-    /// [`RgbSchema`] claims to mirror `vte::ansi::Rgb`'s serde shape
-    /// byte-for-byte — pinned here against the *real* type's output, so a
-    /// vte/alacritty bump that changes `Rgb`'s encoding goes red instead
-    /// of silently making the wire-schema artifact describe a shape the
-    /// wire no longer carries (a review-found checker blind spot: `with =`
-    /// stand-ins are otherwise never validated against their subjects).
-    #[test]
-    fn rgb_schema_matches_the_real_rgb_serde_shape() {
-        let real = serde_json::to_value(Rgb { r: 1, g: 2, b: 3 }).unwrap();
-        assert_eq!(real, serde_json::json!({"r": 1, "g": 2, "b": 3}));
-
-        // And the stand-in's schema describes exactly those properties.
-        let schema = serde_json::to_value(schemars::schema_for!(RgbSchema)).unwrap();
-        let properties = schema["properties"]
-            .as_object()
-            .expect("RgbSchema must describe an object with properties");
-        let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
-        keys.sort_unstable();
-        assert_eq!(keys, ["b", "g", "r"]);
-        assert_eq!(
-            schema["required"],
-            serde_json::json!(["r", "g", "b"]),
-            "every channel is required, like the real struct's fields"
-        );
-    }
+/// A color of the scheme. (alacritty_terminal's `Rgb` stood here: the same
+/// three fields, so the same on the wire.)
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
 }

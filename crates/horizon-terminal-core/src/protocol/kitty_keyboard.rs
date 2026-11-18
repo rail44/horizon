@@ -29,34 +29,27 @@
 //! test(s) that hold it to account. `cargo test print_compliance_matrix --
 //! -- --nocapture` prints it.
 
-use alacritty_terminal::term::TermMode;
 use termwiz::escape::csi::KittyKeyboardFlags;
 use termwiz::input::{CSI, KeyCode, Modifiers, SS3};
 
 use crate::types::KeyEventKind;
 
-/// Read the terminal's negotiated Kitty progressive-enhancement flags off
-/// its live `TermMode` (set by `CSI > flags u` / `CSI = flags ; mode u`,
-/// handled upstream in `alacritty_terminal::Term`).
-pub(crate) fn flags_from_mode(mode: TermMode) -> KittyKeyboardFlags {
+/// The terminal's negotiated Kitty progressive-enhancement flags, from the
+/// engine's own (`CSI > flags u` / `CSI = flags ; mode u`): the protocol's
+/// bits are the same in both.
+pub(crate) fn flags_from_bits(bits: u8) -> KittyKeyboardFlags {
     let mut flags = KittyKeyboardFlags::NONE;
-
-    if mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
-        flags |= KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
+    for (bit, flag) in [
+        (0b1, KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES),
+        (0b10, KittyKeyboardFlags::REPORT_EVENT_TYPES),
+        (0b100, KittyKeyboardFlags::REPORT_ALTERNATE_KEYS),
+        (0b1000, KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES),
+        (0b10000, KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT),
+    ] {
+        if bits & bit != 0 {
+            flags |= flag;
+        }
     }
-    if mode.contains(TermMode::REPORT_EVENT_TYPES) {
-        flags |= KittyKeyboardFlags::REPORT_EVENT_TYPES;
-    }
-    if mode.contains(TermMode::REPORT_ALTERNATE_KEYS) {
-        flags |= KittyKeyboardFlags::REPORT_ALTERNATE_KEYS;
-    }
-    if mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
-        flags |= KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
-    }
-    if mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) {
-        flags |= KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT;
-    }
-
     flags
 }
 

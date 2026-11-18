@@ -1226,7 +1226,7 @@ mod tests {
     /// by the time the very first query is sent.
     #[test]
     fn run_terminal_core_repushes_the_color_scheme_to_a_running_session() {
-        use alacritty_terminal::vte::ansi::Rgb;
+        use crate::core::Rgb;
 
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
@@ -1335,7 +1335,7 @@ mod tests {
     /// `rgb` should produce -- shared by the color-scheme re-push test's
     /// assertions against both OSC 10 (foreground) and OSC 11
     /// (background).
-    fn osc_reply(osc: u8, rgb: alacritty_terminal::vte::ansi::Rgb) -> Vec<u8> {
+    fn osc_reply(osc: u8, rgb: crate::core::Rgb) -> Vec<u8> {
         format!(
             "\x1b]{osc};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x07",
             osc = osc,

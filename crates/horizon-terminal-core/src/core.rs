@@ -1,20 +1,32 @@
-use std::time::Instant;
+//! SPIKE: `TerminalCore` over libghostty-vt in alacritty_terminal's place.
+//! What the type offers is what it offered; what is behind it is the
+//! engine's terminal, its callbacks, and a render state for the cursor.
 
-use alacritty_terminal::event::WindowSize;
-use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::index::{Column, Line, Point as TermPoint, Side};
-use alacritty_terminal::selection::{Selection, SelectionType};
-use alacritty_terminal::term::{Config as TermConfig, Osc52, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Processor, Timeout};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+use libghostty_vt::Terminal;
+use libghostty_vt::color as engine_color;
+use libghostty_vt::fmt::{Format, Formatter};
+use libghostty_vt::grid_ref::TrackedGridRef;
+use libghostty_vt::mode::Mode;
+use libghostty_vt::point::{Coordinate, Point};
+use libghostty_vt::render::RenderState;
+use libghostty_vt::report::SizeReportSize;
+use libghostty_vt::selection::{SelectLineOptions, SelectWordOptions, Selection};
+use libghostty_vt::terminal::ScrollViewport;
 use termwiz::escape::csi::KittyKeyboardFlags;
 use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
 
+#[cfg(test)]
+pub(crate) use self::color::Rgb;
 pub use self::color::TerminalColorScheme;
-use self::color::resolve_query_color;
 use self::events::EventSink;
 pub(crate) use self::events::TerminalEvents;
 use self::input::{arrow_scroll_input, sgr_mouse_input, sgr_mouse_wheel_input};
 use self::osc_notify::OscNotificationScanner;
+use self::render::{Engine, alternate_screen, mode, mouse_mode};
 use crate::protocol::kitty_keyboard;
 use crate::types::{
     KeyEventKind, TerminalFrame, TerminalMouseKind, TerminalMouseReport, TerminalScroll,
@@ -28,66 +40,36 @@ mod osc_notify;
 mod program_status;
 mod render;
 
-/// Built-in fallback for `Term`'s `scrolling_history` (`TermConfig`), used
-/// by [`TerminalCore::new`] — the crate has no dependency on the host's
-/// config file (`docs/session-daemon-design.md` decision 9), so a real
-/// session always goes through [`TerminalCore::with_scrollback`] instead,
-/// fed from `[terminal].scrollback_lines` (`horizon_config::RawTerminalConfig`)
-/// on the host side. Matches the host's own built-in default so a bare `new` — every test in this crate —
-/// still exercises realistic scrollback depth.
+/// Built-in fallback for the scrollback's depth, used by
+/// [`TerminalCore::new`]: a real session goes through
+/// [`TerminalCore::with_scrollback`], fed from the host's configuration.
 pub const DEFAULT_SCROLLBACK_LINES: usize = 10_000;
 
-/// `Term::report_private_mode` (alacritty_terminal's DECRQM handler, in
-/// upstream `term/mod.rs`) always answers a query for private mode 2026
-/// (synchronized output, `CSI ?2026h`/`CSI ?2026l` a.k.a. BSU/ESU) with
-/// "reset" — `NamedPrivateMode::SyncUpdate => ModeState::Reset`,
-/// unconditionally — regardless of whether a synchronized-update window is
-/// actually open. That's an upstream quirk in `Term` itself, not something
-/// fixable from here. Apps that open a window and then verify it took
-/// effect read the always-reset reply as "not supported" and give up on
-/// synchronized output.
-///
-/// `vte::ansi::Processor` (the parser `TerminalCore::parser` wraps) *does*
-/// track the live window correctly — it buffers everything between BSU and
-/// ESU opaquely and only clears its internal sync timeout once ESU (or its
-/// 150ms failsafe, `vte::ansi`'s `SYNC_UPDATE_TIMEOUT`) closes the window,
-/// which is exactly the live state we want (see `Processor::sync_timeout`/
-/// `Timeout::pending_timeout`, used in `TerminalCore::write_vt`). So patch
-/// just this one reply on the way out: while a window is open, report "set"
-/// instead of the hardcoded "reset". Nothing else about DECRQM handling is
-/// touched — only an exact match of the mode-2026 reset reply is ever
-/// rewritten.
-///
-/// Note the failsafe is *not* self-pumping: `Processor` only ever checks the
-/// deadline against real time from inside `advance`, so it only fires on the
-/// next byte that happens to arrive — see `sync_flush_deadline`/
-/// `flush_sync_update` and their caller in `terminal::session::runtime` for
-/// the timer that actually pumps it when no more PTY data shows up.
-const SYNC_UPDATE_DECRQM_RESET: &[u8] = b"\x1b[?2026;2$y";
-const SYNC_UPDATE_DECRQM_SET: &[u8] = b"\x1b[?2026;1$y";
-
-fn rewrite_sync_update_decrqm(pty_writes: &mut [Vec<u8>]) {
-    for write in pty_writes {
-        if write.as_slice() == SYNC_UPDATE_DECRQM_RESET {
-            *write = SYNC_UPDATE_DECRQM_SET.to_vec();
-        }
-    }
-}
+/// How long a synchronized update (mode 2026) may hold the screen before it
+/// is let go without the program's say: the engine has no clock of its own.
+/// alacritty_terminal's own value, kept.
+const SYNC_UPDATE_TIMEOUT: Duration = Duration::from_millis(150);
 
 pub struct TerminalCore {
-    term: Term<EventSink>,
-    parser: Processor,
+    terminal: Engine,
+    /// For the cursor's shape, which the engine keeps nowhere else.
+    render: Rc<RefCell<RenderState<'static>>>,
+    /// The frame as it was when a synchronized update's hold began, while
+    /// one is held: the engine writes to its screen through a hold, and
+    /// what is shown meanwhile is what was there before it.
+    held_frame: Rc<RefCell<Option<TerminalFrame>>>,
     events: EventSink,
-    /// Strips desktop-notification OSC sequences (OSC 9 / OSC 777
-    /// `notify`) off the PTY stream ahead of `parser` — see
-    /// `core::osc_notify` for why this cannot be an `EventSink` arm.
+    /// Strips desktop-notification and program-status OSC sequences off the
+    /// PTY stream ahead of the engine (`core::osc_notify`). The engine reads
+    /// both itself; the spike leaves this as it was.
     osc_notifications: OscNotificationScanner,
-    size: TerminalSize,
-    /// Default colors for OSC 4/10/11/12 query replies
-    /// (`core::color::resolve_query_color`) — see [`TerminalColorScheme`]'s
-    /// doc comment. Set from [`TerminalColorScheme::default`] until the
-    /// host pushes its live theme via [`Self::set_color_scheme`].
-    color_scheme: TerminalColorScheme,
+    size: Rc<Cell<TerminalSize>>,
+    /// When the hold of a synchronized update began, while one is held, and
+    /// whether one was let go since it was last asked.
+    held_since: Rc<Cell<Option<Instant>>>,
+    released: Rc<Cell<bool>>,
+    /// Where a selection began, kept on the text it began on, and its kind.
+    anchor: Option<(TrackedGridRef, TerminalSelectionKind)>,
 }
 
 impl TerminalCore {
@@ -95,94 +77,115 @@ impl TerminalCore {
         Self::with_scrollback(size, DEFAULT_SCROLLBACK_LINES)
     }
 
-    /// Like [`Self::new`], but with an explicit scrollback depth —
-    /// `TerminalSession::spawn` uses this, feeding the host's configured
-    /// `[terminal].scrollback_lines` (`horizon_config::RawTerminalConfig`)
-    /// in rather than this crate's own built-in default.
     pub fn with_scrollback(size: TerminalSize, scrollback_lines: usize) -> Self {
         let size = size.normalized();
-        let events = EventSink::default();
-        let config = TermConfig {
-            kitty_keyboard: true,
-            scrolling_history: scrollback_lines,
-            // OSC 52 clipboard write only, no read: a terminal app can copy
-            // to the system clipboard (`Event::ClipboardStore`, see
-            // `core::events::TerminalEvents::clipboard_writes`) but can
-            // never query it back (`Event::ClipboardLoad`) -- letting an
-            // app read whatever's on the clipboard is the well-known OSC 52
-            // security hazard (a compromised/malicious program could
-            // exfiltrate clipboard contents unrelated to itself), so reads
-            // are refused outright rather than gated some other way. This
-            // is also `Osc52`'s own documented default; set explicitly here
-            // so the security decision is visible at the call site instead
-            // of resting on an upstream default that could silently change.
-            osc52: Osc52::OnlyCopy,
-            ..TermConfig::default()
-        };
-        let term = Term::new(config, &size, events.clone());
+        let mut terminal = Terminal::new(size.cols, size.rows).expect("a terminal");
+        // The engine bounds its history in bytes by default, to about a
+        // page: the bound here is the lines asked for.
+        let _ = terminal.set_scrollback_max_bytes(Some(usize::MAX));
+        let _ = terminal.set_scrollback_max_lines(Some(scrollback_lines));
+        let (cell_width, cell_height) = cell_pixels(size);
+        let _ = terminal.resize(size.cols, size.rows, cell_width, cell_height);
 
-        Self {
-            term,
-            parser: Processor::new(),
+        let events = EventSink::default();
+        let size = Rc::new(Cell::new(size));
+        let held_since = Rc::new(Cell::new(None));
+        let released = Rc::new(Cell::new(false));
+
+        let sink = events.clone();
+        let _ = terminal.on_pty_write(move |_, bytes| sink.pty_write(bytes));
+        let sink = events.clone();
+        let _ = terminal.on_bell(move |_| sink.bell());
+        let sink = events.clone();
+        let _ = terminal.on_title_changed(move |terminal| {
+            sink.title(terminal.title().unwrap_or_default());
+        });
+        // OSC 52 writes only: with no callback for a read, the engine
+        // refuses one.
+        let sink = events.clone();
+        let _ = terminal.on_clipboard_write(move |_, write| {
+            if let Some(content) = write.contents().next() {
+                sink.clipboard_write(content.data);
+            }
+        });
+        // CSI 14 t and its kin: the size in cells and pixels.
+        let asked = size.clone();
+        let _ = terminal.on_size(move |_| {
+            let size = asked.get();
+            let (cell_width, cell_height) = cell_pixels(size);
+            Some(SizeReportSize {
+                rows: size.rows,
+                columns: size.cols,
+                cell_width,
+                cell_height,
+            })
+        });
+        let render = Rc::new(RefCell::new(RenderState::new().expect("a render state")));
+        let held_frame = Rc::new(RefCell::new(None));
+        let (held, let_go) = (held_since.clone(), released.clone());
+        let (drawn, kept, sized) = (render.clone(), held_frame.clone(), size.clone());
+        let _ = terminal.on_render_hold(move |terminal, holding| match holding {
+            true => {
+                held.set(Some(Instant::now()));
+                *kept.borrow_mut() = Some(render::snapshot_frame(terminal, &drawn, sized.get()));
+            }
+            false => {
+                held.set(None);
+                kept.borrow_mut().take();
+                let_go.set(true);
+            }
+        });
+
+        let mut core = Self {
+            terminal,
+            render,
+            held_frame,
             events,
             osc_notifications: OscNotificationScanner::default(),
             size,
-            color_scheme: TerminalColorScheme::default(),
+            held_since,
+            released,
+            anchor: None,
+        };
+        core.set_color_scheme(TerminalColorScheme::default());
+        core
+    }
+
+    /// The host's colors: what the engine answers a program that asks
+    /// (OSC 4/10/11/12) with, where the program has set none of its own.
+    pub fn set_color_scheme(&mut self, scheme: TerminalColorScheme) {
+        let rgb = |color: color::Rgb| engine_color::Rgb {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+        };
+        let _ = (self.terminal).set_default_fg_color(Some(rgb(scheme.foreground)));
+        let _ = (self.terminal).set_default_bg_color(Some(rgb(scheme.background)));
+        let _ = (self.terminal).set_default_cursor_color(Some(rgb(scheme.cursor)));
+        if let Ok(mut palette) = self.terminal.default_color_palette() {
+            for (index, color) in scheme.ansi().into_iter().enumerate() {
+                palette.0[index] = rgb(color);
+            }
+            let _ = self.terminal.set_default_color_palette(Some(palette));
         }
     }
 
-    /// Push the host's live color scheme in, for [`Self`]'s own OSC
-    /// 4/10/11/12 default-reply resolution (`docs/session-daemon-design.md`
-    /// decision 9's crate-local mirror pattern) — called once right after
-    /// construction (`TerminalSession::spawn`), and again on every live
-    /// theme apply (`Reload Config`/the theme settings view) via
-    /// `TerminalCommand::SetColorScheme`, since this crate has no way to
-    /// observe those directly itself.
-    pub fn set_color_scheme(&mut self, scheme: TerminalColorScheme) {
-        self.color_scheme = scheme;
-    }
-
     pub fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
-        // Captured *before* `advance` runs (which can itself close the
-        // window if `bytes` ends a synchronized-update sequence): a DECRQM
-        // reply queued while the window was open is only actually flushed
-        // by `Processor` once ESU (or its failsafe timeout) closes it,
-        // which can happen inside this very call. Classifying that flushed
-        // reply against the *pre-call* state means it's judged by what was
-        // true when the query was made, not by the state its own
-        // terminating ESU leaves behind. See `rewrite_sync_update_decrqm`.
-        let sync_output_was_active = self.parser.sync_timeout().pending_timeout();
-        // Notification OSCs come off the stream *before* the parser:
-        // alacritty_terminal doesn't know either code, so left in they are
-        // dropped silently with no event to observe. They are extracted
-        // even from inside a synchronized-update window (the scanner sees
-        // the raw chunk, not the sync-buffered view) — a notification
-        // surfacing "early" beats not surfacing at all.
         let scanned = self.osc_notifications.feed(bytes);
         let bytes = scanned.bytes;
-        self.parser.advance(&mut self.term, &bytes);
+        let held_before = self.held_since.get().is_some();
+        self.released.set(false);
+        self.terminal.vt_write(&bytes);
 
-        // Did this call actually touch the grid, or did it just add to an
-        // still-open synchronized-update buffer? Mirrors the criterion
-        // alacritty's own `EventLoop::pty_read` uses to decide whether to
-        // fire `Event::Wakeup`: `sync_bytes_count() < processed`. If every
-        // byte just fed ended up sitting in the (possibly already
-        // nonempty) sync buffer, this call couldn't have applied anything
-        // to the grid; any other outcome — no window was open, or one
-        // opened and closed within this very call — means content reached
-        // the grid.
-        // `bytes` here is the post-scan stream (notification OSCs
-        // removed), so the criterion below judges the bytes the parser
-        // actually saw — a chunk that was nothing but a notification never
-        // touches the grid and correctly reports not-dirty.
-        let visible_dirty = self.parser.sync_bytes_count() < bytes.len();
-
-        let mut events = self.finish_advance(sync_output_was_active, visible_dirty);
+        // Held throughout: what was written is on the engine's screen, and
+        // is not to be shown until the program lets the hold go.
+        let held_throughout =
+            held_before && self.held_since.get().is_some() && !self.released.get();
+        let mut events = self.events.drain();
+        events.visible_dirty = !bytes.is_empty() && !held_throughout;
         events.notifications = scanned.notifications;
         for message in scanned.program_status {
             match message {
-                // The answer is what has a program that asks first report
-                // at all.
                 program_status::Message::Query => {
                     events.pty_writes.push(program_status::QUERY_REPLY.to_vec());
                 }
@@ -192,93 +195,34 @@ impl TerminalCore {
         events
     }
 
-    /// The real-time deadline `vte::ansi::Processor` would use to abort a
-    /// synchronized-update window on its own — if it were ever asked. It
-    /// isn't, automatically: `Processor::advance` only compares this against
-    /// `Instant::now()` from *inside* a call fed new bytes (see the doc
-    /// comment above `SYNC_UPDATE_DECRQM_RESET`), so an idle PTY with no more
-    /// data leaves a window open forever. `None` while no window is open.
+    /// When a synchronized update's hold is let go without the program's
+    /// say, while one is held.
     pub fn sync_flush_deadline(&self) -> Option<Instant> {
-        self.parser.sync_timeout().sync_timeout()
+        self.held_since
+            .get()
+            .map(|since| since + SYNC_UPDATE_TIMEOUT)
     }
 
-    /// Force-close an open synchronized-update window without new PTY bytes
-    /// — the explicit pump `terminal::session::runtime` calls once
-    /// `sync_flush_deadline` has passed with nothing else arriving,
-    /// mirroring alacritty's own event loop (`EventLoop::spawn`, which polls
-    /// with that same deadline as its timeout and calls
-    /// `Processor::stop_sync` when it elapses). A no-op, PTY-write-wise, if
-    /// no window is open.
+    /// Lets a synchronized update's hold go.
     pub fn flush_sync_update(&mut self) -> TerminalEvents {
-        let sync_output_was_active = self.parser.sync_timeout().pending_timeout();
-        self.parser.stop_sync(&mut self.term);
-        // Unlike `write_vt`, there's no partial-buffering outcome here: this
-        // is only ever reached once a window was open (the failsafe timer
-        // is only armed while `sync_flush_deadline` is `Some`), and forcing
-        // it closed always replays whatever was buffered onto the grid.
-        self.finish_advance(sync_output_was_active, true)
-    }
-
-    /// Shared tail of `write_vt`/`flush_sync_update`: drain events queued by
-    /// whichever parser call just ran, rewrite a stale DECRQM reply against
-    /// the window state from *before* that call, and resolve any deferred
-    /// color/window-size query formatters. `sync_output_was_active` is the
-    /// pre-call snapshot the caller took for exactly the reason documented
-    /// on `write_vt`'s own capture; `visible_dirty` is likewise computed by
-    /// the caller and just carried onto the returned `TerminalEvents`.
-    fn finish_advance(
-        &mut self,
-        sync_output_was_active: bool,
-        visible_dirty: bool,
-    ) -> TerminalEvents {
+        let _ = self.terminal.set_mode(Mode::SYNC_OUTPUT, false);
+        self.held_since.set(None);
+        self.held_frame.borrow_mut().take();
         let mut events = self.events.drain();
-        events.visible_dirty = visible_dirty;
-
-        if sync_output_was_active {
-            rewrite_sync_update_decrqm(&mut events.pty_writes);
-        }
-
-        // `Event::ColorRequest`/`Event::TextAreaSizeRequest` hand back a
-        // formatter instead of a ready `PtyWrite` because alacritty_terminal
-        // doesn't own the answer (the current theme, or our pixel geometry)
-        // — resolve them now that the parser call that produced them has
-        // released its borrow of `self.term`, and fold the result into
-        // `pty_writes` like any other response so callers only ever see one
-        // kind of outbound byte stream.
-        for (index, format) in events.color_requests.drain(..) {
-            let rgb = resolve_query_color(index, self.term.colors(), &self.color_scheme);
-            events.pty_writes.push(format(rgb).into_bytes());
-        }
-        for format in events.window_size_requests.drain(..) {
-            // The formatter (alacritty_terminal's `Term::text_area_size_pixels`)
-            // answers CSI 14t as `num_lines * cell_height` and
-            // `num_cols * cell_width`, i.e. it expects per-cell pixel size
-            // plus a grid count to multiply out. `TerminalSize` instead
-            // carries the *total* grid pixel size directly
-            // (`pixel_width`/`pixel_height`, mirroring `ws_xpixel`/
-            // `ws_ypixel`), so report a 1x1 "grid" with the totals as the
-            // "cell" size — an exact pass-through rather than dividing by
-            // cols/rows and losing precision on the way back out.
-            let window_size = WindowSize {
-                num_lines: 1,
-                num_cols: 1,
-                cell_width: self.size.pixel_width,
-                cell_height: self.size.pixel_height,
-            };
-            events.pty_writes.push(format(window_size).into_bytes());
-        }
-
+        events.visible_dirty = true;
         events
     }
 
     pub fn resize(&mut self, size: TerminalSize) {
         let size = size.normalized();
-        self.size = size;
-        self.term.resize(size);
+        self.size.set(size);
+        let (cell_width, cell_height) = cell_pixels(size);
+        let _ = (self.terminal).resize(size.cols, size.rows, cell_width, cell_height);
     }
 
     pub fn scroll_display(&mut self, lines: i32) {
-        self.term.scroll_display(Scroll::Delta(lines));
+        // (The engine counts down the screen: back into history is up.)
+        (self.terminal).scroll_viewport(ScrollViewport::Delta(-(lines as isize)));
     }
 
     pub fn handle_scroll(&mut self, scroll: TerminalScroll) -> Option<Vec<u8>> {
@@ -291,14 +235,13 @@ impl TerminalCore {
     }
 
     pub fn handle_mouse_report(&self, report: TerminalMouseReport) -> Option<Vec<u8>> {
-        let mode = *self.term.mode();
-        if !mode.intersects(TermMode::MOUSE_MODE) || !mode.contains(TermMode::SGR_MOUSE) {
+        if !mouse_mode(&self.terminal) || !mode(&self.terminal, Mode::SGR_MOUSE) {
             return None;
         }
 
-        if matches!(report.kind, TerminalMouseKind::Drag)
-            && !mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
-        {
+        let motion =
+            mode(&self.terminal, Mode::BUTTON_MOUSE) || mode(&self.terminal, Mode::ANY_MOUSE);
+        if matches!(report.kind, TerminalMouseKind::Drag) && !motion {
             return None;
         }
 
@@ -306,7 +249,7 @@ impl TerminalCore {
     }
 
     pub fn paste_input(&self, text: &str) -> Vec<u8> {
-        if self.term.mode().contains(TermMode::BRACKETED_PASTE) {
+        if mode(&self.terminal, Mode::BRACKETED_PASTE) {
             let mut input = Vec::with_capacity(text.len() + 12);
             input.extend_from_slice(b"\x1b[200~");
             input.extend_from_slice(text.as_bytes());
@@ -318,18 +261,9 @@ impl TerminalCore {
     }
 
     /// Focus-report bytes for a pane focus transition (`CSI I`/`CSI O`,
-    /// private mode 1004) -- `None` unless the app currently attached to
-    /// this PTY has actually asked for focus events
-    /// (`TermMode::FOCUS_IN_OUT`), the same mode-gated shape as
-    /// `paste_input`'s bracketed-paste check. Stateless: every call is
-    /// judged purely against the terminal's current mode, with no
-    /// deduplication against the last reported state -- an app that
-    /// negotiates mode 1004 must already tolerate a duplicate focus-in/out
-    /// report (nothing in the spec promises otherwise), so the caller
-    /// (`terminal::session::runtime`) is free to call this on every real
-    /// focus transition without this method tracking any history itself.
+    /// private mode 1004): none unless the program asked for them.
     pub fn focus_input(&self, focused: bool) -> Option<Vec<u8>> {
-        if !self.term.mode().contains(TermMode::FOCUS_IN_OUT) {
+        if !mode(&self.terminal, Mode::FOCUS_EVENT) {
             return None;
         }
         Some(if focused {
@@ -341,12 +275,12 @@ impl TerminalCore {
 
     #[cfg(test)]
     pub fn display_offset(&self) -> usize {
-        self.term.grid().display_offset()
+        render::display_offset(&self.terminal)
     }
 
     #[cfg(test)]
     pub fn alternate_screen(&self) -> bool {
-        self.term.mode().contains(TermMode::ALT_SCREEN)
+        alternate_screen(&self.terminal)
     }
 
     #[cfg(test)]
@@ -355,20 +289,21 @@ impl TerminalCore {
     }
 
     pub fn snapshot_frame(&self) -> TerminalFrame {
-        render::snapshot_frame(&self.term, self.size)
+        if let Some(held) = self.held_frame.borrow().as_ref() {
+            return held.clone();
+        }
+        render::snapshot_frame(&self.terminal, &self.render, self.size.get())
     }
 
-    /// Read a scrollback window `height` rows tall, positioned `anchor` rows
-    /// above the live bottom, **without moving the live `display_offset`** --
-    /// the whole point of windowed overscan (`docs/terminal-scrollback-design.md`
-    /// §2.2, §3.2): the live-frame watch keeps following the tail while the
-    /// client scrolls within the returned block locally. Unlike
-    /// [`Self::handle_scroll`]'s `scroll_display` round-trip, this has no side
-    /// effect on the terminal at all -- it is a pure `iter_from` read (see
-    /// `render::snapshot_window`). Served from the session loop's `window_rx`
-    /// arm and returned as [`crate::TerminalUpdate::ScrollWindow`].
+    /// A scrollback window `height` rows tall, `anchor` rows above the live
+    /// bottom, read without moving the viewport.
     pub fn snapshot_window(&self, anchor: usize, height: usize) -> TerminalScrollWindow {
-        render::snapshot_window(&self.term, anchor, height)
+        render::snapshot_window(&self.terminal, self.size.get(), anchor, height)
+    }
+
+    fn kitty_flags(&self) -> KittyKeyboardFlags {
+        let bits = (self.terminal.kitty_keyboard_flags()).map_or(0, |flags| flags.bits());
+        kitty_keyboard::flags_from_bits(bits)
     }
 
     pub fn encode_key(
@@ -378,66 +313,31 @@ impl TerminalCore {
         event: KeyEventKind,
         text: Option<&str>,
     ) -> String {
-        let mode = *self.term.mode();
-        let flags = kitty_keyboard::flags_from_mode(mode);
+        let flags = self.kitty_flags();
 
-        // A release only has a wire representation once REPORT_EVENT_TYPES
-        // is negotiated (<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>:
-        // reporting repeat/release requires flag `0b10`) — without it there
-        // is no key-up concept at all, matching every legacy assumption
-        // that a key event is an ephemeral press (termwiz's own
-        // `KeyCode::encode` hardcodes empty output for `is_down == false`
-        // unconditionally). One gate here covers both the text-key path
-        // and the general `kitty_keyboard::encode` path below, so neither
-        // has to re-derive it.
         if event == KeyEventKind::Release && !flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES)
         {
             return String::new();
         }
 
-        // Text keys (letters/digits/punctuation) are handled by a
-        // dedicated path, special-cased ahead of the `flags.is_empty()`
-        // branch below: unlike every other `KeyCode`, `Char` was never
-        // reachable through `TerminalCommand::Key` at all before this
-        // (`app::keymap::character_input`/`control_input` computed raw
-        // bytes independently and sent them as a pre-encoded
-        // `TerminalCommand::Input`, bypassing Kitty state entirely — see
-        // `KITTY_COMPLIANCE`'s former "Report all keys as escape codes
-        // (text keys)" BYPASSED row). `kitty_keyboard::encode_text_key`
-        // owns both its legacy and Kitty-promoted output so that neither
-        // real termwiz's `KeyCode::encode` (whose Ctrl fallback differs
-        // from `app::keymap`'s pre-existing algorithm for a few
-        // punctuation/digit combinations) nor this module's own
-        // `legacy_bytes` (built for the four keys `kitty_override`
-        // promotes, not text keys) has to reproduce it.
         if let KeyCode::Char(c) = key {
             let bytes = kitty_keyboard::encode_text_key(c, mods, flags, event, text);
             return String::from_utf8(bytes).unwrap_or_default();
         }
 
         if !flags.is_empty() {
-            // Any Kitty flag active: `terminal::protocol::kitty_keyboard`
-            // owns the encoding outright from here — see its module doc for
-            // why this no longer falls through to termwiz.
             let bytes = kitty_keyboard::encode(
                 key,
                 mods,
                 flags,
                 event,
                 text,
-                mode.contains(TermMode::APP_CURSOR),
-                mode.contains(TermMode::LINE_FEED_NEW_LINE),
+                mode(&self.terminal, Mode::DECCKM),
+                mode(&self.terminal, Mode::LINEFEED),
             );
             return String::from_utf8(bytes).unwrap_or_default();
         }
 
-        // Legacy path (no Kitty flag negotiated at all): by this point
-        // `event` can only be `Press` or `Repeat` (the gate above already
-        // returned for `Release`, since `flags` being entirely empty means
-        // it can't contain `REPORT_EVENT_TYPES` either), and termwiz's own
-        // encoder has no repeat/release concept regardless — `is_down` is
-        // always `true` here, so a repeat is byte-for-byte identical to a
-        // press.
         key.encode(mods, self.encode_modes(), event.is_down())
             .unwrap_or_default()
     }
@@ -452,13 +352,11 @@ impl TerminalCore {
         self.encode_key(key, mods, event, text).into_bytes()
     }
 
-    /// Encode a text input event for which no key identity is available,
-    /// most notably an IME commit. When the terminal has negotiated kitty's
-    /// "report all keys as escape codes" (0b1000) and "report associated
-    /// text" (0b10000) flags, this emits the keyless `CSI 0;1;text u`
-    /// form; otherwise it falls back to raw UTF-8 bytes.
+    /// Text with no key behind it (an input method's commit): the keyless
+    /// `CSI 0;1;text u` where the program asked for all keys as escape
+    /// codes with their text, and the text's own bytes otherwise.
     pub fn text_input(&self, text: &str) -> Vec<u8> {
-        let flags = kitty_keyboard::flags_from_mode(*self.term.mode());
+        let flags = self.kitty_flags();
         if flags.contains(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
             && flags.contains(KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT)
             && !text.is_empty()
@@ -475,60 +373,112 @@ impl TerminalCore {
         }
     }
 
-    /// Starts a selection of the given `kind` at `point`. `kind` maps
-    /// directly onto alacritty's own `SelectionType`: `Word`/`Line` become
-    /// `Semantic`/`Lines`, which already select the word/line under `point`
-    /// as part of construction (no extra logic needed here) -- alacritty's
-    /// own char-class-driven word boundaries, "for free" since selection
-    /// executes daemon-side inside `Term`.
-    pub fn start_selection(&mut self, point: TerminalSelectionPoint, kind: TerminalSelectionKind) {
-        let point = self.selection_point(point);
-        let selection_type = match kind {
-            TerminalSelectionKind::Simple => SelectionType::Simple,
-            TerminalSelectionKind::Word => SelectionType::Semantic,
-            TerminalSelectionKind::Line => SelectionType::Lines,
-        };
-        self.term.selection = Some(Selection::new(selection_type, point, Side::Left));
+    /// The cell of the viewport a point of the wire names.
+    fn place(&self, point: TerminalSelectionPoint) -> Point {
+        let size = self.size.get();
+        Point::Viewport(Coordinate {
+            x: point.col.min(size.cols.saturating_sub(1) as usize) as u16,
+            y: point.row.min(size.rows.saturating_sub(1) as usize) as u32,
+        })
     }
 
-    pub fn update_selection(&mut self, point: TerminalSelectionPoint) {
-        let point = self.selection_point(point);
-        if let Some(selection) = self.term.selection.as_mut() {
-            selection.update(point, Side::Right);
-            // Whichever way the drag went, the cell it began in and the
-            // cell it has reached are both in it.
-            selection.include_all();
+    /// Starts a selection of `kind` at `point`: nothing selected yet for a
+    /// plain one, and the word or the line under the point for the others.
+    pub fn start_selection(&mut self, point: TerminalSelectionPoint, kind: TerminalSelectionKind) {
+        let at = self.place(point);
+        let _ = self.terminal.set_selection(None);
+        self.anchor = (self.terminal.track_grid_ref(at).ok()).map(|anchor| (anchor, kind));
+        let Ok(under) = self.terminal.grid_ref(at) else {
+            return;
+        };
+        let selected = match kind {
+            TerminalSelectionKind::Simple => None,
+            TerminalSelectionKind::Word => {
+                (self.terminal.select_word(SelectWordOptions::new(under))).unwrap_or(None)
+            }
+            TerminalSelectionKind::Line => {
+                (self.terminal.select_line(SelectLineOptions::new(under))).unwrap_or(None)
+            }
+        };
+        if let Some(selected) = selected {
+            let _ = self.terminal.set_selection(Some(&selected));
         }
     }
 
-    pub fn selected_text(&self) -> Option<String> {
-        self.term.selection_to_string()
+    /// Takes the selection to `point`: from the cell it began in to this
+    /// one, both in it, whichever way the drag went.
+    pub fn update_selection(&mut self, point: TerminalSelectionPoint) {
+        let Some((anchor, kind)) = &self.anchor else {
+            return;
+        };
+        let Ok(Some(began)) = anchor.snapshot(&self.terminal) else {
+            return;
+        };
+        let Ok(reached) = self.terminal.grid_ref(self.place(point)) else {
+            return;
+        };
+        let terminal = &self.terminal;
+        let around = |at| match kind {
+            TerminalSelectionKind::Simple => None,
+            TerminalSelectionKind::Word => terminal
+                .select_word(SelectWordOptions::new(at))
+                .unwrap_or(None),
+            TerminalSelectionKind::Line => terminal
+                .select_line(SelectLineOptions::new(at))
+                .unwrap_or(None),
+        };
+        // By word or by line: from the start of the earlier one's to the
+        // end of the later one's.
+        let backwards = {
+            let at =
+                |end: &_| terminal.point_from_grid_ref(end, libghostty_vt::point::Space::Screen);
+            match (at(&began), at(&reached)) {
+                (Ok(Some(began)), Ok(Some(reached))) => (reached.y, reached.x) < (began.y, began.x),
+                _ => false,
+            }
+        };
+        let (first, last) = match backwards {
+            true => (reached, began),
+            false => (began, reached),
+        };
+        let from = around(first.clone()).map_or(first, |around| around.start());
+        let to = around(last.clone()).map_or(last, |around| around.end());
+        let _ = terminal.set_selection(Some(&Selection::new(from, to, false)));
     }
 
-    /// Only reached from `encode_key`'s legacy branch, i.e. only when no
-    /// Kitty flag is active — `encoding` is therefore always `Xterm`.
-    /// `modify_other_keys` stays `None` unconditionally too: Horizon never
-    /// negotiates xterm's `modifyOtherKeys` extension independently (no
-    /// DECSET/DECRQM wiring for it exists at all).
+    pub fn selected_text(&self) -> Option<String> {
+        let mut formatter = Formatter::new_selection(&self.terminal).ok()??;
+        let _ = formatter.set_format(Format::Plain);
+        let _ = formatter.set_unwrap(true);
+        let _ = formatter.set_trim(true);
+        let length = formatter.format_len().ok()?;
+        let mut text = vec![0u8; length];
+        let written = formatter.format_buf(&mut text).ok()?;
+        text.truncate(written);
+        let mut text = String::from_utf8(text).ok()?;
+        // A selection by line ends with the line's end.
+        if matches!(self.anchor, Some((_, TerminalSelectionKind::Line))) {
+            text.push('\n');
+        }
+        Some(text)
+    }
+
+    /// Only reached from `encode_key`'s legacy branch (no Kitty flag).
     fn encode_modes(&self) -> KeyCodeEncodeModes {
-        let mode = *self.term.mode();
         KeyCodeEncodeModes {
             encoding: KeyboardEncoding::Xterm,
-            application_cursor_keys: mode.contains(TermMode::APP_CURSOR),
-            newline_mode: mode.contains(TermMode::LINE_FEED_NEW_LINE),
+            application_cursor_keys: mode(&self.terminal, Mode::DECCKM),
+            newline_mode: mode(&self.terminal, Mode::LINEFEED),
             modify_other_keys: None,
         }
     }
 
     fn application_scroll_mode(&self) -> bool {
-        self.term
-            .mode()
-            .intersects(TermMode::ALT_SCREEN | TermMode::MOUSE_MODE)
+        alternate_screen(&self.terminal) || mouse_mode(&self.terminal)
     }
 
     fn scroll_input(&self, scroll: TerminalScroll) -> Vec<u8> {
-        let mode = *self.term.mode();
-        if mode.intersects(TermMode::MOUSE_MODE) && mode.contains(TermMode::SGR_MOUSE) {
+        if mouse_mode(&self.terminal) && mode(&self.terminal, Mode::SGR_MOUSE) {
             return sgr_mouse_wheel_input(
                 scroll.lines,
                 scroll.point.col.saturating_add(1),
@@ -538,13 +488,15 @@ impl TerminalCore {
 
         arrow_scroll_input(scroll.lines)
     }
+}
 
-    fn selection_point(&self, point: TerminalSelectionPoint) -> TermPoint {
-        TermPoint::new(
-            Line(point.row as i32 - self.term.grid().display_offset() as i32),
-            Column(point.col.min(self.size.cols.saturating_sub(1) as usize)),
-        )
-    }
+/// A cell's size in pixels, from the whole screen's: what the engine is
+/// told, and multiplies back out for a program that asks.
+fn cell_pixels(size: TerminalSize) -> (u32, u32) {
+    (
+        size.pixel_width as u32 / size.cols.max(1) as u32,
+        size.pixel_height as u32 / size.rows.max(1) as u32,
+    )
 }
 
 impl Default for TerminalCore {

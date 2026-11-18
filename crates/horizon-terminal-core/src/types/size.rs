@@ -1,9 +1,9 @@
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::{MIN_COLUMNS, MIN_SCREEN_LINES};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// The fewest columns and rows a screen has (alacritty_terminal's own, kept).
+const MIN_COLUMNS: usize = 2;
+const MIN_SCREEN_LINES: usize = 1;
 const DEFAULT_COLS: u16 = 100;
 const DEFAULT_ROWS: u16 = 32;
 
@@ -57,27 +57,5 @@ impl TerminalSize {
             pixel_width: 0,
             pixel_height: 0,
         }
-    }
-}
-
-impl Dimensions for TerminalSize {
-    fn total_lines(&self) -> usize {
-        self.screen_lines()
-    }
-
-    fn columns(&self) -> usize {
-        self.cols as usize
-    }
-
-    fn last_column(&self) -> Column {
-        Column(self.columns().saturating_sub(1))
-    }
-
-    fn bottommost_line(&self) -> Line {
-        Line(self.screen_lines().saturating_sub(1) as i32)
-    }
-
-    fn screen_lines(&self) -> usize {
-        self.rows as usize
     }
 }

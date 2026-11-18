@@ -1,21 +1,8 @@
+use std::cell::RefCell;
 use std::fmt;
-use std::sync::{Arc, Mutex};
-
-use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::vte::ansi::Rgb;
+use std::rc::Rc;
 
 use crate::contract::{TerminalNotification, TerminalProgramStatus};
-
-/// Formatter alacritty_terminal hands back for a color query
-/// (`Event::ColorRequest`): it doesn't own "what color is index N", so the
-/// embedder resolves the RGB value and calls this to get the response
-/// text. See `TerminalCore::write_vt` / `core::color::resolve_query_color`.
-type ColorFormatter = Arc<dyn Fn(Rgb) -> String + Send + Sync>;
-
-/// Formatter for a text-area-size-in-pixels query
-/// (`Event::TextAreaSizeRequest`, CSI 14 t); same deferred shape as
-/// `ColorFormatter`.
-type WindowSizeFormatter = Arc<dyn Fn(WindowSize) -> String + Send + Sync>;
 
 /// Maximum accepted size (decoded UTF-8 byte length) of one OSC 52
 /// clipboard-write payload (`Event::ClipboardStore`). A misbehaving or
@@ -63,17 +50,6 @@ pub(crate) struct TerminalEvents {
     /// otherwise read whatever's on the system clipboard from under the
     /// user), not something this module has to separately filter.
     pub clipboard_writes: Vec<String>,
-    /// Pending color queries, resolved against `Term::colors()` and
-    /// Horizon's theme by `TerminalCore::write_vt` once the parser call
-    /// that produced them returns (the callback needs the terminal's
-    /// current palette, which isn't available from inside
-    /// `EventListener::send_event`). Not observed outside `core` — by the
-    /// time callers outside this module see a `TerminalEvents`, these have
-    /// already been turned into `pty_writes`.
-    pub(super) color_requests: Vec<(usize, ColorFormatter)>,
-    /// Pending text-area-size-in-pixels queries; same deferred-resolution
-    /// shape as `color_requests`.
-    pub(super) window_size_requests: Vec<WindowSizeFormatter>,
     /// Whether the parser call that produced this batch (`write_vt` or
     /// `flush_sync_update`) actually changed the rendered frame — set by
     /// those methods themselves after the fact (this field is never
@@ -98,38 +74,47 @@ impl fmt::Debug for TerminalEvents {
             .field("notifications", &self.notifications)
             .field("program_status", &self.program_status)
             .field("clipboard_writes", &self.clipboard_writes)
-            .field("color_requests", &self.color_requests.len())
-            .field("window_size_requests", &self.window_size_requests.len())
             .field("visible_dirty", &self.visible_dirty)
             .finish()
     }
 }
 
+/// What the engine's callbacks write into while it takes bytes in, and
+/// `TerminalCore` takes out after. The engine and its callbacks are on one
+/// thread, the one that owns the terminal.
 #[derive(Clone, Debug, Default)]
 pub(super) struct EventSink {
-    events: Arc<Mutex<TerminalEvents>>,
+    events: Rc<RefCell<TerminalEvents>>,
 }
 
 impl EventSink {
     pub(super) fn drain(&self) -> TerminalEvents {
-        std::mem::take(&mut *self.events.lock().expect("terminal event mutex poisoned"))
+        std::mem::take(&mut *self.events.borrow_mut())
     }
-}
 
-impl EventListener for EventSink {
-    fn send_event(&self, event: Event) {
-        let mut events = self.events.lock().expect("terminal event mutex poisoned");
-        match event {
-            Event::PtyWrite(text) => events.pty_writes.push(text.into_bytes()),
-            Event::Title(title) => events.title = Some(title),
-            Event::ResetTitle => events.title = None,
-            Event::Bell => events.bell_count += 1,
-            Event::ColorRequest(index, format) => events.color_requests.push((index, format)),
-            Event::TextAreaSizeRequest(format) => events.window_size_requests.push(format),
-            Event::ClipboardStore(_, text) if text.len() <= OSC52_CLIPBOARD_WRITE_CAP => {
-                events.clipboard_writes.push(text);
-            }
-            _ => {}
+    pub(super) fn pty_write(&self, bytes: &[u8]) {
+        self.events.borrow_mut().pty_writes.push(bytes.to_vec());
+    }
+
+    pub(super) fn bell(&self) {
+        self.events.borrow_mut().bell_count += 1;
+    }
+
+    /// The title the program set, or none where it took it back.
+    pub(super) fn title(&self, title: &[u8]) {
+        let title = String::from_utf8_lossy(title).into_owned();
+        self.events.borrow_mut().title = Some(title).filter(|title| !title.is_empty());
+    }
+
+    pub(super) fn clipboard_write(&self, text: &[u8]) {
+        if text.len() > OSC52_CLIPBOARD_WRITE_CAP {
+            return;
+        }
+        if let Ok(text) = std::str::from_utf8(text) {
+            self.events
+                .borrow_mut()
+                .clipboard_writes
+                .push(text.to_string());
         }
     }
 }
