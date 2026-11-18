@@ -1634,3 +1634,53 @@ fn session_records_rebuild_the_logged_records() {
         .collect();
     assert_eq!(store.session_records(session_id, 2).unwrap(), expected);
 }
+
+#[test]
+fn an_event_this_build_cannot_read_is_passed_over_as_the_log_reader_does() {
+    let store = Store::open_in_memory().expect("store");
+    let session_id = SessionId::new();
+    for (sequence, event) in [
+        (0, Event::StateChanged(SessionState::Running)),
+        (
+            1,
+            Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "hello".into(),
+            }),
+        ),
+        (2, Event::StateChanged(SessionState::WaitingForUser)),
+    ] {
+        store
+            .append_record(&label_record(
+                &format!("e{sequence}"),
+                sequence,
+                session_id,
+                None,
+                Some("worker"),
+                event,
+                1_700_000_000_000 + sequence,
+            ))
+            .expect("append");
+    }
+    // What a build that had the kind wrote, and this one has no name for.
+    store
+        .conn
+        .execute(
+            "UPDATE agent_events SET horizon_event_json = ? WHERE sequence = 1",
+            params![r#"{"ApprovalRequested":{"kind":{"RemovedKind":{}}}}"#],
+        )
+        .expect("rewrite");
+
+    let records = store
+        .session_records(session_id, u64::MAX >> 1)
+        .expect("records");
+    assert_eq!(
+        records.iter().map(|r| r.sequence).collect::<Vec<_>>(),
+        [0, 2]
+    );
+    let events = store.events_for_session(session_id).expect("events");
+    assert_eq!(
+        events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+        [0, 2]
+    );
+}

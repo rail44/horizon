@@ -186,7 +186,10 @@ impl Store {
              ORDER BY sequence",
         )?;
         let rows = stmt.query_map(params![&session_id_text, through], |row| {
-            Ok(Record {
+            let Some(event) = decode_stored_event(&row.get::<_, String>(4)?) else {
+                return Ok(None);
+            };
+            Ok(Some(Record {
                 schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
                 version: AGENT_EVENT_LOG_VERSION,
                 event_id: row.get(0)?,
@@ -197,15 +200,16 @@ impl Store {
                 role_id: row.get::<_, Option<String>>(6)?.map(RoleId),
                 session_context: session_context.clone(),
                 event_kind: row.get(3)?,
-                event: decode_json_column(4, &row.get::<_, String>(4)?)?,
+                event,
                 provider_payload: row
                     .get::<_, Option<String>>(7)?
                     .map(|json| decode_json_column(7, &json))
                     .transpose()?,
                 created_at_unix_ms: row.get(8)?,
-            })
+            }))
         })?;
-        rows.collect::<Result<Vec<_>, _>>()
+        rows.filter_map(Result::transpose)
+            .collect::<Result<Vec<_>, _>>()
             .context("query agent session records")
     }
 
@@ -381,21 +385,17 @@ impl Store {
              ORDER BY sequence",
         )?;
         let rows = stmt.query_map(params![&session_id_text], |row| {
-            let event_json: String = row.get(4)?;
+            let Some(event) = decode_stored_event(&row.get::<_, String>(4)?) else {
+                return Ok(None);
+            };
             let provider_payload_json: Option<String> = row.get(7)?;
-            Ok(AgentStoredEvent {
+            Ok(Some(AgentStoredEvent {
                 event_id: row.get(0)?,
                 session_id,
                 turn_id: row.get(1)?,
                 sequence: row.get(2)?,
                 event_kind: row.get(3)?,
-                event: serde_json::from_str(&event_json).map_err(|err| {
-                    duckdb::Error::FromSqlConversionFailure(
-                        4,
-                        duckdb::types::Type::Text,
-                        Box::new(err),
-                    )
-                })?,
+                event,
                 provider_id: row.get::<_, Option<String>>(5)?.map(ProviderId),
                 role_id: row.get::<_, Option<String>>(6)?.map(RoleId),
                 provider_payload: provider_payload_json
@@ -409,10 +409,11 @@ impl Store {
                         })
                     })
                     .transpose()?,
-            })
+            }))
         })?;
 
-        rows.collect::<Result<Vec<_>, _>>()
+        rows.filter_map(Result::transpose)
+            .collect::<Result<Vec<_>, _>>()
             .context("query agent events")
     }
 
@@ -799,6 +800,15 @@ fn parse_role(value: &str) -> MessageRole {
         "task_notification" => MessageRole::TaskNotification,
         _ => MessageRole::Assistant,
     }
+}
+
+/// A stored event as this build reads it, or `None` for one it cannot.
+/// The projection keeps the events an earlier build wrote, a kind since
+/// removed among them, and the log's own reader (`event_log::read`) passes
+/// over the same ones: a session read from here holds what it holds read
+/// from the log.
+fn decode_stored_event(json: &str) -> Option<Event> {
+    serde_json::from_str(json).ok()
 }
 
 fn decode_json_column<T: serde::de::DeserializeOwned>(
