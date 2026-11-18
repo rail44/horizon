@@ -186,6 +186,15 @@ impl AgentSession {
         }
     }
 
+    /// What the session does or asks, in a line (`AgentFrame::words`).
+    pub fn words(&self) -> Option<String> {
+        let folded = self.folded.lock().unwrap();
+        match folded.attachment.is_closed() {
+            true => None,
+            false => folded.model.frame.words(),
+        }
+    }
+
     pub fn standing(&self) -> Standing {
         let folded = self.folded.lock().unwrap();
         let frame = &folded.model.frame;

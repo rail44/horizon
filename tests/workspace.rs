@@ -901,7 +901,7 @@ fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
     opened.until("blocked", || state() == Some(ProgramState::Blocked));
     assert!(tab(0).starts_with("? "), "{}", tab(0));
     assert_eq!(
-        program().and_then(|program| program.message).as_deref(),
+        activity().and_then(|activity| activity.detail).as_deref(),
         Some("approve Bash: ls")
     );
 

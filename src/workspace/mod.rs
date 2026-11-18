@@ -702,7 +702,8 @@ impl Shell {
                         directories.push((*id, directory));
                     }
                     TerminalUpdate::ProgramStatus(status) => {
-                        activities.push((*id, status.map(activity::reported)));
+                        let (doing, detail) = status.map(activity::reported).unzip();
+                        activities.push((*id, doing, detail.flatten()));
                     }
                     _ => {}
                 }
@@ -718,12 +719,13 @@ impl Shell {
             }
             // An agent session is asked what it is doing, and the model
             // told where that is not what it has.
-            let doing = activity::of_agent(session.activity());
+            let (doing, detail) = (activity::of_agent(session.activity()), session.words());
             let known = self.model.with_untracked(|model| {
-                model.session_activity(*id).map(|activity| &activity.doing) == Some(&doing)
+                (model.session_activity(*id))
+                    .is_some_and(|known| known.doing == doing && known.detail == detail)
             });
             if !known {
-                activities.push((*id, Some(doing)));
+                activities.push((*id, Some(doing), detail));
             }
         }
         // The session the owner is looking at: the active pane's, and
@@ -742,7 +744,7 @@ impl Shell {
         // What a session came to be doing is news until the session is
         // looked at, which may be now, or at a layout long after.
         let news = looked_at.filter(|looked_at| {
-            activities.iter().any(|(session, _)| session == looked_at)
+            activities.iter().any(|(session, ..)| session == looked_at)
                 || self.model.with_untracked(|model| {
                     (model.session_activity(*looked_at)).is_some_and(|activity| !activity.seen)
                 })
@@ -756,6 +758,9 @@ impl Shell {
             return;
         }
         let ended = !exited.is_empty();
+        let now_ms = (std::time::SystemTime::now())
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis() as u64);
         self.model.update(|model| {
             for (session, title) in titles {
                 model.set_session_derived_title(session, title.as_deref());
@@ -763,8 +768,8 @@ impl Shell {
             for (session, directory) in directories {
                 model.set_session_directory(session, directory);
             }
-            for (session, doing) in activities {
-                model.set_session_activity(session, doing);
+            for (session, doing, detail) in activities {
+                model.set_session_activity(session, doing, detail, now_ms);
             }
             if let Some(session) = news {
                 model.mark_session_seen(session);

@@ -200,12 +200,17 @@ pub struct ActivityEntry {
     /// Whether the session has been looked at since it came to be in this
     /// state.
     pub seen: bool,
+    /// When the session came to be in this state, in milliseconds since
+    /// the Unix epoch.
+    pub since_ms: u64,
     /// A program's name for itself, such as `claude-code`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
-    /// Why, or what about, in a program's words.
+    /// What the session does or asks, in a line of its own words: what a
+    /// program says with its report, the command an agent waits to be
+    /// allowed, why it failed, how its last answer begins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    pub detail: Option<String>,
 }
 
 /// Reply to `Query { what: "state" }` -- a snapshot equivalent to the app's

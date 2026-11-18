@@ -155,6 +155,18 @@ struct SessionState {
     /// read as none where a word in it is not one this build knows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     looked_at: Option<DoingState>,
+    /// `WorkspaceSession::last_known`, left out and read as `looked_at`
+    /// is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_known: Option<SinceState>,
+}
+
+/// What a session was doing, and since when.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SinceState {
+    doing: DoingState,
+    since_ms: u64,
 }
 
 /// What a session was doing when it was last looked at, in the words its
@@ -168,7 +180,9 @@ enum DoingState {
         blocked_on: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         app: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Read from a state kept while a program's words were part of
+        /// what it was doing, and no longer written.
+        #[serde(default, skip_serializing)]
         message: Option<String>,
     },
     Agent {
@@ -183,7 +197,7 @@ impl From<&Doing> for DoingState {
                 state: program.state.label().to_string(),
                 blocked_on: program.blocked_on.map(|on| on.label().to_string()),
                 app: program.app.clone(),
-                message: program.message.clone(),
+                message: None,
             },
             Doing::Agent(status) => Self::Agent {
                 status: status.label().to_string(),
@@ -199,7 +213,7 @@ impl DoingState {
                 state,
                 blocked_on,
                 app,
-                message,
+                message: _,
             } => Doing::Program(ProgramStatus {
                 state: ProgramState::from_label(&state)?,
                 blocked_on: match blocked_on {
@@ -207,7 +221,6 @@ impl DoingState {
                     None => None,
                 },
                 app,
-                message,
             }),
             Self::Agent { status } => Doing::Agent(AgentStatus::from_label(&status)?),
         })
@@ -395,6 +408,10 @@ impl WorkspaceState {
                     display_number: session.display_number,
                     title: session.title.clone(),
                     looked_at: session.looked_at.as_ref().map(DoingState::from),
+                    last_known: (session.last_known.as_ref()).map(|(doing, since_ms)| SinceState {
+                        doing: DoingState::from(doing),
+                        since_ms: *since_ms,
+                    }),
                 })
                 .collect(),
         })
@@ -433,6 +450,9 @@ impl WorkspaceState {
                     // doing again once it is reattached.
                     activity: None,
                     looked_at: session.looked_at.and_then(DoingState::into_doing),
+                    last_known: session
+                        .last_known
+                        .and_then(|known| Some((known.doing.into_doing()?, known.since_ms))),
                 })
                 .collect(),
             active_tab: self.active_tab,

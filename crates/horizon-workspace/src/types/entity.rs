@@ -69,6 +69,11 @@ pub struct WorkspaceSession {
     /// it was last seen doing has been looked at
     /// ([`Workspace::set_session_activity`]).
     pub looked_at: Option<Doing>,
+    /// What the session was last known to be doing, and since when
+    /// (milliseconds since the Unix epoch). Persisted: a session that
+    /// says after a restart, or after it was out of reach, what it was
+    /// last known to be doing has been doing it since then.
+    pub last_known: Option<(Doing, u64)>,
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +108,7 @@ impl WorkspaceSession {
             parent_session_id: None,
             activity: None,
             looked_at: None,
+            last_known: None,
         }
     }
 

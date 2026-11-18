@@ -52,6 +52,61 @@ impl AgentFrame {
         })
     }
 
+    /// What the session does or asks, in a line, for whoever lists
+    /// sessions: the permission it waits for, the tool it runs, why it
+    /// failed, or how its last answer begins.
+    pub fn words(&self) -> Option<String> {
+        let line = |text: &str| {
+            (text.lines().map(str::trim))
+                .find(|line| !line.is_empty())
+                .map(str::to_string)
+        };
+        let last = |pick: &dyn Fn(&AgentFrameItem) -> Option<String>| {
+            self.items.iter().rev().find_map(pick)
+        };
+        match self.status()? {
+            SessionStatus::WaitingForApproval => last(&|item| match item {
+                AgentFrameItem::Permission(asked) if asked.decision.is_none() => {
+                    line(&asked.reason)
+                }
+                _ => None,
+            }),
+            SessionStatus::ToolRunning => last(&|item| match item {
+                AgentFrameItem::ToolCall(call)
+                    if matches!(
+                        call.status,
+                        ToolCallStatus::Pending | ToolCallStatus::InProgress
+                    ) =>
+                {
+                    // What a tool is run on, where its input names it.
+                    let on = ["command", "path", "file_path", "pattern", "query"]
+                        .iter()
+                        .find_map(|key| call.input.get(key)?.as_str())
+                        .and_then(line);
+                    Some(match on {
+                        Some(on) => format!("{}: {on}", call.meta.tool_id),
+                        None => call.meta.tool_id.clone(),
+                    })
+                }
+                _ => None,
+            }),
+            SessionStatus::Failed => last(&|item| match item {
+                AgentFrameItem::Error(error) => line(error),
+                _ => None,
+            }),
+            SessionStatus::Completed
+            | SessionStatus::WaitingForInput
+            | SessionStatus::Paused
+            | SessionStatus::Cancelled => last(&|item| match item {
+                AgentFrameItem::Message(message) if message.role == MessageRole::Assistant => {
+                    line(&message.text)
+                }
+                _ => None,
+            }),
+            SessionStatus::Starting | SessionStatus::Running | SessionStatus::Terminated => None,
+        }
+    }
+
     /// Whether the session is idle on a guard-halted turn (`max_turn_requests`
     /// or `_horizon/doom_loop`), i.e. `_horizon/continue_turn` has a turn to
     /// resume.
