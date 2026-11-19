@@ -4,12 +4,103 @@
 use std::path::Path;
 
 use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
-use horizon_workspace::commands::{CommandId, CommandState};
+use horizon_workspace::commands::{CommandCategory, CommandId, CommandState, command_entries};
 use horizon_workspace::{CloseCursorOutcome, Workspace};
 
 use super::{Modal, Placement, Shell, plugins};
 
+/// A command there is now, whoever carries it out: what the palette lists,
+/// a key binding names and the command line asks for.
+#[derive(Clone, Debug)]
+pub(super) struct Listed {
+    /// Its stable kebab-case id.
+    pub name: &'static str,
+    pub title: &'static str,
+    pub description: &'static str,
+    /// What the shell sorts its own under.
+    pub category: Option<CommandCategory>,
+    pub destructive: bool,
+    /// Whether it can be carried out now.
+    pub enabled: bool,
+    by: By,
+}
+
+/// Who carries a command out.
+#[derive(Clone, Copy, Debug)]
+enum By {
+    Shell(CommandId),
+    /// The plugin the cursor's pane shows.
+    Pane,
+}
+
 impl Shell {
+    /// Every command there is now, in the order the palette lists them:
+    /// those of the plugin the cursor's pane shows, then the shell's own.
+    pub(super) fn commands(&self) -> Vec<Listed> {
+        let pane = self.model.with_untracked(Workspace::cursor_pane_id);
+        let shown = pane.and_then(|pane| {
+            let plugin = self.plugin(pane)?;
+            let shown = self.kept().panes.borrow().get(&pane)?.plugin.clone()?;
+            Some((plugin, shown))
+        });
+        let of_pane = shown.into_iter().flat_map(|(plugin, shown)| {
+            (plugins::commands().into_iter())
+                .filter(move |listed| listed.plugin == plugin)
+                .map(move |listed| Listed {
+                    name: listed.name,
+                    title: listed.title,
+                    description: listed.description,
+                    category: None,
+                    destructive: listed.destructive,
+                    enabled: shown.enabled(listed.name),
+                    by: By::Pane,
+                })
+        });
+        let own = (command_entries(self.command_state()).into_iter()).map(|entry| Listed {
+            name: entry.spec.name,
+            title: entry.spec.title,
+            description: entry.spec.description,
+            category: Some(entry.spec.category),
+            destructive: entry.spec.destructive,
+            enabled: entry.enabled,
+            by: By::Shell(entry.spec.id),
+        });
+        of_pane.chain(own).collect()
+    }
+
+    /// The command `name` names now. One of the shell's is found before
+    /// one of the same name the cursor's pane has.
+    pub(super) fn command(&self, name: &str) -> Option<Listed> {
+        let mut named: Vec<Listed> = (self.commands().into_iter())
+            .filter(|command| command.name == name)
+            .collect();
+        let own = named
+            .iter()
+            .position(|command| matches!(command.by, By::Shell(_)));
+        (!named.is_empty()).then(|| named.swap_remove(own.unwrap_or(0)))
+    }
+
+    /// Carries a command out; `false` where whoever would is gone.
+    pub(super) fn run(&self, command: &Listed) -> bool {
+        match command.by {
+            By::Shell(id) => {
+                self.execute(id);
+                true
+            }
+            By::Pane => self.execute_plugin(command.name),
+        }
+    }
+
+    /// Says on stderr which of the configuration's bindings name no
+    /// command there can be: one of the shell's, or of any plugin's.
+    pub(super) fn say_unknown_bindings(&self) {
+        let mut known: Vec<&str> = CommandId::ALL.iter().map(|id| id.spec().name).collect();
+        known.extend(plugins::commands().iter().map(|listed| listed.name));
+        for name in self.kept().keymap.borrow().unknown(&known) {
+            eprintln!("horizon config: the keybinding to `{name}` names no command");
+        }
+    }
+
     /// What the commands' availability is decided from.
     pub(super) fn command_state(&self) -> CommandState {
         self.model.with_untracked(|model| CommandState {

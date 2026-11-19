@@ -105,10 +105,14 @@ impl Shell {
                 };
                 self.new_pane(&plugin, given, split, issuer, activate)
             }
-            Command::PluginCommand(name) => match self.execute_plugin(&name) {
-                true => done,
-                false => Err(format!(
-                    "unknown command `{name}`: not one of the plugin the cursor's pane shows"
+            Command::PluginCommand(name) => match self.command(&name) {
+                Some(command) if !command.enabled => {
+                    Err(format!("`{name}` cannot be carried out now"))
+                }
+                Some(command) if self.run(&command) => done,
+                _ => Err(format!(
+                    "unknown command `{name}`: not one of the shell's, nor of the plugin the \
+                     cursor's pane shows"
                 )),
             },
             Command::Approve {

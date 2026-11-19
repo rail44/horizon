@@ -918,28 +918,6 @@ impl Shell {
     }
 
     /// The commands of the plugin the cursor's pane shows, by name.
-    fn cursor_plugin_commands(&self) -> Vec<&'static str> {
-        let pane = self.model.with_untracked(Workspace::cursor_pane_id);
-        let Some(plugin) = pane.and_then(|pane| self.plugin(pane)) else {
-            return Vec::new();
-        };
-        (plugins::commands().into_iter())
-            .filter(|listed| listed.plugin == plugin)
-            .map(|listed| listed.name)
-            .collect()
-    }
-
-    /// Whether the command `name` of the plugin the cursor's pane shows
-    /// can be carried out now.
-    fn plugin_command_enabled(&self, name: &str) -> bool {
-        let pane = self.model.with_untracked(Workspace::cursor_pane_id);
-        let kept = self.kept();
-        let panes = kept.panes.borrow();
-        let shown = pane.and_then(|pane| panes.get(&pane)?.plugin.clone());
-        drop(panes);
-        shown.is_some_and(|shown| shown.enabled(name))
-    }
-
     /// Carries out the command `name` of the plugin the cursor's pane
     /// shows; `false` when it has none of that name.
     pub fn execute_plugin(&self, name: &str) -> bool {
