@@ -1,13 +1,13 @@
 # UI Foundation Migration Design
 
-Status: done. The GPUI shell, `gpui`/`gpui-component` and the GPUI
-preview pane were removed on 2026-11-13, and what was built beside them
-moved to where they were: `shell-blitz/app` is the root package (`src/`,
-`tests/`), `shell-blitz/ui` is `crates/horizon-ui`, `shell-blitz/theme` is
-`crates/horizon-theme-css`, `shell-blitz/vendor` is `vendor/`, and the
-Blitz pins are in the root `Cargo.toml`. The shell uses the same sockets
-and data as the GPUI shell did. The sections below describe the migration
-as it was planned and carried out, in the paths of that time.
+Status: done. The GPUI shell and `gpui`/`gpui-component` were removed on
+2026-11-13, and what was built beside them moved to where they were:
+`shell-blitz/app` is the root package (`src/`, `tests/`), `shell-blitz/ui`
+is `crates/horizon-ui`, `shell-blitz/theme` is `crates/horizon-theme-css`,
+`shell-blitz/vendor` is `vendor/`, and the Blitz pins are in the root
+`Cargo.toml`. The shell uses the same sockets and data as the GPUI shell
+did. The sections below describe the migration as it was planned and
+carried out, in the paths of that time.
 
 Horizon's shell moves from GPUI to Blitz. This document describes the
 target and the route. The decision is board #75; the survey of candidates
@@ -130,8 +130,13 @@ The workspace's crates:
 4. **Agent pane.** The adapter from a live session, approvals, the
    composer.
 5. **Board, Markdown, wiki, theme settings, model picker.**
-6. **Parity and retirement.** The GPUI shell, `gpui`/`gpui-component`,
-   and the preview pane (`src/preview/`, `preview-plugin/`) are deleted.
+6. **Parity and retirement.** The GPUI shell and `gpui`/`gpui-component`
+   are deleted. The preview pane was planned to go with them, on the
+   reading that it existed to show views the GPUI shell could not; it did
+   not, because the extension boundary (#76) made it the way an extension
+   still being written is shown to a person. It moved to Blitz with the
+   rest, and is `src/preview.rs`, with the extensions' components beside
+   their manifests (`plugins/*`).
 
 The extension boundary comes after retirement.
 
