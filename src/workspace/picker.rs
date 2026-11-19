@@ -1,7 +1,7 @@
-//! A list to search and pick from, over everything: what the palette, the
-//! view chooser and the model picker are. The rows follow what is typed and
-//! whatever else they are read from; the arrows and Tab move the choice,
-//! Enter confirms it, Escape or a press outside leaves.
+//! A list to search and pick from, in a sheet over the workspace
+//! (`over`): what the palette, the view chooser and the model picker are.
+//! The rows follow what is typed and whatever else they are read from;
+//! the arrows and Tab move the choice, and Enter confirms it.
 
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::computed::Memo;
@@ -37,18 +37,15 @@ pub(super) fn view(
     view_in_steps(shell, rows, picked, || false)
 }
 
-/// [`view`] for a list of more than one step: Escape asks `back` first,
-/// which says whether there was a step to go back to.
+/// [`view`] for a list of more than one step: Escape asks `back`, which
+/// says whether there was a step to go back to, and is the sheet's where
+/// there was none.
 pub(super) fn view_in_steps(
     shell: Shell,
     rows: impl Fn(&str) -> Vec<Row> + Send + Sync + 'static,
     picked: impl Fn(usize) + Clone + 'static,
     back: impl Fn() -> bool + 'static,
 ) -> El {
-    let close = move || {
-        shell.modal.set(None);
-        shell.focus_active();
-    };
     let input = el("input")
         .attr("type", "text")
         .on("input", move |event| {
@@ -81,14 +78,15 @@ pub(super) fn view_in_steps(
             )
         },
     );
-    let list = el("div")
+    el("div")
         .class(styles::PICKER)
-        // A press in the list is not one outside it.
-        .on("pointerdown", |_| stop_propagation())
         .on("keydown", move |event| {
             let DomEventData::KeyDown(key) = &event.data else {
                 return;
             };
+            if key.key == Key::Named(NamedKey::Escape) && !back() {
+                return;
+            }
             let count = rows.with_untracked(Vec::len);
             let chosen = shell.chosen.get_untracked().min(count.saturating_sub(1));
             let (down, up) = (
@@ -100,11 +98,7 @@ pub(super) fn view_in_steps(
                 Key::Named(NamedKey::ArrowUp) => shell.chosen.set(up),
                 Key::Named(NamedKey::Tab) if key.modifiers.shift() => shell.chosen.set(up),
                 Key::Named(NamedKey::Tab) => shell.chosen.set(down),
-                Key::Named(NamedKey::Escape) => {
-                    if !back() {
-                        close();
-                    }
-                }
+                Key::Named(NamedKey::Escape) => {}
                 _ if count == 0 => return,
                 Key::Named(NamedKey::Enter) => picked(chosen),
                 // Anything else is the field's.
@@ -120,9 +114,5 @@ pub(super) fn view_in_steps(
                 shown: Signal::derive(move || shell.query.get().is_empty()),
             }),
         }))
-        .child(items);
-    el("div")
-        .class(styles::SCRIM)
-        .on("pointerdown", move |_| close())
-        .child(list)
+        .child(items)
 }

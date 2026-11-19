@@ -1,6 +1,7 @@
 //! A file found by typing: a field, and under it the files of a list
 //! whose paths hold what was typed, the best first ([`Source`]). The
-//! arrows and Tab move the choice, Enter takes it, Escape leaves.
+//! arrows and Tab move the choice, and Enter takes it. Leaving is whoever
+//! shows it's.
 //!
 //! A row is the file's path as it is written, its directories muted. A
 //! path too long for the row loses its start, so the file's name stays.
@@ -27,9 +28,7 @@ pub use source::{Found, Results, Source};
 mod styles {
     horizon_ui::css_module! {"
         .finder { width: 560px; max-height: 400px; display: flex; flex-direction: column;
-                  overflow: hidden; background: var(--background);
-                  border: var(--line) solid var(--border); border-radius: 8px;
-                  box-shadow: var(--shadow-modal); }
+                  overflow: hidden; background: var(--background); }
         .search { flex: none; display: flex; align-items: center; gap: var(--u8);
                   height: 32px; padding: 0 var(--u12);
                   border-bottom: var(--line) solid var(--border); }
@@ -62,8 +61,6 @@ pub struct Finder {
     pub source: Rc<Source>,
     /// Told the path of the file taken.
     pub picked: Callback<String>,
-    /// Told when Escape leaves.
-    pub left: Callback<()>,
 }
 
 /// `characters` as text, those among `hits` (counted from `first`) marked.
@@ -125,11 +122,7 @@ fn row(found: &Found) -> El {
 
 impl Component for Finder {
     fn view(self) -> El {
-        let Finder {
-            source,
-            picked,
-            left,
-        } = self;
+        let Finder { source, picked } = self;
         let query = RwSignal::new(String::new());
         let chosen = RwSignal::new(0usize);
         let results = RwSignal::new(Results::default());
@@ -206,7 +199,6 @@ impl Component for Finder {
         };
         el("div")
             .class(styles::FINDER)
-            .on("pointerdown", |_| stop_propagation())
             .on("keydown", move |event| {
                 let DomEventData::KeyDown(key) = &event.data else {
                     return;
@@ -220,7 +212,6 @@ impl Component for Finder {
                     Key::Named(NamedKey::ArrowUp) => choose(up),
                     Key::Named(NamedKey::Tab) if key.modifiers.shift() => choose(up),
                     Key::Named(NamedKey::Tab) => choose(down),
-                    Key::Named(NamedKey::Escape) => left.run(()),
                     Key::Named(NamedKey::Enter) => take(now),
                     // Anything else is the field's.
                     _ => return,

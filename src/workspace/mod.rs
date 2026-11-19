@@ -63,6 +63,7 @@ pub(crate) mod held;
 mod keymap;
 mod keys;
 mod models;
+mod over;
 mod palette;
 mod picker;
 mod plugins;
@@ -111,15 +112,12 @@ pub(crate) mod styles {
         .scrim { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 100;
                  display: flex; justify-content: center; align-items: flex-start;
                  padding-top: 97px; }
-        .picker { width: 560px; max-height: 400px; display: flex; flex-direction: column;
-                  overflow: hidden; background: var(--background);
-                  border: var(--line) solid var(--border); border-radius: 8px;
-                  box-shadow: var(--shadow-modal); }
-        .sheet { width: 720px; height: 480px; display: flex; overflow: hidden;
-                 background: var(--background);
+        .sheet { display: flex; overflow: hidden; background: var(--background);
                  border: var(--line) solid var(--border); border-radius: 8px;
                  box-shadow: var(--shadow-modal); }
-        .sheet > * { flex: 1; min-width: 0; }
+        .picker { width: 560px; max-height: 400px; display: flex; flex-direction: column; }
+        .manager { width: 720px; height: 480px; display: flex; }
+        .manager > * { flex: 1; min-width: 0; }
         .search { flex: none; position: relative; display: flex; align-items: center;
                   height: 32px; padding: 0 var(--u12); border-bottom: var(--line) solid var(--border); }
         .search > * { flex: 1; font-size: var(--body-size); line-height: calc(var(--u4) * 5); }
@@ -1223,15 +1221,18 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         .each(
             move || shell.modal.get().into_iter().collect::<Vec<_>>(),
             |modal| *modal,
-            move |modal| match modal {
-                Modal::Palette => palette::view(shell),
-                Modal::Sessions => sessions::view(shell),
-                Modal::Chooser(placement) => chooser::view(shell, *placement),
-                Modal::Finder(plugin, placement) => finder::view(shell, plugin, *placement),
-                Modal::Models(session) => match shell.kept().models.clone() {
-                    Some(source) => models::view(shell, *session, source),
-                    None => el("div"),
-                },
+            move |modal| {
+                let inside = match modal {
+                    Modal::Palette => palette::view(shell),
+                    Modal::Sessions => sessions::view(shell),
+                    Modal::Chooser(placement) => chooser::view(shell, *placement),
+                    Modal::Finder(plugin, placement) => finder::view(shell, plugin, *placement),
+                    Modal::Models(session) => match shell.kept().models.clone() {
+                        Some(source) => models::view(shell, *session, source),
+                        None => el("div"),
+                    },
+                };
+                over::view(shell, inside)
             },
         );
     shell.focus_active();
