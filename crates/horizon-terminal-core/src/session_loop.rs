@@ -102,6 +102,13 @@ fn send_selection_to_primary(core: &TerminalCore, update_tx: &Sender<TerminalUpd
 /// otherwise a flooded `window_rx` would starve `pty_rx` and the frame path
 /// on this single-threaded loop and let the queue grow unbounded. Draining
 /// the backlog here bounds both.
+/// Applies the colors that have arrived and not been applied.
+fn take_color_schemes(core: &mut TerminalCore, schemes: &Receiver<TerminalColorScheme>) {
+    while let Ok(scheme) = schemes.try_recv() {
+        core.set_color_scheme(scheme);
+    }
+}
+
 fn drain_to_latest<T>(first: T, rx: &Receiver<T>) -> T {
     let mut latest = first;
     while let Ok(newer) = rx.try_recv() {
@@ -155,6 +162,7 @@ impl Stream {
                 self.wanted = true;
                 self.state(core.state(), update_tx);
             }
+            StreamCommand::Stop => *self = Self::default(),
             StreamCommand::Taken(bytes) => {
                 self.outstanding = self.outstanding.saturating_sub(bytes);
                 if self.behind && self.outstanding == 0 {
@@ -351,6 +359,10 @@ pub fn run_terminal_core(
     let mut sync_flush_rx: Receiver<Instant> = crossbeam_channel::never();
 
     loop {
+        // SPIKE Y: a view's keys go to the PTY without passing here, so
+        // what they have a program ask can be read before colors that were
+        // sent earlier are: the colors are taken first.
+        take_color_schemes(&mut core, &color_scheme_rx);
         // PTY output drains with priority over UI-originated input -- see
         // `drain_pty_output` for why that reply ordering is load-bearing.
         if !drain_pty_output(
@@ -409,6 +421,7 @@ pub fn run_terminal_core(
                 // Keep already-received PTY queries ahead of every user
                 // delivery, while the shared input FIFO preserves key/text/
                 // paste order even when the core is busy draining output.
+                take_color_schemes(&mut core, &color_scheme_rx);
                 if !drain_pty_output(
                     &mut core, &pty_rx, &command_tx, &update_tx, &mut frames,
                     &mut sync_flush_rx, &mut stream,
@@ -496,6 +509,7 @@ pub fn run_terminal_core(
                 let Ok(bytes) = bytes else {
                     return;
                 };
+                take_color_schemes(&mut core, &color_scheme_rx);
                 process_pty_chunk(
                     &mut core,
                     &bytes,

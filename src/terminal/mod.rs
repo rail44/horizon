@@ -126,6 +126,8 @@ struct State {
     /// Shared with whoever placed the view: the session outlives a view
     /// of it that is closed.
     session: Rc<Session>,
+    /// The view is not on the page, and has said so to the session.
+    off_the_page: Cell<bool>,
     /// The theme's colors, font and row height, and how many times they
     /// have been given.
     look: RefCell<TerminalLook>,
@@ -179,6 +181,7 @@ impl State {
         } = given;
         Self {
             session,
+            off_the_page: Cell::new(false),
             look: RefCell::new(look.get_untracked()),
             restyled: Cell::new(0),
             frame: RefCell::new(None),
@@ -235,6 +238,18 @@ pub struct Terminal {
 impl Terminal {
     /// Takes in what the session has produced since the last call: the
     /// newest frame, and its updates. Whether anything came.
+    /// Whether the view is on the page. A view off it (its tab is not the
+    /// one shown) lets go of the session's own terminal, and asks for it
+    /// again when it is back.
+    pub fn shown(&self, shown: bool) {
+        self.state.shown(shown);
+    }
+
+    /// Whether the session has a terminal of its own now.
+    pub fn has_a_terminal(&self) -> bool {
+        self.state.session.has_a_terminal()
+    }
+
     pub fn pump(&self) -> bool {
         pump(&self.state)
     }
@@ -309,6 +324,17 @@ impl Terminal {
     /// Who to wake when the session has a frame.
     pub fn set_waker(&self, waker: std::task::Waker) {
         self.state.session.set_waker(waker);
+    }
+}
+
+impl State {
+    fn shown(&self, shown: bool) {
+        if shown == self.off_the_page.replace(!shown) {
+            match shown {
+                true => self.session.show(),
+                false => self.session.hide(),
+            }
+        }
     }
 }
 
@@ -422,6 +448,15 @@ fn key_code(key: &BlitzKeyEvent) -> Option<(KeyCode, Option<String>)> {
 pub fn build(given: TerminalView) -> (El, Terminal) {
     let TerminalView { look, .. } = given;
     let state = Rc::new(State::new(given));
+    // The session has a terminal of its own while this view is on the
+    // page: from here until whoever placed the view says it is off it
+    // (`Terminal::shown`), or the view ends.
+    state.session.show();
+    let shown = horizon_ui::reactive_graph::owner::StoredValue::new_local(state.clone());
+    horizon_ui::reactive_graph::owner::on_cleanup(move || {
+        use horizon_ui::reactive_graph::traits::WithValue as _;
+        shown.try_with_value(|state| state.shown(false));
+    });
     // The colors a program is told when it asks (OSC 4, 10, 11, 12) are
     // the ones it is drawn in, whenever they change.
     let restyled = state.clone();

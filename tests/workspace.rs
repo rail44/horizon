@@ -1275,3 +1275,43 @@ fn a_tab_with_a_tasks_thread_open_is_left_and_come_back_to() {
     assert_eq!(opened.model(Workspace::active_tab_index), 1);
     assert_eq!(opened.all("actions").len(), 1);
 }
+
+/// SPIKE Y. A terminal on a tab that is not shown keeps no terminal of its
+/// own, and has one again, with what was written meanwhile, when its tab
+/// is back.
+#[test]
+fn a_terminal_off_the_page_has_no_terminal_of_its_own_until_it_is_back() {
+    let opened = open();
+    let first = opened.panes()[0];
+    opened.prompt(first);
+    let terminal = opened.shell.terminal(first).expect("a terminal");
+    opened.until("the session's own terminal", || terminal.has_a_terminal());
+    opened.run("sleep 1; echo written-meanwhile");
+
+    opened.chord();
+    opened.character("t");
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
+    assert!(!terminal.has_a_terminal());
+    let second = opened.panes()[0];
+    opened.prompt(second);
+    // What is written to the first is not taken in by anything here.
+    std::thread::sleep(Duration::from_millis(1300));
+    opened.app.resolve();
+    assert!(!terminal.has_a_terminal());
+
+    opened.chord();
+    opened.named(NamedKey::Tab);
+    opened.named(NamedKey::Escape);
+    assert_eq!(opened.model(Workspace::active_tab_index), 0);
+    opened.until("the session's own terminal again", || {
+        terminal.has_a_terminal()
+    });
+    opened.wait(first, "what was written meanwhile", |text| {
+        text.lines().any(|line| line == "written-meanwhile")
+    });
+    // And the keys go to it as before.
+    opened.run("echo back");
+    opened.wait(first, "the output", |text| {
+        text.lines().any(|line| line == "back")
+    });
+}

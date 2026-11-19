@@ -48,6 +48,8 @@ pub struct Session {
     /// daemon's instead, a key would go to the PTY by another way than the
     /// keys after it, and could arrive after them.)
     held: RefCell<Vec<TerminalCommand>>,
+    /// How many views show the session.
+    views: Cell<usize>,
     /// How many times a state has come whole, and how many bytes of output
     /// have been taken in: for a measurement.
     states: Cell<u64>,
@@ -93,12 +95,12 @@ impl Session {
             read: RefCell::default(),
             changed: Cell::new(false),
             held: RefCell::default(),
+            views: Cell::new(0),
             states: Cell::new(0),
             bytes: Cell::new(0),
             waker,
             _attachment: Some(handle),
         }
-        .wanting()
     }
 
     /// A session behind plain channels: whatever runs the terminal core
@@ -128,18 +130,46 @@ impl Session {
             read: RefCell::default(),
             changed: Cell::new(false),
             held: RefCell::default(),
+            views: Cell::new(0),
             states: Cell::new(0),
             bytes: Cell::new(0),
             waker,
             _attachment: None,
         }
-        .wanting()
     }
 
-    /// Asks the daemon for the terminal's state and what follows it.
-    fn wanting(self) -> Self {
-        let _ = self.commands.send(TerminalCommand::WantState);
-        self
+    /// A view shows the session: the daemon is asked for the terminal's
+    /// state and what follows it, and the session has a terminal of its
+    /// own from when the state comes until [`Self::hide`].
+    pub fn show(&self) {
+        self.views.set(self.views.get() + 1);
+        if self.views.get() == 1 {
+            let _ = self.commands.send(TerminalCommand::WantState);
+        }
+    }
+
+    /// A view that showed the session is gone. With the last of them the
+    /// session's terminal is let go of, and the daemon sends no more: a
+    /// session nothing shows costs the daemon's terminal alone.
+    pub fn hide(&self) {
+        self.views.set(self.views.get().saturating_sub(1));
+        if self.views.get() > 0 {
+            return;
+        }
+        let _ = self.commands.send(TerminalCommand::StopState);
+        *self.mirror.borrow_mut() = None;
+        self.state.borrow_mut().clear();
+        self.stream.borrow_mut().clear();
+        *self.read.borrow_mut() = (0, None);
+        // What was held for a terminal that never came is the daemon's.
+        for command in std::mem::take(&mut *self.held.borrow_mut()) {
+            let _ = self.commands.send(command);
+        }
+    }
+
+    /// Whether the session has a terminal of its own now.
+    pub fn has_a_terminal(&self) -> bool {
+        self.mirror.borrow().is_some()
     }
 
     /// What a view asks of the terminal. What is the terminal's own to
@@ -149,6 +179,12 @@ impl Session {
     pub fn send(&self, command: TerminalCommand) {
         let mut mirror = self.mirror.borrow_mut();
         let Some(terminal) = mirror.as_mut() else {
+            if self.views.get() == 0 {
+                // Nothing shows the session: the daemon's terminal is
+                // asked, the only one there is.
+                let _ = self.commands.send(command);
+                return;
+            }
             match command {
                 TerminalCommand::Resize(_)
                 | TerminalCommand::SetColorScheme(_)
@@ -327,6 +363,8 @@ impl Session {
             );
             match (about_the_session, of_the_stream) {
                 (true, _) => self.for_keeper.borrow_mut().push(update),
+                // (Sent before the daemon heard that no view is here.)
+                (_, true) if self.views.get() == 0 => {}
                 (_, true) => self.stream.borrow_mut().push(update),
                 _ => self.for_view.borrow_mut().push(update),
             }

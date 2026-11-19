@@ -568,6 +568,11 @@
           "type": "string"
         },
         {
+          "const": "StopState",
+          "description": "SPIKE Y. Client → daemon: no view is here any more: nothing of the\nstate or the PTY's bytes is to be sent until one asks again.",
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "description": "SPIKE Y. Client → daemon: this many bytes of `Output` have been\ntaken in. The daemon holds what it sends against these: a view that\nfalls too far behind is sent no more until it has caught up, and\nthen the state again.",
           "properties": {

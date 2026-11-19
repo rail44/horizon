@@ -117,6 +117,9 @@ pub enum TerminalCommand {
     /// SPIKE Y. Client → daemon: a view is here and has nothing: the
     /// terminal's state, then what the PTY writes from there on.
     WantState,
+    /// SPIKE Y. Client → daemon: no view is here any more: nothing of the
+    /// state or the PTY's bytes is to be sent until one asks again.
+    StopState,
     /// SPIKE Y. Client → daemon: this many bytes of `Output` have been
     /// taken in. The daemon holds what it sends against these: a view that
     /// falls too far behind is sent no more until it has caught up, and

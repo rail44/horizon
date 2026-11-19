@@ -19,6 +19,8 @@ pub enum CoreInput {
 pub enum StreamCommand {
     /// It has nothing: the state, then the bytes.
     Want,
+    /// No view is there: nothing more.
+    Stop,
     /// It has taken this many bytes in.
     Taken(u64),
 }

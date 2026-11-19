@@ -98,6 +98,15 @@ pub(super) fn view(shell: Shell) -> El {
         shell.rearranged.get();
         shell.reconcile();
         let (split, panes) = previous.unwrap_or_default();
+        // A terminal on the tab shown has a terminal of its own to draw
+        // from, and one on another tab does not.
+        for (id, view) in shell.kept().panes.borrow().iter() {
+            if let Some((_, terminal)) = &view.terminal {
+                let on_the_page =
+                    (shown.as_ref()).is_some_and(|(_, shape)| shape.panes().contains(id));
+                terminal.shown(on_the_page);
+            }
+        }
         for pane in panes {
             pane.detach();
         }

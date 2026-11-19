@@ -773,6 +773,9 @@ fn run_writer(
             TerminalCommand::WantState => {
                 let _ = stream_tx.send(horizon_terminal_core::StreamCommand::Want);
             }
+            TerminalCommand::StopState => {
+                let _ = stream_tx.send(horizon_terminal_core::StreamCommand::Stop);
+            }
             TerminalCommand::OutputTaken(bytes) => {
                 let _ = stream_tx.send(horizon_terminal_core::StreamCommand::Taken(bytes));
             }
