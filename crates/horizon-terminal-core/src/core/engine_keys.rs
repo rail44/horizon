@@ -6,98 +6,10 @@
 //! `cargo nextest run -p horizon-terminal-core --run-ignored only
 //! the_engine_s_key_encoder_beside_horizon_s --no-capture`
 
-use libghostty_vt::key::{Action, Encoder, Event, Key, Mods};
 use termwiz::input::{KeyCode, Modifiers};
 
 use super::TerminalCore;
 use crate::types::{KeyEventKind, TerminalSize};
-
-/// The engine's key for one of the wire's, with the character an
-/// unshifted press of it makes.
-fn engine_key(key: KeyCode) -> Option<(Key, Option<char>)> {
-    let letters = [
-        Key::A,
-        Key::B,
-        Key::C,
-        Key::D,
-        Key::E,
-        Key::F,
-        Key::G,
-        Key::H,
-        Key::I,
-        Key::J,
-        Key::K,
-        Key::L,
-        Key::M,
-        Key::N,
-        Key::O,
-        Key::P,
-        Key::Q,
-        Key::R,
-        Key::S,
-        Key::T,
-        Key::U,
-        Key::V,
-        Key::W,
-        Key::X,
-        Key::Y,
-        Key::Z,
-    ];
-    let digits = [
-        Key::Digit0,
-        Key::Digit1,
-        Key::Digit2,
-        Key::Digit3,
-        Key::Digit4,
-        Key::Digit5,
-        Key::Digit6,
-        Key::Digit7,
-        Key::Digit8,
-        Key::Digit9,
-    ];
-    let functions = [
-        Key::F1,
-        Key::F2,
-        Key::F3,
-        Key::F4,
-        Key::F5,
-        Key::F6,
-        Key::F7,
-        Key::F8,
-        Key::F9,
-        Key::F10,
-        Key::F11,
-        Key::F12,
-    ];
-    Some(match key {
-        KeyCode::Char(c) if c.is_ascii_alphabetic() => {
-            let lower = c.to_ascii_lowercase();
-            (letters[(lower as u8 - b'a') as usize], Some(lower))
-        }
-        KeyCode::Char(c) if c.is_ascii_digit() => (digits[(c as u8 - b'0') as usize], Some(c)),
-        KeyCode::Char(' ') => (Key::Space, Some(' ')),
-        KeyCode::Char('-') => (Key::Minus, Some('-')),
-        KeyCode::Char('[') => (Key::BracketLeft, Some('[')),
-        KeyCode::Char(';') => (Key::Semicolon, Some(';')),
-        KeyCode::Char('/') => (Key::Slash, Some('/')),
-        KeyCode::Enter => (Key::Enter, None),
-        KeyCode::Tab => (Key::Tab, None),
-        KeyCode::Backspace => (Key::Backspace, None),
-        KeyCode::Escape => (Key::Escape, None),
-        KeyCode::Delete => (Key::Delete, None),
-        KeyCode::Insert => (Key::Insert, None),
-        KeyCode::UpArrow => (Key::ArrowUp, None),
-        KeyCode::DownArrow => (Key::ArrowDown, None),
-        KeyCode::LeftArrow => (Key::ArrowLeft, None),
-        KeyCode::RightArrow => (Key::ArrowRight, None),
-        KeyCode::Home => (Key::Home, None),
-        KeyCode::End => (Key::End, None),
-        KeyCode::PageUp => (Key::PageUp, None),
-        KeyCode::PageDown => (Key::PageDown, None),
-        KeyCode::Function(n @ 1..=12) => (functions[n as usize - 1], None),
-        _ => return None,
-    })
-}
 
 impl TerminalCore {
     /// What the engine's encoder writes for a key, the modes read from the
@@ -109,40 +21,13 @@ impl TerminalCore {
         kind: KeyEventKind,
         text: Option<&str>,
     ) -> Option<Vec<u8>> {
-        let (engine, unshifted) = engine_key(key)?;
-        let mut encoder = Encoder::new().ok()?;
-        encoder.set_options_from_terminal(&self.terminal);
-        let mut event = Event::new().ok()?;
-        event.set_action(match kind {
-            KeyEventKind::Press => Action::Press,
-            KeyEventKind::Repeat => Action::Repeat,
-            KeyEventKind::Release => Action::Release,
-        });
-        event.set_key(engine);
-        let mut held = Mods::empty();
-        for (wire, engine) in [
-            (Modifiers::SHIFT, Mods::SHIFT),
-            (Modifiers::CTRL, Mods::CTRL),
-            (Modifiers::ALT, Mods::ALT),
-            (Modifiers::SUPER, Mods::SUPER),
-        ] {
-            if mods.contains(wire) {
-                held |= engine;
-            }
-        }
-        event.set_mods(held);
-        // Shift that went into making the text is not a modifier of the
-        // key any more: the platform says so, and so does this.
-        if text.is_some() && held.contains(Mods::SHIFT) {
-            event.set_consumed_mods(Mods::SHIFT);
-        }
-        event.set_utf8(text);
-        if let Some(unshifted) = unshifted {
-            event.set_unshifted_codepoint(unshifted);
-        }
-        let mut written = Vec::new();
-        encoder.encode_to_vec(&event, &mut written).ok()?;
-        Some(written)
+        self.key_stroke(&super::keys::KeyStroke {
+            code: "",
+            key,
+            modifiers: mods,
+            kind,
+            made: text,
+        })
     }
 }
 
@@ -750,4 +635,39 @@ fn a_state_cut_off_after_the_screen_is_a_terminal_that_goes_on() {
     core.write_vt(b"and then more");
     view.take_in(b"and then more");
     assert_eq!(view.snapshot_text(), core.snapshot_text());
+}
+
+/// A state written out between any two bytes of what a program writes --
+/// in the middle of an escape sequence, of a character -- and the bytes
+/// after it make the terminal the whole makes.
+#[test]
+fn a_state_taken_between_any_two_bytes_goes_on_to_the_same_screen() {
+    let written = "$ typed ahead\r\n\x1b[H\x1b[2J\x1b[4;58;2;255;0;0munders\x1b[0m\r\n\
+                   \x1b[9;38;2;0;0;255mstruck\x1b[0m\r\n日本語 \u{2588}\u{2588}\r\n\
+                   \x1b]0;a title\x07\x1b[4:3mcurled\x1b[0m\r\n$ "
+        .as_bytes();
+    let mut whole = TerminalCore::new(TerminalSize::new(80, 24));
+    whole.write_vt(written);
+    let (text, frame) = (whole.snapshot_text(), whole.snapshot_frame());
+    let mut differing = Vec::new();
+    for at in 0..=written.len() {
+        let mut daemon = TerminalCore::new(TerminalSize::new(80, 24));
+        daemon.write_vt(&written[..at]);
+        let mut view = TerminalCore::from_state(&daemon.state()).expect("a view's terminal");
+        // What the view is sent is what the daemon's engine took in: the
+        // core holds the start of a sequence back until it has seen
+        // whether it is one of its own (a notification), so the engine
+        // has not had those bytes when the state is written, and has them
+        // with the bytes after.
+        let after = daemon.write_vt(&written[at..]).output;
+        view.take_in(&after);
+        if view.snapshot_text() != text || view.snapshot_frame().lines != frame.lines {
+            differing.push(at);
+        }
+    }
+    assert!(
+        differing.is_empty(),
+        "split at {differing:?} of {}",
+        written.len()
+    );
 }

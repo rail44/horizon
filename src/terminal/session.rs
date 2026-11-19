@@ -15,13 +15,17 @@ use std::task::Waker;
 use crossbeam_channel::{Receiver, Sender};
 use horizon_shell_runtime::TerminalSessionHandle;
 use horizon_terminal_core::{
-    ClipboardDestination, TerminalCommand, TerminalCore, TerminalFrame, TerminalUpdate,
+    ClipboardDestination, KeyStroke, TerminalCommand, TerminalCore, TerminalFrame,
+    TerminalKeyInput, TerminalUpdate,
 };
 
 /// How many frames have come and the newest of them, and who to wake
 /// when one comes: shared with the thread that receives frames.
 type Latest = Arc<Mutex<(u64, Option<TerminalFrame>)>>;
 type Wake = Arc<Mutex<Option<Waker>>>;
+/// What the platform said of a key: the physical key's name, and the
+/// text the key makes.
+type Platform = Option<(String, Option<String>)>;
 
 pub struct Session {
     commands: Sender<TerminalCommand>,
@@ -47,7 +51,7 @@ pub struct Session {
     /// of the session's terminal, in order, once it is there. (Sent to the
     /// daemon's instead, a key would go to the PTY by another way than the
     /// keys after it, and could arrive after them.)
-    held: RefCell<Vec<TerminalCommand>>,
+    held: RefCell<Vec<(TerminalCommand, Platform)>>,
     /// How many views show the session.
     views: Cell<usize>,
     /// How many times a state has come whole, and how many bytes of output
@@ -162,7 +166,7 @@ impl Session {
         self.stream.borrow_mut().clear();
         *self.read.borrow_mut() = (0, None);
         // What was held for a terminal that never came is the daemon's.
-        for command in std::mem::take(&mut *self.held.borrow_mut()) {
+        for (command, _) in std::mem::take(&mut *self.held.borrow_mut()) {
             let _ = self.commands.send(command);
         }
     }
@@ -177,6 +181,18 @@ impl Session {
     /// a window of the history), and the daemon is sent only what is for
     /// the PTY: bytes, a size, the colors it answers a program with.
     pub fn send(&self, command: TerminalCommand) {
+        self.ask(command, None);
+    }
+
+    /// A key, with what the platform said of it beside what the wire's
+    /// vocabulary carries: the physical key's name and the text the key
+    /// makes. The session's terminal has the engine's own encoder write
+    /// it from those.
+    pub fn key(&self, input: TerminalKeyInput, code: String, made: Option<String>) {
+        self.ask(TerminalCommand::KeyInput(input), Some((code, made)));
+    }
+
+    fn ask(&self, command: TerminalCommand, platform: Platform) {
         let mut mirror = self.mirror.borrow_mut();
         let Some(terminal) = mirror.as_mut() else {
             if self.views.get() == 0 {
@@ -192,7 +208,7 @@ impl Session {
                 | TerminalCommand::Shutdown => {
                     let _ = self.commands.send(command);
                 }
-                for_the_terminal => self.held.borrow_mut().push(for_the_terminal),
+                for_the_terminal => (self.held.borrow_mut()).push((for_the_terminal, platform)),
             }
             return;
         };
@@ -211,12 +227,26 @@ impl Session {
             }
         };
         match command {
-            TerminalCommand::KeyInput(input) => to_the_pty(terminal.key_input(
-                input.key,
-                input.modifiers,
-                input.kind,
-                input.text.as_deref(),
-            )),
+            TerminalCommand::KeyInput(input) => {
+                let written = platform.and_then(|(code, made)| {
+                    terminal.key_stroke(&KeyStroke {
+                        code: &code,
+                        key: input.key,
+                        modifiers: input.modifiers,
+                        kind: input.kind,
+                        made: made.as_deref(),
+                    })
+                });
+                // (A key the engine has no name for: Horizon's encoder.)
+                to_the_pty(written.unwrap_or_else(|| {
+                    terminal.key_input(
+                        input.key,
+                        input.modifiers,
+                        input.kind,
+                        input.text.as_deref(),
+                    )
+                }));
+            }
             TerminalCommand::TextInput(text) => to_the_pty(terminal.text_input(&text)),
             TerminalCommand::Paste(text) => to_the_pty(terminal.paste_input(&text)),
             TerminalCommand::Mouse(report) => {
@@ -301,8 +331,8 @@ impl Session {
             false => Vec::new(),
         };
         drop(mirror);
-        for command in held {
-            self.send(command);
+        for (command, platform) in held {
+            self.ask(command, platform);
         }
         if taken > 0 {
             self.bytes.set(self.bytes.get() + taken);

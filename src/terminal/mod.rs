@@ -503,9 +503,12 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
             let Some((code, text)) = key_code(key) else {
                 return;
             };
-            keyed
-                .session
-                .send(TerminalCommand::KeyInput(TerminalKeyInput {
+            let made = match &key.key {
+                Key::Character(made) => Some(made.to_string()),
+                Key::Named(_) => None,
+            };
+            keyed.session.key(
+                TerminalKeyInput {
                     key: code,
                     modifiers: modifiers(key),
                     kind: match key.is_auto_repeating {
@@ -513,7 +516,10 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                         false => KeyEventKind::Press,
                     },
                     text,
-                }));
+                },
+                key.code.to_string(),
+                made,
+            );
             // Not the document's Tab to the next element, nor its scroll.
             prevent_default();
         })
@@ -522,14 +528,16 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                 return;
             };
             if let Some((code, _)) = key_code(key) {
-                released
-                    .session
-                    .send(TerminalCommand::KeyInput(TerminalKeyInput {
+                released.session.key(
+                    TerminalKeyInput {
                         key: code,
                         modifiers: modifiers(key),
                         kind: KeyEventKind::Release,
                         text: None,
-                    }));
+                    },
+                    key.code.to_string(),
+                    None,
+                );
             }
         })
         .on("composition", move |event| {
