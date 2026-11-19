@@ -30,8 +30,15 @@
 filter = 'binary_id(horizon-agentd::e2e) + binary_id(horizon-terminald::e2e) + binary_id(horizon-logd::e2e) + binary_id(horizon::terminald) + binary_id(horizon::agentd) + binary_id(horizon::board_logd)'
 test-group = 'daemon-e2e'
 
+# Three at once, not one (2026-11-19): one at a time, the group's 53 tests
+# ran 36-37 s in sequence, and that sequence was what a full run took
+# however many other tests ran beside it (about 38 s). At 2 a full run took
+# 28-29 s, at 3 about 25 s, and at 4 or 6 no less; the group's slowest test
+# took 10-12 s at 1, 2 or 3, far from the waits it races, and nothing
+# failed. At 6 under a loaded machine the contention came back (the
+# group's tests 107 s in all, its slowest 17 s, the run 46 s).
 [test-groups.daemon-e2e]
-max-threads = 1
+max-threads = 3
 
 # The shell's tests with wasm guests in them -- the extensions it comes with
 # (`tests/extension.rs`, `tests/sessions.rs`, `tests/wiki.rs`) and the
