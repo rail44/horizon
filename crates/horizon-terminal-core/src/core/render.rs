@@ -12,11 +12,10 @@ use libghostty_vt::render::{CellIterator, CursorVisualStyle, Dirty, RenderState,
 use libghostty_vt::screen::{CellContentTag, CellWide, Screen};
 use libghostty_vt::style::{Style, StyleColor, Underline};
 use libghostty_vt::{Error, Terminal};
-use unicode_width::UnicodeWidthChar;
 
 use crate::types::{
     NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame, TerminalLine,
-    TerminalScrollWindow, TerminalSelection, TerminalSelectionPoint, TerminalSize, TerminalSpan,
+    TerminalScrollWindow, TerminalSelection, TerminalSelectionPoint, TerminalSize, TerminalStyle,
     TerminalUnderline,
 };
 
@@ -67,6 +66,11 @@ pub(super) struct Draw {
 }
 
 impl Draw {
+    /// Forgets the rows kept: the next frame reads every row.
+    pub(super) fn forget(&mut self) {
+        self.lines.clear();
+    }
+
     pub(super) fn new() -> Self {
         Self {
             state: RenderState::new().expect("a render state"),
@@ -81,16 +85,20 @@ pub(super) fn snapshot_frame(
     terminal: &Engine,
     draw: &RefCell<Draw>,
     size: TerminalSize,
+    shaped: Shaped,
 ) -> TerminalFrame {
     let rows = size.rows as usize;
     let history = history_rows(terminal);
     let offset = display_offset(terminal).min(history);
     // The viewport's top row, counted from the top of the whole buffer.
     let top = history - offset;
-    let (lines, cursor) = match drawn(terminal, &mut draw.borrow_mut(), rows) {
+    let (lines, cursor) = match drawn(terminal, &mut draw.borrow_mut(), rows, shaped) {
         Some(read) => read,
         // (The render state refused: the rows the slow way, and no cursor.)
-        None => (styled_rows(terminal, top, rows, size.cols as usize), None),
+        None => (
+            styled_rows(terminal, top, rows, size.cols as usize, shaped),
+            None,
+        ),
     };
 
     TerminalFrame {
@@ -112,6 +120,7 @@ fn drawn(
     terminal: &Engine,
     draw: &mut Draw,
     rows: usize,
+    shaped: Shaped,
 ) -> Option<(Vec<TerminalLine>, Option<TerminalCursor>)> {
     let Draw {
         state,
@@ -122,7 +131,7 @@ fn drawn(
     let snapshot = state.update(terminal).ok()?;
     let all = lines.len() != rows || !matches!(snapshot.dirty(), Ok(Dirty::Clean | Dirty::Partial));
     if all {
-        *lines = vec![TerminalLine { spans: Vec::new() }; rows];
+        *lines = vec![TerminalLine::default(); rows];
     }
     let cursor = snapshot.cursor().ok().and_then(|cursor| {
         let at = cursor.viewport.filter(|_| cursor.visible)?;
@@ -151,7 +160,7 @@ fn drawn(
         if !all && !row.dirty().unwrap_or(true) {
             continue;
         }
-        let mut line = TerminalLine { spans: Vec::new() };
+        let mut line = TerminalLine::default();
         let mut cell_iteration = cell_iterator.update(row).ok()?;
         let mut x = 0u16;
         while let Some(cell) = cell_iteration.next() {
@@ -182,6 +191,7 @@ fn drawn(
                 cell.style().unwrap_or_default(),
                 url.as_deref(),
                 &graphemes,
+                shaped,
             );
         }
         lines[at] = line;
@@ -346,6 +356,7 @@ pub(super) fn snapshot_window(
     size: TerminalSize,
     anchor: usize,
     height: usize,
+    shaped: Shaped,
 ) -> TerminalScrollWindow {
     let screen_lines = size.rows as i32;
     let history_size = i32::try_from(history_rows(terminal)).unwrap_or(i32::MAX);
@@ -374,7 +385,7 @@ pub(super) fn snapshot_window(
     // From the top of the whole buffer, the block's top row.
     let top = (history_size + block_top) as usize;
     TerminalScrollWindow {
-        lines: styled_rows(terminal, top, row_count, size.cols as usize),
+        lines: styled_rows(terminal, top, row_count, size.cols as usize, shaped),
         viewport_offset,
         above,
         below,
@@ -388,8 +399,9 @@ fn styled_rows(
     top: usize,
     row_count: usize,
     columns: usize,
+    shaped: Shaped,
 ) -> Vec<TerminalLine> {
-    let mut rows = vec![TerminalLine { spans: Vec::new() }; row_count];
+    let mut rows = vec![TerminalLine::default(); row_count];
     let mut graphemes = ['\0'; 32];
     let mut uri = vec![0u8; 2048];
     for (row, line) in rows.iter_mut().enumerate() {
@@ -410,21 +422,32 @@ fn styled_rows(
                 _ => None,
             };
             let written = place.graphemes(&mut graphemes).unwrap_or(0);
-            push_cell(line, cell, style, url.as_deref(), &graphemes[..written]);
+            push_cell(
+                line,
+                cell,
+                style,
+                url.as_deref(),
+                &graphemes[..written],
+                shaped,
+            );
         }
     }
     rows
 }
 
+/// Whether a character is drawn as shapes rather than from a font: the
+/// view's to say (`TerminalCore::set_drawn_as_shapes`).
+pub(super) type Shaped = fn(char) -> bool;
+
 /// Appends one cell of the engine's to a row: nothing for the second half
-/// of a wide character, a blank for a cell with no text or a hidden one,
-/// and its characters otherwise.
+/// of a wide character, a blank for a cell with no text or a hidden one.
 fn push_cell(
     line: &mut TerminalLine,
     cell: libghostty_vt::screen::Cell,
     style: Style,
     url: Option<&str>,
     graphemes: &[char],
+    shaped: Shaped,
 ) {
     let wide = cell.wide().unwrap_or(CellWide::Narrow);
     // The second half of a wide character: its partner counts both
@@ -447,6 +470,8 @@ fn push_cell(
         span.bg = background;
     }
     let (first, following) = match graphemes.split_first() {
+        // SGR 8 hides the glyph; the cell keeps its column.
+        Some(_) if style.invisible => (' ', &[][..]),
         Some((first, following)) if *first != '\0' => (*first, following),
         _ => (' ', &[][..]),
     };
@@ -454,20 +479,10 @@ fn push_cell(
         CellWide::Wide => 2,
         _ => 1,
     };
-    if style.invisible {
-        // SGR 8 hides the glyph; the cell keeps its column.
-        push_styled_cell(line, ' ', cells, span);
-        return;
-    }
-    if following.is_empty() || first == ' ' {
-        push_styled_cell(line, first, cells, span);
-    } else {
-        // A cell with combining characters is a span of its own.
-        line.spans.push(span.span(first.to_string(), cells));
-    }
-    for character in following {
-        push_styled_cell(line, *character, 0, span);
-    }
+    let same = line.ends_in(|last| span.matches(last));
+    line.push_with(first, following, cells, shaped(first), same, || {
+        span.owned()
+    });
 }
 
 /// The URI of the link a cell is in.
@@ -532,20 +547,18 @@ impl<'a> SpanStyle<'a> {
         }
     }
 
-    fn matches(&self, span: &TerminalSpan) -> bool {
-        span.fg == self.fg
-            && span.bg == self.bg
-            && span.italic == self.italic
-            && span.strikethrough == self.strikethrough
-            && span.underline == self.underline
-            && span.underline_color == self.underline_color
-            && span.url.as_deref() == self.url
+    fn matches(&self, style: &TerminalStyle) -> bool {
+        style.fg == self.fg
+            && style.bg == self.bg
+            && style.italic == self.italic
+            && style.strikethrough == self.strikethrough
+            && style.underline == self.underline
+            && style.underline_color == self.underline_color
+            && style.url.as_deref() == self.url
     }
 
-    fn span(&self, text: String, columns: usize) -> TerminalSpan {
-        TerminalSpan {
-            text,
-            columns,
+    fn owned(&self) -> TerminalStyle {
+        TerminalStyle {
             fg: self.fg,
             bg: self.bg,
             italic: self.italic,
@@ -630,65 +643,4 @@ fn promoted(color: TerminalColor, style: Style) -> TerminalColor {
         (false, true) => dim,
         (false, false) => named,
     })
-}
-
-/// Append one cell to the row, merging it into the trailing span whenever
-/// rendering semantics allow: zero-width chars ride their base cell's span,
-/// blank (space) cells extend a blank run of the same style, and printable
-/// cells extend a text run of the same style *and the same width class*
-/// (goal 4 of `docs/terminal-protocol-goals.md` -- frame size proportional
-/// to style runs, not characters).
-///
-/// The width-class fence exists for the GUI's grid snapping:
-/// `paint_terminal` (src/terminal/mod.rs) snaps a run's glyphs to the cell
-/// grid only while `columns == chars` (all single-width) or
-/// `columns == 2 * chars` (all double-width) holds for the whole run; a run
-/// mixing 1-column and 2-column cells falls back to natural shaping and can
-/// drift off the grid. A mergeable text run is width-uniform and free of
-/// zero-width chars by construction (`snapshot_frame` isolates
-/// combining-char cells, and a run that ends in a zero-width char never
-/// accepts printables), so `last.columns == chars * columns` below says
-/// exactly "the run's width class equals this cell's width".
-fn push_styled_cell(line: &mut TerminalLine, ch: char, columns: usize, style: SpanStyle<'_>) {
-    if let Some(last) = line.spans.last_mut() {
-        if columns == 0 && style.matches(last) {
-            last.text.push(ch);
-            return;
-        }
-
-        if ch == ' ' && columns > 0 && last.text.is_empty() && style.matches(last) {
-            last.columns += columns;
-            return;
-        }
-
-        if ch != ' '
-            && columns > 0
-            && style.matches(last)
-            && last.columns == last.text.chars().count() * columns
-            && !ends_with_zero_width(&last.text)
-        {
-            last.text.push(ch);
-            last.columns += columns;
-            return;
-        }
-    }
-
-    if ch == ' ' && columns > 0 {
-        line.spans.push(style.span(String::new(), columns));
-        return;
-    }
-
-    line.spans.push(style.span(ch.to_string(), columns));
-}
-
-/// True when the span's text ends in a zero-width (combining) char --
-/// `push_styled_cell`'s fence keeping printable cells out of a span that
-/// carries a combining sequence. Also disambiguates the one case the
-/// width-class equation alone cannot: a wide base char plus one zero-width
-/// char (2 columns, 2 chars) is indistinguishable from two single-width
-/// printables by arithmetic.
-fn ends_with_zero_width(text: &str) -> bool {
-    text.chars()
-        .next_back()
-        .is_some_and(|ch| ch.width().unwrap_or(0) == 0)
 }

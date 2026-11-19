@@ -700,7 +700,7 @@ mod tests {
     }
 
     fn row_text(line: &horizon_terminal_core::TerminalLine) -> String {
-        line.spans.iter().map(|span| span.text.as_str()).collect()
+        line.plain()
     }
 
     /// A held window with margin above and below the viewport, offset centered.

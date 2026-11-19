@@ -18,8 +18,8 @@ use horizon_terminal_core::{
     ClipboardDestination, KeyEventKind, NamedColor, TerminalColor, TerminalColorScheme,
     TerminalCommand, TerminalCursorShape, TerminalFrame, TerminalKeyInput, TerminalLine,
     TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport,
-    TerminalScroll, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalUnderline,
-    TerminalUpdate, fixed_palette_rgb,
+    TerminalScroll, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalStyle,
+    TerminalUnderline, TerminalUpdate, fixed_palette_rgb,
 };
 use horizon_ui::blitz_traits::events::{
     BlitzImeEvent, BlitzKeyEvent, BlitzWheelDelta, DomEventData, MouseEventButton,
@@ -29,7 +29,6 @@ use kurbo::{Affine, Rect, Stroke};
 use parley::{Layout, PositionedLayoutItem};
 use peniko::{Color, Fill};
 use termwiz::input::{KeyCode, Modifiers};
-use unicode_width::UnicodeWidthChar;
 
 use horizon_components::Drags;
 use horizon_shell_runtime::terminal_glyphs::{self as drawn_glyphs, GlyphShape};
@@ -255,31 +254,17 @@ impl Terminal {
     }
 
     /// The rows on screen, as text: the live screen's, or while the view
-    /// is scrolled back the rows of history it is over. A span's cells
-    /// past its text are blank.
+    /// is scrolled back the rows of history it is over.
     pub fn text(&self) -> String {
         let frame = self.state.frame.borrow();
         let scrolled = (self.state.scrollback.borrow()).visible_lines(self.state.cells.get().2);
         let history = (scrolled.as_ref()).map(|(window, range, _)| &window.lines[range.clone()]);
         let live = frame.as_ref().map(|frame| &frame.lines[..]);
         let lines = history.or(live).into_iter().flatten();
-        let row = |line: &TerminalLine| {
-            let mut row = String::new();
-            for span in &line.spans {
-                // A tab's cell holds the tab: a blank on the screen.
-                let shown: String = (span.text.chars())
-                    .map(|character| match character.is_control() {
-                        true => ' ',
-                        false => character,
-                    })
-                    .collect();
-                let width: usize = shown.chars().filter_map(|c| c.width()).sum();
-                row += &shown;
-                row += &" ".repeat(span.columns.saturating_sub(width));
-            }
-            row.trim_end().to_string()
-        };
-        lines.map(row).collect::<Vec<_>>().join("\n")
+        lines
+            .map(TerminalLine::plain)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// How far into its top row the view is scrolled, as a part of a row,
@@ -876,8 +861,6 @@ struct Shaped {
     line: TerminalLine,
     row: Row,
     layout: Layout<Ink>,
-    /// The byte each character starts at, and its column.
-    columns: Vec<(usize, usize)>,
     /// The characters drawn from shapes and not from a font (box drawing,
     /// block elements, sextants, Braille): each one's column and color. A
     /// font's glyph cannot fill a cell taller than its em box, and its
@@ -895,73 +878,59 @@ struct Ruled {
 }
 
 fn shape(line: &TerminalLine, shaper: &mut Shaper, scale: f32, palette: Palette) -> Shaped {
-    let (mut text, mut colors, mut backgrounds, mut columns) =
-        (String::new(), Vec::new(), Vec::new(), Vec::new());
-    let (mut italics, mut lines) = (Vec::new(), Vec::new());
-    let mut drawn = Vec::new();
-    let mut column = 0;
-    for span in &line.spans {
-        let start = text.len();
-        for character in span.text.chars() {
-            // A cell a tab was written to holds the tab itself: one blank
-            // cell on the screen, and no glyph in any font.
-            let character = match character.is_control() {
-                true => ' ',
-                false => character,
-            };
-            columns.push((text.len(), column));
-            // What is drawn from shapes is a blank to the font.
-            if drawn_glyphs::is_geometric(character) {
-                drawn.push((column, character, palette.rgb(span.fg)));
-                text.push(' ');
-            } else {
-                text.push(character);
+    let (mut colors, mut italics, mut backgrounds) = (Vec::new(), Vec::new(), Vec::new());
+    let mut lines = Vec::new();
+    for run in &line.runs {
+        let style = &run.style;
+        let ink = palette.rgb(style.fg);
+        if !run.bytes.is_empty() {
+            colors.push((run.bytes.clone(), Ink(ink)));
+            if style.italic {
+                italics.push(run.bytes.clone());
             }
-            column += character.width().unwrap_or(0);
         }
-        let ink = palette.rgb(span.fg);
-        colors.push((start..text.len(), Ink(ink)));
-        if span.italic {
-            italics.push(start..text.len());
-        }
-        // The frame's count of the span's cells is what places the next
-        // span, whatever the characters' own widths came to.
-        let first = columns.iter().rev().find(|(byte, _)| *byte <= start);
-        let from = first.map_or(column, |(_, column)| *column);
-        let from = if text.len() == start { column } else { from };
-        column = from + span.columns;
-        let background = palette.rgb(span.bg);
+        let background = palette.rgb(style.bg);
         if background != palette.background() {
-            backgrounds.push((from..column, background));
+            backgrounds.push((run.columns.clone(), background));
         }
         // A link is underlined, whatever it was written with, unless it
         // was written with an underline of its own.
-        let under = match (span.underline, &span.url) {
+        let under = match (style.underline, &style.url) {
             (TerminalUnderline::None, None) => None,
             (TerminalUnderline::None, Some(_)) => Some(TerminalUnderline::Single),
             (kind, _) => Some(kind),
         };
-        let under = under.map(|kind| (kind, span.underline_color.map_or(ink, |c| palette.rgb(c))));
-        let through = span.strikethrough.then_some(ink);
+        let under = under.map(|kind| (kind, style.underline_color.map_or(ink, |c| palette.rgb(c))));
+        let through = style.strikethrough.then_some(ink);
         if under.is_some() || through.is_some() {
             lines.push(Ruled {
-                columns: from..column,
+                columns: run.columns.clone(),
                 under,
                 through,
             });
         }
     }
+    // What is drawn from shapes, in the color of the run it is in.
+    let drawn = (line.shapes.iter())
+        .map(|(place, character)| {
+            let (byte, column) = line.cells[*place];
+            let run = (line.runs.iter()).find(|run| run.bytes.contains(&byte));
+            let ink = run.map_or(
+                palette.rgb(TerminalColor::Named(NamedColor::Foreground)),
+                |run| palette.rgb(run.style.fg),
+            );
+            (column, *character, ink)
+        })
+        .collect();
     let row = Row {
-        text,
         colors,
         italics,
         backgrounds,
     };
     Shaped {
-        layout: shaper.shape(&row, scale),
+        layout: shaper.shape(&line.text, &row, scale),
         line: line.clone(),
         row,
-        columns,
         drawn,
         lines,
     }
@@ -1301,7 +1270,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
                 glyphs(
                     &mut scene,
                     shaped,
-                    &shaped.columns,
+                    &shaped.line.cells,
                     cell,
                     0.,
                     top,
@@ -1385,7 +1354,7 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             glyphs(
                 &mut scene,
                 shaped,
-                &shaped.columns,
+                &shaped.line.cells,
                 cell,
                 0.,
                 index as f64 * line,
@@ -1411,27 +1380,15 @@ impl horizon_ui::blitz_dom::Widget for Screen {
             if !preedit.is_empty() {
                 // What is being composed, over the cells from the cursor,
                 // underlined.
-                let composing = TerminalLine {
-                    spans: vec![horizon_terminal_core::TerminalSpan {
-                        text: preedit.clone(),
-                        columns: preedit.chars().filter_map(|c| c.width()).sum(),
-                        fg: TerminalColor::Named(NamedColor::Foreground),
-                        bg: TerminalColor::Named(NamedColor::Background),
-                        italic: false,
-                        strikethrough: false,
-                        underline: Default::default(),
-                        underline_color: None,
-                        url: None,
-                    }],
-                };
+                let composing = TerminalLine::of(&preedit, TerminalStyle::default());
                 let shaped = shape(&composing, &mut self.shaper, scale as f32, palette);
-                let wide = shaped.line.spans[0].columns;
+                let wide = shaped.line.width();
                 let over = cells(cursor.row, cursor.col, cursor.col + wide);
                 fill(&mut scene, palette.background(), over);
                 glyphs(
                     &mut scene,
                     &shaped,
-                    &shaped.columns,
+                    &shaped.line.cells,
                     cell,
                     place.x0,
                     place.y0,

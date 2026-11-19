@@ -170,65 +170,12 @@ fn what_the_engine_says_of_rows_as_output_scrolls() {
 #[test]
 #[ignore = "sizes for the spike's record, not a check"]
 fn how_much_crosses_to_a_view() {
+    // (It measured frames on the wire too; no frame crosses any more, and
+    // the record keeps what they came to.)
     use std::time::Instant;
 
     use libghostty_vt::Terminal;
     use libghostty_vt::snapshot::Decoder;
-
-    // A frame as the wire has it today, in the wire's own codec.
-    fn frame_bytes(frame: &crate::types::TerminalFrame) -> usize {
-        postbag_len(frame)
-    }
-    fn postbag_len<T: serde::Serialize>(value: &T) -> usize {
-        let mut bytes = Vec::new();
-        let _outside = remoc::codec::allow_outside();
-        <horizon_wire::WireCodec as remoc::codec::Codec>::serialize(&mut bytes, value).unwrap();
-        bytes.len()
-    }
-
-    for (columns, rows) in [(120u16, 40u16), (240, 70)] {
-        // Plain text; text that changes color every few cells; and a
-        // color for every cell.
-        type Screen = Box<dyn Fn(usize, usize) -> String>;
-        let screens: [(&str, Screen); 3] = [
-            ("plain", Box::new(|_, _| String::new())),
-            (
-                "a color every 7 cells",
-                Box::new(|line, column| match column % 7 {
-                    0 => format!("\x1b[3{}m", (line + column) % 8),
-                    _ => String::new(),
-                }),
-            ),
-            (
-                "a color for every cell",
-                Box::new(|line, column| {
-                    format!(
-                        "\x1b[38;2;{};{};{}m",
-                        line % 256,
-                        column % 256,
-                        (line + column) % 256
-                    )
-                }),
-            ),
-        ];
-        for (name, style) in screens {
-            let mut core = TerminalCore::new(TerminalSize::new(columns, rows));
-            let mut one_screen = String::from("\x1b[H");
-            for line in 0..rows as usize {
-                one_screen += &format!("\x1b[{};1H", line + 1);
-                for column in 0..columns as usize {
-                    one_screen += &style(line, column);
-                    one_screen.push((b'!' + ((line * 31 + column * 7) % 90) as u8) as char);
-                }
-            }
-            core.write_vt(one_screen.as_bytes());
-            println!(
-                "{columns}x{rows}, {name}: the program wrote {} bytes for the screen; the frame is {} bytes on the wire",
-                one_screen.len(),
-                frame_bytes(&core.snapshot_frame()),
-            );
-        }
-    }
 
     // The whole state of a terminal with a full history, as it would be
     // handed to a view that attaches.

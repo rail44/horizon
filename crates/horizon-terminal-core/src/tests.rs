@@ -50,11 +50,10 @@ fn vt_stream_preserves_ansi_foreground_color() {
     let first_line = &frame.lines[0];
     assert!(
         first_line
-            .spans
-            .iter()
+            .spans()
             .any(|span| { span.text == "red" && span.fg == TerminalColor::Named(NamedColor::Red) })
     );
-    assert!(first_line.spans.iter().any(|span| {
+    assert!(first_line.spans().any(|span| {
         span.text == "plain" && span.fg == TerminalColor::Named(NamedColor::Foreground)
     }));
 }
@@ -137,13 +136,12 @@ fn bce_erased_line_carries_the_active_background_color() {
 
     let frame = core.snapshot_frame();
     let first_line = &frame.lines[0];
-    let erased = first_line
-        .spans
-        .iter()
-        .find(|span| span.text.is_empty())
-        .expect("the erased tail of the line should be a blank span");
-    assert_eq!(erased.bg, TerminalColor::Rgb([10, 20, 30]));
-    assert_eq!(erased.columns, 18); // 20 cols - "hi"'s 2.
+    // The erased cells have no text and the background: they are in the
+    // run "hi" is in, which covers the whole row.
+    let erased = first_line.run_at(19).expect("the erased tail has a run");
+    assert_eq!(erased.style.bg, TerminalColor::Rgb([10, 20, 30]));
+    assert_eq!(erased.columns, 0..20);
+    assert_eq!(&first_line.text[erased.bytes.clone()], "hi");
 }
 
 /// The other route to the same span shape: literal space characters
@@ -159,13 +157,13 @@ fn mid_line_space_run_with_background_is_a_blank_colored_span() {
 
     let frame = core.snapshot_frame();
     let first_line = &frame.lines[0];
-    let padding = first_line
-        .spans
-        .iter()
-        .find(|span| span.text.is_empty())
-        .expect("the space run between 'A' and 'B' should be a blank span");
-    assert_eq!(padding.bg, TerminalColor::Rgb([9, 9, 9]));
-    assert_eq!(padding.columns, 3);
+    // The spaces have no text, and the background of the run they are in.
+    for column in 1..4 {
+        let padding = first_line.run_at(column).expect("the spaces have a run");
+        assert_eq!(padding.style.bg, TerminalColor::Rgb([9, 9, 9]));
+    }
+    assert_eq!(first_line.text, "AB");
+    assert_eq!(first_line.cells, vec![(0, 0), (1, 4)]);
 }
 
 /// Goal 2 of `docs/terminal-protocol-goals.md`: selection is semantic
@@ -261,11 +259,9 @@ fn sgr_text_styles_reach_the_span() {
     let frame = core.snapshot_frame();
     let span = |row: usize, text: &str| {
         frame.lines[row]
-            .spans
-            .iter()
+            .spans()
             .find(|span| span.text == text)
             .unwrap_or_else(|| panic!("no span {text:?} on row {row}"))
-            .clone()
     };
 
     assert!(span(0, "I").italic);
@@ -280,7 +276,7 @@ fn sgr_text_styles_reach_the_span() {
     assert_eq!(span(7, "P").underline, TerminalUnderline::None);
     // Style is part of the span-merge key: the underlined "X" and plain
     // "P" may not collapse into one span.
-    assert!(frame.lines[7].spans.len() >= 2);
+    assert!(frame.lines[7].runs.len() >= 2);
 }
 
 /// SGR 7 changes the places of a cell's two colors, whichever they are:
@@ -294,11 +290,9 @@ fn inverse_text_is_its_background_s_color_on_its_foreground_s() {
     let frame = core.snapshot_frame();
     let span = |row: usize, text: &str| {
         frame.lines[row]
-            .spans
-            .iter()
+            .spans()
             .find(|span| span.text == text)
             .unwrap_or_else(|| panic!("no span {text:?} on row {row}"))
-            .clone()
     };
     let named = TerminalColor::Named;
 
@@ -329,11 +323,9 @@ fn sgr_58_underline_color_reaches_the_span() {
     let frame = core.snapshot_frame();
     let span = |row: usize, text: &str| {
         frame.lines[row]
-            .spans
-            .iter()
+            .spans()
             .find(|span| span.text == text)
             .unwrap_or_else(|| panic!("no span {text:?} on row {row}"))
-            .clone()
     };
 
     let curl = span(0, "R");
@@ -364,15 +356,15 @@ fn style_attributes_are_part_of_the_span_merge_key() {
     core.write_vt(b"\x1b[4m  \x1b[0m  X");
 
     let frame = core.snapshot_frame();
-    let spans = &frame.lines[0].spans;
+    let spans: Vec<_> = frame.lines[0].spans().collect();
     assert_eq!(spans[0].text, "");
     assert_eq!(spans[0].columns, 2);
     assert_eq!(spans[0].underline, TerminalUnderline::Single);
-    assert_eq!(spans[1].text, "");
-    assert_eq!(spans[1].columns, 2);
+    // The plain spaces are in the run of the plain text after them.
+    assert_eq!(spans[1].text, "X");
     assert_eq!(spans[1].underline, TerminalUnderline::None);
-    assert_eq!(spans[2].text, "X");
-    assert!(!spans[2].italic);
+    assert!(!spans[1].italic);
+    assert_eq!(frame.lines[0].cells, vec![(0, 4)]);
 }
 
 /// Goal 4 of `docs/terminal-protocol-goals.md`, first step: frame size is
@@ -388,7 +380,7 @@ fn same_style_printable_run_merges_into_one_span() {
     core.write_vt(row.as_bytes());
 
     let frame = core.snapshot_frame();
-    let spans = &frame.lines[0].spans;
+    let spans: Vec<_> = frame.lines[0].spans().collect();
     assert_eq!(
         spans.len(),
         1,
@@ -408,15 +400,11 @@ fn style_changes_split_the_merged_run() {
     core.write_vt(b"ab\x1b[31mcd\x1b[0m\x1b[3mef\x1b[0m\x1b[4mgh\x1b[0mij");
 
     let frame = core.snapshot_frame();
-    let spans = &frame.lines[0].spans;
+    let spans: Vec<_> = frame.lines[0].spans().collect();
     assert_eq!(
-        spans
-            .iter()
-            .map(|span| span.text.as_str())
-            .collect::<Vec<_>>(),
-        // The trailing entry is the erased remainder of the 40-column row
-        // (a blank run, the same shape the BCE test above locks down).
-        vec!["ab", "cd", "ef", "gh", "ij", ""]
+        spans.iter().map(|span| span.text).collect::<Vec<_>>(),
+        // (The rest of the row, blank, is in the last run.)
+        vec!["ab", "cd", "ef", "gh", "ij"]
     );
     assert_eq!(spans[1].fg, TerminalColor::Named(NamedColor::Red));
     assert!(spans[2].italic);
@@ -425,49 +413,27 @@ fn style_changes_split_the_merged_run() {
     assert_eq!(frame.text().lines().next(), Some("abcdefghij"));
 }
 
-/// Width class is part of the merge key: same-style runs still split where
-/// 1-column and 2-column cells meet. The GUI (`paint_terminal`'s
-/// force_width) snaps a run to the cell grid only while `columns == chars`
-/// or `columns == 2 * chars` holds for the whole run -- a mixed run falls
-/// back to natural shaping and drifts off the grid, so CJK and ASCII may
-/// not share a span even when their style matches.
+/// Each character has its column: a wide character two, a combining
+/// character its base's. One style is one run, whatever the widths in it
+/// (the view places each character at its column).
 #[test]
-fn width_class_boundary_splits_a_same_style_run() {
+fn every_character_has_its_column() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt("ab日本cd".as_bytes());
-
     let frame = core.snapshot_frame();
-    let spans = &frame.lines[0].spans;
-    assert_eq!(
-        spans
-            .iter()
-            .map(|span| (span.text.as_str(), span.columns))
-            .collect::<Vec<_>>(),
-        vec![("ab", 2), ("日本", 4), ("cd", 2), ("", 12)]
-    );
+    let line = &frame.lines[0];
+    let columns: Vec<_> = line.cells.iter().map(|(_, column)| *column).collect();
+    assert_eq!(columns, vec![0, 1, 2, 4, 6, 7]);
+    assert_eq!(line.runs.len(), 1);
     assert_eq!(frame.text().lines().next(), Some("ab日本cd"));
     assert_eq!(frame.cursor.map(|cursor| cursor.col), Some(8));
-}
 
-/// A cell carrying zero-width combining chars keeps a span of its own, on
-/// both sides: merged into a neighboring run, the extra chars would flip
-/// the GUI's whole-run `columns == chars` grid-snap classification to
-/// natural shaping for the surrounding text too. Isolated, any shaping
-/// drift stays confined to the one cell -- the pre-merge rendering.
-#[test]
-fn combining_chars_keep_their_cell_out_of_the_run_merge() {
     let mut core = TerminalCore::new(TerminalSize::new(20, 4));
     core.write_vt("abc\u{0301}de".as_bytes());
-
     let frame = core.snapshot_frame();
-    let spans = &frame.lines[0].spans;
-    assert_eq!(
-        spans
-            .iter()
-            .map(|span| (span.text.as_str(), span.columns))
-            .collect::<Vec<_>>(),
-        vec![("ab", 2), ("c\u{0301}", 1), ("de", 2), ("", 15)]
-    );
+    let line = &frame.lines[0];
+    let columns: Vec<_> = line.cells.iter().map(|(_, column)| *column).collect();
+    assert_eq!(columns, vec![0, 1, 2, 2, 3, 4]);
     assert_eq!(frame.text().lines().next(), Some("abc\u{0301}de"));
 }
 
@@ -505,14 +471,11 @@ fn vt_stream_tracks_wide_character_columns() {
     assert!(frame.text().contains("日本語"));
     assert_eq!(frame.text().lines().next(), Some("日本語"));
     assert_eq!(frame.cursor.map(|cursor| cursor.col), Some(6));
-    // The three wide cells share one style and one width class, so they
-    // arrive as a single merged span.
-    assert!(
-        frame.lines[0]
-            .spans
-            .iter()
-            .any(|span| span.text == "日本語" && span.columns == 6)
-    );
+    // Each wide character two columns on from the last.
+    let columns: Vec<_> = (frame.lines[0].cells.iter())
+        .map(|(_, column)| *column)
+        .collect();
+    assert_eq!(columns, vec![0, 2, 4]);
 }
 
 /// Backlog 45: SGR 8 (conceal) sets `Flags::HIDDEN` on a cell but leaves
@@ -535,16 +498,12 @@ fn concealed_text_still_occupies_its_columns() {
     // left to fill the gap the concealed run would otherwise leave.
     assert_eq!(frame.text().lines().next(), Some("      visible"));
 
+    // The hidden characters are blank cells: "visible" begins at their
+    // end.
     let first_line = &frame.lines[0];
-    let mut col = 0;
-    for span in &first_line.spans {
-        if span.text == "visible" {
-            break;
-        }
-        col += span.columns;
-    }
+    assert_eq!(first_line.text, "visible");
     assert_eq!(
-        col, 6,
+        first_line.cells[0].1, 6,
         "visible text must start after the concealed run's columns"
     );
 }
@@ -657,7 +616,7 @@ fn scroll_snapshot_reproduces_history_content() {
     // Content assertions: every row of the full scrolled snapshot must
     // carry real history text -- no row silently reverted to blank.
     for (index, line) in scrolled_frame.lines.iter().enumerate() {
-        let text: String = line.spans.iter().map(|span| span.text.as_str()).collect();
+        let text: String = line.spans().map(|span| span.text).collect();
         assert!(
             text.starts_with("line"),
             "row {index} should show scrollback content, got {text:?} (full frame: {:?})",
@@ -742,7 +701,7 @@ fn numbered_history_core_sized(cols: u16, rows: u16, count: usize) -> TerminalCo
 /// The visible text of one window/frame row (spans concatenated; blank runs
 /// contribute their empty text).
 fn window_row_text(line: &TerminalLine) -> String {
-    line.spans.iter().map(|span| span.text.as_str()).collect()
+    line.spans().map(|span| span.text).collect()
 }
 
 /// Phase 1 headline: `snapshot_window(anchor, height)` returns the correct
@@ -1625,38 +1584,6 @@ where
     assert_eq!(value, decoded);
 }
 
-fn test_frame(rows: &[&str]) -> TerminalFrame {
-    let lines = rows
-        .iter()
-        .map(|text| TerminalLine {
-            spans: vec![plain_span((*text).to_string(), text.chars().count())],
-        })
-        .collect::<Vec<_>>();
-    TerminalFrame {
-        lines,
-        cursor: None,
-        selection: None,
-        mouse_reporting: false,
-        keys_as_escape_codes: false,
-        palette_overrides: Vec::new(),
-        scrollback_available: false,
-    }
-}
-
-fn plain_span(text: String, columns: usize) -> TerminalSpan {
-    TerminalSpan {
-        text,
-        columns,
-        fg: TerminalColor::Named(NamedColor::Foreground),
-        bg: TerminalColor::Named(NamedColor::Background),
-        italic: false,
-        strikethrough: false,
-        underline: TerminalUnderline::None,
-        underline_color: None,
-        url: None,
-    }
-}
-
 #[test]
 fn terminal_commands_and_selection_commands_round_trip_through_serde() {
     let point = TerminalSelectionPoint { row: 3, col: 7 };
@@ -1696,9 +1623,6 @@ fn terminal_commands_and_selection_commands_round_trip_through_serde() {
 
 #[test]
 fn terminal_updates_and_external_value_types_round_trip_through_serde() {
-    // Since wire v11 the full frame rides its own `rch::watch<TerminalFrame>`
-    // channel, not a `TerminalUpdate` variant -- round-trip it on its own.
-    assert_serde_round_trip(test_frame(&["one", "two"]));
     let updates = vec![
         TerminalUpdate::Title(Some("title".into())),
         TerminalUpdate::Title(None),
@@ -1748,7 +1672,6 @@ fn terminal_wire_vocabulary_round_trips() {
     assert_serde_round_trip(TerminalSummary { session_id });
 
     assert_serde_round_trip(TerminalCommand::Input(b"echo wire\n".to_vec()));
-    assert_serde_round_trip(test_frame(&["before"]));
 }
 
 /// OSC 8 hyperlinks ride the frame: the URI alacritty parses onto each
@@ -1762,20 +1685,15 @@ fn osc8_hyperlink_carries_its_uri_on_the_span() {
     let frame = core.snapshot_frame();
     let row = &frame.lines[0];
     let linked = row
-        .spans
-        .iter()
+        .spans()
         .find(|span| span.text.contains("link"))
         .expect("linked text spans the row");
     assert_eq!(linked.url.as_deref(), Some("https://example.com/a"));
     let plain = row
-        .spans
-        .iter()
+        .spans()
         .find(|span| span.text.contains("plain"))
         .expect("plain text spans the row");
     assert_eq!(plain.url, None);
-
-    // The URI survives the wire unchanged (serde round trip).
-    assert_serde_round_trip(linked.clone());
 }
 
 /// The URI is part of the span-merge key: adjacent cells sharing one URI
@@ -1789,11 +1707,12 @@ fn url_is_part_of_the_span_merge_key() {
         b"\x1b]8;;https://a\x1b\\AB\x1b]8;;https://b\x1b\\CD\x1b]8;;https://a\x1b\\EF\x1b]8;;\x1b\\",
     );
 
-    let spans = &core.snapshot_frame().lines[0].spans;
+    let frame = core.snapshot_frame();
+    let spans: Vec<_> = frame.lines[0].spans().collect();
     let texts: Vec<(&str, Option<&str>)> = spans
         .iter()
         .filter(|span| !span.text.is_empty())
-        .map(|span| (span.text.as_str(), span.url.as_deref()))
+        .map(|span| (span.text, span.url.as_deref()))
         .collect();
     assert_eq!(
         texts,
@@ -1819,11 +1738,10 @@ fn scrollback_window_spans_carry_osc8_uris() {
     let line = window
         .lines
         .iter()
-        .find(|line| line.spans.iter().any(|span| span.text.contains("history")))
+        .find(|line| line.spans().any(|span| span.text.contains("history")))
         .expect("the linked history row is inside the served window");
     let span = line
-        .spans
-        .iter()
+        .spans()
         .find(|span| span.text.contains("history"))
         .unwrap();
     assert_eq!(span.url.as_deref(), Some("https://example.com/h"));

@@ -27,8 +27,8 @@
 //!   `TerminalAttachment` carries remoc channel halves, which are chmux
 //!   port references on the wire, not data — it appears here as an opaque
 //!   marker.
-//! - `channels`: the vocabularies those channels carry (`TerminalFrame` on
-//!   the v11 frame watch, `TerminalUpdate` events, `TerminalCommand`).
+//! - `channels`: the vocabularies those channels carry (`TerminalUpdate`
+//!   events, `TerminalCommand`). Since v22 there is no frame channel.
 //!
 //! The negotiation half (`ClientHello`, `VersionRange`, `HubError`) is
 //! `horizon-wire`'s and appears in the log artifact too — identically, by
@@ -43,9 +43,7 @@ use serde_json::{Value, json};
 use horizon_terminal_core::wire::{
     TERMINAL_PROTOCOL_VERSION, TerminalAttachment, TerminalHubHello,
 };
-use horizon_terminal_core::{
-    TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
-};
+use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use horizon_wire::schema_check::{PROTOCOL_VERSION_KEY, sort_object_keys};
 use horizon_wire::{ClientHello, HubError};
 
@@ -90,9 +88,6 @@ fn generate_wire_schema() -> Value {
     });
 
     let channels = json!({
-        // Since v11 the frame path is an `rch::watch<TerminalFrame>` (full
-        // frames, §5 Option A); the non-frame updates ride the events mpsc.
-        "terminal_frames": generator.subschema_for::<TerminalFrame>().to_value(),
         "terminal_events": generator.subschema_for::<TerminalUpdate>().to_value(),
         "terminal_commands": generator.subschema_for::<TerminalCommand>().to_value(),
     });

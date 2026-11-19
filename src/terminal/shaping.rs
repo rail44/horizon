@@ -11,11 +11,10 @@ use parley::{FontContext, FontFamily, Layout, LayoutContext, PositionedLayoutIte
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub(super) struct Ink(pub(super) [u8; 3]);
 
-/// One row: its text, the color of each run by byte range, the runs in
-/// italics by byte range, and the runs that have a background by column
-/// range.
+/// One row's styles: the color of each run by byte range of its text, the
+/// runs in italics by byte range, and the runs that have a background by
+/// column range.
 pub(super) struct Row {
-    pub(super) text: String,
     pub(super) colors: Vec<(Range<usize>, Ink)>,
     pub(super) italics: Vec<Range<usize>>,
     pub(super) backgrounds: Vec<(Range<usize>, [u8; 3])>,
@@ -43,9 +42,9 @@ impl Shaper {
         }
     }
 
-    pub(super) fn shape(&mut self, row: &Row, scale: f32) -> Layout<Ink> {
+    pub(super) fn shape(&mut self, text: &str, row: &Row, scale: f32) -> Layout<Ink> {
         let mut layout = FONTS.with_borrow_mut(|fonts| {
-            let mut builder = (self.layouts).ranged_builder(fonts, &row.text, scale, true);
+            let mut builder = (self.layouts).ranged_builder(fonts, text, scale, true);
             builder.push_default(FontFamily::Source(Cow::Borrowed(&self.family)));
             builder.push_default(StyleProperty::FontSize(self.size));
             for (range, ink) in &row.colors {
@@ -57,7 +56,7 @@ impl Shaper {
                     range.clone(),
                 );
             }
-            builder.build(&row.text)
+            builder.build(text)
         });
         layout.break_all_lines(None);
         layout
@@ -65,12 +64,11 @@ impl Shaper {
 
     fn sample(&mut self, text: &str, scale: f32) -> Layout<Ink> {
         let row = Row {
-            text: text.to_string(),
             colors: Vec::new(),
             italics: Vec::new(),
             backgrounds: Vec::new(),
         };
-        self.shape(&row, scale)
+        self.shape(text, &row, scale)
     }
 
     /// Where a row's baseline is below its top, in device pixels at

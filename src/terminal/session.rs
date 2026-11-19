@@ -21,6 +21,7 @@ use std::task::Waker;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_shell_runtime::TerminalSessionHandle;
+use horizon_shell_runtime::terminal_glyphs as drawn_glyphs;
 use horizon_terminal_core::{
     ClipboardDestination, KeyStroke, TerminalCommand, TerminalCore, TerminalFrame,
     TerminalKeyInput, TerminalScrollWindow, TerminalSelectionKind, TerminalSelectionPoint,
@@ -299,7 +300,12 @@ impl Session {
                     let mut state = self.state.borrow_mut();
                     state.extend_from_slice(&bytes);
                     if !more {
-                        *mirror = TerminalCore::from_state(&state);
+                        *mirror = TerminalCore::from_state(&state).map(|mut terminal| {
+                            // What the view draws from shapes is marked so
+                            // in the rows it is given.
+                            terminal.set_drawn_as_shapes(drawn_glyphs::is_geometric);
+                            terminal
+                        });
                         state.clear();
                         self.states.set(self.states.get() + 1);
                     }

@@ -60,6 +60,9 @@ pub struct TerminalCore {
     /// one is held: the engine writes to its screen through a hold, and
     /// what is shown meanwhile is what was there before it.
     held_frame: Rc<RefCell<Option<TerminalFrame>>>,
+    /// Which characters a row's builder marks as drawn as shapes rather
+    /// than from a font: the view's to say (none, by default).
+    shaped: Rc<Cell<render::Shaped>>,
     events: EventSink,
     /// Strips desktop-notification and program-status OSC sequences off the
     /// PTY stream ahead of the engine (`core::osc_notify`). The engine reads
@@ -169,12 +172,15 @@ impl TerminalCore {
         });
         let render = Rc::new(RefCell::new(render::Draw::new()));
         let held_frame = Rc::new(RefCell::new(None));
+        let shaped: Rc<Cell<render::Shaped>> = Rc::new(Cell::new(|_| false));
         let (held, let_go) = (held_since.clone(), released.clone());
         let (drawn, kept, sized) = (render.clone(), held_frame.clone(), size.clone());
+        let shapes = shaped.clone();
         let _ = terminal.on_render_hold(move |terminal, holding| match holding {
             true => {
                 held.set(Some(Instant::now()));
-                *kept.borrow_mut() = Some(render::snapshot_frame(terminal, &drawn, sized.get()));
+                let frame = render::snapshot_frame(terminal, &drawn, sized.get(), shapes.get());
+                *kept.borrow_mut() = Some(frame);
             }
             false => {
                 held.set(None);
@@ -187,6 +193,7 @@ impl TerminalCore {
             terminal,
             render,
             held_frame,
+            shaped,
             events,
             osc_notifications: OscNotificationScanner::default(),
             size,
@@ -353,13 +360,29 @@ impl TerminalCore {
         if let Some(held) = self.held_frame.borrow().as_ref() {
             return held.clone();
         }
-        render::snapshot_frame(&self.terminal, &self.render, self.size.get())
+        render::snapshot_frame(
+            &self.terminal,
+            &self.render,
+            self.size.get(),
+            self.shaped.get(),
+        )
+    }
+
+    /// Which characters the rows mark as drawn as shapes rather than from
+    /// a font (`TerminalLine::shapes`): a view that draws some of them
+    /// itself says which. The rows read from here on are built so.
+    pub fn set_drawn_as_shapes(&mut self, shaped: fn(char) -> bool) {
+        self.shaped.set(shaped);
+        // Rows kept from before were built without it.
+        let mut draw = self.render.borrow_mut();
+        draw.forget();
     }
 
     /// A scrollback window `height` rows tall, `anchor` rows above the live
     /// bottom, read without moving the viewport.
     pub fn snapshot_window(&self, anchor: usize, height: usize) -> TerminalScrollWindow {
-        render::snapshot_window(&self.terminal, self.size.get(), anchor, height)
+        let shaped = self.shaped.get();
+        render::snapshot_window(&self.terminal, self.size.get(), anchor, height, shaped)
     }
 
     /// The bytes a key writes, in the modes the program has asked for:
