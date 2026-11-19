@@ -33,6 +33,22 @@ test-group = 'daemon-e2e'
 [test-groups.daemon-e2e]
 max-threads = 1
 
+# The shell's tests with wasm guests in them -- the extensions it comes with
+# (`tests/extension.rs`, `tests/sessions.rs`, `tests/wiki.rs`) and the
+# preview's fixture (`tests/preview.rs`) -- each run 30 to 60 threads of
+# their own: wasmtime compiles a component on a rayon pool, and
+# wasmtime-wasi runs a tokio runtime of its own, each one thread per core.
+# Many of them at once oversubscribe the machine: measured on 24 cores
+# (2026-11-19), one such test takes about 1 s alone and 9-13 s among a full
+# run, against its 20 s wait for the extensions, and the tests beside it
+# slow down with it. The group lets only a few run at once.
+[[profile.default.overrides]]
+filter = 'binary_id(horizon::extension) + binary_id(horizon::sessions) + binary_id(horizon::wiki) + binary_id(horizon::preview)'
+test-group = 'wasm-guests'
+
+[test-groups.wasm-guests]
+max-threads = 4
+
 # The preview's windowless checks (`tests/preview.rs`) run a real wasm
 # guest, one of whose views never comes back on purpose. A guest that
 # never comes back keeps the call into it from returning, so no in-test
