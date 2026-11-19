@@ -311,6 +311,40 @@ fn a_menu_button_opens_its_items_and_one_is_done_by_click_or_key() {
 }
 
 #[test]
+fn a_menu_button_s_three_dots_are_drawn_in_the_middle_of_its_box() {
+    let app = open_with(|_| {
+        MenuButton {
+            label: MenuLabel::More,
+            items: Vec::new(),
+            open: RwSignal::new(false),
+            on_select: Callback::new(|_| {}),
+            within: None,
+        }
+        .view()
+    });
+    let trigger = all(&app, "trigger")[0];
+    let (_, _, width, height) = bounds(&app, trigger);
+    assert_eq!(width, height);
+    // The middle dot is in the middle of the box; the dots are in a row
+    // across it, the same either side, with none above or below them.
+    let color = painted(&app);
+    let at = |across: f32, down: f32| {
+        let (x, y) = point(&app, trigger, across, down);
+        color(x, y)
+    };
+    let ground = at(0.5, 0.1);
+    assert_ne!(at(0.5, 0.5), ground);
+    assert_eq!(at(0.5, 0.9), ground);
+    let drawn: Vec<f32> = (0..20)
+        .filter(|step| at(*step as f32 / 20. + 0.025, 0.5) != ground)
+        .map(|step| step as f32 + 0.5)
+        .collect();
+    assert!(drawn.len() >= 3, "{drawn:?}");
+    let middle = drawn.iter().sum::<f32>() / drawn.len() as f32;
+    assert!((middle - 10.).abs() <= 1., "{drawn:?}");
+}
+
+#[test]
 fn a_menu_button_opens_upward_where_below_would_pass_what_it_is_in() {
     let open = RwSignal::new(false);
     let app = open_with(|_| {

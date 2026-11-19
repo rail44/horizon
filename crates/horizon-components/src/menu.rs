@@ -21,19 +21,21 @@ use horizon_ui::{
 };
 use keyboard_types::{Key, NamedKey};
 
+use super::Icon;
+
 mod styles {
     horizon_ui::css_module! {"
-    .menu { position: relative; flex: none; align-self: flex-start; outline: none;
+    .menu { position: relative; flex: none; align-self: flex-start; width: fit-content;
+            outline: none;
             font-size: var(--meta-size);
             line-height: var(--meta-line);
-        .trigger { display: flex; align-items: center; justify-content: center; gap: 2px;
+        .trigger { display: flex; align-items: center; justify-content: center;
                    box-sizing: border-box; min-width: calc(var(--u4) * 5);
                    height: calc(var(--u4) * 5); padding: 0 var(--u4);
                    border-radius: var(--radius); color: var(--text-muted);
                    cursor: pointer; }
+        .trigger.more { width: calc(var(--u4) * 5); padding: 0; }
         .trigger:hover { background: var(--hover); color: var(--text); }
-        .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-muted); }
-        .trigger:hover .dot { background: var(--text); }
         .items { position: absolute; z-index: 60; right: 0; top: 100%; margin-top: var(--u4);
                  padding: var(--u4); border-radius: var(--radius-large);
                  border: var(--line) solid var(--border); background: var(--background);
@@ -47,7 +49,6 @@ mod styles {
         .key { color: var(--text-muted); }
     }
     .menu.open .trigger { background: var(--hover); color: var(--text); }
-    .menu.open .dot { background: var(--text); }
 "}
 }
 
@@ -64,8 +65,8 @@ pub struct MenuItem {
 /// What a menu button shows on itself.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MenuLabel<'a> {
-    /// Three dots, for what more there is to do. They are drawn, not
-    /// written: a font's `⋯` is as wide as the font has it, and where.
+    /// The icon of three dots, for what more there is to do. (A font's
+    /// `⋯` is as wide as the font has it, and where.)
     #[default]
     More,
     /// A word or two.
@@ -180,8 +181,8 @@ impl Component for MenuButton<'_> {
         .child(
             match label {
                 MenuLabel::More => el("div")
-                    .class(styles::TRIGGER)
-                    .children((0..3).map(|_| el("span").class(styles::DOT))),
+                    .class((styles::TRIGGER, styles::MORE))
+                    .child(Icon::DotsThree),
                 MenuLabel::Text(text) => el("div").class(styles::TRIGGER).text(text),
             }
             // (A press on the button is not one on what it is in.)

@@ -6,7 +6,8 @@ use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::{Callback, Component, El, el};
 
 use super::{
-    Button, ButtonKind, ButtonSize, Chip, Field, MenuButton, MenuItem, MenuLabel, Prompt, Tone,
+    Button, ButtonKind, ButtonSize, Chip, Field, Icon, MenuButton, MenuItem, MenuLabel, Prompt,
+    Tone,
 };
 
 mod styles {
@@ -257,6 +258,13 @@ pub fn gallery() -> El {
                     ],
                 ),
             ],
+        ))
+        .child(entry(
+            "icon",
+            vec![(
+                "Phosphor's, regular, in the color of the text around it",
+                vec![Icon::DotsThree.view()],
+            )],
         ))
         .child(buttons())
         .child(menus())
