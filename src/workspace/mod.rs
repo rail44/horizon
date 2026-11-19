@@ -39,7 +39,7 @@ use horizon_ui::reactive_graph::traits::{
 use horizon_ui::reactive_graph::wrappers::read::Signal;
 use horizon_ui::{Callback, El, each_layout, el, relayout};
 use horizon_workspace::title::derive_session_title;
-use horizon_workspace::{PaneId, SessionId, SessionKind, SplitAxis, Workspace};
+use horizon_workspace::{PaneId, SessionId, SessionKind, Side, SplitAxis, Workspace};
 
 use crate::agent::plugin::{AgentAsked, AgentPlugin};
 use crate::agent::{Agent, AgentSession};
@@ -306,12 +306,11 @@ impl Start {
     }
 }
 
-/// Where a new pane goes.
+/// Where a new pane goes: a new tab, or beside what the cursor is on.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Placement {
     NewTab,
-    SplitRight,
-    SplitDown,
+    Split(Side),
 }
 
 /// The list over everything, when one is open.
@@ -834,19 +833,15 @@ impl Shell {
     }
 
     /// A new pane at `placement` over a new session of `kind`, with the
-    /// focus. A split is of the active session's pane.
+    /// focus. A split goes beside what the cursor is on.
     fn create(&self, kind: SessionKind, role: Option<RoleId>, placement: Placement) {
         let kept = self.kept();
         self.change(|model| {
             let from = model.active_session_id();
-            let split = |model: &mut Workspace, axis| {
-                model.split_session_with_new_session(from?, kind, axis, true)
-            };
-            let made = match placement {
-                Placement::NewTab => Some(model.open_tab_with_new_session_activated(kind, true)),
-                Placement::SplitRight => split(model, SplitAxis::Horizontal),
-                Placement::SplitDown => split(model, SplitAxis::Vertical),
-            };
+            let made = Some(match placement {
+                Placement::NewTab => model.open_tab_with_new_session_activated(kind, true),
+                Placement::Split(side) => model.split_cursor_with_new_session(kind, side, true),
+            });
             model.exit_workspace_mode();
             if let Some(made) = made {
                 let start = Start {
@@ -1032,12 +1027,7 @@ impl Shell {
         self.change(|model| {
             match placement {
                 Placement::NewTab => model.open_tab_with_view_activated(plugin, true),
-                Placement::SplitRight => {
-                    model.split_active_tab_with_view(plugin, SplitAxis::Horizontal)
-                }
-                Placement::SplitDown => {
-                    model.split_active_tab_with_view(plugin, SplitAxis::Vertical)
-                }
+                Placement::Split(side) => model.split_cursor_with_view(plugin, side),
             };
             model.exit_workspace_mode();
         });

@@ -28,6 +28,8 @@ command_ids! {
     pub enum CommandId {
         SplitRight,
         SplitDown,
+        SplitLeft,
+        SplitUp,
         NewTab,
         FocusNextPane,
         CloseActivePane,
@@ -128,13 +130,29 @@ impl CommandId {
                 "split-right",
                 "Split Right…",
                 CommandCategory::Workspace,
-                "Open the view chooser to split the active pane horizontally.",
+                "Open the view chooser for a new pane on the right of the pane or tab group \
+                 under the cursor.",
             ),
             CommandId::SplitDown => (
                 "split-down",
                 "Split Down…",
                 CommandCategory::Workspace,
-                "Open the view chooser to split the active pane vertically.",
+                "Open the view chooser for a new pane below the pane or tab group under the \
+                 cursor.",
+            ),
+            CommandId::SplitLeft => (
+                "split-left",
+                "Split Left…",
+                CommandCategory::Workspace,
+                "Open the view chooser for a new pane on the left of the pane or tab group \
+                 under the cursor.",
+            ),
+            CommandId::SplitUp => (
+                "split-up",
+                "Split Up…",
+                CommandCategory::Workspace,
+                "Open the view chooser for a new pane above the pane or tab group under the \
+                 cursor.",
             ),
             CommandId::NewTab => (
                 "new-tab",
@@ -245,13 +263,13 @@ pub fn core_commands() -> Vec<CommandSpec> {
 
 pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
     match command_id {
-        // Both split placements target the active tab/session
-        // (`split_active_tab_with_view`/`split_session_with_new_session` in
-        // `horizon-workspace::operations`); with zero tabs there is neither,
-        // so the view chooser used to confirm and silently no-op (backlog
-        // 49). `NewTab` stays unconditionally enabled -- it is the empty
-        // workspace's only way back.
-        CommandId::SplitRight | CommandId::SplitDown => state.tab_count > 0,
+        // A split goes beside what the cursor is on; with no pane on screen
+        // there is nothing to put it beside. `NewTab` stays unconditionally
+        // enabled -- it is the empty workspace's only way back.
+        CommandId::SplitRight
+        | CommandId::SplitDown
+        | CommandId::SplitLeft
+        | CommandId::SplitUp => state.visible_pane_count > 0,
         CommandId::NewTab
         | CommandId::FocusNextPane
         | CommandId::ReloadAgentRuntime
@@ -315,13 +333,15 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 16);
+        assert_eq!(commands.len(), 18);
         let ids: Vec<CommandId> = commands.iter().map(|command| command.id).collect();
         assert_eq!(
             ids,
             [
                 CommandId::SplitRight,
                 CommandId::SplitDown,
+                CommandId::SplitLeft,
+                CommandId::SplitUp,
                 CommandId::NewTab,
                 CommandId::FocusNextPane,
                 CommandId::CloseActivePane,
@@ -339,12 +359,13 @@ mod tests {
             ]
         );
         assert_eq!(commands[0].title, "Split Right…");
-        assert_eq!(commands[2].title, "New Tab…");
-        assert_eq!(commands[6].title, "Terminate Active Session");
-        assert_eq!(commands[9].title, "Reload Terminal Runtime");
-        assert_eq!(commands[10].title, "Reload Config");
-        assert_eq!(commands[12].title, "Open Board");
-        assert_eq!(commands[15].title, "Reset Font Size");
+        assert_eq!(commands[2].title, "Split Left…");
+        assert_eq!(commands[4].title, "New Tab…");
+        assert_eq!(commands[8].title, "Terminate Active Session");
+        assert_eq!(commands[11].title, "Reload Terminal Runtime");
+        assert_eq!(commands[12].title, "Reload Config");
+        assert_eq!(commands[14].title, "Open Board");
+        assert_eq!(commands[17].title, "Reset Font Size");
     }
 
     #[test]

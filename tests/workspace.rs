@@ -1325,3 +1325,49 @@ fn paint_the_layout() {
     }
     std::fs::write(out, picture).expect("the picture written");
 }
+
+#[test]
+fn split_left_from_a_strip_puts_a_terminal_beside_the_whole_group() {
+    let opened = open();
+    let first = opened.panes()[0];
+    opened.prompt(first);
+
+    // From the strip, the palette's Split Left: with nothing but
+    // terminals to choose from, a terminal at once.
+    opened.chord();
+    opened.character("k");
+    opened.character(":");
+    opened.commit("split left");
+    opened.named(NamedKey::Enter);
+    assert!(!opened.mode());
+    let panes = opened.panes();
+    assert_eq!(panes.len(), 2);
+    let left = panes[0];
+    assert_ne!(left, first);
+    assert_eq!(opened.model(|model| model.cursor_pane_id()), Some(left));
+    // It is under no group: the one strip is right of it.
+    assert_eq!(opened.model(|model| model.tab_groups().len()), 1);
+    let (strip_x, ..) = opened.bounds(opened.all("tabs")[0]);
+    let (left_x, _, left_wide, _) = opened.bounds(opened.all("pane")[0]);
+    assert!(strip_x >= left_x + left_wide - 1.);
+    opened.prompt(left);
+
+    // Tab in the mode, from the group's pane, goes round the group's tabs
+    // only: the terminal on the left stays.
+    opened
+        .shell
+        .model
+        .update(|model| _ = model.activate_pane(first));
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.chord();
+    opened.character("t");
+    opened.chord();
+    opened.named(NamedKey::Tab);
+    assert_eq!(opened.model(Workspace::active_tab_index), 0);
+    assert!(opened.panes().contains(&left));
+    opened.named(NamedKey::Tab);
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
+    assert!(opened.panes().contains(&left));
+    opened.named(NamedKey::Escape);
+}

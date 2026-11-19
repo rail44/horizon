@@ -9,7 +9,7 @@ use horizon_ui::reactive_graph::owner::Owner;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Update, WithUntracked};
 use horizon_workspace::commands::{CommandCategory, CommandId, CommandState, command_entries};
-use horizon_workspace::{CloseCursorOutcome, Workspace};
+use horizon_workspace::{CloseCursorOutcome, Side, Workspace};
 
 use super::{Placement, Shell, plugins};
 use crate::extension::{Extension, Running};
@@ -230,8 +230,10 @@ impl Shell {
         let kept = self.kept();
         match command {
             CommandId::NewTab => self.place(Placement::NewTab),
-            CommandId::SplitRight => self.place(Placement::SplitRight),
-            CommandId::SplitDown => self.place(Placement::SplitDown),
+            CommandId::SplitRight => self.place(Placement::Split(Side::Right)),
+            CommandId::SplitDown => self.place(Placement::Split(Side::Down)),
+            CommandId::SplitLeft => self.place(Placement::Split(Side::Left)),
+            CommandId::SplitUp => self.place(Placement::Split(Side::Up)),
             CommandId::FocusNextPane => self.change(|model| model.focus_next()),
             CommandId::CloseActivePane => self.close_pane(),
             CommandId::CloseActiveTab => self.change(|model| {

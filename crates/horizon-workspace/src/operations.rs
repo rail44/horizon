@@ -43,7 +43,7 @@ pub enum CloseCursorOutcome {
 }
 
 /// Where a new pane goes beside what the cursor is on.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Side {
     Left,
     Right,

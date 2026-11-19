@@ -173,9 +173,11 @@ font_size = 13.0
 # `left`, `right`, `home`, `end`, `pageup`, `pagedown`). Case-insensitive.
 #
 # Command ids (see `crates/horizon-workspace/src/commands.rs`'s `CommandId`):
-# split-right (opens the palette's view chooser to split the active pane
-# horizontally), split-down (same chooser, but vertically), new-tab (opens the
-# chooser to open a new tab), focus-next-pane, close-active-pane,
+# split-right (opens the palette's view chooser for a new pane on the right of
+# the pane or tab group under the cursor), split-down, split-left, split-up
+# (the same, below, on the left, above), new-tab (opens the chooser to open a
+# new tab in the tab group the cursor is in), focus-next-pane,
+# close-active-pane,
 # close-active-tab, terminate-active-session, terminate-all-detached-sessions,
 # reload-agent-runtime, reload-terminal-runtime (restarts horizon-terminald --
 # destructive: every terminal session ends), reload-config, manage-sessions
