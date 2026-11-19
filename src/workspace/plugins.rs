@@ -403,6 +403,7 @@ impl Shell {
             set_title: Some(Rc::new(move |text| title.set(text))),
             theme: Some(self.theme_asks()),
             sessions: Some(self.session_asks()),
+            modal: Some(self.modal_asks()),
         };
         let name = extension.name;
         let (root, running) = self.run_extension(&extension, asks, shown.state.as_str());

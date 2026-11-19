@@ -539,6 +539,7 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
                     "horizon:ui/theme": ::horizon_ui::guest::bindings::horizon::ui::theme,
                     "horizon:ui/sessions": ::horizon_ui::guest::bindings::horizon::ui::sessions,
                     "horizon:ui/session-control": ::horizon_ui::guest::bindings::horizon::ui::session_control,
+                    "horizon:ui/modal": ::horizon_ui::guest::bindings::horizon::ui::modal,
                 },
                 additional_derives: [#(#derives),*],
             });

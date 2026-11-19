@@ -327,6 +327,20 @@ pub enum Modal {
     /// Which file the new pane of this extension at this place is made
     /// on.
     Finder(&'static str, Placement),
+    /// A view an extension put there (`horizon:ui/modal`): this one of
+    /// those it has been asked for.
+    Extension(u64),
+}
+
+/// A view an extension has over the workspace.
+struct Over {
+    /// Which of those asked for it is.
+    asked: u64,
+    view: El,
+    /// The sheet made around it.
+    sheet: El,
+    /// Told once the view is there no longer.
+    closed: crate::plugin_host::ModalClosed,
 }
 
 /// A pane on the page.
@@ -384,6 +398,10 @@ struct Kept {
     watched: RefCell<Vec<extensions::Watched>>,
     /// What plugins are told the workspace's sessions are.
     sessions_feed: Arc<crate::plugin_host::SessionsFeed>,
+    /// The view an extension has over the workspace, and how many were
+    /// asked for.
+    over: RefCell<Option<Over>>,
+    over_asked: Cell<u64>,
     /// What the sessions the board views name are doing: every board view
     /// is given it.
     board_activity: RwSignal<HashMap<SessionId, crate::board::activity::BoardSessionActivity>>,
@@ -1160,6 +1178,8 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             extensions_read: Cell::new(false),
             watched: RefCell::default(),
             sessions_feed: Arc::default(),
+            over: RefCell::default(),
+            over_asked: Cell::new(0),
             board_activity: RwSignal::new(HashMap::new()),
             refocus: Cell::new(false),
             board: opening.board,
@@ -1219,7 +1239,17 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         .child(strip(shell))
         .child(arrangement::view(shell))
         .each(
-            move || shell.modal.get().into_iter().collect::<Vec<_>>(),
+            // (An extension's view is put in a sheet made around it when it
+            // is asked for: the view is the extension's to remove.)
+            move || {
+                let own = |modal: &Modal| !matches!(modal, Modal::Extension(_));
+                shell
+                    .modal
+                    .get()
+                    .into_iter()
+                    .filter(own)
+                    .collect::<Vec<_>>()
+            },
             |modal| *modal,
             move |modal| {
                 let inside = match modal {
@@ -1231,10 +1261,12 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
                         Some(source) => models::view(shell, *session, source),
                         None => el("div"),
                     },
+                    Modal::Extension(_) => el("div"),
                 };
                 over::view(shell, inside)
             },
         );
+    over::follow_extensions(shell);
     shell.focus_active();
     shell.reload_extensions(configured);
     horizon_ui::each_effects(move || shell.follow_extensions());

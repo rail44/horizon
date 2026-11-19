@@ -300,6 +300,28 @@ interface session-control {
     open-terminal: func(id: string);
 }
 
+/// A view of a plugin's over the workspace.
+interface modal {
+    /// A view over the workspace, in a sheet in the middle of it and with
+    /// the keys, for as long as the plugin holds this: it is put there
+    /// when this is made, and taken away when this is dropped.
+    ///
+    /// It is taken away too by a press outside the sheet, by Escape the
+    /// view did not stop, and by anything else put over the workspace (one
+    /// thing is there at a time). The view is the plugin's still: taken
+    /// away, it is no longer in the document until the plugin puts it
+    /// somewhere or removes it.
+    resource modal {
+        /// `node` is the view: a node of the plugin's that is nowhere in
+        /// the document.
+        constructor(node: u64);
+
+        /// Comes back once the view is no longer over the workspace,
+        /// whoever took it away.
+        closed: async func();
+    }
+}
+
 /// What a plugin imports: a plugin's world includes it, and declares
 /// only what is its own.
 world imports {
@@ -310,6 +332,7 @@ world imports {
     import theme;
     import sessions;
     import session-control;
+    import modal;
 }
 
 /// The shared exports with the imports: what the SDK's bindings are made

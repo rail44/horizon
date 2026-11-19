@@ -41,5 +41,10 @@ mod fixture {
                 false => Err(format!("the fixture has no view named `{view}`")),
             }
         }
+
+        #[command(title = "Show Over", description = "Put a view over the workspace.")]
+        pub fn show_over() {
+            crate::views::show_over();
+        }
     }
 }

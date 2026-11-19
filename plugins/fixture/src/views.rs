@@ -3,15 +3,16 @@
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::signal::RwSignal;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, Update};
-use horizon_ui::{El, dispatched, each_layout, el, relayout};
+use horizon_ui::{El, dispatched, each_layout, el, relayout, stop_propagation};
 use keyboard_types::Key;
 
-pub const NAMES: [&str; 3] = ["rows", "selection", "stuck"];
+pub const NAMES: [&str; 4] = ["rows", "selection", "over", "stuck"];
 
 pub fn view(name: &str) -> Option<El> {
     match name {
         "rows" => Some(rows()),
         "selection" => Some(selection()),
+        "over" => Some(over()),
         // Never comes back: what the host's limit on a call is for.
         "stuck" => {
             let mut turns = 0u64;
@@ -120,4 +121,49 @@ fn selection() -> El {
     let root = el("div");
     root.child(el("p").class("words").text("Some words to select"))
         .child(el("p").class("said").text_dyn(move || said.get()))
+}
+
+thread_local! {
+    /// How many times a view put over the workspace was let go of, as the
+    /// pane's view says it.
+    static TAKEN: std::cell::Cell<Option<RwSignal<usize>>> = const { std::cell::Cell::new(None) };
+}
+
+/// Says how many times the view its pane's command puts over the
+/// workspace ([`show_over`]) has been taken away.
+fn over() -> El {
+    let taken = RwSignal::new(0usize);
+    TAKEN.set(Some(taken));
+    el("div")
+        .attr("tabindex", "0")
+        .text_dyn(move || match taken.get() {
+            0 => "nothing over".to_string(),
+            taken => format!("taken away {taken}"),
+        })
+        .focus()
+}
+
+/// Puts a view over the workspace, which `c` takes away; let go of, it is
+/// counted.
+pub fn show_over() {
+    let taken = TAKEN.get();
+    horizon_ui::guest::modal(move |close| {
+        if let Some(taken) = taken {
+            horizon_ui::reactive_graph::owner::on_cleanup(move || {
+                taken.update(|taken| *taken += 1)
+            });
+        }
+        el("div")
+            .attr("tabindex", "0")
+            .text("over the workspace")
+            .on("keydown", move |event| {
+                if let DomEventData::KeyDown(key) = &event.data
+                    && key.key == Key::Character("c".into())
+                {
+                    close.close();
+                    stop_propagation();
+                }
+            })
+            .focus()
+    });
 }

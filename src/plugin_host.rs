@@ -54,6 +54,7 @@ wasmtime::component::bindgen!({
         "horizon:ui/files.[method]watch.changed": async | store | trappable,
         "horizon:ui/theme.save": async | store | trappable,
         "horizon:ui/sessions.[method]watch.changed": async | store | trappable,
+        "horizon:ui/modal.[method]modal.closed": async | store | trappable,
         default: trappable,
     },
     // Every call is made through the accessor, beside the plugin's tasks.
@@ -66,6 +67,7 @@ wasmtime::component::bindgen!({
         "horizon:ui/files.working-directory": WorkingDirectory,
         "horizon:ui/files.watch": Watching,
         "horizon:ui/sessions.watch": SessionsWatching,
+        "horizon:ui/modal.modal": ModalShown,
     },
 });
 
@@ -142,6 +144,27 @@ pub struct SessionAsks {
     pub act: Rc<dyn Fn(SessionAsk)>,
 }
 
+/// A view a plugin has over the workspace, for as long as the plugin
+/// holds this.
+pub struct ModalShown {
+    node: NodeId,
+    /// Whether the view has been taken away.
+    closed: tokio::sync::watch::Receiver<bool>,
+}
+
+/// Says that a view is no longer over the workspace.
+pub type ModalClosed = tokio::sync::watch::Sender<bool>;
+
+/// What the host does to put a plugin's view over the workspace.
+#[derive(Clone)]
+pub struct ModalAsks {
+    /// Puts a view there; what it is given is told (`true`) once the view
+    /// is there no longer.
+    pub open: Rc<dyn Fn(NodeId, ModalClosed)>,
+    /// Takes a view away, if it is the one there.
+    pub close: Rc<dyn Fn(NodeId)>,
+}
+
 /// What the host does for a plugin beyond the document, as whoever shows
 /// the plugin does it.
 #[derive(Clone, Default)]
@@ -154,6 +177,8 @@ pub struct Asks {
     pub theme: Option<ThemeAsks>,
     /// The workspace's sessions.
     pub sessions: Option<SessionAsks>,
+    /// A view of the plugin's over the workspace.
+    pub modal: Option<ModalAsks>,
 }
 
 /// What the host does with the shell's theme for a plugin.
@@ -183,6 +208,8 @@ enum Asked {
     /// The answer goes back to the plugin's task that waits for it.
     SaveTheme(Seed, tokio::sync::oneshot::Sender<Result<String, String>>),
     Session(SessionAsk),
+    OpenModal(NodeId, ModalClosed),
+    CloseModal(NodeId),
 }
 
 /// The most memory a plugin may take.
@@ -222,6 +249,8 @@ pub struct State {
     theme: Option<(Seed, Option<PathBuf>)>,
     /// The workspace's sessions, if whoever shows it gives them.
     sessions: Option<Arc<SessionsFeed>>,
+    /// Whether whoever shows it lets it put a view over the workspace.
+    modal: bool,
 }
 
 /// What a plugin leaves for this shell to do once the poll it was left in
@@ -619,6 +648,42 @@ impl self::horizon::ui::session_control::Host for State {
     }
 }
 
+impl self::horizon::ui::modal::Host for State {}
+
+impl self::horizon::ui::modal::HostModal for State {
+    fn new(&mut self, node: u64) -> wasmtime::Result<Resource<ModalShown>> {
+        if !self.modal {
+            return Err(wasmtime::Error::msg(
+                "a view over the workspace is not given to this plugin",
+            ));
+        }
+        let node = self.own(node)?;
+        let (told, closed) = tokio::sync::watch::channel(false);
+        (self.left.lock().unwrap().asked).push(Asked::OpenModal(node, told));
+        Ok(self.table.push(ModalShown { node, closed })?)
+    }
+
+    fn drop(&mut self, modal: Resource<ModalShown>) -> wasmtime::Result<()> {
+        let shown = self.table.delete(modal)?;
+        (self.left.lock().unwrap().asked).push(Asked::CloseModal(shown.node));
+        Ok(())
+    }
+}
+
+impl<T: Send> self::horizon::ui::modal::HostModalWithStore<T> for HasSelf<State> {
+    async fn closed(
+        accessor: &Accessor<T, Self>,
+        modal: Resource<ModalShown>,
+    ) -> wasmtime::Result<()> {
+        let mut closed = accessor.with(|mut access| -> wasmtime::Result<_> {
+            Ok(access.get().table.get(&modal)?.closed.clone())
+        })?;
+        // (Whoever would say so having gone, it is not there either.)
+        let _ = closed.wait_for(|closed| *closed).await;
+        Ok(())
+    }
+}
+
 impl self::horizon::ui::files::Host for State {}
 
 impl self::horizon::ui::files::HostWatch for State {
@@ -848,6 +913,20 @@ pub struct Loaded {
     effects_wait: Cell<bool>,
     /// Whether the plugin has work for after a layout.
     layout_work: Cell<bool>,
+    /// The views it has put over the workspace: one still there is taken
+    /// away when the plugin goes, and each goes with it.
+    over: RefCell<Vec<NodeId>>,
+}
+
+impl Drop for Loaded {
+    fn drop(&mut self) {
+        for node in self.over.take() {
+            if let Some(modal) = &self.asks.modal {
+                (modal.close)(node);
+            }
+            host::remove(node);
+        }
+    }
 }
 
 impl Loaded {
@@ -930,6 +1009,17 @@ impl Loaded {
                 Asked::Session(ask) => {
                     if let Some(sessions) = &self.asks.sessions {
                         (sessions.act)(ask);
+                    }
+                }
+                Asked::OpenModal(node, closed) => {
+                    if let Some(modal) = &self.asks.modal {
+                        self.over.borrow_mut().push(node);
+                        (modal.open)(node, closed);
+                    }
+                }
+                Asked::CloseModal(node) => {
+                    if let Some(modal) = &self.asks.modal {
+                        (modal.close)(node);
                     }
                 }
             }
@@ -1149,6 +1239,7 @@ pub fn instantiate(
             owned: HashSet::new(),
             theme: asks.theme.as_ref().map(|theme| (theme.now)()),
             sessions: asks.sessions.as_ref().map(|sessions| sessions.feed.clone()),
+            modal: asks.modal.is_some(),
         },
     );
     store.limiter(|state| &mut state.limits);
@@ -1201,6 +1292,7 @@ pub fn instantiate(
         polling: Cell::new(false),
         effects_wait: Cell::new(false),
         layout_work: Cell::new(false),
+        over: RefCell::default(),
     });
     // The plugin is made by the future's first polls: a call that asks
     // nothing of it is answered once it is there.
