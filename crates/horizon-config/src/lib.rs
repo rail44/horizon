@@ -21,15 +21,17 @@
 //! to new sessions and title calls, alongside theme and keybindings.
 
 pub mod grants;
+pub mod layouts;
 mod warnings;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
 pub use grants::{ProjectGrant, RawGrantsConfig, RawProjectGrant};
+pub use layouts::{Layout, LayoutAxis, LayoutError};
 
 /// Overrides the config file path outright, bypassing the XDG/home lookup
 /// below entirely. Primarily for tests and for running multiple Horizon
@@ -98,6 +100,21 @@ pub struct RawConfig {
     /// show, each holding a `plugin.toml` and the component it names. Read
     /// at startup.
     pub extensions: Vec<String>,
+    /// `[layouts.<name>]`: trees the workspace can be put in, by name, as
+    /// the file writes them; read with [`RawConfig::layout`].
+    pub layouts: BTreeMap<String, toml::Value>,
+    /// `startup_layout`: the layout the workspace is put in when Horizon
+    /// starts, after it is restored. Not read again on `Reload Config`.
+    pub startup_layout: Option<String>,
+}
+
+impl RawConfig {
+    /// The layout named `name`, read: refused where the file has none of
+    /// that name, or where it is not well formed.
+    pub fn layout(&self, name: &str) -> Result<Layout, String> {
+        let value = (self.layouts.get(name)).ok_or_else(|| format!("no layout `{name}`"))?;
+        Layout::read(value).map_err(|error| format!("the layout `{name}`: {error}"))
+    }
 }
 
 /// Which rig-backed provider *client* an entry builds: the first-scope kinds

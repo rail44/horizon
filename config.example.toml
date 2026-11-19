@@ -454,3 +454,29 @@ cyan = "#56b6c2"
 # no override path left at all -- fixed built-in constants in
 # `crates/horizon-agent/src/config.rs`.
 # ---------------------------------------------------------------------------
+
+# Layouts: trees the workspace can be put in (docs/workspace-layout-design.md),
+# by name, put in with the `Apply Layout…` command. A node is a table with one
+# of:
+#   view = "<name>" (and `arguments = [..]` where the view takes them): a view
+#     as `horizon new <name> <arguments>` makes it; a pane already showing the
+#     same view is moved into place rather than made again;
+#   workspace = true: where the workspace as it is goes -- one at most; with
+#     none, the panes the workspace had are closed (their sessions are left
+#     detached, not ended);
+#   split = "horizontal" | "vertical" with `children = [..]`, two or more,
+#     each with an optional `weight` (1 where it has none);
+#   tabs = [..]: a tab group, each tab a tree.
+#
+# The list of sessions kept on the left of everything else:
+#
+# [layouts.sidebar]
+# split = "horizontal"
+# children = [
+#   { weight = 1, view = "sessions" },
+#   { weight = 3, workspace = true },
+# ]
+
+# The layout the workspace is put in when Horizon starts, after it is restored.
+# Read at startup only.
+# startup_layout = "sidebar"
