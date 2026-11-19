@@ -1,5 +1,6 @@
-//! What views are made of: a chip, a button, a field's box, and the controls a view places (a
-//! slider, a select, a color picker). A control is built over a signal of
+//! What views are made of: a chip, a button and a menu button, a field's
+//! box, and the controls a view places (a slider, a select, a color
+//! picker). A control is built over a signal of
 //! the value it edits, and tells whoever placed it when a person changed
 //! it.
 //!
@@ -20,6 +21,7 @@ mod color;
 mod field;
 mod gallery;
 pub mod markdown;
+mod menu;
 mod select;
 mod slider;
 
@@ -28,6 +30,7 @@ pub use chip::{Chip, Tone};
 pub use color::{ColorPicker, hex, parse_hex};
 pub use field::{Field, Prompt};
 pub use gallery::gallery;
+pub use menu::{MenuButton, MenuItem};
 pub use select::Select;
 pub use slider::{Range, Slider};
 

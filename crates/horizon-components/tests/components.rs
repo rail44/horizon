@@ -5,12 +5,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use horizon_components::{ColorPicker, Drags, Range, Select, Slider};
+use horizon_components::{ColorPicker, Drags, MenuButton, MenuItem, Range, Select, Slider};
 use horizon_theme_css::{Theme, themed};
 use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::signal::RwSignal;
-use horizon_ui::reactive_graph::traits::GetUntracked;
+use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
 use horizon_ui::testing::{Pointer, click_at, pointer};
 use horizon_ui::{App, Callback, Component, El, el};
 use keyboard_types::{Key, Modifiers, NamedKey};
@@ -19,11 +19,18 @@ const HOST: &str = "
     .host { position: relative; width: 400px; height: 400px; padding: 20px;
             box-sizing: border-box; background: var(--background); }
     .other { width: 40px; height: 20px; margin-top: 240px; outline: none; }
+    .within { width: 200px; height: 200px; overflow-y: scroll; }
+    .filler { height: 170px; }
 ";
 
 /// A page with what `build` makes on it, and beside it something else
 /// that takes the focus.
 fn open(build: impl FnOnce(&Drags) -> El) -> App {
+    open_with(build)
+}
+
+/// [`open`], for a test whose own `open` is a signal.
+fn open_with(build: impl FnOnce(&Drags) -> El) -> App {
     let sheet = [horizon_theme_css::CSS, HOST].concat();
     let app = App::new(400, 400, "Test", &sheet, || {
         let drags = Drags::default();
@@ -227,6 +234,109 @@ fn a_select_opens_its_options_and_one_is_chosen_by_click_or_key() {
     app.resolve();
     assert!(all(&app, "option").is_empty());
     assert_eq!(*heard.borrow(), [2, 1]);
+}
+
+#[test]
+fn a_menu_button_opens_its_items_and_one_is_done_by_click_or_key() {
+    let open = RwSignal::new(false);
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let log = heard.clone();
+    let clicked = Rc::new(RefCell::new(0));
+    let behind = clicked.clone();
+    let item = |label: &str, key: &str| MenuItem {
+        label: label.to_string(),
+        key: Some(key.to_string()),
+        danger: label == "Terminate",
+    };
+    let app = open_with(|_| {
+        // What it is in hears its own clicks, not the menu's.
+        el("div")
+            .on("click", move |_| *behind.borrow_mut() += 1)
+            .child(
+                MenuButton {
+                    label: "⋯",
+                    items: vec![
+                        item("Go to", "Enter"),
+                        item("Terminal", "t"),
+                        item("Terminate", "x"),
+                    ],
+                    open,
+                    on_select: Callback::new(move |index| log.borrow_mut().push(index)),
+                    within: None,
+                }
+                .view(),
+            )
+    });
+    let trigger = all(&app, "trigger")[0];
+    assert!(all(&app, "item").is_empty());
+
+    click(&app, trigger, 0.5, 0.5);
+    let listed = all(&app, "item");
+    assert_eq!(listed.len(), 3);
+    assert_eq!(all(&app, "danger"), vec![listed[2]]);
+    click(&app, listed[1], 0.5, 0.5);
+    assert!(!open.get_untracked());
+    assert!(all(&app, "item").is_empty());
+    assert_eq!(*clicked.borrow(), 0);
+
+    // From the keyboard: Enter opens on the first, the arrows move, Enter
+    // does it; Escape shuts it and does nothing.
+    named(&app, NamedKey::Enter);
+    assert_eq!(all(&app, "active"), vec![all(&app, "item")[0]]);
+    named(&app, NamedKey::End);
+    named(&app, NamedKey::ArrowUp);
+    named(&app, NamedKey::Enter);
+    named(&app, NamedKey::ArrowDown);
+    named(&app, NamedKey::Escape);
+    assert!(all(&app, "item").is_empty());
+
+    // Opened from elsewhere, it takes the keys.
+    click(&app, all(&app, "other")[0], 0.5, 0.5);
+    open.set(true);
+    app.run_effects();
+    app.resolve();
+    named(&app, NamedKey::ArrowDown);
+    named(&app, NamedKey::ArrowDown);
+    named(&app, NamedKey::Enter);
+
+    // A press elsewhere shuts it.
+    click(&app, trigger, 0.5, 0.5);
+    assert_eq!(all(&app, "item").len(), 3);
+    click(&app, all(&app, "other")[0], 0.5, 0.5);
+    app.resolve();
+    assert!(all(&app, "item").is_empty());
+    assert_eq!(*heard.borrow(), [1, 1, 2]);
+}
+
+#[test]
+fn a_menu_button_opens_upward_where_below_would_pass_what_it_is_in() {
+    let open = RwSignal::new(false);
+    let app = open_with(|_| {
+        let within = el("div").class("within");
+        within.child(el("div").class("filler")).child(
+            MenuButton {
+                label: "⋯",
+                items: ["one", "two", "three"]
+                    .map(|label| MenuItem {
+                        label: label.to_string(),
+                        ..Default::default()
+                    })
+                    .to_vec(),
+                open,
+                on_select: Callback::new(|_| {}),
+                within: Some(within),
+            }
+            .view(),
+        )
+    });
+    click(&app, all(&app, "trigger")[0], 0.5, 0.5);
+    app.resolve();
+    let (_, trigger_y, _, _) = bounds(&app, all(&app, "trigger")[0]);
+    let (_, items_y, _, items_height) = bounds(&app, all(&app, "items")[0]);
+    assert!(
+        items_y + items_height <= trigger_y + 0.5,
+        "{items_y} {items_height} {trigger_y}"
+    );
 }
 
 #[test]

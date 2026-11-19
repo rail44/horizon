@@ -20,8 +20,18 @@ pub enum Pointer {
 }
 
 pub fn pointer(app: &App, x: f32, y: f32, step: Pointer) {
+    pointer_with(app, x, y, step, false);
+}
+
+/// [`pointer`], with the secondary button in place of the main one where
+/// `secondary`.
+fn pointer_with(app: &App, x: f32, y: f32, step: Pointer, secondary: bool) {
     use blitz_traits::events::{
         BlitzPointerEvent, BlitzPointerId, MouseEventButton, MouseEventButtons, PointerCoords,
+    };
+    let (button, held) = match secondary {
+        true => (MouseEventButton::Secondary, MouseEventButtons::Secondary),
+        false => (MouseEventButton::Main, MouseEventButtons::Primary),
     };
     let event = |buttons| BlitzPointerEvent {
         id: BlitzPointerId::Mouse,
@@ -34,7 +44,7 @@ pub fn pointer(app: &App, x: f32, y: f32, step: Pointer) {
             client_x: x,
             client_y: y,
         },
-        button: MouseEventButton::Main,
+        button,
         buttons,
         mods: Default::default(),
         details: Default::default(),
@@ -43,8 +53,8 @@ pub fn pointer(app: &App, x: f32, y: f32, step: Pointer) {
     };
     app.dispatch(match step {
         Pointer::Move => UiEvent::PointerMove(event(MouseEventButtons::None)),
-        Pointer::Down => UiEvent::PointerDown(event(MouseEventButtons::Primary)),
-        Pointer::Drag => UiEvent::PointerMove(event(MouseEventButtons::Primary)),
+        Pointer::Down => UiEvent::PointerDown(event(held)),
+        Pointer::Drag => UiEvent::PointerMove(event(held)),
         Pointer::Up => UiEvent::PointerUp(event(MouseEventButtons::None)),
     });
 }
@@ -53,6 +63,14 @@ pub fn pointer(app: &App, x: f32, y: f32, step: Pointer) {
 pub fn click_at(app: &App, x: f32, y: f32) {
     for step in [Pointer::Move, Pointer::Down, Pointer::Up] {
         pointer(app, x, y, step);
+    }
+}
+
+/// A press and a release of the secondary button at a point of the page:
+/// a right-click.
+pub fn right_click_at(app: &App, x: f32, y: f32) {
+    for step in [Pointer::Move, Pointer::Down, Pointer::Up] {
+        pointer_with(app, x, y, step, true);
     }
 }
 

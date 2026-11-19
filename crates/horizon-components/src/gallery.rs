@@ -2,9 +2,10 @@
 //! are looked at on (the `components` preview, `tests/components.rs`'s
 //! picture).
 
-use horizon_ui::{Component, El, el};
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::{Callback, Component, El, el};
 
-use super::{Button, ButtonKind, ButtonSize, Chip, Field, Prompt, Tone};
+use super::{Button, ButtonKind, ButtonSize, Chip, Field, MenuButton, MenuItem, Prompt, Tone};
 
 mod styles {
     horizon_ui::css_module! {"
@@ -18,6 +19,8 @@ mod styles {
         .line { display: flex; align-items: flex-start; gap: var(--u8); }
         .said { font-size: var(--meta-size); line-height: var(--meta-line);
                 color: var(--text-muted); }
+        .holds-open { width: calc(var(--u32) * 7); height: calc(var(--u32) * 4);
+                      display: flex; justify-content: flex-end; }
     "}
 }
 
@@ -79,6 +82,47 @@ fn buttons() -> El {
                     }
                     .view(),
                 ],
+            ),
+        ],
+    )
+}
+
+/// A menu button, shut and open: what it does to the row it is on, each
+/// with its key.
+fn menus() -> El {
+    let menu = |open: bool| {
+        MenuButton {
+            label: "⋯",
+            items: vec![
+                MenuItem {
+                    label: "Go to".to_string(),
+                    key: Some("Enter".to_string()),
+                    ..Default::default()
+                },
+                MenuItem {
+                    label: "Open a terminal there".to_string(),
+                    key: Some("t".to_string()),
+                    ..Default::default()
+                },
+                MenuItem {
+                    label: "Terminate".to_string(),
+                    key: Some("x".to_string()),
+                    danger: true,
+                },
+            ],
+            open: RwSignal::new(open),
+            on_select: Callback::new(|_| {}),
+            within: None,
+        }
+        .view()
+    };
+    entry(
+        "menu button",
+        vec![
+            ("shut", vec![menu(false)]),
+            (
+                "open",
+                vec![el("div").class(styles::HOLDS_OPEN).child(menu(true))],
             ),
         ],
     )
@@ -213,6 +257,7 @@ pub fn gallery() -> El {
             ],
         ))
         .child(buttons())
+        .child(menus())
         .child(fields());
     gallery.child(markdown());
     gallery
