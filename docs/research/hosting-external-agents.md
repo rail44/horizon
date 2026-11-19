@@ -1,5 +1,9 @@
 # 外部エージェント面のホスト手段 — 調査記録(2026-08-06)
 
+> 2026-11-18 に調べ直した: `docs/research/agent-sessions-and-views-2026-11-18.md`。
+> この記録の訂正(Codex hooks の `http`、Claude Code の IPC と agent view の
+> 見落としほか)はそちらの §12。
+
 調査日: 2026-08-06、web 検証つき。実測バージョン: Claude Code 2.1.222、
 codex-cli 0.145.0、`@agentclientprotocol/claude-agent-acp` 0.65.0、
 `agent-client-protocol` crate 2.0.0、herdr v0.8.0(2026-08-03)。
