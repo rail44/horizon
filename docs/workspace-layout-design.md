@@ -1,7 +1,6 @@
 # Workspace layout: tab groups as a kind of container
 
-Status: proposed. Board #86 holds how it was arrived at and what is still
-open; nothing here is implemented yet.
+Status: agreed, not implemented. Board #86 holds how it was arrived at.
 
 ## Problem
 
@@ -90,6 +89,14 @@ Every operation acts on the node the cursor is on; nothing is phrased
 Split Left and Split Up are new (today only Right and Down exist); they
 are what puts a pane on the left of a group.
 
+- **A second tab group** is made by New Tab with the cursor on a pane
+  under no group: that pane's place becomes a group, the pane its first
+  tab and the new tab its second.
+- **A session no pane shows** (going to it from the list of sessions, a
+  detached one attached) is opened in the shown tab of the tab group
+  that last had focus, which the workspace keeps; not beside the pane
+  that asked, which may be the list itself, under no group.
+
 ## Persistence
 
 `workspace.json` goes to version 2: the root node, with tab groups
@@ -106,20 +113,15 @@ strip leaves the shell's top edge (`src/workspace/mod.rs`) and is drawn
 by the group it belongs to, so a pane beside the root group runs the
 window's full height.
 
+## The command line
+
+`workspace_snapshot` gives the tree, and a tab is named by its group and
+its index in that group: an index in one list of tabs no longer names a
+tab once there is more than one group.
+
 ## Open questions
 
-1. **Where a session no pane shows is opened.** Today it splits the
-   active pane. With the list outside any group, that is the list again.
-   Proposed: into the shown tab of the tab group last focused, which the
-   workspace keeps.
-2. **How a second tab group is made.** Splitting beside a group makes a
-   plain pane. Proposed: New Tab with the cursor on a pane under no
-   group turns that pane's place into a group, the pane its first tab.
-3. **Nested strips.** A group inside a tab of another group draws a
-   strip inside it. Whether that reads well wants drawing and looking at.
-4. **The command line and its snapshot.** `workspace_snapshot` and
-   `horizon tab …` speak of tabs by their index in one list; with more
-   than one group an index is ambiguous. Proposed: the snapshot gives the
-   tree, and a tab is named by its group and index.
-5. **Moving panes** between groups and in and out of them belongs to
+1. **Nested strips.** A group inside a tab of another group draws a
+   strip inside it. Whether that reads well is to be drawn and looked at.
+2. **Moving panes** between groups and in and out of them belongs to
    rearranging panes, which is decided apart.
