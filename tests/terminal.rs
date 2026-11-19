@@ -103,6 +103,14 @@ impl Opened {
         }
     }
 
+    /// As [`Self::wait`], and until the shell is back at its prompt after
+    /// it: what is typed next is typed at the prompt, as a person types.
+    /// Typed while the command before it still runs, it is echoed at once,
+    /// in among what that command writes.
+    fn done(&self, what: &str, met: impl Fn(&str) -> bool) -> String {
+        self.wait(what, |text| met(text) && text.trim_end().ends_with('$'))
+    }
+
     /// Lays out until `met` holds.
     fn until(&self, what: &str, met: impl Fn() -> bool) {
         let started = Instant::now();
@@ -293,7 +301,7 @@ fn the_shell_is_told_the_size_of_the_box() {
     assert_eq!(rows, 30);
     assert!((100..=150).contains(&columns), "{columns}");
     opened.run("stty size");
-    opened.wait("the size", |text| {
+    opened.done("the size", |text| {
         text.lines().any(|line| line == format!("{rows} {columns}"))
     });
 
@@ -854,6 +862,9 @@ fn text_is_underlined_and_struck_through_in_the_colors_it_was_written_with() {
     opened.run(
         r"clear; printf '\033[4;58;2;255;0;0munders\033[0m\n\033[9;38;2;0;0;255mstruck\033[0m\n\033[4:2;38;2;0;160;0mdouble\033[0m\n'",
     );
+    opened.done("the first rows", |text| {
+        text.lines().any(|line| line == "double")
+    });
     // (And the other lines there are, for a person to look at.)
     opened.run(
         r"printf '\033[4:3;58;2;255;0;0mcurled\033[0m \033[4:4mdotted\033[0m \033[4:5mdashed\033[0m \033[3mitalic\033[0m\n'",
@@ -1081,7 +1092,8 @@ fn a_flood_of_output_ends_with_the_screen_the_shell_has() {
     let text = loop {
         opened.app.resolve();
         let text = opened.terminal.text();
-        if text.lines().any(|line| line == "flood-over") {
+        // (The prompt follows the mark, a moment after it.)
+        if text.lines().any(|line| line == "flood-over") && text.trim_end().ends_with('$') {
             break text;
         }
         assert!(
