@@ -136,3 +136,18 @@ impl Shell {
         }
     }
 }
+
+impl Shell {
+    /// A new terminal tab whose shell starts in `directory`.
+    pub(super) fn open_terminal_in(&self, directory: PathBuf) {
+        let kept = self.kept();
+        self.change(|model| {
+            model.exit_workspace_mode();
+            let session = model.open_tab_with_new_session_activated(
+                horizon_workspace::SessionKind::Terminal,
+                true,
+            );
+            (kept.starting.borrow_mut()).insert(session, super::Start::within(directory));
+        });
+    }
+}

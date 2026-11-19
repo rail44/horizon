@@ -69,7 +69,6 @@ mod picker;
 mod plugins;
 mod reload;
 mod session_feed;
-mod sessions;
 
 pub(crate) mod styles {
     horizon_ui::css_module! {"
@@ -116,8 +115,6 @@ pub(crate) mod styles {
                  border: var(--line) solid var(--border); border-radius: 8px;
                  box-shadow: var(--shadow-modal); }
         .picker { width: 560px; max-height: 400px; display: flex; flex-direction: column; }
-        .manager { width: 720px; height: 480px; display: flex; }
-        .manager > * { flex: 1; min-width: 0; }
         .search { flex: none; position: relative; display: flex; align-items: center;
                   height: 32px; padding: 0 var(--u12); border-bottom: var(--line) solid var(--border); }
         .search > * { flex: 1; font-size: var(--body-size); line-height: calc(var(--u4) * 5); }
@@ -319,7 +316,6 @@ pub enum Placement {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Modal {
     Palette,
-    Sessions,
     /// Which view the new pane at this place shows.
     Chooser(Placement),
     /// Which model an agent session goes on with.
@@ -1261,7 +1257,6 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             move |modal| {
                 let inside = match modal {
                     Modal::Palette => palette::view(shell),
-                    Modal::Sessions => sessions::view(shell),
                     Modal::Chooser(placement) => chooser::view(shell, *placement),
                     Modal::Finder(plugin, placement) => finder::view(shell, plugin, *placement),
                     Modal::Models(session) => match shell.kept().models.clone() {

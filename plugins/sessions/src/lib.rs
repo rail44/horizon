@@ -15,8 +15,16 @@ mod view;
 mod sessions {
     pub mod pane {
         pub fn mount() -> u64 {
-            let mounted = horizon_ui::guest::mount(|| Some(crate::view::view()));
+            let mounted = horizon_ui::guest::mount(|| Some(crate::view::pane()));
             mounted.unwrap_or_default()
         }
+    }
+
+    #[command(
+        title = "Manage Sessions",
+        description = "Open the list of sessions, to go to one or terminate it."
+    )]
+    pub fn manage_sessions() {
+        horizon_ui::guest::modal(crate::view::over);
     }
 }

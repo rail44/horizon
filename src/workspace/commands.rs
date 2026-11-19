@@ -11,7 +11,7 @@ use horizon_ui::reactive_graph::traits::{GetUntracked, Update, WithUntracked};
 use horizon_workspace::commands::{CommandCategory, CommandId, CommandState, command_entries};
 use horizon_workspace::{CloseCursorOutcome, Workspace};
 
-use super::{Modal, Placement, Shell, plugins};
+use super::{Placement, Shell, plugins};
 use crate::extension::{Extension, Running};
 use crate::plugin_host::Asks;
 
@@ -252,7 +252,6 @@ impl Shell {
                 }
             }),
             CommandId::OpenBoard => self.create_plugin(plugins::list(), Placement::NewTab),
-            CommandId::OpenSessionManager => self.open(Modal::Sessions),
             // A file that cannot be read leaves what is in use as it is.
             CommandId::ReloadConfig => match kept.reload.as_ref().map(|reload| reload()) {
                 Some(Ok(config)) => self.apply_config(&config),

@@ -67,7 +67,9 @@ manual smoke checks:
   selected session back into the active tab as a split.
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
 - `terminate active session`: terminates the active session.
-- `manage sessions`: opens the session manager modal (see below).
+- `manage sessions`: opens the list of sessions over the workspace (see
+  below). It is a command of the sessions extension, and is not there
+  when the extension is not built.
 - `reload session runtime`: restarts `horizon-agentd`, closes terminal
   sessions, and reconnects persisted agent sessions — use after rebuilding
   the session runtime crates, or to recover from a lost connection.
@@ -83,8 +85,9 @@ under the rows: `j`/`k` or the arrows move the selection, `n` goes to the
 next session that waits, `/` searches, `Enter` goes to the session's pane
 (a detached session is put in a split), `t` opens a terminal in the
 session's directory, `x` terminates the session and `X` terminates it with
-everything derived from it (each asks first, and `y` answers), and `Esc`
-closes the modal.
+everything derived from it (each asks first, and `y` answers). In a pane
+`Esc` takes a search back; over the workspace it closes the list, as going
+to a session or opening a terminal does.
 
 The same command model is also reachable from outside the GUI: `horizon
 <subcommand>` (no arguments launches the GUI itself) is a thin client over a

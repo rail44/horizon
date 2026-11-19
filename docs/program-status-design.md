@@ -75,7 +75,7 @@ its owner for.
   Code's `✳` and `◐`), which is why the tab draws one. The mark is text in
   the tab's label, not a designed indicator.
 - **The list of sessions** (`plugins/sessions`, in a pane or as the
-  session manager) — a row carries the program's name or the session's
+  list over the workspace) — a row carries the program's name or the session's
   kind, its words, the attention or `working` as a chip, and how long it
   has been in its state. The extension reads these from the host's
   `sessions` interface (`src/workspace/session_feed.rs`).

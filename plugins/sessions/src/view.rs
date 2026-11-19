@@ -1,8 +1,12 @@
 //! The list's view: a project's sessions under its name, each a line of
 //! its title, what it is, its state and since when, with its words under
-//! it where it has some; a band of the
-//! keys under them. A typed key is a command of the list's, and `/` asks
-//! for the field a search is typed into.
+//! it where it has some; a band of the keys under them. A typed key is a
+//! command of the list's, and `/` asks for the field a search is typed
+//! into.
+//!
+//! The list is shown in a pane ([`pane`]), where it stays, and in a sheet
+//! over the workspace ([`over`]), which going to a session leaves. The
+//! two are the same list ([`list`]) told what differs ([`Shown`]).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,7 +17,7 @@ use horizon_components::{Chip, Tone};
 use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::guest::bindings::horizon::ui::session_control as control;
 use horizon_ui::guest::bindings::horizon::ui::sessions::{self as host, Attention, Session};
-use horizon_ui::guest::watch_sessions;
+use horizon_ui::guest::{Close, watch_sessions};
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::signal::RwSignal;
@@ -70,6 +74,8 @@ mod styles {
         .key { font-weight: 600; color: var(--text); }
     }
     .sessions:focus .row.selected { border-color: var(--accent); }
+    .over { width: 720px; height: 480px; display: flex; }
+    .over > .sessions { flex: 1; }
     "}
 }
 
@@ -82,6 +88,40 @@ const KEYS: [(&str, &str); 6] = [
     ("n", "Next waiting"),
     ("/", "Search"),
 ];
+
+/// What differs with where the list is shown.
+struct Shown {
+    /// What the band says after the list's own keys: a key that is not
+    /// the list's, and what it does.
+    left_with: Option<(&'static str, &'static str)>,
+    /// Whether Escape takes a search back. Where it does not, Escape is
+    /// passed on.
+    escape_takes_a_search_back: bool,
+    /// Done once a session is gone to, or a terminal opened where one
+    /// works.
+    gone: Rc<dyn Fn()>,
+}
+
+/// The list as a pane shows it: it stays as sessions are gone to, and
+/// Escape takes a search back.
+pub fn pane() -> El {
+    list(Shown {
+        left_with: None,
+        escape_takes_a_search_back: true,
+        gone: Rc::new(|| {}),
+    })
+}
+
+/// The list in a sheet over the workspace: going to a session leaves it,
+/// and Escape is the sheet's, which leaves it too.
+pub fn over(close: Close) -> El {
+    let list = list(Shown {
+        left_with: Some(("Esc", "Close")),
+        escape_takes_a_search_back: false,
+        gone: Rc::new(move || close.close()),
+    });
+    el("div").class(styles::OVER).child(list)
+}
 
 /// What the list asks before it ends anything.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -149,7 +189,7 @@ fn tone(session: &Session) -> Tone {
 
 /// A session's row. It is made once for a session and follows what the
 /// session comes to be.
-fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows) -> El {
+fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows, gone: Rc<dyn Fn()>) -> El {
     let named = id.clone();
     let this = Memo::new(move |_| {
         order.with(|order| order.iter().find(|row| row.session.id == named).cloned())
@@ -232,7 +272,10 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows) -> El {
                 ),
         )
         .on("click", move |_| state.chosen.set(Some(picked.clone())))
-        .on("dblclick", move |_| control::show(&shown));
+        .on("dblclick", move |_| {
+            control::show(&shown);
+            gone();
+        });
     rows.borrow_mut().insert(id, element);
     element
 }
@@ -241,7 +284,7 @@ fn row(state: State, order: Memo<Vec<Row>>, id: String, rows: &Rows) -> El {
 /// into view by.
 type Rows = Rc<RefCell<HashMap<String, El>>>;
 
-pub fn view() -> El {
+fn list(shown: Shown) -> El {
     let state = State {
         sessions: RwSignal::new(host::all()),
         query: RwSignal::new(String::new()),
@@ -287,11 +330,12 @@ pub fn view() -> El {
 
     let elements: Rows = Rows::default();
     let made = elements.clone();
+    let gone = shown.gone.clone();
     let list = el("div").class(styles::ROWS).each(
         move || groups.get(),
         |group: &Group| group.root.clone(),
         move |group: &Group| {
-            let (root, made) = (group.root.clone(), made.clone());
+            let (root, made, gone) = (group.root.clone(), made.clone(), gone.clone());
             let (named, counted) = (root.clone(), root.clone());
             let of = move |root: &str| {
                 groups.with(|groups| groups.iter().find(|group| group.root == root).cloned())
@@ -310,7 +354,9 @@ pub fn view() -> El {
                 .each(
                     move || of(&root).map(|group| group.rows).unwrap_or_default(),
                     |row: &Row| row.session.id.clone(),
-                    move |row: &Row| self::row(state, order, row.session.id.clone(), &made),
+                    move |row: &Row| {
+                        self::row(state, order, row.session.id.clone(), &made, gone.clone())
+                    },
                 )
         },
     );
@@ -378,7 +424,9 @@ pub fn view() -> El {
                 .child(el("span").text(&question))
                 .children([("y", "Terminate"), ("Esc", "Keep")].map(hint))
         }
-        None => el("div").class(styles::FOOT).children(KEYS.map(hint)),
+        None => el("div")
+            .class(styles::FOOT)
+            .children(KEYS.into_iter().chain(shown.left_with).map(hint)),
     };
 
     let root = root
@@ -442,7 +490,7 @@ pub fn view() -> El {
         if state.searching.get_untracked() {
             match &key.key {
                 Key::Named(NamedKey::Enter) => state.searching.set(false),
-                Key::Named(NamedKey::Escape) => {
+                Key::Named(NamedKey::Escape) if shown.escape_takes_a_search_back => {
                     state.query.set(String::new());
                     state.searching.set(false);
                 }
@@ -471,18 +519,22 @@ pub fn view() -> El {
             (Key::Named(NamedKey::Enter), _) => {
                 if let Some(session) = state.chosen_session() {
                     control::show(&session.id);
+                    (shown.gone)();
                 }
             }
             (_, "t") => {
                 if let Some(session) = state.chosen_session() {
                     control::open_terminal(&session.id);
+                    (shown.gone)();
                 }
             }
             (_, "x") => ask(false),
             (_, "X") => ask(true),
             (_, "/") => state.searching.set(true),
             // (A search that stands is taken back.)
-            (Key::Named(NamedKey::Escape), _) if !state.query.get_untracked().is_empty() => {
+            (Key::Named(NamedKey::Escape), _)
+                if shown.escape_takes_a_search_back && !state.query.get_untracked().is_empty() =>
+            {
                 state.query.set(String::new());
             }
             _ => return,

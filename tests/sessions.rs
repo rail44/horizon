@@ -152,6 +152,27 @@ impl Opened {
         self.app.resolve();
     }
 
+    /// The list over the workspace, as its extension's command puts it
+    /// there, with the keys.
+    fn manage(&self) {
+        let answer = self.shell.control(&ControlRequest::Invoke(Invoke {
+            command: "plugin-command".to_string(),
+            args: serde_json::json!({ "name": "manage-sessions" }),
+        }));
+        std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
+        self.app.run_effects();
+        self.app.resolve();
+        assert!(self.managed(), "{:?}", self.shell.modal());
+    }
+
+    /// Whether an extension's view is over the workspace.
+    fn managed(&self) -> bool {
+        matches!(
+            self.shell.modal(),
+            Some(horizon::workspace::Modal::Extension(_))
+        )
+    }
+
     /// The titles of the rows, in the order they are drawn.
     fn titles(&self) -> Vec<String> {
         self.texts("title")
@@ -449,72 +470,85 @@ fn the_chosen_session_is_gone_to_and_a_terminal_opened_where_it_works() {
 }
 
 #[test]
-fn the_session_manager_is_the_list_over_everything() {
-    use horizon::workspace::Modal;
-    use horizon_workspace::commands::CommandId;
-
+fn the_session_manager_is_the_list_over_the_workspace() {
     let opened = open();
     let places = Places::made("managed");
     let made = make(&opened, &places);
     let manage = || {
-        opened.shell.execute(CommandId::OpenSessionManager);
+        opened.manage();
+        opened.until("the rows", || opened.titles().len() >= 4);
+        // (Laid out, it has the keys.)
         opened.app.run_effects();
         opened.app.resolve();
-        assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
-        opened.until("the rows", || opened.titles().len() >= 4);
+    };
+    let left = || {
+        opened.until("the list left", || {
+            !opened.managed() && opened.titles().is_empty()
+        })
     };
     let has = |session: SessionId| opened.model(|model| model.session_kind(session).is_some());
     let panes = || opened.model(|model| model.all_pane_ids().len());
 
-    // The list, with the keys. A session ended, the list stays.
+    // The list, with the keys, and what leaves it in its band. A session
+    // ended, the list stays.
     manage();
     assert_eq!(
         opened.titles(),
         ["build", "tests", "measure", "shell", "wiki"]
     );
+    let foot = opened.texts("foot").join(" ");
+    assert!(foot.ends_with("EscClose"), "{foot}");
     opened.character("j");
     opened.character("x");
     opened.character("y");
     opened.until("the session ended", || !has(made.derived));
-    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
+    assert!(opened.managed());
     opened.until("the rows", || opened.titles().len() == 4);
 
     // Gone to, a session no pane shows is in a pane beside the active
-    // one, and the list is left.
+    // one, and the list is left: what carried the command out with it.
     assert_eq!(panes(), 1);
     opened.character("n");
     opened.character("n");
     assert_eq!(opened.chosen().as_deref(), Some("measure"));
     opened.key(Key::Named(NamedKey::Enter));
-    opened.until("the list left", || opened.shell.modal().is_none());
+    left();
     assert_eq!(panes(), 2);
     assert_eq!(
         opened.model(Workspace::active_session_id),
         Some(made.finished)
     );
-    assert!(opened.titles().is_empty());
+    opened.until("let go of", || opened.shell.commanded() == 0);
 
-    // Escape leaves it, once a search that stands is taken back.
+    // Escape leaves it, a search under way or not: the keys go back to
+    // the pane that had them.
     manage();
     opened.character("/");
+    opened.until("the field", || !opened.texts("search").is_empty());
     opened.commit("build");
     opened.until("the one found", || opened.titles() == ["build"]);
     opened.key(Key::Named(NamedKey::Escape));
-    opened.until("all of them", || opened.titles().len() == 4);
-    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
-    opened.key(Key::Named(NamedKey::Escape));
-    opened.until("the list left", || opened.shell.modal().is_none());
-    // The pane that had the keys has them again.
+    left();
     assert_eq!(
         opened.model(Workspace::active_session_id),
         Some(made.finished)
     );
+    // (Asked for again, it is the list as it is first shown.)
+    manage();
+    assert_eq!(opened.titles().len(), 4);
+    assert!(opened.texts("search").is_empty());
+    // Escape with a question asked answers the question.
+    opened.character("x");
+    opened.key(Key::Named(NamedKey::Escape));
+    assert!(opened.managed());
+    opened.key(Key::Named(NamedKey::Escape));
+    left();
 
     // A terminal opened where a session works leaves it too.
     manage();
     let tabs = opened.model(Workspace::tab_count);
     opened.character("t");
-    opened.until("the list left", || opened.shell.modal().is_none());
+    left();
     assert_eq!(opened.model(Workspace::tab_count), tabs + 1);
     let _ = made.first;
 }
@@ -537,9 +571,7 @@ fn paint_the_list() {
     let places = Places::made("painted");
     make(&opened, &places);
     match std::env::var_os("HORIZON_SESSIONS_MODAL") {
-        Some(_) => opened
-            .shell
-            .execute(horizon_workspace::commands::CommandId::OpenSessionManager),
+        Some(_) => opened.manage(),
         None => opened.list(),
     }
     opened.app.run_effects();

@@ -341,14 +341,6 @@ impl Shell {
         }
     }
 
-    /// What is there in place of an extension's view that there is none
-    /// of: why.
-    pub(super) fn no_extension(why: &str) -> El {
-        el("div")
-            .class(styles::EXTENSION)
-            .child(el("div").class(styles::FAILED).text(why))
-    }
-
     /// The view of `extension` made on `state`, in an element of its own
     /// that says so where it could not be made or has failed since, and
     /// what runs it. It runs for as long as what this is called under

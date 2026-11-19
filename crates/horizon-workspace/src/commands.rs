@@ -43,7 +43,6 @@ command_ids! {
         /// whatever is running inside it -- ends. The close-vs-terminate
         /// discipline applies to daemons too.
         ReloadTerminalRuntime,
-        OpenSessionManager,
         ReloadConfig,
         /// Opens a new terminal tab whose cwd is the active session's
         /// `directory` (`docs/session-relationship-design.md` decision
@@ -187,12 +186,6 @@ impl CommandId {
                 "Restart horizon-terminald. Terminates every terminal session and its \
                           shell.",
             ),
-            CommandId::OpenSessionManager => (
-                "manage-sessions",
-                "Manage Sessions",
-                CommandCategory::Workspace,
-                "Open the list of sessions, to go to one or terminate it.",
-            ),
             CommandId::ReloadConfig => (
                 "reload-config",
                 "Reload Config",
@@ -263,7 +256,6 @@ pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
         | CommandId::FocusNextPane
         | CommandId::ReloadAgentRuntime
         | CommandId::ReloadTerminalRuntime
-        | CommandId::OpenSessionManager
         | CommandId::ReloadConfig
         | CommandId::OpenBoard
         | CommandId::IncreaseFontSize
@@ -323,7 +315,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 17);
+        assert_eq!(commands.len(), 16);
         let ids: Vec<CommandId> = commands.iter().map(|command| command.id).collect();
         assert_eq!(
             ids,
@@ -338,7 +330,6 @@ mod tests {
                 CommandId::TerminateAllDetachedSessions,
                 CommandId::ReloadAgentRuntime,
                 CommandId::ReloadTerminalRuntime,
-                CommandId::OpenSessionManager,
                 CommandId::ReloadConfig,
                 CommandId::OpenTerminalInSessionDirectory,
                 CommandId::OpenBoard,
@@ -351,23 +342,9 @@ mod tests {
         assert_eq!(commands[2].title, "New Tab…");
         assert_eq!(commands[6].title, "Terminate Active Session");
         assert_eq!(commands[9].title, "Reload Terminal Runtime");
-        assert_eq!(commands[10].title, "Manage Sessions");
-        assert_eq!(commands[13].title, "Open Board");
-        assert_eq!(commands[16].title, "Reset Font Size");
-    }
-
-    #[test]
-    fn open_session_manager_is_always_enabled() {
-        assert!(command_enabled(
-            CommandId::OpenSessionManager,
-            CommandState {
-                tab_count: 0,
-                visible_pane_count: 0,
-                has_active_session: false,
-                detached_session_count: 0,
-                has_active_session_directory: false,
-            }
-        ));
+        assert_eq!(commands[10].title, "Reload Config");
+        assert_eq!(commands[12].title, "Open Board");
+        assert_eq!(commands[15].title, "Reset Font Size");
     }
 
     #[test]

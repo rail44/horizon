@@ -353,7 +353,9 @@ their wiring:
 - `workspace/` — the shell root (`Shell`): draws the shared workspace model
   (tab strip, recursive splits), keeps the sessions (the close-vs-detach
   seam), workspace mode, the key map, command dispatch (`execute`), the
-  modals (palette, session manager, view chooser, model picker), the
+  sheet over the workspace (`over.rs`) and what the shell puts in it
+  (palette, view chooser, model picker; an extension puts its own view
+  there, as the session manager is), the
   control plane's requests, and the runtime reloads. The model itself —
   tabs, panes, layout tree, session attachments, mode state, the pure
   command model, the `workspace_snapshot` payload — is
@@ -387,7 +389,8 @@ their wiring:
   `crates/horizon-wiki`, with the owner's comment threads anchored in
   it, `docs/project-wiki-design.md`), the theme settings
   (`horizon new theme-settings`) and the list of sessions
-  (`horizon new sessions`, which the session manager also shows) are not
+  (`horizon new sessions`, and over the workspace by its own command,
+  `Manage Sessions`) are not
   here: they are extensions, whole in `plugins/markdown`, `plugins/wiki`,
   `plugins/theme-settings` and `plugins/sessions`, over `horizon-ui` and
   `horizon-components`.
@@ -421,10 +424,12 @@ their wiring:
   files rather than large monolith modules.
 - **Operations go through the command model.** User-visible operations are
   `CommandId` variants executed via `Shell::execute`
-  (`src/workspace/commands.rs`), or the commands of the plugin a pane
-  shows (`src/plugin.rs`'s `Plugin::commands`, run on the cursor's pane by
-  `Shell::execute_plugin`). Buttons, keyboard shortcuts, and the palette
-  are bindings to commands — do not add ad-hoc behavior in UI handlers.
+  (`src/workspace/commands.rs`), the commands of the plugin a pane shows
+  (`src/plugin.rs`'s `Plugin::commands`, run on the cursor's pane), or an
+  extension's own commands, which need no pane. `Shell::commands` lists
+  the three as one and `Shell::run` carries one out: buttons, keyboard
+  shortcuts, the palette and the command line are bindings to that list —
+  do not add ad-hoc behavior in UI handlers.
 - **Close vs. terminate are distinct.** Closing a pane/tab detaches sessions;
   `Terminate Active Session` is the explicit destructive command. Preserve
   this separation (see `docs/ux-principles.md`).
