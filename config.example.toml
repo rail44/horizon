@@ -424,6 +424,11 @@ cyan = "#56b6c2"
 # are made again. One that does not load is reported on stderr and left out.
 # A leading "~/" is expanded against $HOME.
 # extensions = ["~/src/your-extension/target/wasm32-wasip2/release/your_extension.wasm"]
+#
+# Every extension's file, those Horizon comes with too, is kept compiled
+# in $XDG_CACHE_HOME/horizon/wasm (falling back to ~/.cache/horizon/wasm),
+# so that a file read again is not compiled again. What is there is thrown
+# out past 512 MB, and the directory can be removed at any time.
 
 # ---------------------------------------------------------------------------
 # Environment-only overrides — no [agent] file key exists for any of these
