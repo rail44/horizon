@@ -313,9 +313,27 @@ fn us_unshifted(key: Key) -> Option<char> {
 
 impl TerminalCore {
     /// The bytes the engine's encoder writes for a key, in the modes the
-    /// program has asked for. `None` for a key the engine has no name for.
-    pub fn key_stroke(&self, stroke: &KeyStroke<'_>) -> Option<Vec<u8>> {
-        let key = key_coded(stroke.code).or_else(|| key_of(stroke.key))?;
+    /// program has asked for. A key the engine has no name for is written
+    /// as one it does not know, with the text it made.
+    pub fn key_stroke(&self, stroke: &KeyStroke<'_>) -> Vec<u8> {
+        let key =
+            (key_coded(stroke.code).or_else(|| key_of(stroke.key))).unwrap_or(Key::Unidentified);
+        self.encoded(key, stroke).unwrap_or_default()
+    }
+
+    /// Text with no key behind it: an input method's commit.
+    pub fn key_text(&self, text: &str) -> Vec<u8> {
+        let stroke = KeyStroke {
+            code: "",
+            key: KeyCode::Char('\0'),
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+            made: Some(text),
+        };
+        self.encoded(Key::Unidentified, &stroke).unwrap_or_default()
+    }
+
+    fn encoded(&self, key: Key, stroke: &KeyStroke<'_>) -> Option<Vec<u8>> {
         let mut encoder = Encoder::new().ok()?;
         encoder.set_options_from_terminal(&self.terminal);
         let mut event = Event::new().ok()?;
@@ -337,7 +355,15 @@ impl TerminalCore {
             }
         }
         event.set_mods(held);
-        let made = (stroke.made).filter(|made| !made.chars().any(char::is_control));
+        // A character key sent with no text (the wire's chords carry none)
+        // makes its own character: the encoder writes a printable key from
+        // its text, and a chord's from the key and the modifiers.
+        let own = match stroke.key {
+            KeyCode::Char(c) if !c.is_control() => Some(c.to_string()),
+            _ => None,
+        };
+        let made =
+            (stroke.made.or(own.as_deref())).filter(|made| !made.chars().any(char::is_control));
         let one = made.and_then(|made| {
             let mut characters = made.chars();
             characters.next().filter(|_| characters.next().is_none())
@@ -345,10 +371,12 @@ impl TerminalCore {
         // The character the key makes with no Shift: what it made, where
         // no Shift is held; a letter's lower case; and otherwise what the
         // key makes on a US layout, the layout's own not being known here.
+        // (A key with no name has none.)
         let shift = held.contains(Mods::SHIFT);
         let unshifted = match one {
             Some(one) if !shift => one.to_lowercase().next(),
             Some(one) if one.is_alphabetic() => one.to_lowercase().next(),
+            _ if key == Key::Unidentified => None,
             _ => us_unshifted(key),
         };
         // Shift that went into making the text is not a modifier of the
@@ -380,15 +408,15 @@ mod tests {
         key: KeyCode,
         modifiers: Modifiers,
         made: Option<&str>,
-    ) -> Option<String> {
+    ) -> String {
         let bytes = core.key_stroke(&KeyStroke {
             code,
             key,
             modifiers,
             kind: KeyEventKind::Press,
             made,
-        })?;
-        Some(String::from_utf8(bytes).unwrap().escape_debug().to_string())
+        });
+        String::from_utf8(bytes).unwrap().escape_debug().to_string()
     }
 
     /// What the engine's encoder writes for the keys a shell is driven
@@ -448,13 +476,7 @@ mod tests {
         let mut differing = Vec::new();
         for (code, key, modifiers, made, expected) in keys {
             for code in [code, ""] {
-                // (With no physical key named, a character that is not a
-                // key of a US layout's has no key: Horizon's own encoder
-                // writes it.)
-                let Some(got) = written(&core, code, key, modifiers, made) else {
-                    assert!(code.is_empty(), "{key:?}");
-                    continue;
-                };
+                let got = written(&core, code, key, modifiers, made);
                 if got != expected {
                     differing.push(format!(
                         "{key:?} {modifiers:?} ({code:?}): {got} for {expected}"
@@ -479,16 +501,16 @@ mod tests {
             kind: KeyEventKind::Release,
             made: None,
         });
-        assert_eq!(release, Some(Vec::new()));
-        assert_eq!(up(&core).unwrap(), "\\u{1b}[A");
+        assert!(release.is_empty());
+        assert_eq!(up(&core), "\\u{1b}[A");
         // Application cursor keys.
         core.write_vt(b"\x1b[?1h");
-        assert_eq!(up(&core).unwrap(), "\\u{1b}OA");
+        assert_eq!(up(&core), "\\u{1b}OA");
         core.write_vt(b"\x1b[?1l");
         // The kitty protocol's first flag: a chord that was a control
         // character is told apart from it.
         core.write_vt(b"\x1b[>1u");
-        let key = |code, key, modifiers, made| written(&core, code, key, modifiers, made).unwrap();
+        let key = |code, key, modifiers, made| written(&core, code, key, modifiers, made);
         assert_eq!(
             key("KeyA", KeyCode::Char('a'), Modifiers::CTRL, Some("a")),
             "\\u{1b}[97;5u"

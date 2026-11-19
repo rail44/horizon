@@ -16,8 +16,7 @@ use libghostty_vt::report::SizeReportSize;
 use libghostty_vt::selection::{SelectLineOptions, SelectWordOptions, Selection};
 use libghostty_vt::snapshot::Decoder;
 use libghostty_vt::terminal::ScrollViewport;
-use termwiz::escape::csi::KittyKeyboardFlags;
-use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
+use termwiz::input::{KeyCode, Modifiers};
 
 #[cfg(test)]
 pub(crate) use self::color::Rgb;
@@ -28,7 +27,6 @@ use self::input::{arrow_scroll_input, sgr_mouse_input, sgr_mouse_wheel_input};
 pub use self::keys::KeyStroke;
 use self::osc_notify::OscNotificationScanner;
 use self::render::{Engine, alternate_screen, mode, mouse_mode};
-use crate::protocol::kitty_keyboard;
 use crate::types::{
     KeyEventKind, TerminalFrame, TerminalMouseKind, TerminalMouseReport, TerminalScroll,
     TerminalScrollWindow, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize,
@@ -36,7 +34,7 @@ use crate::types::{
 
 mod color;
 #[cfg(test)]
-mod engine_keys;
+mod engine_observations;
 mod events;
 mod input;
 mod keys;
@@ -99,8 +97,8 @@ impl TerminalCore {
     pub fn from_state(state: &[u8]) -> Option<Self> {
         let mut decoder = Decoder::new_buf(state).ok()?;
         let _ = decoder.set_retain_continuation(true);
-        // The screen alone is a terminal already: a state cut off after it
-        // (what a view that fell behind is sent) is read as far as that.
+        // The screen is read first and is a terminal already; the rest
+        // (the history) is read after it.
         let mut ready = decoder.ready().ok()?;
         while let Ok(Some(_)) = ready.next() {}
         let terminal = ready.into_terminal();
@@ -112,19 +110,6 @@ impl TerminalCore {
     pub fn state(&mut self) -> Vec<u8> {
         let mut state = Vec::new();
         let _ = self.terminal.encode_snapshot(&mut state);
-        state
-    }
-
-    /// SPIKE Y. The state as far as the screen and the history nearest
-    /// it: what a view that fell behind is sent, and draws from at once.
-    pub fn state_of_the_screen(&mut self) -> Vec<u8> {
-        let mut state = self.state();
-        let screen = Decoder::new_buf(&state)
-            .and_then(Decoder::ready)
-            .and_then(|ready| ready.decoder().source_offset());
-        if let Ok(screen) = screen {
-            state.truncate(screen);
-        }
         state
     }
 
@@ -223,14 +208,12 @@ impl TerminalCore {
     /// or copy is the daemon's to do, once, and is let go of here.
     pub fn take_in(&mut self, bytes: &[u8]) {
         let _ = self.write_vt(bytes);
-        // A hold the program never let go of: the daemon's own clock let
-        // its terminal's go, and no byte says so.
-        if self
-            .sync_flush_deadline()
-            .is_some_and(|deadline| deadline <= Instant::now())
-        {
-            let _ = self.flush_sync_update();
-        }
+    }
+
+    /// SPIKE Y. Lets a synchronized update's hold go where the daemon's
+    /// clock let its terminal's go (`TerminalUpdate::HoldReleased`).
+    pub fn release_hold(&mut self) {
+        let _ = self.flush_sync_update();
     }
 
     pub(crate) fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
@@ -365,47 +348,9 @@ impl TerminalCore {
         render::snapshot_window(&self.terminal, self.size.get(), anchor, height)
     }
 
-    fn kitty_flags(&self) -> KittyKeyboardFlags {
-        let bits = (self.terminal.kitty_keyboard_flags()).map_or(0, |flags| flags.bits());
-        kitty_keyboard::flags_from_bits(bits)
-    }
-
-    pub fn encode_key(
-        &self,
-        key: KeyCode,
-        mods: Modifiers,
-        event: KeyEventKind,
-        text: Option<&str>,
-    ) -> String {
-        let flags = self.kitty_flags();
-
-        if event == KeyEventKind::Release && !flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES)
-        {
-            return String::new();
-        }
-
-        if let KeyCode::Char(c) = key {
-            let bytes = kitty_keyboard::encode_text_key(c, mods, flags, event, text);
-            return String::from_utf8(bytes).unwrap_or_default();
-        }
-
-        if !flags.is_empty() {
-            let bytes = kitty_keyboard::encode(
-                key,
-                mods,
-                flags,
-                event,
-                text,
-                mode(&self.terminal, Mode::DECCKM),
-                mode(&self.terminal, Mode::LINEFEED),
-            );
-            return String::from_utf8(bytes).unwrap_or_default();
-        }
-
-        key.encode(mods, self.encode_modes(), event.is_down())
-            .unwrap_or_default()
-    }
-
+    /// The bytes a key writes, in the modes the program has asked for:
+    /// the engine's encoder's, from what the wire carries of the key (no
+    /// physical key's name; see [`Self::key_stroke`] for a view's own).
     pub fn key_input(
         &self,
         key: KeyCode,
@@ -413,28 +358,19 @@ impl TerminalCore {
         event: KeyEventKind,
         text: Option<&str>,
     ) -> Vec<u8> {
-        self.encode_key(key, mods, event, text).into_bytes()
+        self.key_stroke(&KeyStroke {
+            code: "",
+            key,
+            modifiers: mods,
+            kind: event,
+            made: text,
+        })
     }
 
-    /// Text with no key behind it (an input method's commit): the keyless
-    /// `CSI 0;1;text u` where the program asked for all keys as escape
-    /// codes with their text, and the text's own bytes otherwise.
+    /// Text with no key behind it (an input method's commit), as the
+    /// engine's encoder writes a key it has no name for with that text.
     pub fn text_input(&self, text: &str) -> Vec<u8> {
-        let flags = self.kitty_flags();
-        if flags.contains(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
-            && flags.contains(KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT)
-            && !text.is_empty()
-            && !text.chars().any(|c| c.is_control())
-        {
-            let codepoints = text
-                .chars()
-                .map(|c| (c as u32).to_string())
-                .collect::<Vec<_>>()
-                .join(":");
-            format!("\x1b[0;1;{codepoints}u").into_bytes()
-        } else {
-            text.as_bytes().to_vec()
-        }
+        self.key_text(text)
     }
 
     /// The cell of the viewport a point of the wire names.
@@ -525,16 +461,6 @@ impl TerminalCore {
             text.push('\n');
         }
         Some(text)
-    }
-
-    /// Only reached from `encode_key`'s legacy branch (no Kitty flag).
-    fn encode_modes(&self) -> KeyCodeEncodeModes {
-        KeyCodeEncodeModes {
-            encoding: KeyboardEncoding::Xterm,
-            application_cursor_keys: mode(&self.terminal, Mode::DECCKM),
-            newline_mode: mode(&self.terminal, Mode::LINEFEED),
-            modify_other_keys: None,
-        }
     }
 
     fn application_scroll_mode(&self) -> bool {

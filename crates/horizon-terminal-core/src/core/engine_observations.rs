@@ -1,145 +1,10 @@
-//! SPIKE: the engine's own key encoder beside Horizon's, key by key.
-//!
-//! Not a test of either: a count of where the two write the same bytes
-//! and where they do not, over keys, modifiers, kinds of event and the
-//! modes a program can ask for.
-//! `cargo nextest run -p horizon-terminal-core --run-ignored only
-//! the_engine_s_key_encoder_beside_horizon_s --no-capture`
-
-use termwiz::input::{KeyCode, Modifiers};
+//! SPIKE: what the engine was measured and seen to do, for the spike's
+//! record (`docs/research/libghostty-vt-engine-spike-2026-11-19.md`): the
+//! ignored tests are timings and observations, run by hand with
+//! `--run-ignored only --no-capture`; the others are checks.
 
 use super::TerminalCore;
-use crate::types::{KeyEventKind, TerminalSize};
-
-impl TerminalCore {
-    /// What the engine's encoder writes for a key, the modes read from the
-    /// terminal as the engine has them.
-    fn engine_key_input(
-        &self,
-        key: KeyCode,
-        mods: Modifiers,
-        kind: KeyEventKind,
-        text: Option<&str>,
-    ) -> Option<Vec<u8>> {
-        self.key_stroke(&super::keys::KeyStroke {
-            code: "",
-            key,
-            modifiers: mods,
-            kind,
-            made: text,
-        })
-    }
-}
-
-#[test]
-#[ignore = "a count for the spike's record, not a check"]
-fn the_engine_s_key_encoder_beside_horizon_s() {
-    let keys = [
-        KeyCode::Char('a'),
-        KeyCode::Char('c'),
-        KeyCode::Char('m'),
-        KeyCode::Char('z'),
-        KeyCode::Char('1'),
-        KeyCode::Char('0'),
-        KeyCode::Char(' '),
-        KeyCode::Char('-'),
-        KeyCode::Char('['),
-        KeyCode::Char(';'),
-        KeyCode::Char('/'),
-        KeyCode::Enter,
-        KeyCode::Tab,
-        KeyCode::Backspace,
-        KeyCode::Escape,
-        KeyCode::Delete,
-        KeyCode::Insert,
-        KeyCode::UpArrow,
-        KeyCode::DownArrow,
-        KeyCode::LeftArrow,
-        KeyCode::RightArrow,
-        KeyCode::Home,
-        KeyCode::End,
-        KeyCode::PageUp,
-        KeyCode::PageDown,
-        KeyCode::Function(1),
-        KeyCode::Function(5),
-        KeyCode::Function(12),
-    ];
-    let mods = [
-        Modifiers::NONE,
-        Modifiers::SHIFT,
-        Modifiers::CTRL,
-        Modifiers::ALT,
-        Modifiers::CTRL | Modifiers::SHIFT,
-        Modifiers::ALT | Modifiers::SHIFT,
-        Modifiers::CTRL | Modifiers::ALT,
-        Modifiers::SUPER,
-    ];
-    let kinds = [
-        KeyEventKind::Press,
-        KeyEventKind::Repeat,
-        KeyEventKind::Release,
-    ];
-    // What a program asks for before the keys: nothing, application
-    // cursor keys, and the kitty protocol's flags in the sets programs use.
-    let modes: [(&str, &[u8]); 7] = [
-        ("legacy", b""),
-        ("legacy, application cursor keys", b"\x1b[?1h"),
-        ("kitty 1 (disambiguate)", b"\x1b[>1u"),
-        ("kitty 3 (+ event types)", b"\x1b[>3u"),
-        ("kitty 7 (+ alternate keys)", b"\x1b[>7u"),
-        ("kitty 15 (+ all keys as escape codes)", b"\x1b[>15u"),
-        ("kitty 31 (+ associated text)", b"\x1b[>31u"),
-    ];
-
-    let (mut all, mut same) = (0, 0);
-    for (name, asked) in modes {
-        let mut core = TerminalCore::new(TerminalSize::new(80, 24));
-        core.write_vt(asked);
-        let (mut of_mode, mut same_in_mode) = (0, 0);
-        let mut differing = Vec::new();
-        for key in keys {
-            for held in mods {
-                for kind in kinds {
-                    // The text a press makes: the character, shifted where
-                    // Shift is held, and none where Ctrl, Alt or Super is.
-                    let chord =
-                        held.intersects(Modifiers::CTRL | Modifiers::ALT | Modifiers::SUPER);
-                    let text = match key {
-                        KeyCode::Char(c) if !chord && kind != KeyEventKind::Release => {
-                            Some(match held.contains(Modifiers::SHIFT) {
-                                true => c.to_ascii_uppercase().to_string(),
-                                false => c.to_string(),
-                            })
-                        }
-                        _ => None,
-                    };
-                    let own = core.key_input(key, held, kind, text.as_deref());
-                    let Some(engine) = core.engine_key_input(key, held, kind, text.as_deref())
-                    else {
-                        continue;
-                    };
-                    of_mode += 1;
-                    if own == engine {
-                        same_in_mode += 1;
-                    } else if differing.len() < 12 {
-                        differing.push(format!(
-                            "      {key:?} {held:?} {kind:?}: Horizon {:?}, engine {:?}",
-                            String::from_utf8_lossy(&own),
-                            String::from_utf8_lossy(&engine)
-                        ));
-                    }
-                }
-            }
-        }
-        println!("{name}: {same_in_mode} of {of_mode} the same");
-        for line in differing {
-            println!("{line}");
-        }
-        all += of_mode;
-        same += same_in_mode;
-    }
-    println!("in all: {same} of {all} the same");
-}
+use crate::types::TerminalSize;
 
 #[test]
 #[ignore = "a timing for the spike's record, not a check"]
@@ -614,27 +479,6 @@ fn a_state_handed_over_and_the_bytes_after_it_make_the_same_terminal() {
         }
         Err(error) => println!("cut off after the screen: {error:?}"),
     }
-}
-
-#[test]
-fn a_state_cut_off_after_the_screen_is_a_terminal_that_goes_on() {
-    let mut core = TerminalCore::new(TerminalSize::new(80, 24));
-    for line in 0..5000 {
-        core.write_vt(format!("line {line}\r\n").as_bytes());
-    }
-    let whole = core.state();
-    let screen = core.state_of_the_screen();
-    assert!(
-        screen.len() < whole.len(),
-        "{} of {}",
-        screen.len(),
-        whole.len()
-    );
-    let mut view = TerminalCore::from_state(&screen).expect("a terminal from the screen's part");
-    assert!(view.snapshot_text().contains("line 4999"));
-    core.write_vt(b"and then more");
-    view.take_in(b"and then more");
-    assert_eq!(view.snapshot_text(), core.snapshot_text());
 }
 
 /// A state written out between any two bytes of what a program writes --

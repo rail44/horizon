@@ -228,23 +228,13 @@ impl Session {
         };
         match command {
             TerminalCommand::KeyInput(input) => {
-                let written = platform.and_then(|(code, made)| {
-                    terminal.key_stroke(&KeyStroke {
-                        code: &code,
-                        key: input.key,
-                        modifiers: input.modifiers,
-                        kind: input.kind,
-                        made: made.as_deref(),
-                    })
-                });
-                // (A key the engine has no name for: Horizon's encoder.)
-                to_the_pty(written.unwrap_or_else(|| {
-                    terminal.key_input(
-                        input.key,
-                        input.modifiers,
-                        input.kind,
-                        input.text.as_deref(),
-                    )
+                let (code, made) = platform.unwrap_or((String::new(), input.text.clone()));
+                to_the_pty(terminal.key_stroke(&KeyStroke {
+                    code: &code,
+                    key: input.key,
+                    modifiers: input.modifiers,
+                    kind: input.kind,
+                    made: made.as_deref(),
                 }));
             }
             TerminalCommand::TextInput(text) => to_the_pty(terminal.text_input(&text)),
@@ -323,6 +313,11 @@ impl Session {
                         terminal.resize(size);
                     }
                 }
+                TerminalUpdate::HoldReleased => {
+                    if let Some(terminal) = mirror.as_mut() {
+                        terminal.release_hold();
+                    }
+                }
                 _ => {}
             }
         }
@@ -390,6 +385,7 @@ impl Session {
                 TerminalUpdate::State { .. }
                     | TerminalUpdate::Output(_)
                     | TerminalUpdate::Resized(_)
+                    | TerminalUpdate::HoldReleased
             );
             match (about_the_session, of_the_stream) {
                 (true, _) => self.for_keeper.borrow_mut().push(update),

@@ -240,6 +240,11 @@ pub enum TerminalUpdate {
     /// SPIKE Y. Daemon → client: the terminal was resized here, between
     /// the bytes before and the bytes after.
     Resized(TerminalSize),
+    /// SPIKE Y. Daemon → client: the daemon's clock let a synchronized
+    /// update's hold go here, the program never having let it go. No byte
+    /// says so: a view's terminal lets its own hold go at this place in
+    /// the stream, and keeps no clock of its own.
+    HoldReleased,
     /// Daemon → client: the session's current working directory, read from
     /// its shell process (board #69). Sent when the value changes and once to
     /// every newly installed subscriber, so a reattaching client learns the

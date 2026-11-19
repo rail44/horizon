@@ -1339,6 +1339,11 @@
           "type": "object"
         },
         {
+          "const": "HoldReleased",
+          "description": "SPIKE Y. Daemon → client: the daemon's clock let a synchronized\nupdate's hold go here, the program never having let it go. No byte\nsays so: a view's terminal lets its own hold go at this place in\nthe stream, and keeps no clock of its own.",
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "description": "Daemon → client: the session's current working directory, read from\nits shell process (board #69). Sent when the value changes and once to\nevery newly installed subscriber, so a reattaching client learns the\ncurrent value without a request (`docs/terminald-split-design.md`).",
           "properties": {

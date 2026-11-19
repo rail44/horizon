@@ -155,12 +155,19 @@ run by hand, not in the gate.
 
 ## Build setup
 
+`crates/horizon-terminal-core` builds its terminal engine, libghostty-vt,
+from source with Zig 0.17 (the `libghostty-vt-sys` crate's build script
+calls `zig build`): install it once, e.g. `proto install zig 0.17.1 --pin
+global`. The repo's `.cargo/config.toml` has the engine built optimized in
+every profile (`LIBGHOSTTY_VT_SYS_OPTIMIZE`); its comment says why.
+
 `crates/horizon-agent` links DuckDB dynamically, and the library is a
 machine-level install, not a repository one. Install it once with
 `scripts/install-duckdb-prefix.sh`, which verifies and unpacks DuckDB 2.0's
 prebuilt `duckdb-shared-libs-*` release archive into `~/opt/duckdb/<version>`
 (no root) and points `~/opt/duckdb/current` at it. Then put this in
-`~/.cargo/config.toml` — the repo itself stays config-free:
+`~/.cargo/config.toml` — the paths are this machine's, so they stay out of
+the repo's own `.cargo/config.toml`:
 
 ```toml
 [env]
@@ -251,8 +258,8 @@ worktree was seeded, compare its `target/CACHEDIR.TAG` mtime with the
 main checkout's: the reflink copy keeps it, a cold build writes a new one.
 
 Two build-sharing schemes preceded this and were both retired; their
-history lives in `.cargo/config.toml`'s comment, which is deliberately
-config-free today. If phantom errors (E0432 on symbols that exist, a
+history lives in `.cargo/config.toml`'s comment; that file holds no
+artifact-sharing setting. If phantom errors (E0432 on symbols that exist, a
 sibling's binaries running as yours) ever appear, suspect artifact-level
 sharing having crept back in.
 
@@ -366,8 +373,8 @@ their wiring:
   widget of its own (grid, box and block characters as shapes, the cursor,
   the selection), key/mouse/IME handling, local scrollback. PTY ownership
   lives in `crates/horizon-terminald`; emulation and the session loop in
-  `crates/horizon-terminal-core`; print the kitty conformance matrix with
-  `cargo test -p horizon-terminal-core print_compliance_matrix -- --nocapture`.
+  `crates/horizon-terminal-core`, over libghostty-vt, whose encoder also
+  writes the keys.
 - `agent/` — the agent view and its live session. The fold from ACP
   session updates to what the pane shows is `horizon-shell-runtime`'s
   `agent_model`, `agent_view` and `agent_display`. Contract/providers/tools/persistence

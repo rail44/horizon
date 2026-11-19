@@ -165,8 +165,10 @@ impl Stream {
             StreamCommand::Stop => *self = Self::default(),
             StreamCommand::Taken(bytes) => {
                 self.outstanding = self.outstanding.saturating_sub(bytes);
+                // The whole state, history and all: what the view was not
+                // sent is in it.
                 if self.behind && self.outstanding == 0 {
-                    self.state(core.state_of_the_screen(), update_tx);
+                    self.state(core.state(), update_tx);
                 }
             }
         }
@@ -184,6 +186,12 @@ impl Stream {
         }
         self.outstanding += bytes.len() as u64;
         let _ = update_tx.send(TerminalUpdate::Output(bytes));
+    }
+
+    fn released(&mut self, update_tx: &Sender<TerminalUpdate>) {
+        if self.wanted && !self.behind {
+            let _ = update_tx.send(TerminalUpdate::HoldReleased);
+        }
     }
 
     fn resized(&mut self, size: TerminalSize, update_tx: &Sender<TerminalUpdate>) {
@@ -530,6 +538,7 @@ pub fn run_terminal_core(
                     "sync_flush_fired"
                 );
                 send_terminal_events(events, &command_tx, &update_tx);
+                stream.released(&update_tx);
                 rearm_sync_flush(&core, &mut sync_flush_rx);
                 frames.notify(&core);
             }

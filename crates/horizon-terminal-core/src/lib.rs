@@ -23,7 +23,6 @@
 
 mod contract;
 mod core;
-mod protocol;
 mod session_loop;
 mod types;
 pub mod wire;

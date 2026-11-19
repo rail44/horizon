@@ -1046,12 +1046,7 @@ fn the_wheel_over_the_window_held_has_the_page_drawn_again() {
 /// SPIKE Y. More output than a view is sent: the daemon stops sending
 /// while the view is behind and sends the terminal's state when it has
 /// caught up, and the view ends with the screen the shell has.
-///
-/// Run by hand, with the engine built for speed
-/// (`LIBGHOSTTY_VT_SYS_OPTIMIZE=ReleaseFast`): as a debug build takes its
-/// bytes in, 27 MB is minutes.
 #[test]
-#[ignore = "a measurement: minutes with the engine's debug build"]
 fn a_flood_of_output_ends_with_the_screen_the_shell_has() {
     let opened = open();
     let states_before = opened.session.states_taken();
@@ -1092,4 +1087,18 @@ fn a_flood_of_output_ends_with_the_screen_the_shell_has() {
     opened.wait("the next command", |text| {
         text.lines().any(|line| line == "after-the-flood")
     });
+}
+
+/// A synchronized update the program never closes is let go by the
+/// daemon's clock, and the view lets go where the daemon did, with no
+/// output after it to say so.
+#[test]
+fn an_update_held_and_never_let_go_is_shown_when_the_daemon_lets_it_go() {
+    let opened = open();
+    // (`\154` is `l`: the line typed is not the text held.)
+    opened.run(r"printf '\033[?2026hhe\154d-text'; sleep 3");
+    let started = Instant::now();
+    opened.wait("the held text", |text| text.contains("held-text"));
+    // Long before `sleep` ends and the prompt comes.
+    assert!(started.elapsed() < Duration::from_secs(2));
 }

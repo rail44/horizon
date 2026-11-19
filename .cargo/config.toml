@@ -25,5 +25,16 @@
 #   hook, which delivers ~5s worktree creation + ~33s member-only
 #   builds with no compiler-level sharing at all (owner decision).
 #
-# This file is deliberately config-free today; it exists to carry this
-# history and to be the place a future build knob would go.
+# It carries this history, holds no artifact-sharing setting, and is the
+# place a build knob every checkout needs goes.
+
+[env]
+# The terminal engine (libghostty-vt, built by Zig from its -sys crate's
+# build script) is built optimized in every profile. Its build script
+# would build a debug profile's in Zig's `Debug` mode, which takes in a
+# program's output about a thousand times slower (926 ms against 0.7-1 ms
+# for 117 KB, docs/research/libghostty-vt-engine-spike-2026-11-19.md), and
+# the view runs that engine on the UI thread
+# (docs/terminal-stream-design.md). The cost: no stepping into the engine
+# in a debugger.
+LIBGHOSTTY_VT_SYS_OPTIMIZE = "ReleaseFast"
