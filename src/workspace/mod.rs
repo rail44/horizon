@@ -37,9 +37,8 @@ use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Track, Update, With, WithUntracked, WithValue,
 };
 use horizon_ui::reactive_graph::wrappers::read::Signal;
-use horizon_ui::{Callback, El, each_layout, el, relayout, stop_propagation};
+use horizon_ui::{Callback, El, each_layout, el, relayout};
 use horizon_workspace::title::derive_session_title;
-use horizon_workspace::types::TabSummary;
 use horizon_workspace::{PaneId, SessionId, SessionKind, SplitAxis, Workspace};
 
 use crate::agent::plugin::{AgentAsked, AgentPlugin};
@@ -91,6 +90,9 @@ pub(crate) mod styles {
         .tab-label:hover .close { opacity: 1; }
         .tab-label .close:hover { background: var(--surface-selected); }
         .tab { flex: 1; min-height: 0; display: flex; }
+        .group { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+        .shown-tab { flex: 1; min-width: 0; min-height: 0; display: flex; }
+        .tabs.cursor { border-color: var(--accent); }
         .split { flex: 1; min-width: 0; min-height: 0; display: flex; }
         .split.down { flex-direction: column; }
         .cell { flex-shrink: 1; flex-basis: 0; min-width: 0; min-height: 0; display: flex; }
@@ -1086,48 +1088,6 @@ impl Shell {
     }
 }
 
-fn strip(shell: Shell) -> El {
-    let tabs = Memo::new(move |_| shell.model.with(Workspace::tab_summaries));
-    let tab = move |index: usize| tabs.with(|tabs: &Vec<TabSummary>| tabs.get(index).cloned());
-    el("div").class(styles::TABS).each(
-        move || (0..tabs.with(Vec::len)).collect::<Vec<_>>(),
-        |index| *index,
-        move |index| {
-            let index = *index;
-            el("div")
-                .class(styles::TAB_LABEL)
-                .class_dyn(move || {
-                    tab(index)
-                        .is_some_and(|tab| tab.active)
-                        .then_some(styles::ACTIVE)
-                })
-                .child(el("div").class(styles::TITLE).text_dyn(move || {
-                    tab(index)
-                        .map_or_default(|tab| activity::marked(tab.activity.as_ref(), tab.title))
-                }))
-                // Closing a tab detaches the sessions in it.
-                .child(
-                    el("div")
-                        .class(styles::CLOSE)
-                        .text("×")
-                        .on("click", move |_| {
-                            shell.change(|model| {
-                                model.exit_workspace_mode();
-                                model.close_tab_index(index);
-                            });
-                            stop_propagation();
-                        }),
-                )
-                .on("click", move |_| {
-                    shell.change(|model| {
-                        model.exit_workspace_mode();
-                        model.activate_tab_index(index);
-                    });
-                })
-        },
-    )
-}
-
 /// Builds the shell over `opening`, in its configuration's theme; `spawn`
 /// starts the session of each terminal pane that has none running.
 pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
@@ -1239,7 +1199,6 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
                 shell.resizing.update(|resizing| *resizing = None);
             }
         })
-        .child(strip(shell))
         .child(arrangement::view(shell))
         .each(
             // (An extension's view is put in a sheet made around it when it

@@ -1,7 +1,7 @@
 //! Validate persisted sessions, layout membership, and attachment references.
 
 use super::{
-    PaneState, SessionId, SessionKind, WORKSPACE_STATE_VERSION, WorkspaceState,
+    Found, PaneState, SessionId, SessionKind, WORKSPACE_STATE_VERSION, WorkspaceState,
     WorkspaceStateError, state_error,
 };
 use std::collections::{HashMap, HashSet};
@@ -14,14 +14,8 @@ impl WorkspaceState {
                 supported: WORKSPACE_STATE_VERSION,
             });
         }
-        // A zero-tab workspace is a valid, persistable state (2026-07-18
-        // owner clarification: an empty workspace is first-class, not an
-        // error condition) -- so unlike every other structural rule below,
-        // there is no "at least one tab" requirement here. `self.active_tab`
-        // is simply not checked against `tab_ids` in that case (see below):
-        // with no tabs, any value is equally meaningless, exactly mirroring
-        // how the in-memory model tolerates a dangling `active_tab` once
-        // its last tab closes (`Workspace::close_tab_index`/`detach_pane`).
+        // An empty workspace -- a root tab group with no tab -- is a valid,
+        // persistable state, so there is no "at least one tab" rule here.
         if self.next_terminal_display_number == 0 || self.next_agent_display_number == 0 {
             return Err(state_error("display counters must be positive"));
         }
@@ -81,33 +75,20 @@ fn validate_tabs(
     state: &WorkspaceState,
     sessions: &HashMap<SessionId, SessionKind>,
 ) -> Result<(), WorkspaceStateError> {
-    let mut tab_ids = HashSet::new();
+    let mut found = Found::default();
+    state.root.validate(None, true, &mut found)?;
     let mut pane_ids = HashSet::new();
     let mut attached_sessions = HashSet::new();
-    for tab in &state.tabs {
-        if !tab_ids.insert(tab.id) {
-            return Err(state_error(format!("duplicate tab id {:?}", tab.id)));
+    for pane in &found.panes {
+        if !pane_ids.insert(pane.id) {
+            return Err(state_error(format!("duplicate pane id {:?}", pane.id)));
         }
-        let mut tab_panes = Vec::new();
-        tab.root.validate(None, &mut tab_panes)?;
-        if !tab_panes.iter().any(|pane| pane.id == tab.active_pane) {
-            return Err(state_error(format!(
-                "active pane {:?} is not in tab {:?}",
-                tab.active_pane, tab.id
-            )));
-        }
-        for pane in tab_panes {
-            if !pane_ids.insert(pane.id) {
-                return Err(state_error(format!("duplicate pane id {:?}", pane.id)));
-            }
-            validate_attachment(pane, sessions, &mut attached_sessions)?;
-        }
+        validate_attachment(pane, sessions, &mut attached_sessions)?;
     }
-    if !state.tabs.is_empty() && !tab_ids.contains(&state.active_tab) {
-        return Err(state_error(format!(
-            "active tab {:?} does not exist",
-            state.active_tab
-        )));
+    if let Some(focus) = state.focus
+        && !pane_ids.contains(&focus)
+    {
+        return Err(state_error(format!("focus {focus:?} is not a pane")));
     }
     Ok(())
 }

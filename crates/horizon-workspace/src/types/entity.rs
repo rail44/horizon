@@ -2,26 +2,25 @@ use std::path::PathBuf;
 
 use crate::SessionId;
 
-use super::{Doing, LayoutNode, PaneId, SessionActivity, SessionKind, TabId};
+use super::{Doing, LayoutNode, PaneId, SessionActivity, SessionKind, TabGroupId};
 
 #[derive(Clone, Debug)]
 pub struct Workspace {
-    pub(crate) tabs: Vec<Tab>,
+    /// The workspace's tree. An empty workspace is a tab group with no
+    /// tabs.
+    pub(crate) root: LayoutNode,
     pub(crate) panes: Vec<Pane>,
     pub(crate) sessions: Vec<WorkspaceSession>,
-    pub(crate) active_tab: TabId,
+    /// The pane keys go to, under a tab group or not.
+    pub(crate) focus: Option<PaneId>,
+    /// The tab group that last had focus: where a session no pane shows
+    /// is opened.
+    pub(crate) last_group: Option<TabGroupId>,
     pub(crate) next_terminal_display_number: usize,
     pub(crate) next_agent_display_number: usize,
     /// Explicit mode entry and its optional cursor are one state. Empty
     /// workspaces remain an implicit command surface (see `mode`).
     pub(crate) workspace_mode: crate::mode::WorkspaceMode,
-}
-
-#[derive(Clone, Debug)]
-pub struct Tab {
-    pub id: TabId,
-    pub root: LayoutNode,
-    pub active: PaneId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -1,58 +1,48 @@
-use super::types::{LayoutChild, LayoutNode, PaneId, SplitAxis, TabId, Workspace};
+use super::types::{
+    LayoutChild, LayoutNode, NodeKey, PaneId, SplitAxis, Tab, TabGroup, TabGroupId, TabId,
+    Workspace,
+};
 
 /// One child in a `Split`'s rendering plan (see [`split_render_plan`]):
 /// `anchor` is the stable identity a recursive renderer would key that
-/// child's own nested view by across re-renders -- the child's own pane id
-/// for a leaf, or its subtree's leftmost pane id otherwise (see
-/// `LayoutNode::first_pane`). Two sibling subtrees can never share an
-/// anchor: every `PaneId` in a tree is unique, so a subtree's leftmost leaf
-/// uniquely identifies it among its siblings.
-///
-/// Test-only now: no production caller remains, since the gpui shell renders
-/// splits off `resizable`'s own primitives rather than this plan
-/// (2026-07-18 visibility audit). Kept as a unit-tested description of the
-/// tree's rendering shape, decoupled from any UI framework.
+/// child's own nested view by across re-renders. Test-only: a description
+/// of the tree's rendering shape, decoupled from any UI framework.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct RenderChild {
-    pub(crate) anchor: PaneId,
+    pub(crate) anchor: NodeKey,
     pub(crate) weight: f32,
 }
 
 /// The immediate rendering plan for one `Split` level -- its axis and, per
 /// child, the identity/weight pair a renderer would need to key and size
-/// that child's slot. `None` for a bare leaf (nothing to stack). See
-/// [`RenderChild`]'s doc comment for why this is test-only now.
+/// that child's slot. `None` for anything but a split.
 #[cfg(test)]
 pub(crate) fn split_render_plan(node: &LayoutNode) -> Option<(SplitAxis, Vec<RenderChild>)> {
     match node {
-        LayoutNode::Pane(_) => None,
         LayoutNode::Split { axis, children } => Some((
             *axis,
             children
                 .iter()
                 .map(|child| RenderChild {
-                    anchor: child
-                        .node
-                        .first_pane()
-                        .expect("a canonical Split's child always contains at least one pane"),
+                    anchor: child.node.first_key(),
                     weight: child.weight,
                 })
                 .collect(),
         )),
+        _ => None,
     }
 }
 
 impl Workspace {
     /// Updates one rendered split from pixel sizes reported by the view.
     /// `split_anchor` plus the immediate child anchors identifies the split:
-    /// a first-pane anchor alone is insufficient because the first nested
+    /// a first-child anchor alone is insufficient because the first nested
     /// split shares that anchor with each of its ancestors.
     pub fn set_split_weights(
         &mut self,
-        tab_id: TabId,
-        split_anchor: PaneId,
-        child_anchors: &[PaneId],
+        split_anchor: NodeKey,
+        child_anchors: &[NodeKey],
         sizes: &[f32],
     ) -> bool {
         if sizes.len() != child_anchors.len()
@@ -65,43 +55,104 @@ impl Workspace {
         if !total.is_finite() || total <= 0.0 {
             return false;
         }
-        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
-            return false;
-        };
-        tab.root
+        self.root
             .set_split_weights(split_anchor, child_anchors, sizes, total)
+    }
+}
+
+impl TabGroup {
+    /// The tab the group shows, if it has any.
+    pub fn shown_tab(&self) -> Option<&Tab> {
+        self.tabs.iter().find(|tab| tab.id == self.shown)
+    }
+
+    /// The index of the tab the group shows.
+    pub fn shown_index(&self) -> Option<usize> {
+        self.tabs.iter().position(|tab| tab.id == self.shown)
+    }
+
+    /// A group whose one tab is `root`, with `active` its active pane.
+    pub(crate) fn of(root: LayoutNode, active: PaneId) -> Self {
+        let tab = Tab {
+            id: TabId::new(),
+            root,
+            active,
+        };
+        Self {
+            id: TabGroupId::new(),
+            shown: tab.id,
+            tabs: vec![tab],
+        }
+    }
+
+    /// The root group of an empty workspace.
+    pub(crate) fn empty() -> Self {
+        Self {
+            id: TabGroupId::new(),
+            tabs: Vec::new(),
+            shown: TabId::new(),
+        }
+    }
+
+    /// Shows the tab at `index` beside the one that was there when the
+    /// shown tab is gone: the one that took its place, or the last.
+    fn show_neighbor_of(&mut self, index: usize) {
+        if let Some(tab) = self.tabs.get(index.min(self.tabs.len().saturating_sub(1))) {
+            self.shown = tab.id;
+        }
     }
 }
 
 impl LayoutNode {
     fn set_split_weights(
         &mut self,
-        split_anchor: PaneId,
-        expected_child_anchors: &[PaneId],
+        split_anchor: NodeKey,
+        expected_child_anchors: &[NodeKey],
         sizes: &[f32],
         total: f32,
     ) -> bool {
-        let Self::Split { children, .. } = self else {
-            return false;
-        };
-        let own_anchor = children.first().and_then(|child| child.node.first_pane());
-        let child_anchors: Vec<_> = children
-            .iter()
-            .filter_map(|child| child.node.first_pane())
-            .collect();
-        if own_anchor == Some(split_anchor) && child_anchors == expected_child_anchors {
-            for (child, size) in children.iter_mut().zip(sizes) {
-                child.weight = *size / total;
+        match self {
+            Self::Pane(_) => false,
+            Self::Tabs(group) => group.tabs.iter_mut().any(|tab| {
+                tab.root
+                    .set_split_weights(split_anchor, expected_child_anchors, sizes, total)
+            }),
+            Self::Split { children, .. } => {
+                let own_anchor = children.first().map(|child| child.node.first_key());
+                let child_anchors: Vec<_> = children
+                    .iter()
+                    .map(|child| child.node.first_key())
+                    .collect();
+                if own_anchor == Some(split_anchor) && child_anchors == expected_child_anchors {
+                    for (child, size) in children.iter_mut().zip(sizes) {
+                        child.weight = *size / total;
+                    }
+                    return true;
+                }
+                children.iter_mut().any(|child| {
+                    child
+                        .node
+                        .set_split_weights(split_anchor, expected_child_anchors, sizes, total)
+                })
             }
-            return true;
         }
-        children.iter_mut().any(|child| {
-            child
-                .node
-                .set_split_weights(split_anchor, expected_child_anchors, sizes, total)
-        })
     }
 
+    /// The key this node is known by: a pane's, a group's, or a split's
+    /// first child's.
+    pub fn first_key(&self) -> NodeKey {
+        match self {
+            Self::Pane(pane_id) => NodeKey::Pane(*pane_id),
+            Self::Tabs(group) => NodeKey::Group(group.id),
+            Self::Split { children, .. } => children
+                .first()
+                .map(|child| child.node.first_key())
+                .expect("a canonical split has children"),
+        }
+    }
+
+    /// Every pane in this subtree, every tab of every group included, in
+    /// pre-order.
     pub(crate) fn pane_ids(&self) -> Vec<PaneId> {
         match self {
             Self::Pane(pane_id) => vec![*pane_id],
@@ -109,27 +160,160 @@ impl LayoutNode {
                 .iter()
                 .flat_map(|child| child.node.pane_ids())
                 .collect(),
+            Self::Tabs(group) => group
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.root.pane_ids())
+                .collect(),
         }
     }
 
+    /// The panes on screen: each group's shown tab's only, in pre-order.
+    pub(crate) fn visible_pane_ids(&self) -> Vec<PaneId> {
+        match self {
+            Self::Pane(pane_id) => vec![*pane_id],
+            Self::Split { children, .. } => children
+                .iter()
+                .flat_map(|child| child.node.visible_pane_ids())
+                .collect(),
+            Self::Tabs(group) => group
+                .shown_tab()
+                .map(|tab| tab.root.visible_pane_ids())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The first pane on screen in this subtree.
     pub fn first_pane(&self) -> Option<PaneId> {
         match self {
             Self::Pane(pane_id) => Some(*pane_id),
             Self::Split { children, .. } => {
                 children.iter().find_map(|child| child.node.first_pane())
             }
+            Self::Tabs(group) => group.shown_tab().and_then(|tab| tab.root.first_pane()),
+        }
+    }
+
+    /// Every tab group in this subtree, those in tabs not shown included,
+    /// in pre-order.
+    pub(crate) fn groups(&self) -> Vec<&TabGroup> {
+        let mut found = Vec::new();
+        self.collect_groups(&mut found);
+        found
+    }
+
+    fn collect_groups<'a>(&'a self, found: &mut Vec<&'a TabGroup>) {
+        match self {
+            Self::Pane(_) => {}
+            Self::Split { children, .. } => {
+                for child in children {
+                    child.node.collect_groups(found);
+                }
+            }
+            Self::Tabs(group) => {
+                found.push(group);
+                for tab in &group.tabs {
+                    tab.root.collect_groups(found);
+                }
+            }
+        }
+    }
+
+    /// The tab groups on screen, in pre-order.
+    pub(crate) fn visible_groups(&self) -> Vec<&TabGroup> {
+        match self {
+            Self::Pane(_) => Vec::new(),
+            Self::Split { children, .. } => children
+                .iter()
+                .flat_map(|child| child.node.visible_groups())
+                .collect(),
+            Self::Tabs(group) => std::iter::once(group)
+                .chain(
+                    group
+                        .shown_tab()
+                        .into_iter()
+                        .flat_map(|tab| tab.root.visible_groups()),
+                )
+                .collect(),
+        }
+    }
+
+    pub(crate) fn group(&self, id: TabGroupId) -> Option<&TabGroup> {
+        self.groups().into_iter().find(|group| group.id == id)
+    }
+
+    pub(crate) fn group_mut(&mut self, id: TabGroupId) -> Option<&mut TabGroup> {
+        match self {
+            Self::Pane(_) => None,
+            Self::Split { children, .. } => children
+                .iter_mut()
+                .find_map(|child| child.node.group_mut(id)),
+            Self::Tabs(group) => {
+                if group.id == id {
+                    return Some(group);
+                }
+                group.tabs.iter_mut().find_map(|tab| tab.root.group_mut(id))
+            }
+        }
+    }
+
+    /// The groups and tabs `pane_id` is under, outermost first. Empty for
+    /// a pane under no group, or one not in this subtree.
+    pub(crate) fn tabs_around(&self, pane_id: PaneId) -> Vec<(TabGroupId, TabId)> {
+        match self {
+            Self::Pane(_) => Vec::new(),
+            Self::Split { children, .. } => children
+                .iter()
+                .map(|child| child.node.tabs_around(pane_id))
+                .find(|path| !path.is_empty())
+                .unwrap_or_default(),
+            Self::Tabs(group) => group
+                .tabs
+                .iter()
+                .find(|tab| tab.root.pane_ids().contains(&pane_id))
+                .map(|tab| {
+                    let mut path = vec![(group.id, tab.id)];
+                    path.extend(tab.root.tabs_around(pane_id));
+                    path
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The tab `id`, wherever it is.
+    pub(crate) fn tab_mut(&mut self, id: TabId) -> Option<&mut Tab> {
+        match self {
+            Self::Pane(_) => None,
+            Self::Split { children, .. } => {
+                children.iter_mut().find_map(|child| child.node.tab_mut(id))
+            }
+            Self::Tabs(group) => {
+                if let Some(index) = group.tabs.iter().position(|tab| tab.id == id) {
+                    return group.tabs.get_mut(index);
+                }
+                group.tabs.iter_mut().find_map(|tab| tab.root.tab_mut(id))
+            }
+        }
+    }
+
+    pub(crate) fn tab(&self, id: TabId) -> Option<&Tab> {
+        match self {
+            Self::Pane(_) => None,
+            Self::Split { children, .. } => children.iter().find_map(|child| child.node.tab(id)),
+            Self::Tabs(group) => group
+                .tabs
+                .iter()
+                .find(|tab| tab.id == id)
+                .or_else(|| group.tabs.iter().find_map(|tab| tab.root.tab(id))),
         }
     }
 
     /// Removes `pane_id`, collapsing any `Split` left with a single child
-    /// into that child directly (the N-ary generalization of the prior
-    /// binary `(Some(only), None) => Some(only)` fold) and `None` once a
-    /// `Split` loses all of its children. Does not by itself re-splice a
-    /// same-axis child into its parent -- callers apply `flatten` after
-    /// this for that (see the module doc on `docs/recursive-layout-
-    /// design.md`'s shallow-nesting invariant); a same-axis nesting can
-    /// only arise here if the tree already violated the invariant going in,
-    /// which none of this module's own mutations do.
+    /// into that child directly and `None` once a `Split` loses all of its
+    /// children. A tab left with no pane is closed, and a group left with
+    /// no tab is `None` too: the caller decides what an empty root is.
+    /// Does not by itself re-splice a same-axis child into its parent --
+    /// callers apply `flatten` after this for that.
     pub(crate) fn without_pane(&self, pane_id: PaneId) -> Option<Self> {
         match self {
             Self::Pane(id) if *id == pane_id => None,
@@ -153,87 +337,244 @@ impl LayoutNode {
                     }),
                 }
             }
+            Self::Tabs(group) => {
+                let shown_index = group.shown_index();
+                let mut kept = Vec::with_capacity(group.tabs.len());
+                for tab in &group.tabs {
+                    let Some(root) = tab.root.without_pane(pane_id) else {
+                        continue;
+                    };
+                    let active = match root.pane_ids().contains(&tab.active) {
+                        true => tab.active,
+                        false => root.first_pane().unwrap_or(tab.active),
+                    };
+                    kept.push(Tab {
+                        id: tab.id,
+                        root,
+                        active,
+                    });
+                }
+                if kept.is_empty() {
+                    return None;
+                }
+                let mut group = TabGroup {
+                    id: group.id,
+                    tabs: kept,
+                    shown: group.shown,
+                };
+                if group.shown_tab().is_none() {
+                    group.show_neighbor_of(shown_index.unwrap_or(0));
+                }
+                Some(Self::Tabs(group))
+            }
         }
     }
 
-    /// Splits `target` in `axis`, inserting `new_pane_id` -- the shallow-
-    /// nesting invariant's insert mechanism (`docs/recursive-layout-
-    /// design.md`): absorbs into `target`'s parent container when it
-    /// already has this axis (no new node), otherwise wraps `target` in a
-    /// place `Split{axis, [target, new_pane_id]}` (the only place depth
-    /// grows). The new pane is given the same weight as `target` when
-    /// absorbed, and both children are weighted equally (1.0) when
-    /// wrapped. Returns `false` (no-op) if `target` is not found in this
-    /// subtree. `target` being this node's own bare root (no parent
-    /// `Split` to absorb into or wrap within) is handled here too, since a
-    /// leaf can always be wrapped in place via `*self = ...`.
-    pub(crate) fn split_pane(
+    /// Closes the tab `id` wherever it is, with every pane in it; the
+    /// group shows the tab that took its place. A group left with no tab
+    /// is `None`, as in [`Self::without_pane`].
+    pub(crate) fn without_tab(&self, id: TabId) -> Option<Self> {
+        match self {
+            Self::Pane(pane_id) => Some(Self::Pane(*pane_id)),
+            Self::Split { axis, children } => {
+                let remaining: Vec<LayoutChild> = children
+                    .iter()
+                    .filter_map(|child| {
+                        child.node.without_tab(id).map(|node| LayoutChild {
+                            node,
+                            weight: child.weight,
+                        })
+                    })
+                    .collect();
+                match remaining.len() {
+                    0 => None,
+                    1 => Some(remaining.into_iter().next().expect("len == 1").node),
+                    _ => Some(Self::Split {
+                        axis: *axis,
+                        children: remaining,
+                    }),
+                }
+            }
+            Self::Tabs(group) => {
+                let closed = group.tabs.iter().position(|tab| tab.id == id);
+                let mut tabs = Vec::with_capacity(group.tabs.len());
+                for tab in &group.tabs {
+                    if tab.id == id {
+                        continue;
+                    }
+                    let Some(root) = tab.root.without_tab(id) else {
+                        continue;
+                    };
+                    let active = match root.pane_ids().contains(&tab.active) {
+                        true => tab.active,
+                        false => root.first_pane().unwrap_or(tab.active),
+                    };
+                    tabs.push(Tab {
+                        id: tab.id,
+                        root,
+                        active,
+                    });
+                }
+                if tabs.is_empty() {
+                    return None;
+                }
+                let mut group = TabGroup {
+                    id: group.id,
+                    tabs,
+                    shown: group.shown,
+                };
+                if group.shown_tab().is_none() {
+                    group.show_neighbor_of(closed.unwrap_or(0));
+                }
+                Some(Self::Tabs(group))
+            }
+        }
+    }
+
+    /// Whether this node is the one `key` names.
+    fn is(&self, key: NodeKey) -> bool {
+        match (self, key) {
+            (Self::Pane(id), NodeKey::Pane(wanted)) => *id == wanted,
+            (Self::Tabs(group), NodeKey::Group(wanted)) => group.id == wanted,
+            _ => false,
+        }
+    }
+
+    /// Puts `new` beside the node `target` names, along `axis`, before it
+    /// or after it -- the shallow-nesting invariant's insert mechanism
+    /// (`docs/recursive-layout-design.md`): absorbs into the target's parent
+    /// split when it already has this axis (no new node), otherwise wraps
+    /// the target in a new split in its place (the only place depth grows).
+    /// The new node takes the target's weight when absorbed; both are
+    /// weighted equally (1.0) when wrapped. `false`, a no-op, when no node
+    /// here is `target`. A target in a tab is placed within that tab.
+    pub(crate) fn split_beside(
         &mut self,
-        target: PaneId,
-        new_pane_id: PaneId,
+        target: NodeKey,
+        new: LayoutNode,
         axis: SplitAxis,
+        before: bool,
     ) -> bool {
-        if matches!(self, Self::Pane(id) if *id == target) {
+        if self.is(target) {
+            let old = std::mem::replace(self, Self::Pane(PaneId::new()));
+            let (first, second) = match before {
+                true => (new, old),
+                false => (old, new),
+            };
             *self = Self::Split {
                 axis,
                 children: vec![
                     LayoutChild {
-                        node: Self::Pane(target),
+                        node: first,
                         weight: 1.0,
                     },
                     LayoutChild {
-                        node: Self::Pane(new_pane_id),
+                        node: second,
                         weight: 1.0,
                     },
                 ],
             };
             return true;
         }
-        self.insert_pane(target, new_pane_id, axis)
+        match self {
+            Self::Pane(_) => false,
+            Self::Tabs(group) => {
+                // (Each tab is a tree of its own; `new` goes to one of them.)
+                let mut new = Some(new);
+                for tab in &mut group.tabs {
+                    if tab.root.contains(target) {
+                        return tab.root.split_beside(
+                            target,
+                            new.take().expect("placed once"),
+                            axis,
+                            before,
+                        );
+                    }
+                }
+                false
+            }
+            Self::Split {
+                axis: node_axis,
+                children,
+            } => {
+                if let Some(index) = children.iter().position(|child| child.node.is(target)) {
+                    if *node_axis == axis {
+                        let weight = children[index].weight;
+                        let at = if before { index } else { index + 1 };
+                        children.insert(at, LayoutChild { node: new, weight });
+                        return true;
+                    }
+                    return children[index].node.split_beside(target, new, axis, before);
+                }
+                match children
+                    .iter()
+                    .position(|child| child.node.contains(target))
+                {
+                    Some(index) => children[index].node.split_beside(target, new, axis, before),
+                    None => false,
+                }
+            }
+        }
     }
 
-    fn insert_pane(&mut self, target: PaneId, new_pane_id: PaneId, axis: SplitAxis) -> bool {
-        let Self::Split {
-            axis: node_axis,
-            children,
-        } = self
-        else {
-            return false;
-        };
-        if let Some(index) = children
-            .iter()
-            .position(|child| matches!(child.node, Self::Pane(id) if id == target))
-        {
-            if *node_axis == axis {
-                let weight = children[index].weight;
-                children.insert(
-                    index + 1,
-                    LayoutChild {
-                        node: Self::Pane(new_pane_id),
-                        weight,
-                    },
-                );
-            } else {
-                children[index].node.split_pane(target, new_pane_id, axis);
-            }
+    /// Whether the node `key` names is in this subtree.
+    pub(crate) fn contains(&self, key: NodeKey) -> bool {
+        if self.is(key) {
             return true;
         }
-        children
-            .iter_mut()
-            .any(|child| child.node.insert_pane(target, new_pane_id, axis))
+        match self {
+            Self::Pane(_) => false,
+            Self::Split { children, .. } => children.iter().any(|child| child.node.contains(key)),
+            Self::Tabs(group) => group.tabs.iter().any(|tab| tab.root.contains(key)),
+        }
+    }
+
+    /// Splits `target`'s pane in `axis`, putting `new_pane_id` after it.
+    #[cfg(test)]
+    pub(crate) fn split_pane(
+        &mut self,
+        target: PaneId,
+        new_pane_id: PaneId,
+        axis: SplitAxis,
+    ) -> bool {
+        self.split_beside(NodeKey::Pane(target), Self::Pane(new_pane_id), axis, false)
+    }
+
+    /// Puts `group` in place of the pane `pane_id`. `false` when the pane
+    /// is not here.
+    pub(crate) fn replace_pane(&mut self, pane_id: PaneId, group: TabGroup) -> bool {
+        if matches!(self, Self::Pane(id) if *id == pane_id) {
+            *self = Self::Tabs(group);
+            return true;
+        }
+        match self {
+            Self::Pane(_) => false,
+            Self::Split { children, .. } => children
+                .iter_mut()
+                .any(|child| child.node.replace_pane(pane_id, group.clone())),
+            Self::Tabs(tabs) => tabs
+                .tabs
+                .iter_mut()
+                .any(|tab| tab.root.replace_pane(pane_id, group.clone())),
+        }
     }
 
     /// Normalizes the tree to the shallow-nesting invariant (`docs/
     /// recursive-layout-design.md`): no `Split` child shares its parent's
     /// axis (spliced into the parent, weights rescaled to preserve the
     /// child's overall share) and no `Split` has a single child (replaced
-    /// by that child). A single bottom-up pass suffices: children are
-    /// normalized first, so by the time this level splices/collapses, any
-    /// nested same-axis run has already been pulled up as far as it can go
-    /// below this level.
+    /// by that child). Each tab's tree is normalized on its own; a group is
+    /// never spliced into anything.
     pub fn flatten(&mut self) {
-        let Self::Split { axis, children } = self else {
-            return;
+        let (axis, children) = match self {
+            Self::Pane(_) => return,
+            Self::Tabs(group) => {
+                for tab in &mut group.tabs {
+                    tab.root.flatten();
+                }
+                return;
+            }
+            Self::Split { axis, children } => (axis, children),
         };
         for child in children.iter_mut() {
             child.node.flatten();
@@ -273,25 +614,32 @@ impl LayoutNode {
         }
     }
 
-    /// Test-only invariant checks (`docs/recursive-layout-design.md`'s
-    /// shallow-nesting invariant): no `Split` has a single child, and no
-    /// `Split` child shares its parent's axis.
+    /// Test-only invariant checks: no `Split` has a single child, no
+    /// `Split` child shares its parent's axis, and no group below the root
+    /// is without a tab.
     #[cfg(test)]
     pub fn is_canonical(&self) -> bool {
-        self.is_canonical_under(None)
+        self.is_canonical_under(None, true)
     }
 
     #[cfg(test)]
-    fn is_canonical_under(&self, parent_axis: Option<SplitAxis>) -> bool {
+    fn is_canonical_under(&self, parent_axis: Option<SplitAxis>, root: bool) -> bool {
         match self {
             Self::Pane(_) => true,
+            Self::Tabs(group) => {
+                (root || !group.tabs.is_empty())
+                    && group
+                        .tabs
+                        .iter()
+                        .all(|tab| tab.root.is_canonical_under(None, false))
+            }
             Self::Split { axis, children } => {
                 if children.len() < 2 || parent_axis == Some(*axis) {
                     return false;
                 }
                 children
                     .iter()
-                    .all(|child| child.node.is_canonical_under(Some(*axis)))
+                    .all(|child| child.node.is_canonical_under(Some(*axis), false))
             }
         }
     }
@@ -302,28 +650,29 @@ mod tests {
     use super::*;
     use crate::{SessionId, SessionKind};
 
+    /// The shown tab's tree of the workspace's one group.
+    fn tree(workspace: &Workspace) -> &LayoutNode {
+        &workspace.active_tab().expect("a tab").root
+    }
+
+    fn keys(node: &LayoutNode) -> Vec<NodeKey> {
+        match node {
+            LayoutNode::Split { children, .. } => children
+                .iter()
+                .map(|child| child.node.first_key())
+                .collect(),
+            _ => panic!("expected split"),
+        }
+    }
+
     #[test]
     fn set_split_weights_normalizes_view_sizes() {
         let mut workspace = Workspace::mvp();
         workspace.split_active(SessionKind::Terminal, SessionId::new());
-        let tab_id = workspace.active_tab;
-        let root = &workspace.tabs[0].root;
-        let anchors: Vec<_> = match root {
-            LayoutNode::Split { children, .. } => children
-                .iter()
-                .map(|child| child.node.first_pane().expect("pane"))
-                .collect(),
-            LayoutNode::Pane(_) => panic!("expected split"),
-        };
+        let anchors = keys(tree(&workspace));
 
-        assert!(workspace.set_split_weights(tab_id, anchors[0], &anchors, &[300.0, 100.0]));
-        let weights: Vec<_> = match &workspace.tabs[0].root {
-            LayoutNode::Split { children, .. } => {
-                children.iter().map(|child| child.weight).collect()
-            }
-            LayoutNode::Pane(_) => panic!("expected split"),
-        };
-        assert_eq!(weights, vec![0.75, 0.25]);
+        assert!(workspace.set_split_weights(anchors[0], &anchors, &[300.0, 100.0]));
+        assert_eq!(weights(tree(&workspace)), vec![0.75, 0.25]);
     }
 
     #[test]
@@ -338,32 +687,16 @@ mod tests {
             SplitAxis::Vertical,
             true,
         );
-        let tab_id = workspace.active_tab;
-        let root = &workspace.tabs[0].root;
-        let (nested_anchor, nested_children) = match root {
-            LayoutNode::Split { children, .. } => match &children[0].node {
-                LayoutNode::Split { children, .. } => (
-                    children[0].node.first_pane().expect("anchor"),
-                    children
-                        .iter()
-                        .map(|child| child.node.first_pane().expect("child anchor"))
-                        .collect::<Vec<_>>(),
-                ),
-                LayoutNode::Pane(_) => panic!("expected nested split"),
-            },
-            LayoutNode::Pane(_) => panic!("expected root split"),
+        let nested = match tree(&workspace) {
+            LayoutNode::Split { children, .. } => children[0].node.clone(),
+            _ => panic!("expected root split"),
         };
+        let nested_children = keys(&nested);
 
-        assert!(workspace.set_split_weights(tab_id, nested_anchor, &nested_children, &[1.0, 3.0]));
-        let nested_weights = match &workspace.tabs[0].root {
-            LayoutNode::Split { children, .. } => match &children[0].node {
-                LayoutNode::Split { children, .. } => children
-                    .iter()
-                    .map(|child| child.weight)
-                    .collect::<Vec<_>>(),
-                LayoutNode::Pane(_) => panic!("expected nested split"),
-            },
-            LayoutNode::Pane(_) => panic!("expected root split"),
+        assert!(workspace.set_split_weights(nested_children[0], &nested_children, &[1.0, 3.0]));
+        let nested_weights = match tree(&workspace) {
+            LayoutNode::Split { children, .. } => weights(&children[0].node),
+            _ => panic!("expected root split"),
         };
         assert_eq!(nested_weights, vec![0.25, 0.75]);
     }
@@ -372,20 +705,19 @@ mod tests {
     fn set_split_weights_rejects_invalid_measurements_without_mutating() {
         let mut workspace = Workspace::mvp();
         workspace.split_active(SessionKind::Terminal, SessionId::new());
-        let tab_id = workspace.active_tab;
-        let anchors = workspace.tabs[0].root.pane_ids();
-        let before = weights(&workspace.tabs[0].root);
-        assert!(!workspace.set_split_weights(tab_id, anchors[0], &anchors, &[1.0]));
-        assert!(!workspace.set_split_weights(tab_id, anchors[0], &anchors, &[f32::NAN, 1.0]));
-        assert_eq!(weights(&workspace.tabs[0].root), before);
+        let anchors = keys(tree(&workspace));
+        let before = weights(tree(&workspace));
+        assert!(!workspace.set_split_weights(anchors[0], &anchors, &[1.0]));
+        assert!(!workspace.set_split_weights(anchors[0], &anchors, &[f32::NAN, 1.0]));
+        assert_eq!(weights(tree(&workspace)), before);
     }
 
     fn weights(node: &LayoutNode) -> Vec<f32> {
         match node {
-            LayoutNode::Pane(_) => Vec::new(),
             LayoutNode::Split { children, .. } => {
                 children.iter().map(|child| child.weight).collect()
             }
+            _ => Vec::new(),
         }
     }
 
@@ -418,7 +750,7 @@ mod tests {
         assert!(root.is_canonical());
         match &root {
             LayoutNode::Split { children, .. } => assert_eq!(children.len(), 3),
-            LayoutNode::Pane(_) => panic!("expected a single flat Split"),
+            _ => panic!("expected a single flat Split"),
         }
     }
 
@@ -672,11 +1004,11 @@ mod tests {
             plan,
             vec![
                 RenderChild {
-                    anchor: a,
+                    anchor: NodeKey::Pane(a),
                     weight: 3.0
                 },
                 RenderChild {
-                    anchor: b,
+                    anchor: NodeKey::Pane(b),
                     weight: 1.0
                 },
             ]
@@ -702,7 +1034,7 @@ mod tests {
         assert_eq!(axis, SplitAxis::Horizontal);
         assert_eq!(
             plan.iter().map(|child| child.anchor).collect::<Vec<_>>(),
-            vec![a, b, c],
+            [a, b, c].map(NodeKey::Pane).to_vec(),
             "the nested subtree's anchor is its own leftmost leaf (b), not d"
         );
     }

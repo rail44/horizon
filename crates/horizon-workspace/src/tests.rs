@@ -1,3 +1,6 @@
+#[path = "tests/groups.rs"]
+mod groups;
+
 use super::types::{LayoutNode, PaneSummary, SessionSummary, TabSummary};
 use super::*;
 use crate::SessionId;
@@ -248,13 +251,16 @@ fn splitting_an_unknown_session_with_a_view_spawns_nothing() {
 }
 
 #[test]
-fn pane_position_locates_a_pane_in_a_tab_that_is_not_the_active_one() {
+fn reveal_pane_shows_the_tab_a_pane_is_in_and_focuses_it() {
     let mut workspace = Workspace::mvp();
     let first_pane = workspace.visible_pane_id(0).expect("first pane");
     workspace.open_tab(Content::Session(SessionKind::Terminal, SessionId::new()));
+    assert_eq!(workspace.active_tab_index(), 1);
 
-    assert_eq!(workspace.pane_position(first_pane), Some((0, 0)));
-    assert_eq!(workspace.pane_position(PaneId::new()), None);
+    assert!(workspace.reveal_pane(first_pane));
+    assert_eq!(workspace.active_tab_index(), 0);
+    assert!(workspace.is_active_pane(first_pane));
+    assert!(!workspace.reveal_pane(PaneId::new()));
 }
 
 #[test]
@@ -353,7 +359,7 @@ fn pane_location_for_session_resolves_the_hosting_pane() {
 
     assert_eq!(
         workspace.pane_location_for_session(session_id),
-        Some((0, 1))
+        workspace.visible_pane_id(1)
     );
 }
 
@@ -887,18 +893,18 @@ fn pane_summaries_include_split_panes_by_tab() {
 }
 
 #[test]
-fn activate_pane_index_switches_tab_and_pane() {
+fn activate_tab_index_switches_tab_and_focuses_its_active_pane() {
     let mut workspace = Workspace::mvp();
     workspace.split_active(SessionKind::Terminal, SessionId::new());
+    workspace.activate_visible_pane(0);
     workspace.open_tab(Content::View(SessionKind::Agent.plugin()));
 
     assert_eq!(workspace.active_tab_index(), 1);
-    assert!(workspace.activate_pane_index(0, 0));
+    assert!(workspace.activate_tab_index(0));
     assert_eq!(workspace.active_tab_index(), 0);
     assert_eq!(workspace.active_visible_index(), 0);
     assert_eq!(workspace.active_title(), "Terminal #1");
-    assert!(!workspace.activate_pane_index(9, 0));
-    assert!(!workspace.activate_pane_index(0, 9));
+    assert!(!workspace.activate_tab_index(9));
     assert_eq!(workspace.active_title(), "Terminal #1");
 }
 
@@ -1034,11 +1040,11 @@ fn repeated_splits_of_the_focused_pane_stay_in_one_row() {
     workspace.split_active(SessionKind::Terminal, SessionId::new());
 
     assert_eq!(workspace.visible_panes().len(), 4);
-    let root = &workspace.tabs[workspace.active_tab_index()].root;
+    let root = &workspace.active_tab().expect("tab").root;
     assert!(root.is_canonical());
     match root {
         LayoutNode::Split { children, .. } => assert_eq!(children.len(), 4),
-        LayoutNode::Pane(_) => panic!("expected a single flat row of 4 panes"),
+        _ => panic!("expected a single flat row of 4 panes"),
     }
 }
 
@@ -1065,7 +1071,7 @@ fn split_session_with_new_session_targets_the_sessions_own_pane() {
         )
         .expect("split next to the first session's pane");
 
-    let root = &workspace.tabs[workspace.active_tab_index()].root;
+    let root = &workspace.active_tab().expect("tab").root;
     assert!(root.is_canonical());
     assert_eq!(root.pane_ids().len(), 3);
     assert_eq!(
@@ -1099,13 +1105,13 @@ fn split_session_with_new_session_honors_the_vertical_axis() {
         )
         .expect("split next to the session's pane");
 
-    let root = &workspace.tabs[workspace.active_tab_index()].root;
+    let root = &workspace.active_tab().expect("tab").root;
     match root {
         LayoutNode::Split { axis, children } => {
             assert_eq!(*axis, SplitAxis::Vertical);
             assert_eq!(children.len(), 2);
         }
-        LayoutNode::Pane(_) => panic!("expected a vertical split of 2 panes"),
+        _ => panic!("expected a vertical split of 2 panes"),
     }
 }
 

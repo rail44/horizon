@@ -170,11 +170,7 @@ impl Shell {
         if let Some(pane) = shown {
             self.remake_pane(pane);
             if activate {
-                self.change(|model| {
-                    if let Some((tab, pane)) = model.pane_position(pane) {
-                        model.activate_pane_index(tab, pane);
-                    }
-                });
+                self.change(|model| _ = model.reveal_pane(pane));
             }
             return Ok(EnvelopeBody::Ok { session_id: None });
         }
@@ -319,11 +315,7 @@ impl Shell {
             }
         };
         if activate {
-            self.change(|model| {
-                if let Some((tab, pane)) = model.pane_position(pane) {
-                    model.activate_pane_index(tab, pane);
-                }
-            });
+            self.change(|model| _ = model.reveal_pane(pane));
             self.focus_active();
         }
         Ok(EnvelopeBody::Ok { session_id: None })

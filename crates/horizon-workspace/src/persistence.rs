@@ -9,11 +9,13 @@ use serde::{Deserialize, Serialize};
 use crate::SessionId;
 use crate::types::{AgentStatus, BlockedOn, Doing, ProgramState, ProgramStatus};
 use crate::types::{
-    LayoutChild, LayoutNode, Pane, PaneId, PluginPane, SessionKind, SplitAxis, Tab, TabId,
-    Workspace, WorkspaceSession,
+    LayoutChild, LayoutNode, Pane, PaneId, PluginPane, SessionKind, SplitAxis, Tab, TabGroup,
+    TabGroupId, TabId, Workspace, WorkspaceSession,
 };
 
-pub const WORKSPACE_STATE_VERSION: u32 = 1;
+/// 2: the workspace's one tree, tab groups among its nodes
+/// (`docs/workspace-layout-design.md`). A file of version 1 is not read.
+pub const WORKSPACE_STATE_VERSION: u32 = 2;
 
 /// The sessions the runtimes run, each with its kind.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -72,10 +74,13 @@ impl Error for InventoryError {}
 #[serde(deny_unknown_fields)]
 struct WorkspaceState {
     version: u32,
-    active_tab: TabId,
+    /// The pane keys go to.
+    focus: Option<PaneId>,
+    /// The tab group that last had focus.
+    last_group: Option<TabGroupId>,
     next_terminal_display_number: usize,
     next_agent_display_number: usize,
-    tabs: Vec<TabState>,
+    root: LayoutState,
     sessions: Vec<SessionState>,
 }
 
@@ -96,6 +101,11 @@ enum LayoutState {
     Split {
         axis: AxisState,
         children: Vec<LayoutChildState>,
+    },
+    Tabs {
+        id: TabGroupId,
+        shown: TabId,
+        tabs: Vec<TabState>,
     },
 }
 
@@ -319,30 +329,32 @@ impl Workspace {
     }
 
     fn prune_layout_panes(&mut self, removed: &[PaneId]) {
-        let mut retained_tabs = Vec::with_capacity(self.tabs.len());
-        for mut tab in self.tabs.drain(..) {
-            let mut root = Some(tab.root);
-            for pane_id in removed {
-                root = root.and_then(|node| node.without_pane(*pane_id));
-            }
-            let Some(mut root) = root else {
-                continue;
-            };
-            root.flatten();
-            tab.root = root;
-            if !tab.root.pane_ids().contains(&tab.active) {
-                tab.active = tab
-                    .root
-                    .first_pane()
-                    .expect("a retained layout contains a pane");
-            }
-            retained_tabs.push(tab);
+        let empty = |root: &LayoutNode| match root {
+            LayoutNode::Tabs(group) => TabGroup {
+                id: group.id,
+                ..TabGroup::empty()
+            },
+            _ => TabGroup::empty(),
+        };
+        let mut root = Some(self.root.clone());
+        for pane_id in removed {
+            root = root.and_then(|node| node.without_pane(*pane_id));
         }
-        self.tabs = retained_tabs;
-        if !self.tabs.iter().any(|tab| tab.id == self.active_tab)
-            && let Some(tab) = self.tabs.first()
+        self.root = match root {
+            Some(mut root) => {
+                root.flatten();
+                root
+            }
+            None => LayoutNode::Tabs(empty(&self.root)),
+        };
+        if self
+            .focus
+            .is_some_and(|focus| !self.root.visible_pane_ids().contains(&focus))
         {
-            self.active_tab = tab.id;
+            self.focus = self.root.visible_pane_ids().first().copied();
+            if let Some(focus) = self.focus {
+                self.note_focus(focus);
+            }
         }
         self.exit_workspace_mode();
     }
@@ -366,22 +378,8 @@ impl SessionInventory {
 
 impl WorkspaceState {
     fn capture(workspace: &Workspace) -> Result<Self, WorkspaceStateError> {
-        let tabs: Vec<_> = workspace
-            .tabs
-            .iter()
-            .map(|tab| {
-                Ok(TabState {
-                    id: tab.id,
-                    active_pane: tab.active,
-                    root: LayoutState::capture(&tab.root, &workspace.panes)?,
-                })
-            })
-            .collect::<Result<_, WorkspaceStateError>>()?;
-        let referenced_panes: HashSet<_> = workspace
-            .tabs
-            .iter()
-            .flat_map(|tab| tab.root.pane_ids())
-            .collect();
+        let root = LayoutState::capture(&workspace.root, &workspace.panes)?;
+        let referenced_panes: HashSet<_> = workspace.root.pane_ids().into_iter().collect();
         if referenced_panes.len() != workspace.panes.len()
             || workspace
                 .panes
@@ -395,10 +393,11 @@ impl WorkspaceState {
 
         Ok(Self {
             version: WORKSPACE_STATE_VERSION,
-            active_tab: workspace.active_tab,
+            focus: workspace.focus,
+            last_group: workspace.last_group,
             next_terminal_display_number: workspace.next_terminal_display_number,
             next_agent_display_number: workspace.next_agent_display_number,
-            tabs,
+            root,
             sessions: workspace
                 .sessions
                 .iter()
@@ -419,18 +418,12 @@ impl WorkspaceState {
 
     fn into_workspace(self) -> Workspace {
         let mut panes = Vec::new();
-        let tabs = self
-            .tabs
-            .into_iter()
-            .map(|tab| Tab {
-                id: tab.id,
-                active: tab.active_pane,
-                root: tab.root.into_layout(&mut panes),
-            })
-            .collect();
+        let root = self.root.into_layout(&mut panes);
         Workspace {
-            tabs,
+            root,
             panes,
+            focus: self.focus,
+            last_group: self.last_group,
             sessions: self
                 .sessions
                 .into_iter()
@@ -455,7 +448,6 @@ impl WorkspaceState {
                         .and_then(|known| Some((known.doing.into_doing()?, known.since_ms))),
                 })
                 .collect(),
-            active_tab: self.active_tab,
             next_terminal_display_number: self.next_terminal_display_number,
             next_agent_display_number: self.next_agent_display_number,
             workspace_mode: Default::default(),
@@ -491,16 +483,61 @@ impl LayoutState {
                     })
                     .collect::<Result<_, WorkspaceStateError>>()?,
             },
+            LayoutNode::Tabs(group) => Self::Tabs {
+                id: group.id,
+                shown: group.shown,
+                tabs: group
+                    .tabs
+                    .iter()
+                    .map(|tab| {
+                        Ok(TabState {
+                            id: tab.id,
+                            active_pane: tab.active,
+                            root: Self::capture(&tab.root, panes)?,
+                        })
+                    })
+                    .collect::<Result<_, WorkspaceStateError>>()?,
+            },
         })
     }
 
+    /// Holds the tree to the invariants (`docs/workspace-layout-design.md`)
+    /// and gathers its panes, and its groups' and tabs' ids to be told apart.
     fn validate<'a>(
         &'a self,
         parent_axis: Option<AxisState>,
-        panes: &mut Vec<&'a PaneState>,
+        root: bool,
+        found: &mut Found<'a>,
     ) -> Result<(), WorkspaceStateError> {
         match self {
-            Self::Pane { pane } => panes.push(pane),
+            Self::Pane { pane } => found.panes.push(pane),
+            Self::Tabs { id, shown, tabs } => {
+                if !found.groups.insert(*id) {
+                    return Err(state_error(format!("duplicate tab group id {id:?}")));
+                }
+                if tabs.is_empty() && !root {
+                    return Err(state_error("only the root tab group may have no tab"));
+                }
+                if !tabs.is_empty() && !tabs.iter().any(|tab| tab.id == *shown) {
+                    return Err(state_error(format!(
+                        "tab group {id:?} shows a tab it does not have"
+                    )));
+                }
+                for tab in tabs {
+                    if !found.tabs.insert(tab.id) {
+                        return Err(state_error(format!("duplicate tab id {:?}", tab.id)));
+                    }
+                    tab.root.validate(None, false, found)?;
+                    let mut nested = Vec::new();
+                    tab.root.collect_panes(&mut nested);
+                    if !nested.iter().any(|pane| pane.id == tab.active_pane) {
+                        return Err(state_error(format!(
+                            "active pane {:?} is not in tab {:?}",
+                            tab.active_pane, tab.id
+                        )));
+                    }
+                }
+            }
             Self::Split { axis, children } => {
                 if children.len() < 2 {
                     return Err(state_error("split must contain at least two children"));
@@ -514,11 +551,28 @@ impl LayoutState {
                     if !child.weight.is_finite() || child.weight <= 0.0 {
                         return Err(state_error("split weights must be finite and positive"));
                     }
-                    child.node.validate(Some(*axis), panes)?;
+                    child.node.validate(Some(*axis), false, found)?;
                 }
             }
         }
         Ok(())
+    }
+
+    /// Every pane in this subtree, in the tabs of its groups too.
+    fn collect_panes<'a>(&'a self, out: &mut Vec<&'a PaneState>) {
+        match self {
+            Self::Pane { pane } => out.push(pane),
+            Self::Split { children, .. } => {
+                for child in children {
+                    child.node.collect_panes(out);
+                }
+            }
+            Self::Tabs { tabs, .. } => {
+                for tab in tabs {
+                    tab.root.collect_panes(out);
+                }
+            }
+        }
     }
 
     fn into_layout(self, panes: &mut Vec<Pane>) -> LayoutNode {
@@ -542,8 +596,29 @@ impl LayoutState {
                     })
                     .collect(),
             },
+            Self::Tabs { id, shown, tabs } => LayoutNode::Tabs(TabGroup {
+                id,
+                shown,
+                tabs: tabs
+                    .into_iter()
+                    .map(|tab| Tab {
+                        id: tab.id,
+                        active: tab.active_pane,
+                        root: tab.root.into_layout(panes),
+                    })
+                    .collect(),
+            }),
         }
     }
+}
+
+/// What validating a tree has met so far: its panes, and its groups' and
+/// tabs' ids.
+#[derive(Default)]
+struct Found<'a> {
+    panes: Vec<&'a PaneState>,
+    groups: HashSet<TabGroupId>,
+    tabs: HashSet<TabId>,
 }
 
 impl From<SessionKind> for SessionKindState {
@@ -639,10 +714,11 @@ mod tests {
         );
         let restored = Workspace::from_persisted_json(&json).expect("restore");
 
-        assert_eq!(restored.tabs.len(), workspace.tabs.len());
+        assert_eq!(restored.root.pane_ids(), workspace.root.pane_ids());
         assert_eq!(restored.panes.len(), workspace.panes.len());
         assert_eq!(restored.sessions, workspace.sessions);
-        assert_eq!(restored.active_tab, workspace.active_tab);
+        assert_eq!(restored.focus, workspace.focus);
+        assert_eq!(restored.last_group, workspace.last_group);
         assert_eq!(
             restored.next_terminal_display_number,
             workspace.next_terminal_display_number
@@ -672,7 +748,7 @@ mod tests {
             .to_persisted_json()
             .expect("an empty workspace must serialize");
         let value: Value = serde_json::from_str(&json).expect("json");
-        assert_eq!(value["tabs"], json!([]));
+        assert_eq!(value["root"]["tabs"], json!([]));
 
         let restored =
             Workspace::from_persisted_json(&json).expect("an empty workspace must restore");
@@ -691,10 +767,12 @@ mod tests {
 
         let json = workspace.to_persisted_json().expect("serialize");
         let value: Value = serde_json::from_str(&json).expect("json");
-        let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
+        let pane = &value["root"]["tabs"][0]["root"]["children"][1]["node"]["pane"];
         assert_eq!(pane["plugin"]["name"], json!("preview"));
         assert!(pane.get("kind").is_none());
-        assert!(value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"].is_null());
+        assert!(
+            value["root"]["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"].is_null()
+        );
 
         let restored = Workspace::from_persisted_json(&json).expect("restore");
 
@@ -735,7 +813,7 @@ mod tests {
 
         let json = workspace.to_persisted_json().expect("serialize");
         let value: Value = serde_json::from_str(&json).expect("json");
-        let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
+        let pane = &value["root"]["tabs"][0]["root"]["children"][1]["node"]["pane"];
         assert!(pane.get("kind").is_none());
         assert_eq!(
             pane["plugin"],
@@ -743,7 +821,7 @@ mod tests {
         );
         assert!(pane["session_id"].is_null());
         // A session's pane shows its kind's plugin.
-        let terminal = &value["tabs"][0]["root"]["children"][0]["node"]["pane"];
+        let terminal = &value["root"]["tabs"][0]["root"]["children"][0]["node"]["pane"];
         assert_eq!(terminal["plugin"]["name"], json!("terminal"));
 
         let restored = Workspace::from_persisted_json(&json).expect("restore");
@@ -769,12 +847,12 @@ mod tests {
             serde_json::to_string(&value).expect("serialize the edit")
         };
         let view_without = edited(&|value| {
-            let pane = &mut value["tabs"][0]["root"]["children"][1]["node"]["pane"];
+            let pane = &mut value["root"]["tabs"][0]["root"]["children"][1]["node"]["pane"];
             pane.as_object_mut().expect("a pane").remove("plugin");
         });
         assert!(Workspace::from_persisted_json(&view_without).is_err());
         let terminal_with = edited(&|value| {
-            value["tabs"][0]["root"]["children"][0]["node"]["pane"]["plugin"] =
+            value["root"]["tabs"][0]["root"]["children"][0]["node"]["pane"]["plugin"] =
                 json!({"name": "board-list", "title": "Board", "state": null});
         });
         assert!(Workspace::from_persisted_json(&terminal_with).is_err());
@@ -786,8 +864,8 @@ mod tests {
             serde_json::from_str(&Workspace::mvp().to_persisted_json().expect("serialize"))
                 .expect("json");
         assert!(value.get("panes").is_none());
-        assert_eq!(value["tabs"][0]["root"]["type"], "pane");
-        assert!(value["tabs"][0]["root"]["pane"]["id"].is_string());
+        assert_eq!(value["root"]["tabs"][0]["root"]["type"], "pane");
+        assert!(value["root"]["tabs"][0]["root"]["pane"]["id"].is_string());
     }
 
     #[test]
@@ -813,13 +891,13 @@ mod tests {
         workspace.split_active(SessionKind::Terminal, SessionId::new());
         let mut value: Value =
             serde_json::from_str(&workspace.to_persisted_json().expect("serialize")).expect("json");
-        value["tabs"][0]["root"]["children"][0]["weight"] = json!(0.0);
+        value["root"]["tabs"][0]["root"]["children"][0]["weight"] = json!(0.0);
         assert_invalid(value, "weights");
 
         let mut value: Value =
             serde_json::from_str(&workspace.to_persisted_json().expect("serialize")).expect("json");
-        let leaf = value["tabs"][0]["root"]["children"][0]["node"].take();
-        value["tabs"][0]["root"]["children"][0]["node"] = json!({
+        let leaf = value["root"]["tabs"][0]["root"]["children"][0]["node"].take();
+        value["root"]["tabs"][0]["root"]["children"][0]["node"] = json!({
             "type": "split",
             "axis": "horizontal",
             "children": [
@@ -841,7 +919,7 @@ mod tests {
         assert_invalid(duplicate, "duplicate session id");
 
         let mut mismatch = json_value(&workspace);
-        mismatch["tabs"][0]["root"]["children"][1]["node"]["pane"]["plugin"]["name"] =
+        mismatch["root"]["tabs"][0]["root"]["children"][1]["node"]["pane"]["plugin"]["name"] =
             json!("terminal");
         assert_invalid(mismatch, "is of kind agent");
 
@@ -856,12 +934,12 @@ mod tests {
         workspace.split_active(SessionKind::Terminal, SessionId::new());
         let mut value = json_value(&workspace);
         value["sessions"][0]["title"] = json!("");
-        value["tabs"][0]["root"]["children"][0]["weight"] = json!(0.0);
-        value["tabs"][0]["root"]["children"][0]["node"]["pane"]["session_id"] = Value::Null;
+        value["root"]["tabs"][0]["root"]["children"][0]["weight"] = json!(0.0);
+        value["root"]["tabs"][0]["root"]["children"][0]["node"]["pane"]["session_id"] = Value::Null;
         assert_invalid(value.clone(), "session titles must not be empty");
         value["sessions"][0]["title"] = json!("restored");
         assert_invalid(value.clone(), "weights");
-        value["tabs"][0]["root"]["children"][0]["weight"] = json!(1.0);
+        value["root"]["tabs"][0]["root"]["children"][0]["weight"] = json!(1.0);
         assert_invalid(value, "no session attachment");
     }
 
@@ -870,15 +948,16 @@ mod tests {
         let mut workspace = Workspace::mvp();
         workspace.split_active(SessionKind::Terminal, SessionId::new());
         let mut value = json_value(&workspace);
-        let first = value["tabs"][0]["root"]["children"][0]["node"]["pane"]["session_id"].clone();
-        value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"] = first;
+        let first =
+            value["root"]["tabs"][0]["root"]["children"][0]["node"]["pane"]["session_id"].clone();
+        value["root"]["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"] = first;
         assert_invalid(value, "attached to multiple panes");
     }
 
     #[test]
     fn validation_rejects_a_pane_without_a_session() {
         let mut value = state_value();
-        value["tabs"][0]["root"]["pane"]["session_id"] = Value::Null;
+        value["root"]["tabs"][0]["root"]["pane"]["session_id"] = Value::Null;
         assert_invalid(value, "no session attachment");
     }
 
@@ -890,7 +969,8 @@ mod tests {
         // Any session id is rejected here regardless of whether it's
         // known -- a view pane must have none at all.
         let borrowed_session_id = value["sessions"][0]["id"].clone();
-        value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"] = borrowed_session_id;
+        value["root"]["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"] =
+            borrowed_session_id;
         assert_invalid(value, "shows preview but its session");
     }
 
@@ -915,8 +995,11 @@ mod tests {
         assert!(outcome.removed.contains(&missing_agent));
         assert!(outcome.removed.contains(&second_tab));
         assert_eq!(outcome.added, vec![daemon_only]);
-        assert_eq!(workspace.tabs.len(), 1);
-        std::assert_matches!(workspace.tabs[0].root, LayoutNode::Pane(_));
+        assert_eq!(workspace.tab_count(), 1);
+        std::assert_matches!(
+            workspace.active_tab().expect("tab").root,
+            LayoutNode::Pane(_)
+        );
         assert_eq!(workspace.active_session_id(), Some(retained));
         assert_eq!(workspace.detached_session_count(), 1);
     }

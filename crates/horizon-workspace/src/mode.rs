@@ -3,21 +3,14 @@
 //! persistent modal state (entered by a single reserved chord) in which
 //! `hjkl` moves a **cursor** -- Horizon's operation target -- independently
 //! of **focus** (where keyboard input actually flows). Outside the mode the
-//! two are the same pane by construction (`Workspace::cursor_pane_id`
-//! falls back to the tab's own `active` pane, never a separately-tracked
-//! value), so there is nothing to keep synchronized on every focus-changing
-//! operation elsewhere in the codebase.
+//! cursor is the focused pane by construction (`Workspace::cursor_pane_id`
+//! falls back to it, never a separately-tracked value).
 //!
-//! Formerly disambiguated here against `control_surface::ControlMode::
-//! Workspace`, a same-named-but-unrelated concept (the palette's
-//! Tab-switching "workspace overview" panel); that panel and its `ControlMode`
-//! type are gone (the retired plan
-//! `docs/plans/application-ui/01-session-manager.md`, removed in a8839fc1 --
-//! session management moved to its own modal, `src/session_manager.rs`),
-//! so the disambiguation no longer applies.
+//! The cursor rests on a pane, or on a tab group's strip, which is where
+//! a group as a whole is pointed at (`docs/workspace-layout-design.md`).
 
-use super::nav::{nearest_in_direction, pane_rects};
-use super::types::{PaneId, Workspace};
+use super::nav::{layout_rects, nearest_in_direction};
+use super::types::{PaneId, TabGroupId, Workspace};
 
 /// A cursor movement request, resolved geometrically (bspwm style) rather
 /// than by tree structure (`docs/recursive-layout-design.md`'s Focus
@@ -31,6 +24,14 @@ pub enum Direction {
     Down,
 }
 
+/// What the workspace-mode cursor is on.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Cursor {
+    Pane(PaneId),
+    /// A tab group's strip: the group as a whole.
+    Strip(TabGroupId),
+}
+
 /// A cursor belongs only to explicit workspace mode. Entry with no panes
 /// is valid and has no cursor; implicit empty-workspace mode is derived.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -38,12 +39,12 @@ pub(crate) enum WorkspaceMode {
     #[default]
     PaneInput,
     Commands {
-        cursor: Option<PaneId>,
+        cursor: Option<Cursor>,
     },
 }
 
 impl WorkspaceMode {
-    pub(crate) fn cursor(self) -> Option<PaneId> {
+    pub(crate) fn cursor(self) -> Option<Cursor> {
         match self {
             Self::PaneInput => None,
             Self::Commands { cursor } => cursor,
@@ -52,109 +53,96 @@ impl WorkspaceMode {
 }
 
 impl Workspace {
-    /// Active after explicit entry, or whenever no tabs exist. An empty
+    /// Active after explicit entry, or whenever there is no pane. An empty
     /// workspace has no pane input to protect, so `:` can always open the
     /// command palette. The shell suppresses mode bindings while a modal
     /// owns keyboard input.
     pub fn is_workspace_mode_active(&self) -> bool {
-        matches!(self.workspace_mode, WorkspaceMode::Commands { .. }) || self.tab_count() == 0
+        matches!(self.workspace_mode, WorkspaceMode::Commands { .. }) || self.panes.is_empty()
+    }
+
+    /// What the workspace-mode cursor is on while the mode is active.
+    pub fn workspace_cursor(&self) -> Option<Cursor> {
+        self.workspace_mode.cursor()
     }
 
     /// Enters workspace mode, seeding the cursor at the currently focused
-    /// pane (or `None`, for a zero-tab workspace with nothing to focus). A
-    /// no-op if already active -- re-pressing the entry chord (or
-    /// otherwise re-requesting entry) while already in the mode must not
-    /// reset the cursor back to focus, per
-    /// `docs/workspace-mode-design.md`'s "re-pressing the entry key while
-    /// already in the mode does nothing".
+    /// pane (or `None`, for an empty workspace with nothing to focus). A
+    /// no-op if already active -- re-pressing the entry chord while already
+    /// in the mode must not reset the cursor back to focus, per
+    /// `docs/workspace-mode-design.md`.
     pub fn enter_workspace_mode(&mut self) {
         if matches!(self.workspace_mode, WorkspaceMode::Commands { .. }) {
             return;
         }
         self.workspace_mode = WorkspaceMode::Commands {
-            cursor: self.active_tab().map(|tab| tab.active),
+            cursor: self.focus.map(Cursor::Pane),
         };
     }
 
     /// Moves the cursor one step in `direction`, resolved geometrically
-    /// (`workspace::nav::nearest_in_direction`) against the active tab's
-    /// pane rectangles: the nearest pane whose rectangle lies in
-    /// `direction` from the cursor's, by relative position and overlap --
-    /// not a flat left/right index walk, so `Up`/`Down` reach panes across
-    /// a vertical split exactly like `Left`/`Right` do across a horizontal
-    /// one (`docs/recursive-layout-design.md`'s slice 4). A no-op when the
-    /// mode isn't active, or when nothing qualifies in `direction` (the
-    /// cursor is already at that edge) -- hitting an edge simply stops
-    /// there, matching vim's non-wrapping window navigation (`ctrl-w h`/
-    /// `ctrl-w l` at an edge do nothing) rather than the existing
-    /// `focus_next`'s wrap-around cycling, which is a different, older
-    /// command this deliberately doesn't reuse.
+    /// (`workspace::nav::nearest_in_direction`) against every pane and
+    /// every strip on screen: from a group's top pane up is its strip, and
+    /// from a strip left and right are what is nearest at its height. A
+    /// no-op when the mode isn't active, or when nothing qualifies in
+    /// `direction` -- hitting an edge simply stops there, as vim's window
+    /// navigation does.
     pub fn move_cursor(&mut self, direction: Direction) {
         let Some(current) = self.workspace_mode.cursor() else {
             return;
         };
-        let Some(tab) = self.active_tab() else {
-            return;
-        };
-        let rects = pane_rects(&tab.root);
+        let rects = layout_rects(&self.root);
         if let Some(next) = nearest_in_direction(&rects, current, direction) {
             self.workspace_mode = WorkspaceMode::Commands { cursor: Some(next) };
         }
     }
 
-    /// `Enter`: focus follows the cursor, then the mode ends. Exits the
-    /// mode unconditionally (a no-op if it wasn't active); if there was no
-    /// cursor to commit to -- a zero-tab workspace, which entered the mode
-    /// with nothing to focus -- there is simply nothing else to do.
+    /// `Enter`: focus follows the cursor, then the mode ends -- to the
+    /// pane, or, on a strip, to the active pane of the tab the group shows.
+    /// Exits the mode unconditionally; with no cursor (an empty workspace)
+    /// there is nothing else to do.
     pub fn commit_workspace_mode(&mut self) {
         let mode = std::mem::take(&mut self.workspace_mode);
-        if let Some(pane_id) = mode.cursor() {
-            self.activate_pane(pane_id);
+        match mode.cursor() {
+            Some(Cursor::Pane(pane_id)) => {
+                self.activate_pane(pane_id);
+            }
+            Some(Cursor::Strip(group)) => {
+                let active = (self.root.group(group))
+                    .and_then(|group| group.shown_tab())
+                    .map(|tab| tab.active);
+                if let Some(active) = active {
+                    self.reveal_pane(active);
+                }
+            }
+            None => {}
         }
     }
 
     /// `Esc`: cancels the mode. Focus never moved while the mode was
-    /// active, so simply discarding the cursor is enough to "snap it back"
-    /// -- there is nothing else to restore.
+    /// active, so simply discarding the cursor is enough to "snap it back".
     pub fn cancel_workspace_mode(&mut self) {
         self.workspace_mode = WorkspaceMode::PaneInput;
     }
 
-    /// A pane click while workspace mode is active: the design's click
-    /// convention (`docs/workspace-mode-design.md`'s mouse/keyboard split)
-    /// is that a click always "dives" into the pane clicked, regardless of
-    /// where the cursor currently sits -- equivalent to moving the cursor
-    /// to `pane_id` and then calling [`commit_workspace_mode`], done in one
-    /// step so there's no observable intermediate cursor position. A no-op
-    /// when the mode isn't active: the caller's own ordinary
-    /// `activate_pane` call already handles a plain click-to-focus in that
-    /// case.
-    ///
-    /// [`commit_workspace_mode`]: Self::commit_workspace_mode
+    /// A pane click while workspace mode is active: a click always "dives"
+    /// into the pane clicked, regardless of where the cursor sits --
+    /// moving the cursor to `pane_id` and committing, in one step. A no-op
+    /// when the mode isn't active.
     pub fn commit_workspace_mode_to(&mut self, pane_id: PaneId) {
         if self.workspace_mode == WorkspaceMode::PaneInput {
             return;
         }
         self.workspace_mode = WorkspaceMode::Commands {
-            cursor: Some(pane_id),
+            cursor: Some(Cursor::Pane(pane_id)),
         };
         self.commit_workspace_mode();
     }
 
     /// Unconditionally leaves workspace mode, regardless of whether it was
-    /// active. Used after a "creating" operation (new terminal/agent
-    /// session, a split, or reattaching a detached session) runs from
-    /// inside the mode -- `docs/workspace-mode-design.md`'s "creating
-    /// operations dive" rule: the operation's own focus-follow
-    /// (`WorkspaceShell::focus_active`) already moved focus into
-    /// the new pane, so the mode's job (letting the cursor roam without
-    /// disturbing focus) is done. Also safe to call unconditionally from a
-    /// direct keyboard shortcut path, since a keyboard shortcut can never
-    /// actually fire while the mode is active in the first place (the mode
-    /// swallows every key outside its own `hjkl`/Enter/Esc/`:` vocabulary
-    /// -- see the mode's key bindings in `src/workspace/bindings.rs`) -- this just makes the helper
-    /// reusable across both call shapes without an extra active-check at
-    /// each call site.
+    /// active. Used after a "creating" operation runs from inside the mode
+    /// -- `docs/workspace-mode-design.md`'s "creating operations dive"
+    /// rule.
     pub fn exit_workspace_mode(&mut self) {
         self.workspace_mode = WorkspaceMode::PaneInput;
     }

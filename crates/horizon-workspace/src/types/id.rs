@@ -19,6 +19,23 @@ impl Default for PaneId {
     }
 }
 
+/// A tab group: tabs, one of them shown, as one node of the workspace's
+/// tree.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+pub struct TabGroupId(Uuid);
+
+impl TabGroupId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for TabGroupId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TabId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
