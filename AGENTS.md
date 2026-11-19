@@ -274,12 +274,8 @@ environment-only path overrides. Provider entries are described in
 `docs/provider-configuration.md`.
 
 Secrets (`OPENAI_API_KEY`, `EXA_API_KEY`) are environment-only and never
-read from the file. Four more settings exist only as environment variables
+read from the file. Three more settings exist only as environment variables
 and are not in the example file, all measurement switches:
-`HORIZON_TERMINAL_FRAME_INTERVAL_MS` (how long after a terminal's frame
-`horizon-terminald` waits before the next, 16 when unset, clamped to
-1000, zero for a frame at every change; read when a session is made, from
-the environment the daemon was started in),
 `HORIZON_AGENT_CLEARING_THRESHOLD_PCT` (Tier 1 compaction's trigger
 percentage, clamped 1..=100, see `docs/agent-compaction-design.md`),
 `HORIZON_AGENT_JUDGE_ASK_THRESHOLD` and

@@ -21,7 +21,7 @@ use horizon_acp::{
     HostToolRequest, HostToolResponse, SessionEventNotification, SessionId, SessionInfoMeta,
     read_horizon_meta,
 };
-use horizon_terminal_core::{TerminalCommand, TerminalFrame, TerminalUpdate};
+use horizon_terminal_core::{TerminalCommand, TerminalUpdate};
 use uuid::Uuid;
 
 /// Identifies one local attachment, including replacements of the same session.
@@ -113,11 +113,8 @@ pub(super) type Heard = Arc<dyn Fn() + Send + Sync>;
 
 struct TerminalRoute {
     key: RouteKey<Uuid>,
-    /// The pane-facing frame stream: since wire v11 the frame path is a
-    /// `watch<TerminalFrame>`, so the transport delivers full frames here
-    /// (separate from `terminal_events`).
-    frames: tokio::sync::watch::Sender<TerminalFrame>,
-    /// The pane-facing non-frame events (title/bell/clipboard/exit/error).
+    /// The pane-facing events: the state and the bytes after it, and
+    /// title/bell/clipboard/exit/error.
     events: Sender<TerminalUpdate>,
     /// Told when an event has been put on `events`: whoever takes them
     /// from there is not waiting on it.
@@ -453,15 +450,13 @@ impl TerminalRoutes {
     pub(super) fn register_terminal(
         &self,
         session_id: Uuid,
-        frames: tokio::sync::watch::Sender<TerminalFrame>,
         events: Sender<TerminalUpdate>,
         commands: tokio::sync::mpsc::UnboundedSender<TerminalCommand>,
     ) -> RouteKey<Uuid> {
         let key = RouteKey::new(session_id);
         let mut state = self.state.lock().unwrap();
         if let Some(message) = state.failure.clone() {
-            // A dead runtime surfaces as an error event; the frame stream
-            // simply never delivers (it carries frames, not errors).
+            // A dead runtime surfaces as an error event.
             let _ = events.send(TerminalUpdate::Error(message));
             return key;
         }
@@ -469,7 +464,6 @@ impl TerminalRoutes {
             session_id,
             TerminalRoute {
                 key,
-                frames,
                 events,
                 heard: None,
                 commands: Some(commands),
@@ -510,19 +504,6 @@ impl TerminalRoutes {
             if let Some(sender) = &route.commands {
                 let _ = sender.send(command.clone());
             }
-        }
-    }
-
-    /// One incoming full frame from a terminal attachment's `frames` watch,
-    /// routed to its pane. A dead pane retires the whole route.
-    pub(super) fn route_terminal_frame(&self, key: RouteKey<Uuid>, frame: TerminalFrame) {
-        let mut state = self.state.lock().unwrap();
-        if state
-            .terminals
-            .get(&key.session_id)
-            .is_some_and(|route| route.key == key && route.frames.send(frame).is_err())
-        {
-            state.terminals.remove(&key.session_id);
         }
     }
 

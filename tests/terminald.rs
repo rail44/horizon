@@ -305,7 +305,7 @@ impl std::task::Wake for Woken {
 }
 
 #[test]
-fn what_the_daemon_answers_with_wakes_the_page_though_no_frame_comes() {
+fn what_the_daemon_sends_wakes_the_page() {
     use std::sync::atomic::Ordering;
 
     let daemon = Daemon::prepare();
@@ -314,40 +314,40 @@ fn what_the_daemon_answers_with_wakes_the_page_though_no_frame_comes() {
     let session = Session::attached(handle);
     let woken = std::sync::Arc::new(Woken(Default::default()));
     session.set_waker(woken.clone().into());
+    // As a view does: the terminal's state is asked for.
+    session.show();
 
-    // The shell's prompt, and then nothing more from it.
+    // The state, and the shell's prompt; and then nothing more from it.
     let started = Instant::now();
-    while woken.0.load(Ordering::SeqCst) == 0 {
-        assert!(started.elapsed() < Duration::from_secs(10), "no frame");
+    while !session.has_a_terminal() {
+        assert!(started.elapsed() < Duration::from_secs(10), "no state");
         std::thread::sleep(Duration::from_millis(5));
+        let _ = session.frame_after(0);
     }
     std::thread::sleep(Duration::from_millis(500));
-    let _ = session.take_updates();
+    let _ = session.frame_after(0);
     let before = woken.0.load(Ordering::SeqCst);
 
-    // A window of the scrollback is asked for: the answer is an update,
-    // not a frame, and whoever lays the page out is woken for it.
-    session.send(
-        horizon_terminal_core::TerminalCommand::RequestScrollWindow {
-            anchor: 0,
-            height: 10,
-        },
-    );
+    // What the shell writes comes as events, and whoever lays the page
+    // out is woken for them.
+    session.send(horizon_terminal_core::TerminalCommand::Input(
+        b"printf 'w%sken\\n' o\n".to_vec(),
+    ));
     let started = Instant::now();
-    while woken.0.load(Ordering::SeqCst) == before {
+    loop {
         assert!(
             started.elapsed() < Duration::from_secs(10),
-            "not woken for the window"
+            "not woken for the output"
         );
         std::thread::sleep(Duration::from_millis(5));
+        if woken.0.load(Ordering::SeqCst) == before {
+            continue;
+        }
+        let text = (session.frame_after(0)).map(|(_, frame)| frame.text());
+        if text.is_some_and(|text| text.lines().any(|line| line == "woken")) {
+            break;
+        }
     }
-    let window = (session.take_updates().into_iter()).any(|update| {
-        matches!(
-            update,
-            horizon_terminal_core::TerminalUpdate::ScrollWindow(_)
-        )
-    });
-    assert!(window, "woken for something that was not the window");
 
     drop(session);
     daemon.stop(terminald);

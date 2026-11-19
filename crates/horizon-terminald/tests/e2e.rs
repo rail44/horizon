@@ -26,17 +26,17 @@ use horizon_daemon_testkit::{
     connect_initialized, connect_with_retry, drain_with_timeout, resolve_daemon_binary,
     scratch_socket, sibling_daemon_binary, wait_for_exit,
 };
+use horizon_terminal_core::wire::TerminalAttachment;
 use horizon_terminal_core::wire::{
     MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION, TERMINAL_PROTOCOL_VERSION, TerminalHub as _,
     TerminalHubClient, terminal_client_hello,
 };
 use horizon_terminal_core::{
-    TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize, TerminalSpawnSpec,
+    TerminalColorScheme, TerminalCommand, TerminalCore, TerminalSize, TerminalSpawnSpec,
     TerminalSummary, TerminalUpdate,
 };
 use horizon_wire::{
-    CappedReceiver, CappedWatchReceiver, ClientHello, FRAME_MAX_ITEM_BYTES, HubError,
-    TERMINAL_EVENT_MAX_ITEM_BYTES, VersionRange, WireCodec,
+    CappedReceiver, ClientHello, HubError, TERMINAL_EVENT_MAX_ITEM_BYTES, VersionRange, WireCodec,
 };
 use remoc::rch;
 use tokio::net::UnixStream;
@@ -130,14 +130,6 @@ impl HubTestClient {
     }
 }
 
-/// The attachment's current frame — the watch's seed on attach (the
-/// daemon-retained latest frame), or the newest published frame.
-fn current_frame(
-    frames: &CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
-) -> TerminalFrame {
-    frames.borrow().expect("frame watch error").clone()
-}
-
 /// Waits for the attachment to report that its session has ended after a
 /// `Shutdown`, skipping whatever non-exit events (title, bell, a final
 /// error) arrive first.
@@ -198,33 +190,58 @@ fn terminal_spec(
     }
 }
 
-/// Folds the attachment's frame watch toward a frame whose text contains
-/// `needle`, returning it. Checks the current value first (the seed on
-/// attach), then awaits changes; the watch's latest-value semantics mean a
-/// slow reader skips intermediate frames and still converges on the needle.
-async fn collect_terminal_frame_until(
-    frames: &mut CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
-    needle: &str,
-) -> TerminalFrame {
-    for _ in 0..1000 {
-        {
-            let frame = frames
-                .borrow_and_update()
-                .expect("frame watch error")
-                .clone();
-            if frame.text().contains(needle) {
-                return frame;
+/// The text of the attachment's terminal once it contains `needle` (at
+/// once, for an empty one), read as a view reads it: the terminal's state
+/// asked for, then the bytes after it taken into a terminal of the test's
+/// own.
+async fn screen_until(attachment: &mut TerminalAttachment, needle: &str) -> String {
+    send_terminal_command(&attachment.commands, TerminalCommand::WantState).await;
+    let deadline = tokio::time::Instant::now() + TERMINAL_UPDATE_TIMEOUT;
+    let (mut state, mut terminal) = (Vec::new(), None::<TerminalCore>);
+    loop {
+        if let Some(terminal) = &terminal {
+            let text = terminal.snapshot_frame().text();
+            if text.contains(needle) {
+                return text;
             }
         }
-        tokio::time::timeout(TERMINAL_UPDATE_TIMEOUT, frames.changed())
-            .await
-            .expect("timed out waiting for a terminal frame")
-            .expect("the frame watch closed before the needle arrived");
+        let update = match tokio::time::timeout_at(deadline, attachment.events.recv()).await {
+            Ok(Ok(Some(update))) => update,
+            Ok(Ok(None)) => panic!("the events closed before {needle:?}"),
+            Ok(Err(error)) => panic!("the events failed before {needle:?}: {error}"),
+            Err(_elapsed) => panic!(
+                "gave up waiting for {needle:?}; last screen: {:?}",
+                terminal
+                    .as_ref()
+                    .map(|terminal| terminal.snapshot_frame().text())
+            ),
+        };
+        match update {
+            TerminalUpdate::State { bytes, more } => {
+                state.extend_from_slice(&bytes);
+                if !more {
+                    terminal = TerminalCore::from_state(&state);
+                    state.clear();
+                }
+            }
+            TerminalUpdate::Output(bytes) => {
+                if let Some(terminal) = terminal.as_mut() {
+                    terminal.take_in(&bytes);
+                }
+            }
+            TerminalUpdate::Resized(size) => {
+                if let Some(terminal) = terminal.as_mut() {
+                    terminal.resize(size);
+                }
+            }
+            TerminalUpdate::HoldReleased => {
+                if let Some(terminal) = terminal.as_mut() {
+                    terminal.release_hold();
+                }
+            }
+            _ => {}
+        }
     }
-    panic!(
-        "gave up waiting for {needle:?}; last frame: {:?}",
-        current_frame(frames).text()
-    );
 }
 
 // --- tests -----------------------------------------------------------------
@@ -312,9 +329,7 @@ async fn terminal_create_frame_reconnect_attach_and_shutdown_over_the_real_socke
         TerminalCommand::Input(b"printf 'HORIZON_DIFF_MARKER\\n'\n".to_vec()),
     )
     .await;
-    // Full frames stream on the watch and converge on the marker.
-    let frame = collect_terminal_frame_until(&mut attachment.frames, "HORIZON_DIFF_MARKER").await;
-    assert!(frame.text().contains("HORIZON_DIFF_MARKER"));
+    screen_until(&mut attachment, "HORIZON_DIFF_MARKER").await;
 
     // Disconnect this client entirely; the terminal session keeps running
     // (process-scoped), so a fresh connection can reattach.
@@ -322,30 +337,24 @@ async fn terminal_create_frame_reconnect_attach_and_shutdown_over_the_real_socke
     drop(client);
 
     let client = connect_hub(&terminald.socket_path).await;
-    let attachment = client
+    let mut attachment = client
         .hub
         .attach_terminal(session_id)
         .await
         .expect("attach on a fresh connection should succeed");
-    // The reattach reseeds the full retained latest frame structurally: the
-    // watch's current value already carries the marker, with no snapshot
-    // request or baseline dance (§5 Option A).
-    let attached = current_frame(&attachment.frames);
+    // The state a reattached client asks for already has the marker.
+    let attached = screen_until(&mut attachment, "").await;
     assert!(
-        attached.text().contains("HORIZON_DIFF_MARKER"),
-        "attach must reseed the retained latest frame, got: {:?}",
-        attached.text()
+        attached.contains("HORIZON_DIFF_MARKER"),
+        "the state must have what was written before, got: {attached:?}"
     );
 
-    let mut attachment = attachment;
     send_terminal_command(
         &attachment.commands,
         TerminalCommand::Input(b"printf 'HORIZON_REATTACH_MARKER\\n'\n".to_vec()),
     )
     .await;
-    let reattached =
-        collect_terminal_frame_until(&mut attachment.frames, "HORIZON_REATTACH_MARKER").await;
-    assert!(reattached.text().contains("HORIZON_REATTACH_MARKER"));
+    screen_until(&mut attachment, "HORIZON_REATTACH_MARKER").await;
 
     send_terminal_command(&attachment.commands, TerminalCommand::Shutdown).await;
     wait_for_session_end(&mut attachment.events).await;
@@ -362,23 +371,23 @@ async fn terminal_list_is_sorted_and_a_missing_attach_is_explicit() {
 
     // Create two terminals across two connections; both survive the
     // disconnect (process-scoped sessions).
-    let high = client
+    let mut high = client
         .hub
         .create_terminal(high_id, terminal_spec(std::env::temp_dir(), None))
         .await
         .unwrap();
-    // The attachment's frame watch carries a seed frame immediately.
-    let _ = current_frame(&high.frames);
+    // The attachment answers with the terminal's state.
+    let _ = screen_until(&mut high, "").await;
     drop(high);
     drop(client);
 
     let client = connect_hub(&terminald.socket_path).await;
-    let low = client
+    let mut low = client
         .hub
         .create_terminal(low_id, terminal_spec(std::env::temp_dir(), None))
         .await
         .unwrap();
-    let _ = current_frame(&low.frames);
+    let _ = screen_until(&mut low, "").await;
     drop(low);
     drop(client);
 
@@ -433,7 +442,7 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
     )
     .await;
     let source_needle = format!("SOURCE_CWD:{}", source_cwd.display());
-    let _ = collect_terminal_frame_until(&mut source.frames, &source_needle).await;
+    let _ = screen_until(&mut source, &source_needle).await;
 
     let mut target_spec = terminal_spec(fallback_cwd.clone(), Some(source_id));
     target_spec.initial_size = wide;
@@ -448,7 +457,7 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
     )
     .await;
     let target_needle = format!("TARGET_CWD:{}", source_cwd.display());
-    let _ = collect_terminal_frame_until(&mut target.frames, &target_needle).await;
+    let _ = screen_until(&mut target, &target_needle).await;
 
     send_terminal_command(&source.commands, TerminalCommand::Shutdown).await;
     send_terminal_command(&target.commands, TerminalCommand::Shutdown).await;
@@ -496,7 +505,7 @@ async fn an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable(
         TerminalCommand::Input(b"printf 'BEFORE_AGENT_RELOAD\\n'\n".to_vec()),
     )
     .await;
-    let _ = collect_terminal_frame_until(&mut attachment.frames, "BEFORE_AGENT_RELOAD").await;
+    let _ = screen_until(&mut attachment, "BEFORE_AGENT_RELOAD").await;
 
     // `Reload Agent Runtime`, faithfully: drain the agent daemon over its
     // own hub, confirm the process is gone, then bring a fresh one up on the
@@ -521,34 +530,33 @@ async fn an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable(
     );
     // ...the existing attachment still carries the pre-reload frame...
     assert!(
-        current_frame(&attachment.frames)
-            .text()
+        screen_until(&mut attachment, "")
+            .await
             .contains("BEFORE_AGENT_RELOAD"),
         "the retained frame must survive the agent daemon's restart"
     );
     // ...a *fresh* attachment reseeds it (the UI-restart path)...
-    let reattached = terminal_client
+    let mut reattached = terminal_client
         .hub
         .attach_terminal(session_id)
         .await
         .expect("the session must still be attachable after the agent reload");
     assert!(
-        current_frame(&reattached.frames)
-            .text()
+        screen_until(&mut reattached, "")
+            .await
             .contains("BEFORE_AGENT_RELOAD"),
         "a re-attach after the agent reload must reseed the retained frame"
     );
     // ...and the shell itself is still alive, which is the part that
     // actually mattered to the operator: it answers new input.
-    let mut reattached = reattached;
     send_terminal_command(
         &reattached.commands,
         TerminalCommand::Input(b"printf 'AFTER_AGENT_RELOAD\\n'\n".to_vec()),
     )
     .await;
-    let after = collect_terminal_frame_until(&mut reattached.frames, "AFTER_AGENT_RELOAD").await;
+    let after = screen_until(&mut reattached, "AFTER_AGENT_RELOAD").await;
     assert!(
-        after.text().contains("AFTER_AGENT_RELOAD"),
+        after.contains("AFTER_AGENT_RELOAD"),
         "the PTY's shell must still be running after the agent daemon restart"
     );
 

@@ -1,40 +1,27 @@
-//! The terminal session's byte-driven brain loop: coalesces PTY bytes and
-//! UI-originated commands into `TerminalCore` mutations, and turns those
-//! into rate-controlled full-frame sends. `docs/session-daemon-design.md`
-//! decision 9 names this "the session loop" — extracted here, driven purely
-//! by channels, with no `portable-pty` dependency: the PTY reader/writer
-//! threads that feed and drain these channels live in `horizon-terminald`
+//! The terminal session's byte-driven loop: takes the PTY's bytes and the
+//! commands from a client into one `TerminalCore`, sends the PTY what the
+//! terminal answers, and sends a client that asks the terminal's state and
+//! then the bytes the terminal took in (`docs/terminal-stream-design.md`).
+//! The loop is driven purely by channels, with no `portable-pty`
+//! dependency: the PTY reader/writer threads that feed and drain these
+//! channels live in `horizon-terminald`
 //! (`crates/horizon-terminald/src/terminal.rs`), since PTY ownership is a
-//! host/process concern.
-//!
-//! Since wire v11 (`docs/remoc-adoption-design.md` §5 Option A) the loop
-//! emits on two channels: `frame_tx` carries every rate-controlled
-//! [`TerminalFrame`] snapshot (the daemon forwards these onto the
-//! attachment's `rch::watch<TerminalFrame>`), and `update_tx` carries the
-//! non-frame [`TerminalUpdate`] events (bell, title, clipboard). The 16 ms
-//! coalescing that bounds frame-production rate is unchanged; only the
-//! frame *transport* changed — full frames on a snapshot-valued signal, no
-//! wire diffing.
+//! host/process concern. It makes no frames: a view draws from a terminal
+//! of its own.
 
-use std::time::Duration;
 use std::time::Instant;
 
 mod channels;
-mod frames;
 
 pub use channels::{CoreInput, CoreReceivers, CoreSenders, StreamCommand, core_channels};
-
-use frames::FramePublisher;
 
 use crossbeam_channel::{Receiver, Sender};
 #[cfg(test)]
 use termwiz::input::{KeyCode, Modifiers};
 
-use crate::contract::{
-    ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand, TerminalUpdate,
-};
+use crate::contract::{ClipboardDestination, TerminalCommand, TerminalUpdate};
 use crate::core::{TerminalColorScheme, TerminalCore, TerminalEvents};
-use crate::types::{TerminalFrame, TerminalSize};
+use crate::types::TerminalSize;
 #[cfg(test)]
 use crate::{contract::TerminalKeyInput, types::KeyEventKind};
 
@@ -46,9 +33,6 @@ use crate::{contract::TerminalKeyInput, types::KeyEventKind};
 pub struct TerminalCoreOptions {
     pub scrollback_lines: usize,
     pub color_scheme: TerminalColorScheme,
-    /// How long after a frame the next one waits: output that comes
-    /// faster than this is one frame.
-    pub frame_interval: Duration,
 }
 
 impl Default for TerminalCoreOptions {
@@ -56,7 +40,6 @@ impl Default for TerminalCoreOptions {
         Self {
             scrollback_lines: crate::core::DEFAULT_SCROLLBACK_LINES,
             color_scheme: TerminalColorScheme::default(),
-            frame_interval: frames::COALESCE_WINDOW,
         }
     }
 }
@@ -78,43 +61,11 @@ fn rearm_sync_flush(core: &TerminalCore, sync_flush_rx: &mut Receiver<Instant>) 
     };
 }
 
-/// Selection completion/update writes the selected text to the OS primary
-/// buffer automatically (Linux convention: select = copy to primary),
-/// distinct from the explicit-copy path (`SelectionCommand::Copy`, which
-/// targets the system clipboard). A no-op while nothing is selected yet
-/// (e.g. right after `Start`, before any drag has covered a range) --
-/// mirrors Zed's terminal calling convention (see
-/// docs/research/gpui-terminal-presentation-2026-07-18.md).
-fn send_selection_to_primary(core: &TerminalCore, update_tx: &Sender<TerminalUpdate>) {
-    if let Some(text) = core.selected_text().filter(|text| !text.is_empty()) {
-        let _ = update_tx.send(TerminalUpdate::Clipboard {
-            text,
-            destination: ClipboardDestination::Primary,
-        });
-    }
-}
-
-/// Collapse a burst of pending items to the most recent, starting from the
-/// one the `select!` arm already dequeued. Scroll-window requests are
-/// low-frequency, user-driven prefetches where a newer request supersedes an
-/// older one by self-location (`docs/terminal-scrollback-design.md` §3.4), so
-/// a rapid burst must cost a single `snapshot_window`, not one per request —
-/// otherwise a flooded `window_rx` would starve `pty_rx` and the frame path
-/// on this single-threaded loop and let the queue grow unbounded. Draining
-/// the backlog here bounds both.
 /// Applies the colors that have arrived and not been applied.
 fn take_color_schemes(core: &mut TerminalCore, schemes: &Receiver<TerminalColorScheme>) {
     while let Ok(scheme) = schemes.try_recv() {
         core.set_color_scheme(scheme);
     }
-}
-
-fn drain_to_latest<T>(first: T, rx: &Receiver<T>) -> T {
-    let mut latest = first;
-    while let Ok(newer) = rx.try_recv() {
-        latest = newer;
-    }
-    latest
 }
 
 /// SPIKE Y. What a view is sent of the terminal: its state when it asks,
@@ -203,45 +154,21 @@ impl Stream {
 
 /// Parse one PTY-output chunk and emit everything it produced: query/DA/DSR
 /// replies back into the PTY input (`TerminalCommand::Input`), bell/title/
-/// clipboard updates to the client, and -- when the grid actually changed --
-/// a rate-controlled snapshot. Shared by [`drain_pty_output`]'s priority
+/// clipboard updates to the client, and the bytes the terminal took in to a
+/// client that asked for them. Shared by [`drain_pty_output`]'s priority
 /// drain and the `pty_rx` `select!` arm.
 fn process_pty_chunk(
     core: &mut TerminalCore,
     bytes: &[u8],
     command_tx: &Sender<TerminalCommand>,
     update_tx: &Sender<TerminalUpdate>,
-    frames: &mut FramePublisher,
     sync_flush_rx: &mut Receiver<Instant>,
     stream: &mut Stream,
 ) {
     let mut events = core.write_vt(bytes);
     stream.wrote(std::mem::take(&mut events.output), update_tx);
-    tracing::debug!(
-        target: "horizon_terminal_core::session_loop",
-        visible_dirty = events.visible_dirty,
-        "pty_chunk_processed"
-    );
-    let visible_dirty = events.visible_dirty;
     send_terminal_events(events, command_tx, update_tx);
     rearm_sync_flush(core, sync_flush_rx);
-    // Only a chunk that actually reached the grid deserves
-    // `FramePublisher::notify`'s immediate slot -- a chunk that landed entirely
-    // inside an already-open BSU/ESU window (buffered, nothing flushed yet)
-    // must not steal it from the real content that flushes later. See
-    // `TerminalCore::write_vt`.
-    if visible_dirty {
-        frames.notify(core);
-        tracing::debug!(
-            target: "horizon_terminal_core::session_loop",
-            "notify_snapshot"
-        );
-    } else {
-        tracing::debug!(
-            target: "horizon_terminal_core::session_loop",
-            "skipped_notify_buffered"
-        );
-    }
 }
 
 /// Publish parser side effects in the same order for PTY input and timed flushes.
@@ -305,7 +232,6 @@ fn drain_pty_output(
     pty_rx: &Receiver<Vec<u8>>,
     command_tx: &Sender<TerminalCommand>,
     update_tx: &Sender<TerminalUpdate>,
-    frames: &mut FramePublisher,
     sync_flush_rx: &mut Receiver<Instant>,
     stream: &mut Stream,
 ) -> bool {
@@ -313,15 +239,7 @@ fn drain_pty_output(
     while budget > 0 {
         match pty_rx.try_recv() {
             Ok(bytes) => {
-                process_pty_chunk(
-                    core,
-                    &bytes,
-                    command_tx,
-                    update_tx,
-                    frames,
-                    sync_flush_rx,
-                    stream,
-                );
+                process_pty_chunk(core, &bytes, command_tx, update_tx, sync_flush_rx, stream);
                 budget -= 1;
             }
             Err(crossbeam_channel::TryRecvError::Empty) => return true,
@@ -337,7 +255,6 @@ pub fn run_terminal_core(
     pty_rx: Receiver<Vec<u8>>,
     receivers: CoreReceivers,
     command_tx: Sender<TerminalCommand>,
-    frame_tx: Sender<TerminalFrame>,
     update_tx: Sender<TerminalUpdate>,
 ) {
     let CoreReceivers {
@@ -345,17 +262,12 @@ pub fn run_terminal_core(
         scroll_rx,
         mouse_rx,
         input_rx,
-        selection_rx,
         focus_rx,
         color_scheme_rx,
-        window_rx,
         stream_rx,
     } = receivers;
     let mut core = TerminalCore::with_scrollback(size, options.scrollback_lines);
     core.set_color_scheme(options.color_scheme);
-    let _ = frame_tx.send(core.snapshot_frame());
-
-    let mut frames = FramePublisher::new(frame_tx, options.frame_interval);
     // SPIKE Y: what a view that asked is sent.
     let mut stream = Stream::default();
 
@@ -378,7 +290,6 @@ pub fn run_terminal_core(
             &pty_rx,
             &command_tx,
             &update_tx,
-            &mut frames,
             &mut sync_flush_rx,
             &mut stream,
         ) {
@@ -392,7 +303,6 @@ pub fn run_terminal_core(
                 };
                 core.resize(size);
                 stream.resized(size, &update_tx);
-                frames.notify(&core);
             }
             recv(stream_rx) -> command => {
                 let Ok(command) = command else {
@@ -404,22 +314,17 @@ pub fn run_terminal_core(
                 let Ok(scroll) = scroll else {
                     return;
                 };
-                // A wheel that is the program's changes nothing on the
-                // screen until the program answers: a frame for it now
-                // would be the one before over again, and would put the
-                // program's answer off to the end of the window.
-                match core.handle_scroll(scroll) {
-                    Some(input) => {
-                        let _ = command_tx.send(TerminalCommand::Input(input));
-                    }
-                    None => frames.notify(&core),
+                // (A wheel that is the program's: what the program is told.
+                // One that scrolls the history scrolls this terminal's, which
+                // nothing draws.)
+                if let Some(input) = core.handle_scroll(scroll) {
+                    let _ = command_tx.send(TerminalCommand::Input(input));
                 }
             }
             recv(mouse_rx) -> report => {
                 let Ok(report) = report else {
                     return;
                 };
-                // (Nor does a report to the program change the screen.)
                 if let Some(input) = core.handle_mouse_report(report) {
                     let _ = command_tx.send(TerminalCommand::Input(input));
                 }
@@ -431,7 +336,7 @@ pub fn run_terminal_core(
                 // paste order even when the core is busy draining output.
                 take_color_schemes(&mut core, &color_scheme_rx);
                 if !drain_pty_output(
-                    &mut core, &pty_rx, &command_tx, &update_tx, &mut frames,
+                    &mut core, &pty_rx, &command_tx, &update_tx,
                     &mut sync_flush_rx, &mut stream,
                 ) { return; }
                 let is_paste = matches!(input, CoreInput::Paste(_));
@@ -444,34 +349,6 @@ pub fn run_terminal_core(
                 };
                 if is_paste || !input.is_empty() {
                     let _ = command_tx.send(TerminalCommand::Input(input));
-                }
-                // Key/text encoding alone changes no visible state. Paste
-                // keeps its existing notification; real echo comes via PTY.
-                if is_paste { frames.notify(&core); }
-            }
-            recv(selection_rx) -> command => {
-                let Ok(command) = command else {
-                    return;
-                };
-                match command {
-                    SelectionCommand::Start { point, kind } => {
-                        core.start_selection(point, kind);
-                        send_selection_to_primary(&core, &update_tx);
-                        frames.notify(&core);
-                    }
-                    SelectionCommand::Update(point) => {
-                        core.update_selection(point);
-                        send_selection_to_primary(&core, &update_tx);
-                        frames.notify(&core);
-                    }
-                    SelectionCommand::Copy => {
-                        if let Some(text) = core.selected_text() {
-                            let _ = update_tx.send(TerminalUpdate::Clipboard {
-                                text,
-                                destination: ClipboardDestination::Clipboard,
-                            });
-                        }
-                    }
                 }
             }
             recv(focus_rx) -> focused => {
@@ -486,32 +363,9 @@ pub fn run_terminal_core(
                 let Ok(scheme) = scheme else {
                     return;
                 };
-                // Only OSC 4/10/11/12 query-reply resolution reads this
-                // (`core::color::resolve_query_color`) -- painted cell
-                // colors already come from the host's live `theme::scheme`
-                // on every repaint, so there is no visible grid state to
-                // notify a snapshot for here.
+                // What the program is answered with when it asks the
+                // colors (OSC 4/10/11/12).
                 core.set_color_scheme(scheme);
-            }
-            recv(window_rx) -> request => {
-                let Ok(request) = request else {
-                    return;
-                };
-                // Coalesce a burst to its latest position before serving --
-                // one `snapshot_window` per burst keeps a flooded `window_rx`
-                // from starving `pty_rx`/frames on this single-threaded loop
-                // (see `drain_to_latest`).
-                let ScrollWindowRequest { anchor, height } =
-                    drain_to_latest(request, &window_rx);
-                // A pure read: `snapshot_window` walks `iter_from` and never
-                // moves the live `display_offset`, so there is no visible
-                // grid state to `FramePublisher::notify` for -- the live-frame watch
-                // keeps showing the tail. The window rides the events mpsc
-                // back to the client (`docs/terminal-scrollback-design.md`
-                // §9 option ii), reusing the same `update_tx` plumbing every
-                // other non-frame update already uses.
-                let window = core.snapshot_window(anchor, height);
-                let _ = update_tx.send(TerminalUpdate::ScrollWindow(window));
             }
             recv(pty_rx) -> bytes => {
                 let Ok(bytes) = bytes else {
@@ -523,13 +377,9 @@ pub fn run_terminal_core(
                     &bytes,
                     &command_tx,
                     &update_tx,
-                    &mut frames,
                     &mut sync_flush_rx,
                     &mut stream,
                 );
-            }
-            recv(frames.flush_timer()) -> _ => {
-                frames.flush(&core);
             }
             recv(sync_flush_rx) -> _ => {
                 let events = core.flush_sync_update();
@@ -540,7 +390,6 @@ pub fn run_terminal_core(
                 send_terminal_events(events, &command_tx, &update_tx);
                 stream.released(&update_tx);
                 rearm_sync_flush(&core, &mut sync_flush_rx);
-                frames.notify(&core);
             }
         }
     }
@@ -549,169 +398,47 @@ pub fn run_terminal_core(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tracing_subscriber::prelude::*;
+    use std::time::Duration;
 
-    // ------------------------------------------------------------------
-    // Session-loop event capture (board #9, docs/issues/015)
-    // ------------------------------------------------------------------
-    // A thin `tracing_subscriber::Layer` that drains the loop's `debug!`
-    // observation points into a crossbeam channel. Installed per-test via
-    // `tracing::subscriber::with_default` inside the spawned thread, so tests
-    // can assert on loop behavior by *event order* instead of wall-clock
-    // negative waits (sleeping to confirm nothing arrived). No subscriber is
-    // ever installed in production, so the loop's `tracing::debug!` calls are
-    // no-ops at runtime.
-
-    /// Captures the `message` field of each session-loop tracing event.
-    struct EventSink {
-        tx: Sender<String>,
-    }
-
-    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for EventSink {
-        fn on_event(
-            &self,
-            event: &tracing::Event<'_>,
-            _ctx: tracing_subscriber::layer::Context<'_, S>,
-        ) {
-            let mut visitor = MessageExtractor { message: None };
-            event.record(&mut visitor);
-            if let Some(msg) = visitor.message {
-                let _ = self.tx.send(msg);
-            }
-        }
-    }
-
-    struct MessageExtractor {
-        message: Option<String>,
-    }
-
-    impl tracing::field::Visit for MessageExtractor {
-        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-            if field.name() == "message" {
-                self.message = Some(value.to_string());
-            }
-        }
-        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            if field.name() == "message" {
-                // tracing records string-literal messages as Debug values on
-                // some code paths (not record_str), so capture them here too,
-                // stripping the surrounding quotes Debug adds to &str.
-                let raw = format!("{:?}", value);
-                self.message = Some(raw.trim_matches('"').to_string());
-            }
-        }
-    }
-
-    /// Install `EventSink` as the current thread's tracing subscriber for the
-    /// duration of `run_terminal_core`, returning the channel to observe.
-    fn spawn_core_with_capture(
-        size: TerminalSize,
-        pty_rx: Receiver<Vec<u8>>,
-        receivers: CoreReceivers,
-        command_tx: Sender<TerminalCommand>,
-        frame_tx: Sender<TerminalFrame>,
-        update_tx: Sender<TerminalUpdate>,
-    ) -> Receiver<String> {
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
-        let sink = EventSink { tx: event_tx };
-        std::thread::spawn(move || {
-            let subscriber = tracing_subscriber::registry().with(sink);
-            tracing::subscriber::with_default(subscriber, || {
-                run_terminal_core(
-                    size,
-                    TerminalCoreOptions::default(),
-                    pty_rx,
-                    receivers,
-                    command_tx,
-                    frame_tx,
-                    update_tx,
-                );
-            });
+    /// Has the loop send what it takes in, and waits for the state that
+    /// comes first: proof the loop is running and has done what was sent
+    /// it before.
+    fn watch(stream_tx: &Sender<StreamCommand>, updates: &Receiver<TerminalUpdate>) {
+        stream_tx.send(StreamCommand::Want).unwrap();
+        next(updates, "the state", |update| {
+            matches!(update, TerminalUpdate::State { more: false, .. })
         });
-        event_rx
     }
 
-    /// Review fix (Medium): the window arm coalesces a burst of pending
-    /// `window_rx` requests to the newest before serving, so a flood costs one
-    /// `snapshot_window` rather than one per request. `drain_to_latest` is that
-    /// coalescer: starting from the item the `select!` arm already dequeued, it
-    /// folds the whole backlog and returns the most recent, leaving the channel
-    /// empty.
-    #[test]
-    fn drain_to_latest_coalesces_a_backlog_to_the_newest_item() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        for n in 1..=5 {
-            tx.send(n).unwrap();
-        }
-
-        // The select arm dequeues the first; `drain_to_latest` folds the rest.
-        let first = rx.recv().unwrap();
-        assert_eq!(first, 1);
-        assert_eq!(drain_to_latest(first, &rx), 5);
-        assert!(
-            rx.try_recv().is_err(),
-            "the whole backlog must be drained, not just the front"
-        );
-
-        // With nothing queued behind it, the dequeued item passes through.
-        tx.send(42).unwrap();
-        let only = rx.recv().unwrap();
-        assert_eq!(drain_to_latest(only, &rx), 42);
-    }
-
-    #[test]
-    fn disconnecting_pty_or_command_inputs_stops_the_core_with_the_other_input_alive() {
-        for close_commands in [false, true] {
-            let (senders, receivers) = core_channels();
-            let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
-            let (command_tx, _command_rx) = crossbeam_channel::unbounded();
-            let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
-            let (update_tx, _update_rx) = crossbeam_channel::unbounded();
-            let mut senders = Some(senders);
-            let mut pty_tx = Some(pty_tx);
-            let worker = std::thread::spawn(move || {
-                run_terminal_core(
-                    TerminalSize::new(20, 5),
-                    TerminalCoreOptions::default(),
-                    pty_rx,
-                    receivers,
-                    command_tx,
-                    frame_tx,
-                    update_tx,
-                );
-            });
-            frame_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-            if close_commands {
-                drop(senders.take());
-            } else {
-                drop(pty_tx.take());
+    /// The first update `met` holds for, within two seconds; the others
+    /// are passed by.
+    fn next(
+        updates: &Receiver<TerminalUpdate>,
+        what: &str,
+        met: impl Fn(&TerminalUpdate) -> bool,
+    ) -> TerminalUpdate {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match updates.recv_timeout(left) {
+                Ok(update) if met(&update) => return update,
+                Ok(_) => {}
+                Err(_) => panic!("no {what}"),
             }
-            assert_eq!(
-                frame_rx.recv_timeout(Duration::from_secs(2)),
-                Err(crossbeam_channel::RecvTimeoutError::Disconnected),
-                "the core must exit without waiting for the other input owner"
-            );
-            worker.join().unwrap();
         }
     }
 
-    /// End-to-end regression test for the synchronized-update failsafe
-    /// (`rearm_sync_flush`/`TerminalCore::flush_sync_update`): a PTY chunk
-    /// that opens a BSU window and never sends the closing ESU must still
-    /// eventually flush, driven purely by the wall-clock timer armed
-    /// against `TerminalCore::sync_flush_deadline` — with no further PTY
-    /// data at all. Exercises `run_terminal_core` directly (no real PTY
-    /// needed; `pty_tx` stands in for the reader thread) so the timer
-    /// actually has to fire, unlike the core-level tests in `crate::tests`
-    /// which call `flush_sync_update` explicitly.
+    /// The end-to-end failsafe for a synchronized update left open: a PTY
+    /// chunk that opens one and never closes it is let go by the loop's
+    /// own clock, with no further PTY data at all, and a client that is
+    /// sent the stream is told where (`TerminalUpdate::HoldReleased`). The
+    /// parser's side effects of what was held are forwarded as they came.
     #[test]
-    fn sync_update_failsafe_flushes_a_stuck_window_after_the_deadline() {
+    fn sync_update_failsafe_lets_a_stuck_hold_go_and_says_where() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, update_rx) = crossbeam_channel::unbounded();
-        let (_senders, receivers) = core_channels();
-
+        let (senders, receivers) = core_channels();
         std::thread::spawn(move || {
             run_terminal_core(
                 TerminalSize::new(40, 40),
@@ -719,47 +446,27 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
-                frame_tx,
                 update_tx,
             );
         });
+        watch(&senders.stream_tx, &update_rx);
 
-        frame_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("startup frame");
-        pty_tx.send(b"STALE".to_vec()).unwrap();
-        let stale = frame_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("visible pre-update frame");
-        assert!(stale.text().contains("STALE"));
-        // Open a synchronized-update window with an erase queued inside it,
-        // then go silent — no ESU, no further PTY data, ever.
-        pty_tx
-            .send(
-                b"\x1b[?2026h\x1b[H\x1b[K\x1b]2;flushed\x07\x07\x1b]52;c;aGVsbG8=\x07\x1b[6n"
-                    .to_vec(),
-            )
-            .unwrap();
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut healed = false;
-        while Instant::now() < deadline {
-            match frame_rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(frame) if !frame.text().contains("STALE") => {
-                    healed = true;
-                    break;
-                }
-                _ => {}
+        let held = b"\x1b[?2026h\x1b[H\x1b[K\x1b]2;flushed\x07\x07\x1b]52;c;aGVsbG8=\x07\x1b[6n";
+        pty_tx.send(held.to_vec()).unwrap();
+        let started = Instant::now();
+        let mut seen = Vec::new();
+        loop {
+            match update_rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(TerminalUpdate::HoldReleased) => break,
+                Ok(TerminalUpdate::Output(bytes)) => assert_eq!(bytes, held),
+                Ok(update) => seen.push(update),
+                Err(_) => panic!("the hold was never let go"),
             }
         }
-
-        assert!(
-            healed,
-            "failsafe timer should flush the stuck sync window without any further PTY data"
-        );
-        // The same flush must forward parser side effects before its frame.
+        // Not before the failsafe's time.
+        assert!(started.elapsed() >= Duration::from_millis(100));
         assert_eq!(
-            update_rx.try_iter().collect::<Vec<_>>(),
+            seen,
             vec![
                 TerminalUpdate::Bell,
                 TerminalUpdate::Title(Some("flushed".into())),
@@ -776,238 +483,98 @@ mod tests {
         assert!(command_rx.try_recv().is_err());
     }
 
-    /// Regression test for the terminal keystroke latency fix
-    /// (`docs/roadmap.md`): `TerminalCore::key_input` only encodes bytes for
-    /// the PTY, it never mutates visible state, so a key press on its own
-    /// must never produce a `TerminalUpdate::Snapshot` -- immediate or
-    /// coalesced. Before the fix, the `key_rx` branch called
-    /// `notify_snapshot` unconditionally after every key, which won the
-    /// immediate slot and pushed the *real* echo (arriving moments later
-    /// over `pty_rx`) into the ~16ms coalescing window on every keystroke.
+    /// A client too far behind is sent nothing more until it has taken in
+    /// what it was sent, and then the whole state again.
     #[test]
-    fn key_input_alone_never_triggers_a_snapshot_notification() {
-        let (_pty_tx, pty_rx) = crossbeam_channel::unbounded();
-        let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
-        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
-        let (senders, receivers) = core_channels();
-        let input_tx = senders.input_tx.clone();
-
-        std::thread::spawn(move || {
-            run_terminal_core(
-                TerminalSize::new(20, 10),
-                TerminalCoreOptions::default(),
-                pty_rx,
-                receivers,
-                command_tx,
-                frame_tx,
-                update_tx,
-            );
-        });
-
-        // Drain the one snapshot every session always sends right after
-        // construction (unconditional, not gated on `visible_dirty`).
-        frame_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("startup snapshot");
-
-        input_tx
-            .send(CoreInput::Key(TerminalKeyInput {
-                key: KeyCode::Char('a'),
-                modifiers: Modifiers::NONE,
-                kind: KeyEventKind::Press,
-                text: None,
-            }))
-            .unwrap();
-
-        // The key must still be encoded and forwarded to the PTY writer --
-        // only the spurious notification is gone, not the key handling
-        // itself.
-        let encoded = command_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("the key must still be encoded and forwarded to the PTY");
-        std::assert_matches!(encoded, TerminalCommand::Input(bytes) if !bytes.is_empty());
-
-        assert!(
-            frame_rx.recv_timeout(Duration::from_millis(100)).is_err(),
-            "a key press with no PTY echo must not produce a snapshot notification"
-        );
-    }
-
-    /// A wheel that is the program's (it asked for the mouse) is written
-    /// to it and makes no frame: the screen changes when the program
-    /// answers, and a frame before that would put the answer's own frame
-    /// off to the end of the window.
-    #[test]
-    fn a_wheel_that_is_the_program_s_makes_no_frame_of_its_own() {
-        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
-        let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
-        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
-        let (senders, receivers) = core_channels();
-
-        std::thread::spawn(move || {
-            run_terminal_core(
-                TerminalSize::new(20, 10),
-                TerminalCoreOptions::default(),
-                pty_rx,
-                receivers,
-                command_tx,
-                frame_tx,
-                update_tx,
-            );
-        });
-        frame_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("startup snapshot");
-        // The program asks for the mouse, in SGR's form.
-        pty_tx.send(b"\x1b[?1000h\x1b[?1006h".to_vec()).unwrap();
-        while frame_rx.recv_timeout(Duration::from_millis(100)).is_ok() {}
-
-        let point = crate::types::TerminalSelectionPoint { row: 2, col: 3 };
-        (senders.scroll_tx)
-            .send(crate::types::TerminalScroll { lines: 1, point })
-            .unwrap();
-        let written = command_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("the wheel written to the program");
-        std::assert_matches!(written, TerminalCommand::Input(bytes) if bytes == b"\x1b[<64;4;3M");
-        assert!(
-            frame_rx.recv_timeout(Duration::from_millis(100)).is_err(),
-            "a wheel the program has not answered made a frame"
-        );
-    }
-
-    /// Regression test for the other half of the terminal keystroke latency
-    /// fix (`docs/roadmap.md`): a PTY chunk that lands entirely inside an
-    /// already-open BSU/ESU synchronized-update window -- fully absorbed by
-    /// the sync buffer, nothing reaches the grid -- must not trigger a
-    /// snapshot notification either, immediate or coalesced. Before the
-    /// fix, `write_vt`'s caller notified unconditionally on every `pty_rx`
-    /// chunk regardless of whether anything was actually flushed, which is
-    /// "a compounding risk for redraws split across multiple reads" (the
-    /// investigation's words) on top of the keystroke bug itself.
-    ///
-    /// Verified by **event order** (board #9, docs/issues/015): the loop's
-    /// `tracing::debug!` observation points surface whether `notify_snapshot`
-    /// was called or skipped, so the test asserts the event sequence directly
-    /// instead of sleeping on `recv_timeout` to confirm nothing arrived --
-    /// the wall-clock negative wait that used to flake under load is gone.
-    #[test]
-    fn mid_sync_buffering_chunk_does_not_trigger_a_snapshot_notification() {
+    fn a_client_too_far_behind_is_sent_the_state_again_once_it_has_caught_up() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
-        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
-        let (_senders, receivers) = core_channels();
-
-        let event_rx = spawn_core_with_capture(
-            TerminalSize::new(40, 40),
-            pty_rx,
-            receivers,
-            command_tx,
-            frame_tx,
-            update_tx,
-        );
-
-        // Drain the startup snapshot.
-        frame_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("startup snapshot");
-
-        // Seed a marker at the cursor's home position, and drain the
-        // snapshot that follows.
-        pty_tx.send(b"STALE".to_vec()).unwrap();
-        frame_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("snapshot after seeding STALE");
-
-        // Open a synchronized-update window (a mode toggle only -- no grid
-        // content in this chunk) and drain the snapshot it produces.
-        pty_tx.send(b"\x1b[?2026h".to_vec()).unwrap();
-        frame_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("snapshot after opening the window");
-
-        // Deterministically drain the tracing events the two setup chunks
-        // produced. Each visible chunk emits `pty_chunk_processed` then
-        // `notify_snapshot`; the startup snapshot is sent outside the
-        // `pty_rx` arm and emits no event. The loop thread's execution order
-        // is: (1) debug!(pty_chunk_processed) -> (2) notify_snapshot sends
-        // the frame -> (3) debug!(notify_snapshot). The test thread is
-        // unblocked by the frame arriving at step (2), but step (3) may not
-        // have run yet -- a `try_recv` drain here races with that pending
-        // event. So instead of a non-deterministic drain, consume exactly
-        // the two `notify_snapshot` events with blocking `recv`: the
-        // `pty_chunk_processed` that precedes each is already in the channel
-        // (sent before the frame), and the `notify_snapshot` that follows
-        // is what we wait for. After two `notify_snapshot` events, the event
-        // stream is empty of setup events.
-        for i in 0..2 {
-            // Each visible setup chunk: skip its pty_chunk_processed, then
-            // confirm its notify_snapshot.
-            let label = event_rx
-                .recv_timeout(Duration::from_millis(500))
-                .unwrap_or_else(|_| panic!("setup chunk {i} pty_chunk_processed event"));
-            assert_eq!(
-                label, "pty_chunk_processed",
-                "setup chunk {i} should produce pty_chunk_processed first"
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let (senders, receivers) = core_channels();
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(80, 24),
+                TerminalCoreOptions::default(),
+                pty_rx,
+                receivers,
+                command_tx,
+                update_tx,
             );
-            let label = event_rx
-                .recv_timeout(Duration::from_millis(500))
-                .unwrap_or_else(|_| panic!("setup chunk {i} notify_snapshot event"));
-            assert_eq!(
-                label, "notify_snapshot",
-                "setup chunk {i} should produce notify_snapshot second"
-            );
+        });
+        watch(&senders.stream_tx, &update_rx);
+
+        let chunk = "flooding\r\n".repeat(10_000).into_bytes();
+        let rounds = (STREAM_AHEAD as usize / chunk.len()) + 4;
+        for _ in 0..rounds {
+            pty_tx.send(chunk.clone()).unwrap();
         }
-
-        // The erase that will remove STALE, queued inside the still-open
-        // window with no ESU in this chunk: fully absorbed by the sync
-        // buffer, nothing reaches the grid yet. The loop's observation
-        // points confirm this directly by event order -- no wall-clock
-        // negative wait needed.
-        pty_tx.send(b"\x1b[H\x1b[K".to_vec()).unwrap();
-        assert_eq!(
-            event_rx
-                .recv_timeout(Duration::from_millis(500))
-                .expect("pty_chunk_processed event"),
-            "pty_chunk_processed",
-            "the buffered chunk must be processed"
-        );
-        assert_eq!(
-            event_rx
-                .recv_timeout(Duration::from_millis(500))
-                .expect("skipped_notify_buffered event"),
-            "skipped_notify_buffered",
-            "a chunk fully buffered inside an open sync window must skip \
-             notify_snapshot, not call it"
-        );
-
-        // Closing the window flushes the erase onto the grid -- this one
-        // must notify, and STALE must actually be gone.
-        pty_tx.send(b"\x1b[?2026l".to_vec()).unwrap();
-        assert_eq!(
-            event_rx
-                .recv_timeout(Duration::from_millis(500))
-                .expect("pty_chunk_processed event"),
-            "pty_chunk_processed",
-            "the close-window chunk must be processed"
-        );
-        assert_eq!(
-            event_rx
-                .recv_timeout(Duration::from_millis(500))
-                .expect("notify_snapshot event"),
-            "notify_snapshot",
-            "closing the window must notify a snapshot"
-        );
-        let frame = frame_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("snapshot after closing the window");
+        pty_tx.send(b"after".to_vec()).unwrap();
+        // What is sent stops a little past the bound, with nothing taken in.
+        let mut sent = 0u64;
+        while let Ok(update) = update_rx.recv_timeout(Duration::from_millis(300)) {
+            match update {
+                TerminalUpdate::Output(bytes) => sent += bytes.len() as u64,
+                other => panic!("{other:?} while behind"),
+            }
+        }
         assert!(
-            !frame.text().contains("STALE"),
-            "the flush must apply the buffered erase"
+            sent > STREAM_AHEAD && sent <= STREAM_AHEAD + chunk.len() as u64,
+            "{sent}"
         );
+        // Taken in: the state, which has what was not sent.
+        senders.stream_tx.send(StreamCommand::Taken(sent)).unwrap();
+        let mut state = Vec::new();
+        loop {
+            match next(&update_rx, "the state again", |_| true) {
+                TerminalUpdate::State { bytes, more } => {
+                    state.extend_from_slice(&bytes);
+                    if !more {
+                        break;
+                    }
+                }
+                other => panic!("{other:?} before the state"),
+            }
+        }
+        let view = TerminalCore::from_state(&state).expect("a terminal from the state");
+        assert!(
+            view.snapshot_text().trim_end().ends_with("after"),
+            "{}",
+            view.snapshot_text()
+        );
+    }
+
+    #[test]
+    fn disconnecting_pty_or_command_inputs_stops_the_core_with_the_other_input_alive() {
+        for close_commands in [false, true] {
+            let (senders, receivers) = core_channels();
+            let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+            let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+            let (update_tx, update_rx) = crossbeam_channel::unbounded();
+            let mut senders = Some(senders);
+            let mut pty_tx = Some(pty_tx);
+            let worker = std::thread::spawn(move || {
+                run_terminal_core(
+                    TerminalSize::new(20, 5),
+                    TerminalCoreOptions::default(),
+                    pty_rx,
+                    receivers,
+                    command_tx,
+                    update_tx,
+                );
+            });
+            watch(&senders.as_ref().unwrap().stream_tx, &update_rx);
+            if close_commands {
+                drop(senders.take());
+            } else {
+                drop(pty_tx.take());
+            }
+            assert_eq!(
+                update_rx.recv_timeout(Duration::from_secs(2)),
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected),
+                "the core must exit without waiting for the other input owner"
+            );
+            worker.join().unwrap();
+        }
     }
 
     /// End-to-end regression coverage for OSC 52 clipboard-write plumbing
@@ -1023,7 +590,6 @@ mod tests {
     fn run_terminal_core_forwards_osc52_clipboard_writes_as_updates() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, update_rx) = crossbeam_channel::unbounded();
         let (_senders, receivers) = core_channels();
 
@@ -1034,15 +600,9 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
-                frame_tx,
                 update_tx,
             );
         });
-
-        // Drain the startup frame every session emits on construction.
-        frame_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("startup frame");
 
         // base64("hello") == "aGVsbG8="
         pty_tx.send(b"\x1b]52;c;aGVsbG8=\x07".to_vec()).unwrap();
@@ -1062,20 +622,10 @@ mod tests {
         assert_eq!(clipboard_text.as_deref(), Some("hello"));
     }
 
-    /// End-to-end coverage for the phase-1 window wiring
-    /// (`docs/terminal-scrollback-design.md` §7.1, §9 option ii): a
-    /// `ScrollWindowRequest` on `window_rx` is served by
-    /// `TerminalCore::snapshot_window` and comes back out as a
-    /// `TerminalUpdate::ScrollWindow` on the events mpsc — the same round-trip
-    /// the terminald command/event plumbing carries. Crucially it must **not**
-    /// disturb the live frame watch: serving a window is a pure read, so no
-    /// new `TerminalFrame` is produced and the live viewport stays at the tail
-    /// (the no-side-effect invariant, §2.2).
     #[test]
     fn run_terminal_core_forwards_osc_notifications_as_updates() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, _frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, update_rx) = crossbeam_channel::unbounded();
         let (_senders, receivers) = core_channels();
 
@@ -1086,7 +636,6 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
-                frame_tx,
                 update_tx,
             );
         });
@@ -1126,151 +675,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn run_terminal_core_serves_a_scroll_window_without_touching_the_live_frame() {
-        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
-        let (command_tx, _command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
-        let (update_tx, update_rx) = crossbeam_channel::unbounded();
-        let (senders, receivers) = core_channels();
-        let window_tx = senders.window_tx.clone();
-
-        std::thread::spawn(move || {
-            run_terminal_core(
-                TerminalSize::new(20, 5),
-                TerminalCoreOptions::default(),
-                pty_rx,
-                receivers,
-                command_tx,
-                frame_tx,
-                update_tx,
-            );
-        });
-
-        // Seed 40 numbered lines through a 5-row viewport: 35 rows of history
-        // above the live tail (line35..line39).
-        let mut script = String::new();
-        for i in 0..40 {
-            if i > 0 {
-                script.push_str("\r\n");
-            }
-            script.push_str(&format!("line{i:02}"));
-        }
-        pty_tx.send(script.into_bytes()).unwrap();
-
-        // Drain frames until the live tail has landed, then drain any
-        // stragglers so the post-request "no new frame" assertion is clean.
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut saw_tail = false;
-        while Instant::now() < deadline {
-            match frame_rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(frame) => saw_tail |= frame.text().contains("line39"),
-                Err(_) if saw_tail => break,
-                Err(_) => {}
-            }
-        }
-        assert!(
-            saw_tail,
-            "the live tail (line39) should reach the frame watch"
-        );
-
-        // Request a window at the live edge, three viewports tall.
-        window_tx
-            .send(ScrollWindowRequest {
-                anchor: 0,
-                height: 15,
-            })
-            .unwrap();
-
-        // The window comes back on the events mpsc, self-describing.
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let window = loop {
-            assert!(
-                Instant::now() < deadline,
-                "never received the scroll window"
-            );
-            if let Ok(TerminalUpdate::ScrollWindow(window)) =
-                update_rx.recv_timeout(Duration::from_millis(50))
-            {
-                break window;
-            }
-        };
-        assert_eq!(window.below, 0, "anchor 0 sits at the live edge");
-        assert!(window.above > 0, "history remains above the served block");
-        let last = window.lines.last().expect("a non-empty window");
-        let last_text: String = last.spans.iter().map(|span| span.text.as_str()).collect();
-        assert_eq!(last_text, "line39", "the block's bottom is the live tail");
-
-        // The read must not have produced a new frame — the live viewport is
-        // untouched (no `display_offset` move, no re-snapshot).
-        assert!(
-            frame_rx.recv_timeout(Duration::from_millis(150)).is_err(),
-            "serving a scroll window must not push a new live frame"
-        );
-    }
-
-    /// A word selection (`SelectionCommand::Start { kind: Word, .. }`)
-    /// writes the selected text to the OS primary buffer automatically --
-    /// distinct from the explicit-copy path above, which targets the system
-    /// clipboard instead. Exercised through the real `selection_rx` ->
-    /// `TerminalCore::start_selection` -> `update_tx` path, mirroring the
-    /// OSC 52 test's shape.
-    #[test]
-    fn run_terminal_core_writes_selection_to_primary_on_start() {
-        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
-        let (command_tx, _command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
-        let (update_tx, update_rx) = crossbeam_channel::unbounded();
-        let (senders, receivers) = core_channels();
-        let selection_tx = senders.selection_tx.clone();
-
-        std::thread::spawn(move || {
-            run_terminal_core(
-                TerminalSize::new(40, 40),
-                TerminalCoreOptions::default(),
-                pty_rx,
-                receivers,
-                command_tx,
-                frame_tx,
-                update_tx,
-            );
-        });
-
-        pty_tx.send(b"hello world".to_vec()).unwrap();
-        // Synchronize on the snapshot the PTY write produces before
-        // selecting, so the selection lands on rendered text.
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            assert!(Instant::now() < deadline, "never saw the PTY text land");
-            if let Ok(frame) = frame_rx.recv_timeout(Duration::from_millis(50))
-                && frame.text().contains("hello")
-            {
-                break;
-            }
-        }
-
-        selection_tx
-            .send(crate::contract::SelectionCommand::Start {
-                point: crate::types::TerminalSelectionPoint { row: 0, col: 0 },
-                kind: crate::types::TerminalSelectionKind::Word,
-            })
-            .unwrap();
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut primary_text = None;
-        while Instant::now() < deadline {
-            if let Ok(TerminalUpdate::Clipboard { text, destination }) =
-                update_rx.recv_timeout(Duration::from_millis(50))
-            {
-                assert_eq!(destination, ClipboardDestination::Primary);
-                primary_text = Some(text);
-                break;
-            }
-        }
-
-        assert_eq!(primary_text.as_deref(), Some("hello"));
-    }
-
     /// End-to-end regression coverage for focus-report plumbing
     /// (`docs/tasks/backlog.md` item 5): a `focus_rx` transition must stay
     /// silent until the attached app has negotiated mode 1004 (`CSI ?1004h`,
@@ -1281,8 +685,7 @@ mod tests {
     fn run_terminal_core_reports_focus_only_once_mode_1004_is_enabled() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
-        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
         let (senders, receivers) = core_channels();
         let focus_tx = senders.focus_tx.clone();
 
@@ -1293,7 +696,6 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
-                frame_tx,
                 update_tx,
             );
         });
@@ -1306,15 +708,14 @@ mod tests {
             "focus_input must stay silent until mode 1004 is negotiated"
         );
 
-        // Negotiate mode 1004, then synchronize on the snapshot that always
-        // follows a PTY-driven mutation (`notify_snapshot`'s backdated
-        // `last_sent` guarantees the very first one sends immediately) --
-        // proof the mode-1004 write has already been applied before the
-        // focus transition below is sent, with no arbitrary sleep needed.
+        // Negotiate mode 1004, then synchronize on its bytes coming back
+        // out of the stream: proof the write has been applied before the
+        // focus transition below is sent, with no sleep needed.
+        watch(&senders.stream_tx, &update_rx);
         pty_tx.send(b"\x1b[?1004h".to_vec()).unwrap();
-        frame_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("a snapshot should follow the mode-1004 write");
+        next(&update_rx, "the mode's bytes", |update| {
+            matches!(update, TerminalUpdate::Output(_))
+        });
 
         focus_tx.send(true).unwrap();
         let focus_in = command_rx
@@ -1350,7 +751,6 @@ mod tests {
 
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let (senders, receivers) = core_channels();
         let color_scheme_tx = senders.color_scheme_tx.clone();
@@ -1362,15 +762,9 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
-                frame_tx,
                 update_tx,
             );
         });
-
-        // Drain the startup snapshot.
-        frame_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("startup snapshot");
 
         // Push a scheme distinct from `TerminalColorScheme::default()` and
         // poll an OSC 11 query until the reply reflects it.
@@ -1513,7 +907,6 @@ mod tests {
     fn pending_query_is_answered_before_a_queued_keystroke_is_forwarded() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let (senders, receivers) = core_channels();
         let input_tx = senders.input_tx.clone();
@@ -1525,14 +918,9 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
-                frame_tx,
                 update_tx,
             );
         });
-
-        frame_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("startup snapshot");
 
         // Queue the query first, then the keystrokes it must not lose to.
         pty_tx.send(b"\x1b]11;?\x07".to_vec()).unwrap();
@@ -1586,7 +974,6 @@ mod tests {
     fn mixed_user_input_retains_fifo_order_before_the_core_starts() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, _frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let (senders, receivers) = core_channels();
         let mut expected = Vec::new();
@@ -1622,7 +1009,6 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
-                frame_tx,
                 update_tx,
             )
         });
@@ -1650,7 +1036,6 @@ mod tests {
     fn run_terminal_core_answers_a_status_query_and_forwards_the_reports() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (frame_tx, _frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, update_rx) = crossbeam_channel::unbounded();
         let (_senders, receivers) = core_channels();
 
@@ -1661,7 +1046,6 @@ mod tests {
                 pty_rx,
                 receivers,
                 command_tx,
-                frame_tx,
                 update_tx,
             );
         });

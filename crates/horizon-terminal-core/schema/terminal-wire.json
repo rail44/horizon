@@ -205,7 +205,7 @@
       "type": "object"
     },
     "TerminalAttachment": {
-      "description": "What [`TerminalHub::create_terminal`]/[`TerminalHub::attach_terminal`]\nhand back: the session's live channels. Since wire v11\n(`docs/remoc-adoption-design.md` §5 Option A) frame delivery is a\nsnapshot-valued signal — `frames` is an `rch::watch<TerminalFrame>`\nwhose current value *is* the latest frame at every moment, seeded on\nattach with the daemon-retained latest frame. The wire diff machinery is\ngone: no `Snapshot`/`FrameDiff` split, no per-connection baseline, and\nrow-change detection moved to the client (a `TerminalLine` comparison of\nconsecutive frames). `events` carries everything that is *not* a frame\n(`TerminalUpdate`: title, bell, clipboard, exit, error).",
+      "description": "What [`TerminalHub::create_terminal`]/[`TerminalHub::attach_terminal`]\nhand back: the session's live channels. `events` carries the\nterminal's state and the bytes after it to a client that asks\n(`TerminalCommand::WantState`, `docs/terminal-stream-design.md`), and\nwhat the session says of itself (title, bell, clipboard, exit, error);\n`commands` carries what the client sends. There are no frames: a client\ndraws from a terminal of its own.",
       "properties": {
         "commands": {
           "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
@@ -218,17 +218,9 @@
           "x-channel-payload": {
             "$ref": "#/$defs/TerminalUpdate"
           }
-        },
-        "frames": {
-          "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
-          "description": "The snapshot-valued frame signal: every observation is a full\n[`TerminalFrame`]; a slow reader skips intermediate frames and\nconverges on the latest (§5 Option A, spike §1c). Seeded with the\ndaemon-retained latest frame on attach (the structural resync\nanchor), or an empty frame for a freshly created session.",
-          "x-channel-payload": {
-            "$ref": "#/$defs/TerminalFrame"
-          }
         }
       },
       "required": [
-        "frames",
         "events",
         "commands"
       ],
@@ -374,7 +366,6 @@
       "oneOf": [
         {
           "enum": [
-            "CopySelection",
             "Shutdown"
           ],
           "type": "string"
@@ -502,42 +493,6 @@
         },
         {
           "additionalProperties": false,
-          "properties": {
-            "SelectionStart": {
-              "properties": {
-                "kind": {
-                  "$ref": "#/$defs/TerminalSelectionKind"
-                },
-                "point": {
-                  "$ref": "#/$defs/TerminalSelectionPoint"
-                }
-              },
-              "required": [
-                "point",
-                "kind"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "SelectionStart"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "SelectionUpdate": {
-              "$ref": "#/$defs/TerminalSelectionPoint"
-            }
-          },
-          "required": [
-            "SelectionUpdate"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
           "description": "A pane focus transition (`true` = gained focus, `false` = lost it),\nforwarded to `TerminalCore::focus_input` so it can be reported to\nthe attached app as `CSI I`/`CSI O` if it negotiated mode 1004. The\nsource is `app::runtime::wire_focus_reporting`, which composes\nHorizon's own window focus with which visible pane is active.",
           "properties": {
             "Focus": {
@@ -584,35 +539,6 @@
           },
           "required": [
             "OutputTaken"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Client → daemon: request a scrollback *window* — a contiguous block of\nhistory `height` rows tall, positioned `anchor` rows above the live\nbottom (a hypothetical `display_offset`). The daemon answers on the\nevents channel with [`TerminalUpdate::ScrollWindow`], a self-describing\nwindow (`docs/terminal-scrollback-design.md` §3.2, §9 option ii): the\nreply carries its own `viewport_offset`/`above`/`below`, so no\ncorrelation id is needed. Serving it never moves the live\n`display_offset` (`TerminalCore::snapshot_window`), so the live-frame\nwatch keeps showing the tail throughout. Phase 1 wires this\nend-to-end daemon-side, the client does not send it yet (§7 phase 2).",
-          "properties": {
-            "RequestScrollWindow": {
-              "properties": {
-                "anchor": {
-                  "format": "uint",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "height": {
-                  "format": "uint",
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "anchor",
-                "height"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "RequestScrollWindow"
           ],
           "type": "object"
         }
@@ -923,43 +849,6 @@
       ],
       "type": "object"
     },
-    "TerminalScrollWindow": {
-      "description": "A served scrollback window: a contiguous block of history rows read at an\narbitrary position **without disturbing the live viewport**\n(`TerminalCore::snapshot_window`, built by a `grid.iter_from` walk that\nnever moves `display_offset` — `docs/terminal-scrollback-design.md` §2.2,\n§3.2). The window is self-describing, so the client needs no\nrequest/response correlation id: `viewport_offset`/`above`/`below` locate\nit against the grid at service time. Carried back to the client as\n[`crate::TerminalUpdate::ScrollWindow`] on the events channel\n(§9 option ii). Reuses the frame's own [`TerminalLine`] vocabulary so the\nclient paints it with the identical renderer, and — being a struct, not a\nwire enum in element position — keeps the postbag positional discipline\n(§4 rule 5).",
-      "properties": {
-        "above": {
-          "description": "How many history rows remain above the block's top. `0` is the\ntrue-top signal (upward scrolling and prefetch clamp here).",
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "below": {
-          "description": "How many rows remain below the block's bottom, down to the live tail.\n`0` is the live-edge signal (scrolling past it drops the window and\nresumes the live-frame watch).",
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "lines": {
-          "description": "The contiguous block of history rows, top to bottom. Clamped by\n`above`/`below`, so it may be shorter than the requested height near\nthe true top or the live edge.",
-          "items": {
-            "$ref": "#/$defs/TerminalLine"
-          },
-          "type": "array"
-        },
-        "viewport_offset": {
-          "description": "Index into [`lines`](Self::lines) of the row that is the top of the\nviewport at the requested anchor — where the client places the\nvisible window inside the block.",
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "lines",
-        "viewport_offset",
-        "above",
-        "below"
-      ],
-      "type": "object"
-    },
     "TerminalSelection": {
       "description": "A selection's two inclusive endpoints in viewport coordinates — see\n`TerminalFrame::selection` for the coordinate/clamping contract. Reuses\n[`TerminalSelectionPoint`], the same cell-coordinate type the input side\n(`TerminalCommand::SelectionStart`/`SelectionUpdate`) already speaks.\nFull rows between `start.row` and `end.row` are entirely selected —\nthere is no block-selection variant in this vocabulary.",
       "properties": {
@@ -975,26 +864,6 @@
         "end"
       ],
       "type": "object"
-    },
-    "TerminalSelectionKind": {
-      "description": "Horizon-owned selection-kind vocabulary for the wire (`TerminalCommand::\nSelectionStart`/`SelectionCommand::Start`) -- deliberately not\n`alacritty_terminal::selection::SelectionType` itself, since that type\ncrosses the daemon/host boundary and this crate's contract types are the\nonly ones allowed to. `TerminalCore::start_selection` maps this onto\n`SelectionType::{Simple, Semantic, Lines}`; see its doc for why\n`Semantic`/`Lines` give word/line selection \"for free\" daemon-side.",
-      "oneOf": [
-        {
-          "const": "Simple",
-          "description": "Plain character-range selection (a single click-and-drag).",
-          "type": "string"
-        },
-        {
-          "const": "Word",
-          "description": "Word-boundary selection (a double click), alacritty's \"semantic\".",
-          "type": "string"
-        },
-        {
-          "const": "Line",
-          "description": "Whole-line selection (a triple click or beyond).",
-          "type": "string"
-        }
-      ]
     },
     "TerminalSelectionPoint": {
       "properties": {
@@ -1259,19 +1128,6 @@
           },
           "required": [
             "Error"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Daemon → client: a served scrollback window, the reply to\n[`TerminalCommand::RequestScrollWindow`]\n(`docs/terminal-scrollback-design.md` §3.2, §9 option ii — it rides\nthis existing events mpsc rather than a dedicated channel). The window\nis self-describing (`viewport_offset`/`above`/`below`), so it carries\nno correlation id, and its payload is a struct\n([`TerminalScrollWindow`]) — no wire enum in element position, keeping\nthe postbag positional discipline. Phase 1 produces it daemon-side,\nthe client does not consume it yet (§7 phase 2).",
-          "properties": {
-            "ScrollWindow": {
-              "$ref": "#/$defs/TerminalScrollWindow"
-            }
-          },
-          "required": [
-            "ScrollWindow"
           ],
           "type": "object"
         },

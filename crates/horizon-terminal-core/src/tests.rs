@@ -1686,31 +1686,10 @@ fn terminal_commands_and_selection_commands_round_trip_through_serde() {
         }),
         TerminalCommand::Scroll(TerminalScroll { lines: -2, point }),
         TerminalCommand::Mouse(mouse),
-        TerminalCommand::SelectionStart {
-            point,
-            kind: TerminalSelectionKind::Word,
-        },
-        TerminalCommand::SelectionUpdate(point),
-        TerminalCommand::CopySelection,
         TerminalCommand::Focus(true),
-        TerminalCommand::RequestScrollWindow {
-            anchor: 12,
-            height: 45,
-        },
         TerminalCommand::Shutdown,
     ];
     for command in commands {
-        assert_serde_round_trip(command);
-    }
-
-    for kind in [
-        TerminalSelectionKind::Simple,
-        TerminalSelectionKind::Word,
-        TerminalSelectionKind::Line,
-    ] {
-        assert_serde_round_trip(SelectionCommand::Start { point, kind });
-    }
-    for command in [SelectionCommand::Update(point), SelectionCommand::Copy] {
         assert_serde_round_trip(command);
     }
 }
@@ -1734,14 +1713,6 @@ fn terminal_updates_and_external_value_types_round_trip_through_serde() {
         },
         TerminalUpdate::Exited,
         TerminalUpdate::Error("error".into()),
-        TerminalUpdate::ScrollWindow(TerminalScrollWindow {
-            lines: vec![TerminalLine {
-                spans: vec![plain_span("history".into(), 7)],
-            }],
-            viewport_offset: 1,
-            above: 8,
-            below: 3,
-        }),
         TerminalUpdate::WorkingDirectory("/work/repo".into()),
     ];
     for update in updates {

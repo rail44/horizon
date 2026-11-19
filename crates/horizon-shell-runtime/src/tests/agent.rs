@@ -29,7 +29,7 @@ use super::super::attachment::acp_session_id;
 use super::super::*;
 use super::{
     FakeBehavior, TerminalCall, bind_stub_listener, expect_terminald_handshake, hold_silently,
-    next_terminal_call, read_until_closed, recv_frame, serve_fake_terminal_hub, spec,
+    next_terminal_call, read_until_closed, recv_output, serve_fake_terminal_hub, spec,
     stub_socket_paths,
 };
 use crate::agent_model::{AgentEvent, PermissionDecision, ToolCallIdentity};
@@ -501,8 +501,8 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
     assert_eq!(meta.provider_id, "mock");
     assert_eq!(cwd, PathBuf::from("/work/project"));
 
-    let frame = horizon_terminal_core::TerminalFrame::from_text("terminal".into());
-    peer.frames.send(frame.clone()).unwrap();
+    let output = TerminalUpdate::Output(b"terminal".to_vec());
+    peer.events.send(output).await.unwrap();
     wait_until_ready(&mut agent).await;
     fake.update(agent_id, idle());
     terminal
@@ -510,7 +510,7 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
         .send(TerminalCommand::Input(b"fifo".to_vec()))
         .unwrap();
 
-    assert_eq!(recv_frame(terminal.frames(), "terminal").await, frame);
+    recv_output(terminal.events(), b"terminal").await;
     let event = next_agent_event(&mut agent).await;
     assert!(is_idle_update(&event), "got {event:?}");
     let mut commands = peer.commands;
@@ -555,9 +555,9 @@ async fn draining_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     assert!(agentd.begin_reload(), "the agent runtime was established");
     std::assert_matches!(fake.next_call().await, AgentCall::Drain);
 
-    let frame = horizon_terminal_core::TerminalFrame::from_text("still alive".into());
-    peer.frames.send(frame.clone()).unwrap();
-    assert_eq!(recv_frame(terminal.frames(), "still alive").await, frame);
+    let output = TerminalUpdate::Output(b"still alive".to_vec());
+    peer.events.send(output).await.unwrap();
+    recv_output(terminal.events(), b"still alive").await;
     assert!(
         terminal_calls.try_recv().is_err(),
         "draining agentd must not send anything to terminald"

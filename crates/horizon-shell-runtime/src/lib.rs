@@ -50,9 +50,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use horizon_acp::{HostToolRequest, ProviderSummary, SessionId, SessionNewMeta};
-use horizon_terminal_core::{
-    TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
-};
+use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use routing::{AgentRoutes, RouteKey, TerminalRoutes};
 use uuid::Uuid;
 
@@ -142,12 +140,9 @@ pub struct AgentSessionHandle {
 
 pub struct TerminalSessionHandle {
     commands: Sender<TerminalCommand>,
-    /// Full frames from the daemon's `watch<TerminalFrame>` (wire v11), kept
-    /// latest-only across the local runtime -> UI boundary as well. Using a
-    /// second watch here is load-bearing: an unbounded FIFO makes a slow UI
-    /// replay obsolete frames for seconds after a PTY burst has stopped.
-    frames: tokio::sync::watch::Receiver<TerminalFrame>,
-    /// The non-frame events (title/bell/clipboard/exit/error).
+    /// What the daemon sends: the terminal's state and the bytes after it,
+    /// and what the session says of itself (title/bell/clipboard/exit/
+    /// error).
     events: Receiver<TerminalUpdate>,
     route: RouteKey<Uuid>,
     routes: Arc<TerminalRoutes>,
@@ -183,17 +178,12 @@ impl TerminalSessionHandle {
         self.commands.clone()
     }
 
-    pub fn frames(&self) -> tokio::sync::watch::Receiver<TerminalFrame> {
-        self.frames.clone()
-    }
-
     pub fn events(&self) -> Receiver<TerminalUpdate> {
         self.events.clone()
     }
 
     /// Has `heard` told whenever an event is put on [`events`](Self::events),
-    /// from the thread it arrived on: a frame's arrival is the watch's own
-    /// to wait for, and an event's is not anyone's.
+    /// from the thread it arrived on.
     pub fn hear_events(&self, heard: impl Fn() + Send + Sync + 'static) {
         (self.routes).hear_terminal_events(self.route, Arc::new(heard));
     }
@@ -572,12 +562,9 @@ impl TerminaldHandle {
         tokio::sync::mpsc::UnboundedReceiver<TerminalCommand>,
     ) {
         let (command_tx, command_rx) = unbounded::<TerminalCommand>();
-        let (frame_tx, frame_rx) = tokio::sync::watch::channel(TerminalFrame::empty());
         let (event_tx, event_rx) = unbounded::<TerminalUpdate>();
         let (bridge_tx, bridge_rx) = tokio::sync::mpsc::unbounded_channel();
-        let route =
-            self.routes
-                .register_terminal(session_id, frame_tx, event_tx, bridge_tx.clone());
+        let route = (self.routes).register_terminal(session_id, event_tx, bridge_tx.clone());
 
         std::thread::spawn(move || {
             while let Ok(command) = command_rx.recv() {
@@ -590,7 +577,6 @@ impl TerminaldHandle {
         (
             TerminalSessionHandle {
                 commands: command_tx,
-                frames: frame_rx,
                 events: event_rx,
                 route,
                 routes: self.routes.clone(),

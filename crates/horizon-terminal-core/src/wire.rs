@@ -25,11 +25,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use horizon_wire::{
-    CappedReceiver, CappedWatchReceiver, ClientHello, FRAME_MAX_ITEM_BYTES, HubError,
-    TERMINAL_EVENT_MAX_ITEM_BYTES, VersionRange, WireCodec, channel_schema,
+    CappedReceiver, ClientHello, HubError, TERMINAL_EVENT_MAX_ITEM_BYTES, VersionRange, WireCodec,
+    channel_schema,
 };
 
-use crate::{TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
+use crate::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 
 /// The terminal-daemon protocol version this build speaks.
 ///
@@ -126,24 +126,14 @@ pub struct TerminalHubHello {
 }
 
 /// What [`TerminalHub::create_terminal`]/[`TerminalHub::attach_terminal`]
-/// hand back: the session's live channels. Since wire v11
-/// (`docs/remoc-adoption-design.md` §5 Option A) frame delivery is a
-/// snapshot-valued signal — `frames` is an `rch::watch<TerminalFrame>`
-/// whose current value *is* the latest frame at every moment, seeded on
-/// attach with the daemon-retained latest frame. The wire diff machinery is
-/// gone: no `Snapshot`/`FrameDiff` split, no per-connection baseline, and
-/// row-change detection moved to the client (a `TerminalLine` comparison of
-/// consecutive frames). `events` carries everything that is *not* a frame
-/// (`TerminalUpdate`: title, bell, clipboard, exit, error).
+/// hand back: the session's live channels. `events` carries the
+/// terminal's state and the bytes after it to a client that asks
+/// (`TerminalCommand::WantState`, `docs/terminal-stream-design.md`), and
+/// what the session says of itself (title, bell, clipboard, exit, error);
+/// `commands` carries what the client sends. There are no frames: a client
+/// draws from a terminal of its own.
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct TerminalAttachment {
-    /// The snapshot-valued frame signal: every observation is a full
-    /// [`TerminalFrame`]; a slow reader skips intermediate frames and
-    /// converges on the latest (§5 Option A, spike §1c). Seeded with the
-    /// daemon-retained latest frame on attach (the structural resync
-    /// anchor), or an empty frame for a freshly created session.
-    #[schemars(schema_with = "channel_schema::<TerminalFrame>")]
-    pub frames: CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
     #[schemars(schema_with = "channel_schema::<TerminalUpdate>")]
     pub events: CappedReceiver<TerminalUpdate, TERMINAL_EVENT_MAX_ITEM_BYTES>,
     #[schemars(schema_with = "channel_schema::<TerminalCommand>")]

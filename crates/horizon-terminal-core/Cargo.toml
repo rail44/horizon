@@ -44,10 +44,7 @@ uuid = { version = "1.18", features = ["serde"] }
 # The measurement of what a real program reports runs it in a PTY.
 portable-pty = "0.9.0"
 serde_json = "1.0"
-# The session-loop tests' in-memory event-capture subscriber (board #9).
-tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "registry"] }
-# The live-connection wire tests (`tests/frame_watch.rs`,
-# `tests/limits.rs`), which host both ends of a real remoc connection over
+# The live-connection wire tests (`tests/limits.rs`), which host both ends of a real remoc connection over
 # a `UnixStream` pair.
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "net", "time", "io-util"] }
 

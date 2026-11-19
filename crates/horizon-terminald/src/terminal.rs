@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_terminal_core::{
-    CoreInput, CoreSenders, ScrollWindowRequest, SelectionCommand, TerminalCommand,
-    TerminalCoreOptions, TerminalFrame, TerminalKeyInput, TerminalProgramStatus, TerminalSpawnSpec,
-    TerminalSummary, TerminalUpdate, core_channels, run_terminal_core,
+    CoreInput, CoreSenders, StreamCommand, TerminalCommand, TerminalCoreOptions, TerminalKeyInput,
+    TerminalProgramStatus, TerminalSpawnSpec, TerminalSummary, TerminalUpdate, core_channels,
+    run_terminal_core,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -23,10 +23,10 @@ use uuid::Uuid;
 /// against.
 const TERMINAL_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How long a session's frame stream must stay quiet after a frame before
+/// How long a session's PTY must stay quiet after it wrote before
 /// [`TerminalHost::forward_updates`] re-reads the shell's cwd. A `cd` redraws
 /// the prompt, so the read lands once that redraw has settled; a session that
-/// produces no frames is never sampled.
+/// writes nothing is never sampled.
 const CWD_SETTLE: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
@@ -35,17 +35,14 @@ pub(crate) struct TerminalHost {
     /// One live subscriber per attached terminal session — installed by
     /// the hub's `create_terminal`/`attach_terminal` (a re-attach
     /// replaces), removed when the session exits or the subscriber's
-    /// bridge dies. Since wire v11 (`docs/remoc-adoption-design.md` §5
-    /// Option A) there is no per-attachment baseline: the frame path is a
-    /// watch, so resync is structural (the retained latest frame seeds the
-    /// watch) and the subscriber just forwards full frames and events.
+    /// bridge dies. A client that attaches asks for the terminal's state
+    /// itself (`TerminalCommand::WantState`).
     subscribers: Arc<Mutex<HashMap<Uuid, Subscriber>>>,
 }
 
 #[derive(Clone)]
 struct HostedTerminal {
     command_tx: Sender<TerminalCommand>,
-    latest_frame: Arc<Mutex<Option<TerminalFrame>>>,
     pid: Option<u32>,
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     /// The last cwd published as [`TerminalUpdate::WorkingDirectory`], if
@@ -59,27 +56,18 @@ struct HostedTerminal {
     program_status: Option<TerminalProgramStatus>,
 }
 
-/// The local (sync-sendable, unbounded) halves of one attachment's two
-/// bridges: the PTY-side threads push into these; the hub's async pumps
-/// drain them into the attachment's remote channels. `frames` carries full
-/// [`TerminalFrame`]s onto the `rch::watch` (latest-value); `events`
-/// carries the non-frame [`TerminalUpdate`]s onto the events mpsc. No
-/// baseline: since wire v11 the frame path is a snapshot-valued signal, so
-/// there is nothing per-attachment to diff against.
+/// The local (sync-sendable, unbounded) half of one attachment's bridge:
+/// the PTY-side threads push into it; the hub's async pump drains it into
+/// the attachment's remote events mpsc.
 struct Subscriber {
     registration: Uuid,
-    frames: UnboundedSender<TerminalFrame>,
     events: UnboundedSender<TerminalUpdate>,
 }
 
-/// What [`TerminalHost::install_subscriber`] hands the hub: the watch seed
-/// (the daemon-retained latest frame, or an empty frame for a
-/// freshly-created session) plus the local receiving halves the hub pumps
-/// into the attachment's remote `frames` watch and `events` mpsc.
+/// What [`TerminalHost::install_subscriber`] hands the hub: the local
+/// receiving half the hub pumps into the attachment's remote events mpsc.
 pub(crate) struct SubscriberChannels {
     registration: Uuid,
-    pub(crate) seed: TerminalFrame,
-    pub(crate) frames: UnboundedReceiver<TerminalFrame>,
     pub(crate) events: UnboundedReceiver<TerminalUpdate>,
 }
 
@@ -109,7 +97,7 @@ impl TerminalHost {
 
     /// [`Self::install_subscriber`] for the create path: no existence
     /// requirement, because the hub subscribes *before* spawning the PTY
-    /// so the session's very first frames are never lost.
+    /// so the session's very first events are never lost.
     pub(crate) fn subscribe_for_create(&self, session_id: Uuid) -> SubscriberChannels {
         self.install_subscriber(session_id, false)
             .expect("create subscriptions do not require an existing session")
@@ -127,13 +115,9 @@ impl TerminalHost {
     /// Installs a fresh subscriber for `session_id` (replacing any
     /// previous attachment's). A missing session on the attach path leaves
     /// any in-progress create subscription intact. Returns the channels used to
-    /// wire the attachment. The session's retained latest frame (or an
-    /// empty frame, for a freshly created session) becomes the watch
-    /// *seed*: since wire v11 the frame path is a snapshot-valued signal,
-    /// so the resync anchor is the watch's current value rather than a
-    /// pushed `Snapshot`-then-baseline dance.
+    /// wire the attachment.
     ///
-    /// The whole read-seed-insert sequence runs under the `subscribers`
+    /// The whole read-insert sequence runs under the `subscribers`
     /// lock (with the `sessions` lock taken *inside* it, an ordering
     /// [`Self::forward_updates`] never inverts — it always releases
     /// `sessions` before touching `subscribers`), and the `Exited`
@@ -147,19 +131,14 @@ impl TerminalHost {
         session_id: Uuid,
         require_existing: bool,
     ) -> Option<SubscriberChannels> {
-        let (frame_tx, frame_rx) = unbounded_channel();
         let (event_tx, event_rx) = unbounded_channel();
         let mut subscribers = self.subscribers.lock().unwrap();
-        let (latest, cwd, program_status) = {
+        let (cwd, program_status) = {
             let sessions = self.sessions.lock().unwrap();
             match sessions.get(&session_id) {
-                Some(session) => (
-                    session.latest_frame.lock().unwrap().clone(),
-                    session.cwd.clone(),
-                    session.program_status.clone(),
-                ),
+                Some(session) => (session.cwd.clone(), session.program_status.clone()),
                 None if require_existing => return None,
-                None => (None, None, None),
+                None => (None, None),
             }
         };
         if let Some(cwd) = cwd {
@@ -175,14 +154,11 @@ impl TerminalHost {
             session_id,
             Subscriber {
                 registration,
-                frames: frame_tx,
                 events: event_tx,
             },
         );
         Some(SubscriberChannels {
             registration,
-            seed: latest.unwrap_or_else(TerminalFrame::empty),
-            frames: frame_rx,
             events: event_rx,
         })
     }
@@ -300,7 +276,7 @@ impl TerminalHost {
             let (result_tx, result_rx) = crossbeam_channel::bounded(1);
             thread::spawn(move || {
                 match spawn_terminal(session_id, &spec_for_thread, &cwd_for_thread) {
-                    Ok((session, frame_rx, update_rx)) => {
+                    Ok((session, activity_rx, update_rx)) => {
                         let pid = session.pid;
                         if host.install_if_vacant(session_id, session) {
                             let _ = result_tx.send(Ok(()));
@@ -308,7 +284,7 @@ impl TerminalHost {
                                 session_id,
                                 pid.and_then(sample_cwd).unwrap_or(cwd_for_thread),
                             );
-                            host.forward_updates(session_id, frame_rx, update_rx);
+                            host.forward_updates(session_id, activity_rx, update_rx);
                         }
                         // Occupied: a different attempt (an earlier one that
                         // timed out here but finished late, or a fresh
@@ -465,20 +441,16 @@ impl TerminalHost {
         }
     }
 
-    /// Fans the session loop's two output channels out to the current
-    /// subscriber: full frames onto its `frames` bridge (and the retained
-    /// latest frame), non-frame events onto its `events` bridge. Since wire
-    /// v11 there is no per-attachment diffing — the frame path is a watch,
-    /// so a full frame goes straight through.
+    /// Fans the session loop's events out to the current subscriber.
     ///
-    /// Each frame also arms a [`CWD_SETTLE`] deadline; when it passes with no
-    /// further frame, the shell's cwd is re-read ([`Self::refresh_cwd`]).
-    /// With no frame since the last read the deadline is disarmed, so an
-    /// idle session costs no wakeups.
+    /// Each time the PTY writes (`activity_rx`) a [`CWD_SETTLE`] deadline is
+    /// armed; when it passes with no further write, the shell's cwd is
+    /// re-read ([`Self::refresh_cwd`]). With no write since the last read
+    /// the deadline is disarmed, so an idle session costs no wakeups.
     fn forward_updates(
         &self,
         session_id: Uuid,
-        frame_rx: Receiver<TerminalFrame>,
+        activity_rx: Receiver<()>,
         update_rx: Receiver<TerminalUpdate>,
     ) {
         let host = self.clone();
@@ -486,7 +458,7 @@ impl TerminalHost {
             // Once a channel closes, park it on a `never()` receiver so the
             // select keeps servicing the other; the forwarder ends when the
             // events channel closes or delivers `Exited`.
-            let mut frame_rx = frame_rx;
+            let mut activity_rx = activity_rx;
             let mut cwd_settle = crossbeam_channel::never();
             loop {
                 crossbeam_channel::select! {
@@ -494,21 +466,9 @@ impl TerminalHost {
                         cwd_settle = crossbeam_channel::never();
                         host.refresh_cwd(session_id);
                     }
-                    recv(frame_rx) -> frame => match frame {
-                        Ok(frame) => {
-                            cwd_settle = crossbeam_channel::after(CWD_SETTLE);
-                            if let Some(session) = host.sessions.lock().unwrap().get(&session_id) {
-                                *session.latest_frame.lock().unwrap() = Some(frame.clone());
-                            }
-                            let mut subscribers = host.subscribers.lock().unwrap();
-                            if subscribers
-                                .get(&session_id)
-                                .is_some_and(|subscriber| subscriber.frames.send(frame).is_err())
-                            {
-                                subscribers.remove(&session_id);
-                            }
-                        }
-                        Err(_) => frame_rx = crossbeam_channel::never(),
+                    recv(activity_rx) -> wrote => match wrote {
+                        Ok(()) => cwd_settle = crossbeam_channel::after(CWD_SETTLE),
+                        Err(_) => activity_rx = crossbeam_channel::never(),
                     },
                     recv(update_rx) -> update => {
                         let Ok(update) = update else {
@@ -543,11 +503,7 @@ fn spawn_terminal(
     session_id: Uuid,
     spec: &TerminalSpawnSpec,
     cwd: &Path,
-) -> anyhow::Result<(
-    HostedTerminal,
-    Receiver<TerminalFrame>,
-    Receiver<TerminalUpdate>,
-)> {
+) -> anyhow::Result<(HostedTerminal, Receiver<()>, Receiver<TerminalUpdate>)> {
     let size = spec.initial_size.normalized();
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
@@ -584,29 +540,21 @@ fn spawn_terminal(
     let master = pair.master;
 
     let (command_tx, command_rx) = crossbeam_channel::unbounded();
-    let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+    // That the PTY wrote: at most one waits, the rest are the same news.
+    let (activity_tx, activity_rx) = crossbeam_channel::bounded(1);
     let (update_tx, update_rx) = crossbeam_channel::unbounded();
     let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
     let (senders, receivers) = core_channels();
 
     let response_tx = command_tx.clone();
     let read_update_tx = update_tx.clone();
-    thread::spawn(move || read_pty(&mut *reader, pty_tx, read_update_tx));
+    thread::spawn(move || read_pty(&mut *reader, pty_tx, activity_tx, read_update_tx));
     let options = TerminalCoreOptions {
         scrollback_lines: spec.scrollback_lines,
         color_scheme: spec.color_scheme,
-        frame_interval: frame_interval(),
     };
     thread::spawn(move || {
-        run_terminal_core(
-            size,
-            options,
-            pty_rx,
-            receivers,
-            response_tx,
-            frame_tx,
-            update_tx,
-        );
+        run_terminal_core(size, options, pty_rx, receivers, response_tx, update_tx);
     });
     let writer_killer = killer.clone();
     thread::spawn(move || {
@@ -616,13 +564,12 @@ fn spawn_terminal(
     Ok((
         HostedTerminal {
             command_tx,
-            latest_frame: Arc::new(Mutex::new(None)),
             pid,
             killer,
             cwd: None,
             program_status: None,
         },
-        frame_rx,
+        activity_rx,
         update_rx,
     ))
 }
@@ -643,20 +590,12 @@ fn spawn_terminal(
 /// [`TerminalHost::forward_updates`] mirrors the same teardown on its
 /// channel-close arm, so even a missed `Exited` still reaps the session
 /// and subscriber — hence both fixes.
-/// How long after a frame a session's next one waits:
-/// `HORIZON_TERMINAL_FRAME_INTERVAL_MS`, a measurement switch read when a
-/// session is made, or the core's own interval. Zero is a frame for every
-/// change.
-fn frame_interval() -> Duration {
-    let asked = std::env::var("HORIZON_TERMINAL_FRAME_INTERVAL_MS").ok();
-    let millis = asked.and_then(|asked| asked.trim().parse::<u64>().ok());
-    match millis {
-        Some(millis) => Duration::from_millis(millis.min(1000)),
-        None => TerminalCoreOptions::default().frame_interval,
-    }
-}
-
-fn read_pty(reader: &mut dyn Read, pty_tx: Sender<Vec<u8>>, update_tx: Sender<TerminalUpdate>) {
+fn read_pty(
+    reader: &mut dyn Read,
+    pty_tx: Sender<Vec<u8>>,
+    activity_tx: Sender<()>,
+    update_tx: Sender<TerminalUpdate>,
+) {
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         match reader.read(&mut buffer) {
@@ -674,6 +613,7 @@ fn read_pty(reader: &mut dyn Read, pty_tx: Sender<Vec<u8>>, update_tx: Sender<Te
                     let _ = update_tx.send(TerminalUpdate::Exited);
                     return;
                 }
+                let _ = activity_tx.try_send(());
             }
             Err(error) => {
                 let _ = update_tx.send(TerminalUpdate::Error(error.to_string()));
@@ -696,10 +636,8 @@ fn run_writer(
         scroll_tx,
         mouse_tx,
         input_tx,
-        selection_tx,
         focus_tx,
         color_scheme_tx,
-        window_tx,
         stream_tx,
     } = senders;
     let mut last_size = None;
@@ -752,32 +690,20 @@ fn run_writer(
             TerminalCommand::Mouse(report) => {
                 let _ = mouse_tx.send(report);
             }
-            TerminalCommand::SelectionStart { point, kind } => {
-                let _ = selection_tx.send(SelectionCommand::Start { point, kind });
-            }
-            TerminalCommand::SelectionUpdate(point) => {
-                let _ = selection_tx.send(SelectionCommand::Update(point));
-            }
-            TerminalCommand::CopySelection => {
-                let _ = selection_tx.send(SelectionCommand::Copy);
-            }
             TerminalCommand::Focus(focused) => {
                 let _ = focus_tx.send(focused);
             }
             TerminalCommand::SetColorScheme(scheme) => {
                 let _ = color_scheme_tx.send(scheme);
             }
-            TerminalCommand::RequestScrollWindow { anchor, height } => {
-                let _ = window_tx.send(ScrollWindowRequest { anchor, height });
-            }
             TerminalCommand::WantState => {
-                let _ = stream_tx.send(horizon_terminal_core::StreamCommand::Want);
+                let _ = stream_tx.send(StreamCommand::Want);
             }
             TerminalCommand::StopState => {
-                let _ = stream_tx.send(horizon_terminal_core::StreamCommand::Stop);
+                let _ = stream_tx.send(StreamCommand::Stop);
             }
             TerminalCommand::OutputTaken(bytes) => {
-                let _ = stream_tx.send(horizon_terminal_core::StreamCommand::Taken(bytes));
+                let _ = stream_tx.send(StreamCommand::Taken(bytes));
             }
             TerminalCommand::Shutdown => {
                 let _ = killer.lock().unwrap().kill();
@@ -841,7 +767,6 @@ mod tests {
         };
         let session = HostedTerminal {
             command_tx,
-            latest_frame: Arc::new(Mutex::new(None)),
             pid: None,
             killer: Arc::new(Mutex::new(Box::new(killer))),
             cwd: None,
@@ -1020,7 +945,8 @@ mod tests {
         // One buffered byte makes the first `read` return `Ok(1)` (not the
         // `Ok(0)` EOF arm), so the send-failure path is the one exercised.
         let mut reader = std::io::Cursor::new(vec![b'x'; 1]);
-        read_pty(&mut reader, pty_tx, update_tx);
+        let (activity_tx, _activity_rx) = crossbeam_channel::bounded(1);
+        read_pty(&mut reader, pty_tx, activity_tx, update_tx);
 
         assert_eq!(update_rx.try_recv(), Ok(TerminalUpdate::Exited));
         // Nothing else is queued, and the sender is gone.
@@ -1043,11 +969,11 @@ mod tests {
         let channels = host.attach_subscribe(session_id).expect("live session");
         let mut events = channels.events;
 
-        // Empty, already-closed frame channel; the update channel is the
+        // Empty, already-closed activity channel; the update channel is the
         // one whose close drives the teardown arm.
-        let (_, frame_rx) = crossbeam_channel::unbounded::<TerminalFrame>();
+        let (_, activity_rx) = crossbeam_channel::unbounded::<()>();
         let (update_tx, update_rx) = crossbeam_channel::unbounded::<TerminalUpdate>();
-        host.forward_updates(session_id, frame_rx, update_rx);
+        host.forward_updates(session_id, activity_rx, update_rx);
 
         // Close the update channel without ever sending `Exited`.
         drop(update_tx);

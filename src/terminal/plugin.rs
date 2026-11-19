@@ -40,7 +40,7 @@ impl TerminalPlugin {
             drags: self.drags,
         });
         let run = Callback::new(move |command| match command {
-            TerminalPaneCommand::CopySelection => session.send(TerminalCommand::CopySelection),
+            TerminalPaneCommand::CopySelection => session.copy_selection(),
             // The clipboard's text arrives as a paste, at the view with
             // the keys.
             TerminalPaneCommand::Paste => request_paste(),

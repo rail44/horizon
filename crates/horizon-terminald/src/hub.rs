@@ -19,11 +19,9 @@
 use horizon_terminal_core::wire::{
     TerminalAttachment, TerminalHub, TerminalHubHello, terminal_version_range,
 };
-use horizon_terminal_core::{
-    TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
-};
+use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use horizon_wire::{
-    CHANNEL_BUFFER, COMMAND_MAX_ITEM_BYTES, ClientHello, FRAME_MAX_ITEM_BYTES, HelloGate, HubError,
+    CHANNEL_BUFFER, COMMAND_MAX_ITEM_BYTES, ClientHello, HelloGate, HubError,
     TERMINAL_EVENT_MAX_ITEM_BYTES, WireCodec, receive_pump,
 };
 use remoc::rch;
@@ -51,45 +49,19 @@ impl Hub {
         }
     }
 
-    /// Wires one terminal attachment: local frame bridge → remote frames
-    /// watch (seeded with `seed`, the daemon-retained latest frame), local
-    /// event bridge → remote events mpsc, remote commands channel →
-    /// [`TerminalHost::handle_command`]. Since wire v11
-    /// (`docs/remoc-adoption-design.md` §5 Option A) the frame path is a
-    /// snapshot-valued signal: full frames on `rch::watch<TerminalFrame>`,
-    /// latest-value, no diffing.
+    /// Wires one terminal attachment: local event bridge → remote events
+    /// mpsc, remote commands channel → [`TerminalHost::handle_command`].
     fn terminal_attachment(
         &self,
         session_id: Uuid,
         channels: SubscriberChannels,
     ) -> TerminalAttachment {
         let SubscriberChannels {
-            seed,
-            frames: mut local_frames,
             events: mut local_events,
             ..
         } = channels;
 
-        // Frames: a watch seeded with the retained latest frame. Only the
-        // receiver's `MAX_ITEM_SIZE` const is set (`FRAME_MAX_ITEM_BYTES`):
-        // we transport the receiver and keep the sender, so that const is
-        // the effective cap in both directions (the receiver's serializer
-        // drives forwarding). The sender's runtime limit is never consulted
-        // here — see `FRAME_MAX_ITEM_BYTES`/`CappedWatchReceiver`.
-        let (frame_tx, frame_rx) = rch::watch::channel::<TerminalFrame, WireCodec>(seed);
-        let frame_rx = frame_rx.set_max_item_size::<FRAME_MAX_ITEM_BYTES>();
-        tokio::spawn(async move {
-            while let Some(frame) = local_frames.recv().await {
-                // `rch::watch::Sender::send` is synchronous and only errors
-                // once every receiver is gone — nothing to skip-loop, no
-                // backpressure to bound (the watch keeps only the latest).
-                if frame_tx.send(frame).is_err() {
-                    break;
-                }
-            }
-        });
-
-        // Events: the non-frame updates on an mpsc.
+        // Events: the state, the bytes, and what the session says.
         let (event_tx, event_rx) =
             rch::mpsc::with_local_buffer::<TerminalUpdate, WireCodec>(CHANNEL_BUFFER);
         let event_rx = event_rx.set_max_item_size::<TERMINAL_EVENT_MAX_ITEM_BYTES>();
@@ -122,7 +94,6 @@ impl Hub {
         ));
 
         TerminalAttachment {
-            frames: frame_rx,
             events: event_rx,
             commands: command_tx,
         }
@@ -155,7 +126,7 @@ impl TerminalHub for Hub {
         spec: TerminalSpawnSpec,
     ) -> Result<TerminalAttachment, HubError> {
         self.hello.require()?;
-        // Subscribe before spawning so the session's very first frames
+        // Subscribe before spawning so the session's very first events
         // are never lost — the JSONL flow's `mark_attached`-before-create,
         // made structural.
         let channels = self.terminals.subscribe_for_create(session_id);

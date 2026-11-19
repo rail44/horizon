@@ -1,9 +1,9 @@
 //! The terminal's UI-agnostic brain: the byte-channel-driven session loop
-//! (`run_terminal_core` — 16ms coalescing, the synchronized-update
-//! failsafe) plus the contract types it speaks. `run_terminal_core` and
-//! this contract are THE public seam; VT emulation itself (`TerminalCore`,
-//! wrapping `alacritty_terminal`) is an internal engine the session loop
-//! drives and is not exported. No `floem`/`ui` dependency — see
+//! (`run_terminal_core` — the stream to a view, the synchronized-update
+//! failsafe) plus the contract types it speaks, and the terminal itself
+//! (`TerminalCore`, over libghostty-vt), which the daemon's loop and a
+//! view each have one of (`docs/terminal-stream-design.md`). No UI
+//! dependency — see
 //! `docs/session-daemon-design.md` decisions 8 and 9, and
 //! `docs/agent-runtime-split-design.md` for the sibling split
 //! `crates/horizon-agent` already went through.
@@ -28,9 +28,9 @@ mod types;
 pub mod wire;
 
 pub use contract::{
-    ClipboardDestination, ProgramBlockedOn, ProgramState, ScrollWindowRequest, SelectionCommand,
-    TerminalCommand, TerminalKeyInput, TerminalNotification, TerminalProgramStatus,
-    TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+    ClipboardDestination, ProgramBlockedOn, ProgramState, TerminalCommand, TerminalKeyInput,
+    TerminalNotification, TerminalProgramStatus, TerminalSpawnSpec, TerminalSummary,
+    TerminalUpdate,
 };
 pub use core::{DEFAULT_SCROLLBACK_LINES, KeyStroke, TerminalColorScheme, TerminalCore};
 pub use session_loop::{

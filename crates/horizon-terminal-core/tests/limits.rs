@@ -17,11 +17,7 @@
 //! lines (`docs/runtime-crate-alignment-design.md` phase 2 moved it out of
 //! the dissolved `horizon-session-protocol`).
 
-use horizon_terminal_core::{
-    TerminalColor, TerminalLine, TerminalScrollWindow, TerminalSpan, TerminalUnderline,
-};
-use horizon_wire::{TERMINAL_EVENT_MAX_ITEM_BYTES, WireCodec};
-use remoc::codec::Codec;
+use horizon_wire::WireCodec;
 use remoc::prelude::*;
 use tokio::net::UnixStream;
 
@@ -203,74 +199,4 @@ async fn a_transported_senders_runtime_cap_fails_oversized_items_alone() {
         vec![TEST_CAP / 2, 64],
         "exactly the under-cap items arrive, in order — the channel survived"
     );
-}
-
-/// Review fix (High): a served scroll window
-/// (`horizon_terminal_core::TerminalScrollWindow`, carried as one
-/// `TerminalUpdate::ScrollWindow` on the events mpsc) must stay under
-/// [`TERMINAL_EVENT_MAX_ITEM_BYTES`] even at worst-case decoration — otherwise
-/// it trips the over-cap latch the transported-receiver test above pins and
-/// tears the shared events channel down (dropping the pane's
-/// `Exited`/`Error`/`Bell` and orphaning it). `TerminalCore::snapshot_window`
-/// guarantees this by clamping a window to
-/// `TERMINAL_EVENT_MAX_ITEM_BYTES / (columns * 128)` rows (the full cap,
-/// not half — the 128 vs measured ~107 B/cell over-estimate is the headroom).
-/// This is the independent, real-codec (Postbag) proof of that budget: a
-/// window built at the clamp's own maximum, every cell a distinct
-/// fully-styled span — fatter than anything `snapshot_window` can actually
-/// emit, since it merges same-style runs into one span — still serializes
-/// well under the cap across a range of terminal widths.
-#[test]
-fn a_worst_case_scroll_window_stays_under_the_events_cap() {
-    // Mirrors `core::render::{EVENTS_ITEM_CAP_BYTES, WORST_CASE_BYTES_PER_CELL,
-    // max_window_rows}` (private to horizon-terminal-core) as an independent
-    // check of the same budget under the actual wire codec. The worst span
-    // below measures ~107 B/cell, so 128 is the conservative per-cell bound
-    // the clamp is sized against — and the ~20 % gap between them is the
-    // headroom that lets the clamp budget the entire cap rather than half.
-    // (The `.max(screen_lines)` floor the real clamp applies is intentionally
-    // *not* modeled here: it only enlarges a window when the byte budget
-    // already permits fewer rows than the viewport, an envelope no tighter
-    // than the live-frame watch's own — see `max_window_rows`.)
-    const WORST_CASE_BYTES_PER_CELL: usize = 128;
-    let budget = TERMINAL_EVENT_MAX_ITEM_BYTES;
-
-    let worst_span = || TerminalSpan {
-        text: "M".to_string(),
-        columns: 1,
-        fg: TerminalColor::Rgb([1, 2, 3]),
-        bg: TerminalColor::Rgb([4, 5, 6]),
-        italic: true,
-        strikethrough: true,
-        underline: TerminalUnderline::Curl,
-        underline_color: Some(TerminalColor::Rgb([7, 8, 9])),
-        url: None,
-    };
-
-    for columns in [80usize, 200, 500, 1000] {
-        let max_rows = (budget / (columns * WORST_CASE_BYTES_PER_CELL)).max(1);
-        let row = TerminalLine {
-            spans: Vec::from_fn(columns, |_| worst_span()),
-        };
-        let window = TerminalScrollWindow {
-            lines: vec![row; max_rows],
-            viewport_offset: 0,
-            above: 0,
-            below: 0,
-        };
-
-        let mut bytes = Vec::new();
-        {
-            // The codec is otherwise a connection's: its format is what the
-            // two ends agree on. Here it is this end's own.
-            let _outside = remoc::codec::allow_outside();
-            <WireCodec as Codec>::serialize(&mut bytes, &window).unwrap();
-        }
-        assert!(
-            bytes.len() < TERMINAL_EVENT_MAX_ITEM_BYTES,
-            "worst-case {columns}-col window ({max_rows} rows) serialized to {} bytes, \
-             over the {TERMINAL_EVENT_MAX_ITEM_BYTES}-byte events cap",
-            bytes.len()
-        );
-    }
 }

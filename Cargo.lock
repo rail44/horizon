@@ -3246,7 +3246,6 @@ dependencies = [
  "termwiz",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "unicode-width",
  "uuid",
 ]

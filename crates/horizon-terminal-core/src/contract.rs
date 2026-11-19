@@ -6,10 +6,7 @@ use termwiz::input::{KeyCode, Modifiers};
 use uuid::Uuid;
 
 use crate::core::TerminalColorScheme;
-use crate::types::{
-    KeyEventKind, TerminalMouseReport, TerminalScroll, TerminalScrollWindow, TerminalSelectionKind,
-    TerminalSelectionPoint, TerminalSize,
-};
+use crate::types::{KeyEventKind, TerminalMouseReport, TerminalScroll, TerminalSize};
 
 // The v10 remoc cutover deleted this module's envelope bindings — the
 // `terminal_control`/`terminal_command`/`terminal_update` kind constants,
@@ -92,12 +89,6 @@ pub enum TerminalCommand {
     Resize(TerminalSize),
     Scroll(TerminalScroll),
     Mouse(TerminalMouseReport),
-    SelectionStart {
-        point: TerminalSelectionPoint,
-        kind: TerminalSelectionKind,
-    },
-    SelectionUpdate(TerminalSelectionPoint),
-    CopySelection,
     /// A pane focus transition (`true` = gained focus, `false` = lost it),
     /// forwarded to `TerminalCore::focus_input` so it can be reported to
     /// the attached app as `CSI I`/`CSI O` if it negotiated mode 1004. The
@@ -125,20 +116,6 @@ pub enum TerminalCommand {
     /// falls too far behind is sent no more until it has caught up, and
     /// then the state again.
     OutputTaken(u64),
-    /// Client → daemon: request a scrollback *window* — a contiguous block of
-    /// history `height` rows tall, positioned `anchor` rows above the live
-    /// bottom (a hypothetical `display_offset`). The daemon answers on the
-    /// events channel with [`TerminalUpdate::ScrollWindow`], a self-describing
-    /// window (`docs/terminal-scrollback-design.md` §3.2, §9 option ii): the
-    /// reply carries its own `viewport_offset`/`above`/`below`, so no
-    /// correlation id is needed. Serving it never moves the live
-    /// `display_offset` (`TerminalCore::snapshot_window`), so the live-frame
-    /// watch keeps showing the tail throughout. Phase 1 wires this
-    /// end-to-end daemon-side, the client does not send it yet (§7 phase 2).
-    RequestScrollWindow {
-        anchor: usize,
-        height: usize,
-    },
 }
 
 /// A desktop-notification request a terminal app posted through the PTY
@@ -217,16 +194,6 @@ pub enum TerminalUpdate {
     Notification(TerminalNotification),
     Exited,
     Error(String),
-    /// Daemon → client: a served scrollback window, the reply to
-    /// [`TerminalCommand::RequestScrollWindow`]
-    /// (`docs/terminal-scrollback-design.md` §3.2, §9 option ii — it rides
-    /// this existing events mpsc rather than a dedicated channel). The window
-    /// is self-describing (`viewport_offset`/`above`/`below`), so it carries
-    /// no correlation id, and its payload is a struct
-    /// ([`TerminalScrollWindow`]) — no wire enum in element position, keeping
-    /// the postbag positional discipline. Phase 1 produces it daemon-side,
-    /// the client does not consume it yet (§7 phase 2).
-    ScrollWindow(TerminalScrollWindow),
     /// SPIKE Y. Daemon → client: the terminal's whole state, as its engine
     /// writes it out, in pieces: the last has `more` false. What follows is
     /// the PTY's bytes from that state on.
@@ -268,35 +235,4 @@ pub enum TerminalUpdate {
 pub enum ClipboardDestination {
     Clipboard,
     Primary,
-}
-
-/// Demuxed selection sub-commands (`TerminalCommand::SelectionStart`/
-/// `SelectionUpdate`/`CopySelection`), routed onto their own channel by the
-/// host's PTY writer thread — see [`crate::CoreReceivers`]. Process-local
-/// (crossbeam channels only, never put on the wire), so it is deliberately
-/// outside the wire-schema artifact and carries no `Unknown` skew
-/// catch-all.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum SelectionCommand {
-    Start {
-        point: TerminalSelectionPoint,
-        kind: TerminalSelectionKind,
-    },
-    Update(TerminalSelectionPoint),
-    Copy,
-}
-
-/// A demuxed [`TerminalCommand::RequestScrollWindow`], routed onto the
-/// session loop's own `window_rx` channel by the host's PTY writer thread
-/// (`run_writer`, `horizon-terminald`) — see [`crate::CoreReceivers`]. The
-/// loop answers by calling `TerminalCore::snapshot_window(anchor, height)`
-/// and putting the resulting window on the events mpsc as
-/// [`TerminalUpdate::ScrollWindow`] (`docs/terminal-scrollback-design.md`
-/// §7.1, §9 option ii). Process-local (crossbeam channels only, never on the
-/// wire), so — like [`SelectionCommand`] — it is deliberately outside the
-/// wire-schema artifact and carries no `Unknown` skew catch-all.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ScrollWindowRequest {
-    pub anchor: usize,
-    pub height: usize,
 }

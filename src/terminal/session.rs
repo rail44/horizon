@@ -1,12 +1,19 @@
-//! One terminal session: commands in, the newest frame and the updates
-//! out, and someone to wake when either comes. A session outlives a view
-//! of it: the frame is kept for the next view to draw.
+//! One terminal session: a terminal of its own while a view shows it, the
+//! updates the daemon sends, and someone to wake when they come. A session
+//! outlives a view of it.
 //!
-//! What a session says is for two readers. What is drawn and what a view
-//! acts on (a copy, a window of the scrollback) is the view's
-//! (`take_updates`). What is about the session itself (its title, its
-//! directory, a notification, that its shell has gone) is for whoever
-//! keeps the session, whether a view shows it or not (`take_reports`).
+//! The daemon sends a session that a view shows the terminal's state and
+//! then the bytes its own terminal took in (`docs/terminal-stream-design.md`);
+//! the session takes them into its terminal, and what is drawn is read
+//! from there. What a view does to the terminal (a key to encode, a
+//! selection, a place in the history) is done to the session's terminal;
+//! the daemon is sent only what is for the PTY.
+//!
+//! What a session says is for two readers. What a view acts on (a copy) is
+//! the view's (`take_updates`). What is about the session itself (its
+//! title, its directory, a notification, that its shell has gone) is for
+//! whoever keeps the session, whether a view shows it or not
+//! (`take_reports`).
 
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
@@ -16,12 +23,10 @@ use crossbeam_channel::{Receiver, Sender};
 use horizon_shell_runtime::TerminalSessionHandle;
 use horizon_terminal_core::{
     ClipboardDestination, KeyStroke, TerminalCommand, TerminalCore, TerminalFrame,
-    TerminalKeyInput, TerminalUpdate,
+    TerminalKeyInput, TerminalScrollWindow, TerminalSelectionKind, TerminalSelectionPoint,
+    TerminalUpdate,
 };
 
-/// How many frames have come and the newest of them, and who to wake
-/// when one comes: shared with the thread that receives frames.
-type Latest = Arc<Mutex<(u64, Option<TerminalFrame>)>>;
 type Wake = Arc<Mutex<Option<Waker>>>;
 /// What the platform said of a key: the physical key's name, and the
 /// text the key makes.
@@ -29,15 +34,12 @@ type Platform = Option<(String, Option<String>)>;
 
 pub struct Session {
     commands: Sender<TerminalCommand>,
-    latest: Latest,
     updates: Receiver<TerminalUpdate>,
     /// What has come and not been taken, for each reader.
     for_view: RefCell<Vec<TerminalUpdate>>,
     for_keeper: RefCell<Vec<TerminalUpdate>>,
-    /// SPIKE Y. The session's own terminal: the daemon's state when it
-    /// came, and the PTY's bytes since. What is drawn is read from it, and
-    /// what a view does to the terminal (a selection, a key to encode, a
-    /// place in the history) is done to it.
+    /// The session's own terminal: the daemon's state when it came, and
+    /// the PTY's bytes since.
     mirror: RefCell<Option<TerminalCore>>,
     /// The state as far as it has come, and what of the daemon's stream
     /// has come and not been taken into the terminal: a view takes it in.
@@ -47,10 +49,10 @@ pub struct Session {
     /// terminal has changed since.
     read: RefCell<(u64, Option<TerminalFrame>)>,
     changed: Cell<bool>,
-    /// What a view asked of the terminal before its state had come: asked
-    /// of the session's terminal, in order, once it is there. (Sent to the
-    /// daemon's instead, a key would go to the PTY by another way than the
-    /// keys after it, and could arrive after them.)
+    /// What a view asked for the PTY before the terminal's state had come:
+    /// asked of the session's terminal, in order, once it is there. (Sent
+    /// to the daemon's instead, a key would go to the PTY by another way
+    /// than the keys after it, and could arrive after them.)
     held: RefCell<Vec<(TerminalCommand, Platform)>>,
     /// How many views show the session.
     views: Cell<usize>,
@@ -68,63 +70,41 @@ pub struct Session {
 impl Session {
     /// A session of `horizon-terminald`'s, through the runtime client.
     pub fn attached(handle: TerminalSessionHandle) -> Self {
-        let (latest, waker) = (Latest::default(), Wake::default());
-        let (kept, woken) = (Arc::clone(&latest), Arc::clone(&waker));
-        let mut frames = handle.frames();
-        // The frames are a watch: its newest value is what a view draws,
-        // and for a session attached to again it is there already.
-        keep(&kept, frames.borrow_and_update().clone());
-        // An update is drawn too (a window of the scrollback) or acted on
-        // (a copy): whoever lays the page out is woken for it as for a
-        // frame.
+        let waker = Wake::default();
+        // Whoever lays the page out is woken for what comes.
         let heard = Arc::clone(&waker);
         handle.hear_events(move || wake(&heard));
-        std::thread::spawn(move || {
-            futures::executor::block_on(async {
-                while frames.changed().await.is_ok() {
-                    keep(&kept, frames.borrow_and_update().clone());
-                    wake(&woken);
-                }
-            });
-        });
-        Self {
-            commands: handle.sender(),
-            latest,
-            updates: handle.events(),
-            for_view: RefCell::default(),
-            for_keeper: RefCell::default(),
-            mirror: RefCell::default(),
-            state: RefCell::default(),
-            stream: RefCell::default(),
-            read: RefCell::default(),
-            changed: Cell::new(false),
-            held: RefCell::default(),
-            views: Cell::new(0),
-            states: Cell::new(0),
-            bytes: Cell::new(0),
-            waker,
-            _attachment: Some(handle),
-        }
+        Self::new(handle.sender(), handle.events(), waker, Some(handle))
     }
 
     /// A session behind plain channels: whatever runs the terminal core
     /// itself (a test's own PTY).
     pub fn from_channels(
         commands: Sender<TerminalCommand>,
-        frames: Receiver<TerminalFrame>,
         updates: Receiver<TerminalUpdate>,
     ) -> Self {
-        let (latest, waker) = (Latest::default(), Wake::default());
-        let (kept, woken) = (Arc::clone(&latest), Arc::clone(&waker));
+        let waker = Wake::default();
+        let (passed, kept) = crossbeam_channel::unbounded();
+        let woken = Arc::clone(&waker);
         std::thread::spawn(move || {
-            while let Ok(frame) = frames.recv() {
-                keep(&kept, frame);
+            while let Ok(update) = updates.recv() {
+                if passed.send(update).is_err() {
+                    return;
+                }
                 wake(&woken);
             }
         });
+        Self::new(commands, kept, waker, None)
+    }
+
+    fn new(
+        commands: Sender<TerminalCommand>,
+        updates: Receiver<TerminalUpdate>,
+        waker: Wake,
+        attachment: Option<TerminalSessionHandle>,
+    ) -> Self {
         Self {
             commands,
-            latest,
             updates,
             for_view: RefCell::default(),
             for_keeper: RefCell::default(),
@@ -138,7 +118,7 @@ impl Session {
             states: Cell::new(0),
             bytes: Cell::new(0),
             waker,
-            _attachment: None,
+            _attachment: attachment,
         }
     }
 
@@ -164,7 +144,9 @@ impl Session {
         *self.mirror.borrow_mut() = None;
         self.state.borrow_mut().clear();
         self.stream.borrow_mut().clear();
-        *self.read.borrow_mut() = (0, None);
+        // (The frame's number goes on: a view shown again is to draw the
+        // next one it is given.)
+        self.read.borrow_mut().1 = None;
         // What was held for a terminal that never came is the daemon's.
         for (command, _) in std::mem::take(&mut *self.held.borrow_mut()) {
             let _ = self.commands.send(command);
@@ -176,10 +158,10 @@ impl Session {
         self.mirror.borrow().is_some()
     }
 
-    /// What a view asks of the terminal. What is the terminal's own to
-    /// answer is asked of the session's (a selection, the bytes for a key,
-    /// a window of the history), and the daemon is sent only what is for
-    /// the PTY: bytes, a size, the colors it answers a program with.
+    /// What a view asks for the PTY: the bytes for a key, a paste, a
+    /// report to the program, are the session's terminal's to write, and
+    /// the daemon is sent the bytes; a size and the colors a program is
+    /// answered with are the daemon's.
     pub fn send(&self, command: TerminalCommand) {
         self.ask(command, None);
     }
@@ -190,6 +172,57 @@ impl Session {
     /// it from those.
     pub fn key(&self, input: TerminalKeyInput, code: String, made: Option<String>) {
         self.ask(TerminalCommand::KeyInput(input), Some((code, made)));
+    }
+
+    /// Starts a selection at a cell of the screen. The selection is the
+    /// primary selection as it is made.
+    pub fn select(&self, point: TerminalSelectionPoint, kind: TerminalSelectionKind) {
+        self.on_the_terminal(|terminal| terminal.start_selection(point, kind));
+        self.selected();
+    }
+
+    /// Moves the selection's other end.
+    pub fn extend_selection(&self, point: TerminalSelectionPoint) {
+        self.on_the_terminal(|terminal| terminal.update_selection(point));
+        self.selected();
+    }
+
+    /// Copies the selection to the clipboard.
+    pub fn copy_selection(&self) {
+        let text = (self.mirror.borrow().as_ref()).and_then(TerminalCore::selected_text);
+        if let Some(text) = text {
+            self.for_view.borrow_mut().push(TerminalUpdate::Clipboard {
+                text,
+                destination: ClipboardDestination::Clipboard,
+            });
+            self.redraw();
+        }
+    }
+
+    /// A window of the history `height` rows tall, `anchor` rows above the
+    /// live bottom, read from the session's terminal.
+    pub fn window(&self, anchor: usize, height: usize) -> Option<TerminalScrollWindow> {
+        let mirror = self.mirror.borrow();
+        Some(mirror.as_ref()?.snapshot_window(anchor, height))
+    }
+
+    fn on_the_terminal(&self, act: impl FnOnce(&mut TerminalCore)) {
+        if let Some(terminal) = self.mirror.borrow_mut().as_mut() {
+            act(terminal);
+            self.changed.set(true);
+        }
+        // What was done here is drawn from here: nothing arrives for it.
+        self.redraw();
+    }
+
+    fn selected(&self) {
+        let text = (self.mirror.borrow().as_ref()).and_then(TerminalCore::selected_text);
+        if let Some(text) = text.filter(|text| !text.is_empty()) {
+            self.for_view.borrow_mut().push(TerminalUpdate::Clipboard {
+                text,
+                destination: ClipboardDestination::Primary,
+            });
+        }
     }
 
     fn ask(&self, command: TerminalCommand, platform: Platform) {
@@ -217,15 +250,6 @@ impl Session {
                 let _ = self.commands.send(TerminalCommand::Input(bytes));
             }
         };
-        // The selection is the primary selection as it is made.
-        let selected = |terminal: &TerminalCore| {
-            if let Some(text) = terminal.selected_text().filter(|text| !text.is_empty()) {
-                self.for_view.borrow_mut().push(TerminalUpdate::Clipboard {
-                    text,
-                    destination: ClipboardDestination::Primary,
-                });
-            }
-        };
         match command {
             TerminalCommand::KeyInput(input) => {
                 let (code, made) = platform.unwrap_or((String::new(), input.text.clone()));
@@ -249,28 +273,6 @@ impl Session {
                 Some(bytes) => to_the_pty(bytes),
                 None => self.changed.set(true),
             },
-            TerminalCommand::SelectionStart { point, kind } => {
-                terminal.start_selection(point, kind);
-                selected(terminal);
-                self.changed.set(true);
-            }
-            TerminalCommand::SelectionUpdate(point) => {
-                terminal.update_selection(point);
-                selected(terminal);
-                self.changed.set(true);
-            }
-            TerminalCommand::CopySelection => {
-                if let Some(text) = terminal.selected_text() {
-                    self.for_view.borrow_mut().push(TerminalUpdate::Clipboard {
-                        text,
-                        destination: ClipboardDestination::Clipboard,
-                    });
-                }
-            }
-            TerminalCommand::RequestScrollWindow { anchor, height } => {
-                let window = terminal.snapshot_window(anchor, height);
-                (self.for_view.borrow_mut()).push(TerminalUpdate::ScrollWindow(window));
-            }
             for_the_daemon => {
                 let _ = self.commands.send(for_the_daemon);
                 return;
@@ -348,22 +350,14 @@ impl Session {
 
     /// The newest frame and its number, if it is not the one numbered
     /// `seen`: a view that has drawn nothing yet has seen frame 0. Read
-    /// from the session's own terminal.
+    /// from the session's own terminal; nothing until its state has come.
     pub fn frame_after(&self, seen: u64) -> Option<(u64, TerminalFrame)> {
         self.take_in();
-        if self.mirror.borrow().is_none() {
-            // No state has come yet: the daemon's own frame.
-            let latest = self.latest.lock().unwrap();
-            let frame = latest.1.as_ref().filter(|_| latest.0 != seen)?;
-            return Some((latest.0, frame.clone()));
-        }
         let mut read = self.read.borrow_mut();
         if self.changed.replace(false)
             && let Some(terminal) = self.mirror.borrow().as_ref()
         {
-            // (Numbered apart from the daemon's frames, which a view may
-            // have seen before the state came.)
-            *read = (read.0.max(1 << 32) + 1, Some(terminal.snapshot_frame()));
+            *read = (read.0 + 1, Some(terminal.snapshot_frame()));
         }
         let frame = read.1.as_ref().filter(|_| read.0 != seen)?;
         Some((read.0, frame.clone()))
@@ -397,7 +391,7 @@ impl Session {
         }
     }
 
-    /// What a view draws or acts on, that arrived since the last call.
+    /// What a view acts on, that arrived since the last call.
     pub fn take_updates(&self) -> Vec<TerminalUpdate> {
         self.take_in();
         std::mem::take(&mut *self.for_view.borrow_mut())
@@ -410,7 +404,7 @@ impl Session {
         std::mem::take(&mut *self.for_keeper.borrow_mut())
     }
 
-    /// Who to wake when a frame or an update arrives.
+    /// Who to wake when an update arrives.
     pub fn set_waker(&self, waker: Waker) {
         *self.waker.lock().unwrap() = Some(waker);
     }
@@ -421,11 +415,6 @@ impl Session {
     pub fn redraw(&self) {
         wake(&self.waker);
     }
-}
-
-fn keep(latest: &Latest, frame: TerminalFrame) {
-    let mut latest = latest.lock().unwrap();
-    *latest = (latest.0 + 1, Some(frame));
 }
 
 fn wake(waker: &Mutex<Option<Waker>>) {

@@ -505,8 +505,7 @@ fn handle_op(op: Op, live: &Live) {
 }
 
 /// One live terminal attachment: forwards handle commands to the daemon,
-/// routes full frames (from the `watch<TerminalFrame>`, wire v11) and
-/// non-frame events to the pane, until either side goes away.
+/// and its events to the pane, until either side goes away.
 async fn run_terminal_attachment(
     routes: Arc<TerminalRoutes>,
     route: RouteKey<Uuid>,
@@ -514,32 +513,11 @@ async fn run_terminal_attachment(
     mut commands: UnboundedReceiver<TerminalCommand>,
 ) {
     let TerminalAttachment {
-        mut frames,
         mut events,
         commands: remote_commands,
     } = attachment;
-    let mut frame_skips = DecodeSkipLog::new("terminal frames");
     let mut event_skips = DecodeSkipLog::new("terminal events");
     let mut command_skips = DecodeSkipLog::new("terminal commands");
-
-    // `false` once the frame watch is closed (or its port setup failed): we
-    // stop polling it, but keep servicing `events` so a clean shutdown's
-    // `Exited` (which races the watch close) is never dropped — otherwise a
-    // frames-close winning the select would strand a zombie pane.
-    let mut frames_open = true;
-
-    // Deliver the seed frame first: the watch receiver's initial value (the
-    // daemon-retained latest frame on attach, or the empty create-time seed)
-    // is read with `borrow`, not `changed` — `changed` only fires for
-    // genuinely newer values, so without this an idle reattach would show a
-    // blank grid forever. A non-final error (a skewed/undecodable seed value,
-    // `is_disconnected() == false`) is skipped, self-healing on the next frame; a
-    // final error means the frame port is gone, so stop polling it.
-    match frames.borrow_and_update() {
-        Ok(seed) => routes.route_terminal_frame(route, seed.clone()),
-        Err(err) if err.is_disconnected() => frames_open = false,
-        Err(err) => frame_skips.note(&err),
-    }
 
     loop {
         tokio::select! {
@@ -558,26 +536,6 @@ async fn run_terminal_attachment(
                 }
                 // The pane's handle (and its bridge thread) are gone.
                 None => break,
-            },
-            changed = frames.changed(), if frames_open => match changed {
-                // A new frame is available. The watch keeps only the latest,
-                // so a slow UI skips intermediate frames and converges on the
-                // final value here (§5 Option A / spike §1c) — the client's
-                // own row-comparison then invalidates just the changed rows.
-                Ok(()) => match frames.borrow_and_update() {
-                    Ok(frame) => routes.route_terminal_frame(route, frame.clone()),
-                    // Non-final (a `Deserialize`/`MaxItemSizeExceeded` value
-                    // the watch publishes but keeps the channel for): skip
-                    // it and wait for the next frame, exactly like the events
-                    // and seed paths (adoption condition 2, self-heal §5).
-                    Err(err) if !err.is_disconnected() => frame_skips.note(&err),
-                    // Final: the frame port is gone. Stop polling frames but
-                    // keep servicing events for a still-pending `Exited`.
-                    Err(_) => frames_open = false,
-                },
-                // The watch (sender or connection) is gone — same handling:
-                // stop polling frames, keep draining events.
-                Err(_closed) => frames_open = false,
             },
             event = events.recv() => match event {
                 Ok(Some(update)) => {

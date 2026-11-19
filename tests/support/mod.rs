@@ -8,9 +8,8 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender};
 use horizon::terminal::Session;
 use horizon_terminal_core::{
-    CoreInput, CoreSenders, ScrollWindowRequest, SelectionCommand, TerminalCommand,
-    TerminalCoreOptions, TerminalFrame, TerminalKeyInput, TerminalSize, TerminalUpdate,
-    core_channels, run_terminal_core,
+    CoreInput, CoreSenders, StreamCommand, TerminalCommand, TerminalCoreOptions, TerminalKeyInput,
+    TerminalSize, TerminalUpdate, core_channels, run_terminal_core,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
@@ -38,7 +37,6 @@ pub fn shell(program: &str, size: TerminalSize) -> Session {
     let master = pair.master;
 
     let (commands, command_rx) = crossbeam_channel::unbounded();
-    let (frame_tx, frames) = crossbeam_channel::unbounded::<TerminalFrame>();
     let (update_tx, updates) = crossbeam_channel::unbounded();
     let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
     let (senders, receivers) = core_channels();
@@ -53,12 +51,11 @@ pub fn shell(program: &str, size: TerminalSize) -> Session {
             pty_rx,
             receivers,
             responses,
-            frame_tx,
             update_tx,
         );
     });
     thread::spawn(move || run_writer(master, &mut *writer, killer, command_rx, senders));
-    Session::from_channels(commands, frames, updates)
+    Session::from_channels(commands, updates)
 }
 
 fn read_pty(reader: &mut dyn Read, pty_tx: Sender<Vec<u8>>, update_tx: Sender<TerminalUpdate>) {
@@ -124,33 +121,20 @@ fn run_writer(
             TerminalCommand::Mouse(report) => {
                 let _ = senders.mouse_tx.send(report);
             }
-            TerminalCommand::SelectionStart { point, kind } => {
-                let _ = (senders.selection_tx).send(SelectionCommand::Start { point, kind });
-            }
-            TerminalCommand::SelectionUpdate(point) => {
-                let _ = senders.selection_tx.send(SelectionCommand::Update(point));
-            }
-            TerminalCommand::CopySelection => {
-                let _ = senders.selection_tx.send(SelectionCommand::Copy);
-            }
             TerminalCommand::Focus(focused) => {
                 let _ = senders.focus_tx.send(focused);
             }
             TerminalCommand::SetColorScheme(scheme) => {
                 let _ = senders.color_scheme_tx.send(scheme);
             }
-            TerminalCommand::RequestScrollWindow { anchor, height } => {
-                let _ = (senders.window_tx).send(ScrollWindowRequest { anchor, height });
-            }
             TerminalCommand::WantState => {
-                let _ = (senders.stream_tx).send(horizon_terminal_core::StreamCommand::Want);
+                let _ = senders.stream_tx.send(StreamCommand::Want);
             }
             TerminalCommand::StopState => {
-                let _ = (senders.stream_tx).send(horizon_terminal_core::StreamCommand::Stop);
+                let _ = senders.stream_tx.send(StreamCommand::Stop);
             }
             TerminalCommand::OutputTaken(bytes) => {
-                let _ =
-                    (senders.stream_tx).send(horizon_terminal_core::StreamCommand::Taken(bytes));
+                let _ = senders.stream_tx.send(StreamCommand::Taken(bytes));
             }
             TerminalCommand::Shutdown => {
                 let _ = killer.kill();

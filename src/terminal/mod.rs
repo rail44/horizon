@@ -313,7 +313,7 @@ impl Terminal {
 
     /// Asks the session to copy what is selected.
     pub fn copy_selection(&self) {
-        self.state.session.send(TerminalCommand::CopySelection);
+        self.state.session.copy_selection();
     }
 
     /// What the session last copied, taken.
@@ -361,20 +361,26 @@ fn pump(state: &State) -> bool {
                 text,
                 destination: ClipboardDestination::Primary,
             } => crate::primary::set(text),
-            TerminalUpdate::ScrollWindow(window) => {
-                let install = state.scrollback.borrow_mut().install_window(window);
-                if let Some((anchor, height)) = install.request {
-                    (state.session).send(TerminalCommand::RequestScrollWindow { anchor, height });
-                }
-            }
-            // A runtime that failed serves no window.
-            TerminalUpdate::Error(_) => {
-                state.scrollback.borrow_mut().abandon();
-            }
             _ => {}
         }
     }
     came
+}
+
+/// Serves the history's windows the scrollback asks for, read from the
+/// session's terminal there and then: one window can ask for the next
+/// (a few at most).
+fn serve_windows(state: &State, mut request: Option<(usize, usize)>) {
+    for _ in 0..4 {
+        let Some((anchor, height)) = request else {
+            return;
+        };
+        let Some(window) = state.session.window(anchor, height) else {
+            state.scrollback.borrow_mut().abandon();
+            return;
+        };
+        request = state.scrollback.borrow_mut().install_window(window).request;
+    }
 }
 
 fn modifiers(key: &BlitzKeyEvent) -> Modifiers {
@@ -616,16 +622,16 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                 _ => 1,
             };
             pressed.clicked.set(Some((now, point, presses)));
-            // A selection is of the live screen, which the daemon holds.
+            // A selection is of the live screen.
             pressed.scrollback.borrow_mut().abandon();
-            pressed.session.send(TerminalCommand::SelectionStart {
+            pressed.session.select(
                 point,
-                kind: match presses {
+                match presses {
                     1 => TerminalSelectionKind::Simple,
                     2 => TerminalSelectionKind::Word,
                     _ => TerminalSelectionKind::Line,
                 },
-            });
+            );
             drag(&pressed, mouse_modifiers(&pointer.mods));
         })
         .on("wheel", move |event| {
@@ -646,7 +652,7 @@ pub fn build(given: TerminalView) -> (El, Terminal) {
                 let viewport = wheeled.cells.get().2;
                 let decision = (wheeled.scrollback.borrow_mut()).on_wheel(rows as f32, viewport);
                 if let ScrollIpc::Request { anchor, height } = decision.ipc {
-                    (wheeled.session).send(TerminalCommand::RequestScrollWindow { anchor, height });
+                    serve_windows(&wheeled, Some((anchor, height)));
                 }
                 // The view moved over the window it holds: nothing comes
                 // from the daemon for that, and nothing of the document
@@ -789,7 +795,7 @@ fn drag(state: &Rc<State>, modifiers: TerminalMouseModifiers) {
             match moved.dragging.get() {
                 Some(true) => {
                     moved.scrollback.borrow_mut().abandon();
-                    moved.session.send(TerminalCommand::SelectionUpdate(point));
+                    moved.session.extend_selection(point);
                 }
                 Some(false) => {
                     let Some(button) = moved.reporting.get() else {
