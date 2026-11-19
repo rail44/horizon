@@ -304,7 +304,7 @@ impl Shell {
 impl Shell {
     /// What this shell does with its theme for a plugin: the seed the
     /// theme has, drawing the theme of another, and saving one.
-    fn theme_asks(&self) -> ThemeAsks {
+    pub(super) fn theme_asks(&self) -> ThemeAsks {
         let shell = *self;
         let save = self.kept().save_theme.clone();
         ThemeAsks {
@@ -403,7 +403,7 @@ impl Shell {
             set_title: Some(Rc::new(move |text| title.set(text))),
             theme: Some(self.theme_asks()),
             sessions: Some(self.session_asks()),
-            modal: Some(self.modal_asks()),
+            modal: Some(self.modal_asks(None)),
         };
         let name = extension.name;
         let (root, running) = self.run_extension(&extension, asks, shown.state.as_str());

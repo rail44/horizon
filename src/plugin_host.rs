@@ -920,6 +920,9 @@ pub struct Loaded {
 
 impl Drop for Loaded {
     fn drop(&mut self) {
+        if !host::there() {
+            return;
+        }
         for node in self.over.take() {
             if let Some(modal) = &self.asks.modal {
                 (modal.close)(node);
@@ -931,7 +934,7 @@ impl Drop for Loaded {
 
 impl Loaded {
     /// Whether the plugin has trapped, or ended.
-    fn gone(&self) -> bool {
+    pub fn gone(&self) -> bool {
         // (The signal goes with the pane; a handler may outlast it a moment.)
         self.failed.try_get_untracked().flatten().is_some() || self.driving.borrow().is_none()
     }

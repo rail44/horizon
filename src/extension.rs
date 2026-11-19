@@ -594,7 +594,39 @@ impl Extension {
     }
 }
 
-/// An extension running for a pane.
+impl Extension {
+    /// Carries out the extension's own command `name` in an instance made
+    /// for it, which is what comes back: it is the command's, and what
+    /// the command put over the workspace goes with it.
+    pub fn run_command(
+        self: &Arc<Self>,
+        name: &str,
+        asks: Asks,
+        wake: Wake,
+        failed: RwSignal<Option<String>>,
+    ) -> Result<Running, String> {
+        if !self.commands.iter().any(|command| command.name == name) {
+            return Err(format!("`{}` has no command `{name}`", self.name));
+        }
+        let running = self.instantiate(asks, wake, failed)?;
+        let named = name.to_string();
+        let ran = running.loaded.call(|plugin, accessor| {
+            Box::pin(async move {
+                let command = function(plugin, accessor, Some("commands"), &named)?;
+                command.call_concurrent(accessor, &[], &mut []).await
+            })
+        });
+        match ran {
+            Some(()) => Ok(running),
+            None => {
+                Err((failed.get_untracked())
+                    .unwrap_or_else(|| format!("`{name}` was not carried out")))
+            }
+        }
+    }
+}
+
+/// An extension running: for a pane, or for a command of its own.
 pub struct Running {
     extension: Arc<Extension>,
     loaded: Rc<Loaded>,
@@ -663,6 +695,11 @@ impl Running {
     /// effects when the page's run.
     pub fn follow(&self) {
         self.loaded.follow();
+    }
+
+    /// Whether it has stopped: trapped, or ended.
+    pub fn stopped(&self) -> bool {
+        self.loaded.gone()
     }
 }
 

@@ -9,6 +9,17 @@ mod views;
 
 #[horizon_ui::plugin(name = "fixture", title = "Fixture")]
 mod fixture {
+    #[command(
+        title = "Show Over, Alone",
+        description = "Put a view over the workspace, with no pane."
+    )]
+    pub fn show_over_alone() {
+        crate::views::show_over();
+    }
+
+    #[command(title = "Do Nothing", description = "Carry out nothing.")]
+    pub fn do_nothing() {}
+
     pub mod pane {
         use std::cell::RefCell;
 

@@ -71,7 +71,9 @@ impl Over {
 
 impl Shell {
     /// What this shell does to put an extension's view over the workspace.
-    pub(super) fn modal_asks(&self) -> ModalAsks {
+    /// The view is `by`'s: the instance made for a command, if one of
+    /// those asks.
+    pub(super) fn modal_asks(&self, by: Option<u64>) -> ModalAsks {
         let shell = *self;
         ModalAsks {
             open: Rc::new(move |node, closed| {
@@ -82,6 +84,7 @@ impl Shell {
                 let sheet = self::view(shell, view);
                 let before = kept.over.replace(Some(Over {
                     asked,
+                    by,
                     view,
                     sheet,
                     closed,

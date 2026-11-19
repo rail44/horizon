@@ -899,3 +899,73 @@ fn an_extension_puts_a_view_over_the_workspace_and_hears_it_taken_away() {
         opened.text()
     );
 }
+
+#[test]
+fn an_extensions_own_command_is_carried_out_with_no_pane_of_it() {
+    use horizon::workspace::Modal;
+
+    let opened = open_with(Opening {
+        extensions: vec![fixture()],
+        ..Opening::default()
+    });
+    let run = |name: &str| {
+        let answer = opened.ask("plugin-command", serde_json::json!({ "name": name }));
+        std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
+    };
+    let over = || matches!(opened.shell.modal(), Some(Modal::Extension(_)));
+    let there = || opened.text().contains("over the workspace");
+    // (No pane of the fixture: the only pane is the shell's terminal.)
+    assert_eq!(opened.model(|model| model.all_pane_ids().len()), 1);
+
+    // A command that leaves nothing over the workspace: what was made to
+    // carry it out is let go of.
+    run("do-nothing");
+    opened.until("let go of", || opened.shell.commanded() == 0);
+    assert!(!over());
+
+    // One that puts a view there: what carries it out stays for as long
+    // as the view does, and is let go of once the view is left.
+    run("show-over-alone");
+    opened.until("the view over the workspace", || over() && there());
+    assert_eq!(opened.shell.commanded(), 1);
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.key(Key::Named(NamedKey::Escape));
+    opened.until("the view left", || !over() && !there());
+    opened.until("let go of", || opened.shell.commanded() == 0);
+
+    // The view takes itself away on a key of its own.
+    run("show-over-alone");
+    opened.until("the view over the workspace", || over() && there());
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.key(Key::Character("c".into()));
+    opened.until("the view left", || !over() && !there());
+    opened.until("let go of", || opened.shell.commanded() == 0);
+
+    // A chord the configuration binds to it carries it out, whatever the
+    // cursor's pane shows.
+    let config = horizon_config::parse(
+        r#"
+        [keybindings]
+        "Ctrl+Shift+O" = "show-over-alone"
+        "#,
+    )
+    .unwrap();
+    opened.shell.apply_config(&config);
+    opened.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+        text: None,
+        key: Key::Character("O".into()),
+        code: keyboard_types::Code::Unidentified,
+        modifiers: Modifiers::CONTROL | Modifiers::SHIFT,
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+    }));
+    opened.until("the view over the workspace", || over() && there());
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.key(Key::Named(NamedKey::Escape));
+    opened.until("the view left", || !over() && !there());
+}

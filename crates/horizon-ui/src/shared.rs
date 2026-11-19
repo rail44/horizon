@@ -120,6 +120,14 @@ pub(crate) fn current() -> Option<Rc<Shared>> {
     CURRENT.with(|current| current.borrow().clone())
 }
 
+/// Whether there is an app on this thread still: none once the thread is
+/// ending and what it kept is being let go of.
+pub(crate) fn there() -> bool {
+    CURRENT
+        .try_with(|current| current.try_borrow().is_ok_and(|current| current.is_some()))
+        .unwrap_or(false)
+}
+
 pub(crate) fn shared() -> Rc<Shared> {
     current().expect("inside an App")
 }

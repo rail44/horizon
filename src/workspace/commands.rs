@@ -2,12 +2,23 @@
 //! model: the palette and the mode's keys are bindings to them.
 
 use std::path::Path;
+use std::rc::Rc;
+use std::sync::Arc;
 
-use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
+use horizon_ui::reactive_graph::owner::Owner;
+use horizon_ui::reactive_graph::signal::RwSignal;
+use horizon_ui::reactive_graph::traits::{GetUntracked, Update, WithUntracked};
 use horizon_workspace::commands::{CommandCategory, CommandId, CommandState, command_entries};
 use horizon_workspace::{CloseCursorOutcome, Workspace};
 
 use super::{Modal, Placement, Shell, plugins};
+use crate::extension::{Extension, Running};
+use crate::plugin_host::Asks;
+
+/// Says that an extension's own command was not carried out, or stopped.
+fn command_failed(command: &str, error: &str) {
+    eprintln!("horizon: the command `{command}`: {error}");
+}
 
 /// A command there is now, whoever carries it out: what the palette lists,
 /// a key binding names and the command line asks for.
@@ -31,11 +42,26 @@ enum By {
     Shell(CommandId),
     /// The plugin the cursor's pane shows.
     Pane,
+    /// The extension of this name, for itself.
+    Extension(&'static str),
+}
+
+/// An extension carrying out a command of its own: the instance made for
+/// the command, which lasts as long as what it put over the workspace.
+pub(super) struct Commanded {
+    id: u64,
+    command: &'static str,
+    running: Rc<Running>,
+    /// What it said if it trapped.
+    failed: RwSignal<Option<String>>,
+    /// What the instance's work beside the page's is made under.
+    owner: Owner,
 }
 
 impl Shell {
     /// Every command there is now, in the order the palette lists them:
-    /// those of the plugin the cursor's pane shows, then the shell's own.
+    /// those of the plugin the cursor's pane shows, then the shell's own,
+    /// then each extension's own.
     pub(super) fn commands(&self) -> Vec<Listed> {
         let pane = self.model.with_untracked(Workspace::cursor_pane_id);
         let shown = pane.and_then(|pane| {
@@ -65,7 +91,19 @@ impl Shell {
             enabled: entry.enabled,
             by: By::Shell(entry.spec.id),
         });
-        of_pane.chain(own).collect()
+        let extensions = plugins::extensions();
+        let of_extensions = extensions.iter().flat_map(|extension| {
+            extension.commands.iter().map(|command| Listed {
+                name: command.name,
+                title: command.title,
+                description: command.description,
+                category: None,
+                destructive: command.destructive,
+                enabled: true,
+                by: By::Extension(extension.name),
+            })
+        });
+        of_pane.chain(own).chain(of_extensions).collect()
     }
 
     /// The command `name` names now. One of the shell's is found before
@@ -88,7 +126,75 @@ impl Shell {
                 true
             }
             By::Pane => self.execute_plugin(command.name),
+            By::Extension(extension) => match plugins::extension(extension) {
+                Some(extension) => {
+                    self.run_extension_command(&extension, command.name);
+                    true
+                }
+                None => false,
+            },
         }
+    }
+
+    /// Carries out an extension's own command in an instance made for it.
+    /// The instance is kept for as long as it has a view over the
+    /// workspace ([`Shell::let_go_of_commanded`]).
+    fn run_extension_command(&self, extension: &Arc<Extension>, command: &'static str) {
+        let kept = self.kept();
+        let id = kept.commanded_count.get() + 1;
+        kept.commanded_count.set(id);
+        let asks = Asks {
+            open_url: Some(kept.open_url.clone()),
+            set_title: None,
+            theme: Some(self.theme_asks()),
+            sessions: Some(self.session_asks()),
+            modal: Some(self.modal_asks(Some(id))),
+        };
+        let owner = Owner::new();
+        let failed = owner.with(|| RwSignal::new(None::<String>));
+        match extension.run_command(command, asks, kept.wake.clone(), failed) {
+            Ok(running) => {
+                let running = Rc::new(running);
+                owner.with(|| running.follow());
+                kept.commanded.borrow_mut().push(Commanded {
+                    id,
+                    command,
+                    running,
+                    failed,
+                    owner,
+                });
+            }
+            Err(error) => {
+                owner.cleanup();
+                command_failed(command, &error);
+            }
+        }
+    }
+
+    /// Lets go of the instances made for commands that have nothing over
+    /// the workspace any more, and of those that stopped: what one of
+    /// those had there is taken away, and what it said is said.
+    pub(super) fn let_go_of_commanded(&self) {
+        let kept = self.kept();
+        let shown = (kept.over.borrow().as_ref()).and_then(|over| over.by);
+        let (stay, go): (Vec<Commanded>, Vec<Commanded>) = (kept.commanded.take().into_iter())
+            .partition(|commanded| shown == Some(commanded.id) && !commanded.running.stopped());
+        // (One begun while these go is kept.)
+        kept.commanded.borrow_mut().splice(0..0, stay);
+        for gone in go {
+            if let Some(error) = gone.failed.try_get_untracked().flatten() {
+                command_failed(gone.command, &error);
+            }
+            gone.owner.cleanup();
+            // (What it had over the workspace goes with it.)
+            drop(gone.running);
+        }
+    }
+
+    /// How many instances made for commands there are: those with a view
+    /// over the workspace.
+    pub fn commanded(&self) -> usize {
+        self.kept().commanded.borrow().len()
     }
 
     /// Says on stderr which of the configuration's bindings name no
@@ -96,6 +202,13 @@ impl Shell {
     pub(super) fn say_unknown_bindings(&self) {
         let mut known: Vec<&str> = CommandId::ALL.iter().map(|id| id.spec().name).collect();
         known.extend(plugins::commands().iter().map(|listed| listed.name));
+        let extensions = plugins::extensions();
+        known.extend(
+            extensions
+                .iter()
+                .flat_map(|extension| &extension.commands)
+                .map(|command| command.name),
+        );
         for name in self.kept().keymap.borrow().unknown(&known) {
             eprintln!("horizon config: the keybinding to `{name}` names no command");
         }

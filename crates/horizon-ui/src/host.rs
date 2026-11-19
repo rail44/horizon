@@ -52,6 +52,12 @@ pub fn insert_before(marker: NodeId, nodes: &[NodeId]) {
     with_document(|document| document.mutate().insert_nodes_before(marker, nodes));
 }
 
+/// Whether there is a document on this thread to ask anything of: there
+/// is none for what is let go of as the thread itself ends.
+pub fn there() -> bool {
+    crate::shared::there()
+}
+
 /// Takes a node out for good with everything inside it, now if the
 /// document is free and otherwise once it is: the nodes that go.
 pub fn remove(node: NodeId) -> Vec<NodeId> {

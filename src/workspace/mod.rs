@@ -336,6 +336,8 @@ pub enum Modal {
 struct Over {
     /// Which of those asked for it is.
     asked: u64,
+    /// The instance made for a command that put it there, if one did.
+    by: Option<u64>,
     view: El,
     /// The sheet made around it.
     sheet: El,
@@ -402,6 +404,9 @@ struct Kept {
     /// asked for.
     over: RefCell<Option<Over>>,
     over_asked: Cell<u64>,
+    /// The extensions carrying out commands of their own.
+    commanded: RefCell<Vec<commands::Commanded>>,
+    commanded_count: Cell<u64>,
     /// What the sessions the board views name are doing: every board view
     /// is given it.
     board_activity: RwSignal<HashMap<SessionId, crate::board::activity::BoardSessionActivity>>,
@@ -1180,6 +1185,8 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             sessions_feed: Arc::default(),
             over: RefCell::default(),
             over_asked: Cell::new(0),
+            commanded: RefCell::default(),
+            commanded_count: Cell::new(0),
             board_activity: RwSignal::new(HashMap::new()),
             refocus: Cell::new(false),
             board: opening.board,
@@ -1270,5 +1277,6 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
     shell.focus_active();
     shell.reload_extensions(configured);
     horizon_ui::each_effects(move || shell.follow_extensions());
+    horizon_ui::each_effects(move || shell.let_go_of_commanded());
     (themed(move || shell.theme.get(), root), shell)
 }
