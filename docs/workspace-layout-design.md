@@ -119,6 +119,34 @@ tree's shape changes; the panes and the strips are kept and moved into
 the new boxes, a strip let go of once its group is gone. A strip is
 marked while the cursor is on it.
 
+## Layouts
+
+What a person wants kept where -- the list of sessions on the left, say --
+is theirs to say, not the workspace's: the configuration names layouts,
+trees to put the workspace in (`[layouts.<name>]`, board #87).
+
+- A layout is a tree of **views**, **splits** with weighted children, and
+  **tab groups**, with at most one place for **the workspace as it is**
+  (`workspace = true`). It holds no session: a view is made as `horizon
+  new <name> <arguments>` makes it, and `terminal` or `agent` is refused.
+- `Apply Layout…` puts the workspace in one, chosen by name; and
+  `startup_layout` names the one it is put in when Horizon starts, once the
+  extensions are read (a layout's views may be theirs), on the workspace
+  as it was restored. `Reload Config` does not put it in again.
+- Putting it in (`Workspace::arrange`): a pane already showing a view the
+  layout has -- the same plugin on the same state -- is moved into place
+  rather than made again, so putting the workspace in the same layout
+  again, or starting with one a restored workspace already has, changes
+  nothing. The workspace as it is goes in its place; a layout with none
+  closes the panes the workspace had, their sessions left detached. A
+  place with nothing to hold -- an empty workspace -- is left out.
+- Focus stays where it was while that pane is on screen; else it goes to
+  the first pane on screen.
+- The configuration keeps a layout as the file writes it, and reads it
+  when it is used (`crates/horizon-config/src/layouts.rs`): one that is not
+  well formed is refused then, saying where, and leaves the rest of the
+  file read.
+
 ## The command line
 
 The `workspace_snapshot` an agent asks its host for gives the tree, and

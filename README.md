@@ -66,6 +66,10 @@ manual smoke checks:
   (`docs/workspace-layout-design.md`).
 - `close active pane`: closes the active pane and leaves its session detached
   when another pane remains.
+- `apply layout`: puts the workspace in one of the layouts `config.toml`
+  names (`[layouts.<name>]`, see `config.example.toml`): the list of
+  sessions kept on the left of everything else, for one. `startup_layout`
+  puts the workspace in one when Horizon starts.
 - `detached`: shows detached sessions such as `Terminal #2` and attaches the
   selected session back as a split in the tab group that last had focus.
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
