@@ -37,10 +37,9 @@ use horizon_ui::reactive_graph::traits::{
     Get, GetUntracked, Set, Track, Update, With, WithUntracked, WithValue,
 };
 use horizon_ui::reactive_graph::wrappers::read::Signal;
-use horizon_ui::{Callback, El, each_layout, el, relayout, stop_propagation};
+use horizon_ui::{Callback, El, each_layout, el, relayout};
 use horizon_workspace::title::derive_session_title;
-use horizon_workspace::types::TabSummary;
-use horizon_workspace::{PaneId, SessionId, SessionKind, SplitAxis, Workspace};
+use horizon_workspace::{PaneId, SessionId, SessionKind, Side, SplitAxis, Workspace};
 
 use crate::agent::plugin::{AgentAsked, AgentPlugin};
 use crate::agent::{Agent, AgentSession};
@@ -63,11 +62,12 @@ pub(crate) mod held;
 mod keymap;
 mod keys;
 mod models;
+mod over;
 mod palette;
 mod picker;
 mod plugins;
 mod reload;
-mod sessions;
+mod session_feed;
 
 pub(crate) mod styles {
     horizon_ui::css_module! {"
@@ -90,6 +90,9 @@ pub(crate) mod styles {
         .tab-label:hover .close { opacity: 1; }
         .tab-label .close:hover { background: var(--surface-selected); }
         .tab { flex: 1; min-height: 0; display: flex; }
+        .group { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+        .shown-tab { flex: 1; min-width: 0; min-height: 0; display: flex; }
+        .tabs.cursor { border-color: var(--accent); }
         .split { flex: 1; min-width: 0; min-height: 0; display: flex; }
         .split.down { flex-direction: column; }
         .cell { flex-shrink: 1; flex-basis: 0; min-width: 0; min-height: 0; display: flex; }
@@ -110,22 +113,19 @@ pub(crate) mod styles {
         .scrim { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 100;
                  display: flex; justify-content: center; align-items: flex-start;
                  padding-top: 97px; }
-        .picker { width: 560px; max-height: 400px; display: flex; flex-direction: column;
-                  overflow: hidden; background: var(--background);
-                  border: var(--line) solid var(--border); border-radius: 8px;
-                  box-shadow: var(--shadow-modal); }
+        .sheet { display: flex; overflow: hidden; background: var(--background);
+                 border: var(--line) solid var(--border); border-radius: 8px;
+                 box-shadow: var(--shadow-modal); }
+        .picker { width: 560px; max-height: 400px; display: flex; flex-direction: column; }
         .search { flex: none; position: relative; display: flex; align-items: center;
                   height: 32px; padding: 0 var(--u12); border-bottom: var(--line) solid var(--border); }
         .search > * { flex: 1; font-size: var(--body-size); line-height: calc(var(--u4) * 5); }
         .items { flex: 1; min-height: 0; overflow-y: auto; }
         .item { display: flex; padding: 7px var(--u12); cursor: pointer; }
         .item.command { flex-direction: column; }
-        .item.session { align-items: baseline; gap: var(--u8); }
         .item .name { line-height: calc(var(--u4) * 5); }
-        .item .about, .item .attached, .item .detached {
-            font-size: var(--meta-size); line-height: var(--meta-line);
-            color: var(--text-muted); }
-        .item .attached { color: var(--success); }
+        .item .about { font-size: var(--meta-size); line-height: var(--meta-line);
+                       color: var(--text-muted); }
         .item.destructive .name { color: var(--danger); }
         .item.disabled { cursor: default; }
         .item.disabled .name { color: var(--text-muted); }
@@ -306,19 +306,17 @@ impl Start {
     }
 }
 
-/// Where a new pane goes.
+/// Where a new pane goes: a new tab, or beside what the cursor is on.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Placement {
     NewTab,
-    SplitRight,
-    SplitDown,
+    Split(Side),
 }
 
 /// The list over everything, when one is open.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Modal {
     Palette,
-    Sessions,
     /// Which view the new pane at this place shows.
     Chooser(Placement),
     /// Which model an agent session goes on with.
@@ -326,6 +324,22 @@ pub enum Modal {
     /// Which file the new pane of this extension at this place is made
     /// on.
     Finder(&'static str, Placement),
+    /// A view an extension put there (`horizon:ui/modal`): this one of
+    /// those it has been asked for.
+    Extension(u64),
+}
+
+/// A view an extension has over the workspace.
+struct Over {
+    /// Which of those asked for it is.
+    asked: u64,
+    /// The instance made for a command that put it there, if one did.
+    by: Option<u64>,
+    view: El,
+    /// The sheet made around it.
+    sheet: El,
+    /// Told once the view is there no longer.
+    closed: crate::plugin_host::ModalClosed,
 }
 
 /// A pane on the page.
@@ -381,6 +395,15 @@ struct Kept {
     extensions_read: Cell<bool>,
     /// The extensions whose components are watched.
     watched: RefCell<Vec<extensions::Watched>>,
+    /// What plugins are told the workspace's sessions are.
+    sessions_feed: Arc<crate::plugin_host::SessionsFeed>,
+    /// The view an extension has over the workspace, and how many were
+    /// asked for.
+    over: RefCell<Option<Over>>,
+    over_asked: Cell<u64>,
+    /// The extensions carrying out commands of their own.
+    commanded: RefCell<Vec<commands::Commanded>>,
+    commanded_count: Cell<u64>,
     /// What the sessions the board views name are doing: every board view
     /// is given it.
     board_activity: RwSignal<HashMap<SessionId, crate::board::activity::BoardSessionActivity>>,
@@ -702,7 +725,8 @@ impl Shell {
                         directories.push((*id, directory));
                     }
                     TerminalUpdate::ProgramStatus(status) => {
-                        activities.push((*id, status.map(activity::reported)));
+                        let (doing, detail) = status.map(activity::reported).unzip();
+                        activities.push((*id, doing, detail.flatten()));
                     }
                     _ => {}
                 }
@@ -718,12 +742,13 @@ impl Shell {
             }
             // An agent session is asked what it is doing, and the model
             // told where that is not what it has.
-            let doing = activity::of_agent(session.activity());
+            let (doing, detail) = (activity::of_agent(session.activity()), session.words());
             let known = self.model.with_untracked(|model| {
-                model.session_activity(*id).map(|activity| &activity.doing) == Some(&doing)
+                (model.session_activity(*id))
+                    .is_some_and(|known| known.doing == doing && known.detail == detail)
             });
             if !known {
-                activities.push((*id, Some(doing)));
+                activities.push((*id, Some(doing), detail));
             }
         }
         // The session the owner is looking at: the active pane's, and
@@ -742,7 +767,7 @@ impl Shell {
         // What a session came to be doing is news until the session is
         // looked at, which may be now, or at a layout long after.
         let news = looked_at.filter(|looked_at| {
-            activities.iter().any(|(session, _)| session == looked_at)
+            activities.iter().any(|(session, ..)| session == looked_at)
                 || self.model.with_untracked(|model| {
                     (model.session_activity(*looked_at)).is_some_and(|activity| !activity.seen)
                 })
@@ -756,6 +781,9 @@ impl Shell {
             return;
         }
         let ended = !exited.is_empty();
+        let now_ms = (std::time::SystemTime::now())
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis() as u64);
         self.model.update(|model| {
             for (session, title) in titles {
                 model.set_session_derived_title(session, title.as_deref());
@@ -763,8 +791,8 @@ impl Shell {
             for (session, directory) in directories {
                 model.set_session_directory(session, directory);
             }
-            for (session, doing) in activities {
-                model.set_session_activity(session, doing);
+            for (session, doing, detail) in activities {
+                model.set_session_activity(session, doing, detail, now_ms);
             }
             if let Some(session) = news {
                 model.mark_session_seen(session);
@@ -787,7 +815,7 @@ impl Shell {
         let shown =
             (self.model).with_untracked(|model| model.pane_location_for_session(session).is_some());
         if shown {
-            self.go_to_session(session);
+            self.show_session(session);
         }
     }
 
@@ -805,19 +833,15 @@ impl Shell {
     }
 
     /// A new pane at `placement` over a new session of `kind`, with the
-    /// focus. A split is of the active session's pane.
+    /// focus. A split goes beside what the cursor is on.
     fn create(&self, kind: SessionKind, role: Option<RoleId>, placement: Placement) {
         let kept = self.kept();
         self.change(|model| {
             let from = model.active_session_id();
-            let split = |model: &mut Workspace, axis| {
-                model.split_session_with_new_session(from?, kind, axis, true)
-            };
-            let made = match placement {
-                Placement::NewTab => Some(model.open_tab_with_new_session_activated(kind, true)),
-                Placement::SplitRight => split(model, SplitAxis::Horizontal),
-                Placement::SplitDown => split(model, SplitAxis::Vertical),
-            };
+            let made = Some(match placement {
+                Placement::NewTab => model.new_tab_at_cursor_with_new_session(kind),
+                Placement::Split(side) => model.split_cursor_with_new_session(kind, side, true),
+            });
             model.exit_workspace_mode();
             if let Some(made) = made {
                 let start = Start {
@@ -908,28 +932,6 @@ impl Shell {
     }
 
     /// The commands of the plugin the cursor's pane shows, by name.
-    fn cursor_plugin_commands(&self) -> Vec<&'static str> {
-        let pane = self.model.with_untracked(Workspace::cursor_pane_id);
-        let Some(plugin) = pane.and_then(|pane| self.plugin(pane)) else {
-            return Vec::new();
-        };
-        (plugins::commands().into_iter())
-            .filter(|listed| listed.plugin == plugin)
-            .map(|listed| listed.name)
-            .collect()
-    }
-
-    /// Whether the command `name` of the plugin the cursor's pane shows
-    /// can be carried out now.
-    fn plugin_command_enabled(&self, name: &str) -> bool {
-        let pane = self.model.with_untracked(Workspace::cursor_pane_id);
-        let kept = self.kept();
-        let panes = kept.panes.borrow();
-        let shown = pane.and_then(|pane| panes.get(&pane)?.plugin.clone());
-        drop(panes);
-        shown.is_some_and(|shown| shown.enabled(name))
-    }
-
     /// Carries out the command `name` of the plugin the cursor's pane
     /// shows; `false` when it has none of that name.
     pub fn execute_plugin(&self, name: &str) -> bool {
@@ -997,17 +999,26 @@ impl Shell {
     /// Goes to a session's pane, or puts a session no pane shows in one
     /// beside the active pane. A session this workspace does not have is
     /// left alone.
-    fn go_to_session(&self, session: SessionId) {
+    /// Brings a session in front of its owner, with the keys: its pane,
+    /// or a pane of it beside the active one.
+    pub(super) fn show_session(&self, session: SessionId) {
         self.change(|model| {
-            match model.pane_location_for_session(session) {
-                Some((tab, pane)) => {
-                    model.activate_pane_index(tab, pane);
-                }
-                None => {
-                    model.attach_existing_session_to_split_activated(session, true);
-                }
-            }
-            model.exit_workspace_mode();
+            model.show_session(session);
+        });
+    }
+
+    /// Ends a session; `false` for one the workspace does not have. The
+    /// focus stays where it is, which may be under an open list.
+    pub(super) fn terminate_session(&self, session: SessionId) -> bool {
+        let mut ended = false;
+        self.model_changed(|model| ended = model.terminate_session(session));
+        ended
+    }
+
+    /// Ends a session and every session derived from it.
+    pub(super) fn terminate_session_with_derived(&self, session: SessionId) {
+        self.model_changed(|model| {
+            model.terminate_session_with_derived(session);
         });
     }
 
@@ -1015,14 +1026,9 @@ impl Shell {
     pub fn create_plugin(&self, plugin: horizon_workspace::PluginPane, placement: Placement) {
         self.change(|model| {
             match placement {
-                Placement::NewTab => model.open_tab_with_view_activated(plugin, true),
-                Placement::SplitRight => {
-                    model.split_active_tab_with_view(plugin, SplitAxis::Horizontal)
-                }
-                Placement::SplitDown => {
-                    model.split_active_tab_with_view(plugin, SplitAxis::Vertical)
-                }
-            };
+                Placement::NewTab => _ = model.new_tab_at_cursor_with_view(plugin),
+                Placement::Split(side) => _ = model.split_cursor_with_view(plugin, side),
+            }
             model.exit_workspace_mode();
         });
     }
@@ -1030,6 +1036,11 @@ impl Shell {
     /// The agent view a pane shows.
     pub fn agent(&self, pane: PaneId) -> Option<Agent> {
         self.kept().panes.borrow().get(&pane)?.agent
+    }
+
+    /// The node a pane is drawn in, while it is drawn.
+    pub fn pane_element(&self, pane: PaneId) -> Option<horizon_ui::blitz_dom::NodeId> {
+        Some(self.kept().panes.borrow().get(&pane)?.element.0)
     }
 
     /// The terminal a pane shows.
@@ -1070,48 +1081,6 @@ impl Shell {
     pub fn modal(&self) -> Option<Modal> {
         self.modal.get_untracked()
     }
-}
-
-fn strip(shell: Shell) -> El {
-    let tabs = Memo::new(move |_| shell.model.with(Workspace::tab_summaries));
-    let tab = move |index: usize| tabs.with(|tabs: &Vec<TabSummary>| tabs.get(index).cloned());
-    el("div").class(styles::TABS).each(
-        move || (0..tabs.with(Vec::len)).collect::<Vec<_>>(),
-        |index| *index,
-        move |index| {
-            let index = *index;
-            el("div")
-                .class(styles::TAB_LABEL)
-                .class_dyn(move || {
-                    tab(index)
-                        .is_some_and(|tab| tab.active)
-                        .then_some(styles::ACTIVE)
-                })
-                .child(el("div").class(styles::TITLE).text_dyn(move || {
-                    tab(index)
-                        .map_or_default(|tab| activity::marked(tab.activity.as_ref(), tab.title))
-                }))
-                // Closing a tab detaches the sessions in it.
-                .child(
-                    el("div")
-                        .class(styles::CLOSE)
-                        .text("×")
-                        .on("click", move |_| {
-                            shell.change(|model| {
-                                model.exit_workspace_mode();
-                                model.close_tab_index(index);
-                            });
-                            stop_propagation();
-                        }),
-                )
-                .on("click", move |_| {
-                    shell.change(|model| {
-                        model.exit_workspace_mode();
-                        model.activate_tab_index(index);
-                    });
-                })
-        },
-    )
 }
 
 /// Builds the shell over `opening`, in its configuration's theme; `spawn`
@@ -1164,6 +1133,11 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             own_extensions: opening.extensions,
             extensions_read: Cell::new(false),
             watched: RefCell::default(),
+            sessions_feed: Arc::default(),
+            over: RefCell::default(),
+            over_asked: Cell::new(0),
+            commanded: RefCell::default(),
+            commanded_count: Cell::new(0),
             board_activity: RwSignal::new(HashMap::new()),
             refocus: Cell::new(false),
             board: opening.board,
@@ -1184,6 +1158,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
         shell.reconcile();
     });
     each_layout(move |_| shell.take_in_sessions());
+    shell.feed_sessions();
     // The model is kept as it changes, though not at every step of a
     // boundary being dragged.
     if let Some(mut save) = opening.save {
@@ -1219,24 +1194,38 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
                 shell.resizing.update(|resizing| *resizing = None);
             }
         })
-        .child(strip(shell))
         .child(arrangement::view(shell))
         .each(
-            move || shell.modal.get().into_iter().collect::<Vec<_>>(),
+            // (An extension's view is put in a sheet made around it when it
+            // is asked for: the view is the extension's to remove.)
+            move || {
+                let own = |modal: &Modal| !matches!(modal, Modal::Extension(_));
+                shell
+                    .modal
+                    .get()
+                    .into_iter()
+                    .filter(own)
+                    .collect::<Vec<_>>()
+            },
             |modal| *modal,
-            move |modal| match modal {
-                Modal::Palette => palette::view(shell),
-                Modal::Sessions => sessions::view(shell),
-                Modal::Chooser(placement) => chooser::view(shell, *placement),
-                Modal::Finder(plugin, placement) => finder::view(shell, plugin, *placement),
-                Modal::Models(session) => match shell.kept().models.clone() {
-                    Some(source) => models::view(shell, *session, source),
-                    None => el("div"),
-                },
+            move |modal| {
+                let inside = match modal {
+                    Modal::Palette => palette::view(shell),
+                    Modal::Chooser(placement) => chooser::view(shell, *placement),
+                    Modal::Finder(plugin, placement) => finder::view(shell, plugin, *placement),
+                    Modal::Models(session) => match shell.kept().models.clone() {
+                        Some(source) => models::view(shell, *session, source),
+                        None => el("div"),
+                    },
+                    Modal::Extension(_) => el("div"),
+                };
+                over::view(shell, inside)
             },
         );
+    over::follow_extensions(shell);
     shell.focus_active();
     shell.reload_extensions(configured);
     horizon_ui::each_effects(move || shell.follow_extensions());
+    horizon_ui::each_effects(move || shell.let_go_of_commanded());
     (themed(move || shell.theme.get(), root), shell)
 }

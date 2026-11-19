@@ -74,14 +74,16 @@ its owner for.
   answered leaves out the mark it puts in its own title otherwise (Claude
   Code's `✳` and `◐`), which is why the tab draws one. The mark is text in
   the tab's label, not a designed indicator.
-- **Session manager** — the session's line carries
-  `<app>: <state> [<attention>] — <message>` as far as each part is there
-  (`activity::line`).
+- **The list of sessions** (`plugins/sessions`, in a pane or as the
+  list over the workspace) — a row carries the program's name or the session's
+  kind, its words, the attention or `working` as a chip, and how long it
+  has been in its state. The extension reads these from the host's
+  `sessions` interface (`src/workspace/session_feed.rs`).
 - **`horizon sessions`** — `SessionEntry::activity`
   (`crates/horizon-control/src/contract.rs`): `state` (the kind's own
-  word), `attention`, `seen`, and a program's `app` and `message`. Absent
+  word), `attention`, `seen`, `since_ms`, a program's `app`, and `detail`. Absent
   for a session nothing is known of. The text form adds a column,
-  `<app>:<state> [<attention>]`, and then the message.
+  `<app>:<state> [<attention>]`, and then the detail.
 
 ## 3. Agent sessions
 

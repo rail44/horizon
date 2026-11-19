@@ -5,60 +5,24 @@
 use horizon_ui::El;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set, Track};
 use horizon_workspace::Workspace;
-use horizon_workspace::commands::{CommandId, command_entries, filter_command_entries};
 
-use super::picker::{self, Picked, Row};
-use super::{Shell, plugins, styles};
+use super::commands::Listed;
+use super::picker::{self, Row};
+use super::{Shell, styles};
 
-/// What a palette row carries out.
-#[derive(Clone, Copy)]
-enum Run {
-    Shell(CommandId),
-    /// The command of this name of the cursor's pane's plugin.
-    Plugin(&'static str),
-}
-
-struct Entry {
-    name: &'static str,
-    title: &'static str,
-    description: &'static str,
-    destructive: bool,
-    enabled: bool,
-    run: Run,
-}
-
-/// The commands that match `query`, in the palette's order.
-fn matching(shell: Shell, query: &str) -> Vec<Entry> {
-    let mine = shell.cursor_plugin_commands();
-    let query_lower = query.trim().to_ascii_lowercase();
-    let plugin = (plugins::commands().into_iter())
-        .filter(|listed| mine.contains(&listed.name))
-        .filter(|listed| {
-            query_lower.is_empty()
-                || listed.title.to_ascii_lowercase().contains(&query_lower)
-                || listed
-                    .description
-                    .to_ascii_lowercase()
-                    .contains(&query_lower)
+/// The commands that match `query`, in the palette's order: by a
+/// command's title, its description, or what the shell sorts it under.
+fn matching(shell: Shell, query: &str) -> Vec<Listed> {
+    let query = query.trim().to_ascii_lowercase();
+    let holds = |text: &str| text.to_ascii_lowercase().contains(&query);
+    (shell.commands().into_iter())
+        .filter(|command| {
+            query.is_empty()
+                || holds(command.title)
+                || holds(command.description)
+                || (command.category).is_some_and(|category| holds(&format!("{category:?}")))
         })
-        .map(|listed| Entry {
-            name: listed.name,
-            title: listed.title,
-            description: listed.description,
-            destructive: listed.destructive,
-            enabled: shell.plugin_command_enabled(listed.name),
-            run: Run::Plugin(listed.name),
-        });
-    let own = filter_command_entries(command_entries(shell.command_state()), query);
-    let own = own.into_iter().map(|entry| Entry {
-        name: entry.spec.name,
-        title: entry.spec.title,
-        description: entry.spec.description,
-        destructive: entry.spec.destructive,
-        enabled: entry.enabled,
-        run: Run::Shell(entry.spec.id),
-    });
-    plugin.chain(own).collect()
+        .collect()
 }
 
 pub(super) fn view(shell: Shell) -> El {
@@ -83,19 +47,13 @@ pub(super) fn view(shell: Shell) -> El {
     };
     // A command is run on the mode's cursor, and the mode ends with it,
     // unless what it did was to open another list.
-    let picked = move |index: usize, picked: Picked| {
+    let picked = move |index: usize| {
         let entries = matching(shell, &shell.query.get_untracked());
         let Some(entry) = entries.get(index).filter(|entry| entry.enabled) else {
             return;
         };
-        if !matches!(picked, Picked::Confirmed) {
-            return;
-        }
         shell.modal.set(None);
-        match entry.run {
-            Run::Shell(command) => shell.execute(command),
-            Run::Plugin(name) => _ = shell.execute_plugin(name),
-        }
+        shell.run(entry);
         if shell.modal.get_untracked().is_none() {
             shell.change(Workspace::exit_workspace_mode);
         }

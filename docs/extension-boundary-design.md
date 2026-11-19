@@ -428,6 +428,26 @@ The decisions and who made them are on board #76. What they come to:
   without the lock the daemon's writers take: a log is only appended to,
   a line at a time. `create` may refuse, in words (`result<state,
   string>`), which is what the command line answers with.
+- **The list of sessions is the fourth extension** (`plugins/sessions`),
+  and the first that reads and acts on the workspace. Two interfaces of
+  `horizon:ui` are for that, apart so that reading the sessions is not
+  asking to change them: `sessions` (`all`: each session's kind, title,
+  directory, the project the directory is in, what it was derived from
+  and what it is doing; and a `watch` resource whose `changed` comes back
+  when they have changed) and `session-control` (`show`, `terminate`,
+  `terminate-with-derived`, `open-terminal`, each on a session's id).
+  The shell says what its sessions are whenever its model changes
+  (`src/workspace/session_feed.rs`) and does what is asked with the
+  functions its own commands use; it knows nothing of the list. The keys
+  in the list (a step, the next that waits, a search, the question before
+  a session is ended) are the view's own and are not commands of the
+  shell. A project is the repository a directory is in, a linked
+  worktree's being the repository it is a worktree of
+  (`horizon_workspace::lineage::project_root`). A preview pane is given
+  neither interface. `Manage Sessions` is the extension's own command,
+  which puts the list over the workspace (`modal`, below): the same
+  rows, in a component of its own that Escape and going to a session
+  leave.
 - **A preview pane shows extensions only.** The preview plugins it also
   showed (views of the shell's own, built into wasm over sample data)
   went on 2026-11-16, and with them the root library's build for a guest
@@ -441,8 +461,34 @@ The decisions and who made them are on board #76. What they come to:
   hands it to `mount` when the pane is made again; another state is a
   new `mount`, not a change to the mounted view.
 - **What the shell asks of a view is a function the extension exports.**
-  A command is an exported function; the palette and the key bindings
-  list and run the commands of the extension the cursor's pane shows.
+  A command is an exported function. Which it is of is said by the
+  interface it is exported in: `pane-commands` are the commands of a
+  pane that shows the extension's view, carried out in that pane's
+  instance when the cursor is on it, and `commands` are the extension's
+  own, which need no pane. The view itself is the interface `pane`
+  (`mount`, `state`, `create`); an extension has a `pane`, a command of
+  its own, or both, and one without a `pane` is not among the views to
+  choose from. The shell lists its own commands, the cursor's pane's and
+  every extension's own as one (`Shell::commands`), which is what the
+  palette, the key bindings and the command line read; a binding keeps a
+  command's name and the command is looked for when the chord is pressed.
+- **An extension's own command is carried out in an instance made for
+  it.** The instance lasts for as long as it has a view over the
+  workspace: it is let go of when the command has ended with nothing
+  there, when its view is taken away, or when it stops, and what it had
+  there goes with it. Nothing is kept from one carrying out to the next.
+  What it said if it stopped is said on stderr.
+- **An extension puts a view over the workspace by holding a resource**
+  (`modal.modal`): the view is in the sheet the shell's own lists are in
+  (`src/workspace/over.rs`), with the keys, for as long as the resource
+  is held, and `closed` comes back once it is there no longer -- the
+  resource dropped, a press outside the sheet, Escape the view did not
+  stop, or something else put over the workspace (one thing is there at
+  a time). The view stays the extension's: the shell makes the sheet
+  around it and removes the sheet from around it. An instance of either
+  kind may hold one: a pane's, whose view over the workspace goes if the
+  pane does, or a command's. `horizon_ui::guest::modal` is the SDK's way
+  to it.
 - **A command's parameters are read from its type.** The host reads the
   exported function's parameter types at run time and asks for each in
   the palette by its type (a choice for an `enum`, a field for a
@@ -506,8 +552,9 @@ The decisions and who made them are on board #76. What they come to:
   it, as a custom section (`horizon:manifest`, JSON: nobody writes it,
   the SDK's macro does). The component's
   world includes `horizon-ui`'s `imports` world and declares only what
-  is its own: its state's type, `mount` and `state` over it, `create`,
-  and a `commands` interface. What every plugin exports
+  is its own: the interface `pane` (its state's type, `mount` and
+  `state` over it, `create`), `pane-commands` and `commands`. What every
+  plugin exports
   (`horizon:ui/events`) the SDK implements and exports. The manifest gives the name, the title,
   the commands' titles and descriptions (WIT has no values, and doc
   comments do not reach a component), how `create`'s parameters are
@@ -519,9 +566,11 @@ The decisions and who made them are on board #76. What they come to:
   what the Wasm registries carry (OCI, `wkg`), should extensions be
   handed out that way.
 - **An extension written in Rust says its shape once**
-  (`horizon_ui::plugin`, `crates/horizon-ui-macros`): a module with
-  `struct State`, `fn mount`, `fn state`, a function marked
-  `#[create(..)]` and functions marked `#[command(..)]`. The macro
+  (`horizon_ui::plugin`, `crates/horizon-ui-macros`): a module with a
+  `mod pane` (`struct State`, `fn mount`, `fn state`, a function marked
+  `#[create(..)]`, and functions marked `#[command(..)]` for the pane's
+  commands) and, beside it, functions marked `#[command(..)]` for the
+  extension's own. The macro
   writes the WIT world those amount to, hands it to `wit-bindgen`,
   exports the functions through the bindings beside what every plugin
   exports, and puts the manifest in the wasm. A world, a manifest and

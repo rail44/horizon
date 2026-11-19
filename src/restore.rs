@@ -27,7 +27,17 @@ enum Kept {
 }
 
 fn kept(store: &mut WorkspaceStateStore) -> Kept {
+    // A state of an older version is written over: its layout is not read
+    // (`docs/workspace-layout-design.md`), and the sessions the runtimes
+    // still run arrive detached. One of a newer version is a newer build's,
+    // and is kept as it is.
     let unsupported = |found: u64, supported: u64| {
+        if found < supported {
+            eprintln!(
+                "workspace state version {found} is older than {supported}; starting a new layout"
+            );
+            return Kept::Nothing;
+        }
         eprintln!(
             "workspace state version {found} is unsupported (expected {supported}); preserving the file"
         );

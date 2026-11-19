@@ -97,14 +97,12 @@ pub(crate) async fn operate(
             }
             let base = commit(&working_root, &base)?;
             let tip = commit(&working_root, &tip)?;
-            let records = records(&state)?;
+            let records = session_records(&state, caller)?;
             let identity = records
                 .iter()
                 .rev()
                 .find_map(|record| match &record.event {
-                    Event::EnvironmentActivated(identity) if record.session_id == caller => {
-                        Some(identity)
-                    }
+                    Event::EnvironmentActivated(identity) => Some(identity),
                     _ => None,
                 })
                 .ok_or("Task has no recorded starting base")?;
@@ -274,26 +272,26 @@ pub(crate) fn organizer_session(
     if let Some(session) = live {
         return Ok(session.session_id);
     }
-    let records = records(state)?;
-    let existing = records
-        .iter()
-        .rev()
-        .find(|record| {
-            record
-                .role_id
+    flush(state)?;
+    let existing = state
+        .flushed_sessions_with_role(&RoleId(roles::ORGANIZER.into()))?
+        .into_iter()
+        .find(|(_, root)| {
+            root.as_deref()
+                .and_then(crate::worktree::project_root)
                 .as_ref()
-                .is_some_and(|r| r.0 == roles::ORGANIZER)
-                && record
-                    .session_context
-                    .as_ref()
-                    .and_then(|c| c.workspace_root.as_deref())
-                    .and_then(crate::worktree::project_root)
-                    .as_ref()
-                    == Some(&project)
+                == Some(&project)
         })
-        .map(|record| record.session_id);
+        .map(|(id, _)| id);
     let id = existing.unwrap_or_else(SessionId::new);
-    start_locked(state, id, &project, roles::ORGANIZER, true, &records)?;
+    start_locked(
+        state,
+        id,
+        &project,
+        roles::ORGANIZER,
+        true,
+        existing.is_some(),
+    )?;
     Ok(id)
 }
 fn ensure_started(
@@ -307,21 +305,22 @@ fn ensure_started(
         return Ok(());
     }
     let _guard = START_SESSION.lock().map_err(|e| e.to_string())?;
-    let records = records(state)?;
-    start_locked(state, id, root, role, resume, &records)
+    let recorded = !session_records(state, id)?.is_empty();
+    start_locked(state, id, root, role, resume, recorded)
 }
+/// `recorded`: whether the event log already holds records of `id`.
 fn start_locked(
     state: &Arc<AgentdState>,
     id: SessionId,
     root: &Path,
     role: &str,
     resume: bool,
-    records: &[event_log::Record],
+    recorded: bool,
 ) -> Result<(), String> {
     if state.session_exists(id) {
         return Ok(());
     }
-    if records.iter().any(|record| record.session_id == id) {
+    if recorded {
         if !resume {
             return Err("The task session has been explicitly ended".into());
         }
@@ -347,9 +346,24 @@ fn start_locked(
     );
     Ok(())
 }
-pub(super) fn records(state: &Arc<AgentdState>) -> Result<Vec<event_log::Record>, String> {
+/// Makes what the writer has been handed durable, which a read of the
+/// flushed records waits for.
+fn flush(state: &Arc<AgentdState>) -> Result<(), String> {
     let writer = state.writer().ok_or("Session persistence is unavailable")?;
-    writer.flush().map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())
+}
+/// One session's records, in order: a board operation asks about one
+/// session at a time, and the event log as a whole is not read for it.
+fn session_records(
+    state: &Arc<AgentdState>,
+    id: SessionId,
+) -> Result<Vec<event_log::Record>, String> {
+    flush(state)?;
+    state.flushed_session_records(id)
+}
+#[cfg(test)]
+pub(super) fn records(state: &Arc<AgentdState>) -> Result<Vec<event_log::Record>, String> {
+    flush(state)?;
     let path = state
         .agent_config
         .lock()
@@ -370,11 +384,10 @@ pub(super) fn same_project(
         .session_directory(target)
         .map(|(root, _)| root)
         .or_else(|| {
-            records(state)
+            session_records(state, target)
                 .ok()?
                 .into_iter()
-                .rev()
-                .find(|record| record.session_id == target)
+                .next_back()
                 .and_then(|r| r.session_context)
                 .and_then(|c| c.workspace_root)
         });

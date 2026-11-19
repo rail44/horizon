@@ -30,6 +30,8 @@ use keyboard_types::{Code, Key, Location, Modifiers, NamedKey};
 use reactive_graph::effect::Effect;
 use reactive_graph::graph::untrack;
 use reactive_graph::owner::{Owner, on_cleanup};
+use reactive_graph::signal::RwSignal;
+use reactive_graph::traits::{Get, Set};
 
 use crate::class::Classes;
 use crate::component::Component;
@@ -41,6 +43,8 @@ pub mod bindings {
         world: "view",
         pub_export_macro: true,
         export_macro_name: "export_events",
+        // (What a view is told is compared with what it was told.)
+        additional_derives: [PartialEq],
     });
 }
 
@@ -86,6 +90,8 @@ struct Kept {
     next_id: Cell<u64>,
     /// What the mounted view was made under.
     owner: RefCell<Option<Owner>>,
+    /// What the view last put over the workspace was made under.
+    over: RefCell<Option<Owner>>,
 }
 
 thread_local! {
@@ -737,7 +743,8 @@ pub fn start_tasks() {
     }));
 }
 
-/// A file watched: until it is dropped, `changed` is called whenever the
+/// Something watched ([`watch`], [`watch_sessions`]). For a file: until
+/// it is dropped, `changed` is called whenever the
 /// file changed and has sat still. `changed` reads the file and writes
 /// signals, whose effects draw it; it does not change the document
 /// itself, which may not be changed when it is called.
@@ -769,6 +776,91 @@ pub fn watch(path: &str, changed: impl Fn() + 'static) -> Watch {
         }
     });
     Watch(dropped)
+}
+
+/// The workspace's sessions watched: until what is returned is dropped,
+/// `changed` is called whenever they have changed. As with a file's
+/// [`watch`], `changed` reads (`bindings::horizon::ui::sessions::all`)
+/// and writes signals, and does not change the document itself.
+pub fn watch_sessions(changed: impl Fn() + 'static) -> Watch {
+    let dropped = Rc::new(Cell::new(false));
+    let stops = dropped.clone();
+    let watching = bindings::horizon::ui::sessions::Watch::new();
+    spawn(async move {
+        while !stops.get() {
+            watching.changed().await;
+            if stops.get() {
+                break;
+            }
+            changed();
+        }
+    });
+    Watch(dropped)
+}
+
+/// What a view over the workspace takes itself away with.
+#[derive(Clone, Default)]
+pub struct Close(Rc<Closing>);
+
+#[derive(Default)]
+struct Closing {
+    asked: Cell<bool>,
+    /// What waits to hear of it.
+    waits: RefCell<Option<std::task::Waker>>,
+}
+
+impl Close {
+    /// Takes the view away.
+    pub fn close(&self) {
+        self.0.asked.set(true);
+        if let Some(waits) = self.0.waits.borrow_mut().take() {
+            waits.wake();
+        }
+    }
+}
+
+/// Puts the view `view` makes over the workspace, in a sheet in the middle
+/// of it and with the keys (`horizon:ui/modal`), until it is left -- a
+/// press outside the sheet, Escape the view did not stop, something else
+/// put over the workspace -- or takes itself away with what `view` is
+/// given. The view is let go of then, with what was made for it.
+pub fn modal(view: impl FnOnce(Close) -> El) {
+    let _ = Executor::init_local_custom_executor(Effects);
+    let outer = Owner::new();
+    let inner = outer.child();
+    let close = Close::default();
+    let root = inner.with(|| view(close.clone()));
+    let shown = bindings::horizon::ui::modal::Modal::new(id(root));
+    // (A task does not change the document: the view is let go of by an
+    // effect, when the task says it is there no longer.)
+    let there = outer.with(|| RwSignal::new(true));
+    outer.with(|| {
+        Effect::new(move |_| {
+            if !there.get() {
+                inner.cleanup();
+                drop_node(root.0);
+            }
+        })
+    });
+    let closing = close.0;
+    spawn(async move {
+        {
+            let mut closed = std::pin::pin!(shown.closed());
+            std::future::poll_fn(|context| {
+                if closing.asked.get() {
+                    return std::task::Poll::Ready(());
+                }
+                *closing.waits.borrow_mut() = Some(context.waker().clone());
+                closed.as_mut().poll(context)
+            })
+            .await;
+        }
+        // (Dropped, it is taken away if it was there still.)
+        drop(shown);
+        let _ = there.try_set(false);
+    });
+    // (Kept until the next: what the effect and the signal are made under.)
+    KEPT.with(|kept| *kept.over.borrow_mut() = Some(outer));
 }
 
 /// Exports what every plugin exports (`events`): a plugin's crate calls

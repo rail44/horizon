@@ -1,9 +1,9 @@
-//! A list to search and pick from, over everything: what the palette and
-//! the session manager both are. The rows follow what is typed and
-//! whatever else they are read from; the arrows and Tab move the choice,
-//! Enter confirms it, Escape or a press outside leaves.
+//! A list to search and pick from, in a sheet over the workspace
+//! (`over`): what the palette, the view chooser and the model picker are.
+//! The rows follow what is typed and whatever else they are read from;
+//! the arrows and Tab move the choice, and Enter confirms it.
 
-use horizon_ui::blitz_traits::events::{BlitzKeyEvent, DomEventData};
+use horizon_ui::blitz_traits::events::DomEventData;
 use horizon_ui::reactive_graph::computed::Memo;
 use horizon_ui::reactive_graph::effect::Effect;
 use horizon_ui::reactive_graph::traits::{Get, GetUntracked, Set, WithUntracked};
@@ -26,39 +26,26 @@ pub(super) struct Row {
     pub(super) indent: f32,
 }
 
-/// What was done to the chosen row.
-pub(super) enum Picked<'a> {
-    /// Enter, or a click.
-    Confirmed,
-    /// Enter with Ctrl held.
-    ConfirmedSecondary,
-    /// A chord the list has no use for.
-    Chord(&'a BlitzKeyEvent),
-}
-
 /// Builds the list: `rows` gives the rows for what is typed, and `picked`
-/// is told what was done to which of them. Leaving goes back to workspace
+/// is told which of them was confirmed, by Enter or a click. Leaving goes back to workspace
 /// mode as it was.
 pub(super) fn view(
     shell: Shell,
     rows: impl Fn(&str) -> Vec<Row> + Send + Sync + 'static,
-    picked: impl Fn(usize, Picked) + Clone + 'static,
+    picked: impl Fn(usize) + Clone + 'static,
 ) -> El {
     view_in_steps(shell, rows, picked, || false)
 }
 
-/// [`view`] for a list of more than one step: Escape asks `back` first,
-/// which says whether there was a step to go back to.
+/// [`view`] for a list of more than one step: Escape asks `back`, which
+/// says whether there was a step to go back to, and is the sheet's where
+/// there was none.
 pub(super) fn view_in_steps(
     shell: Shell,
     rows: impl Fn(&str) -> Vec<Row> + Send + Sync + 'static,
-    picked: impl Fn(usize, Picked) + Clone + 'static,
+    picked: impl Fn(usize) + Clone + 'static,
     back: impl Fn() -> bool + 'static,
 ) -> El {
-    let close = move || {
-        shell.modal.set(None);
-        shell.focus_active();
-    };
     let input = el("input")
         .attr("type", "text")
         .on("input", move |event| {
@@ -85,20 +72,21 @@ pub(super) fn view_in_steps(
                 .class((styles::ITEM, class))
                 .class_dyn(move || (shell.chosen.get() == index).then_some(styles::CHOSEN))
                 .attr("style", &format!("padding-left: {}px", 12. + row.indent))
-                .on("click", move |_| clicked(index, Picked::Confirmed));
+                .on("click", move |_| clicked(index));
             item.children(
                 (row.parts.iter()).map(|(class, text)| el("div").class(*class).text(text)),
             )
         },
     );
-    let list = el("div")
+    el("div")
         .class(styles::PICKER)
-        // A press in the list is not one outside it.
-        .on("pointerdown", |_| stop_propagation())
         .on("keydown", move |event| {
             let DomEventData::KeyDown(key) = &event.data else {
                 return;
             };
+            if key.key == Key::Named(NamedKey::Escape) && !back() {
+                return;
+            }
             let count = rows.with_untracked(Vec::len);
             let chosen = shell.chosen.get_untracked().min(count.saturating_sub(1));
             let (down, up) = (
@@ -110,17 +98,9 @@ pub(super) fn view_in_steps(
                 Key::Named(NamedKey::ArrowUp) => shell.chosen.set(up),
                 Key::Named(NamedKey::Tab) if key.modifiers.shift() => shell.chosen.set(up),
                 Key::Named(NamedKey::Tab) => shell.chosen.set(down),
-                Key::Named(NamedKey::Escape) => {
-                    if !back() {
-                        close();
-                    }
-                }
+                Key::Named(NamedKey::Escape) => {}
                 _ if count == 0 => return,
-                Key::Named(NamedKey::Enter) if key.modifiers.ctrl() => {
-                    picked(chosen, Picked::ConfirmedSecondary);
-                }
-                Key::Named(NamedKey::Enter) => picked(chosen, Picked::Confirmed),
-                _ if key.modifiers.ctrl() => picked(chosen, Picked::Chord(key)),
+                Key::Named(NamedKey::Enter) => picked(chosen),
                 // Anything else is the field's.
                 _ => return,
             }
@@ -134,9 +114,5 @@ pub(super) fn view_in_steps(
                 shown: Signal::derive(move || shell.query.get().is_empty()),
             }),
         }))
-        .child(items);
-    el("div")
-        .class(styles::SCRIM)
-        .on("pointerdown", move |_| close())
-        .child(list)
+        .child(items)
 }

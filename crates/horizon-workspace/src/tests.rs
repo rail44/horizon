@@ -1,4 +1,7 @@
-use super::types::{LayoutNode, PaneSummary, SessionSummary, TabSummary};
+#[path = "tests/groups.rs"]
+mod groups;
+
+use super::types::{LayoutNode, SessionSummary, TabSummary};
 use super::*;
 use crate::SessionId;
 use crate::operations::Content;
@@ -248,13 +251,16 @@ fn splitting_an_unknown_session_with_a_view_spawns_nothing() {
 }
 
 #[test]
-fn pane_position_locates_a_pane_in_a_tab_that_is_not_the_active_one() {
+fn reveal_pane_shows_the_tab_a_pane_is_in_and_focuses_it() {
     let mut workspace = Workspace::mvp();
     let first_pane = workspace.visible_pane_id(0).expect("first pane");
     workspace.open_tab(Content::Session(SessionKind::Terminal, SessionId::new()));
+    assert_eq!(workspace.active_tab_index(), 1);
 
-    assert_eq!(workspace.pane_position(first_pane), Some((0, 0)));
-    assert_eq!(workspace.pane_position(PaneId::new()), None);
+    assert!(workspace.reveal_pane(first_pane));
+    assert_eq!(workspace.active_tab_index(), 0);
+    assert!(workspace.is_active_pane(first_pane));
+    assert!(!workspace.reveal_pane(PaneId::new()));
 }
 
 #[test]
@@ -353,7 +359,7 @@ fn pane_location_for_session_resolves_the_hosting_pane() {
 
     assert_eq!(
         workspace.pane_location_for_session(session_id),
-        Some((0, 1))
+        workspace.visible_pane_id(1)
     );
 }
 
@@ -859,46 +865,18 @@ fn activate_visible_pane_switches_active_pane() {
 }
 
 #[test]
-fn pane_summaries_include_split_panes_by_tab() {
+fn activate_tab_index_switches_tab_and_focuses_its_active_pane() {
     let mut workspace = Workspace::mvp();
     workspace.split_active(SessionKind::Terminal, SessionId::new());
-
-    assert_eq!(
-        workspace.pane_summaries(),
-        vec![
-            PaneSummary {
-                tab_index: 0,
-                pane_index: 0,
-                title: "Terminal #1".to_string(),
-                plugin: "terminal".to_string(),
-                active: false,
-                tab_active: true,
-            },
-            PaneSummary {
-                tab_index: 0,
-                pane_index: 1,
-                title: "Terminal #2".to_string(),
-                plugin: "terminal".to_string(),
-                active: true,
-                tab_active: true,
-            },
-        ]
-    );
-}
-
-#[test]
-fn activate_pane_index_switches_tab_and_pane() {
-    let mut workspace = Workspace::mvp();
-    workspace.split_active(SessionKind::Terminal, SessionId::new());
+    workspace.activate_visible_pane(0);
     workspace.open_tab(Content::View(SessionKind::Agent.plugin()));
 
     assert_eq!(workspace.active_tab_index(), 1);
-    assert!(workspace.activate_pane_index(0, 0));
+    assert!(workspace.activate_tab_index(0));
     assert_eq!(workspace.active_tab_index(), 0);
     assert_eq!(workspace.active_visible_index(), 0);
     assert_eq!(workspace.active_title(), "Terminal #1");
-    assert!(!workspace.activate_pane_index(9, 0));
-    assert!(!workspace.activate_pane_index(0, 9));
+    assert!(!workspace.activate_tab_index(9));
     assert_eq!(workspace.active_title(), "Terminal #1");
 }
 
@@ -1034,11 +1012,11 @@ fn repeated_splits_of_the_focused_pane_stay_in_one_row() {
     workspace.split_active(SessionKind::Terminal, SessionId::new());
 
     assert_eq!(workspace.visible_panes().len(), 4);
-    let root = &workspace.tabs[workspace.active_tab_index()].root;
+    let root = &workspace.active_tab().expect("tab").root;
     assert!(root.is_canonical());
     match root {
         LayoutNode::Split { children, .. } => assert_eq!(children.len(), 4),
-        LayoutNode::Pane(_) => panic!("expected a single flat row of 4 panes"),
+        _ => panic!("expected a single flat row of 4 panes"),
     }
 }
 
@@ -1065,7 +1043,7 @@ fn split_session_with_new_session_targets_the_sessions_own_pane() {
         )
         .expect("split next to the first session's pane");
 
-    let root = &workspace.tabs[workspace.active_tab_index()].root;
+    let root = &workspace.active_tab().expect("tab").root;
     assert!(root.is_canonical());
     assert_eq!(root.pane_ids().len(), 3);
     assert_eq!(
@@ -1099,13 +1077,13 @@ fn split_session_with_new_session_honors_the_vertical_axis() {
         )
         .expect("split next to the session's pane");
 
-    let root = &workspace.tabs[workspace.active_tab_index()].root;
+    let root = &workspace.active_tab().expect("tab").root;
     match root {
         LayoutNode::Split { axis, children } => {
             assert_eq!(*axis, SplitAxis::Vertical);
             assert_eq!(children.len(), 2);
         }
-        LayoutNode::Pane(_) => panic!("expected a vertical split of 2 panes"),
+        _ => panic!("expected a vertical split of 2 panes"),
     }
 }
 
@@ -1150,7 +1128,6 @@ fn what_a_session_does_is_news_until_the_session_is_looked_at() {
             state,
             blocked_on,
             app: Some("claude-code".into()),
-            message: None,
         })
     };
     let activity = |workspace: &Workspace| workspace.session_summaries().remove(0).activity;
@@ -1158,8 +1135,8 @@ fn what_a_session_does_is_news_until_the_session_is_looked_at() {
         |workspace: &Workspace| activity(workspace).and_then(|activity| activity.attention());
     let done = program(ProgramState::Done, None);
 
-    assert!(workspace.set_session_activity(session, Some(done.clone())));
-    assert!(!workspace.set_session_activity(session, Some(done.clone())));
+    assert!(workspace.set_session_activity(session, Some(done.clone()), None, 0));
+    assert!(!workspace.set_session_activity(session, Some(done.clone()), None, 0));
     assert_eq!(attention(&workspace), Some(Attention::Unseen));
     // The tab is titled after the session, and says the same of it.
     assert_eq!(workspace.tab_summaries()[0].activity, activity(&workspace));
@@ -1168,24 +1145,32 @@ fn what_a_session_does_is_news_until_the_session_is_looked_at() {
     assert!(!workspace.mark_session_seen(session));
     assert_eq!(attention(&workspace), None);
     // Still done, said again: the same piece of work, and still seen.
-    assert!(!workspace.set_session_activity(session, Some(done)));
+    assert!(!workspace.set_session_activity(session, Some(done), None, 0));
     assert_eq!(attention(&workspace), None);
 
     // What it newly does has not been looked at, and a session that waits
     // is waited on whether looked at or not.
     let blocked = program(ProgramState::Blocked, Some(BlockedOn::Permission));
-    assert!(workspace.set_session_activity(session, Some(blocked)));
+    assert!(workspace.set_session_activity(session, Some(blocked), None, 0));
     assert!(activity(&workspace).is_some_and(|activity| !activity.seen));
     workspace.mark_session_seen(session);
     assert_eq!(attention(&workspace), Some(Attention::Approval));
 
-    assert!(workspace.set_session_activity(session, None));
+    assert!(workspace.set_session_activity(session, None, None, 0));
     assert_eq!(activity(&workspace), None);
     assert!(!workspace.mark_session_seen(session));
-    assert!(!workspace.set_session_activity(SessionId::new(), None));
+    assert!(!workspace.set_session_activity(SessionId::new(), None, None, 0));
 
     // Every kind's words have the one reading.
-    let reads = |doing, seen| SessionActivity { doing, seen }.attention();
+    let reads = |doing, seen| {
+        let activity = SessionActivity {
+            doing,
+            detail: None,
+            since_ms: 0,
+            seen,
+        };
+        activity.attention()
+    };
     let question = Some(BlockedOn::Question);
     for (doing, seen, read) in [
         (
@@ -1253,32 +1238,31 @@ fn what_was_looked_at_stays_seen_until_the_session_has_been_at_work() {
             state,
             blocked_on: None,
             app: None,
-            message: None,
         })
     };
     let completed = Doing::Agent(AgentStatus::Completed);
 
     // Out of reach and back with nothing done in between: still seen.
-    workspace.set_session_activity(session, Some(completed.clone()));
+    workspace.set_session_activity(session, Some(completed.clone()), None, 0);
     workspace.mark_session_seen(session);
-    workspace.set_session_activity(session, Some(Doing::Agent(AgentStatus::Loading)));
+    workspace.set_session_activity(session, Some(Doing::Agent(AgentStatus::Loading)), None, 0);
     assert!(!seen(&workspace));
-    workspace.set_session_activity(session, Some(completed.clone()));
+    workspace.set_session_activity(session, Some(completed.clone()), None, 0);
     assert!(seen(&workspace));
 
     // At work and done again: what is done now is new.
-    workspace.set_session_activity(session, Some(Doing::Agent(AgentStatus::Running)));
-    workspace.set_session_activity(session, Some(completed.clone()));
+    workspace.set_session_activity(session, Some(Doing::Agent(AgentStatus::Running)), None, 0);
+    workspace.set_session_activity(session, Some(completed.clone()), None, 0);
     assert!(!seen(&workspace));
 
     // The same holds for a program, also where it took its report back.
-    workspace.set_session_activity(session, Some(program(ProgramState::Done)));
+    workspace.set_session_activity(session, Some(program(ProgramState::Done)), None, 0);
     workspace.mark_session_seen(session);
-    workspace.set_session_activity(session, None);
-    workspace.set_session_activity(session, Some(program(ProgramState::Done)));
+    workspace.set_session_activity(session, None, None, 0);
+    workspace.set_session_activity(session, Some(program(ProgramState::Done)), None, 0);
     assert!(seen(&workspace));
-    workspace.set_session_activity(session, Some(program(ProgramState::Working)));
-    workspace.set_session_activity(session, Some(program(ProgramState::Done)));
+    workspace.set_session_activity(session, Some(program(ProgramState::Working)), None, 0);
+    workspace.set_session_activity(session, Some(program(ProgramState::Done)), None, 0);
     assert!(!seen(&workspace));
 }
 
@@ -1292,13 +1276,11 @@ fn what_was_looked_at_is_kept_across_a_restart() {
         state: ProgramState::Done,
         blocked_on: None,
         app: Some("claude-code".into()),
-        message: None,
     });
     let blocked = Doing::Program(ProgramStatus {
         state: ProgramState::Blocked,
         blocked_on: Some(BlockedOn::Permission),
         app: Some("claude-code".into()),
-        message: Some("approve Bash: ls".into()),
     });
     let seen = |workspace: &Workspace| {
         (workspace.session_activity(session)).is_some_and(|activity| activity.seen)
@@ -1309,7 +1291,7 @@ fn what_was_looked_at_is_kept_across_a_restart() {
     let untouched = workspace.to_persisted_json().expect("serialize");
     assert!(!untouched.contains("looked_at"), "{untouched}");
 
-    workspace.set_session_activity(session, Some(done.clone()));
+    workspace.set_session_activity(session, Some(done.clone()), None, 0);
     workspace.mark_session_seen(session);
     let json = workspace.to_persisted_json().expect("serialize");
 
@@ -1317,20 +1299,20 @@ fn what_was_looked_at_is_kept_across_a_restart() {
     // was last seen doing, which has been looked at.
     let mut restored = Workspace::from_persisted_json(&json).expect("restore");
     assert_eq!(restored.session_activity(session), None);
-    restored.set_session_activity(session, Some(done.clone()));
+    restored.set_session_activity(session, Some(done.clone()), None, 0);
     assert!(seen(&restored));
     assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
 
     // Something else than it was last seen doing has not been.
     let mut restored = Workspace::from_persisted_json(&json).expect("restore");
-    restored.set_session_activity(session, Some(blocked.clone()));
+    restored.set_session_activity(session, Some(blocked.clone()), None, 0);
     assert!(!seen(&restored));
 
     // Every part of what was seen is kept.
     restored.mark_session_seen(session);
     let json = restored.to_persisted_json().expect("serialize");
     let mut again = Workspace::from_persisted_json(&json).expect("restore");
-    again.set_session_activity(session, Some(blocked));
+    again.set_session_activity(session, Some(blocked), None, 0);
     assert!(seen(&again));
 
     // A word this build does not know is nothing looked at, not a state
@@ -1338,6 +1320,118 @@ fn what_was_looked_at_is_kept_across_a_restart() {
     let unknown = json.replace("\"blocked\"", "\"dreaming\"");
     assert_ne!(unknown, json);
     let mut other = Workspace::from_persisted_json(&unknown).expect("restore");
-    other.set_session_activity(session, Some(done));
+    other.set_session_activity(session, Some(done), None, 0);
     assert!(!seen(&other));
+}
+
+#[test]
+fn showing_a_session_goes_to_its_pane_or_puts_it_beside_the_active_one() {
+    let mut workspace = Workspace::mvp();
+    let first = workspace.active_terminal_session_id().expect("session");
+    let second = SessionId::new();
+    workspace.split_active(SessionKind::Terminal, second);
+    assert_eq!(workspace.active_session_id(), Some(second));
+
+    // One a pane shows: that pane has the keys, and the mode is left.
+    workspace.enter_workspace_mode();
+    assert!(workspace.show_session(first));
+    assert_eq!(workspace.active_session_id(), Some(first));
+    assert!(!workspace.is_workspace_mode_active());
+    assert_eq!(workspace.visible_panes().len(), 2);
+
+    // One no pane shows: a pane of it, beside the active one.
+    let detached = SessionId::new();
+    workspace.register_detached_session(SessionKind::Agent, detached);
+    assert!(workspace.show_session(detached));
+    assert_eq!(workspace.active_session_id(), Some(detached));
+    assert_eq!(workspace.visible_panes().len(), 3);
+
+    // One the workspace does not have changes nothing.
+    assert!(!workspace.show_session(SessionId::new()));
+    assert_eq!(workspace.visible_panes().len(), 3);
+}
+
+#[test]
+fn ending_a_session_with_what_was_derived_from_it_leaves_the_others() {
+    let mut workspace = Workspace::mvp();
+    let kept = workspace.active_terminal_session_id().expect("session");
+    let (root, child, grandchild) = (SessionId::new(), SessionId::new(), SessionId::new());
+    for session in [root, child, grandchild] {
+        workspace.register_detached_session(SessionKind::Agent, session);
+    }
+    workspace.set_session_parent(child, root);
+    workspace.set_session_parent(grandchild, child);
+
+    assert_eq!(workspace.terminate_session_with_derived(child), 2);
+    let left: Vec<SessionId> = (workspace.session_summaries().iter())
+        .map(|session| session.id)
+        .collect();
+    assert_eq!(left, [kept, root]);
+    assert_eq!(workspace.terminate_session_with_derived(child), 0);
+}
+
+#[test]
+fn a_session_has_done_what_it_does_since_it_came_to_do_it() {
+    use crate::types::{AgentStatus, Doing, ProgramState, ProgramStatus};
+
+    let mut workspace = Workspace::mvp();
+    let session = workspace.active_terminal_session_id().expect("session");
+    let since = |workspace: &Workspace| {
+        workspace
+            .session_activity(session)
+            .map(|activity| activity.since_ms)
+    };
+    let detail = |workspace: &Workspace| {
+        (workspace.session_activity(session)).and_then(|activity| activity.detail.clone())
+    };
+    let working = Doing::Program(ProgramStatus {
+        state: ProgramState::Working,
+        blocked_on: None,
+        app: None,
+    });
+    let completed = Doing::Agent(AgentStatus::Completed);
+
+    // Its words change as it works; it has worked since it began.
+    assert!(workspace.set_session_activity(session, Some(working.clone()), None, 100));
+    let reading = Some("Reading notes.txt".to_string());
+    assert!(workspace.set_session_activity(session, Some(working.clone()), reading.clone(), 200));
+    assert!(!workspace.set_session_activity(session, Some(working.clone()), reading.clone(), 300));
+    assert_eq!(
+        (since(&workspace), detail(&workspace)),
+        (Some(100), reading)
+    );
+
+    // What it comes to do next begins then.
+    workspace.set_session_activity(session, Some(completed.clone()), None, 400);
+    assert_eq!(since(&workspace), Some(400));
+
+    // Out of reach and back, or restarted, it has done it since it did.
+    workspace.set_session_activity(session, Some(Doing::Agent(AgentStatus::Loading)), None, 500);
+    assert_eq!(since(&workspace), Some(500));
+    workspace.set_session_activity(session, Some(completed.clone()), None, 600);
+    assert_eq!(since(&workspace), Some(400));
+    let json = workspace.to_persisted_json().expect("serialize");
+    let mut restored = Workspace::from_persisted_json(&json).expect("restore");
+    restored.set_session_activity(session, Some(completed.clone()), None, 900);
+    assert_eq!(since(&restored), Some(400));
+    assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
+
+    // Having worked since, it has not.
+    restored.set_session_activity(session, Some(working), None, 1000);
+    restored.set_session_activity(session, Some(completed), None, 1100);
+    assert_eq!(since(&restored), Some(1100));
+}
+
+#[test]
+fn a_state_kept_with_a_programs_words_in_it_is_still_read() {
+    let workspace = Workspace::mvp();
+    let session = workspace.active_terminal_session_id().expect("session");
+    let json = workspace.to_persisted_json().expect("serialize");
+    let mut state: serde_json::Value = serde_json::from_str(&json).expect("json");
+    state["sessions"][0]["looked_at"] = serde_json::json!({
+        "program": {"state": "blocked", "message": "approve Bash: ls"}
+    });
+    let with_words = state.to_string();
+    let restored = Workspace::from_persisted_json(&with_words).expect("restore");
+    assert_eq!(restored.session_activity(session), None);
 }

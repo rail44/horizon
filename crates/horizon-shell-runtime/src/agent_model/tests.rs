@@ -543,3 +543,52 @@ fn running_task_progress_upserts_in_launch_order_and_finished_retires() {
     model.apply(progress(first, TaskProgressState::Finished, None));
     assert_eq!(model.tasks.len(), 1);
 }
+
+#[test]
+fn a_frame_says_in_a_line_what_its_session_does_or_asks() {
+    let mut model = AgentModel::default();
+    assert_eq!(model.frame.words(), None);
+    apply(&mut model, user_message("u1", "build it"));
+    apply(&mut model, running());
+    assert_eq!(model.frame.status(), Some(SessionStatus::Running));
+    assert_eq!(model.frame.words(), None);
+
+    // A tool that runs: the tool, and what it is run on.
+    let mut update = tool_update(
+        "occ-1",
+        Some(v2::ToolCallStatus::InProgress),
+        Some(meta("call-1", "bash", None)),
+    );
+    update.raw_input = MaybeUndefined::Value(json!({"command": "cargo build\n--workspace"}));
+    apply(&mut model, v2::SessionUpdate::ToolCallUpdate(update));
+    assert_eq!(model.frame.status(), Some(SessionStatus::ToolRunning));
+    assert_eq!(model.frame.words().as_deref(), Some("bash: cargo build"));
+
+    // A permission it waits for: what the request says.
+    model.apply(AgentEvent::PermissionRequested(permission(
+        "call-1", "occ-1",
+    )));
+    apply(&mut model, requires_action());
+    assert_eq!(model.frame.words().as_deref(), Some("Run bash"));
+
+    // A turn that ended: how the answer begins.
+    model.apply(AgentEvent::PermissionResolved {
+        identity: identity("call-1", "occ-1"),
+        decision: PermissionDecision::Approved,
+    });
+    apply(
+        &mut model,
+        v2::SessionUpdate::ToolCallUpdate(tool_update(
+            "occ-1",
+            Some(v2::ToolCallStatus::Completed),
+            None,
+        )),
+    );
+    apply(
+        &mut model,
+        agent_chunk("a1", "\nBuilt.\nNothing else to do."),
+    );
+    apply(&mut model, idle(Some(v2::StopReason::EndTurn)));
+    assert_eq!(model.frame.status(), Some(SessionStatus::Completed));
+    assert_eq!(model.frame.words().as_deref(), Some("Built."));
+}

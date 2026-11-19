@@ -9,7 +9,7 @@ use horizon_ui::reactive_graph::traits::{Set, WithUntracked};
 use horizon_ui::{Callback, Component, El, el};
 use horizon_workspace::PluginPane;
 
-use super::{Placement, Shell, plugins, styles};
+use super::{Placement, Shell, plugins};
 use crate::finder::{Finder, Source};
 
 impl Shell {
@@ -28,18 +28,11 @@ impl Shell {
 }
 
 pub(super) fn view(shell: Shell, plugin: &'static str, placement: Placement) -> El {
-    let close = move || {
-        shell.modal.set(None);
-        shell.focus_active();
-    };
-    let scrim = el("div")
-        .class(styles::SCRIM)
-        .on("pointerdown", move |_| close());
     let Some(extension) = plugins::extension(plugin) else {
-        return scrim;
+        return el("div");
     };
     let Some(extensions) = extension.file_asked_for().map(<[String]>::to_vec) else {
-        return scrim;
+        return el("div");
     };
     let root = shell.working_directory();
     let finder = Finder {
@@ -61,7 +54,6 @@ pub(super) fn view(shell: Shell, plugin: &'static str, placement: Placement) -> 
                 }
             }
         }),
-        left: Callback::new(move |()| close()),
     };
-    scrim.child(finder.view())
+    finder.view()
 }

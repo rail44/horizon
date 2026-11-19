@@ -11,7 +11,7 @@ use horizon_ui::blitz_dom::{BaseDocument, NodeId, local_name};
 use horizon_ui::blitz_traits::events::{BlitzImeEvent, BlitzKeyEvent, KeyState, UiEvent};
 use horizon_ui::reactive_graph::traits::{Update, WithUntracked};
 use horizon_ui::testing::{Pointer, click_at, pointer};
-use horizon_workspace::{PaneId, SessionId, Workspace};
+use horizon_workspace::{Cursor, PaneId, SessionId, SessionKind, Side, Workspace};
 use keyboard_types::{Key, Modifiers, NamedKey};
 
 mod support;
@@ -371,64 +371,6 @@ fn a_shell_that_exits_takes_its_pane_and_the_last_leaves_an_empty_workspace() {
     opened.wait(pane, "the output", |text| {
         text.lines().any(|line| line == "again")
     });
-}
-
-#[test]
-fn the_session_manager_puts_a_detached_session_back_and_ends_one() {
-    let opened = open();
-    let first = opened.panes()[0];
-    opened.prompt(first);
-    opened.run("echo kept-$((2+3))");
-    opened.wait(first, "the output", |text| text.contains("kept-5"));
-    let kept = opened.model(|model| model.terminal_session_id(first).unwrap());
-
-    // A second pane, and the first closed: its session is detached.
-    opened.chord();
-    opened.character("s");
-    opened.chord();
-    opened.character("h");
-    opened.character("x");
-    assert_eq!(opened.model(Workspace::detached_session_count), 1);
-
-    // The manager lists both, the detached one told apart.
-    opened.chord();
-    opened.character(":");
-    opened.commit("manage");
-    opened.named(NamedKey::Enter);
-    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
-    assert_eq!(opened.all("session").len(), 2);
-    assert_eq!(opened.all("detached").len(), 1);
-
-    // Enter on the detached session puts it in a pane beside the active
-    // one, as it was left.
-    opened.commit("#1");
-    assert_eq!(opened.all("session").len(), 1);
-    opened.named(NamedKey::Enter);
-    assert_eq!(opened.shell.modal(), None);
-    assert!(!opened.mode());
-    assert_eq!(opened.model(Workspace::detached_session_count), 0);
-    let panes = opened.panes();
-    assert_eq!(panes.len(), 2);
-    let back = (panes.iter().copied())
-        .find(|pane| opened.model(|model| model.terminal_session_id(*pane)) == Some(kept))
-        .expect("the session's pane");
-    opened.wait(back, "what it showed", |text| text.contains("kept-5"));
-    // It has the keys.
-    opened.run("echo back-$((4+4))");
-    opened.wait(back, "the output", |text| text.contains("back-8"));
-
-    // Ctrl+Enter ends the chosen session, and the list stays.
-    opened.chord();
-    opened.character(":");
-    opened.commit("manage");
-    opened.named(NamedKey::Enter);
-    opened.key(Key::Named(NamedKey::Enter), Modifiers::CONTROL);
-    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
-    assert_eq!(opened.sessions(), 1);
-    assert_eq!(opened.all("session").len(), 1);
-    assert_eq!(opened.panes().len(), 1);
-    opened.named(NamedKey::Escape);
-    assert_eq!(opened.shell.modal(), None);
 }
 
 #[test]
@@ -864,7 +806,7 @@ fn a_notification_a_program_asks_for_is_posted_unless_its_pane_is_looked_at() {
 }
 
 #[test]
-fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
+fn what_a_program_says_of_its_state_is_on_its_tab() {
     use horizon_workspace::types::{Doing, ProgramState, ProgramStatus, SessionActivity};
 
     let opened = open();
@@ -901,12 +843,11 @@ fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
     opened.until("blocked", || state() == Some(ProgramState::Blocked));
     assert!(tab(0).starts_with("? "), "{}", tab(0));
     assert_eq!(
-        program().and_then(|program| program.message).as_deref(),
+        activity().and_then(|activity| activity.detail).as_deref(),
         Some("approve Bash: ls")
     );
 
-    // Done while another tab is the one looked at: news, on the tab and
-    // in the session manager's line.
+    // Done while another tab is the one looked at: news, on the tab.
     opened.run(r"sleep 0.4; printf '\033]7501;state=done:app=claude-code\033\\'");
     opened.chord();
     opened.character("t");
@@ -915,20 +856,6 @@ fn what_a_program_says_of_its_state_is_on_its_tab_and_in_the_session_manager() {
     assert!(activity().is_some_and(|activity| !activity.seen));
     assert!(tab(0).starts_with("● "), "{}", tab(0));
     assert!(!tab(1).starts_with('●'), "{}", tab(1));
-
-    opened.chord();
-    opened.character(":");
-    opened.commit("manage");
-    opened.named(NamedKey::Enter);
-    assert_eq!(opened.shell.modal(), Some(Modal::Sessions));
-    let lines: Vec<String> = opened.all("session").into_iter().map(text_of).collect();
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("claude-code: done [unseen]")),
-        "{lines:?}"
-    );
-    opened.named(NamedKey::Escape);
 
     // Looked at, it is news no longer, and marked as a program at rest.
     opened.shell.reveal_session(session);
@@ -1178,6 +1105,10 @@ fn a_shell_with_nothing_happening_has_nothing_to_draw() {
     let opened = open();
     let pane = opened.panes()[0];
     opened.prompt(pane);
+    // The extensions are read off the page's thread from when the shell is
+    // drawn, and their coming in is something to draw: waited for here,
+    // or it may come while nothing is to happen.
+    opened.until("the extensions read", || opened.shell.extensions_read());
     let Opened { app, shell } = opened;
     // As the window's own wiring does: the waker is handed over once.
     let handed = std::cell::Cell::new(false);
@@ -1314,4 +1245,169 @@ fn a_terminal_off_the_page_has_no_terminal_of_its_own_until_it_is_back() {
     opened.wait(first, "the output", |text| {
         text.lines().any(|line| line == "back")
     });
+}
+
+/// A terminal put on the left of the tab group, with the cursor on the
+/// group's strip: what keeps a pane on screen whatever tab is shown
+/// (`docs/workspace-layout-design.md`). Returns the new pane.
+fn left_of_the_group(opened: &Opened) -> PaneId {
+    opened.chord();
+    opened.character("k");
+    let group = opened.model(|model| model.tab_groups()[0].id);
+    assert_eq!(
+        opened.model(|model| model.workspace_cursor()),
+        Some(Cursor::Strip(group))
+    );
+    // (The strip is marked while the cursor is on it.)
+    let strip = opened.all("tabs")[0];
+    assert!(opened.all("cursor").contains(&strip));
+    opened.shell.model.update(|model| {
+        model.split_cursor_with_new_session(SessionKind::Terminal, Side::Left, true);
+        model.exit_workspace_mode();
+    });
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.model(|model| model.cursor_pane_id().expect("the new pane has focus"))
+}
+
+#[test]
+fn a_pane_beside_the_tab_group_runs_the_full_height_and_stays_across_tabs() {
+    let opened = open();
+    let first = opened.panes()[0];
+    let left = left_of_the_group(&opened);
+    assert_ne!(left, first);
+
+    // One strip, above the group only: the pane on its left starts at the
+    // top of the window and the strip right of it.
+    let strips = opened.all("tabs");
+    assert_eq!(strips.len(), 1);
+    let panes = opened.all("pane");
+    assert_eq!(panes.len(), 2);
+    let (strip_x, strip_y, _, _) = opened.bounds(strips[0]);
+    let (left_x, left_y, left_wide, _) = opened.bounds(panes[0]);
+    assert!(left_y <= strip_y + 1., "{left_y} {strip_y}");
+    assert!(
+        strip_x >= left_x + left_wide - 1.,
+        "{strip_x} {left_x} {left_wide}"
+    );
+
+    // A tab opened from the group's pane goes in the group; the pane on the
+    // left stays, whichever tab is shown.
+    opened
+        .shell
+        .model
+        .update(|model| _ = model.activate_pane(first));
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.chord();
+    opened.character("t");
+    assert_eq!(opened.model(Workspace::tab_count), 2);
+    assert_eq!(opened.all("tab-label").len(), 2);
+    assert!(opened.panes().contains(&left), "{:?}", opened.panes());
+    opened.chord();
+    opened.named(NamedKey::Tab);
+    opened.named(NamedKey::Escape);
+    assert!(opened.panes().contains(&left));
+    assert!(opened.panes().contains(&first));
+}
+
+/// Paints the workspace with a terminal on the left of its tab group and,
+/// with `HORIZON_LAYOUT_TWO` set, a second group made around that
+/// terminal, in this machine's theme, to the file `HORIZON_LAYOUT_OUT`
+/// names (a PPM). A picture for a person to look at; run by hand.
+#[test]
+#[ignore = "writes a picture for a person: set HORIZON_LAYOUT_OUT"]
+fn paint_the_layout() {
+    use anyrender::ImageRenderer as _;
+
+    let out = std::env::var("HORIZON_LAYOUT_OUT").expect("HORIZON_LAYOUT_OUT");
+    let opened = open_with(Opening {
+        config: horizon_config::load().clone(),
+        ..Opening::default()
+    });
+    let first = opened.panes()[0];
+    opened.prompt(first);
+    let left = left_of_the_group(&opened);
+    opened.prompt(left);
+    opened
+        .shell
+        .model
+        .update(|model| _ = model.activate_pane(first));
+    opened.app.run_effects();
+    opened.chord();
+    opened.character("t");
+    if std::env::var_os("HORIZON_LAYOUT_TWO").is_some() {
+        // A tab opened from the pane under no group makes its place a group.
+        opened
+            .shell
+            .model
+            .update(|model| _ = model.activate_pane(left));
+        opened.app.run_effects();
+        opened.chord();
+        opened.character("t");
+    }
+    for pane in opened.panes() {
+        opened.prompt(pane);
+    }
+    let (width, height) = (1200u32, 800u32);
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut pixels = Vec::new();
+    let document = opened.app.document();
+    renderer.render_to_vec(
+        |scene| {
+            blitz_paint::paint_scene(scene, &mut document.borrow_mut(), 1.0, width, height, 0, 0)
+        },
+        &mut pixels,
+    );
+    let mut picture = format!("P6\n{width} {height}\n255\n").into_bytes();
+    for [red, green, blue, _] in pixels.as_chunks::<4>().0 {
+        picture.extend_from_slice(&[*red, *green, *blue]);
+    }
+    std::fs::write(out, picture).expect("the picture written");
+}
+
+#[test]
+fn split_left_from_a_strip_puts_a_terminal_beside_the_whole_group() {
+    let opened = open();
+    let first = opened.panes()[0];
+    opened.prompt(first);
+
+    // From the strip, the palette's Split Left: with nothing but
+    // terminals to choose from, a terminal at once.
+    opened.chord();
+    opened.character("k");
+    opened.character(":");
+    opened.commit("split left");
+    opened.named(NamedKey::Enter);
+    assert!(!opened.mode());
+    let panes = opened.panes();
+    assert_eq!(panes.len(), 2);
+    let left = panes[0];
+    assert_ne!(left, first);
+    assert_eq!(opened.model(|model| model.cursor_pane_id()), Some(left));
+    // It is under no group: the one strip is right of it.
+    assert_eq!(opened.model(|model| model.tab_groups().len()), 1);
+    let (strip_x, ..) = opened.bounds(opened.all("tabs")[0]);
+    let (left_x, _, left_wide, _) = opened.bounds(opened.all("pane")[0]);
+    assert!(strip_x >= left_x + left_wide - 1.);
+    opened.prompt(left);
+
+    // Tab in the mode, from the group's pane, goes round the group's tabs
+    // only: the terminal on the left stays.
+    opened
+        .shell
+        .model
+        .update(|model| _ = model.activate_pane(first));
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.chord();
+    opened.character("t");
+    opened.chord();
+    opened.named(NamedKey::Tab);
+    assert_eq!(opened.model(Workspace::active_tab_index), 0);
+    assert!(opened.panes().contains(&left));
+    opened.named(NamedKey::Tab);
+    assert_eq!(opened.model(Workspace::active_tab_index), 1);
+    assert!(opened.panes().contains(&left));
+    opened.named(NamedKey::Escape);
 }

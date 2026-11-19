@@ -205,6 +205,123 @@ interface theme {
     save: async func(seed: seed) -> result<string, string>;
 }
 
+/// The workspace's sessions, to read: the terminals and the agents, shown
+/// in a pane or not.
+interface sessions {
+    /// What a session waits on its owner for, whatever kind it is of.
+    enum attention {
+        /// Something it wants to do is to be allowed or refused.
+        approval,
+        /// A question is to be answered, or it is to be told to go on.
+        input,
+        /// A login or a credential is to be given.
+        login,
+        /// It cannot go on, and does not say what for.
+        blocked,
+        /// It failed and stopped.
+        failed,
+        /// It finished, and what it finished has not been looked at.
+        unseen,
+    }
+
+    /// What a session is doing.
+    record activity {
+        /// Its state in its own kind's word: for the program in a
+        /// terminal the Program Status Protocol's (`idle`, `working`,
+        /// `done`, `blocked`, `error`), for an agent its runtime's
+        /// (`running`, `waiting-for-approval`, `completed`, ...).
+        state: string,
+        attention: option<attention>,
+        /// Whether it is at work.
+        working: bool,
+        /// A program's name for itself, such as `claude-code`.
+        app: option<string>,
+        /// What it does or asks, in a line of its own words.
+        detail: option<string>,
+        /// When it came to be doing this, in milliseconds since the Unix
+        /// epoch.
+        since-ms: u64,
+        /// Whether it has been looked at since.
+        seen: bool,
+    }
+
+    /// Where a session works: the repository its directory is in (a
+    /// worktree's is the repository it is a worktree of), or else the
+    /// directory.
+    record project {
+        /// The directory, which tells one project from another.
+        root: string,
+        /// What to call it.
+        name: string,
+    }
+
+    record session {
+        /// What the session is named by to the host.
+        id: string,
+        /// `terminal` or `agent`.
+        kind: string,
+        title: string,
+        /// Whether a pane shows it.
+        attached: bool,
+        directory: option<string>,
+        project: option<project>,
+        /// The session it was derived from.
+        parent: option<string>,
+        /// What it is doing, while that is known.
+        activity: option<activity>,
+    }
+
+    /// The sessions as they are, in the order they were made.
+    all: func() -> list<session>;
+
+    /// The sessions watched for as long as this is held.
+    resource watch {
+        constructor();
+        /// Comes back once the sessions have changed: while this was
+        /// waited in, or since it last came back.
+        changed: async func();
+    }
+}
+
+/// What the host does to a session for a plugin. A session the host does
+/// not have is left alone.
+interface session-control {
+    /// Brings a session in front of its owner, with the keys: its pane,
+    /// or a pane of it beside the active one.
+    show: func(id: string);
+
+    /// Ends a session, and what runs in it.
+    terminate: func(id: string);
+
+    /// Ends a session and every session derived from it.
+    terminate-with-derived: func(id: string);
+
+    /// A new terminal that starts in the session's directory.
+    open-terminal: func(id: string);
+}
+
+/// A view of a plugin's over the workspace.
+interface modal {
+    /// A view over the workspace, in a sheet in the middle of it and with
+    /// the keys, for as long as the plugin holds this: it is put there
+    /// when this is made, and taken away when this is dropped.
+    ///
+    /// It is taken away too by a press outside the sheet, by Escape the
+    /// view did not stop, and by anything else put over the workspace (one
+    /// thing is there at a time). The view is the plugin's still: taken
+    /// away, it is no longer in the document until the plugin puts it
+    /// somewhere or removes it.
+    resource modal {
+        /// `node` is the view: a node of the plugin's that is nowhere in
+        /// the document.
+        constructor(node: u64);
+
+        /// Comes back once the view is no longer over the workspace,
+        /// whoever took it away.
+        closed: async func();
+    }
+}
+
 /// What a plugin imports: a plugin's world includes it, and declares
 /// only what is its own.
 world imports {
@@ -213,6 +330,9 @@ world imports {
     import pane;
     import files;
     import theme;
+    import sessions;
+    import session-control;
+    import modal;
 }
 
 /// The shared exports with the imports: what the SDK's bindings are made

@@ -4,6 +4,7 @@
 mod environment;
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -584,6 +585,43 @@ impl AgentdState {
             .collect();
         records.sort_by_key(|record| record.sequence);
         Ok(records)
+    }
+
+    /// The sessions of `role`, the one with the latest record first, each
+    /// with its last workspace root -- for a caller that has just flushed
+    /// the writer, from where [`Self::flushed_session_records`] reads.
+    pub(crate) fn flushed_sessions_with_role(
+        &self,
+        role: &horizon_agent::roles::RoleId,
+    ) -> Result<Vec<(SessionId, Option<PathBuf>)>, String> {
+        if let DuckdbStoreState::Ready(store) = self.duckdb_cell().current() {
+            match store.sessions_with_role(role) {
+                Ok(sessions) => return Ok(sessions),
+                Err(error) => eprintln!(
+                    "horizon-agentd: reading a role's sessions from the projection failed \
+                     ({error:#}); reading the whole event log"
+                ),
+            }
+        }
+        let path = lock_unpoisoned(&self.agent_config)
+            .persistence
+            .event_log_path
+            .clone();
+        let report =
+            horizon_agent::persistence::event_log::read(path).map_err(|error| error.to_string())?;
+        let mut records = report.records;
+        records.sort_by_key(|record| std::cmp::Reverse(record.sequence));
+        let mut sessions: Vec<(SessionId, Option<PathBuf>)> = Vec::new();
+        for record in records {
+            if record.role_id.as_ref() != Some(role)
+                || sessions.iter().any(|(id, _)| *id == record.session_id)
+            {
+                continue;
+            }
+            let root = record.session_context.and_then(|c| c.workspace_root);
+            sessions.push((record.session_id, root));
+        }
+        Ok(sessions)
     }
 
     /// Acknowledge an outbox record even after its source session ended.

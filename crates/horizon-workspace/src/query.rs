@@ -1,28 +1,18 @@
+use super::mode::Cursor;
 use super::types::{
-    Pane, PaneId, PaneSummary, SessionKind, SessionSummary, Tab, TabId, TabSummary, Workspace,
-    WorkspaceSession,
+    NodeKey, Pane, PaneId, SessionKind, SessionSummary, Tab, TabGroup, TabGroupId, TabSummary,
+    Workspace, WorkspaceSession,
 };
 use crate::SessionId;
 
 impl Workspace {
-    /// Resolve placement before creating a pane or registering a session.
-    /// Both session and view splits use the target's own pane, independent
-    /// of tab focus; detached sessions have no split destination.
-    pub(crate) fn split_target_for_session(
-        &self,
-        session_id: SessionId,
-    ) -> Option<(TabId, PaneId)> {
-        let pane_id = self
-            .panes
+    /// The pane that shows `session_id`, wherever it is; none for a
+    /// detached session.
+    pub(crate) fn pane_of_session(&self, session_id: SessionId) -> Option<PaneId> {
+        self.panes
             .iter()
             .find(|pane| pane.session_id == Some(session_id))
-            .map(|pane| pane.id)?;
-        let tab_id = self
-            .tabs
-            .iter()
-            .find(|tab| tab.root.pane_ids().contains(&pane_id))
-            .map(|tab| tab.id)?;
-        Some((tab_id, pane_id))
+            .map(|pane| pane.id)
     }
 
     pub(crate) fn visible_pane_id(&self, index: usize) -> Option<PaneId> {
@@ -57,28 +47,13 @@ impl Workspace {
         (self.session_kind(session) == Some(kind)).then_some(session)
     }
 
-    /// Where `pane_id` sits, as the `(tab index, pane index)` pair
-    /// [`Workspace::activate_pane_index`] takes -- how a caller holding
-    /// only a `PaneId` activates a pane in a tab that is not the active
-    /// one, which `Workspace::activate_pane` refuses.
-    pub fn pane_position(&self, pane_id: PaneId) -> Option<(usize, usize)> {
-        self.tabs.iter().enumerate().find_map(|(tab_index, tab)| {
-            tab.root
-                .pane_ids()
-                .iter()
-                .position(|id| *id == pane_id)
-                .map(|pane_index| (tab_index, pane_index))
-        })
-    }
-
     /// Every pane of the tab that holds `pane_id`, in layout order. What a
     /// pane-local decision reads when it has to look at its tab rather than
     /// at itself -- the board's list finding the thread pane beside it, a
     /// thread finding its list. Empty when no tab holds `pane_id`.
     pub fn tab_panes(&self, pane_id: PaneId) -> Vec<PaneId> {
-        self.tabs
-            .iter()
-            .find(|tab| tab.root.pane_ids().contains(&pane_id))
+        (self.root.tabs_around(pane_id).last())
+            .and_then(|(_, tab)| self.root.tab(*tab))
             .map(|tab| tab.root.pane_ids())
             .unwrap_or_default()
     }
@@ -104,7 +79,7 @@ impl Workspace {
     }
 
     pub fn is_active_pane(&self, pane_id: PaneId) -> bool {
-        self.active_tab().map(|tab| tab.active) == Some(pane_id)
+        self.focus == Some(pane_id)
     }
 
     /// The `PaneId` the workspace-mode cursor currently sits on: the free-
@@ -117,11 +92,71 @@ impl Workspace {
     /// defensive, since nothing in `workspace::mode` itself removes the
     /// cursor's pane.
     pub fn cursor_pane_id(&self) -> Option<PaneId> {
-        let focus = self.active_tab().map(|tab| tab.active);
         match self.workspace_mode.cursor() {
-            Some(pane_id) if self.visible_pane_ids().contains(&pane_id) => Some(pane_id),
-            _ => focus,
+            Some(Cursor::Pane(pane_id)) if self.visible_pane_ids().contains(&pane_id) => {
+                Some(pane_id)
+            }
+            // (A group as a whole is no pane.)
+            Some(Cursor::Strip(group)) if self.root.group(group).is_some() => None,
+            _ => self.focus,
         }
+    }
+
+    /// The tab group whose strip the cursor is on, if it is on one.
+    pub fn cursor_strip(&self) -> Option<TabGroupId> {
+        match self.workspace_mode.cursor() {
+            Some(Cursor::Strip(group)) if self.root.group(group).is_some() => Some(group),
+            _ => None,
+        }
+    }
+
+    /// The tab group the cursor is on or in: the one whose strip it is on,
+    /// or the innermost around the pane it is on. None for a pane under no
+    /// group.
+    pub fn cursor_group(&self) -> Option<TabGroupId> {
+        if let Some(group) = self.cursor_strip() {
+            return Some(group);
+        }
+        let pane = self.cursor_pane_id()?;
+        self.root.tabs_around(pane).last().map(|(group, _)| *group)
+    }
+
+    /// The node the cursor is on, as operations that put something beside
+    /// it name it.
+    pub(crate) fn cursor_node(&self) -> Option<NodeKey> {
+        match self.cursor_strip() {
+            Some(group) => Some(NodeKey::Group(group)),
+            None => self.cursor_pane_id().map(NodeKey::Pane),
+        }
+    }
+
+    /// The tab group that last had focus, while it is there; else the
+    /// first on screen.
+    pub(crate) fn last_group(&self) -> Option<TabGroupId> {
+        (self.last_group)
+            .filter(|group| self.root.group(*group).is_some())
+            .or_else(|| self.root.visible_groups().first().map(|group| group.id))
+    }
+
+    /// The tab group tab operations act on: the one the cursor is on or
+    /// in, else the one that last had focus.
+    pub fn current_group(&self) -> Option<TabGroupId> {
+        self.cursor_group().or_else(|| self.last_group())
+    }
+
+    /// The tab groups on screen, outermost first.
+    pub fn tab_groups(&self) -> Vec<&TabGroup> {
+        self.root.visible_groups()
+    }
+
+    /// The tab group `id`, wherever it is.
+    pub fn tab_group(&self, id: TabGroupId) -> Option<&TabGroup> {
+        self.root.group(id)
+    }
+
+    /// The workspace's tree.
+    pub fn layout(&self) -> &super::types::LayoutNode {
+        &self.root
     }
 
     /// Test-only now: `workspace::mode`'s cursor is `PaneId`-keyed directly
@@ -145,8 +180,7 @@ impl Workspace {
     }
 
     pub fn active_terminal_session_id(&self) -> Option<SessionId> {
-        let active = self.active_tab()?.active;
-        self.terminal_session_id(active)
+        self.terminal_session_id(self.focus?)
     }
 
     /// What a session is doing, while that is known.
@@ -158,11 +192,7 @@ impl Workspace {
     }
 
     pub fn active_session_id(&self) -> Option<SessionId> {
-        let active = self.active_tab()?.active;
-        self.panes
-            .iter()
-            .find(|pane| pane.id == active)
-            .and_then(|pane| pane.session_id)
+        self.pane_session_id(self.focus?)
     }
 
     /// The session attached to the pane the workspace-mode cursor sits on
@@ -233,24 +263,10 @@ impl Workspace {
             .collect()
     }
 
-    /// The `(tab_index, pane_index)` of the visible pane currently hosting
-    /// `session_id`, if any -- lets the session manager modal
-    /// (`WorkspaceShell::open_session_manager` in `src/workspace/modals.rs`)
-    /// resolve an *attached* row straight to `activate_pane_index` without
-    /// a separate lookup table. `None` for a detached session (no pane
-    /// references it).
-    pub fn pane_location_for_session(&self, session_id: SessionId) -> Option<(usize, usize)> {
-        self.tabs.iter().enumerate().find_map(|(tab_index, tab)| {
-            tab.root
-                .pane_ids()
-                .into_iter()
-                .position(|pane_id| {
-                    self.panes
-                        .iter()
-                        .any(|pane| pane.id == pane_id && pane.session_id == Some(session_id))
-                })
-                .map(|pane_index| (tab_index, pane_index))
-        })
+    /// The pane showing `session_id`, wherever it is; `None` for a
+    /// detached session.
+    pub fn pane_location_for_session(&self, session_id: SessionId) -> Option<PaneId> {
+        self.pane_of_session(session_id)
     }
 
     pub fn session_summaries(&self) -> Vec<SessionSummary> {
@@ -270,13 +286,25 @@ impl Workspace {
     }
 
     pub fn tab_summaries(&self) -> Vec<TabSummary> {
-        self.tabs
+        match self.current_group() {
+            Some(group) => self.group_tab_summaries(group),
+            None => Vec::new(),
+        }
+    }
+
+    /// The tabs of `group`, as its strip shows them.
+    pub fn group_tab_summaries(&self, group: TabGroupId) -> Vec<TabSummary> {
+        let Some(group) = self.root.group(group) else {
+            return Vec::new();
+        };
+        group
+            .tabs
             .iter()
             .enumerate()
             .map(|(index, tab)| TabSummary {
                 index,
                 title: self.tab_title(tab),
-                active: tab.id == self.active_tab,
+                active: tab.id == group.shown,
                 pane_count: tab.root.pane_ids().len(),
                 active_session_id: self.tab_session_id(tab),
                 activity: (self.tab_session_id(tab))
@@ -286,32 +314,10 @@ impl Workspace {
             .collect()
     }
 
-    pub(crate) fn pane_summaries(&self) -> Vec<PaneSummary> {
-        self.tabs
-            .iter()
-            .enumerate()
-            .flat_map(|(tab_index, tab)| {
-                tab.root.pane_ids().into_iter().enumerate().filter_map(
-                    move |(pane_index, pane_id)| {
-                        self.panes
-                            .iter()
-                            .find(|pane| pane.id == pane_id)
-                            .map(|pane| PaneSummary {
-                                tab_index,
-                                pane_index,
-                                title: self.pane_title(pane),
-                                plugin: pane.plugin.name.clone(),
-                                active: tab.active == pane_id,
-                                tab_active: tab.id == self.active_tab,
-                            })
-                    },
-                )
-            })
-            .collect()
-    }
-
     pub fn tab_count(&self) -> usize {
-        self.tabs.len()
+        (self.current_group())
+            .and_then(|group| self.root.group(group))
+            .map_or(0, |group| group.tabs.len())
     }
 
     pub fn visible_panes(&self) -> Vec<&Pane> {
@@ -323,25 +329,23 @@ impl Workspace {
     }
 
     pub(crate) fn active_visible_index(&self) -> usize {
-        let active = self.active_tab().map(|tab| tab.active);
         self.visible_pane_ids()
             .iter()
-            .position(|pane| Some(*pane) == active)
+            .position(|pane| Some(*pane) == self.focus)
             .unwrap_or(0)
     }
 
     pub fn active_tab_index(&self) -> usize {
-        self.tabs
-            .iter()
-            .position(|tab| tab.id == self.active_tab)
+        (self.current_group())
+            .and_then(|group| self.root.group(group))
+            .and_then(|group| group.shown_index())
             .unwrap_or(0)
     }
 
     pub(crate) fn active_title(&self) -> String {
-        let active = self.active_tab().map(|tab| tab.active);
         self.panes
             .iter()
-            .find(|pane| Some(pane.id) == active)
+            .find(|pane| Some(pane.id) == self.focus)
             .map(|pane| self.pane_title(pane))
             .unwrap_or_else(|| "none".to_string())
     }
@@ -361,15 +365,11 @@ impl Workspace {
     }
 
     pub(crate) fn visible_pane_ids(&self) -> Vec<PaneId> {
-        let Some(tab) = self.active_tab() else {
-            return Vec::new();
-        };
-
-        tab.root.pane_ids()
+        self.root.visible_pane_ids()
     }
 
     pub fn active_tab(&self) -> Option<&Tab> {
-        self.tabs.iter().find(|tab| tab.id == self.active_tab)
+        self.root.group(self.current_group()?)?.shown_tab()
     }
 
     pub(crate) fn tab_title(&self, tab: &Tab) -> String {

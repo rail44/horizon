@@ -15,7 +15,7 @@ fn board_outbox(state: Arc<AgentdState>, path: PathBuf) -> Outbox {
     )
 }
 
-fn repository() -> tempfile::TempDir {
+pub(super) fn repository() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let mut command = std::process::Command::new("git");
     for (key, _) in std::env::vars_os() {

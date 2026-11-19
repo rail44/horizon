@@ -77,14 +77,10 @@ impl Shell {
                 }
                 done
             }
-            Command::Terminate(session) => {
-                let mut ended = false;
-                self.model_changed(|model| ended = model.terminate_session(session));
-                match ended {
-                    true => done,
-                    false => Err("unknown session".to_string()),
-                }
-            }
+            Command::Terminate(session) => match self.terminate_session(session) {
+                true => done,
+                false => Err("unknown session".to_string()),
+            },
             Command::TerminateAllDetached => {
                 self.execute(CommandId::TerminateAllDetachedSessions);
                 done
@@ -109,10 +105,14 @@ impl Shell {
                 };
                 self.new_pane(&plugin, given, split, issuer, activate)
             }
-            Command::PluginCommand(name) => match self.execute_plugin(&name) {
-                true => done,
-                false => Err(format!(
-                    "unknown command `{name}`: not one of the plugin the cursor's pane shows"
+            Command::PluginCommand(name) => match self.command(&name) {
+                Some(command) if !command.enabled => {
+                    Err(format!("`{name}` cannot be carried out now"))
+                }
+                Some(command) if self.run(&command) => done,
+                _ => Err(format!(
+                    "unknown command `{name}`: not one of the shell's, nor of the plugin the \
+                     cursor's pane shows"
                 )),
             },
             Command::Approve {
@@ -170,11 +170,7 @@ impl Shell {
         if let Some(pane) = shown {
             self.remake_pane(pane);
             if activate {
-                self.change(|model| {
-                    if let Some((tab, pane)) = model.pane_position(pane) {
-                        model.activate_pane_index(tab, pane);
-                    }
-                });
+                self.change(|model| _ = model.reveal_pane(pane));
             }
             return Ok(EnvelopeBody::Ok { session_id: None });
         }
@@ -319,11 +315,7 @@ impl Shell {
             }
         };
         if activate {
-            self.change(|model| {
-                if let Some((tab, pane)) = model.pane_position(pane) {
-                    model.activate_pane_index(tab, pane);
-                }
-            });
+            self.change(|model| _ = model.reveal_pane(pane));
             self.focus_active();
         }
         Ok(EnvelopeBody::Ok { session_id: None })

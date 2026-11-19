@@ -5,7 +5,7 @@
 use horizon_ui::blitz_traits::events::{DomEvent, DomEventData};
 use horizon_ui::reactive_graph::traits::{GetUntracked, WithUntracked};
 use horizon_ui::{prevent_default, stop_propagation};
-use horizon_workspace::commands::{CommandId, command_enabled};
+use horizon_workspace::commands::CommandId;
 use horizon_workspace::{Direction, SessionKind, Workspace};
 use keyboard_types::{Key, NamedKey};
 
@@ -32,11 +32,11 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
     };
     // A chord bound to a command that cannot be carried out now is the
     // view's key.
-    let bound = bound.filter(|bound| match bound {
-        Bound::Command(command) => command_enabled(*command, shell.command_state()),
-        Bound::Plugin(name) => shell.plugin_command_enabled(name),
-        Bound::OpenPalette => true,
-    });
+    let command = match &bound {
+        Some(Bound::Command(name)) => shell.command(name).filter(|command| command.enabled),
+        _ => None,
+    };
+    let bound = bound.filter(|bound| *bound == Bound::OpenPalette || command.is_some());
     if toggles {
         shell.change(|model| match model.is_workspace_mode_active() {
             true => model.cancel_workspace_mode(),
@@ -44,11 +44,10 @@ pub(super) fn pressed(shell: Shell, event: &DomEvent) {
         });
     }
     // A chord the configuration binds works in the mode and out of it.
-    match bound.filter(|_| !toggles) {
-        Some(Bound::OpenPalette) => shell.open(Modal::Palette),
-        Some(Bound::Command(command)) => shell.execute(command),
-        Some(Bound::Plugin(name)) => _ = shell.execute_plugin(name),
-        None => {}
+    match (bound.as_ref().filter(|_| !toggles), &command) {
+        (Some(Bound::OpenPalette), _) => shell.open(Modal::Palette),
+        (Some(Bound::Command(_)), Some(command)) => _ = shell.run(command),
+        _ => {}
     }
     if toggles || bound.is_some() {
         prevent_default();

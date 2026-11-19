@@ -2,22 +2,30 @@
 //!
 //! On a module, it reads what the module declares:
 //!
-//! - `struct State`: what a pane keeps of the plugin, a WIT record;
-//! - `fn mount` and `fn state`: the view on a state, and the state now
-//!   (a plugin whose panes keep nothing has no `State` and no `state`,
-//!   and its `mount` takes nothing);
-//! - a function marked `#[create(..)]`: what a new pane's state is made
-//!   from, its parameters being what the host asks for or gives (a
-//!   `File`, a `String` or an `Option<String>`, a `WorkingDirectory`);
-//! - functions marked `#[command(..)]`: the plugin's commands.
+//! - `mod pane`: the view a pane shows, and what is that view's --
+//!   - `struct State`: what a pane keeps of the plugin, a WIT record;
+//!   - `fn mount` and `fn state`: the view on a state, and the state now
+//!     (a plugin whose panes keep nothing has no `State` and no `state`,
+//!     and its `mount` takes nothing);
+//!   - a function marked `#[create(..)]`: what a new pane's state is made
+//!     from, its parameters being what the host asks for or gives (a
+//!     `File`, a `String` or an `Option<String>`, a `WorkingDirectory`);
+//!   - functions marked `#[command(..)]`: the commands of a pane that
+//!     shows the view, carried out where the cursor's pane does;
+//! - functions marked `#[command(..)]` beside it: the plugin's own
+//!   commands, which need no pane.
 //!
-//! From those it writes the plugin's WIT world, hands it to `wit-bindgen`
-//! for the bindings, exports the functions through them beside what
-//! every plugin exports, and puts a manifest (the name, the title, each
-//! command's title and description, how a parameter is asked for, what
-//! may be read) in a custom section of the wasm. What crosses to the host
-//! is the component's type and that section, as it is for a plugin whose
-//! WIT and manifest are written by hand.
+//! A plugin has a `mod pane`, a command of its own, or both.
+//!
+//! From those it writes the plugin's WIT world (the view as the
+//! interface `pane`, its commands as `pane-commands`, the plugin's own as
+//! `commands`), hands it to `wit-bindgen` for the bindings, exports the
+//! functions through them beside what every plugin exports, and puts a
+//! manifest (the name, the title, each command's title and description,
+//! how a parameter is asked for, what may be read) in a custom section of
+//! the wasm. What crosses to the host is the component's type and that
+//! section, as it is for a plugin whose WIT and manifest are written by
+//! hand.
 //!
 //! `access(..)` holds what the plugin is let have that takes saying what
 //! of: the directories it may read (`read = [..]`), and those it may
@@ -29,18 +37,23 @@
 //! ```ignore
 //! #[horizon_ui::plugin(name = "notes", title = "Notes", access(read = ["/"]))]
 //! mod notes {
-//!     pub struct State {
-//!         pub path: Option<String>,
+//!     pub mod pane {
+//!         pub struct State {
+//!             pub path: Option<String>,
+//!         }
+//!
+//!         pub fn mount(state: Option<State>) -> u64 { .. }
+//!         pub fn state() -> State { .. }
+//!
+//!         #[create(file(extensions = ["md"]))]
+//!         pub fn create(file: File) -> State { .. }
+//!
+//!         #[command(title = "Back", description = "Go back.")]
+//!         pub fn back() { .. }
 //!     }
 //!
-//!     pub fn mount(state: Option<State>) -> u64 { .. }
-//!     pub fn state() -> State { .. }
-//!
-//!     #[create(file(extensions = ["md"]))]
-//!     pub fn create(file: File) -> State { .. }
-//!
-//!     #[command(title = "Back", description = "Go back.")]
-//!     pub fn back() { .. }
+//!     #[command(title = "Find a Note", description = "Search the notes.")]
+//!     pub fn find_a_note() { .. }
 //! }
 //! ```
 
@@ -115,7 +128,7 @@ fn wit(ty: &Type) -> syn::Result<String> {
     Ok(match last.ident.to_string().as_str() {
         "String" => "string".to_string(),
         "bool" => "bool".to_string(),
-        "State" => "state".to_string(),
+        "State" => "pane-state".to_string(),
         "File" => "file".to_string(),
         "WorkingDirectory" => "working-directory".to_string(),
         "Option" => format!("option<{}>", inner()?),
@@ -176,24 +189,101 @@ fn forward(function: &ItemFn, names: &[syn::Ident]) -> Tokens {
     }
 }
 
-fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
-    let name = about
-        .name
-        .ok_or_else(|| error(Span::call_site(), "`name = \"..\"`"))?;
-    let title = about
-        .title
-        .ok_or_else(|| error(Span::call_site(), "`title = \"..\"`"))?;
+/// Commands of one kind: what their attributes said, and what is written
+/// for them.
+#[derive(Default)]
+struct Commands {
+    said: Vec<Command>,
+    /// Each as a line of its interface.
+    lines: Vec<String>,
+    /// Each handed on from the bindings' trait.
+    functions: Vec<Tokens>,
+}
+
+impl Commands {
+    /// Takes `function` in if it is marked `#[command(..)]`, and says
+    /// whether it was.
+    fn take(&mut self, function: &mut ItemFn) -> syn::Result<bool> {
+        let Some(attribute) = take(&mut function.attrs, "command") else {
+            return Ok(false);
+        };
+        let (mut title, mut description, mut destructive) = (None, None, false);
+        attribute.parse_nested_meta(|meta| {
+            if meta.path.is_ident("title") {
+                title = Some(meta.value()?.parse::<LitStr>()?.value());
+            } else if meta.path.is_ident("description") {
+                description = Some(meta.value()?.parse::<LitStr>()?.value());
+            } else if meta.path.is_ident("destructive") {
+                destructive = true;
+            } else {
+                return Err(meta.error("`title`, `description` or `destructive`"));
+            }
+            Ok(())
+        })?;
+        let said = |what: Option<String>, of: &str| what.ok_or_else(|| error(attribute.span(), of));
+        let (names, shape) = signature(function)?;
+        self.said.push(Command {
+            function: function.sig.ident.clone(),
+            title: said(title, "a command's `title`")?,
+            description: said(description, "a command's `description`")?,
+            destructive,
+        });
+        let written = kebab(&function.sig.ident.to_string());
+        self.lines.push(format!("        {written}: {shape};"));
+        self.functions.push(forward(function, &names));
+        Ok(true)
+    }
+
+    /// The interface `name` that exports them, as the world says it;
+    /// nothing where there are none.
+    fn interface(&self, name: &str) -> String {
+        if self.lines.is_empty() {
+            return String::new();
+        }
+        format!(
+            "\n    export {name}: interface {{\n{}\n    }}\n",
+            self.lines.join("\n")
+        )
+    }
+
+    /// What the manifest says of them.
+    fn described(&self) -> serde_json::Map<String, serde_json::Value> {
+        (self.said.iter())
+            .map(|command| {
+                let said = serde_json::json!({
+                    "title": command.title,
+                    "description": command.description,
+                    "destructive": command.destructive,
+                });
+                (kebab(&command.function.to_string()), said)
+            })
+            .collect()
+    }
+}
+
+/// The view a pane shows, as `mod pane` declares it.
+struct Pane {
+    /// The module as it is written out: its own items, and the exports
+    /// that hand its functions on.
+    module: Tokens,
+    /// The interface `pane`, as the world says it.
+    interface: String,
+    commands: Commands,
+    asked: Vec<Asked>,
+    /// What is derived for `State`, which is the bindings' own record.
+    derives: Vec<syn::Path>,
+}
+
+fn pane_of(module: ItemMod) -> syn::Result<Pane> {
+    let span = module.ident.span();
     let (_, items) = module
         .content
-        .ok_or_else(|| error(module.ident.span(), "a module with its items in it"))?;
-
+        .ok_or_else(|| error(span, "a module with its items in it"))?;
     let mut kept = Vec::new();
     let mut record = None::<ItemStruct>;
-    let mut world = Vec::new();
-    let mut world_functions = Vec::new();
-    let mut commands = Vec::new();
-    let mut command_lines = Vec::new();
-    let mut command_functions = Vec::new();
+    let mut lines = Vec::new();
+    let mut functions = Vec::new();
+    let mut commands = Commands::default();
     let mut asked = Vec::new();
     let (mut mounts, mut states) = (false, false);
 
@@ -203,42 +293,18 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
             Item::Fn(mut function) => {
                 // (Only what is exported crosses: a function of the
                 // module's own takes whatever it likes.)
-                let exported = (function.attrs.iter()).any(|attribute| {
-                    attribute.path().is_ident("command") || attribute.path().is_ident("create")
-                }) || function.sig.ident == "mount"
-                    || function.sig.ident == "state";
-                if !exported {
+                if commands.take(&mut function)? {
+                    kept.push(Item::Fn(function));
+                    continue;
+                }
+                let created = take(&mut function.attrs, "create");
+                let named = function.sig.ident.to_string();
+                if created.is_none() && named != "mount" && named != "state" {
                     kept.push(Item::Fn(function));
                     continue;
                 }
                 let (names, shape) = signature(&function)?;
-                let written = kebab(&function.sig.ident.to_string());
-                if let Some(attribute) = take(&mut function.attrs, "command") {
-                    let (mut title, mut description, mut destructive) = (None, None, false);
-                    attribute.parse_nested_meta(|meta| {
-                        if meta.path.is_ident("title") {
-                            title = Some(meta.value()?.parse::<LitStr>()?.value());
-                        } else if meta.path.is_ident("description") {
-                            description = Some(meta.value()?.parse::<LitStr>()?.value());
-                        } else if meta.path.is_ident("destructive") {
-                            destructive = true;
-                        } else {
-                            return Err(meta.error("`title`, `description` or `destructive`"));
-                        }
-                        Ok(())
-                    })?;
-                    let said = |what: Option<String>, of: &str| {
-                        what.ok_or_else(|| error(attribute.span(), of))
-                    };
-                    commands.push(Command {
-                        function: function.sig.ident.clone(),
-                        title: said(title, "a command's `title`")?,
-                        description: said(description, "a command's `description`")?,
-                        destructive,
-                    });
-                    command_lines.push(format!("        {written}: {shape};"));
-                    command_functions.push(forward(&function, &names));
-                } else if let Some(attribute) = take(&mut function.attrs, "create") {
+                if let Some(attribute) = created {
                     // (How each parameter is asked for: `file(extensions = [..])`.)
                     if !matches!(attribute.meta, syn::Meta::Path(_)) {
                         attribute.parse_nested_meta(|meta| {
@@ -264,20 +330,14 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
                             Ok(())
                         })?;
                     }
-                    if function.sig.ident != "create" {
+                    if named != "create" {
                         return Err(error(function.sig.ident.span(), "named `create`"));
                     }
-                    world.push(format!("    export create: {shape};"));
-                    world_functions.push(forward(&function, &names));
-                } else if function.sig.ident == "mount" {
-                    mounts = true;
-                    world.push(format!("    export mount: {shape};"));
-                    world_functions.push(forward(&function, &names));
-                } else if function.sig.ident == "state" {
-                    states = true;
-                    world.push(format!("    export state: {shape};"));
-                    world_functions.push(forward(&function, &names));
                 }
+                mounts |= named == "mount";
+                states |= named == "state";
+                lines.push(format!("        {named}: {shape};"));
+                functions.push(forward(&function, &names));
                 kept.push(Item::Fn(function));
             }
             other => kept.push(other),
@@ -294,19 +354,18 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
             })?;
         }
     }
-    // A plugin keeps a state and says it, or keeps none.
+    // A pane keeps a state and says it, or keeps none.
     match (&record, mounts, states) {
         (Some(_), true, true) | (None, true, false) => {}
-        (Some(_), ..) => return Err(error(module.ident.span(), "`fn mount` and `fn state`")),
+        (Some(_), ..) => return Err(error(span, "`fn mount` and `fn state`")),
         (None, ..) => {
             return Err(error(
-                module.ident.span(),
+                span,
                 "`fn mount`, and with a `struct State` a `fn state`",
             ));
         }
     }
 
-    // The world, as a plugin's own WIT would say it.
     let mut declared = String::new();
     if let Some(record) = &record {
         let mut fields = Vec::new();
@@ -314,64 +373,155 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
             let name =
                 (field.ident.as_ref()).ok_or_else(|| error(field.span(), "a field with a name"))?;
             fields.push(format!(
-                "        {}: {},",
+                "            {}: {},",
                 kebab(&name.to_string()),
                 wit(&field.ty)?
             ));
         }
-        declared = format!("    record state {{\n{}\n    }}\n\n", fields.join("\n"));
+        declared = format!(
+            "        record pane-state {{\n{}\n        }}\n\n",
+            fields.join("\n")
+        );
     }
-    let package = kebab(&name);
-    let mut text = format!(
-        "package horizon-ext:{package};\n\nworld plugin {{\n    include horizon:ui/imports;\n    \
-         use horizon:ui/files.{{file, working-directory}};\n\n{declared}{}\n",
-        world.join("\n")
+    let interface = format!(
+        "\n    export pane: interface {{\n        use horizon:ui/files.{{file, working-directory}};\n\n\
+         {declared}{}\n    }}\n",
+        lines.join("\n")
     );
-    if !command_lines.is_empty() {
-        text.push_str(&format!(
-            "\n    export commands: interface {{\n{}\n    }}\n",
-            command_lines.join("\n")
+    // (`State` is the record, under the name the module wrote.)
+    let state = record.is_some().then(|| {
+        quote! {
+            #[allow(unused_imports)]
+            use super::exports::pane::PaneState as State;
+        }
+    });
+    let commands_export = (!commands.functions.is_empty()).then(|| {
+        let functions = &commands.functions;
+        quote! {
+            impl super::exports::pane_commands::Guest for super::HorizonPlugin {
+                #(#functions)*
+            }
+        }
+    });
+    let (visibility, ident, attributes) = (&module.vis, &module.ident, &module.attrs);
+    let module = quote! {
+        #(#attributes)*
+        #visibility mod #ident {
+            // (The host's resources, as the interface names them.)
+            #[allow(unused_imports)]
+            use super::exports::pane::*;
+            #state
+
+            #(#kept)*
+
+            impl super::exports::pane::Guest for super::HorizonPlugin {
+                #(#functions)*
+            }
+
+            #commands_export
+        }
+    };
+    Ok(Pane {
+        module,
+        interface,
+        commands,
+        asked,
+        derives,
+    })
+}
+
+fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
+    let name = about
+        .name
+        .ok_or_else(|| error(Span::call_site(), "`name = \"..\"`"))?;
+    let title = about
+        .title
+        .ok_or_else(|| error(Span::call_site(), "`title = \"..\"`"))?;
+    let (_, items) = module
+        .content
+        .ok_or_else(|| error(module.ident.span(), "a module with its items in it"))?;
+
+    let mut kept = Vec::new();
+    let mut pane = None::<Pane>;
+    let mut commands = Commands::default();
+    for item in items {
+        match item {
+            Item::Mod(inner) if inner.ident == "pane" => {
+                if pane.is_some() {
+                    return Err(error(inner.ident.span(), "one `mod pane`"));
+                }
+                pane = Some(pane_of(inner)?);
+            }
+            Item::Fn(mut function) => {
+                let of_the_pane = function.sig.ident == "mount"
+                    || function.sig.ident == "state"
+                    || (function.attrs.iter()).any(|attribute| attribute.path().is_ident("create"));
+                if of_the_pane {
+                    return Err(error(
+                        function.sig.ident.span(),
+                        "in `mod pane`: it is the view's a pane shows",
+                    ));
+                }
+                commands.take(&mut function)?;
+                kept.push(Item::Fn(function));
+            }
+            other => kept.push(other),
+        }
+    }
+    if pane.is_none() && commands.said.is_empty() {
+        return Err(error(
+            module.ident.span(),
+            "a `mod pane`, or a function marked `#[command(..)]`",
         ));
     }
+
+    // The world, as a plugin's own WIT would say it.
+    let package = kebab(&name);
+    let mut text = format!(
+        "package horizon-ext:{package};\n\nworld plugin {{\n    include horizon:ui/imports;\n"
+    );
+    if let Some(pane) = &pane {
+        text.push_str(&pane.interface);
+        text.push_str(&pane.commands.interface("pane-commands"));
+    }
+    text.push_str(&commands.interface("commands"));
     text.push_str("}\n");
 
     // The manifest: what the component's type does not carry, as JSON.
-    let described: serde_json::Map<String, serde_json::Value> = (commands.iter())
-        .map(|command| {
-            let said = serde_json::json!({
-                "title": command.title,
-                "description": command.description,
-                "destructive": command.destructive,
-            });
-            (kebab(&command.function.to_string()), said)
-        })
-        .collect();
-    let created: serde_json::Map<String, serde_json::Value> = (asked.iter())
-        .map(|asked| {
-            let said = serde_json::json!({ "extensions": asked.extensions });
-            (asked.parameter.to_string(), said)
-        })
-        .collect();
-    let manifest = serde_json::json!({
+    let mut manifest = serde_json::json!({
         "plugin": { "name": name, "title": title },
-        "commands": described,
-        "create": created,
+        "commands": commands.described(),
         "access": { "read": about.read, "write": about.write },
-    })
-    .to_string();
+    });
+    if let Some(pane) = &pane {
+        let created: serde_json::Map<String, serde_json::Value> = (pane.asked.iter())
+            .map(|asked| {
+                let said = serde_json::json!({ "extensions": asked.extensions });
+                (asked.parameter.to_string(), said)
+            })
+            .collect();
+        manifest["pane"] = serde_json::json!({
+            "commands": pane.commands.described(),
+            "create": created,
+        });
+    }
+    let manifest = manifest.to_string();
     let length = manifest.len();
     let manifest = LitByteStr::new(manifest.as_bytes(), Span::call_site());
 
     // (The boundary's own WIT is the SDK's, beside this crate.)
     let host = concat!(env!("CARGO_MANIFEST_DIR"), "/../horizon-ui/wit");
     let world_name = format!("horizon-ext:{package}/plugin");
-    let commands_export = (!command_functions.is_empty()).then(|| {
+    let commands_export = (!commands.functions.is_empty()).then(|| {
+        let functions = &commands.functions;
         quote! {
             impl exports::commands::Guest for HorizonPlugin {
-                #(#command_functions)*
+                #(#functions)*
             }
         }
     });
+    let derives = pane.iter().flat_map(|pane| &pane.derives);
+    let pane = pane.as_ref().map(|pane| &pane.module);
     let (visibility, ident, attributes) = (&module.vis, &module.ident, &module.attrs);
     Ok(quote! {
         #(#attributes)*
@@ -387,17 +537,18 @@ fn expand(about: About, module: ItemMod) -> syn::Result<Tokens> {
                     "horizon:ui/pane": ::horizon_ui::guest::bindings::horizon::ui::pane,
                     "horizon:ui/files": ::horizon_ui::guest::bindings::horizon::ui::files,
                     "horizon:ui/theme": ::horizon_ui::guest::bindings::horizon::ui::theme,
+                    "horizon:ui/sessions": ::horizon_ui::guest::bindings::horizon::ui::sessions,
+                    "horizon:ui/session-control": ::horizon_ui::guest::bindings::horizon::ui::session_control,
+                    "horizon:ui/modal": ::horizon_ui::guest::bindings::horizon::ui::modal,
                 },
                 additional_derives: [#(#derives),*],
             });
 
             #(#kept)*
 
-            struct HorizonPlugin;
+            #pane
 
-            impl Guest for HorizonPlugin {
-                #(#world_functions)*
-            }
+            struct HorizonPlugin;
 
             #commands_export
 

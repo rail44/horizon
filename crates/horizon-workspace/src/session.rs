@@ -48,26 +48,58 @@ impl Workspace {
         true
     }
 
-    /// Records what a session is doing, or with `None` that this is no
-    /// longer known (a no-op if `session_id` is unknown). What it does
-    /// has been looked at if it is what the session was last seen doing
-    /// with no work in between ([`WorkspaceSession::looked_at`]), and has
-    /// not been otherwise, until [`Self::mark_session_seen`] says so.
-    /// Returns whether the model changed.
-    pub fn set_session_activity(&mut self, session_id: SessionId, doing: Option<Doing>) -> bool {
+    /// Records what a session is doing and in what words, at `now_ms`
+    /// (milliseconds since the Unix epoch), or with `None` that this is no
+    /// longer known (a no-op if `session_id` is unknown).
+    ///
+    /// A session that goes on doing what it did keeps since when, and
+    /// whether it was looked at, whatever its words come to be. What it
+    /// newly does has been looked at if it is what the session was last
+    /// seen doing with no work in between
+    /// ([`WorkspaceSession::looked_at`]), and has been done since it was
+    /// last known to do it ([`WorkspaceSession::last_known`]); otherwise it
+    /// begins now, and has not been looked at until
+    /// [`Self::mark_session_seen`] says so. Returns whether the model
+    /// changed.
+    pub fn set_session_activity(
+        &mut self,
+        session_id: SessionId,
+        doing: Option<Doing>,
+        detail: Option<String>,
+        now_ms: u64,
+    ) -> bool {
         let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) else {
             return false;
         };
-        if session.activity.as_ref().map(|activity| &activity.doing) == doing.as_ref() {
-            return false;
+        let Some(doing) = doing else {
+            return session.activity.take().is_some();
+        };
+        if let Some(activity) = (session.activity.as_mut()).filter(|known| known.doing == doing) {
+            let changed = activity.detail != detail;
+            activity.detail = detail;
+            return changed;
         }
         // Work makes what comes after it new, also where the session
         // ends up saying what it said before.
-        if doing.as_ref().is_some_and(Doing::working) {
+        if doing.working() {
             session.looked_at = None;
         }
-        let seen = doing.is_some() && session.looked_at == doing;
-        session.activity = doing.map(|doing| SessionActivity { doing, seen });
+        let since_ms = match &session.last_known {
+            Some((known, since)) if *known == doing => *since,
+            _ => now_ms,
+        };
+        // What a session does is remembered; that it could not be heard
+        // from is not, so that it is found doing what it did.
+        if doing.present() {
+            session.last_known = Some((doing.clone(), since_ms));
+        }
+        let seen = session.looked_at.as_ref() == Some(&doing);
+        session.activity = Some(SessionActivity {
+            doing,
+            detail,
+            since_ms,
+            seen,
+        });
         true
     }
 
@@ -85,6 +117,16 @@ impl Workspace {
             }
             _ => false,
         }
+    }
+
+    /// Ends a session and every session derived from it, however far
+    /// down. How many were ended: none for a session the workspace does
+    /// not have.
+    pub fn terminate_session_with_derived(&mut self, session_id: SessionId) -> usize {
+        let derived = crate::lineage::subtree_session_ids(&self.session_summaries(), session_id);
+        (derived.into_iter())
+            .filter(|id| self.terminate_session(*id))
+            .count()
     }
 
     pub fn terminate_session(&mut self, session_id: SessionId) -> bool {

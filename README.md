@@ -57,32 +57,40 @@ manual smoke checks:
 
 - `new tab`: opens the view chooser (`Enter` on `Terminal` opens another
   terminal tab; `Enter` on `Agent` or a role like `Configuration Agent`
-  opens an agent tab).
-- `split right`: opens the same view chooser, but the chosen view splits the
-  active pane horizontally instead of opening a new tab.
-- `split down`: same as `split right`, but splits vertically.
+  opens an agent tab) for a tab in the tab group the cursor is in.
+- `split right`, `split left`, `split down`, `split up`: open the same view
+  chooser, but the chosen view goes beside what the cursor is on instead of
+  in a new tab. In workspace mode, `k` from a group's top pane puts the
+  cursor on the group's tab strip: a split from there goes beside the whole
+  group, and stays on screen whatever tab the group shows
+  (`docs/workspace-layout-design.md`).
 - `close active pane`: closes the active pane and leaves its session detached
   when another pane remains.
 - `detached`: shows detached sessions such as `Terminal #2` and attaches the
-  selected session back into the active tab as a split.
+  selected session back as a split in the tab group that last had focus.
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
 - `terminate active session`: terminates the active session.
-- `manage sessions`: opens the session manager modal (see below).
+- `manage sessions`: opens the list of sessions over the workspace (see
+  below). It is a command of the sessions extension, and is not there
+  when the extension is not built.
 - `reload session runtime`: restarts `horizon-agentd`, closes terminal
   sessions, and reconnects persisted agent sessions — use after rebuilding
   the session runtime crates, or to recover from a lost connection.
 
-Running the `manage sessions` command opens a separate modal listing every
-session the workspace knows about, as a derivation tree rather than a flat
-list (a session's recorded derivation parent is its parent; children
-are indented under it, roots first): arrows move the selection, `Enter`
-attaches a detached session as a split (or jumps to an attached session's
-pane), `cmd+Enter` terminates the selected session (the modal stays open),
-`cmd+o` opens a terminal in the selected session's directory (when known --
-rows with one show `dir`), `cmd+shift+t` terminates the selected session
-and every descendant (only on a row with children, shown with `subtree`;
-more destructive than the plain `cmd+Enter` terminate, which leaves
-children untouched), and `Esc` closes the modal.
+Running the `manage sessions` command opens the list of sessions over
+the workspace; `horizon new sessions` (or the view chooser) puts the same
+list in a pane, where it stays. It is an extension (`plugins/sessions`,
+built by `./scripts/extensions.sh build`). The sessions are under the
+project each works in, a session under the one it was derived from; within
+a project, what waits on you is first, then what finished and was not
+looked at, then what works, then what rests. The keys are in the band
+under the rows: `j`/`k` or the arrows move the selection, `n` goes to the
+next session that waits, `/` searches, `Enter` goes to the session's pane
+(a detached session is put in a split), `t` opens a terminal in the
+session's directory, `x` terminates the session and `X` terminates it with
+everything derived from it (each asks first, and `y` answers). In a pane
+`Esc` takes a search back; over the workspace it closes the list, as going
+to a session or opening a terminal does.
 
 The same command model is also reachable from outside the GUI: `horizon
 <subcommand>` (no arguments launches the GUI itself) is a thin client over a

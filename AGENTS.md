@@ -50,7 +50,8 @@ replaces the daemon side. The terminal hub runs the same lockstep over
 its `hello` (`MIN_SUPPORTED == current`). Rebuild, then restart the app
 itself.
 
-The Markdown view, the wiki and the theme settings are extensions (`plugins/*`),
+The Markdown view, the wiki, the theme settings and the list of sessions are
+extensions (`plugins/*`),
 wasm components `cargo build --workspace` does not build: the second
 command above does (`--release` for a release Horizon), and Horizon reads
 each component from beside its executable or from where that command
@@ -353,11 +354,14 @@ variables. Domain logic lives in shared crates; `src/` holds the views and
 their wiring:
 
 - `workspace/` — the shell root (`Shell`): draws the shared workspace model
-  (tab strip, recursive splits), keeps the sessions (the close-vs-detach
+  (one tree of panes, splits and tab groups, each group with its strip --
+  `docs/workspace-layout-design.md`), keeps the sessions (the close-vs-detach
   seam), workspace mode, the key map, command dispatch (`execute`), the
-  modals (palette, session manager, view chooser, model picker), the
+  sheet over the workspace (`over.rs`) and what the shell puts in it
+  (palette, view chooser, model picker; an extension puts its own view
+  there, as the session manager is), the
   control plane's requests, and the runtime reloads. The model itself —
-  tabs, panes, layout tree, session attachments, mode state, the pure
+  the workspace's tree, panes, session attachments, mode state, the pure
   command model, the `workspace_snapshot` payload — is
   `crates/horizon-workspace`.
 - `terminald.rs` / `agentd.rs` — the two runtimes as the shell holds them:
@@ -387,10 +391,13 @@ their wiring:
   share. The Markdown view (`horizon new markdown <path>`), the wiki
   (`horizon new wiki [<page>]`; a page of the project wiki,
   `crates/horizon-wiki`, with the owner's comment threads anchored in
-  it, `docs/project-wiki-design.md`) and the theme settings
-  (`horizon new theme-settings`) are not here: they are extensions, whole
-  in `plugins/markdown`, `plugins/wiki` and `plugins/theme-settings`,
-  over `horizon-ui` and `horizon-components`.
+  it, `docs/project-wiki-design.md`), the theme settings
+  (`horizon new theme-settings`) and the list of sessions
+  (`horizon new sessions`, and over the workspace by its own command,
+  `Manage Sessions`) are not
+  here: they are extensions, whole in `plugins/markdown`, `plugins/wiki`,
+  `plugins/theme-settings` and `plugins/sessions`, over `horizon-ui` and
+  `horizon-components`.
 - `preview.rs` — the preview pane: an extension still being written,
   shown from its component's file. See `docs/preview-pane-design.md`.
 - `control.rs` — the bridge from the CLI control plane's listener to the
@@ -421,10 +428,12 @@ their wiring:
   files rather than large monolith modules.
 - **Operations go through the command model.** User-visible operations are
   `CommandId` variants executed via `Shell::execute`
-  (`src/workspace/commands.rs`), or the commands of the plugin a pane
-  shows (`src/plugin.rs`'s `Plugin::commands`, run on the cursor's pane by
-  `Shell::execute_plugin`). Buttons, keyboard shortcuts, and the palette
-  are bindings to commands — do not add ad-hoc behavior in UI handlers.
+  (`src/workspace/commands.rs`), the commands of the plugin a pane shows
+  (`src/plugin.rs`'s `Plugin::commands`, run on the cursor's pane), or an
+  extension's own commands, which need no pane. `Shell::commands` lists
+  the three as one and `Shell::run` carries one out: buttons, keyboard
+  shortcuts, the palette and the command line are bindings to that list —
+  do not add ad-hoc behavior in UI handlers.
 - **Close vs. terminate are distinct.** Closing a pane/tab detaches sessions;
   `Terminate Active Session` is the explicit destructive command. Preserve
   this separation (see `docs/ux-principles.md`).

@@ -111,9 +111,14 @@ fn follow(
                     Err(_) => return,
                 },
             };
-            // The first line is the log as it stands, which the view has
-            // read already.
-            let _ = lines.next_line().await;
+            // The first line is the log as it stands. The view read the
+            // log before this was listening, and a write between the two
+            // comes with no line of its own: it is read again once.
+            if !matches!(lines.next_line().await, Ok(Some(_))) {
+                return;
+            }
+            let read_again = written.clone();
+            background.tell(move || read_again());
             loop {
                 tokio::select! {
                     biased;

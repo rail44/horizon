@@ -25,7 +25,6 @@ fn open(files: Vec<String>, theme: fn() -> Theme, size: (u32, u32)) -> Opened {
         let finder = Finder {
             source: Source::of(files, Wake::default()),
             picked: Callback::new(move |path| told.borrow_mut().push(path)),
-            left: Callback::new(|()| {}),
         };
         themed(theme, finder.view())
     });

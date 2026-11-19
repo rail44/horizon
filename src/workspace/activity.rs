@@ -10,14 +10,11 @@ use horizon_workspace::types::{
 
 use crate::board::activity::BoardSessionActivity;
 
-/// The longest message a session's line carries, in chars.
-const MESSAGE_CHARS: usize = 60;
-
 /// A program's report as the terminal runtime sends it, as the model
-/// keeps it.
-pub(super) fn reported(status: TerminalProgramStatus) -> Doing {
+/// keeps it: what it is doing, and its words about it.
+pub(super) fn reported(status: TerminalProgramStatus) -> (Doing, Option<String>) {
     use horizon_terminal_core::ProgramState as Wire;
-    Doing::Program(ProgramStatus {
+    let doing = Doing::Program(ProgramStatus {
         state: match status.state {
             Wire::Idle => ProgramState::Idle,
             Wire::Working => ProgramState::Working,
@@ -31,8 +28,8 @@ pub(super) fn reported(status: TerminalProgramStatus) -> Doing {
             ProgramBlockedOn::Auth => BlockedOn::Auth,
         }),
         app: status.app,
-        message: status.message,
-    })
+    });
+    (doing, status.message)
 }
 
 /// What an agent session is doing, as the model keeps it.
@@ -78,48 +75,18 @@ pub(super) fn marked(activity: Option<&SessionActivity>, title: String) -> Strin
     }
 }
 
-/// A session's activity in a line: who, what, waiting for what, and why.
-pub(super) fn line(activity: &SessionActivity) -> String {
-    let mut line = String::new();
-    let (app, message) = match &activity.doing {
-        Doing::Program(program) => (program.app.as_deref(), program.message.as_deref()),
-        Doing::Agent(_) => (None, None),
-    };
-    if let Some(app) = app {
-        line.push_str(app);
-        line.push_str(": ");
-    }
-    line.push_str(activity.state());
-    if let Some(attention) = activity.attention() {
-        line.push_str(&format!(" [{}]", attention.label()));
-    }
-    if let Some(message) = message {
-        line.push_str(" — ");
-        match message.chars().count() > MESSAGE_CHARS {
-            true => {
-                line.extend(message.chars().take(MESSAGE_CHARS - 1));
-                line.push('…');
-            }
-            false => line.push_str(message),
-        }
-    }
-    line
-}
-
 /// A session's activity as `horizon sessions` answers with it.
 pub(super) fn entry(activity: SessionActivity) -> ActivityEntry {
-    let state = activity.state().to_string();
-    let attention = activity.attention().map(|on| on.label().to_string());
-    let (app, message) = match activity.doing {
-        Doing::Program(program) => (program.app, program.message),
-        Doing::Agent(_) => (None, None),
-    };
     ActivityEntry {
-        state,
-        attention,
+        state: activity.state().to_string(),
+        attention: activity.attention().map(|on| on.label().to_string()),
         seen: activity.seen,
-        app,
-        message,
+        since_ms: activity.since_ms,
+        app: match &activity.doing {
+            Doing::Program(program) => program.app.clone(),
+            Doing::Agent(_) => None,
+        },
+        detail: activity.detail,
     }
 }
 
@@ -133,8 +100,9 @@ mod tests {
                 state,
                 blocked_on: None,
                 app: Some("claude-code".into()),
-                message: None,
             }),
+            detail: None,
+            since_ms: 0,
             seen: false,
         }
     }
@@ -142,6 +110,8 @@ mod tests {
     fn agent(status: AgentStatus) -> SessionActivity {
         SessionActivity {
             doing: Doing::Agent(status),
+            detail: None,
+            since_ms: 0,
             seen: false,
         }
     }
@@ -150,16 +120,11 @@ mod tests {
     fn finished_work_is_marked_as_news_until_it_is_seen() {
         for mut done in [program(ProgramState::Done), agent(AgentStatus::Completed)] {
             assert_eq!(mark(&done), Some("●"));
-            assert!(line(&done).ends_with(" [unseen]"), "{}", line(&done));
+            assert_eq!(entry(done.clone()).attention.as_deref(), Some("unseen"));
             done.seen = true;
             assert_eq!(mark(&done), Some("✳"));
-            assert!(!line(&done).contains("unseen"), "{}", line(&done));
+            assert_eq!(entry(done.clone()).attention, None);
         }
-        assert_eq!(
-            line(&program(ProgramState::Done)),
-            "claude-code: done [unseen]"
-        );
-        assert_eq!(line(&agent(AgentStatus::Completed)), "completed [unseen]");
     }
 
     #[test]
@@ -169,15 +134,14 @@ mod tests {
             unreachable!()
         };
         status.blocked_on = Some(BlockedOn::Permission);
-        status.message = Some("approve Bash: touch notes.txt".into());
+        blocked.detail = Some("approve Bash: touch notes.txt".into());
         assert_eq!(mark(&blocked), Some("?"));
         assert_eq!(
-            line(&blocked),
-            "claude-code: blocked [approval] — approve Bash: touch notes.txt"
+            entry(blocked.clone()).detail.as_deref(),
+            Some("approve Bash: touch notes.txt")
         );
         let waiting = agent(AgentStatus::WaitingForApproval);
         assert_eq!(mark(&waiting), Some("?"));
-        assert_eq!(line(&waiting), "waiting-for-approval [approval]");
         assert_eq!(entry(waiting).attention.as_deref(), Some("approval"));
 
         let mut long = program(ProgramState::Error);
@@ -185,12 +149,7 @@ mod tests {
             unreachable!()
         };
         status.app = None;
-        status.message = Some("x".repeat(MESSAGE_CHARS + 1));
         assert_eq!(mark(&long), Some("!"));
-        assert_eq!(
-            line(&long),
-            format!("error [failed] — {}…", "x".repeat(MESSAGE_CHARS - 1))
-        );
     }
 
     #[test]

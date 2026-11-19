@@ -9,7 +9,7 @@ use horizon_ui::El;
 use horizon_ui::reactive_graph::traits::{GetUntracked, Set};
 use horizon_workspace::{PluginPane, SessionKind};
 
-use super::picker::{self, Picked, Row};
+use super::picker::{self, Row};
 use super::{Modal, Placement, Shell, plugins, styles};
 use crate::extension::Extension;
 use std::sync::Arc;
@@ -39,7 +39,11 @@ fn matching(query: &str) -> Vec<(String, Choice)> {
         choices.push((role.title.to_string(), choice));
     }
     choices.push(("Board".to_string(), Choice::Plugin(plugins::list())));
-    for extension in plugins::extensions() {
+    // (One with no view of its own for a pane is its commands only.)
+    for extension in plugins::extensions()
+        .into_iter()
+        .filter(|extension| extension.pane)
+    {
         choices.push((extension.title.clone(), Choice::Extension(extension)));
     }
     let query = query.trim().to_ascii_lowercase();
@@ -58,10 +62,7 @@ pub(super) fn view(shell: Shell, placement: Placement) -> El {
             })
             .collect()
     };
-    let picked = move |index: usize, picked: Picked| {
-        if !matches!(picked, Picked::Confirmed) {
-            return;
-        }
+    let picked = move |index: usize| {
         let mut choices = matching(&shell.query.get_untracked());
         if index < choices.len() {
             let (_, choice) = choices.swap_remove(index);

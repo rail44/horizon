@@ -90,6 +90,15 @@ impl DuckdbStoreHandle {
         self.query(|store| store.session_liveness(through_sequence))
     }
 
+    /// The sessions of `role`, the one with the latest event first, each
+    /// with the workspace root of its stored context.
+    pub fn sessions_with_role(
+        &self,
+        role: &crate::roles::RoleId,
+    ) -> Result<Vec<(SessionId, Option<std::path::PathBuf>)>> {
+        self.query(|store| store.sessions_with_role(role))
+    }
+
     /// One session's records at or below `through_sequence`, rebuilt from the
     /// projection so resume need not read the event log before the cursor.
     pub fn session_records(

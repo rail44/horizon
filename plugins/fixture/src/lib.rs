@@ -9,35 +9,53 @@ mod views;
 
 #[horizon_ui::plugin(name = "fixture", title = "Fixture")]
 mod fixture {
-    use std::cell::RefCell;
-
-    /// What a pane keeps: which of the views it shows.
-    pub struct State {
-        pub view: String,
+    #[command(
+        title = "Show Over, Alone",
+        description = "Put a view over the workspace, with no pane."
+    )]
+    pub fn show_over_alone() {
+        crate::views::show_over();
     }
 
-    thread_local! {
-        static SHOWN: RefCell<String> = const { RefCell::new(String::new()) };
-    }
+    #[command(title = "Do Nothing", description = "Carry out nothing.")]
+    pub fn do_nothing() {}
 
-    pub fn mount(state: Option<State>) -> u64 {
-        let view = state.map_or_default(|state| state.view);
-        SHOWN.with(|shown| *shown.borrow_mut() = view.clone());
-        let mounted = horizon_ui::guest::mount(|| crate::views::view(&view));
-        mounted.unwrap_or_default()
-    }
+    pub mod pane {
+        use std::cell::RefCell;
 
-    pub fn state() -> State {
-        State {
-            view: SHOWN.with(|shown| shown.borrow().clone()),
+        /// What a pane keeps: which of the views it shows.
+        pub struct State {
+            pub view: String,
         }
-    }
 
-    #[create]
-    pub fn create(view: String) -> Result<State, String> {
-        match crate::views::NAMES.contains(&view.as_str()) {
-            true => Ok(State { view }),
-            false => Err(format!("the fixture has no view named `{view}`")),
+        thread_local! {
+            static SHOWN: RefCell<String> = const { RefCell::new(String::new()) };
+        }
+
+        pub fn mount(state: Option<State>) -> u64 {
+            let view = state.map_or_default(|state| state.view);
+            SHOWN.with(|shown| *shown.borrow_mut() = view.clone());
+            let mounted = horizon_ui::guest::mount(|| crate::views::view(&view));
+            mounted.unwrap_or_default()
+        }
+
+        pub fn state() -> State {
+            State {
+                view: SHOWN.with(|shown| shown.borrow().clone()),
+            }
+        }
+
+        #[create]
+        pub fn create(view: String) -> Result<State, String> {
+            match crate::views::NAMES.contains(&view.as_str()) {
+                true => Ok(State { view }),
+                false => Err(format!("the fixture has no view named `{view}`")),
+            }
+        }
+
+        #[command(title = "Show Over", description = "Put a view over the workspace.")]
+        pub fn show_over() {
+            crate::views::show_over();
         }
     }
 }

@@ -2,11 +2,20 @@
 //! the session's own kind, with one reading of them that is the same for
 //! every kind -- whether the session waits on its owner, and for what.
 
-/// What a session is doing and whether its owner has looked at it since.
-/// Not persisted: a reattached session says what it is doing again.
+/// What a session is doing, in what words, since when, and whether its
+/// owner has looked at it since. Not persisted: a reattached session says
+/// what it is doing again.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionActivity {
     pub doing: Doing,
+    /// What the session does or asks, in a line of its own words: what a
+    /// program says with its report, the command an agent waits to be
+    /// allowed, why it failed. It changes under the same `doing`, and no
+    /// change of it makes the session's state another.
+    pub detail: Option<String>,
+    /// When the session came to be doing this, in milliseconds since the
+    /// Unix epoch.
+    pub since_ms: u64,
     /// Whether the session has been looked at since it came to be doing
     /// this. A session that finished says so until it is given more to
     /// do, looked at or not, so what is still news is kept here.
@@ -33,8 +42,6 @@ pub struct ProgramStatus {
     pub blocked_on: Option<BlockedOn>,
     /// The program's name for itself, such as `claude-code`.
     pub app: Option<String>,
-    /// Why, or what about, in the program's words.
-    pub message: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -195,6 +202,15 @@ impl Attention {
 }
 
 impl Doing {
+    /// Whether this is something a session does: not being unheard from,
+    /// out of reach, or ended.
+    pub fn present(&self) -> bool {
+        !matches!(
+            self,
+            Self::Agent(AgentStatus::Loading | AgentStatus::Unavailable | AgentStatus::Terminated)
+        )
+    }
+
     /// Whether this is being at work.
     pub fn working(&self) -> bool {
         match self {
@@ -248,9 +264,6 @@ impl SessionActivity {
     /// Whether there is a session at the other end to be at rest: an agent
     /// session not heard from, out of reach or ended is none.
     pub fn present(&self) -> bool {
-        !matches!(
-            self.doing,
-            Doing::Agent(AgentStatus::Loading | AgentStatus::Unavailable | AgentStatus::Terminated)
-        )
+        self.doing.present()
     }
 }

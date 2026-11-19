@@ -3,7 +3,7 @@
 //! posts answers back to task threads.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::{ReplyAddress, operations};
@@ -43,6 +43,47 @@ impl Project {
 pub(super) struct BoardSource {
     projects: HashMap<PathBuf, Project>,
     registered: HashSet<PathBuf>,
+    /// Candidates that did not resolve to a board, each asked about once:
+    /// a session's worktree that is gone stays in the log's records for
+    /// good. A record that names one again has it asked about again.
+    unresolved: HashSet<PathBuf>,
+}
+
+impl BoardSource {
+    /// Opens the board of each candidate not looked at yet. `resolve` is
+    /// `worktree::project_root`, which starts a `git` process.
+    fn discover(
+        &mut self,
+        candidates: Vec<PathBuf>,
+        resolve: impl Fn(&Path) -> Option<PathBuf>,
+    ) -> Result<(), String> {
+        for candidate in candidates {
+            if self.registered.contains(&candidate) || self.unresolved.contains(&candidate) {
+                continue;
+            }
+            let Some((root, store)) = resolve(&candidate)
+                .and_then(|root| Store::from_dir(&root).ok().map(|store| (root, store)))
+            else {
+                self.unresolved.insert(candidate);
+                continue;
+            };
+            if !self.projects.contains_key(store.path()) {
+                let cursor = store.cursor(CONSUMER).map_err(|e| e.to_string())?;
+                self.projects.insert(
+                    store.path().into(),
+                    Project {
+                        root,
+                        store,
+                        cursor,
+                        length: 0,
+                        pending: true,
+                    },
+                );
+            }
+            self.registered.insert(candidate);
+        }
+        Ok(())
+    }
 }
 
 impl TriggerSource for BoardSource {
@@ -59,38 +100,14 @@ impl TriggerSource for BoardSource {
             .and(record.session_context.as_ref())
             .and_then(|context| context.workspace_root.clone())
         {
+            self.unresolved.remove(&root);
             state.register_board(root);
         }
     }
 
     fn tick<'a>(&'a mut self, ctx: Context<'a>) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            for candidate in ctx.state.board_projects() {
-                if self.registered.contains(&candidate) {
-                    continue;
-                }
-                let root = candidate.clone();
-                let Some(root) = crate::worktree::project_root(&root) else {
-                    continue;
-                };
-                let Ok(store) = Store::from_dir(&root) else {
-                    continue;
-                };
-                if !self.projects.contains_key(store.path()) {
-                    let cursor = store.cursor(CONSUMER).map_err(|e| e.to_string())?;
-                    self.projects.insert(
-                        store.path().into(),
-                        Project {
-                            root,
-                            store,
-                            cursor,
-                            length: 0,
-                            pending: true,
-                        },
-                    );
-                }
-                self.registered.insert(candidate);
-            }
+            self.discover(ctx.state.board_projects(), crate::worktree::project_root)?;
             let mut error = None;
             for project in self.projects.values_mut() {
                 if let Err(e) = process_project(ctx.state, ctx.index, project).await {
@@ -406,6 +423,9 @@ fn task_id(event: &BoardEvent) -> Option<u64> {
 
 #[cfg(test)]
 mod review_tests;
+
+#[cfg(test)]
+mod discover_tests;
 
 #[cfg(test)]
 mod retry_tests {

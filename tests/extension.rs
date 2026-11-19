@@ -39,10 +39,12 @@ fn open() -> Opened {
 
 /// The same, over what else `opening` says.
 fn open_with(opening: Opening) -> Opened {
-    let extensions =
+    let mut extensions =
         horizon::extension::own_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug"));
     assert_eq!(extensions.first(), Some(&component()));
-    assert_eq!(extensions.len(), 3, "{extensions:?}");
+    assert_eq!(extensions.len(), 4, "{extensions:?}");
+    // (And those `opening` adds to them.)
+    extensions.extend(opening.extensions.iter().cloned());
     let mut shell = None;
     let app = App::new(1200, 800, "Test", css(), || {
         let spawn: Spawn = Box::new(|_| support::shell("sh", TerminalSize::new(80, 24)));
@@ -806,4 +808,164 @@ fn a_pane_of_an_extension_waits_for_the_extensions_to_be_read() {
     opened.until("the file", || opened.text().contains("One"));
     assert!(!opened.text().contains("Reading this view's plugin."));
     let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The fixture extension's component, where cargo builds it.
+fn fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/wasm32-wasip2/debug/horizon_fixture_plugin.wasm")
+}
+
+#[test]
+fn an_extension_puts_a_view_over_the_workspace_and_hears_it_taken_away() {
+    use horizon::workspace::Modal;
+
+    let opened = open_with(Opening {
+        extensions: vec![fixture()],
+        ..Opening::default()
+    });
+    let answer = opened.ask(
+        "new",
+        serde_json::json!({
+            "plugin": "fixture", "arguments": ["over"], "directory": "/", "activate": true,
+        }),
+    );
+    std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
+    opened.until("the pane's view", || opened.text().contains("nothing over"));
+    let over = || matches!(opened.shell.modal(), Some(Modal::Extension(_)));
+    let show = || {
+        assert!(opened.shell.execute_plugin("show-over"));
+        opened.until("the view over the workspace", || {
+            over() && opened.text().contains("over the workspace")
+        });
+        // (Laid out, it has the keys.)
+        opened.app.run_effects();
+        opened.app.resolve();
+    };
+
+    // The pane's command puts a view over the workspace. Escape, which
+    // the view has no use for, leaves it: the view is gone from the
+    // page, and the extension hears and lets go of it.
+    show();
+    opened.key(Key::Named(NamedKey::Escape));
+    opened.until("the view left", || !over());
+    opened.until("the extension told", || {
+        opened.text().contains("taken away 1")
+    });
+    assert!(
+        !opened.text().contains("over the workspace"),
+        "{}",
+        opened.text()
+    );
+
+    // The view has the keys, and takes itself away on one of its own.
+    show();
+    opened.key(Key::Character("c".into()));
+    opened.until("the view left", || !over());
+    opened.until("the extension told", || {
+        opened.text().contains("taken away 2")
+    });
+    assert!(
+        !opened.text().contains("over the workspace"),
+        "{}",
+        opened.text()
+    );
+
+    // Something else put over the workspace takes its place.
+    show();
+    opened.shell.execute(CommandId::NewTab);
+    opened.app.run_effects();
+    opened.app.resolve();
+    std::assert_matches!(opened.shell.modal(), Some(Modal::Chooser(_)));
+    opened.until("the extension told", || {
+        opened.text().contains("taken away 3")
+    });
+    assert!(
+        !opened.text().contains("over the workspace"),
+        "{}",
+        opened.text()
+    );
+    opened.key(Key::Named(NamedKey::Escape));
+    assert_eq!(opened.shell.modal(), None);
+
+    // The pane gone while its view is over the workspace, the view goes
+    // with it.
+    show();
+    opened.shell.execute(CommandId::CloseActiveTab);
+    opened.until("the view left", || !over());
+    assert!(
+        !opened.text().contains("over the workspace"),
+        "{}",
+        opened.text()
+    );
+}
+
+#[test]
+fn an_extensions_own_command_is_carried_out_with_no_pane_of_it() {
+    use horizon::workspace::Modal;
+
+    let opened = open_with(Opening {
+        extensions: vec![fixture()],
+        ..Opening::default()
+    });
+    let run = |name: &str| {
+        let answer = opened.ask("plugin-command", serde_json::json!({ "name": name }));
+        std::assert_matches!(answer, EnvelopeBody::Ok { .. }, "{answer:?}");
+    };
+    let over = || matches!(opened.shell.modal(), Some(Modal::Extension(_)));
+    let there = || opened.text().contains("over the workspace");
+    // (No pane of the fixture: the only pane is the shell's terminal.)
+    assert_eq!(opened.model(|model| model.all_pane_ids().len()), 1);
+
+    // A command that leaves nothing over the workspace: what was made to
+    // carry it out is let go of.
+    run("do-nothing");
+    opened.until("let go of", || opened.shell.commanded() == 0);
+    assert!(!over());
+
+    // One that puts a view there: what carries it out stays for as long
+    // as the view does, and is let go of once the view is left.
+    run("show-over-alone");
+    opened.until("the view over the workspace", || over() && there());
+    assert_eq!(opened.shell.commanded(), 1);
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.key(Key::Named(NamedKey::Escape));
+    opened.until("the view left", || !over() && !there());
+    opened.until("let go of", || opened.shell.commanded() == 0);
+
+    // The view takes itself away on a key of its own.
+    run("show-over-alone");
+    opened.until("the view over the workspace", || over() && there());
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.key(Key::Character("c".into()));
+    opened.until("the view left", || !over() && !there());
+    opened.until("let go of", || opened.shell.commanded() == 0);
+
+    // A chord the configuration binds to it carries it out, whatever the
+    // cursor's pane shows.
+    let config = horizon_config::parse(
+        r#"
+        [keybindings]
+        "Ctrl+Shift+O" = "show-over-alone"
+        "#,
+    )
+    .unwrap();
+    opened.shell.apply_config(&config);
+    opened.app.dispatch(UiEvent::KeyDown(BlitzKeyEvent {
+        text: None,
+        key: Key::Character("O".into()),
+        code: keyboard_types::Code::Unidentified,
+        modifiers: Modifiers::CONTROL | Modifiers::SHIFT,
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+    }));
+    opened.until("the view over the workspace", || over() && there());
+    opened.app.run_effects();
+    opened.app.resolve();
+    opened.key(Key::Named(NamedKey::Escape));
+    opened.until("the view left", || !over() && !there());
 }

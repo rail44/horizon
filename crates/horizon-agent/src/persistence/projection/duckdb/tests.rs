@@ -1634,3 +1634,85 @@ fn session_records_rebuild_the_logged_records() {
         .collect();
     assert_eq!(store.session_records(session_id, 2).unwrap(), expected);
 }
+
+#[test]
+fn an_event_this_build_cannot_read_is_passed_over_as_the_log_reader_does() {
+    let store = Store::open_in_memory().expect("store");
+    let session_id = SessionId::new();
+    for (sequence, event) in [
+        (0, Event::StateChanged(SessionState::Running)),
+        (
+            1,
+            Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "hello".into(),
+            }),
+        ),
+        (2, Event::StateChanged(SessionState::WaitingForUser)),
+    ] {
+        store
+            .append_record(&label_record(
+                &format!("e{sequence}"),
+                sequence,
+                session_id,
+                None,
+                Some("worker"),
+                event,
+                1_700_000_000_000 + sequence,
+            ))
+            .expect("append");
+    }
+    // What a build that had the kind wrote, and this one has no name for.
+    store
+        .conn
+        .execute(
+            "UPDATE agent_events SET horizon_event_json = ? WHERE sequence = 1",
+            params![r#"{"ApprovalRequested":{"kind":{"RemovedKind":{}}}}"#],
+        )
+        .expect("rewrite");
+
+    let records = store
+        .session_records(session_id, u64::MAX >> 1)
+        .expect("records");
+    assert_eq!(
+        records.iter().map(|r| r.sequence).collect::<Vec<_>>(),
+        [0, 2]
+    );
+    let events = store.events_for_session(session_id).expect("events");
+    assert_eq!(
+        events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+        [0, 2]
+    );
+}
+
+#[test]
+fn sessions_of_a_role_come_latest_first_with_their_roots() {
+    let store = Store::open_in_memory().expect("store");
+    let (older, newer, other) = (SessionId::new(), SessionId::new(), SessionId::new());
+    for (sequence, session, role, root) in [
+        (0, older, "organizer", "/tmp/a"),
+        (1, newer, "organizer", "/tmp/b"),
+        (2, other, "worker", "/tmp/c"),
+    ] {
+        let mut record = label_record(
+            &format!("e{sequence}"),
+            sequence,
+            session,
+            None,
+            Some(role),
+            Event::StateChanged(SessionState::Running),
+            1_700_000_000_000 + sequence,
+        );
+        record.session_context = Some(context_rooted_at(root));
+        store.append_record(&record).expect("append");
+    }
+    assert_eq!(
+        store
+            .sessions_with_role(&RoleId("organizer".into()))
+            .expect("sessions"),
+        [
+            (newer, Some(std::path::PathBuf::from("/tmp/b"))),
+            (older, Some(std::path::PathBuf::from("/tmp/a"))),
+        ]
+    );
+}

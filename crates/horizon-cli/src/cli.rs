@@ -160,7 +160,7 @@ Subcommands:\n  \
       new markdown <path>\n  \
       new wiki [<page>]\n  \
       new preview <extension.wasm> [<argument>...]\n  \
-      new board-list | board-thread <task> | theme-settings\n  \
+      new board-list | board-thread <task> | theme-settings | sessions\n  \
       new <extension's name> [<argument>...]\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \

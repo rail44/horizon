@@ -7,8 +7,12 @@
 //! no floem/view dependency -- so they're fully unit-testable without
 //! mounting a window; `workspace::mode::move_cursor` is the only caller.
 
-use super::mode::Direction;
-use super::types::{LayoutNode, PaneId, SplitAxis};
+use super::mode::{Cursor, Direction};
+use super::types::{LayoutNode, SplitAxis};
+
+/// How much of a tab group's height its strip takes, in the relative unit
+/// space: only where it is relative to its neighbours matters.
+const STRIP: f32 = 0.05;
 
 /// A pane's rectangle in *relative unit space*: the root viewport is always
 /// `(0, 0)`..`(1, 1)` regardless of the window's actual pixel size. Nearest-
@@ -56,15 +60,40 @@ impl Rect {
 /// `Horizontal` divides width, `Vertical` divides height). Order matches
 /// `LayoutNode::pane_ids`'s pre-order, which `nearest_in_direction` relies
 /// on as its final, deterministic tie-break.
-pub fn pane_rects(node: &LayoutNode) -> Vec<(PaneId, Rect)> {
+#[cfg(test)]
+pub fn pane_rects(node: &LayoutNode) -> Vec<(super::types::PaneId, Rect)> {
+    (layout_rects(node).into_iter())
+        .filter_map(|(cursor, rect)| match cursor {
+            Cursor::Pane(pane_id) => Some((pane_id, rect)),
+            Cursor::Strip(_) => None,
+        })
+        .collect()
+}
+
+/// Every place the workspace-mode cursor can rest on screen, with its
+/// rectangle: each visible pane, and each visible tab group's strip, a
+/// band along the top of the group above its shown tab.
+pub fn layout_rects(node: &LayoutNode) -> Vec<(Cursor, Rect)> {
     let mut out = Vec::new();
     collect_rects(node, Rect::UNIT, &mut out);
     out
 }
 
-fn collect_rects(node: &LayoutNode, rect: Rect, out: &mut Vec<(PaneId, Rect)>) {
+fn collect_rects(node: &LayoutNode, rect: Rect, out: &mut Vec<(Cursor, Rect)>) {
     match node {
-        LayoutNode::Pane(pane_id) => out.push((*pane_id, rect)),
+        LayoutNode::Pane(pane_id) => out.push((Cursor::Pane(*pane_id), rect)),
+        LayoutNode::Tabs(group) => {
+            let strip = rect.h * STRIP;
+            out.push((Cursor::Strip(group.id), Rect { h: strip, ..rect }));
+            if let Some(tab) = group.shown_tab() {
+                let content = Rect {
+                    y: rect.y + strip,
+                    h: rect.h - strip,
+                    ..rect
+                };
+                collect_rects(&tab.root, content, out);
+            }
+        }
         LayoutNode::Split { axis, children } => {
             let total_weight: f32 = children.iter().map(|child| child.weight).sum();
             let mut offset = 0.0;
@@ -105,11 +134,11 @@ fn collect_rects(node: &LayoutNode, rect: Rect, out: &mut Vec<(PaneId, Rect)>) {
 /// a deterministic tie-break for the fully symmetric cases (see this
 /// module's tests). Returns `None` when nothing qualifies (`current` is at
 /// that edge) or `current` itself isn't in `rects`.
-pub fn nearest_in_direction(
-    rects: &[(PaneId, Rect)],
-    current: PaneId,
+pub fn nearest_in_direction<K: Copy + Eq>(
+    rects: &[(K, Rect)],
+    current: K,
     direction: Direction,
-) -> Option<PaneId> {
+) -> Option<K> {
     const EPS: f32 = 1e-4;
 
     let current_rect = rects.iter().find(|(id, _)| *id == current)?.1;
@@ -160,7 +189,7 @@ fn overlap_span(a_start: f32, a_end: f32, b_start: f32, b_end: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::LayoutChild;
+    use crate::types::{LayoutChild, PaneId};
 
     fn rect_of(rects: &[(PaneId, Rect)], id: PaneId) -> Rect {
         rects

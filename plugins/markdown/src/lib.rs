@@ -11,70 +11,72 @@ mod view;
 
 #[horizon_ui::plugin(name = "markdown", title = "Markdown", access(read = ["/"]))]
 mod markdown {
-    use std::cell::{Cell, RefCell};
-    use std::path::PathBuf;
-    use std::rc::Rc;
+    pub mod pane {
+        use std::cell::{Cell, RefCell};
+        use std::path::PathBuf;
+        use std::rc::Rc;
 
-    use horizon_ui::Callback;
+        use horizon_ui::Callback;
 
-    use crate::view::{Controls, Markdown};
+        use crate::view::{Controls, Markdown};
 
-    /// What a pane keeps: the file it shows.
-    pub struct State {
-        pub path: Option<String>,
-    }
-
-    thread_local! {
-        /// The file the view shows.
-        static SHOWN: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
-        static CONTROLS: Cell<Option<Controls>> = const { Cell::new(None) };
-    }
-
-    /// The file the view shows is `path`: the pane is titled for it.
-    fn shows(path: Option<PathBuf>) {
-        if let Some(name) = path.as_deref().and_then(|path| path.file_name()) {
-            horizon_ui::guest::set_title(&name.to_string_lossy());
+        /// What a pane keeps: the file it shows.
+        pub struct State {
+            pub path: Option<String>,
         }
-        SHOWN.with(|shown| *shown.borrow_mut() = path);
-    }
 
-    pub fn mount(state: Option<State>) -> u64 {
-        let path = state.and_then(|state| state.path).map(PathBuf::from);
-        shows(path.clone());
-        let mounted = horizon_ui::guest::mount(|| {
-            let (view, controls) = Markdown {
-                path,
-                open_url: Rc::new(horizon_ui::guest::open_url),
-                on_navigate: Some(Callback::new(|path: PathBuf| shows(Some(path)))),
+        thread_local! {
+            /// The file the view shows.
+            static SHOWN: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+            static CONTROLS: Cell<Option<Controls>> = const { Cell::new(None) };
+        }
+
+        /// The file the view shows is `path`: the pane is titled for it.
+        fn shows(path: Option<PathBuf>) {
+            if let Some(name) = path.as_deref().and_then(|path| path.file_name()) {
+                horizon_ui::guest::set_title(&name.to_string_lossy());
             }
-            .view_with_controls();
-            CONTROLS.with(|kept| kept.set(Some(controls)));
-            Some(view)
-        });
-        mounted.unwrap_or_default()
-    }
-
-    pub fn state() -> State {
-        let path = SHOWN.with(|shown| shown.borrow().clone());
-        State {
-            path: path.map(|path| path.to_string_lossy().into_owned()),
+            SHOWN.with(|shown| *shown.borrow_mut() = path);
         }
-    }
 
-    #[create(file(extensions = ["md", "markdown"]))]
-    pub fn create(file: File) -> State {
-        State {
-            path: Some(file.path()),
+        pub fn mount(state: Option<State>) -> u64 {
+            let path = state.and_then(|state| state.path).map(PathBuf::from);
+            shows(path.clone());
+            let mounted = horizon_ui::guest::mount(|| {
+                let (view, controls) = Markdown {
+                    path,
+                    open_url: Rc::new(horizon_ui::guest::open_url),
+                    on_navigate: Some(Callback::new(|path: PathBuf| shows(Some(path)))),
+                }
+                .view_with_controls();
+                CONTROLS.with(|kept| kept.set(Some(controls)));
+                Some(view)
+            });
+            mounted.unwrap_or_default()
         }
-    }
 
-    #[command(
-        title = "Back",
-        description = "Go back to the file a link was followed from."
-    )]
-    pub fn back() {
-        if let Some(controls) = CONTROLS.with(Cell::get) {
-            controls.back();
+        pub fn state() -> State {
+            let path = SHOWN.with(|shown| shown.borrow().clone());
+            State {
+                path: path.map(|path| path.to_string_lossy().into_owned()),
+            }
+        }
+
+        #[create(file(extensions = ["md", "markdown"]))]
+        pub fn create(file: File) -> State {
+            State {
+                path: Some(file.path()),
+            }
+        }
+
+        #[command(
+            title = "Back",
+            description = "Go back to the file a link was followed from."
+        )]
+        pub fn back() {
+            if let Some(controls) = CONTROLS.with(Cell::get) {
+                controls.back();
+            }
         }
     }
 }

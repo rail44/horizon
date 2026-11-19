@@ -33,14 +33,3 @@ pub struct SessionSummary {
     /// Mirrors `WorkspaceSession::activity` -- see its doc comment.
     pub activity: Option<SessionActivity>,
 }
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PaneSummary {
-    pub tab_index: usize,
-    pub pane_index: usize,
-    pub title: String,
-    /// The plugin the pane shows, by name.
-    pub plugin: String,
-    pub active: bool,
-    pub tab_active: bool,
-}

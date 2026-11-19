@@ -108,7 +108,7 @@ pub(super) fn commands() -> Vec<Listed> {
     commands.extend(listed::<AgentPlugin>());
     EXTENSIONS.with(|kept| {
         for extension in kept.borrow().iter() {
-            commands.extend(extension.commands.iter().map(|command| Listed {
+            commands.extend(extension.pane_commands.iter().map(|command| Listed {
                 plugin: extension.name,
                 name: command.name,
                 title: command.title,
@@ -304,7 +304,7 @@ impl Shell {
 impl Shell {
     /// What this shell does with its theme for a plugin: the seed the
     /// theme has, drawing the theme of another, and saving one.
-    fn theme_asks(&self) -> ThemeAsks {
+    pub(super) fn theme_asks(&self) -> ThemeAsks {
         let shell = *self;
         let save = self.kept().save_theme.clone();
         ThemeAsks {
@@ -341,6 +341,44 @@ impl Shell {
         }
     }
 
+    /// The view of `extension` made on `state`, in an element of its own
+    /// that says so where it could not be made or has failed since, and
+    /// what runs it. It runs for as long as what this is called under
+    /// lasts.
+    pub(super) fn run_extension(
+        &self,
+        extension: &Arc<Extension>,
+        asks: Asks,
+        state: Option<&str>,
+    ) -> (El, Option<Rc<crate::extension::Running>>) {
+        let failed = RwSignal::new(None::<String>);
+        let root = el("div").class(styles::EXTENSION).when(
+            move || failed.get().is_some(),
+            move || {
+                el("div")
+                    .class(styles::FAILED)
+                    .text_dyn(move || failed.get().unwrap_or_default())
+            },
+        );
+        let running = match extension.instantiate(asks, self.kept().wake.clone(), failed) {
+            Ok(running) => Rc::new(running),
+            Err(error) => {
+                failed.set(Some(error));
+                return (root, None);
+            }
+        };
+        match running.mount(state) {
+            Ok(node) => {
+                root.child(El(NodeId::from_u64(node)));
+            }
+            Err(error) => failed.update(|failed| {
+                failed.get_or_insert(error);
+            }),
+        }
+        running.follow();
+        (root, Some(running))
+    }
+
     /// A pane of `extension` on the state the model keeps for it, which
     /// goes back to the model as it changes, with the pane's title.
     fn mount_extension(
@@ -351,38 +389,19 @@ impl Shell {
     ) -> (El, Shown) {
         let shell = *self;
         let kept = self.kept();
-        let failed = RwSignal::new(None::<String>);
         let title = RwSignal::new(shown.title.clone());
-        let root = el("div").class(styles::EXTENSION).when(
-            move || failed.get().is_some(),
-            move || {
-                el("div")
-                    .class(styles::FAILED)
-                    .text_dyn(move || failed.get().unwrap_or_default())
-            },
-        );
         let asks = Asks {
             open_url: Some(kept.open_url.clone()),
             set_title: Some(Rc::new(move |text| title.set(text))),
             theme: Some(self.theme_asks()),
+            sessions: Some(self.session_asks()),
+            modal: Some(self.modal_asks(None)),
         };
         let name = extension.name;
-        let running = match extension.instantiate(asks, kept.wake.clone(), failed) {
-            Ok(running) => Rc::new(running),
-            Err(error) => {
-                failed.set(Some(error));
-                return (root, Shown::none(name));
-            }
+        let (root, running) = self.run_extension(&extension, asks, shown.state.as_str());
+        let Some(running) = running else {
+            return (root, Shown::none(name));
         };
-        match running.mount(shown.state.as_str()) {
-            Ok(node) => {
-                root.child(El(NodeId::from_u64(node)));
-            }
-            Err(error) => failed.update(|failed| {
-                failed.get_or_insert(error);
-            }),
-        }
-        running.follow();
         // What the pane keeps, and its title, after the page's effects.
         let keeping = running.clone();
         horizon_ui::each_effects(move || {

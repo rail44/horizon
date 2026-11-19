@@ -73,7 +73,7 @@ fn render_sessions(sessions: &Sessions, out: &mut impl Write) {
 }
 
 /// What a session is doing in one column: `<app>:<state>`, then in
-/// brackets what it waits on its owner for, and then its message.
+/// brackets what it waits on its owner for, and then its words.
 fn activity_column(activity: &ActivityEntry) -> String {
     let mut column = String::new();
     if let Some(app) = &activity.app {
@@ -84,9 +84,9 @@ fn activity_column(activity: &ActivityEntry) -> String {
     if let Some(attention) = &activity.attention {
         column.push_str(&format!(" [{attention}]"));
     }
-    if let Some(message) = &activity.message {
+    if let Some(detail) = &activity.detail {
         column.push_str("  ");
-        column.push_str(message);
+        column.push_str(detail);
     }
     column
 }
@@ -182,8 +182,9 @@ mod tests {
                         state: "blocked".to_string(),
                         attention: Some("approval".to_string()),
                         seen: false,
+                        since_ms: 0,
                         app: Some("claude-code".to_string()),
-                        message: Some("approve Bash: touch notes.txt".to_string()),
+                        detail: Some("approve Bash: touch notes.txt".to_string()),
                     },
                 ),
                 entry(
@@ -192,8 +193,9 @@ mod tests {
                         state: "completed".to_string(),
                         attention: Some("unseen".to_string()),
                         seen: false,
+                        since_ms: 0,
                         app: None,
-                        message: None,
+                        detail: None,
                     },
                 ),
                 entry(
@@ -202,8 +204,9 @@ mod tests {
                         state: "running".to_string(),
                         attention: None,
                         seen: true,
+                        since_ms: 0,
                         app: None,
-                        message: None,
+                        detail: None,
                     },
                 ),
             ],

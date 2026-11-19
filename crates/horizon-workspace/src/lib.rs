@@ -20,8 +20,8 @@ pub mod store;
 pub mod title;
 pub mod types;
 
-pub use mode::Direction;
-pub use operations::CloseCursorOutcome;
+pub use mode::{Cursor, Direction};
+pub use operations::{CloseCursorOutcome, Side};
 pub use persistence::{
     InventoryError, InventoryReconcile, SessionInventory, WORKSPACE_STATE_VERSION,
     WorkspaceStateError,

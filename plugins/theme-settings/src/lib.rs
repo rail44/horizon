@@ -9,8 +9,10 @@ mod view;
 
 #[horizon_ui::plugin(name = "theme-settings", title = "Theme Settings")]
 mod theme_settings {
-    pub fn mount() -> u64 {
-        let mounted = horizon_ui::guest::mount(|| Some(crate::view::view()));
-        mounted.unwrap_or_default()
+    pub mod pane {
+        pub fn mount() -> u64 {
+            let mounted = horizon_ui::guest::mount(|| Some(crate::view::view()));
+            mounted.unwrap_or_default()
+        }
     }
 }

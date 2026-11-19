@@ -4,10 +4,7 @@
 
 use horizon_config::RawConfig;
 use horizon_ui::blitz_traits::events::BlitzKeyEvent;
-use horizon_workspace::commands::CommandId;
 use keyboard_types::{Key, NamedKey};
-
-use super::plugins;
 
 /// Binds a chord to opening the palette, which is not a command the
 /// palette lists.
@@ -120,12 +117,12 @@ fn key_named(token: &str) -> Option<ChordKey> {
 }
 
 /// What a bound chord does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Bound {
     OpenPalette,
-    Command(CommandId),
-    /// The command of this name of the plugin the cursor's pane shows.
-    Plugin(&'static str),
+    /// The command of this name, looked for among the commands there are
+    /// when the chord is pressed.
+    Command(String),
 }
 
 pub struct Keymap {
@@ -136,17 +133,17 @@ pub struct Keymap {
 /// The chords bound with no configuration: the font size's, and a
 /// terminal's copy and paste, on the chords that leave the program in it
 /// its Ctrl+C and Ctrl+V.
-const BUILT_IN: &[(&str, Bound)] = &[
-    ("ctrl+=", Bound::Command(CommandId::IncreaseFontSize)),
-    ("ctrl++", Bound::Command(CommandId::IncreaseFontSize)),
-    ("ctrl+-", Bound::Command(CommandId::DecreaseFontSize)),
-    ("ctrl+0", Bound::Command(CommandId::ResetFontSize)),
-    ("ctrl+shift+c", Bound::Plugin("copy-terminal-selection")),
-    ("ctrl+shift+v", Bound::Plugin("paste-into-terminal")),
+const BUILT_IN: &[(&str, &str)] = &[
+    ("ctrl+=", "increase-font-size"),
+    ("ctrl++", "increase-font-size"),
+    ("ctrl+-", "decrease-font-size"),
+    ("ctrl+0", "reset-font-size"),
+    ("ctrl+shift+c", "copy-terminal-selection"),
+    ("ctrl+shift+v", "paste-into-terminal"),
     #[cfg(target_os = "macos")]
-    ("meta+c", Bound::Plugin("copy-terminal-selection")),
+    ("meta+c", "copy-terminal-selection"),
     #[cfg(target_os = "macos")]
-    ("meta+v", Bound::Plugin("paste-into-terminal")),
+    ("meta+v", "paste-into-terminal"),
 ];
 
 impl Default for Keymap {
@@ -155,44 +152,34 @@ impl Default for Keymap {
         Self {
             workspace_mode: chord(DEFAULT_WORKSPACE_MODE),
             bindings: (BUILT_IN.iter())
-                .map(|(keys, bound)| (chord(keys), *bound))
+                .map(|(keys, command)| (chord(keys), Bound::Command(command.to_string())))
                 .collect(),
         }
     }
 }
 
 impl Keymap {
-    /// The configuration's bindings. An entry that is not a chord, or
-    /// names no command, is left out with a line on stderr.
+    /// The configuration's bindings. An entry that is not a chord is left
+    /// out with a line on stderr; whether one names a command is known
+    /// when the chord is pressed ([`Keymap::unknown`]).
     pub fn from_config(config: &RawConfig) -> Self {
         let mut keymap = Self::default();
         // The configuration's come first: one of them on a built-in chord
         // takes it.
         let built_in = std::mem::take(&mut keymap.bindings);
         for (chord, command) in &config.keybindings {
-            let skipped = |why: &str| {
-                eprintln!("horizon config: skipping keybinding `{chord}` = `{command}`: {why}");
-            };
             let Some(parsed) = Chord::parse(chord) else {
-                skipped("unrecognized chord");
+                eprintln!(
+                    "horizon config: skipping keybinding `{chord}` = `{command}`: unrecognized chord"
+                );
                 continue;
-            };
-            let named = |id: &&CommandId| id.spec().name == command;
-            let plugin = || {
-                (plugins::commands().into_iter())
-                    .find(|listed| listed.name == command)
-                    .map(|listed| Bound::Plugin(listed.name))
             };
             match command.as_str() {
                 WORKSPACE_MODE => keymap.workspace_mode = parsed,
                 OPEN_PALETTE => keymap.bindings.push((parsed, Bound::OpenPalette)),
-                _ => match CommandId::ALL.iter().find(named) {
-                    Some(id) => keymap.bindings.push((parsed, Bound::Command(*id))),
-                    None => match plugin() {
-                        Some(bound) => keymap.bindings.push((parsed, bound)),
-                        None => skipped("unknown command id"),
-                    },
-                },
+                name => keymap
+                    .bindings
+                    .push((parsed, Bound::Command(name.to_string()))),
             }
         }
         keymap.bindings.extend(built_in);
@@ -202,7 +189,18 @@ impl Keymap {
     /// What the configuration binds `event` to.
     pub fn bound(&self, event: &BlitzKeyEvent) -> Option<Bound> {
         let binding = self.bindings.iter().find(|(chord, _)| chord.matches(event));
-        binding.map(|(_, bound)| *bound)
+        binding.map(|(_, bound)| bound.clone())
+    }
+
+    /// The bindings that name none of `known`, as the configuration wrote
+    /// them: what to say once every command there can be is known.
+    pub fn unknown<'a>(&'a self, known: &[&str]) -> Vec<&'a str> {
+        (self.bindings.iter())
+            .filter_map(|(_, bound)| match bound {
+                Bound::Command(name) if !known.contains(&name.as_str()) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -261,11 +259,11 @@ mod tests {
         let chord = Modifiers::CONTROL | Modifiers::SHIFT;
         assert_eq!(
             keymap.bound(&character("C", chord)),
-            Some(Bound::Plugin("copy-terminal-selection"))
+            Some(Bound::Command("copy-terminal-selection".to_string()))
         );
         assert_eq!(
             keymap.bound(&character("V", chord)),
-            Some(Bound::Plugin("paste-into-terminal"))
+            Some(Bound::Command("paste-into-terminal".to_string()))
         );
         assert_eq!(keymap.bound(&character("c", Modifiers::CONTROL)), None);
         assert_eq!(keymap.bound(&character("v", Modifiers::CONTROL)), None);
@@ -295,16 +293,32 @@ mod tests {
         let chord = Modifiers::CONTROL | Modifiers::SHIFT;
         assert_eq!(
             keymap.bound(&character("D", chord)),
-            Some(Bound::Command(CommandId::SplitDown))
+            Some(Bound::Command("split-down".to_string()))
         );
         assert_eq!(
             keymap.bound(&character("P", chord)),
             Some(Bound::OpenPalette)
         );
-        assert_eq!(keymap.bound(&character("X", chord)), None);
         assert_eq!(
             keymap.bound(&character("A", chord)),
-            Some(Bound::Plugin("add-board-task"))
+            Some(Bound::Command("add-board-task".to_string()))
+        );
+        // One that names no command is kept, and said once the commands
+        // there can be are known.
+        assert_eq!(
+            keymap.bound(&character("X", chord)),
+            Some(Bound::Command("no-such-command".to_string()))
+        );
+        let known = ["split-down", "add-board-task", "increase-font-size"];
+        assert_eq!(
+            keymap.unknown(&known),
+            [
+                "no-such-command",
+                "decrease-font-size",
+                "reset-font-size",
+                "copy-terminal-selection",
+                "paste-into-terminal"
+            ]
         );
         assert!(
             keymap
