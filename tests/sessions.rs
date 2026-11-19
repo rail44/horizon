@@ -565,6 +565,107 @@ fn the_session_manager_is_the_list_over_the_workspace() {
     let _ = made.first;
 }
 
+/// A configuration with the list of sessions kept on the left, put in at
+/// startup, and a layout of one view and no place for the workspace.
+fn with_layouts() -> Opening {
+    let config = horizon_config::parse(
+        r#"
+        startup_layout = "sidebar"
+
+        [layouts.sidebar]
+        split = "horizontal"
+        children = [
+          { weight = 1, view = "sessions" },
+          { weight = 3, workspace = true },
+        ]
+
+        [layouts.alone]
+        view = "sessions"
+
+        [layouts.wrong]
+        view = "terminal"
+        "#,
+    )
+    .expect("a configuration");
+    Opening {
+        config,
+        ..Opening::default()
+    }
+}
+
+/// The panes showing the list of sessions.
+fn lists(opened: &Opened) -> Vec<horizon_workspace::PaneId> {
+    opened.model(|model| {
+        (model.all_pane_ids().into_iter())
+            .filter(|pane| {
+                (model.pane_plugin(*pane)).is_some_and(|plugin| plugin.name == "sessions")
+            })
+            .collect()
+    })
+}
+
+#[test]
+fn the_startup_layout_puts_the_list_left_of_the_workspace_once_it_is_read() {
+    let opened = open_with(with_layouts());
+    let terminal = opened.model(|model| model.cursor_pane_id().expect("a pane"));
+    opened.until("the list", || lists(&opened).len() == 1);
+    opened.app.run_effects();
+    opened.app.resolve();
+    let list = lists(&opened)[0];
+
+    // The list on the left, the workspace as it was on its right, the keys
+    // where they were.
+    let (first, weights) = opened.model(|model| match model.layout() {
+        horizon_workspace::types::LayoutNode::Split { children, .. } => (
+            children[0].node.first_key(),
+            children
+                .iter()
+                .map(|child| child.weight)
+                .collect::<Vec<_>>(),
+        ),
+        _ => panic!("expected the list beside the workspace"),
+    });
+    assert_eq!(first, horizon_workspace::types::NodeKey::Pane(list));
+    assert_eq!(weights, vec![1.0, 3.0]);
+    assert!(opened.model(|model| model.is_active_pane(terminal)));
+    opened.until("the rows", || !opened.titles().is_empty());
+
+    // Put in again from the palette: nothing changes, and no second list.
+    let apply = |name: &str| {
+        opened
+            .shell
+            .execute(horizon_workspace::commands::CommandId::ApplyLayout);
+        opened.app.run_effects();
+        opened.app.resolve();
+        opened.commit(name);
+        opened.key(Key::Named(NamedKey::Enter));
+        opened.app.run_effects();
+        opened.app.resolve();
+    };
+    apply("sidebar");
+    assert_eq!(lists(&opened), vec![list]);
+    assert!(opened.model(|model| model.is_active_pane(terminal)));
+
+    // One that is not well formed for a layout changes nothing.
+    apply("wrong");
+    assert_eq!(lists(&opened), vec![list]);
+    assert!(opened.model(|model| model.is_active_pane(terminal)));
+
+    // One with no place for the workspace closes its panes; their sessions
+    // stay, detached.
+    let sessions = opened.model(|model| model.session_summaries().len());
+    apply("alone");
+    assert_eq!(
+        opened.model(|model| model.all_pane_ids()),
+        std::collections::HashSet::from([list])
+    );
+    assert_eq!(
+        opened.model(|model| model.session_summaries().len()),
+        sessions
+    );
+    assert_eq!(opened.model(Workspace::detached_session_count), 1);
+}
+
 /// Paints the list in a pane, in this machine's theme, to the file
 /// `HORIZON_SESSIONS_OUT` names (a PPM): a picture for a person to look
 /// at. With `HORIZON_SESSIONS_ASK` set, as it asks before it ends a
@@ -676,4 +777,41 @@ fn the_list_left_of_the_tab_group_is_not_cut_by_what_it_opens() {
     });
     assert_eq!(opened.model(|model| model.tab_groups().len()), 1);
     assert_eq!(beside(&opened), 2);
+}
+
+/// Paints the workspace put in a layout with the list of sessions on the
+/// left at startup, in this machine's theme and font, to the file
+/// `HORIZON_SIDEBAR_OUT` names (a PPM): a picture for a person to look at.
+/// Run by hand.
+#[test]
+#[ignore = "writes a picture for a person: set HORIZON_SIDEBAR_OUT"]
+fn paint_the_sidebar() {
+    use anyrender::ImageRenderer as _;
+
+    let out = std::env::var("HORIZON_SIDEBAR_OUT").expect("HORIZON_SIDEBAR_OUT");
+    let mine = horizon_config::load();
+    let mut opening = with_layouts();
+    opening.config.theme = mine.theme.clone();
+    opening.config.ui = mine.ui.clone();
+    opening.config.terminal = mine.terminal.clone();
+    let opened = open_with(opening);
+    let places = Places::made("sidebar");
+    make(&opened, &places);
+    opened.until("the list", || lists(&opened).len() == 1);
+    opened.until("the rows", || opened.titles().len() == 5);
+    let (width, height) = (1200u32, 800u32);
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let mut pixels = Vec::new();
+    let document = opened.app.document();
+    renderer.render_to_vec(
+        |scene| {
+            blitz_paint::paint_scene(scene, &mut document.borrow_mut(), 1.0, width, height, 0, 0)
+        },
+        &mut pixels,
+    );
+    let mut picture = format!("P6\n{width} {height}\n255\n").into_bytes();
+    for [red, green, blue, _] in pixels.as_chunks::<4>().0 {
+        picture.extend_from_slice(&[*red, *green, *blue]);
+    }
+    std::fs::write(out, picture).expect("the picture written");
 }

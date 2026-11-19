@@ -34,6 +34,7 @@ impl Shell {
                 names.extend(loaded.iter().map(|extension| extension.name));
                 plugins::take_in(loaded);
                 shell.kept().extensions_read.set(true);
+                shell.apply_startup_layout();
                 // (Every command there can be is known from here.)
                 shell.say_unknown_bindings();
                 shell.watch_extensions();

@@ -61,6 +61,7 @@ mod finder;
 pub(crate) mod held;
 mod keymap;
 mod keys;
+mod layouts;
 mod models;
 mod over;
 mod palette;
@@ -327,6 +328,8 @@ pub enum Modal {
     /// A view an extension put there (`horizon:ui/modal`): this one of
     /// those it has been asked for.
     Extension(u64),
+    /// Which of the configuration's layouts to put the workspace in.
+    Layouts,
 }
 
 /// A view an extension has over the workspace.
@@ -413,6 +416,9 @@ struct Kept {
     /// The configuration in use: what a theme's seed is read from, and
     /// what one being edited replaces the theme of.
     config: RefCell<RawConfig>,
+    /// Whether `startup_layout` has been put in, once the extensions were
+    /// read.
+    startup_layout_applied: Cell<bool>,
     save_theme: Option<SaveTheme>,
     /// What threads came back with, to take in on the UI thread.
     arrived: Arc<Mutex<Vec<Arrived>>>,
@@ -1142,6 +1148,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             refocus: Cell::new(false),
             board: opening.board,
             config: RefCell::new(opening.config.clone()),
+            startup_layout_applied: Cell::new(false),
             save_theme: opening.save_theme,
             arrived: Arc::default(),
             owner: Owner::current().expect("an owner"),
@@ -1218,6 +1225,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
                         None => el("div"),
                     },
                     Modal::Extension(_) => el("div"),
+                    Modal::Layouts => layouts::view(shell),
                 };
                 over::view(shell, inside)
             },

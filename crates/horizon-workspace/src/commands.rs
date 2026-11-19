@@ -46,6 +46,10 @@ command_ids! {
         /// discipline applies to daemons too.
         ReloadTerminalRuntime,
         ReloadConfig,
+        /// Puts the workspace in one of the configuration's layouts
+        /// (`[layouts.<name>]`, `docs/workspace-layout-design.md`), chosen
+        /// from a list of their names.
+        ApplyLayout,
         /// Opens a new terminal tab whose cwd is the active session's
         /// `directory` (`docs/session-relationship-design.md` decision
         /// 4a) -- v1's "hunt down the agent's worktree and cd there" fix,
@@ -210,6 +214,12 @@ impl CommandId {
                 CommandCategory::Workspace,
                 "Re-read the config file and apply theme and keybindings live.",
             ),
+            CommandId::ApplyLayout => (
+                "apply-layout",
+                "Apply Layout…",
+                CommandCategory::Workspace,
+                "Put the workspace in one of the layouts the config file names.",
+            ),
             CommandId::OpenTerminalInSessionDirectory => (
                 "open-terminal-in-session-directory",
                 "Open Terminal in Session Directory",
@@ -275,6 +285,7 @@ pub fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
         | CommandId::ReloadAgentRuntime
         | CommandId::ReloadTerminalRuntime
         | CommandId::ReloadConfig
+        | CommandId::ApplyLayout
         | CommandId::OpenBoard
         | CommandId::IncreaseFontSize
         | CommandId::DecreaseFontSize
@@ -333,7 +344,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 18);
+        assert_eq!(commands.len(), 19);
         let ids: Vec<CommandId> = commands.iter().map(|command| command.id).collect();
         assert_eq!(
             ids,
@@ -351,6 +362,7 @@ mod tests {
                 CommandId::ReloadAgentRuntime,
                 CommandId::ReloadTerminalRuntime,
                 CommandId::ReloadConfig,
+                CommandId::ApplyLayout,
                 CommandId::OpenTerminalInSessionDirectory,
                 CommandId::OpenBoard,
                 CommandId::IncreaseFontSize,
@@ -364,8 +376,9 @@ mod tests {
         assert_eq!(commands[8].title, "Terminate Active Session");
         assert_eq!(commands[11].title, "Reload Terminal Runtime");
         assert_eq!(commands[12].title, "Reload Config");
-        assert_eq!(commands[14].title, "Open Board");
-        assert_eq!(commands[17].title, "Reset Font Size");
+        assert_eq!(commands[13].title, "Apply Layout…");
+        assert_eq!(commands[15].title, "Open Board");
+        assert_eq!(commands[18].title, "Reset Font Size");
     }
 
     #[test]

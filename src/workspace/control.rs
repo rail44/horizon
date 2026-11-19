@@ -191,7 +191,11 @@ impl Shell {
     }
 
     /// The pane the extension `name` makes from what was `given`.
-    fn created_by_extension(&self, name: &str, mut given: Given) -> Result<PluginPane, String> {
+    pub(super) fn created_by_extension(
+        &self,
+        name: &str,
+        mut given: Given,
+    ) -> Result<PluginPane, String> {
         let extension = plugins::extension(name).ok_or_else(|| {
             if !self.extensions_read() {
                 return format!(
