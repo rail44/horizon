@@ -113,6 +113,20 @@ impl TerminalCore {
         state
     }
 
+    /// SPIKE Y. The state as far as the screen and the history nearest
+    /// it (the engine writes the screen first): what a view that fell
+    /// behind is sent, small enough to read at once.
+    pub fn state_of_the_screen(&mut self) -> Vec<u8> {
+        let mut state = self.state();
+        let screen = Decoder::new_buf(&state)
+            .and_then(Decoder::ready)
+            .and_then(|ready| ready.decoder().source_offset());
+        if let Ok(screen) = screen {
+            state.truncate(screen);
+        }
+        state
+    }
+
     /// The engine's terminal with its callbacks and what the core keeps
     /// beside it.
     fn around(mut terminal: Engine, size: TerminalSize) -> Self {

@@ -9,7 +9,7 @@
 //! host/process concern. It makes no frames: a view draws from a terminal
 //! of its own.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 mod channels;
 
@@ -78,8 +78,11 @@ struct Stream {
     /// Bytes sent that the view has not said it took in.
     outstanding: u64,
     /// The view fell too far behind: nothing is sent until it has taken
-    /// in what it was sent, and then the state again.
+    /// in what it was sent, and then the screen's part of the state.
     behind: bool,
+    /// The view was sent the screen's part of the state and is owed the
+    /// whole of it, history and all: when the PTY last wrote since.
+    owed: Option<Instant>,
 }
 
 /// How many bytes a view may have been sent and not taken in.
@@ -87,6 +90,9 @@ const STREAM_AHEAD: u64 = 2 * 1024 * 1024;
 /// The largest piece a state is sent in: under the events channel's cap
 /// for an item.
 const STATE_PIECE: usize = 1024 * 1024;
+/// How long the PTY is to have written nothing before a view that was sent
+/// the screen's part of the state is sent the whole of it.
+const CALM: Duration = Duration::from_millis(300);
 
 impl Stream {
     fn state(&mut self, state: Vec<u8>, update_tx: &Sender<TerminalUpdate>) {
@@ -111,22 +117,33 @@ impl Stream {
         match command {
             StreamCommand::Want => {
                 self.wanted = true;
+                self.owed = None;
                 self.state(core.state(), update_tx);
             }
             StreamCommand::Stop => *self = Self::default(),
             StreamCommand::Taken(bytes) => {
                 self.outstanding = self.outstanding.saturating_sub(bytes);
-                // The whole state, history and all: what the view was not
-                // sent is in it.
+                // The screen's part of the state: what the view was not
+                // sent is in it, and it is read at once. (The whole state
+                // here would be read slowly by a view that is behind
+                // because it is slow, and it would fall behind again for
+                // reading it.) The history comes once the output calms.
                 if self.behind && self.outstanding == 0 {
-                    self.state(core.state(), update_tx);
+                    self.state(core.state_of_the_screen(), update_tx);
+                    self.owed = Some(Instant::now());
                 }
             }
         }
     }
 
     fn wrote(&mut self, bytes: Vec<u8>, update_tx: &Sender<TerminalUpdate>) {
-        if !self.wanted || self.behind || bytes.is_empty() {
+        if !self.wanted || bytes.is_empty() {
+            return;
+        }
+        if let Some(wrote) = &mut self.owed {
+            *wrote = Instant::now();
+        }
+        if self.behind {
             return;
         }
         if self.outstanding > STREAM_AHEAD {
@@ -137,6 +154,27 @@ impl Stream {
         }
         self.outstanding += bytes.len() as u64;
         let _ = update_tx.send(TerminalUpdate::Output(bytes));
+    }
+
+    /// When the whole state is due to a view owed it.
+    fn owed_at(&self) -> Option<Instant> {
+        (self.owed)
+            .filter(|_| self.wanted)
+            .map(|wrote| wrote + CALM)
+    }
+
+    /// The whole state, to a view owed it, if the output has calmed and
+    /// the view has taken in what it was sent; otherwise later.
+    fn pay(&mut self, core: &mut TerminalCore, update_tx: &Sender<TerminalUpdate>) {
+        if !self.wanted || self.owed.is_none() {
+            return;
+        }
+        if self.behind || self.outstanding > 0 {
+            self.owed = Some(Instant::now());
+            return;
+        }
+        self.owed = None;
+        self.state(core.state(), update_tx);
     }
 
     fn released(&mut self, update_tx: &Sender<TerminalUpdate>) {
@@ -296,7 +334,12 @@ pub fn run_terminal_core(
             return;
         }
 
+        let owed_rx = match stream.owed_at() {
+            Some(at) => crossbeam_channel::at(at),
+            None => crossbeam_channel::never(),
+        };
         crossbeam_channel::select! {
+            recv(owed_rx) -> _ => stream.pay(&mut core, &update_tx),
             recv(resize_rx) -> size => {
                 let Ok(size) = size else {
                     return;
@@ -484,7 +527,8 @@ mod tests {
     }
 
     /// A client too far behind is sent nothing more until it has taken in
-    /// what it was sent, and then the whole state again.
+    /// what it was sent, and then the screen's part of the state; once the
+    /// output has calmed, the whole of it.
     #[test]
     fn a_client_too_far_behind_is_sent_the_state_again_once_it_has_caught_up() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
@@ -521,21 +565,41 @@ mod tests {
             sent > STREAM_AHEAD && sent <= STREAM_AHEAD + chunk.len() as u64,
             "{sent}"
         );
-        // Taken in: the state, which has what was not sent.
+        // Taken in: the screen's part of the state, which has what was not
+        // sent.
         senders.stream_tx.send(StreamCommand::Taken(sent)).unwrap();
-        let mut state = Vec::new();
-        loop {
-            match next(&update_rx, "the state again", |_| true) {
-                TerminalUpdate::State { bytes, more } => {
-                    state.extend_from_slice(&bytes);
-                    if !more {
-                        break;
+        let state = |what: &str| {
+            let mut state = Vec::new();
+            loop {
+                match next(&update_rx, what, |_| true) {
+                    TerminalUpdate::State { bytes, more } => {
+                        state.extend_from_slice(&bytes);
+                        if !more {
+                            return state;
+                        }
                     }
+                    other => panic!("{other:?} before {what}"),
                 }
-                other => panic!("{other:?} before the state"),
             }
-        }
-        let view = TerminalCore::from_state(&state).expect("a terminal from the state");
+        };
+        let screen = state("the screen's part");
+        let view = TerminalCore::from_state(&screen).expect("a terminal from the screen's part");
+        assert!(
+            view.snapshot_text().trim_end().ends_with("after"),
+            "{}",
+            view.snapshot_text()
+        );
+        // The output has stopped: the whole of it, history and all.
+        let started = Instant::now();
+        let whole = state("the whole state");
+        assert!(started.elapsed() >= CALM / 2);
+        assert!(
+            whole.len() > screen.len() * 4,
+            "{} after {}",
+            whole.len(),
+            screen.len()
+        );
+        let view = TerminalCore::from_state(&whole).expect("a terminal from the whole state");
         assert!(
             view.snapshot_text().trim_end().ends_with("after"),
             "{}",

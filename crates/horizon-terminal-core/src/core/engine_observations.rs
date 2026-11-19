@@ -3,6 +3,8 @@
 //! ignored tests are timings and observations, run by hand with
 //! `--run-ignored only --no-capture`; the others are checks.
 
+use std::time::{Duration, Instant};
+
 use super::TerminalCore;
 use crate::types::TerminalSize;
 
@@ -514,4 +516,72 @@ fn a_state_taken_between_any_two_bytes_goes_on_to_the_same_screen() {
         "split at {differing:?} of {}",
         written.len()
     );
+}
+
+/// How a scrolling frame's time divides: the engine's render state
+/// updated and every cell read out of it (what any drawing from the
+/// engine pays), against the frame built from those cells (Horizon's
+/// spans).
+#[test]
+#[ignore = "a timing for the spike's record, not a check"]
+fn how_a_scrolling_frame_s_time_divides() {
+    use libghostty_vt::render::{CellIterator, RenderState, RowIterator};
+
+    for (columns, rows) in [(160u16, 50u16), (400, 120)] {
+        let mut core = TerminalCore::new(TerminalSize::new(columns, rows));
+        let line = |n: usize| {
+            let mut text = format!("{n:012} ");
+            for word in 0..(columns as usize / 8) {
+                text.push_str(&format!("\x1b[3{}m{word:06} ", word % 7 + 1));
+            }
+            text.push_str("\x1b[0m\r\n");
+            text
+        };
+        for n in 0..rows as usize {
+            core.write_vt(line(n).as_bytes());
+        }
+        let _ = core.snapshot_frame();
+        let (mut state, mut row_it, mut cell_it) = (
+            RenderState::new().unwrap(),
+            RowIterator::new().unwrap(),
+            CellIterator::new().unwrap(),
+        );
+        let rounds = 200;
+        let (mut read, mut built) = (Duration::ZERO, Duration::ZERO);
+        let mut graphemes = Vec::new();
+        for n in 0..rounds {
+            core.write_vt(line(rows as usize + n).as_bytes());
+            // The cells read, nothing built.
+            let started = Instant::now();
+            let snapshot = state.update(&core.terminal).unwrap();
+            let mut row_iteration = row_it.update(&snapshot).unwrap();
+            let mut seen = 0usize;
+            while let Some(row) = row_iteration.next() {
+                let mut cells = cell_it.update(row).unwrap();
+                while let Some(cell) = cells.next() {
+                    let raw = cell.raw_cell().unwrap();
+                    let length = cell.graphemes_len().unwrap_or(0) as usize;
+                    graphemes.clear();
+                    graphemes.resize(length, '\0');
+                    let _ = cell.graphemes_buf(&mut graphemes);
+                    let style = cell.style().unwrap_or_default();
+                    seen += usize::from(raw.has_hyperlink().unwrap_or(false))
+                        + usize::from(style.bold)
+                        + graphemes.len();
+                }
+                let _ = row.set_dirty(false);
+            }
+            std::hint::black_box(seen);
+            read += started.elapsed();
+            // The frame as the view builds it.
+            let started = Instant::now();
+            std::hint::black_box(core.snapshot_frame());
+            built += started.elapsed();
+        }
+        println!(
+            "{columns}x{rows}: cells read {:.3} ms, frame built {:.3} ms (per scrolled line)",
+            read.as_secs_f64() * 1000.0 / rounds as f64,
+            built.as_secs_f64() * 1000.0 / rounds as f64,
+        );
+    }
 }
