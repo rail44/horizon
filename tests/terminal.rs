@@ -1072,7 +1072,10 @@ fn a_flood_of_output_ends_with_the_screen_the_shell_has() {
     let opened = open();
     let states_before = opened.session.states_taken();
     let started = Instant::now();
-    opened.run("yes flooding | head -n 3000000; echo flood-over");
+    // About 5.4 MB: past what a view may be sent and not take in (2 MB)
+    // while it takes in nothing, and short enough not to hold the
+    // machine's cores from the tests beside it.
+    opened.run("yes flooding | head -n 600000; echo flood-over");
     // The view takes nothing in for a while: it falls behind.
     std::thread::sleep(Duration::from_millis(1500));
     let text = loop {
@@ -1098,7 +1101,7 @@ fn a_flood_of_output_ends_with_the_screen_the_shell_has() {
     assert!(lines[mark + 1].trim_end().ends_with('$'), "in:\n{text}");
     let again = opened.session.states_taken() - states_before;
     println!(
-        "27 MB of output in {took:?}; the state was sent again {again} times; {} bytes of output were taken in",
+        "5.4 MB of output in {took:?}; the state was sent again {again} times; {} bytes of output were taken in",
         opened.session.bytes_taken(),
     );
     assert!(again > 0, "the view never fell behind");
