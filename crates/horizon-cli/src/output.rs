@@ -6,7 +6,7 @@
 
 use std::io::Write;
 
-use horizon_control::contract::{ActivityEntry, EnvelopeBody, Sessions, State};
+use horizon_control::contract::{ActivityEntry, EnvelopeBody, Extensions, Sessions, State};
 
 pub fn render(body: &EnvelopeBody, json: bool, out: &mut impl Write) {
     if json {
@@ -23,6 +23,7 @@ pub fn render(body: &EnvelopeBody, json: bool, out: &mut impl Write) {
         }
         EnvelopeBody::Sessions(sessions) => render_sessions(sessions, out),
         EnvelopeBody::State(state) => render_state(state, out),
+        EnvelopeBody::Extensions(extensions) => render_extensions(extensions, out),
         EnvelopeBody::Unknown { kind, payload } => {
             let _ = writeln!(out, "(unrecognized server response: kind={kind})");
             let _ = writeln!(out, "{payload}");
@@ -69,6 +70,21 @@ fn render_sessions(sessions: &Sessions, out: &mut impl Write) {
             let _ = write!(out, "  {}", activity_column(activity));
         }
         let _ = writeln!(out);
+    }
+}
+
+/// Each extension on a line: its name, where it is from, its file.
+fn render_extensions(extensions: &Extensions, out: &mut impl Write) {
+    if extensions.extensions.is_empty() {
+        let _ = writeln!(out, "(no extensions)");
+        return;
+    }
+    for extension in &extensions.extensions {
+        let _ = writeln!(
+            out,
+            "{}  {}  {}",
+            extension.name, extension.source, extension.file
+        );
     }
 }
 
@@ -119,6 +135,28 @@ mod tests {
         let mut buf = Vec::new();
         render(body, json, &mut buf);
         String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn extensions_render_one_to_a_line_with_where_each_is_from() {
+        use horizon_control::contract::ExtensionEntry;
+        let entry = |name: &str, source: &str, file: &str| ExtensionEntry {
+            name: name.to_string(),
+            source: source.to_string(),
+            file: file.to_string(),
+        };
+        let body = EnvelopeBody::Extensions(Extensions {
+            extensions: vec![
+                entry("sessions", "temporary", "/work/sessions.wasm"),
+                entry("wiki", "own", "/app/wiki.wasm"),
+            ],
+        });
+        assert_eq!(
+            rendered(&body, false),
+            "sessions  temporary  /work/sessions.wasm\nwiki  own  /app/wiki.wasm\n"
+        );
+        let none = EnvelopeBody::Extensions(Extensions { extensions: vec![] });
+        assert_eq!(rendered(&none, false), "(no extensions)\n");
     }
 
     #[test]

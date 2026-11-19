@@ -39,8 +39,14 @@ or what its tasks do when they are woken). One that traps is let go of,
 and the pane says what it said.
 
 What a preview pane does not give an extension: its commands are not
-carried out there, and the shell's theme is not given to it
-(`horizon:ui/theme`), so the theme settings are not looked at this way.
+carried out there, and nothing the shell lends an extension beyond the
+document is lent to it -- the theme (`horizon:ui/theme`), the workspace's
+sessions (`horizon:ui/sessions`), a view over the workspace. So the theme
+settings and the list of sessions are not looked at this way: an extension
+that asks for one of those is let go of where it asks. Such a one is tried
+with `horizon extension use <extension.wasm>`
+(`docs/cli-control-plane-design.md`), which takes it in place of the one
+of its name in the running Horizon until it is reset.
 
 ## The pane
 

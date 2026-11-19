@@ -70,6 +70,10 @@ manual smoke checks:
   names (`[layouts.<name>]`, see `config.example.toml`): the list of
   sessions kept on the left of everything else, for one. `startup_layout`
   puts the workspace in one when Horizon starts.
+- `reset extensions`: lets go of the extensions `horizon extension use
+  <extension.wasm>` put in from their files (one still being written, tried
+  in place of the one of its name); the configuration's and Horizon's own
+  are loaded again.
 - `detached`: shows detached sessions such as `Terminal #2` and attaches the
   selected session back as a split in the tab group that last had focus.
 - `tab 1`, `tab 2`, ...: switches to the matching tab.

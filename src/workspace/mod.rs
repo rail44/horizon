@@ -394,6 +394,10 @@ struct Kept {
     looked_for: RefCell<HashMap<SessionId, bool>>,
     /// The components of the extensions that come with the shell.
     own_extensions: Vec<PathBuf>,
+    /// The extensions in use for now from files `horizon extension use`
+    /// named, by their names: each in place of the one of its name until
+    /// it is reset.
+    tried_extensions: RefCell<Vec<(&'static str, PathBuf)>>,
     /// The extensions have been read, since the shell was started.
     extensions_read: Cell<bool>,
     /// The extensions whose components are watched.
@@ -1137,6 +1141,7 @@ pub fn view(spawn: Spawn, opening: Opening) -> (El, Shell) {
             reloading: Cell::new(None),
             looked_for: RefCell::default(),
             own_extensions: opening.extensions,
+            tried_extensions: RefCell::default(),
             extensions_read: Cell::new(false),
             watched: RefCell::default(),
             sessions_feed: Arc::default(),

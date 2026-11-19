@@ -131,6 +131,19 @@ pub enum Subcommand {
     OpenTerminalInSessionDirectory,
     Sessions,
     State,
+    /// `extension use <file>`: the extension whose component is `file`
+    /// in place of the one of its name, until it is reset or the app
+    /// restarts. The file is a path from where the command is run.
+    ExtensionUse {
+        file: String,
+    },
+    /// `extension reset [<name>]`: lets go of what `extension use` put in,
+    /// the one named or all.
+    ExtensionReset {
+        name: Option<String>,
+    },
+    /// `extension list`: the extensions loaded, and where each is from.
+    ExtensionList,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +190,14 @@ Subcommands:\n  \
   open-terminal-in-session-directory\n  \
   sessions\n  \
   state\n  \
+  extension use <extension.wasm>\n  \
+      takes an extension from its file in place of the one of its name,\n  \
+      until it is reset or Horizon restarts: one still being written, tried\n  \
+      where the one in use is\n  \
+  extension reset [<name>]\n  \
+      lets go of what `extension use` put in: the one named, or all\n  \
+  extension list\n  \
+      the extensions loaded, and where each is from\n  \
   <command>    a command of the plugin the cursor's pane shows";
 
 /// Parses `argv` (already stripped of `argv[0]`). Global flags
@@ -312,6 +333,30 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
         "state" => {
             reject_extra(&mut positionals, "state")?;
             Subcommand::State
+        }
+        "extension" => {
+            let verb = next_required(&mut positionals, "extension", "use | reset | list")?;
+            match verb.as_str() {
+                "use" => {
+                    let file = next_required(&mut positionals, "extension use", "extension.wasm")?;
+                    reject_extra(&mut positionals, "extension use")?;
+                    Subcommand::ExtensionUse { file }
+                }
+                "reset" => {
+                    let name = positionals.next();
+                    reject_extra(&mut positionals, "extension reset")?;
+                    Subcommand::ExtensionReset { name }
+                }
+                "list" => {
+                    reject_extra(&mut positionals, "extension list")?;
+                    Subcommand::ExtensionList
+                }
+                other => {
+                    return Err(UsageError(format!(
+                        "unknown extension command: {other} (there are: use, reset, list)"
+                    )));
+                }
+            }
         }
         // Not one of this program's own: a plugin's command, which the
         // running Horizon knows.
@@ -595,6 +640,42 @@ mod tests {
         for flag in ["--prompt", "--role"] {
             let said = parse(&args(&["sessions", flag, "x"])).unwrap_err().0;
             assert_eq!(said, format!("{flag} is only valid with new"));
+        }
+    }
+
+    #[test]
+    fn parses_the_extension_commands() {
+        let parsed = |words: &[&str]| parse(&args(words)).map(|parsed| parsed.subcommand);
+        assert_eq!(
+            parsed(&["extension", "use", "target/a.wasm"]),
+            Ok(Subcommand::ExtensionUse {
+                file: "target/a.wasm".to_string()
+            })
+        );
+        assert_eq!(
+            parsed(&["extension", "reset", "sessions"]),
+            Ok(Subcommand::ExtensionReset {
+                name: Some("sessions".to_string())
+            })
+        );
+        assert_eq!(
+            parsed(&["extension", "reset"]),
+            Ok(Subcommand::ExtensionReset { name: None })
+        );
+        assert_eq!(
+            parsed(&["extension", "list"]),
+            Ok(Subcommand::ExtensionList)
+        );
+        // What is not one of them, or is short of what it takes, is a
+        // usage error.
+        for words in [
+            &["extension"][..],
+            &["extension", "use"],
+            &["extension", "use", "a.wasm", "b.wasm"],
+            &["extension", "list", "more"],
+            &["extension", "swap", "a.wasm"],
+        ] {
+            assert!(parsed(words).is_err(), "{words:?}");
         }
     }
 

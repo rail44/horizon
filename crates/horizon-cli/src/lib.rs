@@ -102,6 +102,11 @@ pub fn run(
     if let cli::Subcommand::New { directory, .. } = &mut parsed.subcommand {
         *directory = std::env::current_dir().unwrap_or_default();
     }
+    // `extension use`: the file is a path from where the caller is.
+    if let cli::Subcommand::ExtensionUse { file } = &mut parsed.subcommand {
+        let from = std::env::current_dir().unwrap_or_default();
+        *file = from.join(&*file).to_string_lossy().into_owned();
+    }
 
     let resolved_split = match cli::resolved_split_for(&parsed.subcommand, env_session_id.clone()) {
         Ok(resolved) => resolved,

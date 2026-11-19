@@ -51,6 +51,15 @@ pub enum Command {
         provider: String,
         model: String,
     },
+    /// Takes the extension whose component is `file` in place of the one
+    /// of its name, until it is reset or the app restarts.
+    ExtensionUse {
+        file: PathBuf,
+    },
+    /// Lets go of what `ExtensionUse` took in: the one named, or all.
+    ExtensionReset {
+        name: Option<String>,
+    },
 }
 
 pub fn parse(invoke: &Invoke) -> Result<Command, String> {
@@ -97,6 +106,12 @@ pub fn parse(invoke: &Invoke) -> Result<Command, String> {
             session_id: session_id_arg(args, "session_id")?,
             provider: nonempty_string_arg(args, "provider")?,
             model: nonempty_string_arg(args, "model")?,
+        },
+        "extension-use" => Command::ExtensionUse {
+            file: nonempty_string_arg(args, "file")?.into(),
+        },
+        "extension-reset" => Command::ExtensionReset {
+            name: optional_string_arg(args, "name")?,
         },
         "reload-agent-runtime" => Command::Execute(CommandId::ReloadAgentRuntime),
         "reload-terminal-runtime" => Command::Execute(CommandId::ReloadTerminalRuntime),
@@ -344,6 +359,30 @@ mod tests {
             parse(&Invoke { command: "set-model".into(), args: serde_json::json!({
             "session_id": uuid::Uuid::nil().to_string(), "provider": "p", "model": "m",
         }) }).unwrap(), Command::SetModel { provider, model, .. } if provider == "p" && model == "m"
+        );
+    }
+
+    #[test]
+    fn the_extension_commands_take_a_file_and_a_name_that_may_be_left_out() {
+        let parsed = |command: &str, args: serde_json::Value| {
+            parse(&Invoke {
+                command: command.into(),
+                args,
+            })
+        };
+        std::assert_matches!(
+            parsed("extension-use", serde_json::json!({ "file": "/work/a.wasm" })).unwrap(),
+            Command::ExtensionUse { file } if file == std::path::Path::new("/work/a.wasm")
+        );
+        assert!(parsed("extension-use", serde_json::json!({})).is_err());
+        assert!(parsed("extension-use", serde_json::json!({ "file": "" })).is_err());
+        std::assert_matches!(
+            parsed("extension-reset", serde_json::json!({ "name": "sessions" })).unwrap(),
+            Command::ExtensionReset { name: Some(name) } if name == "sessions"
+        );
+        std::assert_matches!(
+            parsed("extension-reset", serde_json::json!({ "name": null })).unwrap(),
+            Command::ExtensionReset { name: None }
         );
     }
 

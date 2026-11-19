@@ -66,7 +66,7 @@ impl Envelope {
 /// (server -> client) are [`EnvelopeBody::HelloAck`],
 /// [`EnvelopeBody::Rejected`], [`EnvelopeBody::Ok`],
 /// [`EnvelopeBody::Error`], [`EnvelopeBody::Sessions`],
-/// [`EnvelopeBody::State`].
+/// [`EnvelopeBody::State`], [`EnvelopeBody::Extensions`].
 ///
 /// [`EnvelopeBody::Unknown`] is this contract's forward-compatibility
 /// escape hatch: an envelope whose `kind` this build doesn't recognize is
@@ -92,6 +92,7 @@ pub enum EnvelopeBody {
     Error(ErrorMessage),
     Sessions(Sessions),
     State(State),
+    Extensions(Extensions),
     /// See [`EnvelopeBody`]'s doc comment. Never constructed by
     /// [`Envelope::new`] callers on purpose -- only
     /// [`crate::wire::read_envelope`] produces this, as the fallback for an
@@ -155,6 +156,26 @@ pub struct Rejected {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ErrorMessage {
     pub message: String,
+}
+
+/// Reply to `Query { what: "extensions" }`, and to the invokes that change
+/// which extensions are loaded (`extension-use`, `extension-reset`): the
+/// extensions as they then are.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Extensions {
+    pub extensions: Vec<ExtensionEntry>,
+}
+
+/// One extension loaded.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExtensionEntry {
+    pub name: String,
+    /// Where it is from: `own` (it comes with the app), `configured` (the
+    /// configuration names its file) or `temporary` (`extension-use` put
+    /// it in, until it is reset or the app restarts).
+    pub source: String,
+    /// Its component's file.
+    pub file: String,
 }
 
 /// Reply to `Query { what: "sessions" }`.

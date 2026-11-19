@@ -40,6 +40,9 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::OpenTerminalInSessionDirectory => "open-terminal-in-session-directory",
         Subcommand::Sessions => "sessions",
         Subcommand::State => "state",
+        Subcommand::ExtensionUse { .. } => "extension-use",
+        Subcommand::ExtensionReset { .. } => "extension-reset",
+        Subcommand::ExtensionList => "extensions",
     }
 }
 
@@ -185,6 +188,15 @@ pub fn to_request(
             what: command_name.to_string(),
         }),
         Subcommand::State => Request::Query(Query {
+            what: command_name.to_string(),
+        }),
+        Subcommand::ExtensionUse { file } => {
+            invoke(command_name, serde_json::json!({ "file": file }))
+        }
+        Subcommand::ExtensionReset { name } => {
+            invoke(command_name, serde_json::json!({ "name": name }))
+        }
+        Subcommand::ExtensionList => Request::Query(Query {
             what: command_name.to_string(),
         }),
     }
@@ -598,5 +610,31 @@ mod tests {
         std::assert_matches!(
             to_request(&Subcommand::State, None, None),
             Request::Query(q) if q.what == "state");
+    }
+
+    #[test]
+    fn the_extension_commands_are_two_invokes_and_a_query() {
+        let Request::Invoke(used) = to_request(
+            &Subcommand::ExtensionUse {
+                file: "/work/a.wasm".to_string(),
+            },
+            None,
+            None,
+        ) else {
+            panic!("an invoke");
+        };
+        assert_eq!(used.command, "extension-use");
+        assert_eq!(used.args, serde_json::json!({ "file": "/work/a.wasm" }));
+        let Request::Invoke(reset) =
+            to_request(&Subcommand::ExtensionReset { name: None }, None, None)
+        else {
+            panic!("an invoke");
+        };
+        assert_eq!(reset.command, "extension-reset");
+        assert_eq!(reset.args, serde_json::json!({ "name": null }));
+        let Request::Query(listed) = to_request(&Subcommand::ExtensionList, None, None) else {
+            panic!("a query");
+        };
+        assert_eq!(listed.what, "extensions");
     }
 }

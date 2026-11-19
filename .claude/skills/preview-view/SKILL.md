@@ -1,6 +1,6 @@
 ---
 name: preview-view
-description: Use when writing or changing an extension's view in Horizon and you want it shown to the owner from the branch you are on - building the extension, checking it windowlessly, and showing it in a preview pane of the running Horizon. Trigger words: preview a view, preview pane, show the view to the owner, view feedback, horizon preview, extension being written.
+description: Use when writing or changing an extension's view in Horizon and you want it shown to the owner from the branch you are on - building the extension, checking it windowlessly, and showing it in the running Horizon, in a preview pane or in place of the one in use. Trigger words: preview a view, preview pane, show the view to the owner, view feedback, horizon preview, extension being written, horizon extension use, try an extension.
 ---
 
 # Showing an extension that is being written
@@ -57,6 +57,33 @@ pane it is run in), without taking the focus unless `--active` is given.
 The arguments are what the extension's pane is made from (a file for the
 Markdown view, a page's name for the wiki). The pane reads the file again
 whenever a build replaces it, so the loop after that is edit and build.
-The extension's commands are not carried out in a preview pane, and the
-theme is not given to it. This shows something on a person's screen: do
-it when they have asked to see the view, not as a check of your own.
+The extension's commands are not carried out in a preview pane, and
+nothing the shell lends an extension beyond the document is lent to it:
+not the theme, not the workspace's sessions, not a view over the
+workspace. An extension that asks for one of those stops in a preview
+pane ("the sessions are not given to this plugin").
+
+## Trying it in place of the one in use
+
+For an extension that needs what a preview pane does not lend (the list
+of sessions, the theme settings), or to look at it where the one in use
+is shown (a command's sheet over the workspace, the startup layout):
+
+```sh
+scripts/extensions.sh build
+horizon extension use target/wasm32-wasip2/debug/horizon_<name>_plugin.wasm
+horizon extension list
+horizon extension reset <name>
+```
+
+`use` takes the file's extension in place of the one of its name in the
+Horizon the command reaches, with all an extension is lent; its panes are
+made again, and the file is read again whenever a build replaces it.
+`list` says where each loaded extension is from (`temporary` for one put
+in this way). It stays until `reset` (the `Reset Extensions` command does
+that from the palette) or until Horizon is started again; reading the
+configuration again leaves it in. What it does is real: the list of
+sessions ends real sessions. Reset it when the look is over.
+
+Either way this shows something on a person's screen: do it when they
+have asked to see the view, not as a check of your own.

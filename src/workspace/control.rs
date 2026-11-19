@@ -37,26 +37,53 @@ impl Shell {
         request: &ControlRequest,
         reply: impl FnOnce(EnvelopeBody) + Send + 'static,
     ) {
-        if let ControlRequest::Invoke(invoke) = request
-            && let Ok(Command::SetModel {
+        let later = match request {
+            ControlRequest::Invoke(invoke) => control_invoke::parse(invoke).ok(),
+            ControlRequest::Query(_) => None,
+        };
+        match later {
+            Some(Command::SetModel {
                 session_id,
                 provider,
                 model,
-            }) = control_invoke::parse(invoke)
-        {
-            let Some(models) = self.kept().models.clone() else {
-                reply(error_body("the agent runtime is not running"));
-                return;
-            };
-            std::thread::spawn(move || {
-                reply(match models.switch(session_id, &provider, &model) {
-                    Ok(()) => EnvelopeBody::Ok { session_id: None },
-                    Err(error) => error_body(format!("model switch failed: {error}")),
+            }) => {
+                let Some(models) = self.kept().models.clone() else {
+                    reply(error_body("the agent runtime is not running"));
+                    return;
+                };
+                std::thread::spawn(move || {
+                    reply(match models.switch(session_id, &provider, &model) {
+                        Ok(()) => EnvelopeBody::Ok { session_id: None },
+                        Err(error) => error_body(format!("model switch failed: {error}")),
+                    });
                 });
-            });
-            return;
+            }
+            // (Answered once the components are read, off the UI thread.)
+            Some(Command::ExtensionUse { file }) => {
+                self.use_extension(file, move |shell, used| {
+                    reply(match used {
+                        Ok(_) => shell.extensions_body(),
+                        Err(error) => error_body(error),
+                    });
+                });
+            }
+            Some(Command::ExtensionReset { name }) => {
+                let reply = std::sync::Arc::new(std::sync::Mutex::new(Some(reply)));
+                let answered = reply.clone();
+                let reset = self.reset_extensions(name.as_deref(), move |shell| {
+                    if let Some(reply) = answered.lock().unwrap().take() {
+                        reply(shell.extensions_body());
+                    }
+                });
+                // (Refused, nothing is read and the answer is this one.)
+                if let Err(error) = reset
+                    && let Some(reply) = reply.lock().unwrap().take()
+                {
+                    reply(error_body(error));
+                }
+            }
+            _ => reply(self.control(request)),
         }
-        reply(self.control(request));
     }
 
     fn invoke(&self, command: Command) -> Result<EnvelopeBody, String> {
@@ -336,6 +363,7 @@ impl Shell {
 
     fn query(&self, query: &Query) -> EnvelopeBody {
         match query.what.as_str() {
+            "extensions" => self.extensions_body(),
             "sessions" => EnvelopeBody::Sessions(Sessions {
                 sessions: self.model.with_untracked(|model| {
                     (model.session_summaries().into_iter())

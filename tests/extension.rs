@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use horizon::workspace::{Opening, Placement, Shell, Spawn, css, view};
-use horizon_control::contract::{EnvelopeBody, Invoke};
+use horizon_control::contract::{EnvelopeBody, Invoke, Query};
 use horizon_control::host::executor::ControlRequest;
 use horizon_terminal_core::TerminalSize;
 use horizon_ui::App;
@@ -184,6 +184,35 @@ impl Opened {
         self.app.run_effects();
         self.app.resolve();
         answer
+    }
+
+    /// Asks the shell as the command line does for what is answered once
+    /// work off the UI thread is done, and waits for the answer.
+    fn answered(&self, command: &str, args: serde_json::Value) -> EnvelopeBody {
+        let (answer, answers) = std::sync::mpsc::channel();
+        let request = ControlRequest::Invoke(Invoke {
+            command: command.to_string(),
+            args,
+        });
+        (self.shell).control_answering(&request, move |body| _ = answer.send(body));
+        let body = std::cell::RefCell::new(None);
+        self.until(command, || {
+            let mut body = body.borrow_mut();
+            if body.is_none() {
+                *body = answers.try_recv().ok();
+            }
+            body.is_some()
+        });
+        body.into_inner().expect("an answer")
+    }
+
+    /// The extensions loaded, as `horizon extension list` is told them:
+    /// each one's name with where it is from and its file.
+    fn extensions(&self) -> Vec<(String, String, PathBuf)> {
+        let answer = self.shell.control(&ControlRequest::Query(Query {
+            what: "extensions".to_string(),
+        }));
+        listed(&answer)
     }
 
     /// `horizon new markdown <file>`, from `directory`.
@@ -807,6 +836,129 @@ fn a_pane_of_an_extension_waits_for_the_extensions_to_be_read() {
     opened.until("the extensions", || opened.shell.extensions_read());
     opened.until("the file", || opened.text().contains("One"));
     assert!(!opened.text().contains("Reading this view's plugin."));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The extensions an answer says are loaded.
+fn listed(answer: &EnvelopeBody) -> Vec<(String, String, PathBuf)> {
+    let EnvelopeBody::Extensions(extensions) = answer else {
+        panic!("the extensions, not {answer:?}");
+    };
+    (extensions.extensions.iter())
+        .map(|entry| {
+            (
+                entry.name.clone(),
+                entry.source.clone(),
+                PathBuf::from(&entry.file),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn an_extension_is_used_from_its_file_for_now_in_place_of_the_one_of_its_name() {
+    let directory = std::env::temp_dir().join(format!("hzb-ext-use-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    // A build of the Markdown view that is not the shell's own: its title
+    // tells them apart.
+    let tried = directory.join("tried.wasm");
+    std::fs::write(&tried, retitled(&component())).unwrap();
+    // (The configuration read again names another extension, which says
+    // when it has been read.)
+    let named = fixture().to_string_lossy().into_owned();
+    let reload = Box::new(move || {
+        Ok(horizon_config::RawConfig {
+            extensions: vec![named.clone()],
+            ..horizon_config::RawConfig::default()
+        })
+    });
+    let opened = open_with(Opening {
+        reload: Some(reload),
+        ..Opening::default()
+    });
+    let of = |name: &str| {
+        (opened.extensions().into_iter())
+            .find(|(named, ..)| named == name)
+            .map(|(_, source, file)| (source, file))
+    };
+    // (The chooser lists what is loaded by its title.)
+    let titled = |title: &str| {
+        opened.shell.execute(CommandId::NewTab);
+        opened.app.run_effects();
+        opened.app.resolve();
+        let listed = opened.text().contains(title);
+        opened.key(Key::Named(NamedKey::Escape));
+        opened.app.run_effects();
+        opened.app.resolve();
+        listed
+    };
+    assert_eq!(of("markdown"), Some(("own".to_string(), component())));
+    assert!(titled("Markdown") && !titled("Notebook"));
+
+    // Used: the file's in place of the shell's own, and said so.
+    let args = serde_json::json!({ "file": tried.to_string_lossy() });
+    let answer = opened.answered("extension-use", args.clone());
+    assert!(
+        listed(&answer).contains(&(
+            "markdown".to_string(),
+            "temporary".to_string(),
+            tried.clone()
+        )),
+        "{answer:?}"
+    );
+    assert_eq!(
+        of("markdown"),
+        Some(("temporary".to_string(), tried.clone()))
+    );
+    assert!(titled("Notebook") && !titled("Markdown"));
+    assert_eq!(opened.extensions().len(), 4);
+
+    // A file that is no extension is refused, and nothing changes.
+    let none = directory.join("none.wasm");
+    std::fs::write(&none, b"not a component").unwrap();
+    let refused = opened.answered(
+        "extension-use",
+        serde_json::json!({ "file": none.to_string_lossy() }),
+    );
+    std::assert_matches!(refused, EnvelopeBody::Error { .. });
+    assert_eq!(
+        of("markdown"),
+        Some(("temporary".to_string(), tried.clone()))
+    );
+
+    // The configuration read again leaves it in.
+    opened.shell.execute(CommandId::ReloadConfig);
+    opened.until("the configuration's extension", || of("fixture").is_some());
+    assert_eq!(
+        of("fixture").map(|(source, _)| source).as_deref(),
+        Some("configured")
+    );
+    assert_eq!(
+        of("markdown"),
+        Some(("temporary".to_string(), tried.clone()))
+    );
+
+    // Reset by its name: the shell's own again. One that is not in use
+    // for now is refused.
+    let refused = opened.answered("extension-reset", serde_json::json!({ "name": "wiki" }));
+    std::assert_matches!(refused, EnvelopeBody::Error { .. });
+    let answer = opened.answered("extension-reset", serde_json::json!({ "name": "markdown" }));
+    assert!(
+        listed(&answer).contains(&("markdown".to_string(), "own".to_string(), component())),
+        "{answer:?}"
+    );
+    assert!(titled("Markdown") && !titled("Notebook"));
+
+    // Used again, and let go of by the shell's own command.
+    opened.answered("extension-use", args);
+    assert_eq!(
+        of("markdown"),
+        Some(("temporary".to_string(), tried.clone()))
+    );
+    opened.shell.execute(CommandId::ResetExtensions);
+    opened.until("the shell's own", || {
+        of("markdown") == Some(("own".to_string(), component()))
+    });
     let _ = std::fs::remove_dir_all(&directory);
 }
 

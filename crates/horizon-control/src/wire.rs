@@ -15,8 +15,8 @@ use std::io::{BufRead, Write};
 use serde::Deserialize;
 
 use crate::contract::{
-    CONTROL_VERSION, Envelope, EnvelopeBody, ErrorMessage, Hello, HelloAck, Invoke, Query,
-    Rejected, Sessions, State,
+    CONTROL_VERSION, Envelope, EnvelopeBody, ErrorMessage, Extensions, Hello, HelloAck, Invoke,
+    Query, Rejected, Sessions, State,
 };
 
 /// Explicit, non-panicking failure modes for [`read_envelope`]. Unlike
@@ -110,6 +110,9 @@ fn parse_line(line: &str) -> Result<Envelope, WireError> {
         "error" => EnvelopeBody::Error(serde_json::from_value::<ErrorMessage>(raw.payload)?),
         "sessions" => EnvelopeBody::Sessions(serde_json::from_value::<Sessions>(raw.payload)?),
         "state" => EnvelopeBody::State(serde_json::from_value::<State>(raw.payload)?),
+        "extensions" => {
+            EnvelopeBody::Extensions(serde_json::from_value::<Extensions>(raw.payload)?)
+        }
         other => EnvelopeBody::Unknown {
             kind: other.to_string(),
             payload: raw.payload,

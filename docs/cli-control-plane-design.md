@@ -162,6 +162,39 @@ plugin the cursor's pane shows, by the name the palette lists it under
 (`horizon back`): the same commands, delivered the same way, as inside
 Horizon. The client's own subcommands come first.
 
+## Extensions on the command line
+
+An extension still being written is tried where the one in use is (board
+#89):
+
+```
+horizon extension use <extension.wasm>
+horizon extension reset [<name>]
+horizon extension list
+```
+
+- `use` takes the extension whose component is the file in place of the
+  one of its name -- the shell's own, or the configuration's -- with all
+  the shell gives an extension (the workspace's sessions, the theme, a
+  view over the workspace), which a preview pane does not
+  (`docs/preview-pane-design.md`). The file is a path from where the
+  command is run. Its panes are made again; it is read again whenever it
+  is built again, as any extension is.
+- It stays until `reset` or until Horizon is started again: it is not
+  saved. Reading the configuration again leaves it in.
+- `reset` lets go of the one named, or of all, and what was there before
+  is loaded again: the configuration's of that name, or else the shell's
+  own. The `Reset Extensions` command does the same for all of them from
+  the palette.
+- `list` says each extension loaded on a line: its name, where it is from
+  (`own`, `configured` or `temporary`) and its file.
+
+`use` and `reset` are answered once the components are read, off the UI
+thread, with the extensions as they then are; a component that does not
+load is the error the command prints, and nothing changes. The requests
+are `extension-use { file }` and `extension-reset { name }` as invokes
+and `extensions` as a query; the reply is an `extensions` body.
+
 ## Deferred
 
 - **Subscription streams** — v2, additive (see above).

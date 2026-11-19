@@ -324,7 +324,11 @@ running Horizon, from its component's file: `horizon new preview
 <extension.wasm> <arguments>` (`docs/preview-pane-design.md`), which reads
 the file again whenever it is built again. That is how an agent asks a
 person to look at a view; the components' gallery (`plugins/gallery`) is
-looked at the same way. What the host does for a guest is tested through
+looked at the same way. A preview pane lends an extension nothing beyond
+the document, so one that asks for the sessions or the theme is tried in
+place of the one of its name instead: `horizon extension use
+<extension.wasm>`, until `horizon extension reset` or a restart
+(`docs/cli-control-plane-design.md`). What the host does for a guest is tested through
 the preview pane with the fixture extension (`plugins/fixture`,
 `tests/preview.rs`). A view of the shell's own (the board, the terminal,
 the agent) is not shown this way.
