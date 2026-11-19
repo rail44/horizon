@@ -1105,6 +1105,10 @@ fn a_shell_with_nothing_happening_has_nothing_to_draw() {
     let opened = open();
     let pane = opened.panes()[0];
     opened.prompt(pane);
+    // The extensions are read off the page's thread from when the shell is
+    // drawn, and their coming in is something to draw: waited for here,
+    // or it may come while nothing is to happen.
+    opened.until("the extensions read", || opened.shell.extensions_read());
     let Opened { app, shell } = opened;
     // As the window's own wiring does: the waker is handed over once.
     let handed = std::cell::Cell::new(false);

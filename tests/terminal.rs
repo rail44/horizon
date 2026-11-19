@@ -103,6 +103,23 @@ impl Opened {
         }
     }
 
+    /// Lays out until `met` holds.
+    fn until(&self, what: &str, met: impl Fn() -> bool) {
+        let started = Instant::now();
+        loop {
+            self.app.resolve();
+            if met() {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "no {what} in:\n{}",
+                self.terminal.text()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     fn key(&self, key: keyboard_types::Key, modifiers: keyboard_types::Modifiers) {
         let text = match &key {
             keyboard_types::Key::Character(text) if modifiers.is_empty() => Some(text.as_str()),
@@ -974,9 +991,13 @@ fn a_notch_of_the_wheel_is_one_report_to_a_program_that_asked_for_the_mouse() {
     // A program that asks for the mouse, in SGR's form, and reads what it
     // is sent: the terminal's own echo shows each report as it is written.
     opened.run(r"clear; printf '\033[?1000h\033[?1006h'; cat");
-    opened.wait("the screen cleared", |text| !text.contains("clear"));
-    std::thread::sleep(Duration::from_millis(200));
-    opened.app.resolve();
+    // The wheel is the program's once the frame the view has says it
+    // asked for the mouse: before that it scrolls the history, and nothing
+    // is reported. (The program asks some time after the screen is
+    // cleared, as long after as the machine takes to start it.)
+    opened.until("the mouse asked for", || {
+        (opened.terminal.frame()).is_some_and(|frame| frame.mouse_reporting)
+    });
 
     move_to(&opened.app, 300., 200.);
     opened.app.dispatch(UiEvent::Wheel(BlitzWheelEvent {
