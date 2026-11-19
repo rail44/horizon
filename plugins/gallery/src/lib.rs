@@ -13,8 +13,10 @@
 
 #[horizon_ui::plugin(name = "components", title = "Components")]
 mod gallery {
-    pub fn mount() -> u64 {
-        let mounted = horizon_ui::guest::mount(|| Some(horizon_components::gallery()));
-        mounted.unwrap_or_default()
+    pub mod pane {
+        pub fn mount() -> u64 {
+            let mounted = horizon_ui::guest::mount(|| Some(horizon_components::gallery()));
+            mounted.unwrap_or_default()
+        }
     }
 }

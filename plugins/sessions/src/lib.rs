@@ -13,8 +13,10 @@ mod view;
 
 #[horizon_ui::plugin(name = "sessions", title = "Sessions")]
 mod sessions {
-    pub fn mount() -> u64 {
-        let mounted = horizon_ui::guest::mount(|| Some(crate::view::view()));
-        mounted.unwrap_or_default()
+    pub mod pane {
+        pub fn mount() -> u64 {
+            let mounted = horizon_ui::guest::mount(|| Some(crate::view::view()));
+            mounted.unwrap_or_default()
+        }
     }
 }

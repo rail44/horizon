@@ -49,13 +49,25 @@ fn manifest_in(bytes: &[u8]) -> Option<String> {
 #[serde(deny_unknown_fields)]
 struct Manifest {
     plugin: ManifestPlugin,
+    /// The extension's own commands, by their names.
+    #[serde(default)]
+    commands: BTreeMap<String, ManifestCommand>,
+    /// Of the view a pane shows, if it has one.
+    #[serde(default)]
+    pane: ManifestPane,
+    #[serde(default)]
+    access: Access,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestPane {
+    /// The view's commands, by their names.
     #[serde(default)]
     commands: BTreeMap<String, ManifestCommand>,
     /// How each parameter of `create` is asked for, by the parameter's name.
     #[serde(default)]
     create: BTreeMap<String, ManifestParameter>,
-    #[serde(default)]
-    access: Access,
 }
 
 #[derive(Default, Deserialize)]
@@ -136,6 +148,12 @@ pub struct ExtensionCommand {
 pub struct Extension {
     pub name: &'static str,
     pub title: String,
+    /// Whether it has a view a pane shows (`pane`). One without is its
+    /// own commands only.
+    pub pane: bool,
+    /// The commands of a pane that shows its view (`pane-commands`).
+    pub pane_commands: Vec<ExtensionCommand>,
+    /// Its own commands, which need no pane (`commands`).
     pub commands: Vec<ExtensionCommand>,
     /// What a new pane of it is made from, if it says (`create`): what
     /// `create` takes, in order.
@@ -185,12 +203,17 @@ fn kept(text: String) -> &'static str {
 }
 
 /// What a component declares of itself, read from its type.
+#[derive(Default)]
 struct Shape {
+    /// Whether it exports `pane` with a `mount` in it.
+    pane: bool,
     /// The type `state` gives: what a pane keeps of the extension, if
     /// its panes keep anything.
     state: Option<Type>,
-    /// The commands its `commands` interface exports, in the order they
-    /// were read.
+    /// The commands its `pane-commands` interface exports, in the order
+    /// they were read.
+    pane_commands: Vec<String>,
+    /// Those of its `commands` interface.
     commands: Vec<String>,
     /// What `create` takes, in order, if it exports one. (A file's
     /// `extensions` are the manifest's to say.)
@@ -217,68 +240,86 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
             })
     };
     let (file, working_directory) = (resource("file"), resource("working-directory"));
-    let mut state = None;
-    let mut creates = None;
-    let mut commands = Vec::new();
-    let mut mount = false;
+    // What `create` takes, as the host asks for each.
+    let created = |function: &wasmtime::component::types::ComponentFunc| {
+        let mut taken = Vec::new();
+        for (name, ty) in function.params() {
+            let name = name.to_string();
+            taken.push(match ty {
+                Type::Own(resource) if Some(&resource) == file.as_ref() => Parameter::File {
+                    name,
+                    extensions: Vec::new(),
+                },
+                Type::Own(resource) if Some(&resource) == working_directory.as_ref() => {
+                    Parameter::WorkingDirectory
+                }
+                Type::String => Parameter::Text {
+                    name,
+                    optional: false,
+                },
+                Type::Option(inner) if inner.ty() == Type::String => Parameter::Text {
+                    name,
+                    optional: true,
+                },
+                _ => {
+                    return Err(format!(
+                        "`create` takes `{name}`, which the host has no way to ask for: a \
+                         file, a text or where the pane was asked for"
+                    ));
+                }
+            });
+        }
+        let files = (taken.iter())
+            .filter(|parameter| matches!(parameter, Parameter::File { .. }))
+            .count();
+        if files > 1 {
+            return Err("`create` takes more than one file".to_string());
+        }
+        Ok(taken)
+    };
+    // The commands an interface exports.
+    let commands_of = |instance: &wasmtime::component::types::ComponentInstance| {
+        let mut commands = Vec::new();
+        for (command, item) in instance.exports(engine) {
+            let ComponentItem::ComponentFunc(function) = item.ty else {
+                continue;
+            };
+            if function.params().next().is_some() {
+                return Err(format!(
+                    "the command `{command}` takes parameters, which an extension's commands \
+                     cannot yet"
+                ));
+            }
+            commands.push(command.to_string());
+        }
+        Ok(commands)
+    };
+    let mut shape = Shape::default();
     let mut events = false;
     for (name, item) in exported.exports(engine) {
         match (name, item.ty) {
-            ("mount", ComponentItem::ComponentFunc(_)) => mount = true,
-            ("state", ComponentItem::ComponentFunc(function)) => {
-                state = function.results().next();
+            ("pane", ComponentItem::ComponentInstance(instance)) => {
+                for (name, item) in instance.exports(engine) {
+                    match (name, item.ty) {
+                        ("mount", ComponentItem::ComponentFunc(_)) => shape.pane = true,
+                        ("state", ComponentItem::ComponentFunc(function)) => {
+                            shape.state = function.results().next();
+                        }
+                        ("create", ComponentItem::ComponentFunc(function)) => {
+                            shape.creates = Some(created(&function)?);
+                        }
+                        _ => {}
+                    }
+                }
+                if !shape.pane {
+                    return Err("the component's `pane` exports no `mount`".to_string());
+                }
             }
-            ("create", ComponentItem::ComponentFunc(function)) => {
-                let mut taken = Vec::new();
-                for (name, ty) in function.params() {
-                    let name = name.to_string();
-                    taken.push(match ty {
-                        Type::Own(resource) if Some(&resource) == file.as_ref() => {
-                            Parameter::File {
-                                name,
-                                extensions: Vec::new(),
-                            }
-                        }
-                        Type::Own(resource) if Some(&resource) == working_directory.as_ref() => {
-                            Parameter::WorkingDirectory
-                        }
-                        Type::String => Parameter::Text {
-                            name,
-                            optional: false,
-                        },
-                        Type::Option(inner) if inner.ty() == Type::String => Parameter::Text {
-                            name,
-                            optional: true,
-                        },
-                        _ => {
-                            return Err(format!(
-                                "`create` takes `{name}`, which the host has no way to ask for: \
-                                 a file, a text or where the pane was asked for"
-                            ));
-                        }
-                    });
-                }
-                let files = (taken.iter())
-                    .filter(|parameter| matches!(parameter, Parameter::File { .. }))
-                    .count();
-                if files > 1 {
-                    return Err("`create` takes more than one file".to_string());
-                }
-                creates = Some(taken);
+            ("pane-commands", ComponentItem::ComponentInstance(instance)) => {
+                shape.pane_commands = commands_of(&instance)?;
             }
             ("commands", ComponentItem::ComponentInstance(instance)) => {
-                for (command, item) in instance.exports(engine) {
-                    let ComponentItem::ComponentFunc(function) = item.ty else {
-                        continue;
-                    };
-                    if function.params().next().is_some() {
-                        return Err(format!(
-                            "the command `{command}` takes parameters, which an extension's \
-                             commands cannot yet"
-                        ));
-                    }
-                    commands.push(command.to_string());
-                }
+                shape.commands = commands_of(&instance)?;
             }
             (name, ComponentItem::ComponentInstance(_))
                 if name.starts_with("horizon:ui/events") =>
@@ -288,17 +329,16 @@ fn shape_of(compiled: &Compiled) -> Result<Shape, String> {
             _ => {}
         }
     }
-    if !mount {
-        return Err("the component exports no `mount`".to_string());
+    if !shape.pane && shape.commands.is_empty() {
+        return Err("the component exports no `pane`, and no command of its own".to_string());
+    }
+    if !shape.pane && !shape.pane_commands.is_empty() {
+        return Err("the component exports `pane-commands` and no `pane`".to_string());
     }
     if !events {
         return Err("the component does not export `horizon:ui/events`".to_string());
     }
-    Ok(Shape {
-        state,
-        commands,
-        creates,
-    })
+    Ok(shape)
 }
 
 /// Holds the commands the component exports and the ones the manifest
@@ -337,34 +377,41 @@ impl Extension {
             format!("it asks of the host what this Horizon does not offer: {error}")
         })?;
         let Shape {
+            pane,
             state,
+            pane_commands,
             commands,
             mut creates,
         } = shape_of(&compiled)?;
+        match_commands(&pane_commands, &manifest.pane.commands)?;
         match_commands(&commands, &manifest.commands)?;
         // (What the manifest says of how `create`'s file is asked for.)
         for parameter in creates.iter_mut().flatten() {
             if let Parameter::File { name, extensions } = parameter {
-                *extensions = (manifest.create.remove(name.as_str()))
+                *extensions = (manifest.pane.create.remove(name.as_str()))
                     .unwrap_or_default()
                     .extensions;
             }
         }
-        if let Some(name) = manifest.create.keys().next() {
+        if let Some(name) = manifest.pane.create.keys().next() {
             return Err(format!("`create` has no file parameter `{name}`"));
         }
-        let commands = (manifest.commands.into_iter())
-            .map(|(name, command)| ExtensionCommand {
-                name: kept(name),
-                title: kept(command.title),
-                description: kept(command.description),
-                destructive: command.destructive,
-            })
-            .collect();
+        let listed = |commands: BTreeMap<String, ManifestCommand>| {
+            (commands.into_iter())
+                .map(|(name, command)| ExtensionCommand {
+                    name: kept(name),
+                    title: kept(command.title),
+                    description: kept(command.description),
+                    destructive: command.destructive,
+                })
+                .collect()
+        };
         Ok(Self {
             name: kept(manifest.plugin.name),
             title: manifest.plugin.title,
-            commands,
+            pane,
+            pane_commands: listed(manifest.pane.commands),
+            commands: listed(manifest.commands),
             creates,
             file: file.to_path_buf(),
             compiled,
@@ -421,11 +468,20 @@ impl Extension {
         })
     }
 
+    /// Refuses a pane of an extension that is its own commands only.
+    fn shown_in_a_pane(&self) -> Result<(), String> {
+        match self.pane {
+            true => Ok(()),
+            false => Err(format!("`{}` has no view a pane shows", self.name)),
+        }
+    }
+
     /// The state of a new pane, as text, made from what was `given` on
     /// the command line: a file is a path from where it was run, a text
     /// the next argument. `None` for an extension whose panes are made
     /// from nothing.
     pub fn created_from(self: &Arc<Self>, given: &mut Given) -> Result<Option<String>, String> {
+        self.shown_in_a_pane()?;
         let Some(parameters) = &self.creates else {
             return Ok(None);
         };
@@ -456,6 +512,7 @@ impl Extension {
         file: Option<PathBuf>,
         directory: &Path,
     ) -> Result<Option<String>, String> {
+        self.shown_in_a_pane()?;
         let Some(parameters) = &self.creates else {
             return Ok(None);
         };
@@ -489,7 +546,7 @@ impl Extension {
             (self.instantiate(Asks::default(), Wake::default(), failed)).and_then(|running| {
                 let state = running.loaded.call(|plugin, accessor| {
                     Box::pin(async move {
-                        let create = function(plugin, accessor, None, "create")?;
+                        let create = function(plugin, accessor, Some("pane"), "create")?;
                         let mut values = Vec::new();
                         for handed in handed {
                             values.push(match handed {
@@ -559,7 +616,7 @@ impl Running {
         };
         let root = self.loaded.call(|plugin, accessor| {
             Box::pin(async move {
-                let mount = function(plugin, accessor, None, "mount")?;
+                let mount = function(plugin, accessor, Some("pane"), "mount")?;
                 let mut answer = [Val::U64(0)];
                 (mount.call_concurrent(accessor, &given, &mut answer)).await?;
                 Ok(answer[0].clone())
@@ -576,7 +633,7 @@ impl Running {
         self.extension.state.as_ref()?;
         let value = self.loaded.call(|plugin, accessor| {
             Box::pin(async move {
-                let state = function(plugin, accessor, None, "state")?;
+                let state = function(plugin, accessor, Some("pane"), "state")?;
                 let mut answer = [Val::Bool(false)];
                 state.call_concurrent(accessor, &[], &mut answer).await?;
                 Ok(answer[0].clone())
@@ -585,20 +642,17 @@ impl Running {
         value.to_wave().ok()
     }
 
-    /// Carries out the command named `name`; `false` when there is none.
+    /// Carries out the pane's command named `name`; `false` when there is
+    /// none.
     pub fn run(&self, name: &str) -> bool {
-        if !self
-            .extension
-            .commands
-            .iter()
-            .any(|command| command.name == name)
-        {
+        let commands = &self.extension.pane_commands;
+        if !commands.iter().any(|command| command.name == name) {
             return false;
         }
         let name = name.to_string();
         let ran = self.loaded.call(|plugin, accessor| {
             Box::pin(async move {
-                let command = function(plugin, accessor, Some("commands"), &name)?;
+                let command = function(plugin, accessor, Some("pane-commands"), &name)?;
                 command.call_concurrent(accessor, &[], &mut []).await
             })
         });

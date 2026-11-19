@@ -39,7 +39,11 @@ fn matching(query: &str) -> Vec<(String, Choice)> {
         choices.push((role.title.to_string(), choice));
     }
     choices.push(("Board".to_string(), Choice::Plugin(plugins::list())));
-    for extension in plugins::extensions() {
+    // (One with no view of its own for a pane is its commands only.)
+    for extension in plugins::extensions()
+        .into_iter()
+        .filter(|extension| extension.pane)
+    {
         choices.push((extension.title.clone(), Choice::Extension(extension)));
     }
     let query = query.trim().to_ascii_lowercase();

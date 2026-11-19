@@ -108,7 +108,7 @@ pub(super) fn commands() -> Vec<Listed> {
     commands.extend(listed::<AgentPlugin>());
     EXTENSIONS.with(|kept| {
         for extension in kept.borrow().iter() {
-            commands.extend(extension.commands.iter().map(|command| Listed {
+            commands.extend(extension.pane_commands.iter().map(|command| Listed {
                 plugin: extension.name,
                 name: command.name,
                 title: command.title,
