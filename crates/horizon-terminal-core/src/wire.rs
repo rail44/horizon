@@ -173,11 +173,8 @@ pub trait TerminalHub {
         spec: TerminalSpawnSpec,
     ) -> Result<TerminalAttachment, HubError>;
 
-    /// Attaches to an already-running terminal session. The returned
-    /// attachment's `frames` watch is seeded with the daemon-retained latest
-    /// frame — the structural resync anchor: since v11 the watch's current
-    /// value *is* the latest frame, so there is no baseline to establish and
-    /// no snapshot-then-diffs dance.
+    /// Attaches to an already-running terminal session. A client that
+    /// shows it asks for its state (`TerminalCommand::WantState`).
     async fn attach_terminal(&self, session_id: Uuid) -> Result<TerminalAttachment, HubError>;
 
     /// Flush-and-exit: shuts every hosted terminal down and exits. The

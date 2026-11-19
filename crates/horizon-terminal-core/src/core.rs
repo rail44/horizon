@@ -1,6 +1,7 @@
-//! SPIKE: `TerminalCore` over libghostty-vt in alacritty_terminal's place.
-//! What the type offers is what it offered; what is behind it is the
-//! engine's terminal, its callbacks, and a render state for the cursor.
+//! `TerminalCore`: one terminal, over libghostty-vt. The daemon has one
+//! for each session, and a view has one for each session it shows
+//! (`docs/terminal-stream-design.md`). Behind it are the engine's
+//! terminal, its callbacks, and a render state the rows are read through.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -65,14 +66,12 @@ pub struct TerminalCore {
     shaped: Rc<Cell<render::Shaped>>,
     events: EventSink,
     /// Strips desktop-notification and program-status OSC sequences off the
-    /// PTY stream ahead of the engine (`core::osc_notify`). The engine reads
-    /// both itself; the spike leaves this as it was.
+    /// PTY stream ahead of the engine (`core::osc_notify`).
     osc_notifications: OscNotificationScanner,
     size: Rc<Cell<TerminalSize>>,
     /// When the hold of a synchronized update began, while one is held, and
     /// whether one was let go since it was last asked.
     held_since: Rc<Cell<Option<Instant>>>,
-    released: Rc<Cell<bool>>,
     /// Where a selection began, kept on the text it began on, and its kind.
     anchor: Option<(TrackedGridRef, TerminalSelectionKind)>,
 }
@@ -94,7 +93,7 @@ impl TerminalCore {
         Self::around(terminal, size)
     }
 
-    /// SPIKE Y. A terminal from a state another wrote out
+    /// A terminal from a state another wrote out
     /// ([`Self::state`]): a view's own, which takes in the bytes that
     /// follow that state.
     pub fn from_state(state: &[u8]) -> Option<Self> {
@@ -109,14 +108,14 @@ impl TerminalCore {
         Some(Self::around(terminal, size))
     }
 
-    /// SPIKE Y. The terminal's whole state, for [`Self::from_state`].
+    /// The terminal's whole state, for [`Self::from_state`].
     pub fn state(&mut self) -> Vec<u8> {
         let mut state = Vec::new();
         let _ = self.terminal.encode_snapshot(&mut state);
         state
     }
 
-    /// SPIKE Y. The state as far as the screen and the history nearest
+    /// The state as far as the screen and the history nearest
     /// it (the engine writes the screen first): what a view that fell
     /// behind is sent, small enough to read at once.
     pub fn state_of_the_screen(&mut self) -> Vec<u8> {
@@ -140,7 +139,6 @@ impl TerminalCore {
         let events = EventSink::default();
         let size = Rc::new(Cell::new(size));
         let held_since = Rc::new(Cell::new(None));
-        let released = Rc::new(Cell::new(false));
 
         let sink = events.clone();
         let _ = terminal.on_pty_write(move |_, bytes| sink.pty_write(bytes));
@@ -173,7 +171,7 @@ impl TerminalCore {
         let render = Rc::new(RefCell::new(render::Draw::new()));
         let held_frame = Rc::new(RefCell::new(None));
         let shaped: Rc<Cell<render::Shaped>> = Rc::new(Cell::new(|_| false));
-        let (held, let_go) = (held_since.clone(), released.clone());
+        let held = held_since.clone();
         let (drawn, kept, sized) = (render.clone(), held_frame.clone(), size.clone());
         let shapes = shaped.clone();
         let _ = terminal.on_render_hold(move |terminal, holding| match holding {
@@ -185,7 +183,6 @@ impl TerminalCore {
             false => {
                 held.set(None);
                 kept.borrow_mut().take();
-                let_go.set(true);
             }
         });
 
@@ -198,7 +195,6 @@ impl TerminalCore {
             osc_notifications: OscNotificationScanner::default(),
             size,
             held_since,
-            released,
             anchor: None,
         };
         core.set_color_scheme(TerminalColorScheme::default());
@@ -224,14 +220,14 @@ impl TerminalCore {
         }
     }
 
-    /// SPIKE Y. Takes in bytes the daemon's terminal took in: what a
+    /// Takes in bytes the daemon's terminal took in: what a
     /// view's terminal does with them. What the engine would answer, ring
     /// or copy is the daemon's to do, once, and is let go of here.
     pub fn take_in(&mut self, bytes: &[u8]) {
         let _ = self.write_vt(bytes);
     }
 
-    /// SPIKE Y. Lets a synchronized update's hold go where the daemon's
+    /// Lets a synchronized update's hold go where the daemon's
     /// clock let its terminal's go (`TerminalUpdate::HoldReleased`).
     pub fn release_hold(&mut self) {
         let _ = self.flush_sync_update();
@@ -240,16 +236,9 @@ impl TerminalCore {
     pub(crate) fn write_vt(&mut self, bytes: &[u8]) -> TerminalEvents {
         let scanned = self.osc_notifications.feed(bytes);
         let bytes = scanned.bytes;
-        let held_before = self.held_since.get().is_some();
-        self.released.set(false);
         self.terminal.vt_write(&bytes);
 
-        // Held throughout: what was written is on the engine's screen, and
-        // is not to be shown until the program lets the hold go.
-        let held_throughout =
-            held_before && self.held_since.get().is_some() && !self.released.get();
         let mut events = self.events.drain();
-        events.visible_dirty = !bytes.is_empty() && !held_throughout;
         events.output = bytes.to_vec();
         events.notifications = scanned.notifications;
         for message in scanned.program_status {
@@ -276,9 +265,7 @@ impl TerminalCore {
         let _ = self.terminal.set_mode(Mode::SYNC_OUTPUT, false);
         self.held_since.set(None);
         self.held_frame.borrow_mut().take();
-        let mut events = self.events.drain();
-        events.visible_dirty = true;
-        events
+        self.events.drain()
     }
 
     pub fn resize(&mut self, size: TerminalSize) {

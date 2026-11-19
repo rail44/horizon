@@ -1043,7 +1043,7 @@ fn the_wheel_over_the_window_held_has_the_page_drawn_again() {
     assert_eq!(opened.terminal.scrolled_into(), Some(0.5));
 }
 
-/// SPIKE Y. More output than a view is sent: the daemon stops sending
+/// More output than a view is sent: the daemon stops sending
 /// while the view is behind and sends the terminal's state when it has
 /// caught up, and the view ends with the screen the shell has.
 #[test]

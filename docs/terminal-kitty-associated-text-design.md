@@ -1,5 +1,9 @@
 # Kitty Keyboard Associated Text
 
+> 2026-11-19: `docs/terminal-stream-design.md` で、キーは Horizon 自前のエンコーダではなく
+> libghostty-vt のエンコーダが書くようになり、この文書の実装(適合の表、確定文字を
+> `CSI 0;1;…u` で送る処理)は無くなった。
+
 Status: implemented 2026-07-23 (protocol v13).
 This is the implementation brief for the first correctness slice from
 `horizon-terminal-core`'s resident Kitty keyboard compliance matrix. The

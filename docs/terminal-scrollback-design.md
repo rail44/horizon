@@ -1,5 +1,9 @@
 # Terminal Scrollback — Windowed Overscan Design
 
+> 2026-11-19: `docs/terminal-stream-design.md` で、窓はデーモンが返すものではなく、ビューが
+> 手元の端末からその場で読むものになった(`TerminalCommand::RequestScrollWindow` と
+> `TerminalUpdate::ScrollWindow` は無くなった)。ビュー側の窓の保持と先読みはこの文書のとおり。
+
 Status: implemented through phase 3 on 2026-07-22 as **windowed overscan**
 (owner direction) — the earlier draft's persistent cross-frame cache was
 dropped; see §2.2 for why. The client now holds a shared immutable window,

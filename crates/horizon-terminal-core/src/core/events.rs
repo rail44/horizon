@@ -18,18 +18,14 @@ const OSC52_CLIPBOARD_WRITE_CAP: usize = 256 * 1024;
 #[derive(Clone, Default)]
 pub(crate) struct TerminalEvents {
     pub pty_writes: Vec<Vec<u8>>,
-    /// SPIKE Y. The bytes the terminal took in: what a view's own terminal
+    /// The bytes the terminal took in: what a view's own terminal
     /// is to take in too.
     pub output: Vec<u8>,
     pub title: Option<String>,
     pub bell_count: usize,
-    /// Desktop-notification requests extracted from the raw PTY stream
-    /// during the parser call that produced this batch (OSC 9 / OSC 777
-    /// `notify`, `core::osc_notify`) — the one event family that never
-    /// travels through `EventSink::send_event`, because
-    /// `alacritty_terminal` never parses those codes into `Event`s. Set
-    /// directly by `TerminalCore::write_vt` after `finish_advance`'s
-    /// drain, exactly like `visible_dirty`.
+    /// Desktop-notification requests taken off the PTY stream ahead of
+    /// the engine during the call that produced this batch (OSC 9 / OSC 777
+    /// `notify`, `core::osc_notify`). Set by `TerminalCore::write_vt`.
     pub notifications: Vec<TerminalNotification>,
     /// What the program in the terminal said of its own state (OSC 7501,
     /// `core::program_status`) during the parser call that produced this
@@ -37,35 +33,16 @@ pub(crate) struct TerminalEvents {
     /// report back. Set by `TerminalCore::write_vt`, as `notifications`
     /// is.
     pub program_status: Vec<Option<TerminalProgramStatus>>,
-    /// OSC 52 clipboard-write payloads (`Event::ClipboardStore`) accepted
-    /// this call, already capped at `OSC52_CLIPBOARD_WRITE_CAP` -- see
-    /// `EventSink::send_event`. Both OSC 52 targets alacritty_terminal
-    /// parses (`c` clipboard, `p`/`s` selection) land here uniformly:
-    /// Horizon exposes a single system clipboard (`src/terminal/session.rs`
-    /// applies the write via gpui's `cx.write_to_clipboard`, backed by the
-    /// current OS's native GPUI platform), not a separate
-    /// primary-selection buffer, so there is nothing to
-    /// distinguish between them. OSC 52 *read* (`Event::ClipboardLoad`)
-    /// never reaches here at all -- `TerminalCore::new` configures
-    /// `alacritty_terminal` with `Osc52::OnlyCopy`, so the parser itself
-    /// refuses to ever emit a load event. Rejecting clipboard read access
-    /// from a terminal app is a deliberate security decision (an app could
-    /// otherwise read whatever's on the system clipboard from under the
-    /// user), not something this module has to separately filter.
+    /// OSC 52 clipboard writes the engine reported this call
+    /// (`on_clipboard_write`), each at most `OSC52_CLIPBOARD_WRITE_CAP` --
+    /// see `EventSink::clipboard_write`. Whichever clipboard a program
+    /// names lands here alike: the view writes the system clipboard. An
+    /// OSC 52 *read* is never answered: the core sets the engine no read
+    /// callback, and without one the engine denies reads. Rejecting
+    /// clipboard read access from a terminal app is a deliberate security
+    /// decision (an app could otherwise read whatever's on the system
+    /// clipboard from under the user).
     pub clipboard_writes: Vec<String>,
-    /// Whether the parser call that produced this batch (`write_vt` or
-    /// `flush_sync_update`) actually changed the rendered frame — set by
-    /// those methods themselves after the fact (this field is never
-    /// touched by `EventSink::send_event`, unlike everything else here, so
-    /// it survives `EventSink::drain`'s `Default` reset only because the
-    /// caller overwrites it before returning). `session_loop`'s `pty_rx`
-    /// handler gates its `notify_snapshot` call on this: a PTY chunk that
-    /// lands entirely inside an already-open BSU/ESU synchronized-update
-    /// window (buffered, not yet flushed to the grid) must not steal
-    /// `notify_snapshot`'s immediate slot from the real content that
-    /// flushes later. See `TerminalCore::write_vt`'s doc comment for the
-    /// exact criterion.
-    pub visible_dirty: bool,
 }
 
 impl fmt::Debug for TerminalEvents {
@@ -77,7 +54,6 @@ impl fmt::Debug for TerminalEvents {
             .field("notifications", &self.notifications)
             .field("program_status", &self.program_status)
             .field("clipboard_writes", &self.clipboard_writes)
-            .field("visible_dirty", &self.visible_dirty)
             .finish()
     }
 }

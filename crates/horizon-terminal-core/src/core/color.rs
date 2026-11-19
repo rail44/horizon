@@ -77,10 +77,8 @@ pub struct TerminalColorScheme {
     pub bright_white: Rgb,
 }
 
-/// Schema stand-in for `alacritty_terminal::vte::ansi::Rgb`, which
-/// (de)serializes as a plain `{r, g, b}` u8 struct but is external and
-/// cannot derive `JsonSchema` itself. Kept byte-for-byte in sync with that
-/// serde shape; the wire-schema artifact sees this in its place.
+/// The wire schema's [`Rgb`]: a plain `{r, g, b}` u8 struct, kept in sync
+/// with its serde shape.
 #[derive(JsonSchema)]
 #[schemars(rename = "Rgb")]
 #[expect(dead_code)]
@@ -178,8 +176,7 @@ impl TerminalColorScheme {
     }
 }
 
-/// A color of the scheme. (alacritty_terminal's `Rgb` stood here: the same
-/// three fields, so the same on the wire.)
+/// A color of the scheme.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Rgb {
     pub r: u8,

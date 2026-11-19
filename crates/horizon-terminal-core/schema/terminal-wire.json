@@ -92,7 +92,7 @@
       ]
     },
     "KeyEventKind": {
-      "description": "Classifies a key event per the Kitty keyboard protocol's \"event types\"\n(<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, gated on the\n`REPORT_EVENT_TYPES` progressive-enhancement flag): an initial press, an\nOS/winit-synthesized repeat while the key is held, or a release.\n\nThreaded from `src/terminal/mod.rs`'s key handling (where gpui's\n`KeyDownEvent`/`KeyUpEvent` and its `is_held` repeat flag are classified)\ndown through `TerminalCommand::Key` to\n`terminal::core::TerminalCore::encode_key` and\n`terminal::protocol::kitty_keyboard`, which is the only place a\nnon-`Press` kind changes the bytes actually sent — see that module's doc\nfor how (and when) it does.",
+      "description": "Classifies a key event per the Kitty keyboard protocol's \"event types\"\n(<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, gated on the\n`REPORT_EVENT_TYPES` progressive-enhancement flag): an initial press, an\nOS/winit-synthesized repeat while the key is held, or a release.\n\nThreaded from the view's key handling to `TerminalCore::key_stroke`,\nwhere the engine's encoder writes a repeat or a release differently\nfrom a press only where the program asked for event types.",
       "enum": [
         "Press",
         "Repeat",
@@ -141,7 +141,7 @@
       ]
     },
     "Rgb": {
-      "description": "Schema stand-in for `alacritty_terminal::vte::ansi::Rgb`, which\n(de)serializes as a plain `{r, g, b}` u8 struct but is external and\ncannot derive `JsonSchema` itself. Kept byte-for-byte in sync with that\nserde shape; the wire-schema artifact sees this in its place.",
+      "description": "The wire schema's [`Rgb`]: a plain `{r, g, b}` u8 struct, kept in sync\nwith its serde shape.",
       "properties": {
         "b": {
           "format": "uint8",
@@ -419,7 +419,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Re-pushes the host's live theme-derived color scheme into a\n*running* session's `TerminalCore` (`TerminalCore::set_color_scheme`),\nso a subsequent OSC 10/11/12 query reply reflects a live theme apply\n(`Reload Config` / the theme settings view) instead of the stale\nspawn-time snapshot (`TerminalSpawnSpec::color_scheme`). App-set\nlive overrides (`Term::colors()`, e.g. an OSC 4/10/11/12 write the\nattached app made itself) still win over this, exactly as they do\nover the spawn-time scheme -- see `core::color::resolve_query_color`.",
+          "description": "Re-pushes the host's live theme-derived color scheme into a\n*running* session's `TerminalCore` (`TerminalCore::set_color_scheme`),\nso a subsequent OSC 10/11/12 query reply reflects a live theme apply\n(`Reload Config` / the theme settings view) instead of the stale\nspawn-time snapshot (`TerminalSpawnSpec::color_scheme`). App-set\nlive overrides (an OSC 4/10/11/12 write the attached app made\nitself) still win over this, exactly as they do over the spawn-time\nscheme: the engine answers from its palette, and the scheme is its\ndefault palette (`TerminalCore::set_color_scheme`).",
           "properties": {
             "SetColorScheme": {
               "$ref": "#/$defs/TerminalColorScheme"
@@ -432,17 +432,17 @@
         },
         {
           "const": "WantState",
-          "description": "SPIKE Y. Client → daemon: a view is here and has nothing: the\nterminal's state, then what the PTY writes from there on.",
+          "description": "Client → daemon: a view is here and has nothing: the\nterminal's state, then what the PTY writes from there on.",
           "type": "string"
         },
         {
           "const": "StopState",
-          "description": "SPIKE Y. Client → daemon: no view is here any more: nothing of the\nstate or the PTY's bytes is to be sent until one asks again.",
+          "description": "Client → daemon: no view is here any more: nothing of the\nstate or the PTY's bytes is to be sent until one asks again.",
           "type": "string"
         },
         {
           "additionalProperties": false,
-          "description": "SPIKE Y. Client → daemon: this many bytes of `Output` have been\ntaken in. The daemon holds what it sends against these: a view that\nfalls too far behind is sent no more until it has caught up, and\nthen the state again.",
+          "description": "Client → daemon: this many bytes of `Output` have been\ntaken in. The daemon holds what it sends against these: a view that\nfalls too far behind is sent no more until it has caught up, and\nthen the state again.",
           "properties": {
             "OutputTaken": {
               "format": "uint64",
@@ -562,7 +562,7 @@
       "type": "object"
     },
     "TerminalNotification": {
-      "description": "A desktop-notification request a terminal app posted through the PTY\nstream — OSC 9 (iTerm2-style: body only) or OSC 777 `notify`\n(rxvt-style: optional summary + body). Extracted from the raw bytes\nbefore the VT parser sees them (`core::osc_notify` — alacritty_terminal\nrecognizes neither code and would drop both silently) and delivered to\nthe client as [`TerminalUpdate::Notification`].",
+      "description": "A desktop-notification request a terminal app posted through the PTY\nstream — OSC 9 (iTerm2-style: body only) or OSC 777 `notify`\n(rxvt-style: optional summary + body). Extracted from the raw bytes\nbefore the engine sees them (`core::osc_notify`) and delivered to the\nclient as [`TerminalUpdate::Notification`].",
       "properties": {
         "body": {
           "description": "The message body (OSC 9's whole payload, OSC 777's second argument).",
@@ -755,7 +755,7 @@
       "type": "object"
     },
     "TerminalUpdate": {
-      "description": "The non-frame terminal events, carried on the attachment's `events`\nmpsc channel (`TerminalAttachment::events`). Since wire v11 the frame\nsnapshots that used to be a `Snapshot`/`FrameDiff` variant here travel\non their own `rch::watch<TerminalFrame>` channel instead\n(`docs/remoc-adoption-design.md` §5 Option A): a full frame per delivery,\nwith the diff machinery deleted wholesale and row-change detection moved\nto the client. What remains here is everything that is *not* a frame.",
+      "description": "What the daemon sends a client, on the attachment's `events` mpsc\nchannel (`TerminalAttachment::events`): the terminal's state and the\nbytes after it, to a client that asked (`docs/terminal-stream-design.md`),\nand what the session says of itself.",
       "oneOf": [
         {
           "enum": [
@@ -830,7 +830,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "SPIKE Y. Daemon → client: the terminal's whole state, as its engine\nwrites it out, in pieces: the last has `more` false. What follows is\nthe PTY's bytes from that state on.",
+          "description": "Daemon → client: the terminal's whole state, as its engine\nwrites it out, in pieces: the last has `more` false. What follows is\nthe PTY's bytes from that state on.",
           "properties": {
             "State": {
               "properties": {
@@ -861,7 +861,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "SPIKE Y. Daemon → client: what the PTY wrote, as the daemon's own\nterminal took it in.",
+          "description": "Daemon → client: what the PTY wrote, as the daemon's own\nterminal took it in.",
           "properties": {
             "Output": {
               "items": {
@@ -880,7 +880,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "SPIKE Y. Daemon → client: the terminal was resized here, between\nthe bytes before and the bytes after.",
+          "description": "Daemon → client: the terminal was resized here, between\nthe bytes before and the bytes after.",
           "properties": {
             "Resized": {
               "$ref": "#/$defs/TerminalSize"
@@ -893,7 +893,7 @@
         },
         {
           "const": "HoldReleased",
-          "description": "SPIKE Y. Daemon → client: the daemon's clock let a synchronized\nupdate's hold go here, the program never having let it go. No byte\nsays so: a view's terminal lets its own hold go at this place in\nthe stream, and keeps no clock of its own.",
+          "description": "Daemon → client: the daemon's clock let a synchronized\nupdate's hold go here, the program never having let it go. No byte\nsays so: a view's terminal lets its own hold go at this place in\nthe stream, and keeps no clock of its own.",
           "type": "string"
         },
         {

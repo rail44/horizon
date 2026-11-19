@@ -1,8 +1,8 @@
-//! SPIKE: the frame and the scrollback window read out of libghostty-vt.
-//!
-//! Both are rows of the screen's whole buffer (history, then the live
-//! screen), read a cell at a time through grid references. The cell-to-span
-//! merging is what it was over alacritty_terminal.
+//! The frame and the scrollback window read out of libghostty-vt: rows
+//! built once from the engine's cells as they are drawn
+//! (`TerminalLine`). The live screen's rows are read through the engine's
+//! render state, which says which rows changed; a window of the history
+//! is read a cell at a time through grid references.
 
 use std::cell::RefCell;
 
@@ -106,8 +106,6 @@ pub(super) fn snapshot_frame(
         cursor,
         selection: selection_in_rows(terminal, top, size),
         mouse_reporting: mouse_mode(terminal) && mode(terminal, Mode::SGR_MOUSE),
-        keys_as_escape_codes: (terminal.kitty_keyboard_flags())
-            .is_ok_and(|flags| flags.bits() & 0b1000 != 0),
         palette_overrides: palette_overrides(terminal),
         scrollback_available: !(alternate_screen(terminal) || mouse_mode(terminal)),
     }
@@ -276,37 +274,16 @@ fn palette_overrides(terminal: &Engine) -> Vec<(u16, [u8; 3])> {
     set
 }
 
-/// The session-daemon events-channel item cap a served scroll window must
-/// stay under — a mirror of
-/// `horizon_wire::TERMINAL_EVENT_MAX_ITEM_BYTES` (4 MiB), duplicated as a
-/// local constant because this crate does not depend on the wire crates.
-/// (Naming it directly became *possible* when
-/// `docs/runtime-crate-alignment-design.md` phase 1 moved the caps into the
-/// domain-free `horizon-wire`; the edge is deliberately not added here
-/// ahead of phase 2, which brings `TerminalHub` into this crate.) A window
-/// rides that mpsc as one
-/// `TerminalUpdate::ScrollWindow`; exceeding the cap trips remoc's over-cap
-/// latch and tears the shared events channel down (pinned by that crate's
-/// `tests/limits.rs`), dropping the pane's `Exited`/`Error`/`Bell` on the
-/// floor and orphaning it — the hazard `max_window_rows` closes.
+/// A window's size is bounded in bytes as well as rows, so that a wide
+/// terminal's window holds fewer rows: at most this many bytes, at the
+/// worst-case bytes a cell costs below. The two values were set when a
+/// window crossed the daemon's events channel (whose item cap is 4 MiB,
+/// and where a fully styled cell measured about 107 bytes); a window is
+/// read from the view's own terminal now, and the bound is kept as it was,
+/// so a window holds what it did.
 const EVENTS_ITEM_CAP_BYTES: usize = 4 * 1024 * 1024;
 
-/// A conservative upper bound on the wire bytes one grid cell costs under the
-/// Postbag codec at *worst-case* decoration. The genuine worst case is not
-/// the spike's all-rows-styled frame (~18 B/cell, where a row of one style
-/// merges into a single span) but a distinct fully-styled span *per cell*
-/// (rainbow truecolor text, which `styled_rows` cannot merge): the sibling
-/// test `a_worst_case_scroll_window_stays_under_the_events_cap`
-/// (this crate's `tests/limits.rs`) measures that at ~107 B/cell.
-/// 128 rounds it up with headroom — and that headroom (128 vs the measured
-/// 107, ~20 %) is what lets [`max_window_rows`] budget the *entire* events
-/// cap rather than half of it: the over-estimate absorbs the enum/struct
-/// framing and per-row span vectors that the raw cell count does not account
-/// for, with the sibling test as the real-codec proof. (Combining-char
-/// pathology — an app packing unbounded zero-width chars into one cell — is
-/// deliberately *not* bounded here: it inflates a single span without limit
-/// and afflicts the live-frame watch identically, so it is the frame path's
-/// own out-of-scope envelope, not a windowing regression.)
+/// See [`EVENTS_ITEM_CAP_BYTES`].
 const WORST_CASE_BYTES_PER_CELL: usize = 128;
 
 /// How many rows of overscan [`max_window_rows`] guarantees above and below
@@ -316,19 +293,18 @@ const WORST_CASE_BYTES_PER_CELL: usize = 128;
 /// `.max(screen_lines)` floor collapsed this margin to zero for tall panes,
 /// regressing smooth scroll to line steps; issue 008: the resulting
 /// zero-overscan window snapped to the top of each re-fetched block on
-/// upward scroll). The daemon centers the viewport in the block, so each
-/// side gets `OVERSCAN_ROWS / 2` rows of margin.
+/// upward scroll). The viewport is centered in the block, so each side
+/// gets `OVERSCAN_ROWS / 2` rows of margin.
 const OVERSCAN_ROWS: usize = 64;
 
-/// The largest window, in rows, [`snapshot_window`] will serve, sized so even
-/// worst-case per-cell decoration keeps the serialized window under the
-/// events cap. Byte-budget-derived rather than a fixed row multiple precisely
-/// because it must also bound *wide* terminals, where one row is many more
-/// cells. The formula guarantees the viewport plus [`OVERSCAN_ROWS`] rows of
-/// overscan when the byte budget allows it, clips the overscan to whatever the
-/// budget permits when the viewport is tall, and collapses to the viewport
-/// alone (zero overscan — the same envelope the live-frame watch runs under)
-/// only when a single screen already strains the cap. That extreme is the
+/// The largest window, in rows, [`snapshot_window`] will read, within the
+/// byte bound ([`EVENTS_ITEM_CAP_BYTES`]). Byte-budget-derived rather than a
+/// fixed row multiple because it must also bound *wide* terminals, where one
+/// row is many more cells. The formula guarantees the viewport plus
+/// [`OVERSCAN_ROWS`] rows of overscan when the byte budget allows it, clips
+/// the overscan to whatever the budget permits when the viewport is tall,
+/// and collapses to the viewport alone (zero overscan) only when a single
+/// screen already strains the bound. That extreme is the
 /// documented fallback where scrolling regresses to line steps (issue 007);
 /// for realistic pane heights the overscan is always present.
 fn max_window_rows(columns: usize, screen_lines: usize) -> usize {
@@ -348,9 +324,8 @@ fn max_window_rows(columns: usize, screen_lines: usize) -> usize {
 }
 
 /// Read a `height`-row scrollback window positioned `anchor` rows above the
-/// live bottom, without moving the viewport: the same block arithmetic as
-/// over alacritty_terminal, in rows counted from the top of the live screen
-/// (negative in the history).
+/// live bottom, without moving the viewport, in rows counted from the top
+/// of the live screen (negative in the history).
 pub(super) fn snapshot_window(
     terminal: &Engine,
     size: TerminalSize,

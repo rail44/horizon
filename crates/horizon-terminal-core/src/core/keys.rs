@@ -1,4 +1,4 @@
-//! SPIKE Y. A key written for the PTY by the engine's own encoder.
+//! A key written for the PTY by the engine's own encoder.
 //!
 //! The encoder takes a key as a platform reports it: the physical key,
 //! the modifiers held, the text the press made and which modifiers went

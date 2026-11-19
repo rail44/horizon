@@ -1,5 +1,9 @@
 # Terminal Frame Path — Protocol & Rendering Goals
 
+> 2026-11-19: `docs/terminal-stream-design.md` で、デーモンはフレームを送らなくなった。
+> デーモンは PTY のバイト列を送り、ビューが自分の端末から行を組んで描く。この文書の
+> 「フレームの経路」についての目標は、その文書の形に置き換わっている。
+
 Status: decided 2026-07-19 (project session with owner). Companion to
 `docs/session-daemon-design.md`, which records how the daemon split was
 made; this file records where the frame path (terminal runtime → GUI) is

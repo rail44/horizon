@@ -1276,7 +1276,7 @@ fn a_tab_with_a_tasks_thread_open_is_left_and_come_back_to() {
     assert_eq!(opened.all("actions").len(), 1);
 }
 
-/// SPIKE Y. A terminal on a tab that is not shown keeps no terminal of its
+/// A terminal on a tab that is not shown keeps no terminal of its
 /// own, and has one again, with what was written meanwhile, when its tab
 /// is back.
 #[test]

@@ -28,25 +28,17 @@ pub fn fixed_palette_rgb(index: u8) -> Option<[u8; 3]> {
 /// bold/dim-promotable), an xterm 256-color palette index, or a literal
 /// 24-bit truecolor value.
 ///
-/// Horizon-owned rather than re-exported from `alacritty_terminal` (as it
-/// was before this type existed) so UI clients (`src/theme/ansi.rs`,
-/// `src/terminal/`) don't need `alacritty_terminal` as a dependency just to
-/// match on a cell's color. `core::render::snapshot_frame` is the one place
-/// that converts from `alacritty_terminal`'s own `vte::ansi::Color`/
-/// `NamedColor` into this type, at frame-build time.
+/// Horizon-owned, so a view matches on a cell's color without the engine.
+/// `core::render` is the one place that converts the engine's style colors
+/// into this type, as a row is built.
 ///
-/// `docs/session-daemon-design.md` decision 8: this is what actually crosses
-/// the `TerminalFrame`/`TerminalSpan` boundary now, instead of a resolved
-/// `[u8; 3]` RGB triple — resolving a logical color against a theme (the app
-/// default, or in the future a per-client one) is the UI's job
-/// (`theme::resolve`, `src/theme/ansi.rs`), not this crate's. A color a
-/// terminal app redefined at runtime via OSC 4/10/11/12 (`Term::colors()`'s
-/// live per-session overrides) still affects cell *rendering*: `TerminalFrame::palette_overrides`
-/// carries that sparse index→RGB table alongside the logical colors, and the
-/// UI consults it before falling back to the theme. `TerminalCore`'s own
-/// OSC 4/10/11/12 *query replies* (`core::color::resolve_query_color`) use
-/// alacritty's own `Colors`/`NamedColor` directly, independent of this
-/// boundary.
+/// `docs/session-daemon-design.md` decision 8: a row carries this logical
+/// color, not a resolved `[u8; 3]` RGB triple — resolving it against the
+/// theme is the view's (`src/terminal/mod.rs`'s `Palette`). A color a
+/// program redefined via OSC 4/10/11/12 still affects how cells are drawn:
+/// `TerminalFrame::palette_overrides` carries that sparse index→RGB table,
+/// and the view consults it before the theme. The engine answers a
+/// program's color queries from its own palette.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalColor {
     Named(NamedColor),
@@ -54,18 +46,15 @@ pub enum TerminalColor {
     Rgb([u8; 3]),
 }
 
-/// One of the fixed named color roles a cell can carry. This set was
-/// derived by reading exactly what `core::render::snapshot_frame` (via
-/// `cell_fg`/`cell_bg`) can produce from a live `alacritty_terminal::Term`,
-/// not assumed:
+/// One of the fixed named color roles a cell can carry: what
+/// `core::render` (`SpanStyle::of`, `promoted`) produces from the engine's
+/// styles:
 ///
 /// - The 8 base ANSI hues (`Black`..`White`) and their bright forms
 ///   (`BrightBlack`..`BrightWhite`) reach frames directly from SGR
-///   30-37/90-97, or as the bold-promoted form of a base hue (`cell_fg`
-///   applies `NamedColor::to_bright` under the `BOLD` flag).
+///   30-37/90-97, or as the bold-promoted form of a base hue.
 /// - Dim forms (`DimBlack`..`DimWhite`) are *not* a normal SGR target —
-///   they only ever appear as the dim-promoted form of a base hue
-///   (`cell_fg` applies `NamedColor::to_dim` under the `DIM` flag).
+///   they only ever appear as the faint-promoted form of a base hue.
 /// - `Foreground`/`Background`/`Cursor` are the default-role slots; only
 ///   `Foreground` is ever bold/dim-promoted this way too, producing
 ///   `BrightForeground`/`DimForeground`. Under `INVERSE` a cell's two
@@ -105,12 +94,10 @@ pub enum NamedColor {
 }
 
 impl NamedColor {
-    /// This role's index in `TerminalFrame::palette_overrides`, mirroring
-    /// `alacritty_terminal`'s OSC-addressable color slots: 0..=15 for the
-    /// base ANSI hues (incl. bright), 256/257/258 for the default
-    /// foreground/background/cursor roles — the only indices OSC 4/10/11/12
-    /// ever write into `Term::colors()` (see
-    /// `core::render::palette_overrides`). The bold/dim-promoted roles
+    /// This role's index in `TerminalFrame::palette_overrides`: 0..=15 for
+    /// the base ANSI hues (incl. bright), 256/257/258 for the default
+    /// foreground/background/cursor roles — the only colors OSC 4/10/11/12
+    /// set (see `core::render::palette_overrides`). The bold/dim-promoted roles
     /// (`Dim*`, `BrightForeground`, `DimForeground`) are never set this way
     /// and have no override slot.
     pub fn override_index(self) -> Option<u16> {

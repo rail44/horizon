@@ -1,4 +1,4 @@
-//! SPIKE: what the engine was measured and seen to do, for the spike's
+//! What the engine was measured and seen to do, for the
 //! record (`docs/research/libghostty-vt-engine-spike-2026-11-19.md`): the
 //! ignored tests are timings and observations, run by hand with
 //! `--run-ignored only --no-capture`; the others are checks.

@@ -100,18 +100,19 @@ pub enum TerminalCommand {
     /// so a subsequent OSC 10/11/12 query reply reflects a live theme apply
     /// (`Reload Config` / the theme settings view) instead of the stale
     /// spawn-time snapshot (`TerminalSpawnSpec::color_scheme`). App-set
-    /// live overrides (`Term::colors()`, e.g. an OSC 4/10/11/12 write the
-    /// attached app made itself) still win over this, exactly as they do
-    /// over the spawn-time scheme -- see `core::color::resolve_query_color`.
+    /// live overrides (an OSC 4/10/11/12 write the attached app made
+    /// itself) still win over this, exactly as they do over the spawn-time
+    /// scheme: the engine answers from its palette, and the scheme is its
+    /// default palette (`TerminalCore::set_color_scheme`).
     SetColorScheme(TerminalColorScheme),
     Shutdown,
-    /// SPIKE Y. Client → daemon: a view is here and has nothing: the
+    /// Client → daemon: a view is here and has nothing: the
     /// terminal's state, then what the PTY writes from there on.
     WantState,
-    /// SPIKE Y. Client → daemon: no view is here any more: nothing of the
+    /// Client → daemon: no view is here any more: nothing of the
     /// state or the PTY's bytes is to be sent until one asks again.
     StopState,
-    /// SPIKE Y. Client → daemon: this many bytes of `Output` have been
+    /// Client → daemon: this many bytes of `Output` have been
     /// taken in. The daemon holds what it sends against these: a view that
     /// falls too far behind is sent no more until it has caught up, and
     /// then the state again.
@@ -121,9 +122,8 @@ pub enum TerminalCommand {
 /// A desktop-notification request a terminal app posted through the PTY
 /// stream — OSC 9 (iTerm2-style: body only) or OSC 777 `notify`
 /// (rxvt-style: optional summary + body). Extracted from the raw bytes
-/// before the VT parser sees them (`core::osc_notify` — alacritty_terminal
-/// recognizes neither code and would drop both silently) and delivered to
-/// the client as [`TerminalUpdate::Notification`].
+/// before the engine sees them (`core::osc_notify`) and delivered to the
+/// client as [`TerminalUpdate::Notification`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalNotification {
     /// The summary line (OSC 777's `notify ; <title> ; <body>` first
@@ -171,13 +171,10 @@ pub enum ProgramBlockedOn {
     Auth,
 }
 
-/// The non-frame terminal events, carried on the attachment's `events`
-/// mpsc channel (`TerminalAttachment::events`). Since wire v11 the frame
-/// snapshots that used to be a `Snapshot`/`FrameDiff` variant here travel
-/// on their own `rch::watch<TerminalFrame>` channel instead
-/// (`docs/remoc-adoption-design.md` §5 Option A): a full frame per delivery,
-/// with the diff machinery deleted wholesale and row-change detection moved
-/// to the client. What remains here is everything that is *not* a frame.
+/// What the daemon sends a client, on the attachment's `events` mpsc
+/// channel (`TerminalAttachment::events`): the terminal's state and the
+/// bytes after it, to a client that asked (`docs/terminal-stream-design.md`),
+/// and what the session says of itself.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalUpdate {
     Title(Option<String>),
@@ -194,20 +191,20 @@ pub enum TerminalUpdate {
     Notification(TerminalNotification),
     Exited,
     Error(String),
-    /// SPIKE Y. Daemon → client: the terminal's whole state, as its engine
+    /// Daemon → client: the terminal's whole state, as its engine
     /// writes it out, in pieces: the last has `more` false. What follows is
     /// the PTY's bytes from that state on.
     State {
         bytes: Vec<u8>,
         more: bool,
     },
-    /// SPIKE Y. Daemon → client: what the PTY wrote, as the daemon's own
+    /// Daemon → client: what the PTY wrote, as the daemon's own
     /// terminal took it in.
     Output(Vec<u8>),
-    /// SPIKE Y. Daemon → client: the terminal was resized here, between
+    /// Daemon → client: the terminal was resized here, between
     /// the bytes before and the bytes after.
     Resized(TerminalSize),
-    /// SPIKE Y. Daemon → client: the daemon's clock let a synchronized
+    /// Daemon → client: the daemon's clock let a synchronized
     /// update's hold go here, the program never having let it go. No byte
     /// says so: a view's terminal lets its own hold go at this place in
     /// the stream, and keeps no clock of its own.

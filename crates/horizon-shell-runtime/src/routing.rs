@@ -536,8 +536,8 @@ impl TerminalRoutes {
     }
 
     /// The terminal runtime is gone: every registered terminal pane hears
-    /// about it on its event stream (the frame watch just stops
-    /// delivering), and later registrations inherit the sticky failure.
+    /// about it on its event stream, and later registrations inherit the
+    /// sticky failure.
     pub(super) fn connection_failed(&self, message: String) {
         let terminal_routes = {
             let mut state = self.state.lock().unwrap();

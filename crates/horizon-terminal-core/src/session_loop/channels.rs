@@ -15,7 +15,7 @@ pub enum CoreInput {
     Paste(String),
 }
 
-/// SPIKE Y. What a view says of the stream it is sent.
+/// What a view says of the stream it is sent.
 pub enum StreamCommand {
     /// It has nothing: the state, then the bytes.
     Want,

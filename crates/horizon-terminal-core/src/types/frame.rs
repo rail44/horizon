@@ -19,52 +19,26 @@ pub struct TerminalFrame {
     /// intersection.
     pub selection: Option<TerminalSelection>,
     pub mouse_reporting: bool,
-    /// Whether the attached app negotiated kitty's "report all keys as
-    /// escape codes" progressive enhancement (`TermMode::
-    /// REPORT_ALL_KEYS_AS_ESC`). Mirrored on the frame — like
-    /// `mouse_reporting` — because it is the *host view's* routing
-    /// signal: while set, printable text keys must reach the session as
-    /// `TerminalCommand::Key` (so `TerminalCore::encode_key` emits the
-    /// negotiated kitty encoding) instead of the host's plain-text
-    /// input path. Encoding itself never depends on this field; the
-    /// core consults live `TermMode` per key event.
-    pub keys_as_escape_codes: bool,
-    /// Sparse table of this session's live OSC 4/10/11/12 palette overrides
-    /// (`alacritty_terminal::term::color::Colors`), sorted ascending by
-    /// index for deterministic `Eq`/`PartialEq` — see
-    /// `docs/session-daemon-design.md` decision 8. Index space: 0..=15 base
-    /// ANSI, 16..=255 the color cube, 256/257/258
+    /// Sparse table of the colors the program set over the defaults (OSC
+    /// 4/10/11/12), sorted ascending by index for deterministic
+    /// `Eq`/`PartialEq` — see `docs/session-daemon-design.md` decision 8.
+    /// Index space: 0..=15 base ANSI, 16..=255 the color cube, 256/257/258
     /// foreground/background/cursor (`NamedColor::Foreground`/`Background`/
-    /// `Cursor`). Consulted by the host's `theme::resolve`
-    /// (`src/theme/ansi.rs`) before falling back to the per-client theme.
+    /// `Cursor`). The view consults it before the theme.
     pub palette_overrides: Vec<(u16, [u8; 3])>,
-    /// Whether this session can currently serve a scrollback *window*
-    /// (`TerminalCommand::RequestScrollWindow`): `true` on the primary
-    /// screen with no application-scroll mode active, `false` while
-    /// `ALT_SCREEN` or `MOUSE_MODE` is set — the alt grid is built with
-    /// `max_scroll_limit == 0` (no scrollback), and a mouse app's wheel is
-    /// application input, not a `display_offset` move
-    /// (`docs/terminal-scrollback-design.md` §2.1, §2.3, §5). The client
-    /// routes wheel/PageUp to local windowing only while this is set, and
-    /// keeps today's passthrough round-trip otherwise. Additive since the
-    /// scrollback windowing work (phase 1); `#[serde(default)]` so a peer
-    /// predating it decodes to `false`, the conservative "no windowing"
-    /// default.
+    /// Whether the view scrolls the history: `true` on the primary screen
+    /// with no application-scroll mode active, `false` on the alternate
+    /// screen (which has no history) or while the program takes the mouse
+    /// (its wheel is the program's input). The view moves over windows of
+    /// the history (`TerminalScrollWindow`) only while this is set.
     pub scrollback_available: bool,
 }
 
-/// A served scrollback window: a contiguous block of history rows read at an
-/// arbitrary position **without disturbing the live viewport**
-/// (`TerminalCore::snapshot_window`, built by a `grid.iter_from` walk that
-/// never moves `display_offset` — `docs/terminal-scrollback-design.md` §2.2,
-/// §3.2). The window is self-describing, so the client needs no
-/// request/response correlation id: `viewport_offset`/`above`/`below` locate
-/// it against the grid at service time. Carried back to the client as
-/// [`crate::TerminalUpdate::ScrollWindow`] on the events channel
-/// (§9 option ii). Reuses the frame's own [`TerminalLine`] vocabulary so the
-/// client paints it with the identical renderer, and — being a struct, not a
-/// wire enum in element position — keeps the postbag positional discipline
-/// (§4 rule 5).
+/// A window of the history: a contiguous block of rows read at an arbitrary
+/// position **without moving the viewport** (`TerminalCore::snapshot_window`,
+/// `docs/terminal-scrollback-design.md` §2.2, §3.2). The window is
+/// self-describing: `viewport_offset`/`above`/`below` locate it against the
+/// buffer as it was read. The view draws its rows as it draws the screen's.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TerminalScrollWindow {
     /// The contiguous block of history rows, top to bottom. Clamped by
@@ -80,7 +54,7 @@ pub struct TerminalScrollWindow {
     pub above: usize,
     /// How many rows remain below the block's bottom, down to the live tail.
     /// `0` is the live-edge signal (scrolling past it drops the window and
-    /// resumes the live-frame watch).
+    /// goes back to the live screen).
     pub below: usize,
 }
 
@@ -285,9 +259,7 @@ impl TerminalLine {
 
 /// The underline styles of SGR 4's colon sub-parameters (`4:0`..`4:5`),
 /// Horizon-owned like every frame type (`TerminalColor`'s doc has the
-/// rationale). Maps 1:1 from `alacritty_terminal`'s cell flags
-/// (`UNDERLINE`/`DOUBLE_UNDERLINE`/`UNDERCURL`/`DOTTED_UNDERLINE`/
-/// `DASHED_UNDERLINE`).
+/// rationale). Maps 1:1 from the engine's underline styles.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalUnderline {
     #[default]
@@ -303,15 +275,14 @@ pub enum TerminalUnderline {
 pub struct TerminalCursor {
     pub row: usize,
     pub col: usize,
-    /// The DECSCUSR-negotiated shape (`CSI Ps SP q`; blink variants are
-    /// collapsed by `alacritty_terminal` itself — the frame carries no
+    /// The DECSCUSR-negotiated shape (`CSI Ps SP q`; the frame carries no
     /// blink state). A hidden cursor (DECTCEM reset, `CSI ?25l`) is
     /// `TerminalFrame::cursor == None`, never a shape variant.
     pub shape: TerminalCursorShape,
 }
 
-/// Mirrors `alacritty_terminal`'s `CursorShape` minus `Hidden` (a hidden
-/// cursor never reaches the wire — see [`TerminalCursor::shape`]).
+/// The cursor's shapes. A hidden cursor is no shape: see
+/// [`TerminalCursor::shape`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalCursorShape {
     #[default]
@@ -323,8 +294,8 @@ pub enum TerminalCursorShape {
 
 /// A selection's two inclusive endpoints in viewport coordinates — see
 /// `TerminalFrame::selection` for the coordinate/clamping contract. Reuses
-/// [`TerminalSelectionPoint`], the same cell-coordinate type the input side
-/// (`TerminalCommand::SelectionStart`/`SelectionUpdate`) already speaks.
+/// [`TerminalSelectionPoint`], the same cell-coordinate type the view
+/// selects with.
 /// Full rows between `start.row` and `end.row` are entirely selected —
 /// there is no block-selection variant in this vocabulary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -334,20 +305,13 @@ pub struct TerminalSelection {
 }
 
 impl TerminalFrame {
-    /// An empty frame — no rows, no cursor, no styling. Since wire v11 the
-    /// frame path is an `rch::watch<TerminalFrame>` snapshot-valued signal
-    /// (`docs/remoc-adoption-design.md` §5 Option A), and a watch channel
-    /// requires an initial value: this is the seed a freshly created
-    /// terminal's frame channel carries until the session loop produces its
-    /// first real snapshot (the client renders it as a blank grid for the
-    /// few milliseconds before the first frame arrives, then converges).
+    /// An empty frame — no rows, no cursor, no styling.
     pub fn empty() -> Self {
         Self {
             lines: Vec::new(),
             cursor: None,
             selection: None,
             mouse_reporting: false,
-            keys_as_escape_codes: false,
             palette_overrides: Vec::new(),
             scrollback_available: false,
         }
@@ -370,7 +334,6 @@ impl TerminalFrame {
             cursor: None,
             selection: None,
             mouse_reporting: false,
-            keys_as_escape_codes: false,
             palette_overrides: Vec::new(),
             scrollback_available: false,
         }

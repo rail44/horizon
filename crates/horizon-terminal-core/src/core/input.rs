@@ -2,10 +2,8 @@ use crate::types::{
     TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers, TerminalMouseReport,
 };
 
-/// Kitty keyboard protocol handling (flag interpretation, key overrides,
-/// modifier mapping) lives in `terminal::protocol::kitty_keyboard` — see
-/// that module's doc for why. Only non-keyboard-protocol input helpers
-/// (mouse reporting, scroll-as-arrow-keys) remain here.
+/// What a terminal writes for the mouse and the wheel that is not the
+/// keys': keys are the engine's encoder's (`core::keys`).
 pub(super) fn arrow_scroll_input(lines: i32) -> Vec<u8> {
     let sequence = if lines > 0 { b"\x1b[A" } else { b"\x1b[B" };
     let repeat = lines.unsigned_abs().max(1) as usize;

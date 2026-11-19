@@ -8,8 +8,8 @@ use horizon_terminal_core::TerminalScrollWindow;
 
 /// How many viewports tall a **requested** scrollback window is
 /// (`docs/terminal-scrollback-design.md` §3.2, §9(2)). This is an upper
-/// bound, not a contract: the daemon clamps the served height to its own
-/// byte-budgeted `max_window_rows` (`screen_lines + OVERSCAN_ROWS`, so the
+/// bound, not a contract: the terminal core clamps the served height to its
+/// own byte-budgeted `max_window_rows` (`screen_lines + OVERSCAN_ROWS`, so the
 /// overscan it actually grants is ~`OVERSCAN_ROWS / 2` per side however tall
 /// the pane), and the reply's `viewport_offset` reports the margin it really
 /// carried. The prefetch logic below must derive its lead from that served
@@ -23,7 +23,7 @@ const WINDOW_VIEWPORTS: usize = 3;
 /// replenishing the held window while one served margin of overscan remains,
 /// and centre the replacement that far ahead in the gesture direction. Both
 /// are capped by the held window's served `viewport_offset` (see
-/// `WINDOW_VIEWPORTS`); for panes within the daemon's overscan the cap is
+/// `WINDOW_VIEWPORTS`); for panes within the core's overscan the cap is
 /// inert and this is the whole distance.
 const PREFETCH_VIEWPORTS: usize = 1;
 
@@ -36,10 +36,10 @@ fn requested_window_height(viewport_rows: usize) -> usize {
 /// math (`docs/terminal-scrollback-design.md` §3.2): a window served for a
 /// viewport `viewport_rows` tall satisfies
 /// `anchor(off) = lines.len() + below - viewport_rows - off` — confirmed
-/// against the daemon's own `snapshot_window` tests. `off` is signed so an
+/// against the core's own `snapshot_window` tests. `off` is signed so an
 /// overshoot past a block edge (a negative index above the top, or one past
 /// the bottom) yields the further-up / further-down anchor to re-fetch at; the
-/// result saturates at 0 (the live edge), which the daemon further clamps to
+/// result saturates at 0 (the live edge), which the core further clamps to
 /// `history_size`.
 fn edge_anchor(len: usize, below: usize, viewport_rows: usize, off: i64) -> usize {
     let anchor = len as i64 + below as i64 - viewport_rows as i64 - off;
@@ -122,7 +122,8 @@ pub enum ScrollIpc {
 
 /// The outcome of [`Scrollback::on_wheel`]: what to send, and whether the view
 /// must repaint *now* rather than wait for a reply — the local paint the
-/// round-trip used to wait on the daemon to deliver.
+/// round-trip used to wait on the daemon to deliver (windows came from the
+/// daemon then; they are read from the view's own terminal now).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScrollDecision {
     pub ipc: ScrollIpc,
@@ -131,11 +132,10 @@ pub struct ScrollDecision {
 
 /// The client's scrollback presentation mode (`docs/terminal-scrollback-design.md`
 /// §3.3, §7 phase 2). The terminal is either following the live tail (painting
-/// the `watch<TerminalFrame>`), waiting for the first window after a
+/// the live screen), waiting for the first window after a
 /// scroll-back gesture, or holding one served window and scrolling within it
-/// **locally** — the state that removes the per-tick daemon round-trip that
-/// judders today. Free-standing and GPUI-free, like the session's row-generation tracker, so its
-/// transitions are unit-testable without a `Context`.
+/// **locally**, with no read per wheel tick. Free-standing and free of any
+/// UI framework, so its transitions are unit-testable on their own.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Scrollback {
     /// Following the live tail; paint the watch frame. No window held.
@@ -239,7 +239,7 @@ fn served_anchor(window: &TerminalScrollWindow, viewport_rows: usize) -> f32 {
 
 impl Scrollback {
     /// Decide a continuous frontend scroll. `rows > 0` moves toward history,
-    /// `< 0` toward the live tail. Precise GPUI deltas remain fractional here;
+    /// `< 0` toward the live tail. Precise wheel deltas remain fractional here;
     /// only the held-window address and prefetch requests are row-based. The
     /// caller routes old peers and application-owned scrolling around this
     /// local-only state machine.
@@ -255,7 +255,7 @@ impl Scrollback {
             Scrollback::Live => {
                 if rows > 0.0 {
                     // Fetch around the live tail even for a sub-row delta. The
-                    // reply's pending_rows then positions the GPUI viewport at
+                    // reply's pending_rows then positions the view at
                     // the exact pixel displacement the gesture reached while
                     // the request was in flight.
                     let requested_anchor = rows.ceil().max(1.0) as usize;
@@ -272,7 +272,7 @@ impl Scrollback {
                     }
                 } else {
                     // Already at the live tail; scrolling further down is a
-                    // no-op (the daemon would ignore it too), so spend no IPC.
+                    // no-op (the core would ignore it too), so ask for nothing.
                     ScrollDecision {
                         ipc: ScrollIpc::None,
                         repaint: false,
@@ -404,7 +404,7 @@ impl Scrollback {
                     (*offset, *fractional_row) = split_row_position(new_position, max_top);
                     let distance_to_top = *offset;
                     let distance_to_bottom = max_top - *offset;
-                    // The daemon serves at most `screen_lines + OVERSCAN_ROWS`
+                    // The core serves at most `screen_lines + OVERSCAN_ROWS`
                     // rows whatever height was requested, so the overscan it
                     // actually grants is the held window's own
                     // `viewport_offset` — cap both the trigger distance and
@@ -443,7 +443,7 @@ impl Scrollback {
         }
     }
 
-    /// Install a served window (a `TerminalUpdate::ScrollWindow` reply). Takes
+    /// Install a served window (the answer to a request). Takes
     /// effect only when a request is outstanding: the initial fetch
     /// ([`Scrollback::Requesting`]) enters windowed mode, and an edge re-fetch
     /// ([`Scrollback::Windowed`] with `fetch`) swaps in the new block. A
@@ -516,7 +516,7 @@ impl Scrollback {
                         // starts. Locate that current viewport in the new
                         // self-describing window instead of jumping back to
                         // the request-time position — but only if the
-                        // replacement can represent it. The daemon caps served
+                        // replacement can represent it. The core caps served
                         // windows at `screen_lines + OVERSCAN_ROWS` whatever
                         // height was asked, so a replacement centred further
                         // ahead than the served margin arrives without the
@@ -649,7 +649,7 @@ impl Scrollback {
     /// reporting whether that changed anything (so a caller can repaint). The
     /// review's shared "stop clinging to a stale window" primitive: a resize
     /// (its geometry no longer matches the served window), a selection gesture
-    /// (handed to the daemon-owned live viewport so cursor/selection render as
+    /// (handed to the live screen so cursor/selection render as
     /// on `main`), and a runtime going unreachable (so a dead pane never freezes
     /// on a stale window + pending-fetch latch) all route through it.
     pub fn abandon(&mut self) -> bool {

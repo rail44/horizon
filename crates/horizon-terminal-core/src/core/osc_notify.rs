@@ -1,5 +1,5 @@
 //! Streaming extraction of desktop-notification OSC sequences from the
-//! raw PTY byte stream, ahead of `alacritty_terminal`'s parser.
+//! raw PTY byte stream, ahead of the engine.
 //!
 //! Terminal apps post notifications two ways:
 //!
@@ -10,17 +10,13 @@
 //! is taken off the stream here too: it is no notification, but it is lost
 //! in the same way.
 //!
-//! `alacritty_terminal` recognizes neither code, so left in the stream
-//! both are swallowed silently — unknown OSC payloads never reach the grid
-//! (good: nothing misrenders) but they also never produce an `Event`,
-//! which is what this crate's normal observation path,
-//! `core::events::EventSink`, is made of. The scanner below therefore runs
-//! in front of `Processor::advance` in [`TerminalCore::write_vt`]: it
-//! removes exactly the notification sequences from the byte stream (every
-//! other byte passes through untouched, byte-for-byte, so title/clipboard/
-//! color handling and grid rendering see what they always saw) and hands
-//! the parsed [`TerminalNotification`]s back alongside the parser's own
-//! events.
+//! The scanner below runs in front of the engine in
+//! [`TerminalCore::write_vt`]: it removes exactly these sequences from the
+//! byte stream (every other byte passes through untouched, byte-for-byte,
+//! so title/clipboard/color handling and the screen see what they always
+//! saw) and hands the parsed [`TerminalNotification`]s back alongside the
+//! engine's own events. (The engine has a desktop-notification callback
+//! of its own; the core leaves it unset, and reads both codes here.)
 //!
 //! The scan is a real state machine, not a byte search, because the PTY is
 //! a byte stream, not a message stream: a sequence can be split across two
@@ -32,7 +28,7 @@
 //!
 //! Deliberate limits:
 //!
-//! - Any OSC 777 is swallowed (alacritty would drop it either way), but
+//! - Any OSC 777 is swallowed, but
 //!   only payloads whose first token is `notify` (case-insensitively,
 //!   rxvt's spelling) become notifications.
 //! - Any OSC 9 payload is taken as the body wholesale, except ConEmu's

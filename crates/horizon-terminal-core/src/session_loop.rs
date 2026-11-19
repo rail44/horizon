@@ -52,8 +52,7 @@ impl Default for TerminalCoreOptions {
 /// alacritty's own event loop, which polls with this same deadline as its
 /// timeout — see `TerminalCore::sync_flush_deadline`'s doc comment); `None`
 /// (no window open) parks it on a channel that never fires, so an idle
-/// terminal causes no extra wakeups, matching `FramePublisher::notify`'s own
-/// coalescing-timer discipline.
+/// terminal causes no extra wakeups.
 fn rearm_sync_flush(core: &TerminalCore, sync_flush_rx: &mut Receiver<Instant>) {
     *sync_flush_rx = match core.sync_flush_deadline() {
         Some(deadline) => crossbeam_channel::at(deadline),
@@ -68,7 +67,7 @@ fn take_color_schemes(core: &mut TerminalCore, schemes: &Receiver<TerminalColorS
     }
 }
 
-/// SPIKE Y. What a view is sent of the terminal: its state when it asks,
+/// What a view is sent of the terminal: its state when it asks,
 /// and from there what the PTY writes, held against what the view says it
 /// has taken in.
 #[derive(Default)]
@@ -306,7 +305,7 @@ pub fn run_terminal_core(
     } = receivers;
     let mut core = TerminalCore::with_scrollback(size, options.scrollback_lines);
     core.set_color_scheme(options.color_scheme);
-    // SPIKE Y: what a view that asked is sent.
+    // what a view that asked is sent.
     let mut stream = Stream::default();
 
     // Failsafe for a synchronized-update window (BSU/ESU, private mode 2026)
@@ -317,7 +316,7 @@ pub fn run_terminal_core(
     let mut sync_flush_rx: Receiver<Instant> = crossbeam_channel::never();
 
     loop {
-        // SPIKE Y: a view's keys go to the PTY without passing here, so
+        // a view's keys go to the PTY without passing here, so
         // what they have a program ask can be read before colors that were
         // sent earlier are: the colors are taken first.
         take_color_schemes(&mut core, &color_scheme_rx);
